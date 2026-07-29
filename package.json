@@ -1,0 +1,37 @@
+{
+  "version": "0.3.2",
+  "scripts": {
+    "dev:frontend": "node scripts/write_frontend_config.js && vite --config vite.local.config.mjs --host 127.0.0.1",
+    "build:frontend": "node scripts/write_frontend_config.js && vite build --config vite.local.config.mjs",
+    "lint:frontend": "node scripts/lint_frontend.mjs",
+    "test:frontend": "vitest run --config vitest.config.mjs",
+    "start": "python3 -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000"
+  },
+  "dependencies": {
+    "@tiptap/extension-image": "^3.28.0",
+    "@tiptap/extension-table": "^3.28.0",
+    "@tiptap/pm": "^3.28.0",
+    "@tiptap/react": "^3.28.0",
+    "@tiptap/starter-kit": "^3.28.0",
+    "docx": "^9.7.1",
+    "lucide-react": "^1.21.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/container-queries": "^0.1.1",
+    "@tailwindcss/forms": "^0.5.10",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@vitejs/plugin-react": "^6.0.2",
+    "autoprefixer": "^10.5.0",
+    "jsdom": "^29.1.1",
+    "tailwindcss": "^3.4.18",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.10"
+  },
+  "name": "fluentflow-local",
+  "description": "A local-first video and audio transcription workspace.",
+  "license": "AGPL-3.0-or-later"
+}

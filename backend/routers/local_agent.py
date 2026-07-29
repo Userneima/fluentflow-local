@@ -1,0 +1,568 @@
+"""Local-edition Agent API (``/agent/v1``).
+
+Same task surface as the hosted Agent API — submit, inspect, wait, diagnose,
+retry, regenerate, export — with local semantics: the single local event hub
+and job store, the local entry guards (atomic task ids, strict AI keys),
+local-owner Feishu export routes only, and no accounts, quota, or
+desktop-sync. Per the design contract the whole surface is DISABLED until the
+user configures a local access token (``FLUENTFLOW_ACCESS_TOKEN``); the
+loopback/session boundary itself belongs to the composition-root unit.
+
+Classification note: ``local_ready``. Video-link submission delegates to the
+local video-source router and therefore remains inside the local/shared graph.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import time
+from copy import deepcopy
+from typing import Any, Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
+
+from backend.core.ai_summarizer import summarize_transcript_with_metadata
+from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
+from backend.core.event_context import event_metadata
+from backend.core.event_logger import log_event
+from backend.core.job_store import (
+    append_job_result_list_item,
+    finalize_job_result_if_unchanged,
+    get_job,
+    upsert_job,
+)
+from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
+from backend.core.lark_exporter import export_markdown_to_lark
+from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
+from backend.core.local_config import resolve_secret
+from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
+from backend.core.local_request_scope import request_client_id, require_local_agent_access
+from backend.core.note_title import resolve_lark_doc_title
+from backend.core.result_artifacts import _attach_result_artifacts
+from backend.core.storage_paths import _artifact_storage_dir
+from backend.routers.local_feishu_export import _local_lark_export_target
+from backend.routers.local_processing import retry_job_from_stored_source
+from backend.routers.local_video_sources import submit_video_source_job
+
+router = APIRouter(prefix="/agent/v1", dependencies=[Depends(require_local_agent_access)])
+
+_ROUTE = "/agent/v1/tasks"
+
+
+def _truthy_json(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _local_client_scope(request: Request) -> Optional[str]:
+    return request_client_id(request) or "anonymous"
+
+
+def _task_package_response(job: dict[str, Any]) -> dict[str, Any]:
+    return build_agent_task_package(job, artifact_root=_artifact_storage_dir())
+
+
+def _job_for_request(request: Request, task_id: str) -> dict[str, Any]:
+    job = get_job(task_id, client_id=_local_client_scope(request))
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+def _result_changed(task_id: str, client_id: Optional[str], initial_result: Any) -> bool:
+    latest = get_job(task_id, client_id=client_id)
+    return latest is None or deepcopy(latest.get("result")) != initial_result
+
+
+def _bounded_finite_float(
+    value: Any,
+    *,
+    field: str,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    raw_value = default if value is None else value
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"{field} must be a number") from exc
+    if not math.isfinite(parsed):
+        raise HTTPException(status_code=422, detail=f"{field} must be a finite number")
+    return min(max(parsed, minimum), maximum)
+
+
+@router.post("/tasks")
+async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    input_text = str(payload.get("input") or payload.get("url") or "").strip()
+    transcript = str(payload.get("transcript_text") or "").strip()
+    input_type = str(payload.get("input_type") or "").strip().lower()
+    options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+    client_id = _local_client_scope(request)
+
+    if input_text and input_type in {"", "video_link", "url", "share_text"}:
+        job = await submit_video_source_job(
+            input_text=input_text,
+            title=str(payload.get("title") or "").strip(),
+            raw_options=options,
+            client_id=client_id,
+            route=_ROUTE,
+            extra_metadata={"agent_input_type": "video_link"},
+        )
+        task_id_value = job["task_id"]
+        return {
+            "ok": True,
+            "task_id": task_id_value,
+            "status": job.get("status"),
+            "package_url": f"/agent/v1/tasks/{task_id_value}/package",
+            "job": job,
+        }
+
+    if transcript and input_type in {"", "transcript", "transcript_text"}:
+        task_id_value = claim_task_id(
+            str(payload.get("task_id") or "").strip() or None, client_id=client_id
+        )
+        title = str(payload.get("title") or "Transcript").strip()
+        skip_summary = _truthy_json(options.get("skip_summary"))
+        result: dict[str, Any] = {
+            "task_id": task_id_value,
+            "filename": title,
+            "display_title": title,
+            "transcript_text": transcript,
+            "transcript_text_preview": transcript[:200],
+            "source": "agent_transcript",
+        }
+        summary_status = "skipped"
+        if skip_summary:
+            result.update({"summary_skipped": True, "summary_status": "skipped"})
+        else:
+            kwargs = local_ai_kwargs(
+                deepseek_api_key=payload.get("deepseek_api_key"),
+                openai_api_key=payload.get("openai_api_key"),
+                qwen_api_key=payload.get("qwen_api_key"),
+                ai_provider=payload.get("ai_provider"),
+                ai_model=payload.get("ai_model"),
+                system_prompt=payload.get("system_prompt"),
+                note_mode=options.get("note_mode"),
+            )
+            loop = asyncio.get_running_loop()
+            try:
+                summary_result = await loop.run_in_executor(
+                    None,
+                    lambda: summarize_transcript_with_metadata(transcript, **kwargs),
+                )
+            except Exception as exc:
+                detail = friendly_error(exc)
+                upsert_job(
+                    task_id=task_id_value,
+                    status="failed",
+                    client_id=client_id,
+                    stage="summary",
+                    source_type="agent_transcript",
+                    source_filename=title,
+                    summary_status="failed",
+                    error_reason=detail,
+                    metadata=event_metadata(route=_ROUTE, agent_input_type="transcript"),
+                )
+                raise HTTPException(status_code=500, detail=detail) from exc
+            result.update({
+                "summary_markdown": summary_result.markdown,
+                "summary_status": "completed",
+                "summary_skipped": False,
+                "requested_note_mode": summary_result.requested_mode,
+                "resolved_note_mode": summary_result.resolved_mode,
+                "note_mode_chunk_count": summary_result.chunk_count,
+                "note_mode_segment_count": getattr(summary_result, "segment_count", None),
+                "note_mode_evidence_count": getattr(summary_result, "evidence_count", None),
+                "note_mode_chapter_count": getattr(summary_result, "chapter_count", None),
+                "note_mode_important_evidence_count": getattr(summary_result, "important_evidence_count", None),
+                "note_mode_covered_important_evidence_count": getattr(summary_result, "covered_important_evidence_count", None),
+                "note_mode_coverage_missing_count": getattr(summary_result, "coverage_missing_count", None),
+                "chapter_coverage": getattr(summary_result, "chapter_coverage", None),
+            })
+            result = bind_chapter_coverage_time_ranges(result)
+            summary_status = "completed"
+        try:
+            result = _attach_result_artifacts(task_id_value, result)
+            upsert_job(
+                task_id=task_id_value,
+                status="completed",
+                client_id=client_id,
+                stage="done",
+                progress=100,
+                source_type="agent_transcript",
+                source_filename=title,
+                summary_status=summary_status,
+                result=result,
+                metadata=event_metadata(route=_ROUTE, agent_input_type="transcript"),
+            )
+        except Exception as exc:
+            detail = friendly_error(exc)
+            upsert_job(
+                task_id=task_id_value,
+                status="failed",
+                client_id=client_id,
+                stage="finalize",
+                progress=100,
+                source_type="agent_transcript",
+                source_filename=title,
+                summary_status="failed",
+                error_reason=detail,
+                metadata=event_metadata(route=_ROUTE, agent_input_type="transcript"),
+            )
+            raise HTTPException(status_code=500, detail=detail) from exc
+        job = get_job(task_id_value, client_id=client_id)
+        return {
+            "ok": True,
+            "task_id": task_id_value,
+            "status": "completed",
+            "package_url": f"/agent/v1/tasks/{task_id_value}/package",
+            "package": _task_package_response(job or {"task_id": task_id_value, "result": result}),
+        }
+
+    raise HTTPException(status_code=400, detail="Provide a video link input or transcript_text")
+
+
+@router.get("/tasks/{task_id}")
+def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
+    job = _job_for_request(request, task_id)
+    return {
+        "ok": True,
+        "task": {
+            "task_id": job.get("task_id"),
+            "status": job.get("status"),
+            "stage": job.get("stage"),
+            "progress": job.get("progress"),
+            "summary_status": job.get("summary_status"),
+        },
+        "package_url": f"/agent/v1/tasks/{task_id}/package",
+    }
+
+
+@router.get("/tasks/{task_id}/package")
+def get_agent_task_package(request: Request, task_id: str) -> dict[str, Any]:
+    return _task_package_response(_job_for_request(request, task_id))
+
+
+@router.post("/tasks/{task_id}/wait")
+async def wait_agent_task(
+    request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)
+) -> dict[str, Any]:
+    payload = payload or {}
+    timeout_seconds = _bounded_finite_float(
+        payload.get("timeout_seconds"),
+        field="timeout_seconds",
+        default=30,
+        minimum=0,
+        maximum=60,
+    )
+    poll_interval = _bounded_finite_float(
+        payload.get("poll_interval_seconds"),
+        field="poll_interval_seconds",
+        default=2,
+        minimum=0.5,
+        maximum=10,
+    )
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        job = _job_for_request(request, task_id)
+        if job.get("status") in {"completed", "failed", "cancelled"}:
+            return {"ok": True, "done": True, "package": _task_package_response(job)}
+        if time.monotonic() >= deadline:
+            return {
+                "ok": True,
+                "done": False,
+                "task": {
+                    "task_id": job.get("task_id"),
+                    "status": job.get("status"),
+                    "stage": job.get("stage"),
+                    "progress": job.get("progress"),
+                },
+                "package_url": f"/agent/v1/tasks/{task_id}/package",
+            }
+        await asyncio.sleep(poll_interval)
+
+
+@router.get("/tasks/{task_id}/diagnosis")
+def get_agent_task_diagnosis(request: Request, task_id: str) -> dict[str, Any]:
+    job = _job_for_request(request, task_id)
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "note": note_generation_diagnosis(job, result),
+    }
+
+
+@router.post("/tasks/{task_id}/retry")
+async def retry_agent_task(request: Request, task_id: str) -> dict[str, Any]:
+    retried = await retry_job_from_stored_source(request, task_id)
+    next_task_id = str(retried.get("task_id") or "")
+    job = retried.get("job") if isinstance(retried.get("job"), dict) else {}
+    return {
+        "ok": True,
+        "source_task_id": task_id,
+        "task_id": next_task_id,
+        "status": job.get("status") or "queued",
+        "package_url": f"/agent/v1/tasks/{next_task_id}/package",
+        "package": _task_package_response(job),
+    }
+
+
+@router.post("/tasks/{task_id}/note/regenerate")
+async def regenerate_agent_task_note(
+    request: Request,
+    task_id: str,
+    payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    payload = payload or {}
+    client_id = _local_client_scope(request)
+    job = _job_for_request(request, task_id)
+    initial_result = deepcopy(job.get("result"))
+    result = dict(initial_result or {})
+    transcript_source = (
+        "corrected_transcript"
+        if str(result.get("corrected_transcript_text") or "").strip()
+        else "transcript_text"
+    )
+    transcript = str(
+        result.get("corrected_transcript_text") or result.get("transcript_text") or ""
+    ).strip()
+    if not transcript:
+        raise HTTPException(status_code=400, detail="No transcript available for note regeneration")
+
+    kwargs = local_ai_kwargs(
+        deepseek_api_key=payload.get("deepseek_api_key"),
+        openai_api_key=payload.get("openai_api_key"),
+        qwen_api_key=payload.get("qwen_api_key"),
+        ai_provider=payload.get("ai_provider"),
+        ai_model=payload.get("ai_model"),
+        system_prompt=payload.get("system_prompt"),
+        note_mode=payload.get("note_mode"),
+    )
+    route = "/agent/v1/tasks/{task_id}/note/regenerate"
+    started_at = time.perf_counter()
+    try:
+        loop = asyncio.get_running_loop()
+        summary_result = await loop.run_in_executor(
+            None,
+            lambda: summarize_transcript_with_metadata(transcript, **kwargs),
+        )
+    except Exception as exc:
+        detail = friendly_error(exc)
+        if _result_changed(task_id, client_id, initial_result):
+            raise HTTPException(
+                status_code=409,
+                detail="笔记在生成期间已被修改，本次生成失败未覆盖你的编辑。",
+            ) from exc
+        result.update({
+            "summary_status": "failed",
+            "summary_error": detail,
+            "summary_skipped": False,
+        })
+        updated = finalize_job_result_if_unchanged(
+            task_id=task_id,
+            expected_result=initial_result,
+            result=result,
+            status="failed",
+            client_id=client_id,
+            stage="summary_regenerate",
+            progress=job.get("progress"),
+            summary_status="failed",
+            error_reason=detail,
+        )
+        if updated is None:
+            raise HTTPException(
+                status_code=409,
+                detail="笔记在生成期间已被修改，本次生成失败未覆盖你的编辑。",
+            ) from exc
+        log_event(
+            task_id=task_id,
+            event_name="agent_note_regenerated",
+            source_type=job.get("source_type"),
+            source_filename=job.get("source_filename"),
+            transcript_length=len(transcript),
+            stage="summary_regenerate",
+            duration_seconds=round(time.perf_counter() - started_at, 3),
+            success=False,
+            error_reason=detail,
+            metadata=event_metadata(
+                route=route, raw_error=str(exc),
+                note_generation_transcript_source=transcript_source,
+            ),
+        )
+        raise HTTPException(status_code=500, detail=detail) from exc
+
+    if _result_changed(task_id, client_id, initial_result):
+        raise HTTPException(
+            status_code=409,
+            detail="笔记在生成期间已被修改，本次生成结果未覆盖你的编辑。",
+        )
+    result.update({
+        "summary_markdown": summary_result.markdown,
+        "summary_status": "completed",
+        "summary_error": None,
+        "summary_skipped": False,
+        "requested_note_mode": summary_result.requested_mode,
+        "resolved_note_mode": summary_result.resolved_mode,
+        "note_mode_chunk_count": summary_result.chunk_count,
+        "note_mode_segment_count": getattr(summary_result, "segment_count", None),
+        "note_mode_evidence_count": getattr(summary_result, "evidence_count", None),
+        "note_mode_chapter_count": getattr(summary_result, "chapter_count", None),
+        "note_mode_important_evidence_count": getattr(summary_result, "important_evidence_count", None),
+        "note_mode_covered_important_evidence_count": getattr(summary_result, "covered_important_evidence_count", None),
+        "note_mode_coverage_missing_count": getattr(summary_result, "coverage_missing_count", None),
+        "chapter_coverage": getattr(summary_result, "chapter_coverage", None),
+        "prompt_preset": str(payload.get("prompt_preset") or "").strip() or result.get("prompt_preset"),
+        "prompt_preset_label": str(payload.get("prompt_preset_label") or "").strip() or result.get("prompt_preset_label"),
+    })
+    result = bind_chapter_coverage_time_ranges(result)
+    result = _attach_result_artifacts(task_id, result)
+    updated = finalize_job_result_if_unchanged(
+        task_id=task_id,
+        expected_result=initial_result,
+        result=result,
+        status="completed",
+        client_id=client_id,
+        stage="done",
+        progress=100,
+        summary_status="completed",
+        error_reason=None,
+    )
+    if updated is None:
+        latest = get_job(task_id, client_id=client_id)
+        latest_result = latest.get("result") if latest else None
+        if isinstance(latest_result, dict):
+            _attach_result_artifacts(task_id, latest_result)
+        raise HTTPException(
+            status_code=409,
+            detail="笔记在生成期间已被修改，本次生成结果未覆盖你的编辑。",
+        )
+    log_event(
+        task_id=task_id,
+        event_name="agent_note_regenerated",
+        source_type=job.get("source_type"),
+        source_filename=job.get("source_filename"),
+        transcript_length=len(transcript),
+        summary_length=len(summary_result.markdown or ""),
+        stage="summary_regenerate",
+        duration_seconds=round(time.perf_counter() - started_at, 3),
+        success=True,
+        metadata=event_metadata(
+            route=route, note_generation_transcript_source=transcript_source
+        ),
+    )
+    return {"ok": True, "task_id": task_id, "package": _task_package_response(updated)}
+
+
+@router.post("/tasks/{task_id}/exports")
+async def export_agent_task(
+    request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)
+) -> dict[str, Any]:
+    payload = payload or {}
+    client_id = _local_client_scope(request)
+    job = _job_for_request(request, task_id)
+    result = dict(job.get("result") or {})
+    markdown = str(payload.get("markdown") or result.get("summary_markdown") or "").strip()
+    if not markdown:
+        raise HTTPException(status_code=400, detail="No markdown note available to export")
+    target = str(payload.get("target") or "lark").strip().lower()
+    if target not in {"lark", "feishu"}:
+        raise HTTPException(status_code=400, detail="Only lark export is supported")
+
+    title = str(
+        payload.get("title") or result.get("display_title") or job.get("source_filename") or task_id
+    ).strip()
+    resolved_title = resolve_lark_doc_title(markdown, filename_stem="", form_title=title)
+    # Local-owner routes only; hosted account OAuth is rejected inside.
+    export_target = _local_lark_export_target(
+        payload.get("lark_export_route"), payload.get("lark_via_cli")
+    )
+    kwargs: dict[str, Any] = {}
+    if (app_id := resolve_secret(payload.get("lark_app_id"), "lark_app_id")):
+        kwargs["app_id"] = app_id
+    if (app_secret := resolve_secret(payload.get("lark_app_secret"), "lark_app_secret")):
+        kwargs["app_secret"] = app_secret
+    if payload.get("folder_token"):
+        kwargs["folder_token"] = payload.get("folder_token")
+
+    route = "/agent/v1/tasks/{task_id}/exports"
+    started_at = time.perf_counter()
+    log_event(
+        task_id=task_id,
+        event_name="agent_export_started",
+        source_type=job.get("source_type"),
+        source_filename=job.get("source_filename"),
+        summary_length=len(markdown),
+        stage="export",
+        export_target=export_target,
+        metadata=event_metadata(route=route, target=target, doc_title=resolved_title),
+    )
+    try:
+        loop = asyncio.get_running_loop()
+        if export_target == "lark_cli":
+            export_response = await loop.run_in_executor(
+                None, lambda: export_markdown_via_lark_cli(resolved_title, markdown)
+            )
+        else:
+            export_response = await loop.run_in_executor(
+                None,
+                lambda: export_markdown_to_lark(
+                    resolved_title,
+                    markdown,
+                    task_id=task_id,
+                    artifact_root=_artifact_storage_dir(),
+                    **kwargs,
+                ),
+            )
+    except Exception as exc:
+        detail = friendly_error(exc)
+        log_event(
+            task_id=task_id,
+            event_name="agent_export_completed",
+            source_type=job.get("source_type"),
+            source_filename=job.get("source_filename"),
+            summary_length=len(markdown),
+            stage="export",
+            duration_seconds=round(time.perf_counter() - started_at, 3),
+            success=False,
+            error_reason=detail,
+            export_target=export_target,
+            metadata=event_metadata(route=route, target=target, raw_error=str(exc)),
+        )
+        raise HTTPException(status_code=500, detail=detail) from exc
+
+    if isinstance(export_response, dict):
+        export_response["doc_title"] = resolved_title
+        export_response["task_id"] = task_id
+    export_record = {
+        "target": target,
+        "route": export_target,
+        "title": resolved_title,
+        "url": export_response.get("url") if isinstance(export_response, dict) else None,
+        "response": export_response,
+    }
+    updated = append_job_result_list_item(
+        task_id,
+        "exports",
+        export_record,
+        client_id=client_id,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Job not found")
+    log_event(
+        task_id=task_id,
+        event_name="agent_export_completed",
+        source_type=job.get("source_type"),
+        source_filename=job.get("source_filename"),
+        summary_length=len(markdown),
+        stage="export",
+        duration_seconds=round(time.perf_counter() - started_at, 3),
+        success=True,
+        export_target=export_target,
+        feishu_doc_url=export_record["url"],
+        metadata=event_metadata(route=route, target=target, doc_title=resolved_title),
+    )
+    return {"ok": True, "task_id": task_id, "export": export_record, "package": _task_package_response(updated)}

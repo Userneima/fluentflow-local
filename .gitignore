@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+node_modules/
+frontend/dist-local/
+frontend/public/assets/config.js
+backend/data/*
+!backend/data/.gitkeep
+data/*
+!data/.gitkeep
+logs/
+exports/
+reports/

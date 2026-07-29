@@ -1,0 +1,26 @@
+# FluentFlow Local edition Python dependencies.
+#
+# System dependency (not installable via pip): FFmpeg.
+# Install it on the OS and keep `ffmpeg` on PATH:
+#   - macOS:  brew install ffmpeg
+#   - Ubuntu: sudo apt install ffmpeg
+#
+# This file must stay in sync with the `python_local` list in
+# distribution/local-edition.manifest.json (guarded by
+# tests/test_local_edition_setup.py). Cloud-only packages (Alibaba OSS)
+# intentionally do not appear here.
+
+faster-whisper>=1.0.0
+opencc-python-reimplemented>=0.1.7
+moviepy>=1.0.3
+openai>=1.0.0
+lark-oapi>=1.0.0
+fastapi>=0.115.0
+httpx>=0.27.0
+python-multipart>=0.0.9
+uvicorn[standard]>=0.32.0
+python-dotenv>=1.0.0
+yt-dlp>=2025.10.14
+
+# Optional speaker diarization:
+#   pip install -r requirements-speaker.txt

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<!--
+  Local-edition entry (vite.local.config.mjs). Keep the <head> theme styles in
+  sync with frontend/index.html until they are extracted to a shared file;
+  only the title and the entry module differ.
+-->
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>FluentFlow Local</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <script src="/assets/config.js"></script>
+    <style>
+        :root {
+            --c-surface:#f8f7fb; --c-surface-dim:#e8e5e5; --c-surface-bright:#fbfbfb; --c-surface-variant:#efeeee;
+            --c-surface-container:#efeeee; --c-surface-container-low:#f4f3f3; --c-surface-container-lowest:#ffffff;
+            --c-surface-container-high:#e8e5e5; --c-surface-container-highest:#dedada; --c-surface-tint:#111111;
+            --c-on-surface:#111111; --c-on-surface-variant:#5f6368; --c-on-background:#111111; --c-background:#f8f7fb;
+            --c-outline:#858585; --c-outline-variant:#dedada;
+            --c-tertiary-fixed:#efeeee; --c-on-tertiary-fixed-variant:#3a3838; --c-on-tertiary-container:#ffffff;
+            --c-primary:#111111; --c-on-primary:#ffffff; --c-primary-container:#000001; --c-on-primary-container:#fefcff;
+            --c-tertiary:#111111; --c-on-tertiary:#ffffff; --c-tertiary-container:#2a2a2a;
+            --c-error-container:#ffdad6; --c-on-error-container:#93000a;
+            --c-inverse-surface:#111111; --c-inverse-on-surface:#ffffff;
+        }
+        .dark {
+            --c-surface:#111318; --c-surface-dim:#111318; --c-surface-bright:#373a3e; --c-surface-variant:#424754;
+            --c-surface-container:#1d2024; --c-surface-container-low:#191c20; --c-surface-container-lowest:#0c0e11;
+            --c-surface-container-high:#272a2e; --c-surface-container-highest:#323538; --c-surface-tint:#adc6ff;
+            --c-on-surface:#e2e2e6; --c-on-surface-variant:#c2c6d6; --c-on-background:#e2e2e6; --c-background:#111318;
+            --c-outline:#8c909f; --c-outline-variant:#424754;
+            --c-primary:#e2e2e6; --c-on-primary:#111111; --c-primary-container:#2e3134; --c-on-primary-container:#e2e2e6;
+            --c-tertiary:#c2c6d6; --c-on-tertiary:#111318; --c-tertiary-container:rgba(194,198,214,0.12);
+            --c-tertiary-fixed:#332050; --c-on-tertiary-fixed-variant:#d0bcff; --c-on-tertiary-container:#e9ddff;
+            --c-error-container:#93000a; --c-on-error-container:#ffdad6;
+            --c-inverse-surface:#e2e2e6; --c-inverse-on-surface:#2e3134;
+        }
+        .material-symbols-outlined {
+            font-family:'Material Symbols Outlined';
+            font-weight:normal;
+            font-style:normal;
+            line-height:1;
+            letter-spacing:normal;
+            text-transform:none;
+            display:inline-block;
+            white-space:nowrap;
+            word-wrap:normal;
+            direction:ltr;
+            -webkit-font-feature-settings:'liga';
+            -webkit-font-smoothing:antialiased;
+            font-variation-settings:'FILL' 0,'wght' 500,'GRAD' 0,'opsz' 24;
+        }
+        .editorial-shadow { box-shadow:0 18px 40px -28px rgba(17,17,17,.28); }
+        .dark .editorial-shadow { box-shadow:0 24px 48px -12px rgba(0,0,0,.3); }
+        * { scrollbar-color: rgba(17,17,17,.18) transparent; }
+        body { font-feature-settings: "cv02","cv03","cv04","tnum"; }
+        button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
+        button, a { transition-property: color, background-color, border-color, box-shadow, transform, opacity; transition-duration: 180ms; transition-timing-function: ease-out; }
+        button:active, a:active { transform: translateY(1px); }
+        input, textarea, select {
+            border-radius: 16px;
+            border-color: color-mix(in srgb, var(--c-outline-variant) 70%, transparent);
+            background: rgba(255,255,255,.92);
+        }
+        input:focus, textarea:focus, select:focus {
+            outline: 2px solid color-mix(in srgb, var(--c-surface-tint) 18%, transparent);
+            outline-offset: 2px;
+            border-color: color-mix(in srgb, var(--c-surface-tint) 38%, var(--c-outline-variant));
+            box-shadow: none;
+        }
+        .hide-scrollbar::-webkit-scrollbar{display:none}
+        .hide-scrollbar{-ms-overflow-style:none;scrollbar-width:none}
+        /* ── dark overrides for hardcoded utility classes ── */
+        .dark .bg-white { background-color: #1e2024 !important; }
+        .dark .bg-white\/80 { background-color: rgba(30,32,36,0.8) !important; }
+        .dark .bg-white\/50 { background-color: rgba(30,32,36,0.5) !important; }
+        .dark .bg-slate-50 { background-color: #191c20 !important; }
+        .dark .bg-slate-100 { background-color: #1d2024 !important; }
+        .dark .bg-slate-100\/50 { background-color: rgba(29,32,36,0.5) !important; }
+        .dark .bg-slate-200 { background-color: #272a2e !important; }
+        .dark .bg-slate-200\/50 { background-color: rgba(39,42,46,0.5) !important; }
+        .dark .bg-slate-700 { background-color: #3a3f47 !important; }
+        .dark .bg-slate-900 { background-color: #0c0e11 !important; }
+        .dark .text-slate-900 { color: #e2e2e6 !important; }
+        .dark .text-slate-600 { color: #a0a4b0 !important; }
+        .dark .text-slate-500 { color: #8c909f !important; }
+        .dark .text-slate-400 { color: #727785 !important; }
+        .dark .text-slate-300 { color: #5c616e !important; }
+        .dark .border-slate-200 { border-color: #323538 !important; }
+        .dark .border-slate-200\/50 { border-color: rgba(50,53,56,0.5) !important; }
+        .dark .border-slate-100 { border-color: #272a2e !important; }
+        .dark .shadow-sm { box-shadow: 0 1px 2px 0 rgba(0,0,0,.25) !important; }
+        .dark .shadow-lg { box-shadow: 0 10px 15px -3px rgba(0,0,0,.35) !important; }
+        .dark .shadow-xl { box-shadow: 0 20px 25px -5px rgba(0,0,0,.4) !important; }
+        .dark .shadow-2xl { box-shadow: 0 25px 50px -12px rgba(0,0,0,.5) !important; }
+        .dark .bg-blue-50 { background-color: rgba(59,130,246,0.12) !important; }
+        .dark .bg-purple-50 { background-color: rgba(107,56,212,0.12) !important; }
+        .dark .bg-amber-50 { background-color: rgba(245,158,11,0.12) !important; }
+        .dark .bg-amber-50\/50 { background-color: rgba(245,158,11,0.06) !important; }
+        .dark .bg-red-50 { background-color: rgba(239,68,68,0.12) !important; }
+        .dark .bg-green-50 { background-color: rgba(34,197,94,0.12) !important; }
+        .dark .hover\:bg-slate-200\/50:hover { background-color: rgba(39,42,46,0.5) !important; }
+        .dark .hover\:bg-white\/50:hover { background-color: rgba(30,32,36,0.5) !important; }
+        .dark .hover\:bg-slate-200:hover { background-color: #323538 !important; }
+        .dark .hover\:bg-blue-50:hover { background-color: rgba(59,130,246,0.18) !important; }
+        .dark .hover\:bg-amber-100:hover { background-color: rgba(245,158,11,0.2) !important; }
+        .dark .hover\:bg-slate-50:hover { background-color: #272a2e !important; }
+        .dark .hover\:bg-purple-100:hover { background-color: rgba(107,56,212,0.2) !important; }
+        .dark .ring-white { --tw-ring-color: #1e2024 !important; }
+        .dark .border-green-200 { border-color: #166534 !important; }
+        .dark .border-amber-200\/50 { border-color: rgba(120,80,6,0.5) !important; }
+        .dark .border-amber-200\/60 { border-color: rgba(120,80,6,0.6) !important; }
+        .dark .border-blue-200\/50 { border-color: rgba(30,64,175,0.5) !important; }
+        .dark .border-purple-200\/50 { border-color: rgba(88,28,135,0.5) !important; }
+        .dark .border-amber-400\/25 { border-color: rgba(217,119,6,0.25) !important; }
+        .dark .border-amber-400\/25 { border-color: rgba(217,119,6,0.25) !important; }
+        .dark .hover\:text-slate-900:hover { color: #e2e2e6 !important; }
+        .dark .hover\:text-slate-600:hover { color: #a0a4b0 !important; }
+        .dark .hover\:bg-slate-100:hover { background-color: #272a2e !important; }
+        .dark .hover\:bg-red-100:hover { background-color: rgba(239,68,68,0.2) !important; }
+        .dark .text-blue-700 { color: #93b4f8 !important; }
+        .dark .text-red-500 { color: #f87171 !important; }
+        .dark .text-red-600 { color: #f87171 !important; }
+        .dark .text-red-300 { color: #fca5a5 !important; }
+        .dark .text-red-400 { color: #f87171 !important; }
+        .dark .text-green-500 { color: #4ade80 !important; }
+        .dark .text-green-600 { color: #4ade80 !important; }
+        .dark .text-amber-600 { color: #fbbf24 !important; }
+        .dark .text-amber-600\/70 { color: rgba(251,191,36,0.7) !important; }
+        .dark .text-amber-700 { color: #fbbf24 !important; }
+        .dark .bg-green-500\/20 { background-color: rgba(34,197,94,0.15) !important; }
+        .dark .bg-red-500\/20 { background-color: rgba(239,68,68,0.15) !important; }
+        .dark .border-green-500\/50 { border-color: rgba(34,197,94,0.3) !important; }
+        .dark .border-red-500\/50 { border-color: rgba(239,68,68,0.3) !important; }
+        .dark .placeholder-slate-400::placeholder { color: #5c616e !important; }
+        .dark input, .dark select, .dark textarea { color: var(--c-on-surface); }
+        .dark .focus\:ring-amber-300\/50:focus { --tw-ring-color: rgba(180,130,20,0.4) !important; }
+        .dark .focus\:border-amber-300:focus { border-color: #92700a !important; }
+    </style>
+    <script>
+        /* Apply saved theme before React renders to prevent flash */
+        try{const s=JSON.parse(localStorage.getItem('fluentflow_settings')||'{}');
+        if(s.theme==='dark')document.documentElement.classList.add('dark');
+        else document.documentElement.classList.remove('dark');
+        }catch(_){}
+    </script>
+</head>
+<body class="bg-surface text-on-surface font-body overflow-hidden">
+    <div id="root"></div>
+    <script type="module" src="/src/local-app.jsx"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .ff-border-muted {
+    border-color: color-mix(in srgb, var(--c-outline-variant) 38%, transparent);
+  }
+
+  .dark .ff-border-muted {
+    border-color: color-mix(in srgb, var(--c-outline-variant) 30%, transparent);
+  }
+
+  .ff-border-control {
+    border-color: color-mix(in srgb, var(--c-outline-variant) 58%, transparent);
+  }
+
+  .dark .ff-border-control {
+    border-color: color-mix(in srgb, var(--c-outline-variant) 42%, transparent);
+  }
+
+  .progress-indeterminate {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .progress-indeterminate::after {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 38%;
+    border-radius: 9999px;
+    background: linear-gradient(90deg, transparent, rgba(103, 232, 249, 0.95), transparent);
+    animation: ff-progress-scan 1.4s ease-in-out infinite;
+  }
+
+  @keyframes ff-progress-scan {
+    from {
+      transform: translateX(-120%);
+    }
+    to {
+      transform: translateX(320%);
+    }
+  }
+}

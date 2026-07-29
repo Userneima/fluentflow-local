@@ -1,0 +1,612 @@
+import {useEffect, useRef, useState} from 'react';
+import {Link, useNavigate, useSearchParams} from 'react-router-dom';
+import {XCircle} from 'lucide-react';
+import {
+    DEFAULT_PROMPT_PRESET,
+    presetDisplayLabel,
+    resolveSystemPromptFromSettings,
+} from '../lib/promptPresets.js';
+import {
+    createTaskId,
+    effectiveSttProvider,
+    fileNameStem,
+    fmtFileSize,
+    friendlyTaskError,
+    hasTranscriptResult,
+    historyEntryToResult,
+    jobToCurrentJob,
+    larkExportRouteFromSettings,
+    normalizeSttModel,
+    resultToHistoryEntry,
+    timeAgo,
+    totalFileSizeMb,
+    useApi,
+    useI18n,
+    useSettings,
+} from '../app/shared.jsx';
+import {useApp} from '../app/AppContext.jsx';
+import {
+    queueUploadItemsFromFiles,
+    queueUploadItemsFromQueuedResponse,
+} from '../lib/queueUpload.js';
+import SvgIcon from '../components/SvgIcon.jsx';
+
+const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
+const transcriptExts = /\.(srt|vtt|txt|md)$/i;
+const audioExts = /\.(mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
+
+const platformItems = [
+    {label: '抖音', tone: 'bg-[#111111] text-white', icon: 'douyin'},
+    {label: 'Bilibili', tone: 'bg-[#00aeec] text-white', icon: 'bilibili'},
+    {label: 'YouTube', tone: 'bg-[#ff0033] text-white', icon: 'youtube'},
+    {label: '本地文件', tone: 'bg-[#efeeee] text-[#111111]', icon: 'local-file'},
+];
+
+// The local media workspace owns the normal queue path. Hosted-only visitor
+// trial behavior and direct-upload options arrive through the route wrapper,
+// so the local bundle does not carry their API calls or state transitions.
+const MediaText = ({hosted = null}) => {
+    const {t, lang} = useI18n();
+    const {
+        history,
+        addToHistory,
+        currentJob,
+        setCurrentJob,
+        setLastResult,
+        setLastSourceFile,
+        addLarkExport,
+        runtimeConfig,
+        setPendingUploadAbort,
+        abortPendingUpload,
+    } = useApp();
+    const {
+        enqueueProcessFiles,
+        createVideoSourceJob,
+        summarizeTranscriptFile,
+        cancelJob,
+        checkHealth,
+    } = useApi();
+    const {loadSettings} = useSettings();
+    const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const mode = searchParams.get('mode') === 'subtitle' ? 'subtitle' : 'media';
+    const [sourceMode, setSourceMode] = useState('link');
+    const [videoLinkInput, setVideoLinkInput] = useState('');
+    const [uploadError, setUploadError] = useState(null);
+    const [processingResult, setProcessingResult] = useState(null);
+    const [submitting, setSubmitting] = useState(false);
+    const fileInputRef = useRef(null);
+    const subtitleInputRef = useRef(null);
+    const abortRef = useRef(null);
+
+    useEffect(() => { checkHealth(); }, []);
+    useEffect(() => {
+        if (mode === 'subtitle') setSourceMode('upload');
+    }, [mode]);
+
+    const buildAiOptions = (settings) => ({
+        aiProvider: settings.aiProvider || 'deepseek',
+        aiModel: settings.aiModel || null,
+        systemPrompt: resolveSystemPromptFromSettings(settings) || null,
+        noteMode: settings.noteMode || 'auto',
+        promptPreset: settings.promptPreset || DEFAULT_PROMPT_PRESET,
+        promptPresetLabel: presetDisplayLabel(settings.promptPreset || DEFAULT_PROMPT_PRESET, settings, lang),
+        speakerDiarization: !!settings.speakerDiarization,
+        generateVisuals: !!settings.autoIllustrate,
+        sttProvider: effectiveSttProvider(settings, runtimeConfig),
+        cookiesFromBrowser: settings.videoCookiesBrowser || '',
+    });
+
+    const ensureSttReady = hosted?.ensureSttReady || (async () => true);
+
+    const applyProgressEvent = (ev) => {
+        setCurrentJob((prev) => prev ? {
+            ...prev,
+            stage: ev.stage,
+            progress: ev.progress,
+            sttProgress: ev.stt_progress ?? prev.sttProgress,
+            transcribedSeconds: ev.transcribed_seconds ?? prev.transcribedSeconds,
+            durationSeconds: ev.duration_seconds ?? prev.durationSeconds,
+            sttElapsedSeconds: ev.stt_elapsed_seconds ?? prev.sttElapsedSeconds,
+            sttStatus: ev.stt_status ?? prev.sttStatus,
+            sttProvider: ev.stt_provider ?? prev.sttProvider,
+            cloudAudioSizeMb: ev.elevenlabs_audio_size_mb ?? prev.cloudAudioSizeMb,
+        } : null);
+        if (ev.stage === 'transcript_ready' && ev.result) {
+            setLastResult(ev.result);
+            setProcessingResult(ev.result);
+        }
+    };
+
+    const settleResult = (result, {taskId, fileName, source = 'media'} = {}) => {
+        const displayName = result?.title || result?.filename || fileName;
+        setLastResult(result);
+        setProcessingResult(result);
+        setCurrentJob({taskId, fileName: displayName || fileName, stage: 'done', progress: 100});
+        addToHistory(resultToHistoryEntry(result, {
+            taskId,
+            name: displayName || fileName,
+            rawFilename: fileName,
+            requestedNoteMode: loadSettings().noteMode || 'auto',
+            source,
+        }));
+        const larkUrl = result?.lark_response?.url || null;
+        if (larkUrl) addLarkExport({url: larkUrl, title: result.lark_doc_title || fileNameStem(displayName || fileName), timestamp: Date.now()});
+        setTimeout(() => setCurrentJob((prev) => prev?.taskId === taskId ? null : prev), 3000);
+    };
+
+    const startMediaFiles = async (files) => {
+        const selectedFiles = Array.from(files || []);
+        if (selectedFiles.length === 0) return;
+        if (!selectedFiles.every((file) => mediaExts.test(file.name))) {
+            setUploadError(t('dash.fileError'));
+            return;
+        }
+        setUploadError(null);
+        setProcessingResult(null);
+        setLastResult(null);
+        const settings = loadSettings();
+        const sttModel = normalizeSttModel(settings.sttModel);
+        const sttProvider = effectiveSttProvider(settings, runtimeConfig);
+        if (!(await ensureSttReady({sttProvider, setUploadError, lang}))) return;
+
+        if (await hosted?.submitMediaFiles?.({
+            selectedFiles,
+            settings,
+            sttProvider,
+            sttModel,
+            runtimeConfig,
+            buildAiOptions,
+            applyProgressEvent,
+            settleResult,
+            addToHistory,
+            setCurrentJob,
+            setLastSourceFile,
+            setUploadError,
+            setSubmitting,
+            abortRef,
+            navigate,
+            lang,
+            isAudioFile: (file) => audioExts.test(file.name),
+        })) return;
+
+        // Every local media upload (single or multiple) goes through the
+        // background queue so the single worker processes them one at a time.
+        // This is the only way to guarantee "one video at a time" regardless of
+        // whether the user uploads files individually or selects several at once.
+        const queueLabel = selectedFiles.length === 1
+            ? selectedFiles[0].name
+            : (lang === 'zh' ? `${selectedFiles.length} 个文件` : `${selectedFiles.length} files`);
+        const uploadController = new AbortController();
+        abortRef.current = uploadController;
+        setPendingUploadAbort(uploadController);
+        setSubmitting(true);
+        setLastSourceFile(null);
+        const provisionalQueueItems = queueUploadItemsFromFiles(selectedFiles);
+        setCurrentJob({
+            taskId: null,
+            fileName: queueLabel,
+            stage: 'upload',
+            progress: 2,
+            startedAt: Date.now(),
+            sourceType: 'queue_upload',
+            fileSizeMb: totalFileSizeMb(selectedFiles),
+            queueTotal: selectedFiles.length,
+            queueItems: provisionalQueueItems,
+            queueUpload: true,
+        });
+        navigate('/agent');
+        try {
+            const data = await enqueueProcessFiles(selectedFiles, {
+                exportToLark: settings.exportToLark || false,
+                larkExportRoute: larkExportRouteFromSettings(settings),
+                larkViaCli: !!settings.larkViaCli,
+                ...buildAiOptions(settings),
+                skipSummary: !!settings.skipAiSummary,
+                sttProvider,
+                sttModel,
+                sttSpeed: settings.sttSpeed || 'balanced',
+                sttLanguage: 'auto',
+                ...(hosted?.queueUploadOptions?.({runtimeConfig}) || {}),
+            }, {
+                onProgress: (pct) => setCurrentJob((prev) => (
+                    prev && prev.queueUpload && !prev.queueSubmitted
+                        ? {...prev, progress: Math.max(2, Math.min(99, pct))}
+                        : prev
+                )),
+                signal: uploadController.signal,
+            });
+            const queueItems = queueUploadItemsFromQueuedResponse(data?.queued, provisionalQueueItems);
+            setCurrentJob({
+                taskId: null,
+                fileName: queueLabel,
+                stage: 'queued',
+                progress: 100,
+                startedAt: Date.now(),
+                sourceType: 'queue_upload',
+                fileSizeMb: totalFileSizeMb(selectedFiles),
+                queueTotal: selectedFiles.length,
+                queueItems,
+                queueUpload: true,
+                queueSubmitted: true,
+            });
+            navigate('/agent', {replace: true, state: {queueSubmittedAt: Date.now()}});
+        } catch (err) {
+            setCurrentJob(null);
+            if (err?.aborted) {
+                navigate('/agent', {replace: true});
+                return;
+            }
+            const submitError = err?.status
+                ? friendlyTaskError(err.message || 'Queue failed.', lang)
+                : (lang === 'zh'
+                    ? '上传失败或中断，请重新提交。'
+                    : 'Upload failed or was interrupted. Please submit again.');
+            navigate('/agent', {
+                replace: true,
+                state: {queueSubmitError: submitError},
+            });
+        } finally {
+            if (abortRef.current === uploadController) {
+                abortRef.current = null;
+                setPendingUploadAbort(null);
+            }
+            setSubmitting(false);
+        }
+        return;
+
+    };
+
+    const handleVideoLinkSubmit = async () => {
+        if (hosted?.blockVideoLink?.({setUploadError, lang})) return;
+        const input = videoLinkInput.trim();
+        if (!input) {
+            setUploadError(t('dash.linkEmpty'));
+            return;
+        }
+        setUploadError(null);
+        setProcessingResult(null);
+        setLastResult(null);
+        setLastSourceFile(null);
+        const settings = loadSettings();
+        const sttModel = normalizeSttModel(settings.sttModel);
+        const sttProvider = effectiveSttProvider(settings, runtimeConfig);
+        if (!(await ensureSttReady({sttProvider, setUploadError, lang}))) return;
+        const ac = new AbortController();
+        abortRef.current = ac;
+        setSubmitting(true);
+        try {
+            const data = await createVideoSourceJob(input, {
+                exportToLark: settings.exportToLark || false,
+                larkExportRoute: larkExportRouteFromSettings(settings),
+                larkViaCli: !!settings.larkViaCli,
+                ...buildAiOptions(settings),
+                skipSummary: !!settings.skipAiSummary,
+                sttProvider,
+                sttModel,
+                sttSpeed: settings.sttSpeed || 'balanced',
+                sttLanguage: 'auto',
+            }, ac.signal);
+            const job = data?.job || {};
+            if (job.task_id) {
+                setCurrentJob({
+                    ...jobToCurrentJob({...job, progress: job.progress ?? 2, created_at: job.created_at || new Date().toISOString()}),
+                    sourceType: 'video_link',
+                    resume: true,
+                    skipSummary: !!settings.skipAiSummary,
+                    exportToLark: !!settings.exportToLark,
+                    noteMode: settings.noteMode || 'auto',
+                    sttProvider,
+                    sttModel,
+                    sttSpeed: settings.sttSpeed || 'balanced',
+                    sttLanguage: 'auto',
+                });
+                setVideoLinkInput('');
+                abortRef.current = null;
+                setSubmitting(false);
+                navigate('/agent', {state: {job}});
+                return;
+            }
+        } catch (err) {
+            setUploadError(err.message || 'Video link fetch failed.');
+        }
+        if (abortRef.current === ac) abortRef.current = null;
+        setSubmitting(false);
+    };
+
+    const handleSubtitleSelect = async (eventOrFiles) => {
+        const file = Array.isArray(eventOrFiles)
+            ? eventOrFiles[0]
+            : eventOrFiles?.target?.files?.[0];
+        if (subtitleInputRef.current) subtitleInputRef.current.value = '';
+        if (!file) return;
+        if (hosted?.blockSubtitleImport?.({setUploadError, lang})) return;
+        if (!transcriptExts.test(file.name)) {
+            setUploadError(t('dash.subtitleFileError'));
+            return;
+        }
+        setUploadError(null);
+        setProcessingResult(null);
+        setLastResult(null);
+        setLastSourceFile(null);
+
+        const ac = new AbortController();
+        abortRef.current = ac;
+        const taskId = createTaskId();
+        const settings = loadSettings();
+        const fileSizeMb = Math.round(file.size / 1024 / 1024 * 1000) / 1000;
+        setSubmitting(true);
+        setCurrentJob({
+            taskId,
+            fileName: file.name,
+            stage: 'summary',
+            progress: 20,
+            startedAt: Date.now(),
+            sourceType: 'transcript_file',
+            fileSizeMb,
+            skipSummary: false,
+            exportToLark: false,
+            noteMode: settings.noteMode || 'auto',
+        });
+        try {
+            const result = await summarizeTranscriptFile(file, {taskId, ...buildAiOptions(settings), skipSummary: false}, ac.signal);
+            settleResult(result, {taskId, fileName: file.name, source: 'transcript_file'});
+            navigate('/editor');
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                setUploadError(err.message || 'Summary generation failed.');
+                addToHistory({id: Date.now(), taskId, name: file.name, timestamp: Date.now(), durationMin: 0, status: 'failed'});
+            }
+            setCurrentJob(null);
+        } finally {
+            if (abortRef.current === ac) abortRef.current = null;
+            setSubmitting(false);
+        }
+    };
+
+    const handleMediaInput = async (eventOrFiles) => {
+        const files = Array.isArray(eventOrFiles)
+            ? eventOrFiles
+            : Array.from(eventOrFiles?.target?.files || []);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        await startMediaFiles(files);
+    };
+
+    const handleDrop = (e) => {
+        e.preventDefault();
+        const files = Array.from(e.dataTransfer.files || []);
+        if (files.length === 0) return;
+        if (mode === 'subtitle' || (files.length === 1 && transcriptExts.test(files[0].name))) {
+            handleSubtitleSelect(files);
+        } else {
+            startMediaFiles(files);
+        }
+    };
+
+    const handleCancel = async () => {
+        const confirmText = lang === 'zh'
+            ? '取消当前正在上传或处理的任务？任务会中止，完整结果不会生成；如果任务已经进入队列，可到处理记录查看已取消记录。这不是删除历史记录。'
+            : 'Cancel the current upload or processing task? The task will stop and a complete result will not be created. If it already entered the queue, you can check the cancelled record in Processing records. This does not delete history.';
+        if (!window.confirm(confirmText)) return;
+        abortPendingUpload();
+        abortRef.current = null;
+        if (await hosted?.cancelCurrentJob?.({currentJob, setUploadError, lang})) {
+            setCurrentJob(null);
+            setSubmitting(false);
+            return;
+        }
+        if (currentJob?.taskId) {
+            try { await cancelJob(currentJob.taskId, {sttProvider: currentJob.sttProvider}); } catch (err) { setUploadError(friendlyTaskError(err.message || String(err), lang)); }
+        }
+        setCurrentJob(null);
+        setSubmitting(false);
+    };
+
+    const recent = history.slice(0, 6);
+
+    const openRecentTask = async (item) => {
+        const cachedResult = historyEntryToResult(item);
+        const openCachedEditor = () => {
+            if (item.status !== 'completed' || !hasTranscriptResult(cachedResult)) return false;
+            setLastResult(cachedResult);
+            navigate('/editor');
+            return true;
+        };
+        if (openCachedEditor()) return;
+        if (!item.taskId) return;
+        navigate('/agent', {state: {job: item}});
+    };
+
+    return (
+        <main className="ml-[var(--sidebar-offset)] min-h-screen bg-[#f8f7fb] text-[#111111] transition-[margin] duration-200 ease-out dark:bg-[#101010] dark:text-white/[0.92]">
+            <section className="mx-auto h-dvh max-w-[1280px] overflow-y-auto px-8 py-9 hide-scrollbar">
+                <input ref={fileInputRef} type="file" multiple accept="video/*,audio/*,.mp4,.mov,.avi,.mkv,.webm,.mp3,.wav,.flac,.aac,.ogg,.m4a,.wma,.opus" onChange={handleMediaInput} className="hidden"/>
+                <input ref={subtitleInputRef} type="file" accept=".srt,.vtt,.txt,.md,text/plain,text/markdown" onChange={handleSubtitleSelect} className="hidden"/>
+
+                <div className="mb-7 flex flex-wrap items-center justify-center gap-3">
+                    <span className="text-sm font-bold text-[#8a8a8a] dark:text-white/40">{lang === 'zh' ? '目前支持：' : 'Supported:'}</span>
+                    {platformItems.map((item) => (
+                        <span key={item.label} className="inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-bold text-[#666] dark:text-white/55">
+                            <span className={`flex size-7 items-center justify-center rounded-[8px] ${item.tone}`}>
+                                <SvgIcon name={item.icon} className="size-4"/>
+                            </span>
+                            {item.label}
+                        </span>
+                    ))}
+                </div>
+
+                <section
+                    className="relative overflow-hidden rounded-[24px] border border-[#dedada] bg-white p-8 shadow-[0_26px_70px_-46px_rgba(17,17,17,.5)] dark:border-white/[0.12] dark:bg-[#1d1f22] dark:shadow-none"
+                    onDrop={handleDrop}
+                    onDragOver={(e) => e.preventDefault()}
+                >
+                    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_14%,rgba(0,174,236,.14),transparent_32%),radial-gradient(circle_at_82%_10%,rgba(255,0,51,.08),transparent_28%),radial-gradient(circle_at_44%_105%,rgba(151,231,211,.12),transparent_34%)] dark:bg-[radial-gradient(circle_at_18%_14%,rgba(0,174,236,.18),transparent_34%),radial-gradient(circle_at_82%_10%,rgba(255,0,51,.12),transparent_30%),radial-gradient(circle_at_42%_108%,rgba(151,231,211,.12),transparent_36%)]"/>
+                    <div className="pointer-events-none absolute inset-0 bg-white/72 dark:bg-[#1d1f22]/78"/>
+                    <div className="relative z-10">
+                        <div className="mb-7 flex items-center justify-between gap-3">
+                            <div className="inline-flex min-w-0 shrink rounded-[18px] border border-[#dedada] bg-[#f4f3f3] p-1 dark:border-white/[0.12] dark:bg-white/[0.08]">
+                                {['media', 'subtitle'].map((item) => (
+                                    <button
+                                        key={item}
+                                        type="button"
+                                        onClick={() => setSearchParams({mode: item})}
+                                        className={`h-10 min-w-0 whitespace-nowrap rounded-[14px] px-3 text-[13px] font-extrabold transition sm:px-4 sm:text-sm ${mode === item ? 'bg-white text-[#111111] shadow-sm dark:bg-white/[0.16] dark:text-white' : 'text-[#777] hover:text-[#111111] dark:text-white/55 dark:hover:text-white'}`}
+                                    >
+                                        {item === 'media' ? (lang === 'zh' ? '视频生成笔记' : 'Media notes') : (lang === 'zh' ? '字幕生成笔记' : 'Subtitle notes')}
+                                    </button>
+                                ))}
+                            </div>
+                            <Link to="/agent" className="inline-flex h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-[16px] bg-[#efeeee] px-4 text-sm font-extrabold text-[#111111] hover:bg-[#e8e5e5] dark:bg-white/[0.12] dark:text-white dark:hover:bg-white/[0.18]">
+                                {t('dash.viewTasks')}
+                            </Link>
+                        </div>
+
+                        {mode === 'media' && (
+                            <div className="space-y-5">
+                                <div className="inline-flex rounded-[18px] border border-[#dedada] bg-[#f4f3f3] p-1 dark:border-white/[0.12] dark:bg-white/[0.08]">
+                                    {['link', 'upload'].map((item) => (
+                                        <button
+                                            key={item}
+                                            type="button"
+                                            onClick={() => setSourceMode(item)}
+                                            className={`h-10 rounded-[14px] px-4 text-sm font-extrabold transition ${sourceMode === item ? 'bg-white text-[#111111] shadow-sm dark:bg-white/[0.16] dark:text-white' : 'text-[#777] hover:text-[#111111] dark:text-white/55 dark:hover:text-white'}`}
+                                        >
+                                            {item === 'link' ? (lang === 'zh' ? '链接' : 'Link') : (lang === 'zh' ? '本地上传' : 'Upload')}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {sourceMode === 'link' ? (
+                                    <div>
+                                        <label className="mb-2 block text-sm font-extrabold text-[#111111] dark:text-white">{lang === 'zh' ? '视频或播客链接' : 'Video or podcast link'}</label>
+                                        <textarea
+                                            value={videoLinkInput}
+                                            onChange={(e) => setVideoLinkInput(e.target.value)}
+                                            className="min-h-[116px] w-full resize-none rounded-[18px] border border-[#dedada] bg-[#fbfbfb] px-5 py-4 text-[15px] font-semibold text-[#111111] outline-none placeholder:text-[#aaa] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/30 dark:focus:border-white/[0.4]"
+                                            placeholder={lang === 'zh' ? '粘贴抖音、Bilibili、YouTube 或视频直链' : 'Paste a Douyin, Bilibili, YouTube, or direct video link'}
+                                        />
+                                    </div>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="flex min-h-[180px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
+                                    >
+                                        <SvgIcon name="upload-file" className="mb-3 size-8 text-[#111111] dark:text-white"/>
+                                        <span className="text-lg font-extrabold">{lang === 'zh' ? '拖放或选择音视频文件' : 'Drop or choose media files'}</span>
+                                        <span className="mt-2 text-sm font-semibold text-[#777] dark:text-white/55">MP4 / MOV / MP3 / WAV / M4A</span>
+                                    </button>
+                                )}
+                            </div>
+                        )}
+
+                        {mode === 'subtitle' && (
+                            <button
+                                type="button"
+                                onClick={() => subtitleInputRef.current?.click()}
+                                className="flex min-h-[220px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
+                            >
+                                <SvgIcon name="subtitles" className="mb-3 size-8 text-[#111111] dark:text-white"/>
+                                <span className="text-lg font-extrabold">{lang === 'zh' ? '拖放或选择字幕 / 文本文件' : 'Drop or choose subtitle files'}</span>
+                                <span className="mt-2 text-sm font-semibold text-[#777] dark:text-white/55">SRT / VTT / TXT / MD</span>
+                            </button>
+                        )}
+
+                        <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-end">
+                            {mode === 'media' && sourceMode === 'upload' && (
+                                <button type="button" onClick={() => fileInputRef.current?.click()} disabled={submitting} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
+                                    <SvgIcon name="upload-file" className="size-4"/>
+                                    {lang === 'zh' ? '选择文件' : 'Choose files'}
+                                </button>
+                            )}
+                            {mode === 'subtitle' && (
+                                <button type="button" onClick={() => subtitleInputRef.current?.click()} disabled={submitting} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
+                                    <SvgIcon name="subtitles" className="size-4"/>
+                                    {lang === 'zh' ? '选择字幕文件' : 'Choose subtitle file'}
+                                </button>
+                            )}
+                            {mode === 'media' && sourceMode === 'link' && (
+                                <button type="button" onClick={handleVideoLinkSubmit} disabled={submitting} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] bg-[#111111] px-7 text-sm font-extrabold text-white hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-[#111111] dark:hover:bg-[#e8e8e8]">
+                                    {submitting ? <SvgIcon name="sync" className="size-4 animate-spin"/> : <SvgIcon name="arrow-right" className="size-4"/>}
+                                    {lang === 'zh' ? '开始生成笔记' : 'Start'}
+                                </button>
+                            )}
+                        </div>
+
+                        {uploadError && <div className="mt-5 rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-300">{uploadError}</div>}
+                        {processingResult && <div className="mt-5 rounded-[16px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">{t('dash.done')} <button type="button" onClick={() => navigate('/editor')} className="underline hover:no-underline">{t('dash.viewEditor')}</button></div>}
+                    </div>
+                </section>
+
+                {currentJob && currentJob.stage !== 'done' && currentJob.sourceType !== 'video_link' && (
+                    <section className="mt-6 rounded-[22px] border border-[#dedada] bg-white p-5 dark:border-white/[0.12] dark:bg-white/[0.06]">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                                <p className="text-xs font-extrabold text-[#777] dark:text-white/55">{lang === 'zh' ? '当前任务' : 'Active task'}</p>
+                                <h2 className="mt-1 truncate text-xl font-extrabold">{currentJob.fileName}</h2>
+                                <p className="mt-1 text-sm font-semibold text-[#666] dark:text-white/55">{t(`status.${currentJob.stage}`)}</p>
+                            </div>
+                            <button type="button" onClick={handleCancel} className="inline-flex h-10 items-center justify-center gap-2 rounded-[14px] border border-red-200 bg-red-50 px-3 text-xs font-extrabold text-red-600 hover:bg-red-100 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-300 dark:hover:bg-red-400/20">
+                                <XCircle className="size-4" strokeWidth={2.15}/>
+                                {t('dash.cancel')}
+                            </button>
+                        </div>
+                        <div className="mt-4 flex items-center gap-3">
+                            <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-[#efeeee] dark:bg-white/[0.12]">
+                                <div className="h-full rounded-full bg-[#111111] transition-all duration-700 dark:bg-white" style={{width: `${Math.max(0, Math.min(100, Number(currentJob?.progress) || 0))}%`}}/>
+                            </div>
+                            <span className="shrink-0 text-sm font-extrabold tabular-nums">{Math.round(Math.max(0, Math.min(100, Number(currentJob?.progress) || 0)))}%</span>
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                            <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
+                                <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{t('dash.fileSize')}</p>
+                                <p className="mt-1 text-sm font-extrabold">{fmtFileSize(currentJob.fileSizeMb)}</p>
+                            </div>
+                            <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
+                                <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{lang === 'zh' ? '转录路线' : 'Transcription'}</p>
+                                <p className="mt-1 truncate text-sm font-extrabold">{currentJob.sttProvider ? (String(currentJob.sttProvider).toLowerCase() === 'local' ? (lang === 'zh' ? '本地' : 'Local') : (lang === 'zh' ? '云端' : 'Cloud')) : '-'}</p>
+                            </div>
+                            <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
+                                <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{lang === 'zh' ? 'STT 模型' : 'STT model'}</p>
+                                <p className="mt-1 truncate text-sm font-extrabold">{currentJob.sttModel || '-'}</p>
+                            </div>
+                            <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
+                                <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{lang === 'zh' ? '来源' : 'Source'}</p>
+                                <p className="mt-1 truncate text-sm font-extrabold">{(() => { const s = String(currentJob.sourceType || '').toLowerCase(); if (s.includes('audio')) return lang === 'zh' ? '音频' : 'Audio'; if (s.includes('transcript') || s.includes('subtitle')) return lang === 'zh' ? '字幕' : 'Subtitle'; if (s.includes('video') || s === 'queue_upload') return lang === 'zh' ? '视频' : 'Video'; return '-'; })()}</p>
+                            </div>
+                        </div>
+                    </section>
+                )}
+
+                <section className="mt-7 rounded-[24px] border border-[#dedada] bg-white p-6 shadow-[0_18px_44px_-38px_rgba(17,17,17,.45)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
+                    <div className="mb-5 flex items-center justify-between gap-4">
+                        <div>
+                            <h2 className="text-[22px] font-extrabold">{t('dash.recent')}</h2>
+                            <p className="mt-1 text-sm font-semibold text-[#777] dark:text-white/55">{lang === 'zh' ? '最近完成和处理中任务会显示在这里。' : 'Recent completed and active tasks appear here.'}</p>
+                        </div>
+                        <Link to="/agent" className="rounded-full bg-[#efeeee] px-4 py-2 text-xs font-extrabold text-[#111111] hover:bg-[#e8e5e5] dark:bg-white/[0.12] dark:text-white dark:hover:bg-white/[0.18]">{t('dash.viewAll')}</Link>
+                    </div>
+                    {recent.length === 0 ? (
+                        <div className="rounded-[18px] border border-dashed border-[#dedada] bg-[#fbfbfb] px-4 py-12 text-center text-sm font-semibold text-[#999] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-white/40">
+                            {t('dash.noActivity')}
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                            {recent.map((item) => (
+                                <button key={item.id} type="button" onClick={() => openRecentTask(item)} className="min-w-0 rounded-[18px] bg-[#f4f3f3] p-4 text-left transition hover:bg-[#efeeee] dark:bg-white/[0.08] dark:hover:bg-white/[0.12]">
+                                    <div className="mb-2 flex items-center justify-between gap-2">
+                                        <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold">{item.name}</h3>
+                                        <span className="inline-flex shrink-0 whitespace-nowrap rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-[#666] dark:bg-white/[0.16] dark:text-white/70">{t(item.status === 'completed' ? 'dash.statusCompleted' : item.status === 'processing' ? 'dash.statusProcessing' : 'dash.statusFailed')}</span>
+                                    </div>
+                                    <p className="text-xs font-semibold text-[#777] dark:text-white/55">{timeAgo(item.timestamp, t)}{item.durationMin > 0 && ` · ${item.durationMin} ${t('dash.minUnit')}`}</p>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </section>
+            </section>
+        </main>
+    );
+};
+
+export default MediaText;
