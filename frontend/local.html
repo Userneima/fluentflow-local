@@ -10,8 +10,10 @@
     <meta content="width=device-width, initial-scale=1.0" name="viewport" />
     <title>FluentFlow Local</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <!-- Self-hosted font: no third-party request on page load (local-first
+         privacy + offline startup). Icons are inline SVG (lucide), so the old
+         Material Symbols stylesheet was an unused leftover. -->
+    <link href="/assets/fonts/inter.css" rel="stylesheet" />
     <script src="/assets/config.js"></script>
     <style>
         :root {
