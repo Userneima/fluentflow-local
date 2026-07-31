@@ -2,7 +2,7 @@
   "status": "exported",
   "edition": "local",
   "source_version": "0.3.2",
-  "source_revision": "9615dcebeff97d6a33e1a7357ef024ecf3164160",
+  "source_revision": "ea890a6b4a63b328215cf1eec4b9018b7cc7000f",
   "copied_files": [
     "VERSION",
     "backend/core/__init__.py",

@@ -49,7 +49,9 @@ if (-not (Test-Path (Join-Path $Repo "backend\\local_main.py"))) {
 
 $health = Get-LocalHealth
 if ($health) {
-    if ($health.execution -eq "local") {
+    # /health nests the edition marker under "runtime"; reading it from the
+    # top level made a healthy running instance look like a foreign process.
+    if ($health.runtime -and $health.runtime.execution -eq "local") {
         Write-Host "FluentFlow Local is already running. Opening the workspace."
         Start-Process $AppUrl
         exit 0
