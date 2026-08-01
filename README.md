@@ -29,6 +29,18 @@ npm run build:frontend
 .venv/bin/python -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000
 ```
 
+## 开发检查
+
+```bash
+npm ci
+npm run lint:frontend
+npm run test:frontend
+npm run build:frontend
+python -m pip install -r requirements-dev.txt
+python -m unittest discover -s tests -p 'test_*.py'
+python -m pylint backend --errors-only --disable=import-error,no-member
+```
+
 需要 FFmpeg；AI 与飞书凭据可在应用设置中填写。
 
 ## License

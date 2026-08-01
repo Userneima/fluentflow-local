@@ -3,7 +3,7 @@
   "scripts": {
     "dev:frontend": "node scripts/write_frontend_config.js && vite --config vite.local.config.mjs --host 127.0.0.1",
     "build:frontend": "node scripts/write_frontend_config.js && vite build --config vite.local.config.mjs",
-    "lint:frontend": "node scripts/lint_frontend.mjs",
+    "lint:frontend": "eslint frontend/src",
     "test:frontend": "vitest run --config vitest.config.mjs",
     "start": "python3 -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000"
   },
@@ -26,6 +26,8 @@
     "@testing-library/react": "^16.3.2",
     "@vitejs/plugin-react": "^6.0.2",
     "autoprefixer": "^10.5.0",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
     "jsdom": "^29.1.1",
     "tailwindcss": "^3.4.18",
     "vite": "^8.0.16",
