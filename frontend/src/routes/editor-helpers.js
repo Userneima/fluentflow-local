@@ -27,6 +27,23 @@ export const isVideoResultSource = (result, sourceFile) => {
 
 export const shouldKeepVideoReviewMounted = ({activeReviewMode}) => activeReviewMode === 'video';
 
+export const activeTranscriptSegmentIndex = (segments, currentTime) => {
+    let low = 0;
+    let high = Math.max(0, (segments?.length || 0) - 1);
+    const time = Number(currentTime) || 0;
+    while (low <= high) {
+        const index = Math.floor((low + high) / 2);
+        const current = segments[index] || {};
+        const start = Number(current.start) || 0;
+        const nextStart = Number(segments[index + 1]?.start);
+        const end = Number(current.end) || (Number.isFinite(nextStart) ? nextStart : start + 6);
+        if (time < start) high = index - 1;
+        else if (time >= end) low = index + 1;
+        else return index;
+    }
+    return -1;
+};
+
 export const localSourceFileMatchesResult = (file, result) => {
     if (!file || !result) return false;
     const fingerprint = result.source_fingerprint || {};

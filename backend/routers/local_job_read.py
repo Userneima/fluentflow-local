@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import Request
 
 from backend.core.local_job_runtime import JOB_EVENTS
+from backend.core.local_media_access import LocalMediaAccess
 from backend.core.local_request_scope import request_client_id
 from backend.routers.job_read import create_job_read_router
 
@@ -21,4 +22,5 @@ def _local_client_scope(request: Request) -> Optional[str]:
 router = create_job_read_router(
     request_client_scope=_local_client_scope,
     job_events=JOB_EVENTS,
+    media_access=LocalMediaAccess(),
 )

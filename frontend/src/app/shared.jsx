@@ -436,6 +436,17 @@ export const useApi = () => {
         const blob = await r.blob();
         return new File([blob], filename || 'source', {type: blob.type || 'application/octet-stream'});
     };
+    const getJobMediaUrl = async (taskId, options={}) => {
+        const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/media-session`, {
+            method: 'POST',
+            headers: localExecutionHeaders(options),
+        });
+        if (!r.ok) throw new Error('Source media not found');
+        const payload = await r.json();
+        const mediaUrl = String(payload?.media_url || '');
+        if (!mediaUrl) throw new Error('Source media not found');
+        return /^https?:\/\//i.test(mediaUrl) ? mediaUrl : `${API_BASE}${mediaUrl}`;
+    };
     const fetchJobArtifactFile = async (taskId, kind, filename='artifact', options={}) => {
         const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(kind)}`, {
             headers: localExecutionHeaders(options),
@@ -523,7 +534,7 @@ export const useApi = () => {
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
     // Local-safe API methods available in every edition.
-    const baseMethods = {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, deleteJob, retryJob, getJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
+    const baseMethods = {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, deleteJob, retryJob, getJobs, fetchJobSourceFile, getJobMediaUrl, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
     // The hosted composition root registers the hosted-only fetch helpers
     // (guest trial, account quota, admin, hosted Feishu OAuth, desktop sync).
     // The local edition registers nothing, so those methods stay absent and the

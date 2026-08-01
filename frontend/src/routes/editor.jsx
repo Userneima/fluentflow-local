@@ -56,6 +56,7 @@ import {
     isLikelyVideoFile,
     isVideoResultSource,
     localSourceFileMatchesResult,
+    activeTranscriptSegmentIndex,
     shouldKeepVideoReviewMounted,
     summaryFailureNextStep,
     formatElapsedMinuteSecond,
@@ -79,7 +80,7 @@ const Editor = ({hosted = null}) => {
         addLarkExport,
         runtimeConfig,
     } = useApp();
-    const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit} = useApi();
+    const {processVideoSSE, fetchJobSourceFile, getJobMediaUrl, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit} = useApi();
     const {loadSettings, saveSettings} = useSettings();
     const [exporting, setExporting] = useState(false);
     const [regenerating, setRegenerating] = useState(false);
@@ -355,10 +356,10 @@ const Editor = ({hosted = null}) => {
         ? summaryDraft
         : (summaryDraft || result?.summary_markdown || '');
 
-    const replaceMediaUrl = useCallback((nextUrl = '') => {
+    const replaceMediaUrl = useCallback((nextUrl = '', {objectUrl = false} = {}) => {
         const previousUrl = mediaObjectUrlRef.current;
         if (previousUrl && previousUrl !== nextUrl) URL.revokeObjectURL(previousUrl);
-        mediaObjectUrlRef.current = nextUrl;
+        mediaObjectUrlRef.current = objectUrl ? nextUrl : '';
         setMediaUrl(nextUrl);
     }, []);
 
@@ -366,7 +367,7 @@ const Editor = ({hosted = null}) => {
         if (!file) return;
         const url = URL.createObjectURL(file);
         setMediaKind(isLikelyVideoFile(file) ? 'video' : 'audio');
-        replaceMediaUrl(url);
+        replaceMediaUrl(url, {objectUrl: true});
         setMediaError('');
         setMediaLoading(false);
     }, [replaceMediaUrl]);
@@ -377,9 +378,19 @@ const Editor = ({hosted = null}) => {
         setMediaError('');
         setMediaLoading(false);
         setMediaKind('audio');
+        setTranscriptReviewMode('text');
         if (!result) return () => { cancelled = true; };
         if (matchedLocalSourceFile) {
             loadMediaFile(matchedLocalSourceFile);
+            return () => { cancelled = true; };
+        }
+        const hasStoredVideo = result.task_id
+            && result.source_file_available
+            && isVideoResultSource(result, matchedLocalSourceFile);
+        if (hasStoredVideo) {
+            // Keep the large video on disk until the user actually opens video
+            // review. The native media element will then make Range requests.
+            setMediaKind('video');
             return () => { cancelled = true; };
         }
         if (result.task_id && result.source_file_available && canPersistResult) {
@@ -481,12 +492,20 @@ const Editor = ({hosted = null}) => {
         () => simpleMd(summary, {renderImages: !hasInlineVisualEvidence || visualEvidenceVisible}),
         [summary, hasInlineVisualEvidence, visualEvidenceVisible]
     );
-    const displayTranscriptSegments = pickDisplayTranscriptSegments(result, segments);
-    const bilingualTranscriptSegments = displayTranscriptSegments
-        .filter((seg) => String(seg.text_zh || '').trim());
+    const displayTranscriptSegments = useMemo(
+        () => pickDisplayTranscriptSegments(result, segments),
+        [result, segments],
+    );
+    const bilingualTranscriptSegments = useMemo(
+        () => displayTranscriptSegments.filter((seg) => String(seg.text_zh || '').trim()),
+        [displayTranscriptSegments],
+    );
     const hasBilingualTranscript = bilingualTranscriptSegments.length > 0;
     const visibleTranscriptView = hasBilingualTranscript && transcriptView !== 'raw' ? 'bilingual' : 'raw';
-    const visibleTranscriptSegments = visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments;
+    const visibleTranscriptSegments = useMemo(
+        () => visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments,
+        [bilingualTranscriptSegments, segments, visibleTranscriptView],
+    );
     const isTranscriptHydrationPending = !!result?.task_id
         && !transcriptUnsaved
         && !isLocalHistoryResult(result)
@@ -532,20 +551,17 @@ const Editor = ({hosted = null}) => {
         && (matchedLocalSourceFile || (result?.task_id && result?.source_file_available))
     );
     const canShowVideoReview = isVideoResultSource(result, matchedLocalSourceFile);
-    const canUseVideoReview = canShowVideoReview && mediaKind === 'video' && !!mediaUrl && segments.length > 0;
+    const canUseVideoReview = canShowVideoReview && segments.length > 0 && !!(
+        (mediaKind === 'video' && mediaUrl)
+        || matchedLocalSourceFile
+        || result?.source_file_available
+    );
     const activeReviewMode = canUseVideoReview ? transcriptReviewMode : 'text';
     const shouldShowVideoReview = shouldKeepVideoReviewMounted({activeReviewMode});
-    const activeSegmentIndex = visibleTranscriptSegments.length > 0
-        ? (() => {
-            const found = visibleTranscriptSegments.findIndex((seg, index) => {
-            const start = Number(seg.start) || 0;
-            const nextStart = Number(visibleTranscriptSegments[index + 1]?.start);
-            const end = Number(seg.end) || (Number.isFinite(nextStart) ? nextStart : start + 6);
-            return mediaCurrentTime >= start && mediaCurrentTime < end;
-            });
-            return found >= 0 ? found : -1;
-        })()
-        : -1;
+    const activeSegmentIndex = useMemo(
+        () => activeTranscriptSegmentIndex(visibleTranscriptSegments, mediaCurrentTime),
+        [mediaCurrentTime, visibleTranscriptSegments],
+    );
     const updateMediaCurrentTime = useCallback((time, options={}) => {
         const next = Math.max(0, Number(time) || 0);
         setMediaCurrentTime(next);
@@ -697,6 +713,33 @@ const Editor = ({hosted = null}) => {
     const seekToSegment = (seg) => {
         if (seg?.start == null) return;
         seekMediaTo(Number(seg.start) || 0);
+    };
+
+    const openVideoReview = async () => {
+        if (!canUseVideoReview || mediaLoading) return;
+        persistMediaPosition();
+        if (mediaKind === 'video' && mediaUrl) {
+            setTranscriptReviewMode('video');
+            return;
+        }
+        if (matchedLocalSourceFile) {
+            loadMediaFile(matchedLocalSourceFile);
+            setTranscriptReviewMode('video');
+            return;
+        }
+        if (!result?.task_id || !result?.source_file_available) return;
+        setMediaLoading(true);
+        setMediaError('');
+        try {
+            const nextUrl = await getJobMediaUrl(result.task_id, resultJobOptions);
+            replaceMediaUrl(nextUrl);
+            setMediaKind('video');
+            setTranscriptReviewMode('video');
+        } catch (err) {
+            setMediaError(err.message || 'Source media unavailable');
+        } finally {
+            setMediaLoading(false);
+        }
     };
 
     const togglePlayback = () => {
@@ -1364,8 +1407,8 @@ const Editor = ({hosted = null}) => {
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        onClick={()=>{ if (canUseVideoReview) { persistMediaPosition(); setTranscriptReviewMode('video'); } }}
-                                                        disabled={!canUseVideoReview}
+                                                        onClick={openVideoReview}
+                                                        disabled={!canUseVideoReview || mediaLoading}
                                                         title={!canUseVideoReview ? (lang === 'zh' ? '选择原视频并保留时间戳后可用' : 'Available after choosing source video with timestamps') : undefined}
                                                         className={`inline-flex h-full items-center justify-center rounded-[10px] px-2.5 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:text-[#9a9a9a] disabled:hover:bg-transparent disabled:hover:text-[#9a9a9a] dark:disabled:text-white/28 dark:disabled:hover:text-white/28 ${
                                                             activeReviewMode === 'video'
@@ -1440,6 +1483,7 @@ const Editor = ({hosted = null}) => {
                                         ref={mediaRef}
                                         src={mediaUrl || undefined}
                                         controls
+                                        preload="metadata"
                                         className="max-h-[min(58vh,36rem)] w-full shrink-0 rounded-[18px] bg-black object-contain"
                                         onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
                                         onLoadedMetadata={(e)=>restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0)}
@@ -1533,6 +1577,7 @@ const Editor = ({hosted = null}) => {
                                             ref={mediaRef}
                                             src={mediaUrl || undefined}
                                             className="hidden"
+                                            preload="metadata"
                                             onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
                                             onLoadedMetadata={(e)=>restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0)}
                                             onSeeked={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true})}
