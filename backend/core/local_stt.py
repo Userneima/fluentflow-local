@@ -12,6 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from backend.core.windows_gpu_runtime import configure_windows_gpu_runtime
+
+# On Windows, CTranslate2 needs the CUDA DLL directories registered before
+# faster-whisper imports it.  The setup script keeps those DLLs in this venv.
+configure_windows_gpu_runtime()
+
 from faster_whisper import WhisperModel
 
 logger = logging.getLogger(__name__)
@@ -75,6 +81,26 @@ _opencc_converter: Any | None = None
 _opencc_checked = False
 
 
+def _resolve_stt_device(device: str) -> tuple[str, str | None]:
+    """Avoid a late DLL crash when automatic GPU selection lacks its runtime."""
+    requested = (device or "auto").strip().lower()
+    runtime = configure_windows_gpu_runtime()
+    if requested == "auto" and runtime.supported_platform and not runtime.ready:
+        message = (
+            "Windows NVIDIA runtime is missing "
+            f"({', '.join(runtime.missing_dlls)}); using CPU. "
+            f"Run {runtime.install_hint} in the FluentFlow virtual environment to enable GPU transcription."
+        )
+        logger.warning(message)
+        return "cpu", message
+    return requested, None
+
+
+def _is_cuda_runtime_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(token in message for token in ("cublas", "cudnn", "cuda", "nvcuda"))
+
+
 def _to_simplified_chinese(text: str) -> str:
     """Convert Traditional Chinese output to Simplified when OpenCC is available."""
     global _opencc_converter, _opencc_checked
@@ -103,20 +129,38 @@ def get_or_load_model_with_stats(
 ) -> tuple[WhisperModel, dict[str, Any]]:
     """Return a cached WhisperModel plus coarse cache/load metadata."""
     resolved = _resolve_model(model_size)
-    key = f"{resolved}|{compute_type}|{device}|{cpu_threads}|{num_workers}"
+    effective_device, fallback_reason = _resolve_stt_device(device)
+    key = f"{resolved}|{compute_type}|{effective_device}|{cpu_threads}|{num_workers}"
     with _model_lock:
         cache_hit = key in _model_cache
         load_seconds = 0.0
         if not cache_hit:
-            logger.info("Loading Whisper model: %s (device=%s, compute=%s)…", resolved, device, compute_type)
+            logger.info("Loading Whisper model: %s (device=%s, compute=%s)…", resolved, effective_device, compute_type)
             started_at = time.perf_counter()
-            _model_cache[key] = WhisperModel(
-                resolved,
-                device=device,
-                compute_type=compute_type,
-                cpu_threads=cpu_threads,
-                num_workers=num_workers,
-            )
+            try:
+                _model_cache[key] = WhisperModel(
+                    resolved,
+                    device=effective_device,
+                    compute_type=compute_type,
+                    cpu_threads=cpu_threads,
+                    num_workers=num_workers,
+                )
+            except (OSError, RuntimeError) as exc:
+                if (device or "auto").strip().lower() != "auto" or effective_device == "cpu" or not _is_cuda_runtime_error(exc):
+                    raise
+                fallback_reason = f"GPU runtime could not start ({exc}); using CPU."
+                logger.warning(fallback_reason)
+                effective_device = "cpu"
+                key = f"{resolved}|{compute_type}|{effective_device}|{cpu_threads}|{num_workers}"
+                cache_hit = key in _model_cache
+                if not cache_hit:
+                    _model_cache[key] = WhisperModel(
+                        resolved,
+                        device=effective_device,
+                        compute_type=compute_type,
+                        cpu_threads=cpu_threads,
+                        num_workers=num_workers,
+                    )
             load_seconds = time.perf_counter() - started_at
             logger.info("Whisper model loaded.")
         return _model_cache[key], {
@@ -126,6 +170,7 @@ def get_or_load_model_with_stats(
             "compute_type": compute_type,
             "device_requested": device,
             "device_resolved": getattr(_model_cache[key], "device", None),
+            "device_fallback_reason": fallback_reason,
             "cpu_threads": cpu_threads,
             "num_workers": num_workers,
         }

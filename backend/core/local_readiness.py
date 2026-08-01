@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from backend.core.frontend_paths import local_frontend_index_path
 from backend.core.runtime_paths import app_data_root
+from backend.core.windows_gpu_runtime import inspect_windows_gpu_runtime
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,21 @@ def run_readiness_checks() -> list[ReadinessCheck]:
         detail=("本地转录引擎可用" if fw
                 else "未安装 faster-whisper：请运行 pip install -r requirements-local.txt。"),
     ))
+
+    if sys.platform.startswith("win"):
+        gpu_runtime = inspect_windows_gpu_runtime()
+        checks.append(ReadinessCheck(
+            name="windows-gpu-runtime",
+            ok=gpu_runtime.ready,
+            required=False,
+            detail=(
+                "NVIDIA GPU transcription runtime is ready in this project environment."
+                if gpu_runtime.ready
+                else "NVIDIA GPU runtime DLLs are missing "
+                f"({', '.join(gpu_runtime.missing_dlls)}). Automatic mode will use CPU; "
+                f"run {gpu_runtime.install_hint} to enable GPU transcription."
+            ),
+        ))
 
     ytdlp = _module_available("yt_dlp")
     checks.append(ReadinessCheck(
