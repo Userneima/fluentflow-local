@@ -49,6 +49,7 @@ import {
 import {useApp} from '../app/AppContext.jsx';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
+import VirtualTranscriptList from '../components/VirtualTranscriptList.jsx';
 import {FeishuExportPrompt, RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
 import {
     jobOptionsForResult,
@@ -188,8 +189,7 @@ const Editor = ({hosted = null}) => {
     const [editRecordsOpen, setEditRecordsOpen] = useState(false);
     const mediaRef = useRef(null);
     const mediaInputRef = useRef(null);
-    const transcriptScrollRef = useRef(null);
-    const segmentRefs = useRef({});
+    const transcriptListRef = useRef(null);
     const resultJobOptions = useMemo(() => resultAccess.jobOptions || jobOptionsForResult(result), [
         resultAccess.jobOptions,
         result?.stt_provider,
@@ -318,10 +318,18 @@ const Editor = ({hosted = null}) => {
         setLastResult(updated);
     }, [baselineSegments, result, setLastResult]);
 
-    const handleSegmentTextChange = (index, text) => {
-        const nextSegments = editedSegments.map((seg, i) => i === index ? {...seg, text} : seg);
-        applyTranscriptEdit(nextSegments, composeTranscriptText(nextSegments, editedTranscript));
-    };
+    const handleSegmentTextChange = useCallback((index, text) => {
+        setEditedSegments((previous) => {
+            const current = previous[index];
+            if (!current || current.text === text) return previous;
+            const next = previous.slice();
+            next[index] = {...current, text};
+            return next;
+        });
+        setTranscriptDirty(true);
+        setTranscriptUnsaved(true);
+        setTranscriptSaveStatus(result?.task_id ? 'saving' : 'failed');
+    }, [result?.task_id]);
 
     const handlePlainTranscriptChange = (text) => {
         applyTranscriptEdit([], text);
@@ -429,7 +437,11 @@ const Editor = ({hosted = null}) => {
     }, [mediaSourceKey, canPersistResult, hosted, resultJobOptions, replaceMediaUrl]);
 
     const segments = editedSegments;
-    const transcript = editedTranscript || result?.transcript_text || '';
+    const transcript = useMemo(() => (
+        segments.length > 0
+            ? composeTranscriptText(segments, result?.transcript_text || '')
+            : (editedTranscript || result?.transcript_text || '')
+    ), [editedTranscript, result?.transcript_text, segments]);
     const editRecords = useMemo(
         () => buildTranscriptEditRecords(baselineSegments, segments, result),
         [baselineSegments, segments, result?.transcript_edit_records]
@@ -593,15 +605,8 @@ const Editor = ({hosted = null}) => {
     useEffect(() => {
         const followIndex = activeSegmentIndex;
         if (!followPlayback || followIndex < 0 || !mediaPlaying) return;
-        const node = segmentRefs.current[followIndex];
-        if (node) node.scrollIntoView({block:'center', behavior:'smooth'});
+        transcriptListRef.current?.scrollToIndex(followIndex);
     }, [activeSegmentIndex, followPlayback, mediaPlaying]);
-
-    useEffect(() => {
-        const root = transcriptScrollRef.current;
-        if (!root) return;
-        root.querySelectorAll('textarea[data-transcript-segment="true"]').forEach(autoSizeTextarea);
-    }, [segments]);
 
     useEffect(() => {
         const persistBeforeBackground = () => {
@@ -1443,112 +1448,38 @@ const Editor = ({hosted = null}) => {
                                             onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
                                             onEnded={()=>setMediaPlaying(false)}
                                         />
-                                    <div ref={transcriptScrollRef} className="hide-scrollbar min-h-[10rem] flex-1 overflow-y-auto rounded-[18px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]">
-                                        <div className="divide-y divide-[#e4e0e0] dark:divide-white/[0.08]">
-                                            {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
-                                                <div
-                                                    key={`video-review-bilingual-${i}`}
-                                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                                    className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${i===activeSegmentIndex ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`}
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        onClick={()=>seekToSegment(seg)}
-                                                        className={`pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${i===activeSegmentIndex ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`}
-                                                    >
-                                                        {fmtTime(seg.start)}
-                                                    </button>
-                                                    <div className="min-w-0">
-                                                        <p className="whitespace-pre-wrap text-sm font-semibold leading-snug text-[#111111] dark:text-white">
-                                                            {seg.text}
-                                                        </p>
-                                                        <p className="mt-1.5 border-l-2 border-primary/25 pl-3 text-sm font-semibold leading-snug text-[#666] dark:text-white/68">
-                                                            {seg.text_zh}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            )) : segments.map((seg,i) => (
-                                                <div
-                                                    key={`video-review-${i}`}
-                                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                                    className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${i===activeSegmentIndex ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`}
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        onClick={()=>seekToSegment(seg)}
-                                                        className={`pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${i===activeSegmentIndex ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`}
-                                                    >
-                                                        {fmtTime(seg.start)}
-                                                    </button>
-                                                    <textarea
-                                                        data-transcript-segment="true"
-                                                        value={seg.text || ''}
-                                                        ref={(node)=>{ if(node) autoSizeTextarea(node); }}
-                                                        onChange={(e)=>{ autoSizeTextarea(e.target); handleSegmentTextChange(i, e.target.value); }}
-                                                        readOnly={isReadOnlyResult}
-                                                        onFocus={()=>setFollowPlayback(false)}
-                                                        rows={1}
-                                                        className="min-h-[1.45rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-semibold leading-snug text-[#111111] focus:ring-0 dark:text-white"
-                                                    />
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
+                                    <VirtualTranscriptList
+                                        ref={transcriptListRef}
+                                        activeIndex={activeSegmentIndex}
+                                        bilingual={visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0}
+                                        formatTime={fmtTime}
+                                        onFocusSegment={() => setFollowPlayback(false)}
+                                        onSeek={seekToSegment}
+                                        onSegmentChange={handleSegmentTextChange}
+                                        readOnly={isReadOnlyResult}
+                                        resizeTextarea={autoSizeTextarea}
+                                        segments={visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments}
+                                        variant="video"
+                                    />
                                 </div>
                             </div>
                         ) : (
                             <>
-                        <div ref={transcriptScrollRef} className="hide-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
-                            {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
-                                <div
-                                    key={`bilingual-${i}`}
-                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                    className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${i===activeSegmentIndex && mediaUrl ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={()=>seekToSegment(seg)}
-                                        className={`flex flex-col items-start justify-start pt-[1px] font-mono text-xs tabular-nums transition ${i===activeSegmentIndex && mediaUrl ? 'font-bold text-primary' : 'text-[#777] hover:text-primary dark:text-white/45'}`}
-                                    >
-                                        <span className="block">{fmtTime(seg.start)}</span>
-                                        <span className="mt-0.5 block text-[10px] opacity-70">{fmtTime(seg.end)}</span>
-                                    </button>
-                                    <div className="min-w-0 flex-1">
-                                        <p className="whitespace-pre-wrap text-sm font-medium leading-snug text-[#111111] dark:text-white">
-                                            {seg.text}
-                                        </p>
-                                        <p className="mt-1.5 border-l-2 border-primary/25 pl-3 text-sm font-medium leading-snug text-[#666] dark:text-white/65">
-                                            {seg.text_zh}
-                                        </p>
-                                    </div>
-                                </div>
-                            )) : segments.length > 0 ? segments.map((seg,i) => (
-                                <div
-                                    key={i}
-                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                    className={`group grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${i===activeSegmentIndex && mediaUrl ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={()=>seekToSegment(seg)}
-                                        className={`pt-[1px] text-left font-mono text-xs tabular-nums transition ${i===activeSegmentIndex && mediaUrl ? 'font-bold text-primary' : 'text-[#8a8a8a] hover:text-primary dark:text-white/40'}`}
-                                    >
-                                        {fmtTime(seg.start)}
-                                    </button>
-                                    <div className="min-w-0 flex-1">
-                                        <textarea
-                                            data-transcript-segment="true"
-                                            value={seg.text || ''}
-                                            ref={autoSizeTextarea}
-                                                        onChange={(e)=>{ autoSizeTextarea(e.target); handleSegmentTextChange(i, e.target.value); }}
-                                                        readOnly={isReadOnlyResult}
-                                            onFocus={()=>setFollowPlayback(false)}
-                                            rows={1}
-                                            className="min-h-[1.75rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-medium leading-snug text-[#111111] focus:ring-0 dark:text-white"
-                                        />
-                                    </div>
-                                        </div>
-                                )) : isTranscriptHydrationPending ? (
+                        {segments.length > 0 ? (
+                            <VirtualTranscriptList
+                                ref={transcriptListRef}
+                                activeIndex={activeSegmentIndex}
+                                bilingual={visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0}
+                                formatTime={fmtTime}
+                                highlightActive={!!mediaUrl}
+                                onFocusSegment={() => setFollowPlayback(false)}
+                                onSeek={seekToSegment}
+                                onSegmentChange={handleSegmentTextChange}
+                                readOnly={isReadOnlyResult}
+                                resizeTextarea={autoSizeTextarea}
+                                segments={visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments}
+                            />
+                        ) : isTranscriptHydrationPending ? (
                                     <div className="flex min-h-[320px] items-center justify-center rounded-[16px] border border-dashed border-outline-variant bg-surface-container-low px-4 py-8 text-center">
                                         <div className="max-w-[28rem]">
                                             <SvgIcon name="sync" className="mx-auto mb-3 h-5 w-5 animate-spin text-primary"/>
@@ -1597,7 +1528,6 @@ const Editor = ({hosted = null}) => {
                                     />
                                     </div>
                                 )}
-                                </div>
                                 <div className="border-t border-[#e4e0e0] bg-[#fbfbfb]/90 p-4 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                         <video
                                             ref={mediaRef}
