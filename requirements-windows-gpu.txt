@@ -1,0 +1,8 @@
+# NVIDIA runtime DLLs used by CTranslate2/faster-whisper on Windows.
+#
+# Keep these in the project virtual environment instead of relying on a
+# machine-wide CUDA Toolkit.  The NVIDIA display driver is still required.
+# These pins provide the CUDA 12 + cuDNN 8 DLL families required by the
+# current faster-whisper/CTranslate2 Windows wheel.
+nvidia-cublas-cu12==12.9.1.4
+nvidia-cudnn-cu12==8.9.7.29

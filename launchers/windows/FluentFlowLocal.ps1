@@ -9,10 +9,6 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = if ($env:FLUENTFLOW_REPO) { $env:FLUENTFLOW_REPO } else { Split-Path -Parent (Split-Path -Parent $ScriptDir) }
 $Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } else { "8000" }
 $AppUrl = "http://127.0.0.1:$Port/"
-$LocalAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\\Local" }
-$LogDir = Join-Path $LocalAppData "FluentFlow\\Logs"
-$LogFile = Join-Path $LogDir "local.log"
-
 function Fail([string]$Message) {
     Write-Host ""
     Write-Host "x $Message" -ForegroundColor Red
@@ -77,31 +73,53 @@ if ($LASTEXITCODE -ne 0) {
     Fail "The environment is not ready. Follow the messages above, then launch again."
 }
 
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-Add-Content -Path $LogFile -Value "---- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') starting backend.local_main:app on :$Port ----"
-
-Set-Location $Repo
-Start-Job -ScriptBlock {
-    param($ProbePort, $ProbeUrl, $ProbeLog)
-    for ($attempt = 0; $attempt -lt 80; $attempt++) {
-        try {
-            Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$ProbePort/health" -TimeoutSec 1 | Out-Null
-            Start-Process $ProbeUrl
-            return
-        } catch {
-            Start-Sleep -Milliseconds 250
-        }
-    }
-    Add-Content -Path $ProbeLog -Value "Service did not listen on port $ProbePort within 20 seconds."
-} -ArgumentList $Port, $AppUrl, $LogFile | Out-Null
-
 Write-Host ""
 Write-Host "FluentFlow Local is starting: $AppUrl"
-Write-Host "Log file: $LogFile"
 Write-Host "To stop: press Ctrl+C in this window, or close the window."
 Write-Host ""
 
-# Let python-dotenv in backend.local_main parse .env; PowerShell must not
-# source it because dotenv files may contain comments, spaces, or non-shell syntax.
-& $Python -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port 2>&1 | Tee-Object -FilePath $LogFile -Append
-exit $LASTEXITCODE
+# Start the server separately so this foreground PowerShell session can wait for
+# health and invoke the browser in the active desktop session. Start-Job uses an
+# isolated background process, where URL activation is not reliable.
+$ServerArguments = @("-m", "uvicorn", "backend.local_main:app", "--host", "127.0.0.1", "--port", $Port)
+$Server = $null
+$ExitCode = 1
+
+try {
+    $Server = Start-Process -FilePath $Python -ArgumentList $ServerArguments -WorkingDirectory $Repo -NoNewWindow -PassThru
+    $deadline = (Get-Date).AddSeconds(20)
+
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        $health = Get-LocalHealth
+        if ($health -and $health.runtime -and $health.runtime.execution -eq "local") {
+            try {
+                Start-Process $AppUrl
+                Write-Host "Opened FluentFlow Local in your default browser."
+            } catch {
+                Write-Host "The local service is ready, but the browser could not be opened automatically." -ForegroundColor Yellow
+                Write-Host "Open this address manually: $AppUrl" -ForegroundColor Yellow
+            }
+
+            Wait-Process -Id $Server.Id
+            $Server.Refresh()
+            $ExitCode = $Server.ExitCode
+            exit $ExitCode
+        }
+
+        $Server.Refresh()
+        if ($Server.HasExited) {
+            Fail "FluentFlow Local exited before it became ready (exit code $($Server.ExitCode)). Run this launcher from PowerShell to inspect the server output."
+        }
+    }
+
+    Fail "FluentFlow Local did not become ready within 20 seconds. Run this launcher from PowerShell to inspect the server output."
+}
+finally {
+    # Closing the launcher window or pressing Ctrl+C also stops the child server.
+    if ($Server -and -not $Server.HasExited) {
+        Stop-Process -Id $Server.Id -Force
+    }
+}
+
+exit $ExitCode
