@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from backend.core.runtime_paths import default_job_db_path
 from backend.core.result_schema import normalize_result_for_read, normalize_result_for_storage
@@ -340,6 +340,28 @@ def update_job_result(
     return _row_to_dict(updated) if updated else None
 
 
+# The only parts of a result a note regeneration would overwrite.
+#
+# The compare-and-swap below used to require the *whole* result dict to be
+# byte-identical to the snapshot taken before generation. That made every
+# unrelated background write veto a finished note: a retention sweep, an
+# artifact refresh, or — as actually happened — a summary autosave that stored
+# the very same text and only bumped `summary_edited_at`. Nine minutes of
+# generation were discarded because a timestamp moved.
+#
+# Comparing the note and the transcript it was written from keeps the guarantee
+# that matters (a real edit is never clobbered) and drops the false positives.
+NOTE_CONFLICT_FIELDS: Final[tuple[str, ...]] = ("summary_markdown", "transcript_text")
+
+
+def note_conflict_fingerprint(result: Any) -> tuple[str, ...] | None:
+    """The editable state a regeneration competes with, or None for no result."""
+    data = normalize_result_for_read(result)
+    if not isinstance(data, dict):
+        return None
+    return tuple(str(data.get(field) or "") for field in NOTE_CONFLICT_FIELDS)
+
+
 def finalize_job_result_if_unchanged(
     task_id: str,
     expected_result: Any,
@@ -372,11 +394,11 @@ def finalize_job_result_if_unchanged(
                 "SELECT * FROM jobs WHERE task_id = ? AND client_id = ?",
                 (task_id_value, client_id),
             ).fetchone()
-        current_result = (
-            normalize_result_for_read(_json_loads(row["result_json"])) if row else None
+        current_fingerprint = (
+            note_conflict_fingerprint(_json_loads(row["result_json"])) if row else None
         )
-        expected = normalize_result_for_read(expected_result)
-        if row is None or row["status"] == "cancelled" or current_result != expected:
+        expected_fingerprint = note_conflict_fingerprint(expected_result)
+        if row is None or row["status"] == "cancelled" or current_fingerprint != expected_fingerprint:
             conn.rollback()
             return None
         conn.execute(

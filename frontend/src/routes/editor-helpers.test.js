@@ -1,7 +1,26 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { activeTranscriptSegmentIndex, mediaSourcePlan, resultEditingLock, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+import { activeTranscriptSegmentIndex, mediaSourcePlan, regenerateProgressLabel, resultEditingLock, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+
+describe('regenerateProgressLabel', () => {
+    it('counts through a fan-out step so a long wait reads as movement', () => {
+        expect(regenerateProgressLabel({label: '撰写章节', completed: 3, total: 7})).toBe('撰写章节 3/7');
+    });
+
+    it('drops the counter for a single-call step', () => {
+        expect(regenerateProgressLabel({label: '检查覆盖度', completed: 0, total: 1})).toBe('检查覆盖度');
+    });
+
+    it('never shows more completed than the step has', () => {
+        expect(regenerateProgressLabel({label: '提取要点', completed: 9, total: 7})).toBe('提取要点 7/7');
+    });
+
+    it('falls back before the first step event arrives', () => {
+        expect(regenerateProgressLabel(null, {fallback: '重生中…'})).toBe('重生中…');
+        expect(regenerateProgressLabel({label: '   '}, {fallback: '重生中…'})).toBe('重生中…');
+    });
+});
 
 describe('resultEditingLock', () => {
     // A job-list row carried a 240-char preview under `summary_markdown`. The

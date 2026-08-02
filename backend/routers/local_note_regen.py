@@ -13,11 +13,12 @@ from __future__ import annotations
 import asyncio
 import time
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 
 from backend.core.ai_summarizer import summarize_transcript_with_metadata
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
@@ -28,6 +29,7 @@ from backend.core.job_lifecycle import (
     result_for_summary_success,
     result_for_transcript_only,
 )
+from backend.core.job_event_hub import _sse
 from backend.core.job_store import finalize_job_result_if_unchanged, get_job, upsert_job
 from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import (
@@ -43,6 +45,7 @@ from backend.core.local_limits_config import (
 )
 from backend.core.local_request_scope import request_client_id
 from backend.core.media_intake import TRANSCRIPT_SUFFIXES, file_size_mb
+from backend.core.note_progress import note_progress_event
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.transcript_cleaner import clean_repeated_transcript
 from backend.core.transcript_correction import (
@@ -105,36 +108,30 @@ def _cleanup_payload(cleanup_result: Any) -> dict[str, Any]:
     }
 
 
-@router.post("/regenerate-summary")
-async def regenerate_summary(
-    request: Request,
-    transcript: str = Form(...),
-    deepseek_api_key: Optional[str] = Form(None),
-    openai_api_key: Optional[str] = Form(None),
-    qwen_api_key: Optional[str] = Form(None),
-    ai_provider: Optional[str] = Form(None),
-    ai_model: Optional[str] = Form(None),
-    note_mode: Optional[str] = Form(None),
-    system_prompt: Optional[str] = Form(None),
-    prompt_preset: Optional[str] = Form(None),
-    prompt_preset_label: Optional[str] = Form(None),
-    task_id: Optional[str] = Form(None),
-    source_type: Optional[str] = Form(None),
-    source_filename: Optional[str] = Form(None),
-    source_duration_seconds: Optional[float] = Form(None),
-) -> dict[str, Any]:
-    """Re-run AI summarization on an existing transcript."""
-    loop = asyncio.get_event_loop()
+@dataclass(frozen=True)
+class _RegenTarget:
+    """Which job a regeneration writes to, resolved before any streaming starts.
+
+    Ownership and 404 handling must answer with a real HTTP status. Once a
+    StreamingResponse has sent its headers that is no longer possible, so both
+    routes resolve the target first and only then start generating.
+    """
+
+    task_id: str
+    client_id: Optional[str]
+    existing_job: Optional[dict[str, Any]]
+    initial_result: Any
+    regenerated_from_task_id: Optional[str]
+
+
+def _resolve_regen_target(request: Request, task_id: Optional[str]) -> _RegenTarget:
     client_id = _local_client_scope(request)
     requested_task_id = (task_id or "").strip()
     existing_job = None
     regenerated_from_task_id = None
     if requested_task_id:
         try:
-            task_id_value = require_owned_task_id(
-                requested_task_id,
-                client_id=client_id,
-            )
+            task_id_value = require_owned_task_id(requested_task_id, client_id=client_id)
             existing_job = get_job(task_id_value, client_id=client_id)
         except HTTPException as exc:
             if exc.status_code != 404:
@@ -143,7 +140,45 @@ async def regenerate_summary(
             task_id_value = claim_task_id(None, client_id=client_id)
     else:
         task_id_value = claim_task_id(None, client_id=client_id)
-    initial_result = deepcopy(existing_job.get("result")) if existing_job else None
+    return _RegenTarget(
+        task_id=task_id_value,
+        client_id=client_id,
+        existing_job=existing_job,
+        initial_result=deepcopy(existing_job.get("result")) if existing_job else None,
+        regenerated_from_task_id=regenerated_from_task_id,
+    )
+
+
+async def _regenerate_summary_events(
+    *,
+    target: _RegenTarget,
+    transcript: str,
+    deepseek_api_key: Optional[str],
+    openai_api_key: Optional[str],
+    qwen_api_key: Optional[str],
+    ai_provider: Optional[str],
+    ai_model: Optional[str],
+    note_mode: Optional[str],
+    system_prompt: Optional[str],
+    prompt_preset: Optional[str],
+    prompt_preset_label: Optional[str],
+    source_type: Optional[str],
+    source_filename: Optional[str],
+    source_duration_seconds: Optional[float],
+) -> AsyncIterator[dict[str, Any]]:
+    """Regenerate a note, yielding SSE-shaped progress and one terminal event.
+
+    Single implementation behind both the JSON and the streaming route, so the
+    two can never drift on conflict handling or job bookkeeping. Terminal event
+    is either {"stage": "done", "result": payload} or {"stage": "error", ...}
+    carrying the HTTP status the JSON route should raise.
+    """
+    loop = asyncio.get_running_loop()
+    client_id = target.client_id
+    task_id_value = target.task_id
+    existing_job = target.existing_job
+    initial_result = target.initial_result
+    regenerated_from_task_id = target.regenerated_from_task_id
     kwargs = local_ai_kwargs(
         deepseek_api_key=deepseek_api_key,
         openai_api_key=openai_api_key,
@@ -155,18 +190,33 @@ async def regenerate_summary(
     )
     started_at = time.perf_counter()
     try:
-        summary_result = await loop.run_in_executor(
-            None, lambda: summarize_transcript_with_metadata(transcript, **kwargs)
-        )
+        # Pump step events from the summarizer's worker threads onto this
+        # coroutine. `run_in_executor` re-raises the worker's exception when
+        # awaited, so failures still land in the handler below.
+        progress_queue: asyncio.Queue[Any] = asyncio.Queue()
+        finished = object()
+
+        def _emit(event: dict[str, Any]) -> None:
+            loop.call_soon_threadsafe(progress_queue.put_nowait, event)
+
+        def _work() -> Any:
+            try:
+                return summarize_transcript_with_metadata(transcript, on_progress=_emit, **kwargs)
+            finally:
+                loop.call_soon_threadsafe(progress_queue.put_nowait, finished)
+
+        yield {"stage": "summary", "progress": 0.0, "note_step": "start"}
+        summary_future = loop.run_in_executor(None, _work)
+        while True:
+            event = await progress_queue.get()
+            if event is finished:
+                break
+            yield note_progress_event(event, start=0.0, end=95.0)
+        summary_result = await summary_future
         md = summary_result.markdown
-        if existing_job:
-            latest_job = get_job(task_id_value, client_id=client_id)
-            latest_result = deepcopy(latest_job.get("result")) if latest_job else None
-            if latest_result != initial_result:
-                raise HTTPException(
-                    status_code=409,
-                    detail="笔记在生成期间已被修改，本次生成结果未覆盖你的编辑。",
-                )
+        # No pre-check here: `finalize_job_result_if_unchanged` below does the
+        # same comparison inside BEGIN IMMEDIATE, so it cannot lose a write that
+        # lands between the check and the update.
         payload = {
             "summary_markdown": md,
             "task_id": task_id_value,
@@ -184,11 +234,10 @@ async def regenerate_summary(
             "prompt_preset_label": (prompt_preset_label or "").strip() or None,
             "regenerated_from_task_id": regenerated_from_task_id,
         }
-        existing = (
-            existing_job
-            if existing_job and task_id_value == requested_task_id
-            else get_job(task_id_value, client_id=client_id)
-        )
+        # `existing_job` is only set when the requested id resolved and was
+        # owned, so it always describes `task_id_value`; the 404 path leaves it
+        # None and a freshly claimed job is read back here.
+        existing = existing_job or get_job(task_id_value, client_id=client_id)
         result = dict(existing.get("result") or {}) if existing else {
             "task_id": task_id_value,
             "filename": source_filename,
@@ -216,10 +265,12 @@ async def regenerate_summary(
                 summary_status="completed",
             )
             if updated is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="笔记在生成期间已被修改，本次生成结果未覆盖你的编辑。",
-                )
+                yield {
+                    "stage": "error",
+                    "status": 409,
+                    "error": "笔记在生成期间已被修改，本次生成结果未覆盖你的编辑。",
+                }
+                return
         else:
             upsert_job(
                 task_id=task_id_value,
@@ -252,9 +303,8 @@ async def regenerate_summary(
                 **_summary_result_metadata(summary_result),
             ),
         )
-        return payload
-    except HTTPException:
-        raise
+        yield {"stage": "done", "progress": 100.0, "result": payload}
+        return
     except Exception as exc:
         friendly_error = _friendly_error(exc)
         log_event(
@@ -292,7 +342,109 @@ async def regenerate_summary(
             summary_status="failed",
             error_reason=friendly_error,
         )
-        raise HTTPException(status_code=500, detail=friendly_error) from exc
+        yield {"stage": "error", "status": 500, "error": friendly_error}
+
+
+@router.post("/regenerate-summary")
+async def regenerate_summary(
+    request: Request,
+    transcript: str = Form(...),
+    deepseek_api_key: Optional[str] = Form(None),
+    openai_api_key: Optional[str] = Form(None),
+    qwen_api_key: Optional[str] = Form(None),
+    ai_provider: Optional[str] = Form(None),
+    ai_model: Optional[str] = Form(None),
+    note_mode: Optional[str] = Form(None),
+    system_prompt: Optional[str] = Form(None),
+    prompt_preset: Optional[str] = Form(None),
+    prompt_preset_label: Optional[str] = Form(None),
+    task_id: Optional[str] = Form(None),
+    source_type: Optional[str] = Form(None),
+    source_filename: Optional[str] = Form(None),
+    source_duration_seconds: Optional[float] = Form(None),
+) -> dict[str, Any]:
+    """Re-run AI summarization on an existing transcript and return the note.
+
+    Kept for callers that cannot consume a stream; `/regenerate-summary/stream`
+    is the same work with progress. Both share one generator, so their conflict
+    handling and job bookkeeping cannot drift apart.
+    """
+    events = _regenerate_summary_events(
+        target=_resolve_regen_target(request, task_id),
+        transcript=transcript,
+        deepseek_api_key=deepseek_api_key,
+        openai_api_key=openai_api_key,
+        qwen_api_key=qwen_api_key,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        note_mode=note_mode,
+        system_prompt=system_prompt,
+        prompt_preset=prompt_preset,
+        prompt_preset_label=prompt_preset_label,
+        source_type=source_type,
+        source_filename=source_filename,
+        source_duration_seconds=source_duration_seconds,
+    )
+    async for event in events:
+        if event.get("stage") == "done":
+            return event["result"]
+        if event.get("stage") == "error":
+            raise HTTPException(
+                status_code=int(event.get("status") or 500),
+                detail=str(event.get("error") or "Regeneration failed"),
+            )
+    raise HTTPException(status_code=500, detail="Regeneration produced no result")
+
+
+@router.post("/regenerate-summary/stream")
+async def regenerate_summary_stream(
+    request: Request,
+    transcript: str = Form(...),
+    deepseek_api_key: Optional[str] = Form(None),
+    openai_api_key: Optional[str] = Form(None),
+    qwen_api_key: Optional[str] = Form(None),
+    ai_provider: Optional[str] = Form(None),
+    ai_model: Optional[str] = Form(None),
+    note_mode: Optional[str] = Form(None),
+    system_prompt: Optional[str] = Form(None),
+    prompt_preset: Optional[str] = Form(None),
+    prompt_preset_label: Optional[str] = Form(None),
+    task_id: Optional[str] = Form(None),
+    source_type: Optional[str] = Form(None),
+    source_filename: Optional[str] = Form(None),
+    source_duration_seconds: Optional[float] = Form(None),
+) -> StreamingResponse:
+    """Same regeneration, reported step by step.
+
+    Ownership is resolved before the response starts so 403/404 still arrive as
+    real status codes; everything after that is SSE, matching `/process`.
+    """
+    target = _resolve_regen_target(request, task_id)
+
+    async def _stream() -> AsyncIterator[str]:
+        async for event in _regenerate_summary_events(
+            target=target,
+            transcript=transcript,
+            deepseek_api_key=deepseek_api_key,
+            openai_api_key=openai_api_key,
+            qwen_api_key=qwen_api_key,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            note_mode=note_mode,
+            system_prompt=system_prompt,
+            prompt_preset=prompt_preset,
+            prompt_preset_label=prompt_preset_label,
+            source_type=source_type,
+            source_filename=source_filename,
+            source_duration_seconds=source_duration_seconds,
+        ):
+            yield _sse(event)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 async def _run_local_transcript_correction(

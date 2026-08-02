@@ -7,10 +7,11 @@ import re
 import json
 import base64
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -248,6 +249,45 @@ def _strip_prompt_leakage(markdown: str) -> str:
 # so they can run concurrently instead of one-after-another. Cap concurrency to
 # stay well under provider rate limits.
 _MAX_PARALLEL_CALLS: Final[int] = 6
+
+
+NoteProgressCallback = Optional[Callable[[dict[str, Any]], None]]
+
+
+# Note generation is minutes of silent model calls. Without a progress signal
+# the UI can only spin, and a nine-minute wait reads as a hang. The pipeline
+# reports each finished step through this reporter; the caller decides whether
+# anyone is listening.
+#
+# Steps complete on ThreadPoolExecutor workers, so every counter bump is taken
+# under a lock and the callback must be cheap and thread-safe (the SSE route
+# hands it straight to `loop.call_soon_threadsafe`).
+class _ProgressReporter:
+    """Serializes step-completion events from concurrent worker threads."""
+
+    def __init__(self, callback: NoteProgressCallback = None):
+        self._callback = callback
+        self._lock = threading.Lock()
+        self._completed: dict[str, int] = {}
+
+    def start(self, step: str, total: int) -> None:
+        with self._lock:
+            self._completed[step] = 0
+            self._emit(step, 0, total)
+
+    def advance(self, step: str, total: int) -> None:
+        with self._lock:
+            done = self._completed.get(step, 0) + 1
+            self._completed[step] = done
+            self._emit(step, done, total)
+
+    def _emit(self, step: str, completed: int, total: int) -> None:
+        if not self._callback:
+            return
+        try:
+            self._callback({"step": step, "completed": completed, "total": total})
+        except Exception:  # pragma: no cover - progress must never break a note
+            logger.warning("Note progress callback raised; continuing without it.", exc_info=True)
 
 
 def _parallel_map(fn: Callable[[Any], Any], items: list[Any]) -> list[Any]:
@@ -998,9 +1038,11 @@ def _run_chapter_coverage_mode(
     *,
     segment_chars: int,
     max_final_input_chars: int,
+    progress: _ProgressReporter,
 ) -> SummaryResult:
     segments = _chapter_segments(transcript_text, segment_chars)
     valid_segment_ids = {segment["segment_id"] for segment in segments}
+    progress.start("evidence", len(segments))
 
     def _extract_segment_evidence(batch: dict[str, Any]) -> list[Any]:
         payload = json.dumps([batch], ensure_ascii=False)
@@ -1014,6 +1056,8 @@ def _run_chapter_coverage_mode(
                 "segment %s; skipping it.", batch.get("segment_id"),
             )
             return []
+        finally:
+            progress.advance("evidence", len(segments))
 
     # Extract each segment's evidence concurrently, then assign stable sequential
     # IDs in the original order so downstream references stay deterministic.
@@ -1025,9 +1069,11 @@ def _run_chapter_coverage_mode(
     if not evidence:
         raise ValueError("Chapter coverage evidence extraction returned no usable evidence")
 
+    progress.start("outline", 1)
     outline_payload = json.dumps(_compact_evidence_view(evidence), ensure_ascii=False)
     raw_chapters = _chat_json_array(client, model, _CHAPTER_OUTLINE_SYSTEM, outline_payload, temperature=0.1)
     chapters = _normalize_chapters(raw_chapters, evidence)
+    progress.advance("outline", 1)
     evidence_by_id = {item["evidence_id"]: item for item in evidence}
 
     def _chapter_evidence_for(chapter: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1041,6 +1087,8 @@ def _run_chapter_coverage_mode(
     for chapter in chapters:
         covered_ids.update(item["evidence_id"] for item in _chapter_evidence_for(chapter))
 
+    progress.start("chapters", len(chapters))
+
     def _write_chapter(chapter: dict[str, Any]) -> str:
         user = json.dumps({
             "chapter_id": chapter["chapter_id"],
@@ -1048,15 +1096,20 @@ def _run_chapter_coverage_mode(
             "purpose": chapter.get("purpose") or "",
             "evidence": _chapter_evidence_for(chapter),
         }, ensure_ascii=False)
-        return _strip_prompt_leakage(_chat(client, model, _CHAPTER_NOTE_SYSTEM, user, temperature=0.2))
+        try:
+            return _strip_prompt_leakage(_chat(client, model, _CHAPTER_NOTE_SYSTEM, user, temperature=0.2))
+        finally:
+            progress.advance("chapters", len(chapters))
 
     # Each chapter is written independently from its own evidence; run concurrently, keep order.
     chapter_notes: list[str] = _parallel_map(_write_chapter, chapters)
 
+    progress.start("style", 1)
     draft = "\n\n".join(note for note in chapter_notes if note.strip())
     final_note = _strip_prompt_leakage(_chat(client, model, _CHAPTER_STYLE_SYSTEM, draft, temperature=0.2))
     if not final_note:
         final_note = draft
+    progress.advance("style", 1)
 
     important_ids = {item["evidence_id"] for item in evidence if int(item.get("importance") or 0) >= 4}
     uncovered_important = sorted(important_ids - covered_ids)
@@ -1075,8 +1128,14 @@ def _run_chapter_coverage_mode(
     coverage_revision_used = False
     missing_count = len(uncovered_important)
     if coverage_checked:
+        progress.start("coverage", 1)
         coverage = _chat(client, model, _COVERAGE_SYSTEM, coverage_input, temperature=0.1).strip()
+        progress.advance("coverage", 1)
         if coverage and coverage != "COVERED":
+            # The conditional full rewrite: the single most expensive call in the
+            # pipeline, and the main reason two runs of the same transcript can
+            # differ by minutes. Announce it so the wait is explained.
+            progress.start("revision", 1)
             final_note = _strip_prompt_leakage(
                 _chat(
                     client,
@@ -1086,6 +1145,7 @@ def _run_chapter_coverage_mode(
                     temperature=0.2,
                 )
             )
+            progress.advance("revision", 1)
             coverage_revision_used = True
             missing_count = max(missing_count, 1)
 
@@ -1197,9 +1257,16 @@ def summarize_transcript_with_metadata(
     interim_batch_cap: int = 28_000,
     evidence_chunk_chars: int = 8_000,
     evidence_overlap: int = 300,
+    on_progress: NoteProgressCallback = None,
 ) -> SummaryResult:
-    """Generate a note and return mode/chunk metadata for product analysis."""
+    """Generate a note and return mode/chunk metadata for product analysis.
+
+    `on_progress` receives {"step", "completed", "total"} as each model call
+    finishes, from worker threads. Omit it and the pipeline runs exactly as
+    before.
+    """
     load_dotenv()
+    progress = _ProgressReporter(on_progress)
     provider_name = _normalize_provider(provider)
     client = _get_client(provider=provider_name, api_key=api_key)
     m = _normalize_model(provider_name, model)
@@ -1218,8 +1285,11 @@ def summarize_transcript_with_metadata(
         )
 
     if resolved_mode == "direct":
+        progress.start("note", 1)
+        markdown = _strip_prompt_leakage(_chat(client, m, prompt, transcript_text))
+        progress.advance("note", 1)
         return SummaryResult(
-            markdown=_strip_prompt_leakage(_chat(client, m, prompt, transcript_text)),
+            markdown=markdown,
             requested_mode=normalized_mode,
             resolved_mode=resolved_mode,
             transcript_length=transcript_length,
@@ -1234,15 +1304,20 @@ def summarize_transcript_with_metadata(
             transcript_text,
             segment_chars=evidence_chunk_chars,
             max_final_input_chars=max_final_input_chars,
+            progress=progress,
         )
 
     chunks = _chunk_text(transcript_text, evidence_chunk_chars, evidence_overlap)
     total = len(chunks)
+    progress.start("evidence", total)
 
     def _extract_evidence(indexed_chunk: tuple[int, str]) -> str:
         idx, chunk = indexed_chunk
         user = f"这是整段转录的第 {idx + 1}/{total} 部分，请提取证据。\n\n{chunk}"
-        return _chat(client, m, _EVIDENCE_SYSTEM, user, temperature=0.2)
+        try:
+            return _chat(client, m, _EVIDENCE_SYSTEM, user, temperature=0.2)
+        finally:
+            progress.advance("evidence", total)
 
     # Each chunk's extraction is independent; run them concurrently but keep order.
     evidence_items: list[str] = _parallel_map(_extract_evidence, list(enumerate(chunks)))
@@ -1258,14 +1333,19 @@ def summarize_transcript_with_metadata(
             max_batch_chars=interim_batch_cap,
         )
 
+    progress.start("note", 1)
     draft = _strip_prompt_leakage(_chat(client, m, prompt, _HIGH_FIDELITY_FINAL_WRAPPER + evidence))
+    progress.advance("note", 1)
     coverage_input = f"--- 证据清单 ---\n\n{evidence}\n\n--- 已生成笔记 ---\n\n{draft}"
     coverage_checked = len(coverage_input) <= max_final_input_chars
     coverage_revision_used = False
     final_note = draft
     if coverage_checked:
+        progress.start("coverage", 1)
         coverage = _chat(client, m, _COVERAGE_SYSTEM, coverage_input, temperature=0.1).strip()
+        progress.advance("coverage", 1)
         if coverage and coverage != "COVERED":
+            progress.start("revision", 1)
             final_note = _strip_prompt_leakage(
                 _chat(
                     client,
@@ -1275,6 +1355,7 @@ def summarize_transcript_with_metadata(
                     temperature=0.2,
                 )
             )
+            progress.advance("revision", 1)
             coverage_revision_used = True
 
     return SummaryResult(

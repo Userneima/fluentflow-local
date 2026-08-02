@@ -27,6 +27,20 @@ export const isVideoResultSource = (result, sourceFile) => {
 
 export const shouldKeepVideoReviewMounted = ({activeReviewMode}) => activeReviewMode === 'video';
 
+// What the regenerate button says while the server streams its steps.
+//
+// The percentage alone is not reassuring on a nine-minute run — "42%" could
+// still be stuck. Naming the running step ("撰写章节 3/7") is what separates a
+// slow run from a hung one, so the label leads with the step and only shows
+// n/m when the step actually fans out.
+export const regenerateProgressLabel = (progress, {fallback = ''} = {}) => {
+    const label = String(progress?.label || '').trim();
+    if (!label) return fallback;
+    const total = Number(progress?.total) || 0;
+    const completed = Math.min(Number(progress?.completed) || 0, total);
+    return total > 1 ? `${label} ${completed}/${total}` : label;
+};
+
 // Why the editor refuses to touch a `result_partial` payload.
 //
 // A job-list row and a browser-cache row both carry 240-char previews under

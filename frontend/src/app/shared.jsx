@@ -6,6 +6,7 @@ import {
     sanitizeSettings,
 } from '../lib/settingsModel.js';
 import { _dl } from '../lib/download.js';
+import { readSseResult } from '../lib/sse.js';
 import { getDirectUploadTransport } from './directUploadTransport.js';
 import { getHostedApiExtension } from './hostedApiExtension.js';
 
@@ -172,6 +173,8 @@ export { _dl, _baseName, _fmtSrtTime, _fmtVttTime, dlTranscriptTxt, dlTranscript
 
 export {DropdownMenu} from './DropdownMenu.jsx';
 
+export { readSseResult };
+
 /* ═══════════════ hooks ═══════════════ */
 export const useApi = () => {
     const appendAiOptions = (fd, options={}) => {
@@ -199,31 +202,6 @@ export const useApi = () => {
         if(options.sttSpeed) fd.append("stt_speed", options.sttSpeed);
         if(options.sttLanguage) fd.append("stt_language", options.sttLanguage);
         if(options.speakerDiarization) fd.append("speaker_diarization", "true");
-    };
-    const readSseResult = async (r, onProgress) => {
-        const reader = r.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '', result = null;
-        while(true){
-            const {value,done} = await reader.read();
-            if(done) break;
-            buf += decoder.decode(value,{stream:true});
-            const parts = buf.split('\n\n');
-            buf = parts.pop() || '';
-            for(const part of parts){
-                const dl = part.split('\n').find(l=>l.startsWith('data: '));
-                if(!dl) continue;
-                try{
-                    const data = JSON.parse(dl.slice(6));
-                    if(data.stage==='done'){ result=data.result; onProgress?.({stage:'done',progress:100,result:data.result}); }
-                    else if(data.stage==='transcript_ready'){ onProgress?.({stage:'transcript_ready',progress:data.progress||60,result:data.result}); }
-                    else if(data.stage==='error'){ throw new Error(data.error||'Processing failed'); }
-                    else { onProgress?.(data); }
-                }catch(pe){ if(pe.message && !pe.message.startsWith('Unexpected')) throw pe; }
-            }
-        }
-        if(!result) throw new Error('No result received from server');
-        return result;
     };
     const processVideoSSE = async (file, options={}, onProgress, signal) => {
         const fd = new FormData();

@@ -38,6 +38,7 @@ import {
     normalizeSttModel,
     pickTranscriptBaselineSegments,
     pickTranscriptSegments,
+    readSseResult,
     resultToHistoryEntry,
     resultDisplayTitle,
     shouldUseLocalSingleUserClientId,
@@ -57,6 +58,7 @@ import {
     isVideoResultSource,
     localSourceFileMatchesResult,
     mediaSourcePlan,
+    regenerateProgressLabel,
     resultEditingLock,
     activeTranscriptSegmentIndex,
     shouldKeepVideoReviewMounted,
@@ -86,6 +88,7 @@ const Editor = ({hosted = null}) => {
     const {loadSettings, saveSettings} = useSettings();
     const [exporting, setExporting] = useState(false);
     const [regenerating, setRegenerating] = useState(false);
+    const [regenerateProgress, setRegenerateProgress] = useState(null);
     const [retranscribing, setRetranscribing] = useState(false);
     const [downloading, setDownloading] = useState(null);
     const [toast, setToast] = useState(null);
@@ -491,6 +494,9 @@ const Editor = ({hosted = null}) => {
         || !!result?.summary_edited
     );
     const canEditSummary = hasEditableSummary && !isReadOnlyResult && !editingLock;
+    const regenerateStatusLabel = regenerateProgressLabel(regenerateProgress, {
+        fallback: t('edit.regenerating'),
+    });
     const summarySaveLabel = summarySaveStatus === 'saving'
         ? (lang === 'zh' ? '保存中' : 'Saving')
         : summarySaveStatus === 'saved'
@@ -963,6 +969,7 @@ const Editor = ({hosted = null}) => {
         }
         if (hosted?.blockRegenerate?.({result, showToast, lang})) return;
         setRegenerating(true);
+        setRegenerateProgress(null);
         try {
             const settings = loadSettings();
             const fd = new FormData();
@@ -978,9 +985,17 @@ const Editor = ({hosted = null}) => {
             if(activePrompt) fd.append('system_prompt', activePrompt);
             fd.append('prompt_preset', settings.promptPreset || DEFAULT_PROMPT_PRESET);
             fd.append('prompt_preset_label', presetDisplayLabel(settings.promptPreset || DEFAULT_PROMPT_PRESET, settings, lang));
-            const r = await apiFetch(`${API_BASE}/regenerate-summary`, {method:'POST', body:fd});
+            // Streamed so the wait is explained rather than endured: note
+            // generation is minutes of model calls, and a bare spinner made a
+            // normal run indistinguishable from a hang.
+            const r = await apiFetch(`${API_BASE}/regenerate-summary/stream`, {method:'POST', body:fd});
             if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||'Regeneration failed');
-            const data = await r.json();
+            const data = await readSseResult(r, (event)=>setRegenerateProgress({
+                percent: Math.round(Number(event.progress) || 0),
+                label: (lang === 'zh' ? event.note_step_label : event.note_step_label_en) || '',
+                completed: Number(event.note_step_completed) || 0,
+                total: Number(event.note_step_total) || 0,
+            }));
                     setLastResult({
                         ...result,
                         task_id: data.task_id || activeTaskId,
@@ -1006,7 +1021,7 @@ const Editor = ({hosted = null}) => {
                         });
             showToast(t('edit.regenDone'));
         } catch(err) { showToast(err.message, false); }
-        finally { setRegenerating(false); }
+        finally { setRegenerating(false); setRegenerateProgress(null); }
     };
 
     const runRetranscribe = async (file) => {
@@ -1327,10 +1342,20 @@ const Editor = ({hosted = null}) => {
                             type="button"
                             onClick={()=>setRegenerateConfirmOpen(true)}
                             disabled={isTransientResult||isReadOnlyResult||regenerating||!transcript||!!editingLock}
-                            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
+                            title={regenerateStatusLabel || undefined}
+                            className="relative inline-flex h-10 items-center justify-center gap-1.5 overflow-hidden rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
                         >
-                            <SvgIcon name={regenerating ? 'sync' : 'refresh'} className={`text-[17px] ${regenerating?'animate-spin':''}`}/>
-                            <span>{regenerating ? t('edit.regenerating') : t('edit.regenerate')}</span>
+                            {regenerating && (
+                                // A filling bar behind the label: the step text
+                                // says what is running, this says how far in.
+                                <span
+                                    aria-hidden="true"
+                                    className="absolute inset-y-0 left-0 bg-primary/15 transition-[width] duration-500 ease-out"
+                                    style={{width: `${regenerateProgress?.percent || 0}%`}}
+                                />
+                            )}
+                            <SvgIcon name={regenerating ? 'sync' : 'refresh'} className={`relative text-[17px] ${regenerating?'animate-spin':''}`}/>
+                            <span className="relative">{regenerating ? (regenerateStatusLabel || t('edit.regenerating')) : t('edit.regenerate')}</span>
                         </button>
                         <button
                             type="button"

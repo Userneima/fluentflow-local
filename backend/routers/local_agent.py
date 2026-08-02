@@ -30,6 +30,7 @@ from backend.core.job_store import (
     append_job_result_list_item,
     finalize_job_result_if_unchanged,
     get_job,
+    note_conflict_fingerprint,
     upsert_job,
 )
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
@@ -72,8 +73,11 @@ def _job_for_request(request: Request, task_id: str) -> dict[str, Any]:
 
 
 def _result_changed(task_id: str, client_id: Optional[str], initial_result: Any) -> bool:
+    """True only when the note or its transcript moved — see NOTE_CONFLICT_FIELDS."""
     latest = get_job(task_id, client_id=client_id)
-    return latest is None or deepcopy(latest.get("result")) != initial_result
+    if latest is None:
+        return True
+    return note_conflict_fingerprint(latest.get("result")) != note_conflict_fingerprint(initial_result)
 
 
 def _bounded_finite_float(
