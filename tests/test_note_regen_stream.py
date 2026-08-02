@@ -5,15 +5,13 @@ signal, so a slow run and a hung run looked identical. `/regenerate-summary`
 and `/regenerate-summary/stream` now share one generator — these tests pin that
 the stream reports steps and that both routes still agree on the outcome.
 
-Every job-store call the routes make is rebound to a temp database here.
-`job_store`'s functions take `db_path` as a *default argument*, bound at import
-time, so patching the module constant does not redirect them: the only reliable
-way to keep a test off the user's real database is to rebind the callables the
-router actually holds.
+The whole route runs against a temp database, redirected by the two runtime
+path variables. `job_store`/`event_logger` resolve their path per call, so one
+environment patch is enough — no rebinding of the callables the router holds.
 """
 
-import functools
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -23,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.core.ai_summarizer import SummaryResult
-import backend.core.job_store as job_store
+from backend.core.job_store import get_job, upsert_job
 import backend.routers.local_note_regen as regen
 
 TRANSCRIPT = "转录文本。" * 200
@@ -49,21 +47,17 @@ def _fake_summarize(transcript, *, on_progress=None, **_kwargs):
 
 class RegenerateStreamTests(TestCase):
     def setUp(self):
+        # Windows keeps the sqlite file handle alive past the last connection,
+        # so teardown must not treat a locked temp file as a test failure.
         self._tmp = TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self._tmp.cleanup)
         self.db_path = Path(self._tmp.name) / "jobs.sqlite"
-        self.store = {
-            name: functools.partial(getattr(job_store, name), db_path=self.db_path)
-            for name in ("get_job", "upsert_job", "finalize_job_result_if_unchanged")
-        }
-        for name, bound in self.store.items():
-            self._start(patch.object(regen, name, bound))
-        # Ownership resolution reaches the store through helpers that hold their
-        # own import-time default; the routes only need a resolved target.
-        self._start(patch.object(regen, "_resolve_regen_target", self._target))
-        self._start(patch.object(regen, "log_event", lambda **_kwargs: None))
+        self._start(patch.dict(os.environ, {
+            "FLUENTFLOW_JOB_DB_PATH": str(self.db_path),
+            "FLUENTFLOW_EVENT_DB_PATH": str(Path(self._tmp.name) / "events.sqlite"),
+        }))
 
-        self.store["upsert_job"](
+        upsert_job(
             task_id="task-a",
             status="completed",
             client_id=CLIENT,
@@ -80,18 +74,8 @@ class RegenerateStreamTests(TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _target(self, _request, task_id):
-        job = self.store["get_job"](task_id, client_id=CLIENT)
-        return regen._RegenTarget(
-            task_id=task_id,
-            client_id=CLIENT,
-            existing_job=job,
-            initial_result=job.get("result") if job else None,
-            regenerated_from_task_id=None,
-        )
-
     def _stored(self):
-        return self.store["get_job"]("task-a", client_id=CLIENT)["result"]
+        return get_job("task-a", client_id=CLIENT)["result"]
 
     @staticmethod
     def _events(body: str) -> list[dict]:
@@ -158,7 +142,7 @@ class RegenerateStreamTests(TestCase):
         # The observed failure: the editor stored the identical note and only
         # moved `summary_edited_at`, and the finished regeneration was dropped.
         def _autosave_then_summarize(transcript, *, on_progress=None, **kwargs):
-            self.store["upsert_job"](
+            upsert_job(
                 task_id="task-a",
                 status="completed",
                 client_id=CLIENT,
@@ -180,7 +164,7 @@ class RegenerateStreamTests(TestCase):
 
     def test_a_real_edit_during_generation_still_wins(self):
         def _edit_then_summarize(transcript, *, on_progress=None, **kwargs):
-            self.store["upsert_job"](
+            upsert_job(
                 task_id="task-a",
                 status="completed",
                 client_id=CLIENT,

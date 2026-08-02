@@ -18,7 +18,19 @@ from backend.core.runtime_paths import default_event_db_path
 
 logger = logging.getLogger(__name__)
 
+# Import-time snapshot, kept for callers that report which database this
+# process would use. Never use it as a default argument — see the note in
+# `job_store`: a bound default freezes the path at import and silently ignores
+# any later redirection, which is how tests ended up writing to the real DB.
 DEFAULT_DB_PATH = default_event_db_path()
+
+
+def resolve_db_path(db_path: Path | str | None = None) -> Path:
+    """Resolve an explicit path, or the configured default at call time."""
+    if db_path is None:
+        return default_event_db_path()
+    return Path(db_path)
+
 
 EVENT_COLUMNS = [
     "event_id",
@@ -85,8 +97,8 @@ def _success_value(success: bool | None) -> int | None:
     return 1 if success else 0
 
 
-def ensure_event_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
-    path = Path(db_path)
+def ensure_event_db(db_path: Path | str | None = None) -> None:
+    path = resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA_SQL)
@@ -109,7 +121,7 @@ def log_event(
     export_target: str | None = None,
     feishu_doc_url: str | None = None,
     metadata: dict[str, Any] | list[Any] | str | None = None,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> str | None:
     """Insert one analytics event and swallow all logging failures."""
 
@@ -117,6 +129,7 @@ def log_event(
         if not task_id or not event_name:
             return None
 
+        db_path = resolve_db_path(db_path)
         ensure_event_db(db_path)
         event_id = uuid.uuid4().hex
         row = {
@@ -142,7 +155,7 @@ def log_event(
         placeholders = ", ".join(["?"] * len(EVENT_COLUMNS))
         column_sql = ", ".join(EVENT_COLUMNS)
         values = [row[col] for col in EVENT_COLUMNS]
-        with sqlite3.connect(Path(db_path)) as conn:
+        with sqlite3.connect(db_path) as conn:
             conn.execute(
                 f"INSERT INTO events ({column_sql}) VALUES ({placeholders})",
                 values,
@@ -153,12 +166,16 @@ def log_event(
         return None
 
 
-def delete_events_for_tasks(task_ids: list[str] | tuple[str, ...], db_path: Path | str = DEFAULT_DB_PATH) -> int:
+def delete_events_for_tasks(
+    task_ids: list[str] | tuple[str, ...],
+    db_path: Path | str | None = None,
+) -> int:
     ids = [str(task_id).strip() for task_id in task_ids if str(task_id).strip()]
     if not ids:
         return 0
+    db_path = resolve_db_path(db_path)
     ensure_event_db(db_path)
     placeholders = ",".join("?" for _ in ids)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         cursor = conn.execute(f"DELETE FROM events WHERE task_id IN ({placeholders})", ids)
     return int(cursor.rowcount or 0)
