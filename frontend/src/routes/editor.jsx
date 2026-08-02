@@ -48,6 +48,7 @@ import {
     useSettings,
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
+import {noteForEditing, transcriptForEditing, transcriptLength} from '../lib/resultViews.js';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import VirtualTranscriptList from '../components/VirtualTranscriptList.jsx';
@@ -163,7 +164,7 @@ const Editor = ({hosted = null}) => {
     const canPersistResult = !isTransientResult && !isReadOnlyResult;
     const matchedLocalSourceFile = localSourceFileMatchesResult(lastSourceFile, result) ? lastSourceFile : null;
     const resultSegmentCount = pickTranscriptSegments(result).length;
-    const resultTextLength = (result?.transcript_text || '').length;
+    const resultTextLength = transcriptLength(result);
     const resultKey = result
         ? `${result.task_id || result.filename || 'current_result'}:${result.transcript_edited ? 'edited' : `${resultSegmentCount}:${resultTextLength}`}`
         : 'empty_result';
@@ -230,7 +231,7 @@ const Editor = ({hosted = null}) => {
             return;
         }
         const currentSegments = pickTranscriptSegments(result);
-        const currentText = result.transcript_text || '';
+        const currentText = transcriptForEditing(result) || '';
         // `result_partial` is the explicit signal; the length checks stay as a
         // fallback for payloads that predate the flag.
         const needsHydration = !!result.result_partial || currentSegments.length === 0 || currentText.length <= 260;
@@ -249,7 +250,7 @@ const Editor = ({hosted = null}) => {
                 const full = job?.result;
                 if (cancelled || !full) return;
                 const fullSegments = pickTranscriptSegments(full);
-                const fullText = full.transcript_text || '';
+                const fullText = transcriptForEditing(full) || '';
                 const currentDisplayCount = pickDisplayTranscriptSegments(result, currentSegments).length;
                 const fullDisplayCount = pickDisplayTranscriptSegments(full, fullSegments).length;
                 // A partial payload is always replaced, even when it happens to
@@ -294,7 +295,7 @@ const Editor = ({hosted = null}) => {
         if (result.transcript_edited && transcriptUnsaved) return;
         const sourceSegments = pickTranscriptSegments(result);
         const baselineSourceSegments = pickTranscriptBaselineSegments(result);
-        const sourceText = result.transcript_text || '';
+        const sourceText = transcriptForEditing(result) || '';
         setEditedSegments(sourceSegments.map((seg) => ({...seg})));
         setEditedTranscript(composeTranscriptText(sourceSegments, sourceText));
         setBaselineSegments((prev) => {
@@ -317,15 +318,15 @@ const Editor = ({hosted = null}) => {
         }
         if (summaryDraftResultKeyRef.current !== summaryResultKey) {
             summaryDraftResultKeyRef.current = summaryResultKey;
-            setSummaryDraft(result.summary_markdown || '');
+            setSummaryDraft(noteForEditing(result) || '');
             setSummaryUnsaved(false);
             setSummarySaveStatus(result.summary_edited ? 'saved' : 'idle');
             return;
         }
         if (summaryUnsaved) return;
-        setSummaryDraft(result.summary_markdown || '');
+        setSummaryDraft(noteForEditing(result) || '');
         setSummarySaveStatus(result.summary_edited ? 'saved' : 'idle');
-    }, [summaryResultKey, result?.summary_markdown, result?.summary_edited, summaryUnsaved]);
+    }, [summaryResultKey, noteForEditing(result), result?.summary_edited, summaryUnsaved]);
 
     const applyTranscriptEdit = useCallback((nextSegments, nextText) => {
         if (!result) return;
@@ -384,7 +385,7 @@ const Editor = ({hosted = null}) => {
 
     const summaryMarkdownForEditor = summaryUnsaved
         ? summaryDraft
-        : (summaryDraft || result?.summary_markdown || '');
+        : (summaryDraft || noteForEditing(result) || '');
 
     const replaceMediaUrl = useCallback((nextUrl = '', {objectUrl = false} = {}) => {
         const previousUrl = mediaObjectUrlRef.current;
@@ -472,9 +473,9 @@ const Editor = ({hosted = null}) => {
     const segments = editedSegments;
     const transcript = useMemo(() => (
         segments.length > 0
-            ? composeTranscriptText(segments, result?.transcript_text || '')
-            : (editedTranscript || result?.transcript_text || '')
-    ), [editedTranscript, result?.transcript_text, segments]);
+            ? composeTranscriptText(segments, transcriptForEditing(result) || '')
+            : (editedTranscript || transcriptForEditing(result) || '')
+    ), [editedTranscript, transcriptForEditing(result), segments]);
     const editRecords = useMemo(
         () => buildTranscriptEditRecords(baselineSegments, segments, result),
         [baselineSegments, segments, result?.transcript_edit_records]
@@ -535,14 +536,14 @@ const Editor = ({hosted = null}) => {
         && !transcriptUnsaved
         && !isLocalHistoryResult(result)
         && segments.length === 0
-        && (result.transcript_text || '').length > 0
+        && transcriptLength(result) > 0
         && !hydrationFailed
         && (!hydratedTaskIdsRef.current.has(result.task_id) || hydratingResult);
     const isTranscriptHydrationFailed = !!result?.task_id
         && !transcriptUnsaved
         && !isLocalHistoryResult(result)
         && segments.length === 0
-        && (result.transcript_text || '').length > 0
+        && transcriptLength(result) > 0
         && hydrationFailed;
     const canUseStoredSource = !!result?.source_file_available && !!result?.task_id;
     const canUsePlaybackAudio = !!result?.artifacts?.playback_audio && !!result?.task_id;
@@ -1030,7 +1031,7 @@ const Editor = ({hosted = null}) => {
                         transcript_text: transcript,
                         segments,
                         transcript_edited: transcriptDirty || !!result.transcript_edited,
-                        summary_markdown: data.summary_markdown,
+                        summary_markdown: noteForEditing(data) || '',
                         summary_skipped: false,
                         summary_status: data.summary_status || 'completed',
                         summary_error: null,

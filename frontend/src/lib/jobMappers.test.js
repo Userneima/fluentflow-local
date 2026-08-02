@@ -237,9 +237,11 @@ describe('cached rows declare themselves partial', () => {
     });
 
     it('never writes truncated text under the canonical field names', () => {
+        // Absent, not empty: a cached row has no body field at all, so nothing
+        // downstream can read one and treat the value as the note.
         const cached = roundTrip();
-        expect(cached.summary_markdown).toBe('');
-        expect(cached.transcript_text).toBe('');
+        expect('summary_markdown' in cached).toBe(false);
+        expect('transcript_text' in cached).toBe(false);
     });
 
     it('marks the cached row partial and keeps the previews', () => {

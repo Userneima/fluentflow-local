@@ -3,6 +3,7 @@ import {
     normalizeJobPayload,
     normalizeResultPayload,
 } from './resultSchema.js';
+import { noteForDisplay, toPreviewResult, transcriptForDisplay } from './resultViews.js';
 import {
     normalizeTaskState,
     TASK_STATE_UPLOADING,
@@ -23,9 +24,7 @@ const jobBelongsToAccountCache = (accountId, job) => {
     return clientId === `user:${normalizedAccountId}` || clientId === `user${normalizedAccountId}`;
 };
 
-const compactTextForCache = (value, maxChars=240) => (
-    value ? String(value).slice(0, maxChars) : ''
-);
+const CACHE_PREVIEW_CHARS = 240;
 
 const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
 
@@ -60,23 +59,16 @@ const minimizeJobForCache = (job) => {
     const result = job.result && typeof job.result === 'object' ? job.result : null;
     return {
         ...persistedJob,
+        // localStorage cannot hold a full transcript and note for every record,
+        // so a cached row keeps previews only — and says so, because an editor
+        // that opened one as if it were the record autosaved the preview over
+        // the real note.
         result: result ? {
-            ...result,
-            // localStorage cannot hold a full transcript and note for every
-            // record, so a cached row keeps previews only. It must say so:
-            // an editor that opened a cached row as if it were the record
-            // once autosaved the 240-char preview over the real note.
-            result_partial: true,
-            transcript_text_preview: result.transcript_text_preview || compactTextForCache(result.transcript_text),
-            transcript_text: '',
-            summary_preview: result.summary_preview || compactTextForCache(result.summary_markdown),
-            summary_markdown: '',
+            ...toPreviewResult(result, {maxChars: CACHE_PREVIEW_CHARS}),
             segments: [],
             cleaned_segments: null,
             raw_segments: null,
             translated_segments_zh: null,
-            raw_transcript_text: null,
-            cleaned_transcript_text: null,
         } : result,
     };
 };
@@ -205,8 +197,7 @@ export const sortJobsForHistoryView = (jobs=[]) => {
 export const hasTranscriptResult = (result={}) => {
     const normalized = normalizeResultPayload(result);
     return !!(
-        String(normalized.transcript_text || '').trim()
-        || String(normalized.transcript_text_preview || '').trim()
+        transcriptForDisplay(normalized).trim()
         || (Array.isArray(normalized.raw_segments) && normalized.raw_segments.length > 0)
         || (Array.isArray(normalized.display_segments) && normalized.display_segments.length > 0)
     );
@@ -273,10 +264,10 @@ export const resultToHistoryEntry = (sourceResult, fallback={}) => {
         durationMin: Math.round(durSec/60*10)/10,
         status: hasTranscript ? 'completed' : (fallback.status || (result.status === 'completed' ? 'completed' : (result.status || 'failed'))),
         resultPartial: !!result.result_partial,
-        transcriptText: result.transcript_text||result.transcript_text_preview||'',
+        transcriptText: transcriptForDisplay(result),
         segments,
         displaySegments: result.display_segments || [],
-        summary: result.summary_markdown||result.summary_preview||'',
+        summary: noteForDisplay(result),
         summarySkipped: !!result.summary_skipped,
         summaryStatus: result.summary_status||null,
         summaryError: result.summary_error||null,

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from backend.core.runtime_paths import default_job_db_path
+from backend.core.job_views import job_list_row
 from backend.core.result_schema import normalize_result_for_read, normalize_result_for_storage
 from backend.core.title_display import display_title_for_user
 
@@ -979,81 +980,8 @@ def _step_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-PREVIEW_CHARS = 240
-
-
-def _result_summary(result: Any) -> dict[str, Any] | None:
-    result = normalize_result_for_read(result)
-    if not isinstance(result, dict):
-        return None
-    lark_response = result.get("lark_response") if isinstance(result.get("lark_response"), dict) else None
-    summary_markdown = result.get("summary_markdown") or ""
-    transcript_text = result.get("transcript_text") or result.get("transcript_text_preview") or ""
-    return {
-        # A list row carries previews, never the record itself. The truncated
-        # text must not travel under the canonical `summary_markdown` /
-        # `transcript_text` names: an editor that mistook a preview for the
-        # real note saved the 240-char stub back over a 13k-char note. Readers
-        # that only need "is there a note" use the preview or the *_chars
-        # counts; anything that edits must fetch the full job first.
-        "result_partial": True,
-        "task_id": result.get("task_id"),
-        "status": result.get("status"),
-        "filename": result.get("filename"),
-        "raw_title": result.get("raw_title"),
-        "display_title": result.get("display_title"),
-        "audio_duration_seconds": result.get("audio_duration_seconds"),
-        "stt_elapsed_seconds": result.get("stt_elapsed_seconds"),
-        "stt_realtime_factor": result.get("stt_realtime_factor"),
-        "stt_provider": result.get("stt_provider"),
-        "stt_provider_label": result.get("stt_provider_label"),
-        "stt_model": result.get("stt_model"),
-        "stt_speed": result.get("stt_speed"),
-        "stt_language": result.get("stt_language"),
-        "detected_language": result.get("detected_language"),
-        "source_language": result.get("source_language"),
-        "subtitle_mode": result.get("subtitle_mode"),
-        "translation_status": result.get("translation_status"),
-        "translation_error": result.get("translation_error"),
-        "summary_status": result.get("summary_status"),
-        "summary_error": result.get("summary_error"),
-        "summary_skipped": result.get("summary_skipped"),
-        "summary_preview": str(summary_markdown)[:PREVIEW_CHARS] if summary_markdown else "",
-        "summary_markdown_chars": len(str(summary_markdown)),
-        "transcript_text_preview": str(transcript_text)[:PREVIEW_CHARS] if transcript_text else "",
-        "transcript_text_chars": len(str(transcript_text)),
-        "artifacts": result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {},
-        "lark_response": {"url": lark_response.get("url")} if lark_response and lark_response.get("url") else None,
-        "feishu_doc_url": result.get("feishu_doc_url"),
-        "lark_error": result.get("lark_error"),
-        "source_fingerprint": result.get("source_fingerprint"),
-        "playback_audio_available": result.get("playback_audio_available"),
-        "source_file_available": result.get("source_file_available"),
-        "requested_note_mode": result.get("requested_note_mode"),
-        "resolved_note_mode": result.get("resolved_note_mode"),
-        "note_mode_chunk_count": result.get("note_mode_chunk_count"),
-        "note_mode_segment_count": result.get("note_mode_segment_count"),
-        "note_mode_evidence_count": result.get("note_mode_evidence_count"),
-        "note_mode_chapter_count": result.get("note_mode_chapter_count"),
-        "note_mode_important_evidence_count": result.get("note_mode_important_evidence_count"),
-        "note_mode_covered_important_evidence_count": result.get("note_mode_covered_important_evidence_count"),
-        "note_mode_coverage_missing_count": result.get("note_mode_coverage_missing_count"),
-        "note_mode_plan_reason": result.get("note_mode_plan_reason"),
-        "note_mode_plan_confidence": result.get("note_mode_plan_confidence"),
-        "note_mode_plan_warnings": result.get("note_mode_plan_warnings"),
-        "note_mode_plan_provider": result.get("note_mode_plan_provider"),
-        "note_mode_plan_model": result.get("note_mode_plan_model"),
-        "note_mode_plan_fallback": result.get("note_mode_plan_fallback"),
-        "note_mode_plan_error": result.get("note_mode_plan_error"),
-        "note_mode_plan_selected_mode": result.get("note_mode_plan_selected_mode"),
-        "prompt_preset": result.get("prompt_preset"),
-        "prompt_preset_label": result.get("prompt_preset_label"),
-        "imported_from_local_history": result.get("imported_from_local_history"),
-    }
-
-
 def _row_to_summary_dict(row: sqlite3.Row) -> dict[str, Any]:
-    result = _result_summary(_json_loads(row["result_json"]))
+    result = job_list_row(_json_loads(row["result_json"]))
     return {
         "task_id": row["task_id"],
         "created_at": row["created_at"],

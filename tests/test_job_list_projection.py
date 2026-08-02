@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from backend.core.job_store import get_job, list_job_summaries, upsert_job
+from backend.core.job_views import RECORD_BODY_FIELDS, assert_is_list_row
 
 FULL_NOTE = "# 完整笔记\n\n" + ("这是一段很长的笔记正文。" * 200)
 FULL_TRANSCRIPT = "这是一段很长的转录文本。" * 400
@@ -59,6 +60,26 @@ class JobListProjectionTests(TestCase):
         self.assertEqual(result["summary_markdown_chars"], len(FULL_NOTE))
         self.assertEqual(result["transcript_text_preview"], FULL_TRANSCRIPT[:240])
         self.assertEqual(result["transcript_text_chars"], len(FULL_TRANSCRIPT))
+
+    def test_a_row_carrying_a_body_field_is_rejected_rather_than_shipped(self):
+        # The wall is checked, not assumed: reintroducing a body field under its
+        # canonical name must fail here rather than reach an editor that saves it.
+        with self.assertRaises(AssertionError) as caught:
+            assert_is_list_row({"task_id": "t", "summary_preview": "x", "summary_markdown": "x"})
+        self.assertIn("summary_markdown", str(caught.exception))
+
+    def test_every_body_field_is_guarded_not_just_the_note(self):
+        for field in RECORD_BODY_FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(AssertionError):
+                    assert_is_list_row({"task_id": "t", field: "anything"})
+
+    def test_an_unknown_metadata_field_is_dropped_rather_than_passed_through(self):
+        # Allowlisted, not filtered: a new body-sized field added to results
+        # cannot reach list rows by default.
+        row = self._row()
+        self.assertNotIn("speaker_diarization", row)
+        self.assertNotIn("chapter_coverage", row)
 
     def test_reading_one_job_still_returns_the_whole_record(self):
         result = get_job("task-a", db_path=self.db_path)["result"]
