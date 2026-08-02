@@ -56,6 +56,7 @@ import {
     isLikelyVideoFile,
     isVideoResultSource,
     localSourceFileMatchesResult,
+    mediaSourcePlan,
     activeTranscriptSegmentIndex,
     shouldKeepVideoReviewMounted,
     summaryFailureNextStep,
@@ -103,6 +104,8 @@ const Editor = ({hosted = null}) => {
     const summaryDraftResultKeyRef = useRef('');
     const playbackSaveRef = useRef(0);
     const mediaObjectUrlRef = useRef('');
+    const streamedMediaTaskRef = useRef('');
+    const mediaGrantRetryRef = useRef('');
 
     const initSettings = loadSettings();
     let initPk = initSettings.promptPreset || DEFAULT_PROMPT_PRESET;
@@ -380,72 +383,64 @@ const Editor = ({hosted = null}) => {
         setMediaKind('audio');
         setTranscriptReviewMode('text');
         if (!result) return () => { cancelled = true; };
-        if (matchedLocalSourceFile) {
-            loadMediaFile(matchedLocalSourceFile);
+        const plan = mediaSourcePlan(result, {localFile: matchedLocalSourceFile, canPersistResult});
+        if (plan.length === 0) return () => { cancelled = true; };
+        if (plan[0].kind === 'local-file') {
+            loadMediaFile(plan[0].file);
             return () => { cancelled = true; };
         }
-        const hasStoredVideo = result.task_id
-            && result.source_file_available
-            && isVideoResultSource(result, matchedLocalSourceFile);
-        if (hasStoredVideo) {
-            // Keep the large video on disk until the user actually opens video
-            // review. The native media element will then make Range requests.
-            setMediaKind('video');
-            return () => { cancelled = true; };
-        }
-        if (result.task_id && result.source_file_available && canPersistResult) {
-            setMediaLoading(true);
-            fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
-                .then((file) => { if (!cancelled) loadMediaFile(file); })
-                .catch((sourceErr) => {
-                    if (!cancelled && result.artifacts?.playback_audio) {
-                        const playbackArtifact = result.artifacts.playback_audio;
-                        const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
-                        fetchArtifact(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, resultJobOptions)
-                            .then((file) => { if (!cancelled) loadMediaFile(file); })
-                            .catch((err) => {
-                                if (!cancelled) {
-                                    setMediaError(err.message || sourceErr.message || 'Source file unavailable');
-                                    setMediaLoading(false);
-                                }
-                            });
-                        return;
-                    }
-                    if (!cancelled) {
-                        setMediaError(sourceErr.message || 'Source file unavailable');
-                        setMediaLoading(false);
-                    }
-                });
-            return () => { cancelled = true; };
-        }
-        const playbackArtifact = result.artifacts?.playback_audio;
-        if (result.task_id && playbackArtifact) {
-            setMediaLoading(true);
-            const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
-            const artifactOptions = resultJobOptions;
-            fetchArtifact(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, artifactOptions)
-                .then((file) => { if (!cancelled) loadMediaFile(file); })
-                .catch((err) => {
-                    if (!cancelled && result.source_file_available && canPersistResult) {
-                        fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
-                            .then((file) => { if (!cancelled) loadMediaFile(file); })
-                            .catch((sourceErr) => {
-                                if (!cancelled) {
-                                    setMediaError(sourceErr.message || err.message || 'Audio file unavailable');
-                                    setMediaLoading(false);
-                                }
-                            });
-                        return;
-                    }
-                    if (!cancelled) {
-                        setMediaError(err.message || 'Audio file unavailable');
-                        setMediaLoading(false);
-                    }
-            });
-            return () => { cancelled = true; };
-        }
+        const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
+        const attachStep = async (step) => {
+            if (step.kind === 'stream') {
+                const url = await getJobMediaUrl(result.task_id, resultJobOptions);
+                if (cancelled) return;
+                streamedMediaTaskRef.current = result.task_id;
+                setMediaKind(step.mediaKind);
+                replaceMediaUrl(url);
+                setMediaError('');
+                setMediaLoading(false);
+                return;
+            }
+            streamedMediaTaskRef.current = '';
+            const file = step.kind === 'artifact'
+                ? await fetchArtifact(result.task_id, 'playback_audio', step.filename, resultJobOptions)
+                : await fetchJobSourceFile(result.task_id, step.filename, resultJobOptions);
+            if (cancelled) return;
+            loadMediaFile(file);
+        };
+        setMediaLoading(true);
+        (async () => {
+            let lastError = null;
+            for (const step of plan) {
+                if (cancelled) return;
+                try {
+                    await attachStep(step);
+                    return;
+                } catch (err) {
+                    lastError = err;
+                }
+            }
+            if (cancelled) return;
+            setMediaError(lastError?.message || 'Source file unavailable');
+            setMediaLoading(false);
+        })();
         return () => { cancelled = true; };
     }, [mediaSourceKey, canPersistResult, hosted, resultJobOptions, replaceMediaUrl]);
+
+    // A streaming grant expires while the editor stays open, so the first play
+    // after a long idle would otherwise fail with no way back except choosing
+    // the file again. Re-issue the grant once per attached URL and resume.
+    const handleMediaElementError = useCallback(async () => {
+        const taskId = streamedMediaTaskRef.current;
+        if (!taskId || mediaGrantRetryRef.current === mediaUrl) return;
+        mediaGrantRetryRef.current = mediaUrl;
+        try {
+            replaceMediaUrl(await getJobMediaUrl(taskId, resultJobOptions));
+            setMediaError('');
+        } catch (err) {
+            setMediaError(err.message || 'Source media unavailable');
+        }
+    }, [mediaUrl, replaceMediaUrl, resultJobOptions]);
 
     const segments = editedSegments;
     const transcript = useMemo(() => (
@@ -1491,6 +1486,7 @@ const Editor = ({hosted = null}) => {
                                         onPlay={()=>setMediaPlaying(true)}
                                             onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
                                             onEnded={()=>setMediaPlaying(false)}
+                                            onError={handleMediaElementError}
                                         />
                                     <VirtualTranscriptList
                                         ref={transcriptListRef}
@@ -1584,6 +1580,7 @@ const Editor = ({hosted = null}) => {
                                             onPlay={()=>setMediaPlaying(true)}
                                             onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
                                             onEnded={()=>setMediaPlaying(false)}
+                                            onError={handleMediaElementError}
                                         />
                                     {mediaUrl ? (
                                         <div className="space-y-3">

@@ -27,6 +27,37 @@ export const isVideoResultSource = (result, sourceFile) => {
 
 export const shouldKeepVideoReviewMounted = ({activeReviewMode}) => activeReviewMode === 'video';
 
+// Ordered fallback chain for attaching playable media to a stored result.
+//
+// A browser cannot reopen the file the user originally picked, and the picked
+// File only lives in this page's memory — so after a restart the ONLY way back
+// to playback is the copy the local service retained on disk. Streaming it via
+// a media grant comes first: one URL serves both the inline player and video
+// review, the media element fetches ranges instead of the whole file, and it
+// keeps working across restarts without asking the user to reselect anything.
+// Blob downloads stay behind it as fallbacks for editions or records where
+// streaming is unavailable.
+export const mediaSourcePlan = (result, {localFile = null, canPersistResult = true} = {}) => {
+    if (!result) return [];
+    if (localFile) return [{kind: 'local-file', file: localFile}];
+    const taskId = result.task_id;
+    if (!taskId) return [];
+    const plan = [];
+    const storedSource = !!result.source_file_available;
+    const sourceName = result.filename || 'source';
+    if (storedSource) {
+        plan.push({kind: 'stream', mediaKind: isVideoResultSource(result, null) ? 'video' : 'audio'});
+    }
+    const playbackArtifact = result.artifacts?.playback_audio;
+    if (playbackArtifact) {
+        plan.push({kind: 'artifact', filename: playbackArtifact.filename || `${sourceName}_audio.mp3`});
+    }
+    if (storedSource && canPersistResult) {
+        plan.push({kind: 'download', filename: sourceName});
+    }
+    return plan;
+};
+
 export const activeTranscriptSegmentIndex = (segments, currentTime) => {
     let low = 0;
     let high = Math.max(0, (segments?.length || 0) - 1);
