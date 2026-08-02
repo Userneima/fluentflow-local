@@ -102,6 +102,19 @@ class JobEventHub:
                     if not subscribers:
                         self._subscribers.pop(task_id, None)
 
+    async def reset(self, task_id: str) -> None:
+        """Forget a task's recorded events before it runs again under the same id.
+
+        Processing invents a fresh id per run, but note regeneration reuses the
+        record's id. Without this, a second run replays the first run's history
+        to every new subscriber — including its terminal event, which ends the
+        subscription instantly and shows the previous note as the new result.
+        """
+        if not task_id:
+            return
+        async with self._lock:
+            self._events.pop(task_id, None)
+
     async def cached_events(self, task_id: str) -> list[dict[str, Any]]:
         async with self._lock:
             return list(self._events.get(task_id, []))

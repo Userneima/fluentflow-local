@@ -10,6 +10,7 @@ path variables. `job_store`/`event_logger` resolve their path per call, so one
 environment patch is enough — no rebinding of the callables the router holds.
 """
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -161,6 +162,77 @@ class RegenerateStreamTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self._stored()["summary_markdown"], REGENERATED)
+
+    def test_a_client_that_hangs_up_does_not_cancel_the_generation(self):
+        # Switching windows or closing the tab used to tear the generator down
+        # mid-run: the note was discarded and nothing was even logged. The work
+        # is a job task now; the stream is only a view of it.
+        from backend.core.local_job_runtime import JOB_EVENTS
+
+        async def drive():
+            await JOB_EVENTS.reset("task-a")
+            upsert_job(task_id="task-a", status="running", client_id=CLIENT,
+                       stage="summary_regenerate", progress=0)
+            events = regen._regenerate_summary_events(
+                target=regen._RegenTarget(
+                    "task-a", CLIENT, get_job("task-a", client_id=CLIENT),
+                    get_job("task-a", client_id=CLIENT)["result"], None),
+                transcript=TRANSCRIPT, deepseek_api_key=None, openai_api_key=None,
+                qwen_api_key=None, ai_provider=None, ai_model=None, note_mode=None,
+                system_prompt=None, prompt_preset=None, prompt_preset_label=None,
+                source_type=None, source_filename=None, source_duration_seconds=None,
+            )
+
+            async def worker():
+                async for event in events:
+                    await JOB_EVENTS.publish("task-a", event)
+
+            await JOB_EVENTS.start("task-a", worker)
+            # Read two frames, then walk away without draining the rest.
+            subscription = JOB_EVENTS.subscribe("task-a")
+            await subscription.__anext__()
+            await subscription.__anext__()
+            await subscription.aclose()
+            for _ in range(200):
+                if not await JOB_EVENTS.has_running_task("task-a"):
+                    break
+                await asyncio.sleep(0.01)
+
+        with patch.object(regen, "summarize_transcript_with_metadata", _fake_summarize):
+            asyncio.run(drive())
+
+        self.assertEqual(self._stored()["summary_markdown"], REGENERATED)
+
+    def test_re_attaching_replays_from_the_requested_event_index(self):
+        from backend.core.local_job_runtime import JOB_EVENTS
+
+        async def drive():
+            await JOB_EVENTS.reset("task-b")
+            for index in range(4):
+                await JOB_EVENTS.publish("task-b", {"stage": "summary", "progress": index * 10})
+            await JOB_EVENTS.publish("task-b", {"stage": "done", "progress": 100, "result": {}})
+            seen = []
+            async for chunk in JOB_EVENTS.subscribe("task-b", since=3):
+                seen.append(json.loads(chunk[6:]))
+            return seen
+
+        seen = asyncio.run(drive())
+        self.assertEqual([event["event_index"] for event in seen], [3, 4])
+        self.assertEqual(seen[-1]["stage"], "done")
+
+    def test_a_second_run_does_not_replay_the_previous_runs_result(self):
+        # A record keeps its id across regenerations, so stale history would end
+        # a new subscriber immediately with the old note.
+        from backend.core.local_job_runtime import JOB_EVENTS
+
+        async def drive():
+            await JOB_EVENTS.reset("task-c")
+            await JOB_EVENTS.publish("task-c", {"stage": "done", "progress": 100,
+                                                "result": {"summary_markdown": "# 上一轮"}})
+            await JOB_EVENTS.reset("task-c")
+            return await JOB_EVENTS.cached_events("task-c")
+
+        self.assertEqual(asyncio.run(drive()), [])
 
     def test_a_real_edit_during_generation_still_wins(self):
         def _edit_then_summarize(transcript, *, on_progress=None, **kwargs):

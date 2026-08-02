@@ -32,7 +32,12 @@ export const readSseResult = async (response, onProgress) => {
             } else if (data.stage === 'transcript_ready') {
                 onProgress?.({stage: 'transcript_ready', progress: data.progress || 60, result: data.result});
             } else if (data.stage === 'error') {
-                throw new Error(data.error || 'Processing failed');
+                // Tagged so a caller can tell "the server rejected this" from
+                // "the connection went away" — only the latter is worth
+                // re-attaching for.
+                const failure = new Error(data.error || 'Processing failed');
+                failure.serverStage = true;
+                throw failure;
             } else {
                 onProgress?.(data);
             }

@@ -71,6 +71,11 @@ import {
 // The default editor is the local workspace. Hosted result access, visitor
 // trial artifacts, account OAuth, and cross-device read-only policy are
 // supplied by HostedEditorWorkspace.jsx only in the hosted route.
+// How many times a dropped regeneration stream is re-attached before giving up.
+// Generation keeps running server-side either way; this only bounds how long
+// the button keeps trying to watch it.
+const REGENERATE_REATTACH_LIMIT = 5;
+
 const Editor = ({hosted = null}) => {
     const {t, lang} = useI18n();
     const {
@@ -988,14 +993,37 @@ const Editor = ({hosted = null}) => {
             // Streamed so the wait is explained rather than endured: note
             // generation is minutes of model calls, and a bare spinner made a
             // normal run indistinguishable from a hang.
-            const r = await apiFetch(`${API_BASE}/regenerate-summary/stream`, {method:'POST', body:fd});
-            if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||'Regeneration failed');
-            const data = await readSseResult(r, (event)=>setRegenerateProgress({
-                percent: Math.round(Number(event.progress) || 0),
-                label: (lang === 'zh' ? event.note_step_label : event.note_step_label_en) || '',
-                completed: Number(event.note_step_completed) || 0,
-                total: Number(event.note_step_total) || 0,
-            }));
+            //
+            // The stream is only a view of the work — the server runs it as a
+            // job task. A backgrounded tab or a dropped socket therefore does
+            // not cancel anything, and re-attaching from the last event index
+            // resumes the same run instead of starting a second one.
+            let since = 0;
+            const track = (event) => {
+                if (Number.isInteger(event?.event_index)) since = event.event_index + 1;
+                setRegenerateProgress({
+                    percent: Math.round(Number(event.progress) || 0),
+                    label: (lang === 'zh' ? event.note_step_label : event.note_step_label_en) || '',
+                    completed: Number(event.note_step_completed) || 0,
+                    total: Number(event.note_step_total) || 0,
+                });
+            };
+            let response = await apiFetch(`${API_BASE}/regenerate-summary/stream`, {method:'POST', body:fd});
+            if(!response.ok) throw new Error((await response.json().catch(()=>({}))).detail||'Regeneration failed');
+            let data = null;
+            for(let attempt = 0; data === null; attempt += 1){
+                try {
+                    data = await readSseResult(response, track);
+                } catch(streamErr) {
+                    if(streamErr.serverStage || attempt >= REGENERATE_REATTACH_LIMIT) throw streamErr;
+                    const reattached = await apiFetch(
+                        `${API_BASE}/jobs/${encodeURIComponent(activeTaskId)}/events?since=${since}`,
+                        {headers: localExecutionHeaders({sttProvider: 'local'})},
+                    ).catch(() => null);
+                    if(!reattached?.ok) throw streamErr;
+                    response = reattached;
+                }
+            }
                     setLastResult({
                         ...result,
                         task_id: data.task_id || activeTaskId,

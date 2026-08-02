@@ -11,6 +11,7 @@ the hosted field names so the shared frontend works unchanged.
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -29,7 +30,7 @@ from backend.core.job_lifecycle import (
     result_for_summary_success,
     result_for_transcript_only,
 )
-from backend.core.job_event_hub import _sse
+from backend.core.local_job_runtime import JOB_EVENTS
 from backend.core.job_store import finalize_job_result_if_unchanged, get_job, upsert_job
 from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import (
@@ -37,6 +38,7 @@ from backend.core.local_entry_guards import (
     local_ai_kwargs,
     read_upload_bounded,
     require_owned_task_id,
+    run_worker_with_terminal_state,
 )
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_limits_config import (
@@ -265,6 +267,17 @@ async def _regenerate_summary_events(
                 summary_status="completed",
             )
             if updated is None:
+                # The user's note is intact, so the record is still completed —
+                # restore that before reporting, or the background runner sees a
+                # non-terminal job and overwrites this with a generic failure.
+                upsert_job(
+                    task_id=task_id_value,
+                    status="completed",
+                    client_id=client_id,
+                    stage="done",
+                    progress=100,
+                    summary_status="completed",
+                )
                 yield {
                     "stage": "error",
                     "status": 409,
@@ -414,14 +427,21 @@ async def regenerate_summary_stream(
     source_filename: Optional[str] = Form(None),
     source_duration_seconds: Optional[float] = Form(None),
 ) -> StreamingResponse:
-    """Same regeneration, reported step by step.
+    """Same regeneration, reported step by step, and detached from this response.
+
+    Generation runs as a hub task, exactly like `/process`. That separation is
+    the point: streaming the work directly from the response handler meant a
+    backgrounded tab or a closed window tore the generator down mid-run, and
+    minutes of finished generation were discarded without even an error in the
+    log. Now the client can drop and re-attach via `/jobs/{id}/events?since=N`
+    while the work continues.
 
     Ownership is resolved before the response starts so 403/404 still arrive as
-    real status codes; everything after that is SSE, matching `/process`.
+    real status codes.
     """
     target = _resolve_regen_target(request, task_id)
 
-    async def _stream() -> AsyncIterator[str]:
+    async def _worker() -> None:
         async for event in _regenerate_summary_events(
             target=target,
             transcript=transcript,
@@ -438,10 +458,36 @@ async def regenerate_summary_stream(
             source_filename=source_filename,
             source_duration_seconds=source_duration_seconds,
         ):
-            yield _sse(event)
+            await JOB_EVENTS.publish(target.task_id, event)
+
+    if not await JOB_EVENTS.has_running_task(target.task_id):
+        # A record keeps its id across regenerations, so last run's history has
+        # to go before this run's subscribers arrive. Marking the job running is
+        # what stops `subscribe` from answering a new subscriber with the
+        # previous, already-terminal result — and it makes an in-flight
+        # regeneration visible to the task list and to the launcher's restart
+        # guard.
+        await JOB_EVENTS.reset(target.task_id)
+        upsert_job(
+            task_id=target.task_id,
+            status="running",
+            client_id=target.client_id,
+            stage="summary_regenerate",
+            progress=0,
+            summary_status="pending",
+        )
+        await JOB_EVENTS.start(target.task_id, functools.partial(
+            run_worker_with_terminal_state,
+            task_id=target.task_id,
+            client_id=target.client_id,
+            hub=JOB_EVENTS,
+            route="/regenerate-summary/stream",
+            stage="summary_regenerate",
+            worker=_worker,
+        ))
 
     return StreamingResponse(
-        _stream(),
+        JOB_EVENTS.subscribe(target.task_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
