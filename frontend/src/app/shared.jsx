@@ -455,12 +455,12 @@ export const useApi = () => {
         const blob = await r.blob();
         return new File([blob], filename || kind, {type: blob.type || 'application/octet-stream'});
     };
-    const uploadJobPlaybackAudio = async (taskId, file) => {
+    const uploadJobSourceFile = async (taskId, file, options={}) => {
         const fd = new FormData();
         fd.append("file", file);
-        const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/playback-audio`, {
+        const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/source`, {
             method: "POST",
-            headers: localExecutionHeaders({sttProvider: 'local'}),
+            headers: localExecutionHeaders(options),
             body: fd,
         });
         const data = await r.json().catch(()=>({}));
@@ -534,7 +534,7 @@ export const useApi = () => {
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
     // Local-safe API methods available in every edition.
-    const baseMethods = {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, deleteJob, retryJob, getJobs, fetchJobSourceFile, getJobMediaUrl, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
+    const baseMethods = {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, deleteJob, retryJob, getJobs, fetchJobSourceFile, getJobMediaUrl, fetchJobArtifactFile, uploadJobSourceFile, downloadJobArtifact, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
     // The hosted composition root registers the hosted-only fetch helpers
     // (guest trial, account quota, admin, hosted Feishu OAuth, desktop sync).
     // The local edition registers nothing, so those methods stay absent and the

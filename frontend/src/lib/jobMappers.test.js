@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reconcileTaskList, entryToJob, jobToHistoryEntry } from './jobMappers.js';
+import { reconcileTaskList, entryToJob, jobToHistoryEntry, jobDisplayTitle, resultDisplayTitle } from './jobMappers.js';
 import { normalizeTaskState } from './taskState.js';
 
 // Each test locks one historically-recurring list-reconciliation regression so
@@ -201,5 +201,17 @@ describe('entryToJob round trip', () => {
     it('returns null for a missing entry or one without a task id', () => {
         expect(entryToJob(null)).toBeNull();
         expect(entryToJob({ name: 'no id' })).toBeNull();
+    });
+});
+
+describe('source filename display', () => {
+    it('keeps a decimal chapter prefix in local media filenames', () => {
+        const result = {
+            filename: '4.5期从零到一实战kickoff和组队.mp4',
+            raw_title: '4.5期从零到一实战kickoff和组队',
+            display_title: '4',
+        };
+        expect(resultDisplayTitle(result)).toBe('4.5期从零到一实战kickoff和组队');
+        expect(jobDisplayTitle({source_filename: result.filename, result})).toBe('4.5期从零到一实战kickoff和组队');
     });
 });

@@ -39,6 +39,7 @@ from backend.routers.local_feishu_export import router as feishu_export_router
 from backend.routers.local_job_edit import router as job_edit_router
 from backend.routers.local_job_mutation import router as job_mutation_router
 from backend.routers.local_job_read import router as job_read_router
+from backend.routers.local_job_source import router as job_source_router
 from backend.routers.local_jobs import router as jobs_router
 from backend.routers.local_note_regen import router as note_regen_router
 from backend.routers.local_processing import router as processing_router
@@ -53,6 +54,7 @@ LOCAL_API_ROUTERS = (
     events_router,
     jobs_router,
     job_read_router,
+    job_source_router,
     job_mutation_router,
     job_edit_router,
     processing_router,

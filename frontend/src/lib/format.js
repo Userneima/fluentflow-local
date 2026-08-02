@@ -1,4 +1,7 @@
-export const fileNameStem = (name) => (name || "").replace(/\.[^/.]+$/, "") || "";
+const DISPLAY_FILE_EXTENSION_RE = /\.(?:mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus|srt|vtt|txt|md)$/i;
+// Titles may contain dots (for example, "4.5期 kickoff"). Only strip a
+// supported source extension, rather than treating the final dot as one.
+export const fileNameStem = (name) => String(name || "").replace(DISPLAY_FILE_EXTENSION_RE, "") || "";
 export const stripGeneratedFilenamePrefix = (name) => String(name || '').replace(/^(?:[0-9]{10,24}|BV[a-zA-Z0-9]{8,})[-_]+/, '');
 export const displayTitleForUser = (value, fallback='') => {
     const clean = stripGeneratedFilenamePrefix(fileNameStem(value)).trim();

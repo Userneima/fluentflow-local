@@ -221,7 +221,7 @@ export const jobVisibleInHistory = (job={}) => !!(job?.task_id || job?.result);
 export const resultDisplayTitle = (result={}, fallback={}) => {
     const normalized = normalizeResultPayload(result);
     return displayTitleForUser(
-        normalized.display_title || fallback.displayTitle || normalized.raw_title || fallback.rawTitle || normalized.filename || fallback.name,
+        normalized.raw_title || fallback.rawTitle || normalized.display_title || fallback.displayTitle || normalized.filename || fallback.name,
         normalized.filename || fallback.rawFilename || fallback.name,
     );
 };
@@ -231,8 +231,10 @@ export const jobDisplayTitle = (job={}, lang='zh') => {
     const result = normalizedJob.result || {};
     const metadata = normalizedJob.metadata || {};
     const videoSource = metadata.video_source || {};
+    const isLocalFileJob = !videoSource || Object.keys(videoSource).length === 0;
     const title = displayTitleForUser(
-        metadata.display_title
+        (isLocalFileJob && (normalizedJob.source_filename || result.filename))
+            || metadata.display_title
             || videoSource.display_title
             || result.display_title
             || metadata.raw_title

@@ -80,7 +80,7 @@ const Editor = ({hosted = null}) => {
         addLarkExport,
         runtimeConfig,
     } = useApp();
-    const {processVideoSSE, fetchJobSourceFile, getJobMediaUrl, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit} = useApi();
+    const {processVideoSSE, fetchJobSourceFile, getJobMediaUrl, fetchJobArtifactFile, uploadJobSourceFile, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit} = useApi();
     const {loadSettings, saveSettings} = useSettings();
     const [exporting, setExporting] = useState(false);
     const [regenerating, setRegenerating] = useState(false);
@@ -1127,7 +1127,7 @@ const Editor = ({hosted = null}) => {
         }
         if (!result?.task_id || !canPersistResult) return;
         try {
-            const data = await uploadJobPlaybackAudio(result.task_id, file);
+            const data = await uploadJobSourceFile(result.task_id, file, resultJobOptions);
             if (data?.result) {
                 setLastResult(data.result);
                 addToHistory(resultToHistoryEntry(data.result, {
@@ -1135,7 +1135,7 @@ const Editor = ({hosted = null}) => {
                     name: data.result.filename || file.name,
                 }));
             }
-            showToast(lang === 'zh' ? '原音频已保存，下次打开不用重选。' : 'Source audio saved for next time.');
+            showToast(lang === 'zh' ? '原视频已保存，下次打开不用重选。' : 'Source video saved for next time.');
         } catch (err) {
             showToast(
                 lang === 'zh'
