@@ -29,6 +29,20 @@ npm run build:frontend
 .venv/bin/python -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000
 ```
 
+## 数据存放位置
+
+转录会完整保留源文件，所以运行数据默认不放系统盘：Windows 上选择可用空间最大的固定非系统盘（如 `D:\FluentFlow`），没有合适磁盘时回退到 `%APPDATA%\FluentFlow`。想指定目录就设 `FLUENTFLOW_DATA_DIR`。
+
+已经在 `%APPDATA%` 下积累了记录的旧安装会继续读原目录，不会自动切换；需要搬到数据盘时先关闭应用，再执行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\migrate_data_dir.py
+```
+
+迁移完成后位置会记录在 `%LOCALAPPDATA%\FluentFlow\data-root.txt`，之后每次启动都直接读这份记录，不再按剩余空间重新推算——否则搬到"不是最大那块盘"的工作区会在下次启动时被悄悄绕开，界面看起来就像记录全丢了。
+
+笔记和转录默认永久保留。源媒体在 `FLUENTFLOW_SOURCE_RETENTION_DAYS`（默认 7 天）后清理，笔记不受影响。
+
 ## 开发检查
 
 ```bash
