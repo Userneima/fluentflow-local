@@ -27,6 +27,26 @@ export const isVideoResultSource = (result, sourceFile) => {
 
 export const shouldKeepVideoReviewMounted = ({activeReviewMode}) => activeReviewMode === 'video';
 
+// Why the editor refuses to touch a `result_partial` payload.
+//
+// A job-list row and a browser-cache row both carry 240-char previews under
+// the same field names a real record uses. Opening one looks fine — the note
+// panel just renders short — but the first keystroke arms the 800ms autosave,
+// which PATCHes the preview back over the full note. That is how a 13k-char
+// note became a 240-char stub with no way to recover it.
+//
+// So: partial in, no writes out. 'loading' while hydration is still fetching
+// the real record, 'unavailable' once it has failed, null when the payload is
+// the record itself and editing is safe.
+//
+// `hydratable` false means no server record exists to recover (an imported
+// browser-history entry). Locking those would strand them read-only forever,
+// and there is no full note behind them to protect.
+export const resultEditingLock = (result, {hydrationFailed = false, hydratable = true} = {}) => {
+    if (!result?.result_partial || !hydratable) return null;
+    return hydrationFailed ? 'unavailable' : 'loading';
+};
+
 // Ordered fallback chain for attaching playable media to a stored result.
 //
 // A browser cannot reopen the file the user originally picked, and the picked

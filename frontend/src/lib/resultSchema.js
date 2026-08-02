@@ -53,7 +53,7 @@ const text = (value) => String(value || '');
 export const normalizeSummaryStatus = (status, result={}) => {
     const value = text(status).trim().toLowerCase();
     if (['completed', 'failed', 'skipped', 'pending'].includes(value)) return value;
-    if (text(result.summary_markdown).trim()) return 'completed';
+    if (text(result.summary_markdown).trim() || text(result.summary_preview).trim()) return 'completed';
     if (result.summary_skipped) return 'skipped';
     if (text(result.summary_error).trim()) return 'failed';
     return value || null;
@@ -71,6 +71,11 @@ export const normalizeResultPayload = (value={}) => {
         ...(schemaVersion && schemaVersion !== RESULT_SCHEMA_VERSION
             ? {result_schema_migrated_from: schemaVersion}
             : {}),
+        // `result_partial` marks a payload that only carries previews (a job
+        // list row, a browser cache row). It survives normalization because
+        // the editor uses it to refuse edits that would save a preview back
+        // over the full record.
+        result_partial: !!source.result_partial,
         transcript_text: source.transcript_text || source.transcript_text_preview || '',
         raw_segments: rawSegments,
         display_segments: displaySegments,

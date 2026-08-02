@@ -57,6 +57,7 @@ import {
     isVideoResultSource,
     localSourceFileMatchesResult,
     mediaSourcePlan,
+    resultEditingLock,
     activeTranscriptSegmentIndex,
     shouldKeepVideoReviewMounted,
     summaryFailureNextStep,
@@ -200,6 +201,14 @@ const Editor = ({hosted = null}) => {
         result?.playback_audio_storage,
         result?.source_file_storage,
     ]);
+    // Mirrors the hydration effect's own preconditions: lock only what
+    // hydration can actually come back and unlock. Everything that writes —
+    // the change handlers, both autosave effects, regenerate, export — checks
+    // this before touching the record.
+    const editingLock = resultEditingLock(result, {
+        hydrationFailed,
+        hydratable: !!result?.task_id && !isLocalHistoryResult(result),
+    });
 
     useEffect(() => {
         if (!result?.task_id || transcriptUnsaved) {
@@ -214,7 +223,9 @@ const Editor = ({hosted = null}) => {
         }
         const currentSegments = pickTranscriptSegments(result);
         const currentText = result.transcript_text || '';
-        const needsHydration = currentSegments.length === 0 || currentText.length <= 260;
+        // `result_partial` is the explicit signal; the length checks stay as a
+        // fallback for payloads that predate the flag.
+        const needsHydration = !!result.result_partial || currentSegments.length === 0 || currentText.length <= 260;
         if (!needsHydration || hydratedTaskIdsRef.current.has(result.task_id)) {
             setHydratingResult(false);
             if (!needsHydration) setHydrationFailed(false);
@@ -233,7 +244,13 @@ const Editor = ({hosted = null}) => {
                 const fullText = full.transcript_text || '';
                 const currentDisplayCount = pickDisplayTranscriptSegments(result, currentSegments).length;
                 const fullDisplayCount = pickDisplayTranscriptSegments(full, fullSegments).length;
-                if (fullSegments.length > currentSegments.length || fullText.length > currentText.length || fullDisplayCount > currentDisplayCount) {
+                // A partial payload is always replaced, even when it happens to
+                // hold as much transcript as the record: its note is a preview,
+                // and leaving the flag set would keep the editor locked.
+                if (result.result_partial
+                    || fullSegments.length > currentSegments.length
+                    || fullText.length > currentText.length
+                    || fullDisplayCount > currentDisplayCount) {
                     const fullBaselineSegments = pickTranscriptBaselineSegments(full);
                     setLastResult(hosted?.mergeHydratedResult?.(full, result) || full);
                     setEditedSegments(fullSegments.map((seg) => ({...seg})));
@@ -340,6 +357,8 @@ const Editor = ({hosted = null}) => {
     };
 
     const handleSummaryChange = useCallback((text) => {
+        // Never let an edit made against a preview become the draft of record.
+        if (editingLock) return;
         setSummaryDraft(text);
         setSummaryUnsaved(true);
         setSummarySaveStatus(result?.task_id && canPersistResult ? 'saving' : 'local');
@@ -353,7 +372,7 @@ const Editor = ({hosted = null}) => {
             summary_edited: true,
             summary_edited_at: new Date().toISOString(),
         });
-    }, [canPersistResult, result, setLastResult]);
+    }, [canPersistResult, editingLock, result, setLastResult]);
 
     const summaryMarkdownForEditor = summaryUnsaved
         ? summaryDraft
@@ -471,7 +490,7 @@ const Editor = ({hosted = null}) => {
         || result?.summary_status === 'completed'
         || !!result?.summary_edited
     );
-    const canEditSummary = hasEditableSummary && !isReadOnlyResult;
+    const canEditSummary = hasEditableSummary && !isReadOnlyResult && !editingLock;
     const summarySaveLabel = summarySaveStatus === 'saving'
         ? (lang === 'zh' ? '保存中' : 'Saving')
         : summarySaveStatus === 'saved'
@@ -640,6 +659,9 @@ const Editor = ({hosted = null}) => {
 
     useEffect(() => {
         if (!result?.task_id || !transcriptUnsaved) return;
+        // Autosave is the step that turns a preview into permanent data loss.
+        // It never runs against a payload the editor knows is partial.
+        if (editingLock) return;
         if (!canPersistResult) {
             setTranscriptSaveStatus('idle');
             return;
@@ -671,10 +693,11 @@ const Editor = ({hosted = null}) => {
                 });
         }, 800);
         return () => clearTimeout(timer);
-    }, [result?.task_id, transcriptUnsaved, transcript, segments, visibleEditRecords, canPersistResult, resultJobOptions]);
+    }, [result?.task_id, transcriptUnsaved, transcript, segments, visibleEditRecords, canPersistResult, resultJobOptions, editingLock]);
 
     useEffect(() => {
         if (!summaryUnsaved) return;
+        if (editingLock) return;
         if (!result?.task_id || !canPersistResult) {
             setSummarySaveStatus('local');
             return;
@@ -703,7 +726,7 @@ const Editor = ({hosted = null}) => {
                 });
         }, 800);
         return () => clearTimeout(timer);
-    }, [result?.task_id, summaryUnsaved, summaryDraft, canPersistResult, resultJobOptions]);
+    }, [result?.task_id, summaryUnsaved, summaryDraft, canPersistResult, resultJobOptions, editingLock]);
 
     const seekToSegment = (seg) => {
         if (seg?.start == null) return;
@@ -932,6 +955,12 @@ const Editor = ({hosted = null}) => {
             return;
         }
         if(!transcript || regenerating) return;
+        // Regenerating from a preview would feed 240 characters to the model
+        // and then overwrite the real note with the result.
+        if (editingLock) {
+            showToast(lang === 'zh' ? '完整记录还没读取到，请稍后重试。' : 'The full record has not loaded yet. Try again shortly.', false);
+            return;
+        }
         if (hosted?.blockRegenerate?.({result, showToast, lang})) return;
         setRegenerating(true);
         try {
@@ -1297,7 +1326,7 @@ const Editor = ({hosted = null}) => {
                         <button
                             type="button"
                             onClick={()=>setRegenerateConfirmOpen(true)}
-                            disabled={isTransientResult||isReadOnlyResult||regenerating||!transcript}
+                            disabled={isTransientResult||isReadOnlyResult||regenerating||!transcript||!!editingLock}
                             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
                         >
                             <SvgIcon name={regenerating ? 'sync' : 'refresh'} className={`text-[17px] ${regenerating?'animate-spin':''}`}/>
@@ -1315,7 +1344,7 @@ const Editor = ({hosted = null}) => {
                         <button
                             type="button"
                             onClick={handleExportLark}
-                            disabled={isTransientResult||exporting||!summary}
+                            disabled={isTransientResult||exporting||!summary||!!editingLock}
                             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] bg-[#111111] px-4 text-xs font-extrabold text-white transition hover:bg-[#2a2a2a] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
                         >
                             <SvgIcon name={exporting ? 'sync' : 'cloud_upload'} className={`text-[17px] ${exporting?'animate-spin':''}`}/>
@@ -1496,7 +1525,7 @@ const Editor = ({hosted = null}) => {
                                         onFocusSegment={() => setFollowPlayback(false)}
                                         onSeek={seekToSegment}
                                         onSegmentChange={handleSegmentTextChange}
-                                        readOnly={isReadOnlyResult}
+                                        readOnly={isReadOnlyResult || !!editingLock}
                                         resizeTextarea={autoSizeTextarea}
                                         segments={visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments}
                                         variant="video"
@@ -1515,7 +1544,7 @@ const Editor = ({hosted = null}) => {
                                 onFocusSegment={() => setFollowPlayback(false)}
                                 onSeek={seekToSegment}
                                 onSegmentChange={handleSegmentTextChange}
-                                readOnly={isReadOnlyResult}
+                                readOnly={isReadOnlyResult || !!editingLock}
                                 resizeTextarea={autoSizeTextarea}
                                 segments={visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments}
                             />
@@ -1562,7 +1591,7 @@ const Editor = ({hosted = null}) => {
                                     <textarea
                                         value={transcript}
                                         onChange={(e)=>handlePlainTranscriptChange(e.target.value)}
-                                        readOnly={isReadOnlyResult}
+                                        readOnly={isReadOnlyResult || !!editingLock}
                                         onFocus={()=>setFollowPlayback(false)}
                                         className="min-h-[320px] w-full flex-1 resize-none whitespace-pre-wrap border-none bg-transparent p-0 text-sm font-medium leading-relaxed text-[#111111] focus:ring-0 dark:text-white"
                                     />
@@ -1651,7 +1680,7 @@ const Editor = ({hosted = null}) => {
                                         )}
                                         <DropdownMenu
                                             trigger={
-                                                <button disabled={!summary || !!downloading} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]">
+                                                <button disabled={!summary || !!downloading || !!editingLock} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]">
                                                     <SvgIcon name={downloading ? 'sync' : 'download'} className={`text-sm ${downloading?'animate-spin':''}`}/>
                                                     {downloading ? t('dl.generating') : t('dl.summary')}
                                             </button>
@@ -1690,7 +1719,25 @@ const Editor = ({hosted = null}) => {
                                     </>
                                 ) : (
                                     <div className="hide-scrollbar min-h-0 flex-1 overflow-y-auto p-6 text-[#111111] dark:text-white">
-                                    {hasEditableSummary ? (
+                                    {editingLock === 'loading' ? (
+                                        <p className="flex items-center gap-2 text-sm italic text-[#666] dark:text-white/60">
+                                            <SvgIcon name="sync" className="animate-spin text-base"/>
+                                            {lang === 'zh' ? '正在读取完整笔记…' : 'Loading the full note…'}
+                                        </p>
+                                    ) : editingLock === 'unavailable' ? (
+                                        <div className="space-y-2 text-sm text-[#666] dark:text-white/60">
+                                            <p className="italic">
+                                                {lang === 'zh'
+                                                    ? '读取完整笔记失败，这里只有列表里的摘要预览。'
+                                                    : 'Could not load the full note; this is only the list preview.'}
+                                            </p>
+                                            <p className="rounded-[14px] border border-error/20 bg-error-container px-3 py-2 text-xs font-semibold leading-relaxed text-on-error-container">
+                                                {lang === 'zh'
+                                                    ? '编辑与自动保存已停用，以免预览覆盖完整笔记。请刷新页面后重试。'
+                                                    : 'Editing and autosave are off so the preview cannot overwrite the full note. Refresh and try again.'}
+                                            </p>
+                                        </div>
+                                    ) : hasEditableSummary ? (
                                         <div
                                             ref={summaryRef}
                                             className="max-w-none text-base font-semibold leading-8 text-[#111111] dark:text-white [&_a]:text-primary [&_blockquote]:border-l-4 [&_blockquote]:border-primary/30 [&_blockquote]:pl-4 [&_blockquote]:text-[#555] dark:[&_blockquote]:text-white/70 [&_h1]:mb-4 [&_h1]:mt-6 [&_h1]:font-headline [&_h1]:text-2xl [&_h1]:font-extrabold [&_h2]:mb-3 [&_h2]:mt-6 [&_h2]:font-headline [&_h2]:text-xl [&_h2]:font-extrabold [&_h3]:mb-2 [&_h3]:mt-5 [&_h3]:font-headline [&_h3]:text-lg [&_h3]:font-extrabold [&_li]:my-1.5 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-3 [&_strong]:font-extrabold [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6"

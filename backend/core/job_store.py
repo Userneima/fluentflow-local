@@ -926,6 +926,9 @@ def _step_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+PREVIEW_CHARS = 240
+
+
 def _result_summary(result: Any) -> dict[str, Any] | None:
     result = normalize_result_for_read(result)
     if not isinstance(result, dict):
@@ -934,6 +937,13 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
     summary_markdown = result.get("summary_markdown") or ""
     transcript_text = result.get("transcript_text") or result.get("transcript_text_preview") or ""
     return {
+        # A list row carries previews, never the record itself. The truncated
+        # text must not travel under the canonical `summary_markdown` /
+        # `transcript_text` names: an editor that mistook a preview for the
+        # real note saved the 240-char stub back over a 13k-char note. Readers
+        # that only need "is there a note" use the preview or the *_chars
+        # counts; anything that edits must fetch the full job first.
+        "result_partial": True,
         "task_id": result.get("task_id"),
         "status": result.get("status"),
         "filename": result.get("filename"),
@@ -955,10 +965,10 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         "summary_status": result.get("summary_status"),
         "summary_error": result.get("summary_error"),
         "summary_skipped": result.get("summary_skipped"),
-        "summary_markdown": str(summary_markdown)[:240] if summary_markdown else "",
-        "summary_preview": str(summary_markdown)[:240] if summary_markdown else "",
-        "transcript_text": str(transcript_text)[:240] if transcript_text else "",
-        "transcript_text_preview": str(transcript_text)[:240] if transcript_text else "",
+        "summary_preview": str(summary_markdown)[:PREVIEW_CHARS] if summary_markdown else "",
+        "summary_markdown_chars": len(str(summary_markdown)),
+        "transcript_text_preview": str(transcript_text)[:PREVIEW_CHARS] if transcript_text else "",
+        "transcript_text_chars": len(str(transcript_text)),
         "artifacts": result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {},
         "lark_response": {"url": lark_response.get("url")} if lark_response and lark_response.get("url") else None,
         "feishu_doc_url": result.get("feishu_doc_url"),

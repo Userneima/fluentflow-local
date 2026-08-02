@@ -62,9 +62,15 @@ const minimizeJobForCache = (job) => {
         ...persistedJob,
         result: result ? {
             ...result,
+            // localStorage cannot hold a full transcript and note for every
+            // record, so a cached row keeps previews only. It must say so:
+            // an editor that opened a cached row as if it were the record
+            // once autosaved the 240-char preview over the real note.
+            result_partial: true,
             transcript_text_preview: result.transcript_text_preview || compactTextForCache(result.transcript_text),
-            transcript_text: compactTextForCache(result.transcript_text),
-            summary_markdown: compactTextForCache(result.summary_markdown),
+            transcript_text: '',
+            summary_preview: result.summary_preview || compactTextForCache(result.summary_markdown),
+            summary_markdown: '',
             segments: [],
             cleaned_segments: null,
             raw_segments: null,
@@ -266,10 +272,11 @@ export const resultToHistoryEntry = (sourceResult, fallback={}) => {
         timestamp: fallback.timestamp || Date.now(),
         durationMin: Math.round(durSec/60*10)/10,
         status: hasTranscript ? 'completed' : (fallback.status || (result.status === 'completed' ? 'completed' : (result.status || 'failed'))),
+        resultPartial: !!result.result_partial,
         transcriptText: result.transcript_text||result.transcript_text_preview||'',
         segments,
         displaySegments: result.display_segments || [],
-        summary: result.summary_markdown||'',
+        summary: result.summary_markdown||result.summary_preview||'',
         summarySkipped: !!result.summary_skipped,
         summaryStatus: result.summary_status||null,
         summaryError: result.summary_error||null,
@@ -429,6 +436,9 @@ export const entryToJob = (entry = {}, { clientId = null } = {}) => {
 export const historyEntryToResult = (h) => h ? normalizeResultPayload({
     task_id: h.taskId,
     source: h.source||null,
+    // A history entry is rebuilt from cached previews, so it stays partial
+    // until the editor hydrates the full job.
+    result_partial: !!h.resultPartial,
     transcript_text: h.transcriptText,
     segments: h.segments,
     summary_markdown: h.summary,

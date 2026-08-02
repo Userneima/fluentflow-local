@@ -1,7 +1,37 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { activeTranscriptSegmentIndex, mediaSourcePlan, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+import { activeTranscriptSegmentIndex, mediaSourcePlan, resultEditingLock, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+
+describe('resultEditingLock', () => {
+    // A job-list row carried a 240-char preview under `summary_markdown`. The
+    // editor opened it, autosave fired, and a 13k-char note became the stub.
+    it('locks a partial payload so autosave cannot overwrite the record', () => {
+        expect(resultEditingLock({task_id: 't1', result_partial: true, summary_markdown: '# 预览'}))
+            .toBe('loading');
+    });
+
+    it('keeps the lock and reports it differently once hydration has failed', () => {
+        expect(resultEditingLock({task_id: 't1', result_partial: true}, {hydrationFailed: true}))
+            .toBe('unavailable');
+    });
+
+    it('leaves a fully hydrated record editable', () => {
+        expect(resultEditingLock({task_id: 't1', summary_markdown: '# 完整笔记'})).toBeNull();
+        expect(resultEditingLock({task_id: 't1', result_partial: false}, {hydrationFailed: true})).toBeNull();
+    });
+
+    // An imported browser-history entry has no server record behind it, so
+    // locking it would strand it read-only with nothing to recover.
+    it('does not lock a payload that hydration can never unlock', () => {
+        expect(resultEditingLock({result_partial: true}, {hydratable: false})).toBeNull();
+    });
+
+    it('has nothing to lock without a result', () => {
+        expect(resultEditingLock(null)).toBeNull();
+        expect(resultEditingLock(undefined)).toBeNull();
+    });
+});
 
 describe('shouldKeepVideoReviewMounted', () => {
     it('keeps the player mounted while playback is between subtitle segments', () => {

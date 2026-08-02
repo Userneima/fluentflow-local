@@ -466,7 +466,7 @@ export const friendlyTaskError = (message, lang='zh') => {
 };
 
 export const noteGenerationDiagnosis = (result={}, lang='zh') => {
-    const summary = String(result?.summary_markdown || '').trim();
+    const summary = String(result?.summary_markdown || result?.summary_preview || '').trim();
     const status = String(result?.summary_status || '').trim().toLowerCase();
     const stage = String(result?.stage || '').trim().toLowerCase();
     const rawError = String(result?.summary_error || result?.error_reason || '').trim();
