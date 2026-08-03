@@ -11,17 +11,17 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 SERVER_SCRIPT = PROJECT_ROOT / "scripts" / "fluentflow_mcp_server.py"
-EXPECTED_TOOLS = {
-    "submit_video_link",
-    "submit_transcript",
-    "get_task",
-    "wait_task",
-    "get_task_package",
-    "diagnose_task",
-    "regenerate_note",
-    "export_result",
-}
+
+# Read the registry rather than restating it. The hardcoded copy this replaced
+# had already fallen a tool behind, and because the check is a subset test a
+# stale list fails open: the tool simply stops being verified.
+from scripts.fluentflow_mcp_server import TOOL_FUNCTIONS  # noqa: E402
+
+EXPECTED_TOOLS = set(TOOL_FUNCTIONS)
 
 
 class McpCheckError(RuntimeError):
@@ -35,6 +35,11 @@ class McpStdioClient:
         env["FLUENTFLOW_CLIENT_ID"] = client_id
         if access_token:
             env["FLUENTFLOW_ACCESS_TOKEN"] = access_token
+        # MCP frames are UTF-8 JSON and this product's content is mostly
+        # Chinese. Without both of these the pipe falls back to the console
+        # codepage on a non-UTF-8 Windows locale, and the check dies decoding
+        # the first task package that contains a Chinese character.
+        env["PYTHONIOENCODING"] = "utf-8"
         self.process = subprocess.Popen(
             [sys.executable, str(SERVER_SCRIPT)],
             cwd=str(PROJECT_ROOT),
@@ -43,6 +48,7 @@ class McpStdioClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
             bufsize=1,
         )
         self._next_id = 1

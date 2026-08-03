@@ -30,7 +30,9 @@ from backend.core.job_store import (
     append_job_result_list_item,
     finalize_job_result_if_unchanged,
     get_job,
+    list_job_summaries,
     note_conflict_fingerprint,
+    update_job_result,
     upsert_job,
 )
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
@@ -40,6 +42,11 @@ from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
 from backend.core.local_request_scope import request_client_id, require_local_agent_access
 from backend.core.note_title import resolve_lark_doc_title
+from backend.core.note_write import (
+    NOTE_SOURCE_AGENT,
+    apply_summary_edit,
+    max_summary_edit_chars,
+)
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.routers.local_feishu_export import _local_lark_export_target
@@ -146,6 +153,7 @@ async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...
                 deepseek_api_key=payload.get("deepseek_api_key"),
                 openai_api_key=payload.get("openai_api_key"),
                 qwen_api_key=payload.get("qwen_api_key"),
+                anthropic_api_key=payload.get("anthropic_api_key"),
                 ai_provider=payload.get("ai_provider"),
                 ai_model=payload.get("ai_model"),
                 system_prompt=payload.get("system_prompt"),
@@ -227,6 +235,86 @@ async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...
         }
 
     raise HTTPException(status_code=400, detail="Provide a video link input or transcript_text")
+
+
+_NOTE_FILTERS = ("any", "missing", "present")
+
+
+def _agent_task_row(job: dict[str, Any]) -> dict[str, Any]:
+    """A task as an agent picking work needs to see it.
+
+    Deliberately not the full list row: an agent choosing which tasks to write
+    notes for needs the note's state and size, not previews, artifacts, or
+    transcription telemetry. ``note.source`` is the load-bearing field — without
+    it a second "write notes for everything that needs one" pass cannot tell a
+    pipeline note from one this agent already wrote, and rewrites its own work.
+    """
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    return {
+        "task_id": job.get("task_id"),
+        "status": job.get("status"),
+        # raw_title first, matching the browser app: records written before the
+        # title-truncation fix carry a mangled display_title (a "4.5期…" file
+        # became "4"), and an agent picking work by title needs a readable one.
+        "title": result.get("raw_title") or result.get("display_title") or job.get("source_filename"),
+        "updated_at": job.get("updated_at"),
+        "transcript_chars": result.get("transcript_text_chars") or 0,
+        "note": {
+            # The result wins over the job's summary_status column: a note
+            # written by the editor or an agent updates the result only, so the
+            # column can still read "skipped" for a task that now has a note.
+            "status": result.get("summary_status") or job.get("summary_status"),
+            "chars": result.get("summary_markdown_chars") or 0,
+            "edited": bool(result.get("summary_edited")),
+            "source": result.get("summary_source"),
+            "source_label": result.get("summary_source_label"),
+        },
+    }
+
+
+def _note_is_missing(row: dict[str, Any]) -> bool:
+    """Whether this task still needs a note written.
+
+    The note body is the only reliable signal. Status is not: it is duplicated
+    between the result and a job column that note writers do not update, and a
+    "skipped" status with a body means transcript-only mode plus a note somebody
+    wrote afterwards — which is exactly the task an agent must NOT redo.
+    """
+    return not row["note"]["chars"]
+
+
+@router.get("/tasks")
+def list_agent_tasks(
+    request: Request,
+    limit: int = 50,
+    note: str = "any",
+    status: str = "",
+) -> dict[str, Any]:
+    """List tasks so an agent can find the ones that still need a note.
+
+    Without this an agent can only act on task ids the user pasted by hand,
+    which is what made "write notes for everything that needs one" impossible to
+    ask for. Reads the cheap list projection, so no transcript or note body is
+    loaded to answer it.
+    """
+    note_filter = (note or "any").strip().lower()
+    if note_filter not in _NOTE_FILTERS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"note must be one of: {', '.join(_NOTE_FILTERS)}",
+        )
+    rows = [
+        _agent_task_row(job)
+        for job in list_job_summaries(limit=limit, client_id=_local_client_scope(request))
+    ]
+    wanted_status = (status or "").strip().lower()
+    if wanted_status:
+        rows = [row for row in rows if str(row["status"] or "").lower() == wanted_status]
+    if note_filter == "missing":
+        rows = [row for row in rows if _note_is_missing(row)]
+    elif note_filter == "present":
+        rows = [row for row in rows if not _note_is_missing(row)]
+    return {"ok": True, "count": len(rows), "note_filter": note_filter, "tasks": rows}
 
 
 @router.get("/tasks/{task_id}")
@@ -341,6 +429,7 @@ async def regenerate_agent_task_note(
         deepseek_api_key=payload.get("deepseek_api_key"),
         openai_api_key=payload.get("openai_api_key"),
         qwen_api_key=payload.get("qwen_api_key"),
+        anthropic_api_key=payload.get("anthropic_api_key"),
         ai_provider=payload.get("ai_provider"),
         ai_model=payload.get("ai_model"),
         system_prompt=payload.get("system_prompt"),
@@ -456,6 +545,81 @@ async def regenerate_agent_task_note(
         success=True,
         metadata=event_metadata(
             route=route, note_generation_transcript_source=transcript_source
+        ),
+    )
+    return {"ok": True, "task_id": task_id, "package": _task_package_response(updated)}
+
+
+@router.put("/tasks/{task_id}/note")
+def save_agent_task_note(
+    request: Request,
+    task_id: str,
+    payload: dict[str, Any] = Body(...),
+) -> dict[str, Any]:
+    """Store a note an external agent wrote, in place of generating one locally.
+
+    This is the write half of reading a task package: an agent reads the
+    transcript, writes the note with its own model, and puts it back here. It
+    deliberately shares ``apply_summary_edit`` with the editor route so the
+    stored note is indistinguishable in shape from a hand-edited one — the
+    editor, exports, and artifacts all keep working without knowing who wrote
+    it, and an in-flight local regeneration correctly loses to this write.
+    """
+    client_id = _local_client_scope(request)
+    job = _job_for_request(request, task_id)
+    result = dict(job.get("result") or {})
+
+    summary = payload.get("summary_markdown")
+    if not isinstance(summary, str):
+        raise HTTPException(status_code=400, detail="summary_markdown is required")
+    # Stricter than the editor, which may legitimately clear a note: an agent
+    # that produced nothing has failed, and must not blank the stored note.
+    if not summary.strip():
+        raise HTTPException(status_code=400, detail="summary_markdown must not be empty")
+    limit = max_summary_edit_chars()
+    if len(summary) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Note is too large: {len(summary)} chars (limit {limit})",
+        )
+
+    # Optional precondition. An agent spends minutes writing, so the note it
+    # read may already have been edited by the user in the meantime; echoing
+    # back what it read turns a silent clobber into a 409 it can react to.
+    expected = payload.get("expected_summary_markdown")
+    if expected is not None:
+        if not isinstance(expected, str):
+            raise HTTPException(status_code=400, detail="expected_summary_markdown must be a string")
+        if expected != str(result.get("summary_markdown") or ""):
+            raise HTTPException(
+                status_code=409,
+                detail="笔记已被改动，本次写入未覆盖。请重新读取任务包后再写。",
+            )
+
+    next_result = apply_summary_edit(
+        result,
+        task_id,
+        summary,
+        source=NOTE_SOURCE_AGENT,
+        source_label=str(payload.get("author") or "").strip() or None,
+    )
+    next_result = _attach_result_artifacts(task_id, next_result)
+    updated = update_job_result(task_id, next_result, client_id=client_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Job not found")
+    log_event(
+        task_id=task_id,
+        event_name="agent_note_saved",
+        source_type=job.get("source_type"),
+        source_filename=job.get("source_filename"),
+        summary_length=len(summary),
+        stage="summary_saved",
+        success=True,
+        metadata=event_metadata(
+            route="/agent/v1/tasks/{task_id}/note",
+            summary_source=NOTE_SOURCE_AGENT,
+            summary_source_label=next_result.get("summary_source_label"),
+            precondition_checked=expected is not None,
         ),
     )
     return {"ok": True, "task_id": task_id, "package": _task_package_response(updated)}

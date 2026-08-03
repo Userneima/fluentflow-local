@@ -29,6 +29,36 @@ npm run build:frontend
 .venv/bin/python -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000
 ```
 
+## 用 Claude Desktop 等 MCP 客户端写笔记
+
+除了本机 AI 凭证生成笔记，也可以让 MCP 客户端读走转录、用它自己的模型写笔记再存回来——这样走的是那个客户端的订阅，不消耗你配置的 AI 凭证。
+
+先设访问令牌启用 Agent API（不设则 `/agent/v1` 整体关闭）：
+
+```powershell
+$env:FLUENTFLOW_ACCESS_TOKEN = "自己起一个足够长的随机串"
+```
+
+再把 `scripts/fluentflow_mcp_server.py` 注册为 MCP server（stdio），需要时用 `FLUENTFLOW_API_BASE`、`FLUENTFLOW_CLIENT_ID` 指定后端地址与客户端标识。
+
+单条的用法是：`get_task_package` 读全文转录 → 客户端写笔记 → `save_note` 存回，笔记随即出现在编辑器里，导出飞书照常。
+
+攒一批处理时不用逐个报 task_id，一句话就够：
+
+> 把 FluentFlow 里所有还没有笔记的任务列出来，逐个读转录写笔记，写完存回去
+
+客户端会用 `list_tasks(note="missing")` 找出待办、逐个 `get_task_package` + `save_note`。每行都带 `note.source`，所以第二次跑批能跳过自己写过的（`agent`）、也不会去覆盖用户手改过的（`editor`）。
+
+改写已有笔记时把读到的原文作为 `expected_summary_markdown` 一起传回：期间用户在编辑器改过笔记的话会返回 409，而不是静默覆盖。
+
+自检：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_mcp_server.py --access-token $env:FLUENTFLOW_ACCESS_TOKEN --backend-e2e
+```
+
+注意转录文本会发送给该 MCP 客户端背后的服务商；原始音视频仍然只留在本机。
+
 ## 数据存放位置
 
 转录会完整保留源文件，所以运行数据默认不放系统盘：Windows 上选择可用空间最大的固定非系统盘（如 `D:\FluentFlow`），没有合适磁盘时回退到 `%APPDATA%\FluentFlow`。想指定目录就设 `FLUENTFLOW_DATA_DIR`。

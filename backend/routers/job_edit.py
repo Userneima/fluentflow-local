@@ -22,6 +22,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, BackgroundTasks, HTTPException, Request
 
 from backend.core.job_store import get_job, update_job_result
+from backend.core.note_write import (
+    NOTE_SOURCE_EDITOR,
+    apply_summary_edit,
+    max_summary_edit_chars,
+)
 from backend.core.result_artifacts import (
     _attach_result_artifacts,
     _canonical_display_segments,
@@ -120,20 +125,11 @@ def create_job_edit_router(
         summary = payload.get("summary_markdown")
         if not isinstance(summary, str):
             raise HTTPException(status_code=400, detail="summary_markdown is required")
-        max_chars = int(os.environ.get("FLUENTFLOW_MAX_SUMMARY_EDIT_CHARS", "500000"))
+        max_chars = max_summary_edit_chars()
         if len(summary) > max_chars:
             raise HTTPException(status_code=413, detail=f"Summary edit is too large: {len(summary)} chars")
 
-        edited_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-        result.update({
-            "task_id": result.get("task_id") or task_id,
-            "summary_markdown": summary,
-            "summary_skipped": False,
-            "summary_status": "completed" if summary.strip() else result.get("summary_status") or "completed",
-            "summary_error": None,
-            "summary_edited": True,
-            "summary_edited_at": edited_at,
-        })
+        result = apply_summary_edit(result, task_id, summary, source=NOTE_SOURCE_EDITOR)
         result = _attach_result_artifacts(task_id, result)
         updated = update_job_result(task_id, result, client_id=client_id)
         if not updated:

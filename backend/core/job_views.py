@@ -64,6 +64,13 @@ _LIST_ROW_FIELDS: Final[tuple[str, ...]] = (
     "summary_status",
     "summary_error",
     "summary_skipped",
+    # Who wrote the note. Small metadata, and load-bearing for an agent listing
+    # tasks to work through: without it, "write notes for everything that needs
+    # one" cannot tell a pipeline note from one the agent itself already wrote,
+    # so a second run rewrites its own work.
+    "summary_edited",
+    "summary_source",
+    "summary_source_label",
     "feishu_doc_url",
     "lark_error",
     "source_fingerprint",

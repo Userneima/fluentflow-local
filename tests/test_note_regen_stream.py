@@ -178,7 +178,8 @@ class RegenerateStreamTests(TestCase):
                     "task-a", CLIENT, get_job("task-a", client_id=CLIENT),
                     get_job("task-a", client_id=CLIENT)["result"], None),
                 transcript=TRANSCRIPT, deepseek_api_key=None, openai_api_key=None,
-                qwen_api_key=None, ai_provider=None, ai_model=None, note_mode=None,
+                qwen_api_key=None, anthropic_api_key=None,
+                ai_provider=None, ai_model=None, note_mode=None,
                 system_prompt=None, prompt_preset=None, prompt_preset_label=None,
                 source_type=None, source_filename=None, source_duration_seconds=None,
             )
