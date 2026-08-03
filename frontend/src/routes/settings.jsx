@@ -4,6 +4,8 @@ import {
     DEFAULT_DEEPSEEK_MODEL,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_QWEN_MODEL,
+    DEFAULT_ANTHROPIC_MODEL,
+    aiProviderSecretKey,
     LARK_EXPORT_ROUTE_LOCAL_CLI,
     LARK_EXPORT_ROUTE_OPENAPI,
     effectiveSttProvider,
@@ -185,11 +187,10 @@ const Settings = ({account = null}) => {
         deepseek: DEFAULT_DEEPSEEK_MODEL,
         openai: DEFAULT_OPENAI_MODEL,
         qwen: DEFAULT_QWEN_MODEL,
+        anthropic: DEFAULT_ANTHROPIC_MODEL,
     };
-    const activeAiSecretKey = aiProvider === 'openai' ? 'openai_api_key' : (aiProvider === 'qwen' ? 'dashscope_api_key' : 'deepseek_api_key');
-    const activeAiConfigured = aiProvider === 'openai'
-        ? credentialStatus?.openai_api_key_configured
-        : (aiProvider === 'qwen' ? credentialConfigured(credentialStatus, 'dashscope_api_key') : credentialStatus?.deepseek_api_key_configured);
+    const activeAiSecretKey = aiProviderSecretKey(aiProvider);
+    const activeAiConfigured = credentialConfigured(credentialStatus, activeAiSecretKey);
     const sttProvider = effectiveSttProvider(settings, runtimeConfig);
     const larkExportRoute = larkExportRouteFromSettings(settings);
     // Extra routes (today: the hosted account-OAuth route) come from the
@@ -470,6 +471,7 @@ const Settings = ({account = null}) => {
                                             <option value="deepseek">DeepSeek</option>
                                             <option value="openai">OpenAI</option>
                                             <option value="qwen">Qwen</option>
+                                            <option value="anthropic">Claude</option>
                                         </select>
                                     </div>
                                     <div className="space-y-2">
@@ -479,6 +481,12 @@ const Settings = ({account = null}) => {
                                                 <option value="gpt-5.4-mini">gpt-5.4-mini</option>
                                                 <option value="gpt-5.4">gpt-5.4</option>
                                                 <option value="gpt-5.5">gpt-5.5</option>
+                                            </select>
+                                        ) : aiProvider === 'anthropic' ? (
+                                            <select className={inputClass} value={aiModel} onChange={e=>updateSettingNow({aiModel:e.target.value})}>
+                                                <option value="claude-opus-5">claude-opus-5</option>
+                                                <option value="claude-sonnet-5">claude-sonnet-5</option>
+                                                <option value="claude-haiku-4-5">claude-haiku-4-5</option>
                                             </select>
                                         ) : aiProvider === 'qwen' ? (
                                             <select className={inputClass} value={aiModel} onChange={e=>updateSettingNow({aiModel:e.target.value})}>
@@ -491,7 +499,7 @@ const Settings = ({account = null}) => {
                                         )}
                                     </div>
                                     <div className="space-y-2 md:col-span-2">
-                                        <label className={fieldLabelClass}>{aiProvider === 'openai' ? t('set.openaiKey') : (aiProvider === 'qwen' ? t('set.dashscopeKey') : t('set.deepseekKey'))}</label>
+                                        <label className={fieldLabelClass}>{aiProvider === 'openai' ? t('set.openaiKey') : (aiProvider === 'qwen' ? t('set.dashscopeKey') : (aiProvider === 'anthropic' ? t('set.anthropicKey') : t('set.deepseekKey')))}</label>
                                         <p className="text-xs leading-relaxed text-on-surface-variant">{secretRetentionText(activeAiConfigured)}</p>
                                         <div className="flex gap-2">
                                             <input className={inputClass} placeholder={secretInputPlaceholder(activeAiConfigured)} type="password" value={secretDraft[activeAiSecretKey] || ''} onChange={e=>setSecretDraft(d=>({...d, [activeAiSecretKey]: e.target.value}))}/>
@@ -499,7 +507,7 @@ const Settings = ({account = null}) => {
                                         </div>
                                         <SecretFeedback keyName={activeAiSecretKey} />
                                     </div>
-                                    {aiProvider !== 'qwen' && (
+                                    {aiProvider !== 'qwen' && aiProvider !== 'anthropic' && (
                                         <div className="space-y-2 md:col-span-2">
                                             <label className={fieldLabelClass}>{t('set.dashscopeKey')}</label>
                                             <p className="text-xs leading-relaxed text-on-surface-variant">

@@ -18,8 +18,17 @@ DEFAULT_QWEN_MODEL: Final[str] = "qwen3.7-plus"
 # visual-evidence step reports "unavailable". qwen-vl-plus is the cheaper vision
 # tier; override with QWEN_VISION_MODEL (e.g. qwen-vl-max) if needed.
 DEFAULT_QWEN_VISION_MODEL: Final[str] = "qwen-vl-plus"
+# Claude models are multimodal, so a vision call reuses the note model — there
+# is no separate vision tier to switch to the way Qwen needs.
+DEFAULT_ANTHROPIC_MODEL: Final[str] = "claude-opus-5"
+# The Messages API requires max_tokens, and on current Claude models it caps
+# thinking and the answer together — a tight value truncates a long note
+# mid-sentence. It is a ceiling, not a charge: only generated tokens are billed,
+# so this is deliberately generous.
+DEFAULT_ANTHROPIC_MAX_TOKENS: Final[int] = 64_000
 DEFAULT_MODEL: Final[str] = DEFAULT_DEEPSEEK_MODEL
-SUPPORTED_PROVIDERS: Final[set[str]] = {"deepseek", "openai", "qwen"}
+ANTHROPIC_PROVIDER: Final[str] = "anthropic"
+SUPPORTED_PROVIDERS: Final[set[str]] = {"deepseek", "openai", "qwen", ANTHROPIC_PROVIDER}
 SUPPORTED_NOTE_MODES: Final[set[str]] = {"auto", "direct", "fast", "high_fidelity", "chapter_coverage"}
 CHAPTER_COVERAGE_VERSION: Final[str] = "1"
 DIRECT_MODE_MAX_CHARS: Final[int] = 20_000

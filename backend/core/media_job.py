@@ -32,6 +32,7 @@ from backend.core.audio_handler import (
     require_audible_audio,
 )
 from backend.core.ai_summarizer import (
+    can_use_multimodal,
     generate_bilingual_segments_zh,
     plan_visual_evidence_requests,
     select_visual_evidence_frames,
@@ -337,6 +338,7 @@ class MediaJobContext:
     deepseek_api_key: Any
     openai_api_key: Any
     qwen_api_key: Any
+    anthropic_api_key: Any
     ai_provider: Any
     ai_model: Any
     note_mode: Any
@@ -457,6 +459,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     deepseek_api_key = ctx.deepseek_api_key
     openai_api_key = ctx.openai_api_key
     qwen_api_key = ctx.qwen_api_key
+    anthropic_api_key = ctx.anthropic_api_key
     ai_provider = ctx.ai_provider
     ai_model = ctx.ai_model
     note_mode = ctx.note_mode
@@ -938,6 +941,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                     deepseek_api_key=deepseek_api_key,
                     openai_api_key=openai_api_key,
                     qwen_api_key=qwen_api_key,
+                    anthropic_api_key=anthropic_api_key,
                     ai_provider=ai_provider,
                     ai_model=ai_model,
                     system_prompt=None,
@@ -1143,6 +1147,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 deepseek_api_key=deepseek_api_key,
                 openai_api_key=openai_api_key,
                 qwen_api_key=qwen_api_key,
+                anthropic_api_key=anthropic_api_key,
                 ai_provider=ai_provider,
                 ai_model=ai_model,
                 system_prompt=system_prompt,
@@ -1199,16 +1204,25 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                                 keyframe_result.skipped_reason,
                             )
                     if frame_metadata:
-                        visual_api_key = secret_resolver(qwen_api_key, "qwen_api_key")
-                        if not visual_api_key and (kwargs.get("provider") == "qwen"):
+                        # Frame selection needs a model that can see images.
+                        # This was pinned to Qwen, so auto-illustration demanded
+                        # a DashScope key even when the note model was already
+                        # multimodal; follow the note provider when it can see,
+                        # and fall back to Qwen when it cannot (e.g. DeepSeek).
+                        note_provider = str(kwargs.get("provider") or "")
+                        if can_use_multimodal(note_provider):
+                            visual_provider = note_provider
                             visual_api_key = kwargs.get("api_key") or ""
+                        else:
+                            visual_provider = "qwen"
+                            visual_api_key = secret_resolver(qwen_api_key, "qwen_api_key")
                         visual_selection = await loop.run_in_executor(
                             None,
                             lambda: select_visual_evidence_frames(
                                 visual_requests,
                                 frame_metadata,
                                 api_key=visual_api_key or None,
-                                provider="qwen",
+                                provider=visual_provider,
                             ),
                         )
                         visual_selections = visual_selection.selections

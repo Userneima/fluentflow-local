@@ -29,6 +29,23 @@ npm run build:frontend
 .venv/bin/python -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000
 ```
 
+## 用 Claude 生成笔记
+
+设置页的「服务商」多了 `Claude` 一项，填 Anthropic API Key 即可，笔记流水线其余部分不变。默认模型 `claude-opus-5`，也可选 `claude-sonnet-5` / `claude-haiku-4-5`；用 `ANTHROPIC_MODEL` 和 `ANTHROPIC_MAX_TOKENS`（默认 64000）覆盖。
+
+**这需要 API Key，不是 Claude Pro/Max 订阅**——订阅无法作为 API 凭证给第三方程序使用。想用订阅走下一节的 MCP 路线。
+
+选了 Claude 之后建议把「笔记生成模式」设成**直接上下文**（`FLUENTFLOW_NOTE_MODE=direct`）：
+
+| | DeepSeek + 自动选择 | Claude + 直接上下文 |
+|---|---|---|
+| 13 万字转录 | 走完整覆盖模式，20+ 次模型调用 | **1 次调用** |
+| 连贯性 | 分章写完再拼接 | 一次读完全文再写 |
+
+那套多步流水线（切段抽证据 → 大纲 → 逐章 → 统一文风 → 覆盖度检查 → 按需返修）是为上下文装不下长转录的模型准备的补偿机制，默认阈值 2 万字。Claude 的上下文足够长，可以直接一次成文。DeepSeek 用户仍然需要多步模式，所以它原样保留。
+
+另外自动配图不再必须配置阿里云百炼：笔记服务商本身能看图时（Claude、Qwen）就用它选帧，只有 DeepSeek 这类纯文本服务商才回退到 Qwen。
+
 ## 用 Claude Desktop 等 MCP 客户端写笔记
 
 除了本机 AI 凭证生成笔记，也可以让 MCP 客户端读走转录、用它自己的模型写笔记再存回来——这样走的是那个客户端的订阅，不消耗你配置的 AI 凭证。

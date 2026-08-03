@@ -125,10 +125,13 @@ async def read_upload_bounded(upload: UploadFile, limit_mb: float) -> bytearray:
     return content
 
 
+# Order matters: with no provider selected, the first entry that has a key wins,
+# so this doubles as the product's provider preference order.
 _PROVIDER_KEY_NAMES = (
     ("deepseek", "deepseek_api_key"),
     ("openai", "openai_api_key"),
     ("qwen", "qwen_api_key"),
+    ("anthropic", "anthropic_api_key"),
 )
 
 
@@ -137,6 +140,7 @@ def local_ai_kwargs(
     deepseek_api_key: Optional[str] = None,
     openai_api_key: Optional[str] = None,
     qwen_api_key: Optional[str] = None,
+    anthropic_api_key: Optional[str] = None,
     ai_provider: Optional[str] = None,
     ai_model: Optional[str] = None,
     system_prompt: Optional[str] = None,
@@ -150,12 +154,13 @@ def local_ai_kwargs(
     provider's own environment variable — or fails with its own clear
     "key not configured" message — instead of receiving another provider's
     credential. With no provider selected, the first provider that has a key
-    (deepseek → openai → qwen, matching the product default order) is used.
+    is used, in ``_PROVIDER_KEY_NAMES`` order.
     """
     form_values = {
         "deepseek_api_key": deepseek_api_key,
         "openai_api_key": openai_api_key,
         "qwen_api_key": qwen_api_key,
+        "anthropic_api_key": anthropic_api_key,
     }
     resolved = {
         provider: resolve_secret(form_values[key_name], key_name)

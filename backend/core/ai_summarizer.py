@@ -1,4 +1,4 @@
-"""Summarize Whisper transcripts with OpenAI-compatible chat providers."""
+"""Summarize Whisper transcripts with the configured chat provider."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, Callable, Final, Optional
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,6 @@ from backend.core.ai_config import (
     DEFAULT_DEEPSEEK_MODEL,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_QWEN_MODEL,
-    DEFAULT_QWEN_VISION_MODEL,
     DEFAULT_MODEL,
     SUPPORTED_PROVIDERS,
     SUPPORTED_NOTE_MODES,
@@ -154,6 +152,7 @@ class BilingualSegmentResult:
 
 
 from backend.core.ai_client import (
+    AiClient,
     _normalize_provider,
     _provider_base_url,
     _provider_default_model,
@@ -164,6 +163,7 @@ from backend.core.ai_client import (
     _image_to_base64_data_url,
     _vision_chat,
     can_use_multimodal,
+    vision_model,
 )
 
 
@@ -367,7 +367,7 @@ def _extract_json_array(text: str) -> list[Any]:
 
 
 def _chat_json_array(
-    client: OpenAI,
+    client: AiClient,
     model: str,
     system: str,
     user: str,
@@ -659,8 +659,8 @@ def select_visual_evidence_frames(
     if not can_use_multimodal(provider_name):
         raise ValueError(f"Provider {provider_name} does not support multimodal")
     client = _get_client(provider=provider_name, api_key=api_key)
-    # Default to a vision-capable model; the provider's plain default is text-only.
-    m = _normalize_model(provider_name, model or os.environ.get("QWEN_VISION_MODEL") or DEFAULT_QWEN_VISION_MODEL)
+    # Qwen needs a different model for vision; Claude reuses the note model.
+    m = vision_model(provider_name, model)
     selections: list[dict[str, Any]] = []
     for request in visual_requests:
         if len(selections) >= max_total_images:
@@ -1031,7 +1031,7 @@ def _renumber_chapter_headings(markdown: str) -> str:
 
 
 def _run_chapter_coverage_mode(
-    client: OpenAI,
+    client: AiClient,
     model: str,
     prompt: str,
     transcript_text: str,
@@ -1184,7 +1184,7 @@ def _run_chapter_coverage_mode(
 
 
 def _condense_interim_drafts(
-    client: OpenAI,
+    client: AiClient,
     model: str,
     drafts: list[str],
     *,
@@ -1223,7 +1223,7 @@ def _condense_interim_drafts(
 
 
 def _condense_evidence(
-    client: OpenAI,
+    client: AiClient,
     model: str,
     evidence_items: list[str],
     *,
@@ -1384,8 +1384,8 @@ def summarize_transcript_with_frames(
     if not can_use_multimodal(provider_name):
         raise ValueError(f"Provider {provider_name} does not support multimodal")
     client = _get_client(provider=provider_name, api_key=api_key)
-    # Default to a vision-capable model; the provider's plain default is text-only.
-    m = _normalize_model(provider_name, model or os.environ.get("QWEN_VISION_MODEL") or DEFAULT_QWEN_VISION_MODEL)
+    # Qwen needs a different model for vision; Claude reuses the note model.
+    m = vision_model(provider_name, model)
     prompt = _compose_multimodal_system_prompt(system_prompt)
     transcript_text = transcript.strip()
     if not transcript_text:

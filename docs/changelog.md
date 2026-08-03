@@ -25,5 +25,11 @@
 - MCP 客户端可以自己找到待办任务：新增 `GET /agent/v1/tasks` 与 MCP 工具 `list_tasks`（`note=any|missing|present`），于是「把还没有笔记的任务都处理一遍」变成一句话，而不必由用户逐个报 task_id。行里带 `note.source`，第二次跑批可以跳过自己写过的、也不覆盖用户手改的；读的是列表投影，不会为了列出一百条而加载一百份转录稿。
   判定「还没有笔记」只看笔记正文长度：`summary_status` 同时存在于 result 和 job 列里，而笔记写入只更新 result，列一直停留在 `skipped`——按状态判定会把每条写完的任务都报成待办（端到端测试抓到的）。
 - 笔记写入路径收敛为一处：新增 `backend/core/note_write.py` 的 `apply_summary_edit()`，编辑器路由与 Agent 路由共用同一套字段。过去每条写入路径各自拼字段，它们不一致的那几个（空笔记后的 `summary_status`、`summary_skipped`、编辑标记）直接决定编辑器是否显示"已保存"、导出能否找到笔记、以及正在跑的重生是否有权覆盖。同时记录 `summary_source` / `summary_source_label` 并在任务包的 `note` 段暴露 `edited` / `source`——否则 Agent 重读任务时分不清笔记是自己写的、用户手改的，还是流水线产出的，会覆盖掉刚做完的手工工作。
+- 笔记生成新增 Claude（Anthropic）服务商，可替代 DeepSeek：设置页多一个选项 + API Key，默认 `claude-opus-5`，`ANTHROPIC_MODEL` / `ANTHROPIC_MAX_TOKENS`（默认 64000）可覆盖。需要 API Key，Claude Pro/Max 订阅无法作为 API 凭证。
+  三个既有服务商都是 OpenAI 兼容格式、只差 base URL，Anthropic 不是，所以客户端改为携带自己的服务商标记（`AiClient`），由 `_chat` / `_vision_chat` 按标记分派——靠类型判断客户端对象会把将来第四个异形服务商送进恰好当兜底的那条分支。
+  三个必须做对否则静默失败的点：现役 Claude 模型已移除 `temperature` 等采样参数，收到就返回 400，所以流水线的逐次 temperature 不能透传；`max_tokens` 是必填且与思考共享上限，给小了笔记会被截断（触顶时打警告）；拒答返回 HTTP 200 但没有正文，不检查 `stop_reason` 就会被当成"模型没话说"存下一份空笔记。长笔记走流式以免撞上非流式 HTTP 超时。
+- 长转录可以一次成文：Claude 的上下文足够装下整份转录稿，配合已有的"直接上下文"模式，13 万字的转录从 20+ 次模型调用变成 1 次，且不再需要"分章写完再拼接"。多步流水线（切段抽证据 → 大纲 → 逐章 → 统一文风 → 覆盖度检查 → 按需返修）本质是对上下文不足的补偿，DeepSeek 仍需要它，因此原样保留，只是不再是 Claude 的必经之路。
+- 自动配图不再必须配置阿里云百炼：选帧调用过去硬编码 `provider="qwen"`，现在跟随笔记服务商（能看图就用它，纯文本服务商如 DeepSeek 才回退 Qwen）。「哪个模型能看图」的判断收敛到 `ai_client.vision_model()`，不再由两个调用点各自内联一个服务商的环境变量。
+- 前端服务商判定改为查表（`AI_PROVIDERS`）而非三元链：三元链会把未知值静默落到最后一个分支，新增服务商的典型后果就是被存成 deepseek、还配上 deepseek 的模型名。
 - `scripts/check_mcp_server.py` 改为直接读取 MCP 工具注册表，不再维护第二份工具清单（那份已经漏了一个工具，而且检查是子集比较，清单过时只会让工具悄悄不再被验证）；并修复它在非 UTF-8 的中文 Windows 环境下用 GBK 解码子进程输出、遇到含中文的任务包直接崩掉的问题。
 - 存储的任务记录去掉重复副本：一条三小时的转录曾把转录稿存 3 份、字幕分段存 3 份，1011 KB 里有 583 KB 是逐字节相同的副本或没有任何读取方的字段（`stt_raw_segments` 写两处、读零处）。写入时由 `normalize_result_for_storage` 只留一份，读取时 `normalize_result_for_read` 再补回派生字段——瘦身是存储决定，不能变成 API 变更（一度让 `GET /jobs/{id}` 对 3886 段的记录返回 `display_segments: []`）。已有记录用 `scripts/compact_job_results.py` 迁移：先备份、逐行比对读取结果、只在读取内容完全不变时才重写，`--check` 只报告，`--restore` 可回滚。本机实测 3072 KB → 772 KB。
