@@ -118,7 +118,7 @@ def run_readiness_checks() -> list[ReadinessCheck]:
         ok=bundle.exists(),
         required=False,
         detail=(f"本地前端已构建：{bundle}" if bundle.exists()
-                else "本地前端未构建：请运行 npm run build:frontend:local（API 仍可用）。"),
+                else "本地前端未构建：请运行 npm run build:frontend（API 仍可用）。"),
     ))
 
     writable, detail = _data_dir_writable()

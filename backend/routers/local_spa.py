@@ -68,10 +68,17 @@ def create_local_spa_router(index_path: Optional[Path] = None) -> APIRouter:
                 status_code=503,
                 detail=(
                     "本地前端还没有构建：请在项目目录运行 "
-                    "npm run build:frontend:local 后刷新页面。"
+                    "npm run build:frontend 后刷新页面。"
                 ),
             )
-        return FileResponse(str(resolved_index), headers={"Cache-Control": "no-cache"})
+        # no-store, not no-cache: the document names content-hashed chunk files
+        # that the next `npm run build:frontend` deletes (emptyOutDir),
+        # and "no-cache" still lets a browser restore its stored copy — on
+        # session restore or history navigation — without revalidating. A
+        # restored document then requests chunks that no longer exist. The
+        # frontend recovers from that (frontend/src/app/staleBuildRecovery.js);
+        # not storing the entry point keeps it from happening.
+        return FileResponse(str(resolved_index), headers={"Cache-Control": "no-store"})
 
     @router.get("/", include_in_schema=False)
     def serve_frontend_index() -> FileResponse:
