@@ -6,12 +6,17 @@ directory unless an explicit environment variable says otherwise.
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import shutil
 import string
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
+
+logger = logging.getLogger(__name__)
 
 APP_NAME = "FluentFlow"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -126,28 +131,125 @@ def write_data_root_pointer(target: Path) -> None:
     pointer.write_text(str(Path(target).expanduser()), encoding="utf-8")
 
 
-def app_data_root() -> Path:
-    override = (os.environ.get("FLUENTFLOW_DATA_DIR") or "").strip()
-    if override:
-        return Path(override).expanduser()
+# Every environment variable that can move one piece of the workspace on its
+# own. They are legitimate operator tools, but nine independent overrides mean a
+# workspace can end up scattered across drives with nothing saying so — which is
+# how a jobs database on one disk and a config file on another looked, from the
+# UI, exactly like every record had been lost.
+#
+# So they stay, and `resolve_workspace().overrides` reports the ones in effect
+# for the readiness check to print. Silence was the actual defect.
+PATH_OVERRIDE_ENV_NAMES: Final[tuple[str, ...]] = (
+    "FLUENTFLOW_CONFIG_PATH",
+    "FLUENTFLOW_JOB_DB_PATH",
+    "FLUENTFLOW_EVENT_DB_PATH",
+    "FLUENTFLOW_SOURCE_DIR",
+    "FLUENTFLOW_ARTIFACT_DIR",
+    "FLUENTFLOW_EDITED_TRANSCRIPT_DIR",
+    "FLUENTFLOW_TRANSCRIPT_EDIT_RECORDS_DIR",
+    "FLUENTFLOW_VIDEO_SOURCE_DIR",
+    "FLUENTFLOW_CODEX_EXPORT_DIR",
+)
 
-    # A recorded location always beats the free-space heuristic. Without this,
-    # where the data lives is re-guessed on every startup, and a migration that
-    # put it anywhere other than the drive the heuristic happens to pick is
-    # silently abandoned — the workspace comes up empty on the next launch.
-    recorded = read_data_root_pointer()
-    if recorded:
-        return recorded
+# How the workspace root was decided, most authoritative first.
+DECIDED_BY_ENV: Final[str] = "env"
+DECIDED_BY_RECORDED: Final[str] = "recorded"
+DECIDED_BY_CHOSEN: Final[str] = "chosen"
+DECIDED_BY_DEFAULT: Final[str] = "default"
 
+# A guess, as opposed to something an operator or a past migration stated.
+_GUESSED = frozenset({DECIDED_BY_CHOSEN, DECIDED_BY_DEFAULT})
+
+
+@dataclass(frozen=True)
+class Workspace:
+    """Where the workspace is, how that was decided, and what is scattered."""
+
+    root: Path
+    decided_by: str
+    overrides: tuple[tuple[str, Path], ...] = ()
+
+    @property
+    def is_guess(self) -> bool:
+        return self.decided_by in _GUESSED
+
+    def describe(self) -> str:
+        reason = {
+            DECIDED_BY_ENV: "由 FLUENTFLOW_DATA_DIR 指定",
+            DECIDED_BY_RECORDED: "沿用已记录的迁移结果",
+            DECIDED_BY_CHOSEN: "首次运行按可用空间选定",
+            DECIDED_BY_DEFAULT: "使用系统默认目录",
+        }.get(self.decided_by, self.decided_by)
+        text = f"{self.root}（{reason}）"
+        if self.overrides:
+            scattered = "、".join(name for name, _ in self.overrides)
+            text += f"；另有 {len(self.overrides)} 项被单独指向别处：{scattered}"
+        return text
+
+
+def _default_root() -> tuple[Path, str]:
     system = platform.system().lower()
     if system == "darwin":
-        return Path.home() / "Library" / "Application Support" / APP_NAME
+        return Path.home() / "Library" / "Application Support" / APP_NAME, DECIDED_BY_DEFAULT
     if system == "windows":
-        return _windows_data_root()
+        root = _windows_data_root()
+        return root, DECIDED_BY_CHOSEN if root != windows_appdata_root() else DECIDED_BY_DEFAULT
 
     xdg_data_home = os.environ.get("XDG_DATA_HOME")
-    root = Path(xdg_data_home).expanduser() if xdg_data_home else Path.home() / ".local" / "share"
-    return root / "fluentflow"
+    base = Path(xdg_data_home).expanduser() if xdg_data_home else Path.home() / ".local" / "share"
+    return base / "fluentflow", DECIDED_BY_DEFAULT
+
+
+def workspace_overrides() -> tuple[tuple[str, Path], ...]:
+    """Per-path overrides currently in effect, in declaration order."""
+    active: list[tuple[str, Path]] = []
+    for name in PATH_OVERRIDE_ENV_NAMES:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            active.append((name, Path(value).expanduser()))
+    return tuple(active)
+
+
+def resolve_workspace() -> Workspace:
+    """The one place the workspace location is decided.
+
+    Order: an explicit `FLUENTFLOW_DATA_DIR`, then the location a past migration
+    recorded, then a default. Only the last is a guess, and
+    `ensure_workspace_recorded` turns it into a recorded decision on first run so
+    it is never guessed twice — a heuristic re-run on every startup is what
+    silently abandoned a workspace that had been moved elsewhere.
+    """
+    override = (os.environ.get("FLUENTFLOW_DATA_DIR") or "").strip()
+    if override:
+        return Workspace(Path(override).expanduser(), DECIDED_BY_ENV, workspace_overrides())
+
+    recorded = read_data_root_pointer()
+    if recorded:
+        return Workspace(recorded, DECIDED_BY_RECORDED, workspace_overrides())
+
+    root, decided_by = _default_root()
+    return Workspace(root, decided_by, workspace_overrides())
+
+
+def ensure_workspace_recorded() -> Workspace:
+    """Pin a first-run guess so later startups read it instead of re-deciding.
+
+    Called from startup paths only. A failure to record is not fatal: the same
+    location is still resolvable, it just gets decided again next time.
+    """
+    workspace = resolve_workspace()
+    if not workspace.is_guess:
+        return workspace
+    try:
+        write_data_root_pointer(workspace.root)
+    except OSError:
+        logger.warning("Could not record the workspace location at %s", data_root_pointer_path())
+        return workspace
+    return Workspace(workspace.root, DECIDED_BY_RECORDED, workspace.overrides)
+
+
+def app_data_root() -> Path:
+    return resolve_workspace().root
 
 
 def runtime_path(env_name: str, *parts: str) -> Path:

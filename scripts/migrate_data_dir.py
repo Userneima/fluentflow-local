@@ -28,6 +28,7 @@ from backend.core.runtime_paths import (  # noqa: E402
     APP_NAME,
     _candidate_data_drives,
     app_data_root,
+    resolve_workspace,
     write_data_root_pointer,
 )
 
@@ -134,7 +135,7 @@ def main() -> int:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     retired = source.with_name(f"{source.name}.migrated-{stamp}")
     source.rename(retired)
-    print(f"Done. FluentFlow now uses: {target}")
+    print(f"Done. FluentFlow now uses: {resolve_workspace().describe()}")
     print(f"The old copy was renamed to: {retired}")
     print("Start FluentFlow, confirm your records are there, then delete that folder.")
     return 0

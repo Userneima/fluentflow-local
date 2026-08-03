@@ -39,7 +39,17 @@ npm run build:frontend
 .\.venv\Scripts\python.exe scripts\migrate_data_dir.py
 ```
 
-迁移完成后位置会记录在 `%LOCALAPPDATA%\FluentFlow\data-root.txt`，之后每次启动都直接读这份记录，不再按剩余空间重新推算——否则搬到"不是最大那块盘"的工作区会在下次启动时被悄悄绕开，界面看起来就像记录全丢了。
+位置只由一处决定，优先级从高到低：
+
+| 依据 | 何时生效 |
+|---|---|
+| `FLUENTFLOW_DATA_DIR` | 显式指定某一次运行；不会被写入记录 |
+| `%LOCALAPPDATA%\FluentFlow\data-root.txt` | 迁移脚本写入，或首次运行时自动记录 |
+| 按剩余空间选盘 | 只在还没有记录时用一次，随即记录下来 |
+
+启发式只在首次运行跑一次就被固化，之后启动都是读文件——否则搬到"不是最大那块盘"的工作区会在下次启动时被悄悄绕开，界面看起来就像记录全丢了。
+
+启动时的 `data-dir` 检查会打印当前位置**和判定依据**，以及被 `FLUENTFLOW_*_PATH` / `FLUENTFLOW_*_DIR` 单独指到别处的项——工作区被拆散时不会再毫无提示。
 
 笔记和转录默认永久保留。源媒体在 `FLUENTFLOW_SOURCE_RETENTION_DAYS`（默认 7 天）后清理，笔记不受影响。
 

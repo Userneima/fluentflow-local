@@ -153,3 +153,78 @@ class DataRootPointerTests(TestCase):
         runtime_paths.write_data_root_pointer(Path("G:\\FluentFlow"))
         with patch.dict(os.environ, {"FLUENTFLOW_DATA_DIR": "E:\\custom"}):
             self.assertEqual(app_data_root(), Path("E:\\custom"))
+
+
+# One decision, made once, and able to say how it was made. The location used to
+# be re-derived on every startup from whichever mechanism answered first, with
+# nothing reporting which had won — so a workspace resolved somewhere unexpected
+# presented as an empty task list, indistinguishable from total data loss.
+class WorkspaceResolutionTests(TestCase):
+    def setUp(self):
+        self._tmp = TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._tmp.cleanup)
+        self.pointer = Path(self._tmp.name) / "data-root.txt"
+        self._patch(patch.object(runtime_paths, "data_root_pointer_path", return_value=self.pointer))
+        self._patch(patch.dict(os.environ, {}, clear=False))
+        for name in ("FLUENTFLOW_DATA_DIR", *runtime_paths.PATH_OVERRIDE_ENV_NAMES):
+            os.environ.pop(name, None)
+
+    def _patch(self, patcher):
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_an_explicit_override_reports_itself_as_the_decision(self):
+        with patch.dict(os.environ, {"FLUENTFLOW_DATA_DIR": "E:\\custom"}):
+            workspace = runtime_paths.resolve_workspace()
+        self.assertEqual(workspace.decided_by, runtime_paths.DECIDED_BY_ENV)
+        self.assertFalse(workspace.is_guess)
+
+    def test_a_recorded_location_reports_itself_and_is_not_a_guess(self):
+        runtime_paths.write_data_root_pointer(Path("G:\\FluentFlow"))
+        workspace = runtime_paths.resolve_workspace()
+        self.assertEqual(workspace.root, Path("G:\\FluentFlow"))
+        self.assertEqual(workspace.decided_by, runtime_paths.DECIDED_BY_RECORDED)
+        self.assertFalse(workspace.is_guess)
+
+    def test_a_first_run_guess_is_recorded_so_it_is_never_guessed_twice(self):
+        before = runtime_paths.resolve_workspace()
+        self.assertTrue(before.is_guess)
+
+        recorded = runtime_paths.ensure_workspace_recorded()
+        self.assertEqual(recorded.root, before.root)
+        self.assertEqual(recorded.decided_by, runtime_paths.DECIDED_BY_RECORDED)
+        # The next startup reads the file instead of re-deciding.
+        self.assertEqual(runtime_paths.read_data_root_pointer(), before.root)
+        self.assertFalse(runtime_paths.resolve_workspace().is_guess)
+
+    def test_recording_does_not_pin_a_temporary_override(self):
+        # An operator steering one run must not silently become permanent.
+        with patch.dict(os.environ, {"FLUENTFLOW_DATA_DIR": "E:\\just-this-once"}):
+            runtime_paths.ensure_workspace_recorded()
+        self.assertIsNone(runtime_paths.read_data_root_pointer())
+
+    def test_a_failure_to_record_is_not_fatal(self):
+        with patch.object(runtime_paths, "write_data_root_pointer", side_effect=OSError("read-only")):
+            workspace = runtime_paths.ensure_workspace_recorded()
+        self.assertTrue(workspace.is_guess)
+        self.assertTrue(workspace.root)
+
+    def test_per_path_overrides_are_reported_rather_than_left_silent(self):
+        # A jobs database on one disk and a config file on another looked, from
+        # the UI, exactly like every record had been lost.
+        with patch.dict(os.environ, {
+            "FLUENTFLOW_JOB_DB_PATH": "D:\\elsewhere\\jobs.sqlite",
+            "FLUENTFLOW_CONFIG_PATH": "E:\\elsewhere\\config.json",
+        }):
+            workspace = runtime_paths.resolve_workspace()
+        self.assertEqual([name for name, _ in workspace.overrides],
+                         ["FLUENTFLOW_CONFIG_PATH", "FLUENTFLOW_JOB_DB_PATH"])
+        described = workspace.describe()
+        self.assertIn("FLUENTFLOW_JOB_DB_PATH", described)
+        self.assertIn("2", described)
+
+    def test_a_workspace_with_nothing_scattered_says_nothing_about_overrides(self):
+        runtime_paths.write_data_root_pointer(Path("G:\\FluentFlow"))
+        described = runtime_paths.resolve_workspace().describe()
+        self.assertIn("G:\\FluentFlow", described)
+        self.assertNotIn("FLUENTFLOW_", described)
