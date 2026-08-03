@@ -1,9 +1,14 @@
 <!DOCTYPE html>
 <html class="light" lang="en">
 <!--
-  Local-edition entry (vite.local.config.mjs). Keep the <head> theme styles in
-  sync with frontend/index.html until they are extracted to a shared file;
-  only the title and the entry module differ.
+  Local-edition entry (vite.local.config.mjs). Keep the theme styles below in
+  sync with the hosted entry document until they are extracted to a shared
+  file; only the title and the entry module differ.
+
+  Write no head/script tag as literal text above the real head element: the
+  dev server injects its react-refresh preamble after the first match, and a
+  match inside this comment injects it into the comment. See
+  src/app/entryHtml.test.js.
 -->
 <head>
     <meta charset="utf-8" />
