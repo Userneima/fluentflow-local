@@ -112,6 +112,8 @@ python -m unittest discover -s tests -p 'test_*.py'
 python -m pylint backend --errors-only --disable=import-error,no-member
 ```
 
+Node 版本以 `.nvmrc` 为准（CI 读同一个文件）。改动依赖时请用这个版本重新生成 `package-lock.json`：npm 10 和 npm 11 对可选依赖的 peer 条目该不该写进 lock 有分歧，而 `npm ci` 遇到差异是直接失败而不是自行修补。
+
 需要 FFmpeg；AI 与飞书凭据可在应用设置中填写。
 
 ## License
