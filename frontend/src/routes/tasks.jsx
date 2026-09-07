@@ -397,6 +397,17 @@ const Tasks = () => {
             ? friendlyTaskError(raw, lang)
             : (lang === 'zh' ? '任务处理失败，但后端没有返回具体原因。' : 'The task failed, but no detailed reason was returned.');
     };
+    // The badge is the file type, not the artifact key: an unmapped kind used to
+    // print its whole internal name into the menu.
+    const artifactBadge = (kind) => {
+        if (kind.endsWith('vtt')) return 'VTT';
+        if (kind.endsWith('srt')) return 'SRT';
+        if (kind.endsWith('txt')) return 'TXT';
+        if (kind.endsWith('md')) return 'MD';
+        if (kind === 'playback_audio_enhanced') return 'M4A';
+        if (kind === 'playback_audio') return 'MP3';
+        return kind;
+    };
     const artifactButtons = [
         ['transcript_srt', t('tasks.srt')],
         ['transcript_txt', t('tasks.txt')],
@@ -404,6 +415,10 @@ const Tasks = () => {
         ['transcript_bilingual_srt', t('tasks.bilingualSrt')],
         ['transcript_bilingual_vtt', t('tasks.bilingualVtt')],
         ['summary_md', t('tasks.md')],
+        // The presence-corrected take of the audio, when one was produced. A
+        // download entry rather than a player: which take sounds better is a
+        // listening judgement, and the editor page has no room to host it.
+        ['playback_audio_enhanced', t('tasks.enhancedAudio')],
     ];
 
     return (
@@ -482,7 +497,7 @@ const Tasks = () => {
                             const taskId = taskIdForJob(job);
                             const canRetry = canRetryJob(job);
                             const downloadItems = [
-                                ...availableArtifacts.map(([kind, label]) => ({icon:'download', label, badge:kind.endsWith('vtt')?'VTT':kind.endsWith('srt')?'SRT':kind.endsWith('txt')?'TXT':kind.endsWith('md')?'MD':kind, onClick:()=>downloadArtifact(job,kind)})),
+                                ...availableArtifacts.map(([kind, label]) => ({icon:'download', label, badge:artifactBadge(kind), onClick:()=>downloadArtifact(job,kind)})),
                                 ...(larkUrl ? [{divider:true},{icon:'open_in_new', label:t('tasks.larkDoc'), onClick:()=>window.open(larkUrl,'_blank','noopener')}] : []),
                             ];
                             return (

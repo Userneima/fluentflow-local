@@ -20,6 +20,11 @@ LOCAL_SENSITIVE_FIELDS = {
     "openai_api_key",
     "dashscope_api_key",
     "qwen_api_key",
+    # The user's own Anthropic key, used only by the visual-note entry. Kept a
+    # separate field rather than folded into the note-provider keys because it
+    # buys a different capability: without it that entry refuses and says so,
+    # instead of quietly producing a subtitles-only note.
+    "anthropic_api_key",
     "lark_app_id",
     "lark_app_secret",
     "pyannote_auth_token",
@@ -30,6 +35,7 @@ LOCAL_ENV_FALLBACKS = {
     "openai_api_key": "OPENAI_API_KEY",
     "dashscope_api_key": "DASHSCOPE_API_KEY",
     "qwen_api_key": "QWEN_API_KEY",
+    "anthropic_api_key": "ANTHROPIC_API_KEY",
     "lark_app_id": "LARK_APP_ID",
     "lark_app_secret": "LARK_APP_SECRET",
     "pyannote_auth_token": "PYANNOTE_AUTH_TOKEN",
@@ -102,9 +108,8 @@ def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = Non
     return credential_status(path=path)
 
 
-# Non-sensitive, user-remembered choices. ``allow_miuistore`` is the design
-# contract's Douyin third-party fallback consent: remembered once given, and
-# changeable in settings.
+# Non-sensitive, user-remembered choices. ``allow_miuistore`` is the Douyin
+# third-party fallback: on by default, and remembered here when switched off.
 LOCAL_PREFERENCE_FIELDS = {"allow_miuistore"}
 
 
@@ -196,6 +201,7 @@ def credential_status(path: Path | str | None = None) -> dict[str, Any]:
         "openai_api_key_configured": bool(get_sensitive_setting("openai_api_key", path)),
         "dashscope_api_key_configured": bool(get_sensitive_setting("dashscope_api_key", path)),
         "qwen_api_key_configured": bool(get_sensitive_setting("qwen_api_key", path)),
+        "anthropic_api_key_configured": bool(get_sensitive_setting("anthropic_api_key", path)),
         "lark_app_id_configured": bool(get_sensitive_setting("lark_app_id", path)),
         "lark_app_secret_configured": bool(get_sensitive_setting("lark_app_secret", path)),
         "pyannote_auth_token_configured": bool(get_sensitive_setting("pyannote_auth_token", path)),

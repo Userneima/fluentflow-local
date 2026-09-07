@@ -69,6 +69,44 @@ def _options(**values: Any) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value not in (None, "")}
 
 
+def submit_local_media(
+    path: str,
+    title: str | None = None,
+    skip_summary: bool = False,
+    note_mode: str | None = None,
+    prompt_preset: str | None = None,
+    stt_model: str | None = None,
+    speaker_diarization: bool = True,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Submit one recording that stays where it is, by absolute path on this machine.
+
+    Local edition only, and the backend refuses it from anywhere but localhost. One
+    file per call on purpose: a task has one id, and a call that queued five of them
+    would have nothing to return and nothing to point at when one failed. For a whole
+    folder, loop — or use scripts/debreath_batch.py, which needs no backend at all.
+    """
+    return _agent_request(
+        "POST",
+        "/agent/v1/tasks",
+        api_base=api_base,
+        client_id=client_id,
+        payload={
+            "path": path,
+            "input_type": "local_path",
+            "title": title,
+            "options": _options(
+                skip_summary="true" if skip_summary else "false",
+                note_mode=note_mode,
+                prompt_preset=prompt_preset,
+                stt_model=stt_model,
+                speaker_diarization="true" if speaker_diarization else "false",
+            ),
+        },
+    )
+
+
 def submit_video_link(
     input_text: str,
     title: str | None = None,
@@ -207,6 +245,90 @@ def regenerate_note(
     )
 
 
+def debreath_task(
+    task_id: str,
+    min_silence_seconds: float | None = None,
+    noise_db: float | None = None,
+    padding_seconds: float | None = None,
+    render: bool = True,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Remove silent gaps from a completed task's source media, mechanically.
+
+    A distinct action rather than a package field: it starts work, and it takes
+    parameters the caller has to choose. Returns as soon as the work is accepted —
+    rendering takes minutes, so poll ``get_task_package`` and read its
+    ``debreath`` block.
+
+    ``render=False`` produces only the cut list, which is the cheap way to see how
+    much would be removed and to check the ``warnings`` before spending an encode.
+    """
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/debreath",
+        api_base=api_base,
+        client_id=client_id,
+        payload={
+            **_options(
+                min_silence_seconds=min_silence_seconds,
+                noise_db=noise_db,
+                padding_seconds=padding_seconds,
+            ),
+            "render": bool(render),
+        },
+        timeout=60,
+    )
+
+
+def write_note_from_cut_media(
+    task_id: str,
+    preview: bool = True,
+    replace_note: bool = True,
+    restore_previous_note: bool = False,
+    use_generated_note: bool = False,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Write a task's note from its de-breathed media, after ``debreath_task``.
+
+    The second half of one flow: ``debreath_task`` produces the shortened file
+    and the cut list, and this writes the note from that file — frames taken from
+    it, subtitles moved onto its clock. It refuses if no cut file exists yet
+    rather than reading the original recording, so call ``debreath_task`` with
+    ``render=True`` first.
+
+    ``preview`` defaults to **true** and costs nothing: it answers which file
+    would be read, how much transcript after remapping, how many frames, and
+    whose Claude allowance pays. Pass ``preview=False`` to actually run it — that
+    spends the machine owner's Claude allowance, so do not do it unasked.
+
+    By default the finished note becomes the task's note and the previous one is
+    kept and restorable. ``replace_note=False`` leaves the task's note alone;
+    ``restore_previous_note`` and ``use_generated_note`` switch between the two
+    without a model call. Poll ``get_task_package`` and read its
+    ``cut_media_note`` block: ``basis`` there is measured from the note's own
+    citations, so ``transcript_only`` means nothing was written from a picture.
+    """
+    payload: dict[str, Any] = {}
+    if restore_previous_note:
+        payload["restore_previous_note"] = True
+    elif use_generated_note:
+        payload["use_generated_note"] = True
+    elif preview:
+        payload["preview"] = True
+    else:
+        payload["replace_note"] = bool(replace_note)
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/visual-note",
+        api_base=api_base,
+        client_id=client_id,
+        payload=payload,
+        timeout=60,
+    )
+
+
 def export_result(
     task_id: str,
     target: str = "lark",
@@ -233,7 +355,10 @@ TOOL_FUNCTIONS = {
     "get_task_package": get_task_package,
     "diagnose_task": diagnose_task,
     "retry_task": retry_task,
+    "submit_local_media": submit_local_media,
     "regenerate_note": regenerate_note,
+    "debreath_task": debreath_task,
+    "write_note_from_cut_media": write_note_from_cut_media,
     "export_result": export_result,
 }
 
@@ -272,6 +397,29 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "client_id": {"type": "string"},
             },
             "required": ["transcript_text"],
+        },
+    },
+    {
+        "name": "submit_local_media",
+        "description": (
+            "Submit one audio or video file that stays where it is, by absolute path "
+            "on this machine. Local edition only; the backend accepts it from localhost "
+            "only. One file per call — loop for a folder, or use "
+            "scripts/debreath_batch.py to process a folder without a running backend."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the recording."},
+                "title": {"type": "string"},
+                "skip_summary": {"type": "boolean", "default": False},
+                "note_mode": {"type": "string"},
+                "prompt_preset": {"type": "string"},
+                "stt_model": {"type": "string"},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["path"],
         },
     },
     {
@@ -334,6 +482,89 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "task_id": {"type": "string"},
                 "note_mode": {"type": "string", "default": "auto"},
                 "prompt_preset": {"type": "string"},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "debreath_task",
+        "description": (
+            "Mechanically remove silent gaps from a completed task's source media. "
+            "Acoustic detection only — no model decides which pause matters. Writes a cut "
+            "list artifact always and a rendered file when render is true; poll "
+            "get_task_package and read its debreath block for progress, counts, and warnings."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "min_silence_seconds": {
+                    "type": "number",
+                    "description": (
+                        "Shortest silence to remove, 0.02-60. Default 0.25. Raise it "
+                        "(e.g. 1.0) for faintly recorded material, where the default cuts "
+                        "close to speech."
+                    ),
+                },
+                "noise_db": {
+                    "type": "number",
+                    "description": "Silence threshold in dBFS, -90 to 0. Default -30.",
+                },
+                "padding_seconds": {
+                    "type": "number",
+                    "description": "Sliver of each removed stretch kept at both ends, 0-2. Default 0.1.",
+                },
+                "render": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "False produces only the cut list — no encode, no CPU spent.",
+                },
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "write_note_from_cut_media",
+        "description": (
+            "Write a task's note from its de-breathed media — the second half of the flow "
+            "that starts with debreath_task(render=True). Frames come from the shortened "
+            "file and the subtitles are moved onto its clock; with no cut file it refuses "
+            "instead of reading the original recording. preview defaults to true and is "
+            "free (which file, how much transcript, how many frames, whose Claude "
+            "allowance pays); preview=false spends that allowance, so ask first. The note "
+            "becomes the task's note by default, keeping the previous one restorable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "preview": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "True answers what would be sent and who pays, for free. False runs it.",
+                },
+                "replace_note": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": (
+                        "True makes the finished note the task's note, keeping the previous "
+                        "one on record. False writes it without touching the task's note."
+                    ),
+                },
+                "restore_previous_note": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Put back the note a run replaced. Free, no model call.",
+                },
+                "use_generated_note": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Make the already-written note the task's note again. Free.",
+                },
                 "api_base": {"type": "string"},
                 "client_id": {"type": "string"},
             },

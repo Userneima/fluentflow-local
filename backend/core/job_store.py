@@ -255,6 +255,42 @@ def list_jobs(
     return [_row_to_dict(row) if include_result else _row_to_summary_dict(row) for row in rows]
 
 
+def recent_local_folders(
+    limit: int = 8,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> list[str]:
+    """Folders this machine has already been pointed at, newest first.
+
+    Two things need them and both are the same question — where does this owner
+    keep recordings? The file dialog opens in the newest one instead of wherever
+    Finder happened to be last, and a dropped file is looked for in all of them.
+
+    Only folders that still exist are returned: a directory that has been moved or
+    unplugged is not somewhere to open a dialog, and it is not somewhere a file
+    can be found.
+    """
+    ensure_job_db(db_path)
+    with sqlite3.connect(Path(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT metadata_json FROM jobs WHERE metadata_json LIKE '%folder_intake%' "
+            "ORDER BY updated_at DESC LIMIT 200"
+        ).fetchall()
+    folders: list[str] = []
+    for (raw,) in rows:
+        try:
+            intake = (json.loads(raw or "{}") or {}).get("folder_intake") or {}
+        except (TypeError, ValueError):
+            continue
+        folder = str(intake.get("folder") or "").strip()
+        if not folder or folder in folders:
+            continue
+        if Path(folder).is_dir():
+            folders.append(folder)
+        if len(folders) >= max(1, limit):
+            break
+    return folders
+
+
 def list_jobs_by_statuses(
     statuses: tuple[str, ...] | list[str],
     *,
@@ -926,6 +962,45 @@ def _step_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _debreath_summary(state: Any) -> dict[str, Any] | None:
+    """The cut's counts for a list row, without its thousands of ranges.
+
+    Absence has to keep meaning "never cut", so this returns None for a task that
+    has no cut rather than an empty object — the records page distinguishes the two
+    and says so in words.
+    """
+    if not isinstance(state, dict) or not state:
+        return None
+    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    return {
+        "status": state.get("status"),
+        "stage": state.get("stage"),
+        "used_for_transcription": state.get("used_for_transcription"),
+        "already_cut": bool(state.get("already_cut")) or None,
+        "not_worth_rendering": bool(state.get("not_worth_rendering")) or None,
+        "not_used_reason": state.get("not_used_reason"),
+        "ran_before_transcription": state.get("ran_before_transcription"),
+        "render_verified": state.get("render_verified"),
+        # Three states, and the card says something for only two of them. None
+        # means an upload, where there is no "beside the original" to deliver to
+        # and nothing to report. True is the ordinary outcome of the in-place
+        # entry — also nothing to report, because a line saying it on every card
+        # is a column of the same words. False is the one worth a warning, and
+        # the reason has to travel with it or the card can only say "something
+        # went wrong".
+        "delivered": state.get("delivered"),
+        "delivered_name": state.get("delivered_name"),
+        "delivery_error": state.get("delivery_error"),
+        "plan": {
+            "cut_count": plan.get("cut_count"),
+            "removed_seconds": plan.get("removed_seconds"),
+            "removed_percent": plan.get("removed_percent"),
+            "kept_seconds": plan.get("kept_seconds"),
+            "source_duration_seconds": plan.get("source_duration_seconds"),
+        },
+    }
+
+
 def _result_summary(result: Any) -> dict[str, Any] | None:
     result = normalize_result_for_read(result)
     if not isinstance(result, dict):
@@ -960,6 +1035,16 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         "transcript_text": str(transcript_text)[:240] if transcript_text else "",
         "transcript_text_preview": str(transcript_text)[:240] if transcript_text else "",
         "artifacts": result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {},
+        # The cut, in counts only. The list is an allowlist on purpose — a result
+        # carries megabytes of segments and every list query would read them — but
+        # leaving the cut out entirely made the records page report "未剪（旧任务）"
+        # for a task that had just been cut, because absence read as "never ran".
+        # The ranges stay in the artifact; these are the numbers a card shows.
+        "debreath": _debreath_summary(result.get("debreath")),
+        # Which file the transcript and the note belong to. One line each, and the
+        # only way a list row can say the note describes the shortened version.
+        "transcript_media": result.get("transcript_media"),
+        "summary_written_from": result.get("summary_written_from"),
         "lark_response": {"url": lark_response.get("url")} if lark_response and lark_response.get("url") else None,
         "feishu_doc_url": result.get("feishu_doc_url"),
         "lark_error": result.get("lark_error"),

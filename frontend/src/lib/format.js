@@ -320,6 +320,60 @@ export const diagnoseTaskError = (message, lang='zh') => {
                 nextEn: 'Retry later, or upload the local video/subtitle file.',
             }),
         ],
+        // Must precede the download-timeout rule below, which matches any
+        // "timeout": a transcription that ran out of time has nothing to do
+        // with downloading, and telling someone who uploaded a local file to
+        // "upload the local video" sends them after the wrong subsystem.
+        [
+            lower.includes('stt processing timed out') || raw.includes('转写超时'),
+            taskErrorDiagnosis({
+                code: 'stt_timeout',
+                titleZh: '转写超时',
+                titleEn: 'Transcription timed out',
+                detailZh: '转写超过时间上限被中止。通常是音视频太长，或所选引擎在当前机器上跑不完。',
+                detailEn: 'Transcription was stopped at the time limit, usually because the recording is long or the chosen engine cannot finish it on this machine.',
+                nextZh: '换用云端转写引擎重试；如果素材很长，先拆分成几段再处理。',
+                nextEn: 'Retry with a cloud engine, or split a long recording into parts.',
+            }),
+        ],
+        [
+            raw.includes('本地转写在公开服务上不可用'),
+            taskErrorDiagnosis({
+                code: 'local_stt_not_available',
+                titleZh: '本地转写在公开服务上不可用',
+                titleEn: 'Local transcription is not available here',
+                detailZh: '这台服务器不提供本地转写。任务已停止，没有改用其他引擎。',
+                detailEn: 'This server does not run local transcription. The task stopped instead of switching engines.',
+                nextZh: '在设置里选择云端转写引擎后重新提交。',
+                nextEn: 'Pick a cloud engine in settings and submit again.',
+                retryable: false,
+            }),
+        ],
+        [
+            raw.includes('云端转写引擎') && lower.includes('未找到可用的 api key'),
+            taskErrorDiagnosis({
+                code: 'cloud_stt_key_missing',
+                titleZh: '云端转写引擎不可用',
+                titleEn: 'The cloud transcription engine is unavailable',
+                detailZh: '所选云端转写引擎没有可用的 API Key，任务已停止，不会退回本地转写。',
+                detailEn: 'The selected cloud engine has no usable API key. The task stopped rather than falling back to local transcription.',
+                nextZh: '联系维护者补齐该引擎的 API Key，或改用另一个已配置的云端引擎。',
+                nextEn: 'Ask the maintainer to configure the key, or pick another cloud engine.',
+                retryable: false,
+            }),
+        ],
+        [
+            lower.includes('dashscope asr'),
+            taskErrorDiagnosis({
+                code: 'dashscope_stt_failed',
+                titleZh: '云端转写失败',
+                titleEn: 'Cloud transcription failed',
+                detailZh: '阿里云百炼 Fun-ASR 转写失败。原始返回见下方详情。',
+                detailEn: 'Alibaba Model Studio Fun-ASR failed to transcribe. The raw response is below.',
+                nextZh: '重试一次；连续失败就改用 ElevenLabs 引擎，并把详情发给维护者。',
+                nextEn: 'Retry once; if it keeps failing, switch to ElevenLabs and send the details to the maintainer.',
+            }),
+        ],
         [
             raw.includes('视频下载超时') || lower.includes('timed out') || lower.includes('timeout'),
             taskErrorDiagnosis({
@@ -567,7 +621,15 @@ export const isSttProgressUnmeasured = (job) => (
     && sttProgressFraction(job) <= 0
     && job?.sttStatus !== 'transcribing_segments'
 );
-export const jobProgressLabel = (job, t) => isSttProgressUnmeasured(job)
+// Removing the breath gaps has no percentage to report: it is one ffmpeg pipeline
+// over the whole file, and the pipeline publishes a single number at the start of
+// the stage. On a 24-minute recording that number sat at 2% for twenty minutes,
+// which is how a working task got reported as a hung one. No number is the honest
+// answer here, and the stage's own label says it takes minutes.
+export const isProgressUnmeasured = (job) => (
+    job?.stage === 'prepare_media' || isSttProgressUnmeasured(job)
+);
+export const jobProgressLabel = (job, t) => isProgressUnmeasured(job)
     ? t('dash.progressUnknown')
     : `${Math.round(Math.max(0, Math.min(100, Number(job?.progress) || 0)))}%`;
 

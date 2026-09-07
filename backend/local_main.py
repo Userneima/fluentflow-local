@@ -25,6 +25,7 @@ from backend.core.local_config import load_project_env
 load_project_env()
 
 from backend.core.app_factory import create_app
+from backend.core.debreath_job import recover_stranded_renders
 from backend.core.frontend_paths import FRONTEND_LOCAL_DIST_DIR
 from backend.core.job_store import list_jobs_by_statuses, upsert_job
 from backend.core.local_http_boundary import local_boundary_middleware
@@ -33,12 +34,15 @@ from backend.core.local_readiness import (
     format_report,
     run_readiness_checks,
 )
+from backend.core.visual_note_job import recover_stranded_notes
 from backend.routers.local_agent import router as agent_router
 from backend.routers.local_events import router as events_router
 from backend.routers.local_feishu_export import router as feishu_export_router
+from backend.routers.local_job_debreath import router as job_debreath_router
 from backend.routers.local_job_edit import router as job_edit_router
 from backend.routers.local_job_mutation import router as job_mutation_router
 from backend.routers.local_job_read import router as job_read_router
+from backend.routers.local_job_visual_note import router as job_visual_note_router
 from backend.routers.local_jobs import router as jobs_router
 from backend.routers.local_note_regen import router as note_regen_router
 from backend.routers.local_processing import router as processing_router
@@ -55,6 +59,8 @@ LOCAL_API_ROUTERS = (
     job_read_router,
     job_mutation_router,
     job_edit_router,
+    job_debreath_router,
+    job_visual_note_router,
     processing_router,
     video_sources_router,
     note_regen_router,
@@ -102,6 +108,17 @@ async def lifespan(app: FastAPI):
     recovered = recover_stale_jobs()
     if recovered:
         logger.info("Startup recovery marked %s stranded local jobs as failed", recovered)
+    # The de-breath render slot lives in process memory, so a service killed
+    # mid-encode leaves a completed task saying its de-breath is still running —
+    # and the route refuses that state, which would make the entry dead for good.
+    stranded_renders = recover_stranded_renders()
+    if stranded_renders:
+        logger.info("Startup recovery cleared %s stranded de-breath renders", stranded_renders)
+    # Same shape, same reason: the visual-note slot is process memory, and the
+    # entry refuses a task whose note still says "running".
+    stranded_notes = recover_stranded_notes()
+    if stranded_notes:
+        logger.info("Startup recovery cleared %s stranded visual notes", stranded_notes)
     yield
 
 

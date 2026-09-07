@@ -11,15 +11,36 @@
 # intentionally do not appear here.
 
 faster-whisper>=1.0.0
+# Apple-Silicon fast lane for local transcription. faster-whisper cannot reach
+# the GPU on a Mac (its CTranslate2 backend has no Metal path), and MLX measured
+# 2.2x faster on the same audio through the same entry point. The marker keeps
+# it off every other platform, where it does not exist; `local_stt` falls back
+# to faster-whisper whenever it is missing, so this stays optional everywhere.
+mlx-whisper>=0.4.0; sys_platform == "darwin" and platform_machine == "arm64"
+# Reads the text off a frame with the OS's own Vision framework, so the frame
+# index the note-writing agent chooses from can say what is on a picture rather
+# than guess from its edge contrast. macOS-only; without it the index falls back
+# to the numbers it used before and no note fails. Needs a pip newer than the
+# 21.x shipped with Xcode's Python 3.9, which tries to build pyobjc-core from
+# source and fails.
+pyobjc-framework-Vision>=10.0; sys_platform == "darwin"
 opencc-python-reimplemented>=0.1.7
 moviepy>=1.0.3
 openai>=1.0.0
+# Anthropic's own SDK, for the entry that has Claude read a task's frames and
+# write a note from them. Not the Claude Agent SDK — that one stays frozen; this
+# is the plain Messages API client. The app still boots without it: that entry
+# refuses with an install command instead of crashing at import.
+anthropic>=0.69.0
 lark-oapi>=1.0.0
-fastapi>=0.115.0
+# Same upper bound as requirements.txt: FastAPI 0.130+ pulls Starlette 1.x,
+# which the route contract has not been tested against.
+fastapi>=0.115.0,<0.130
 httpx>=0.27.0
 python-multipart>=0.0.9
 uvicorn[standard]>=0.32.0
 python-dotenv>=1.0.0
+# Deliberately unpinned; see requirements.txt.
 yt-dlp>=2025.10.14
 
 # Optional speaker diarization:

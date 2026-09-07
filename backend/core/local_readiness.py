@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from backend.core.frontend_paths import local_frontend_index_path
 from backend.core.runtime_paths import app_data_root
+from backend.core.windows_gpu_runtime import inspect_windows_gpu_runtime
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,24 @@ def run_readiness_checks() -> list[ReadinessCheck]:
 
     writable, detail = _data_dir_writable()
     checks.append(ReadinessCheck(name="data-dir", ok=writable, required=True, detail=detail))
+
+    # Not required: without it transcription still runs, just on the CPU. It is
+    # reported so that "why is this so slow" has an answer here rather than in
+    # a log line nobody reads.
+    if sys.platform.startswith("win"):
+        gpu_runtime = inspect_windows_gpu_runtime()
+        checks.append(ReadinessCheck(
+            name="windows-gpu-runtime",
+            ok=gpu_runtime.ready,
+            required=False,
+            detail=(
+                "NVIDIA GPU transcription runtime is ready in this project environment."
+                if gpu_runtime.ready
+                else "NVIDIA GPU runtime DLLs are missing "
+                f"({', '.join(gpu_runtime.missing_dlls)}). Transcription will use the CPU; "
+                f"run {gpu_runtime.install_hint} to enable GPU transcription."
+            ),
+        ))
 
     return checks
 

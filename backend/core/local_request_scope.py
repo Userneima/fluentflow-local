@@ -69,9 +69,16 @@ def request_client_id(request: Optional[Request]) -> Optional[str]:
 
 
 def request_is_localhost(request: Request) -> bool:
+    """Whether the request really came from this machine.
+
+    ONLY the socket peer counts. This used to also accept the URL hostname,
+    which comes from the client-supplied Host header (nginx forwards it
+    verbatim), so `curl -H 'Host: localhost' -H '<execution-target>: local'`
+    satisfied the localhost test on the public site and skipped the entire
+    account middleware — verified live against production before this fix.
+    """
     client_host = ((request.client.host if request.client else "") or "").strip().lower()
-    url_host = (request.url.hostname or "").strip().lower()
-    return client_host in LOCAL_REQUEST_HOSTS or url_host in LOCAL_REQUEST_HOSTS
+    return client_host in LOCAL_REQUEST_HOSTS
 
 
 def request_prefers_local_execution(request: Request) -> bool:

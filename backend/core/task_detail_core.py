@@ -724,6 +724,51 @@ def build_task_snapshot(
     return {key: value for key, value in snapshot.items() if value not in (None, "", [])}
 
 
+def _media_preparation(result: dict[str, Any]) -> dict[str, Any] | None:
+    """The cut, for the page that has room to explain it.
+
+    None when the recording was never cut, so the page can leave the section out
+    rather than print an empty one.
+    """
+    state = result.get("debreath")
+    if not isinstance(state, dict) or not state:
+        return None
+    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    return {
+        "status": _text(state.get("status")),
+        "ran_before_transcription": bool(state.get("ran_before_transcription")),
+        "used_for_transcription": state.get("used_for_transcription"),
+        "not_used_reason": _text(state.get("not_used_reason")),
+        # Declined because the file was already cut, which is a different answer
+        # from "the cut was unsafe here" and reads differently to the user.
+        "already_cut": bool(state.get("already_cut")) or None,
+        "not_worth_rendering": bool(state.get("not_worth_rendering")) or None,
+        "error": _text(state.get("error")),
+        "render_verified": state.get("render_verified"),
+        "delivered": state.get("delivered"),
+        "delivered_path": _text(state.get("delivered_path")),
+        # Written since the delivery was built and read by nothing until now: the
+        # copy beside the original can fail, and the only thing that knew was the
+        # log.
+        "delivery_error": _text(state.get("delivery_error")),
+        "cut_count": plan.get("cut_count"),
+        "removed_seconds": plan.get("removed_seconds"),
+        "removed_percent": plan.get("removed_percent"),
+        "kept_seconds": plan.get("kept_seconds"),
+        "source_duration_seconds": plan.get("source_duration_seconds"),
+        # The engine's own spot check, verbatim. It is the only thing that can say
+        # the threshold did not suit this material; the counts all look reasonable
+        # while a faint room is being cut close to the speech.
+        "warnings": [_text(item) for item in (state.get("warnings") or []) if _text(item)],
+        # Why the threshold is not the default number, when it is not. A user who
+        # sees fewer cuts than they expected on a faint recording deserves the
+        # sentence rather than a mystery.
+        "threshold_choice": state.get("threshold_choice") if isinstance(state.get("threshold_choice"), dict) else None,
+        "transcript_media": _text(result.get("transcript_media")),
+        "note_written_from": _text(result.get("summary_written_from")),
+    }
+
+
 def build_task_detail(
     job: dict[str, Any],
     *,
@@ -765,6 +810,11 @@ def build_task_detail(
         "actions": _actions(policy, job, result, artifacts, diagnosis),
         "artifacts": artifacts,
         "chapter_coverage": result.get("chapter_coverage") if isinstance(result.get("chapter_coverage"), dict) else None,
+        # What happened to the recording, with room for the sentence. The records
+        # card states the outcome in three words ("按原片处理"); why the cut declined
+        # is a sentence, and a sentence truncated into a tile is worth less than no
+        # sentence. This page is where it fits.
+        "media_preparation": _media_preparation(result),
         "recorded_steps": job_steps,
         "data_quality": {
             "has_recorded_steps": bool(job_steps),

@@ -32,6 +32,46 @@ from backend.core.subtitle_format import _format_srt, _format_vtt
 
 logger = logging.getLogger(__name__)
 
+# Breath-gap removal outputs. The kinds live here, with the rest of the artifact
+# contract, so a read-only download route can allow them without importing the
+# module that produces them. The suffix is only the filename fallback: the
+# rendered media keeps its source container, and the recorded artifact filename
+# is what actually serves.
+DEBREATH_CUT_LIST_KIND = "debreath_cut_list"
+DEBREATH_MEDIA_KIND = "debreath_media"
+DEBREATH_TRANSCRIPT_KIND = "debreath_transcript_srt"
+DEBREATH_ARTIFACT_SUFFIXES = {
+    DEBREATH_CUT_LIST_KIND: ".json",
+    DEBREATH_MEDIA_KIND: ".mp4",
+    DEBREATH_TRANSCRIPT_KIND: ".srt",
+}
+
+# Everything one de-breath produced lives in one directory inside the task's
+# artifact folder. The point is that a user looking at the files can tell which
+# media is the recording they uploaded and which is the shortened version: the
+# original never moves and never changes — it stays in the task's source storage
+# — and everything derived from cutting it is in here together.
+DEBREATH_ARTIFACT_DIRNAME = "debreath"
+
+# In the name of every file the cut produces. Half of "is this already cut?" —
+# the other half is the mark inside the bytes (silence_cuts.CUT_FILE_MARK), which
+# survives renaming.
+CUT_FILE_NAME_MARKER = "_debreath"
+
+# Which media a transcript's timestamps belong to. A transcript is only meaningful
+# against one file, and the failure mode of getting it wrong is silent — captions
+# and note timings drift further out the longer the recording runs — so it is
+# recorded on the result instead of inferred from whichever files happen to exist.
+TRANSCRIPT_MEDIA_CUT = "debreath_media"
+TRANSCRIPT_MEDIA_SOURCE = "source"
+
+# The note written from that cut media. Here for the same reason as the kinds
+# above: a read-only download route and the agent read model both need the kind
+# without importing the module that runs the model.
+VISUAL_NOTE_KIND = "visual_note"
+VISUAL_NOTE_ARTIFACT_FILENAME = "visual_note.md"
+VISUAL_NOTE_ARTIFACT_SUFFIXES = {VISUAL_NOTE_KIND: ".md"}
+
 
 def _format_backup_timestamp(seconds: Any) -> str:
     try:
@@ -179,8 +219,14 @@ def _subtitle_segments_from_display(display_segments: list[dict[str, Any]]) -> l
 def _write_text_artifact(task_id: str, kind: str, filename: str, content: str) -> dict[str, Any]:
     target_dir = _artifact_storage_dir() / task_id
     target_dir.mkdir(parents=True, exist_ok=True)
-    path = target_dir / filename
-    tmp = target_dir / f".{filename}.{uuid.uuid4().hex}.tmp"
+    # A filename may name a subdirectory: the de-breath outputs are grouped in
+    # one. The temporary file is placed beside its target rather than under a
+    # name built from the whole relative path, which would point at a directory
+    # that does not exist.
+    relative = _safe_artifact_relative_path(filename)
+    path = target_dir / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
     try:
         tmp.write_text(content, encoding="utf-8")
         tmp.replace(path)
@@ -189,8 +235,41 @@ def _write_text_artifact(task_id: str, kind: str, filename: str, content: str) -
             tmp.unlink()
     return {
         "kind": kind,
-        "filename": filename,
+        "filename": str(relative).replace("\\", "/"),
         "url": _artifact_url(task_id, kind),
+        "size_bytes": path.stat().st_size,
+        "updated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+    }
+
+
+def write_text_artifact(task_id: str, kind: str, filename: str, content: str) -> dict[str, Any]:
+    """Public name for the text-artifact writer, for callers outside this module."""
+    return _write_text_artifact(task_id, kind, filename, content)
+
+
+def artifact_target_path(task_id: str, filename: str) -> Path:
+    """Where an artifact of this name belongs, with the directory created.
+
+    For a producer that writes a large file — a re-encoded video is the case this
+    exists for — writing straight here and then registering it avoids copying
+    gigabytes to move them a few directories.
+    """
+    target_dir = _artifact_storage_dir() / task_id
+    path = target_dir / _safe_artifact_relative_path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def describe_existing_artifact(task_id: str, kind: str, filename: str) -> dict[str, Any]:
+    """Build the artifact record for a file already sitting in the task's directory."""
+    path = artifact_target_path(task_id, filename)
+    if not path.is_file():
+        raise FileNotFoundError(f"artifact not found: {path}")
+    relative = _safe_artifact_relative_path(filename)
+    return {
+        "kind": kind,
+        "filename": str(relative).replace("\\", "/"),
+        "url": _artifact_url(task_id, kind, filename=str(relative)),
         "size_bytes": path.stat().st_size,
         "updated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
     }
@@ -201,6 +280,54 @@ def _safe_artifact_relative_path(filename: str) -> Path:
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError("Artifact filename must be a safe relative path")
     return path
+
+
+def resolve_artifact_file(task_dir: Path, filename: Any) -> Path | None:
+    """The file a recorded artifact filename points at, or ``None``.
+
+    Recorded filenames may name a subdirectory — frames always have, and the
+    de-breath outputs now do — so a download route cannot reduce the record to a
+    basename and look in the task's root. It also cannot simply join it: the
+    record is stored data, and a stored ``../`` would walk out of the task's
+    directory. This resolves the relative path, refuses anything that escapes,
+    and falls back to the basename so artifacts recorded before the outputs moved
+    into their own directory still serve.
+    """
+    raw = str(filename or "").strip()
+    if not raw or not task_dir.is_dir():
+        return None
+    try:
+        relative = _safe_artifact_relative_path(raw)
+    except ValueError:
+        return None
+    root = task_dir.resolve()
+    candidate = (task_dir / relative).resolve()
+    if root in candidate.parents and candidate.is_file():
+        return candidate
+    legacy = task_dir / relative.name
+    return legacy if legacy.is_file() else None
+
+
+def artifact_search_dirs(task_dir: Path, kind: str) -> list[Path]:
+    """Where a download route may guess by suffix when no record names the file.
+
+    A fallback, not the path: a recorded filename is always tried first, and this
+    only catches a result whose artifact record was lost while its files were
+    not. The de-breath outputs live in their own directory, so it has to be
+    searched — except for the remapped subtitles, which must never fall back to
+    the task root. The original recording's ``.srt`` sits there, and serving it
+    under a kind that promises the cut version's timeline is precisely the
+    substitution this whole path exists to avoid.
+    """
+    if kind not in DEBREATH_ARTIFACT_SUFFIXES:
+        return [task_dir]
+    cut_dir = task_dir / DEBREATH_ARTIFACT_DIRNAME
+    dirs = [cut_dir] if cut_dir.is_dir() else []
+    if kind != DEBREATH_TRANSCRIPT_KIND:
+        # These two have results that recorded them in the task root, from before
+        # the outputs got a directory of their own.
+        dirs.append(task_dir)
+    return dirs
 
 
 def _write_file_artifact(task_id: str, kind: str, filename: str, source_path: Path | str) -> dict[str, Any]:
@@ -263,6 +390,43 @@ def _attach_playback_audio_artifact(
     next_result["artifacts"] = artifacts
     next_result["playback_audio_available"] = True
     next_result["playback_audio_storage"] = "local"
+    return next_result
+
+
+def _attach_enhanced_playback_audio_artifact(
+    task_id: str,
+    result: dict[str, Any],
+    audio_path: Path | str,
+    presence: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Attach the presence-corrected take alongside the untouched one.
+
+    Deliberately a separate artifact rather than a replacement for
+    ``playback_audio``, which also feeds re-transcription: a re-run should
+    reproduce the original run, so the input it reads stays fixed. Not because
+    the correction harms transcription — measured, it does not; see
+    ``voice_enhance``.
+    """
+    path = Path(audio_path)
+    if not path.is_file():
+        return result
+    try:
+        artifact = _write_file_artifact(
+            task_id,
+            "playback_audio_enhanced",
+            _artifact_filename(result, "_audio_enhanced.m4a"),
+            path,
+        )
+    except Exception as exc:
+        logger.warning("Enhanced playback audio artifact write failed for %s: %s", task_id, exc)
+        return result
+    next_result = dict(result)
+    artifacts = dict(next_result.get("artifacts") or {})
+    artifacts["playback_audio_enhanced"] = artifact
+    next_result["artifacts"] = artifacts
+    next_result["playback_audio_enhanced_available"] = True
+    if presence:
+        next_result["voice_presence"] = presence
     return next_result
 
 

@@ -47,6 +47,7 @@ def extract_keyframes(
     scene_threshold: float = 0.3,
     max_scene_frames: int = 30,
     min_gap_seconds: float = 2.0,
+    anchor_seconds: list[float] | None = None,
 ) -> KeyframeExtractionResult:
     selected = provider or configured_keyframe_provider()
     if selected == "disabled":
@@ -60,6 +61,7 @@ def extract_keyframes(
         scene_threshold=scene_threshold,
         max_scene_frames=max_scene_frames,
         min_gap_seconds=min_gap_seconds,
+        anchor_seconds=anchor_seconds,
     )
     for frame in frames:
         frame.setdefault("provider", "local_ffmpeg")

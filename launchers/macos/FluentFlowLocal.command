@@ -34,12 +34,50 @@ fi
 health="$(curl -s --max-time 2 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
 if [[ -n "$health" ]]; then
 	if [[ "$health" == *'"execution":"local"'* ]]; then
-		echo "FluentFlow Local 已在运行，直接打开浏览器。"
-		open "$APP_URL"
-		exit 0
-	fi
-	fail "端口 ${PORT} 被其他程序占用（不是 FluentFlow Local）。
+		# /health 活着不等于页面出得来。一个跑了 11 天的进程曾经健康检查照常返回
+		# 200，访问 / 却只发响应头、一个字节的正文都不发，浏览器打开就是全白。
+		# 那次启动器认定「已在运行」，高高兴兴地把空白页打开了 —— 所以这里要探
+		# 浏览器真正会加载的那个地址，而不是只探健康检查。
+		if curl -sf --max-time 5 "$APP_URL" 2>/dev/null | head -c 1 | grep -q .; then
+			echo "FluentFlow Local 已在运行，直接打开浏览器。"
+			open "$APP_URL"
+			exit 0
+		fi
+		echo ""
+		echo "⚠ 端口 ${PORT} 上的 FluentFlow Local 还在应答健康检查，但已经打不开页面了。"
+		echo "  这通常是跑了很久的旧进程。正在重启它…"
+		echo ""
+		stale_pids="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null || true)"
+		if [[ -z "$stale_pids" ]]; then
+			fail "没能找到占用端口 ${PORT} 的进程，请手动退出它后重试。"
+		fi
+		# 双击启动器本身就是「我要用它」，所以坏掉的实例直接重启，不再多问一句。
+		# 唯一要停下来问的情况是后台真的在转东西：界面坏了不代表任务坏了，一段三小时
+		# 的视频转到一半被杀掉，得从头再来。查不到任务列表就照常重启 —— 那说明这个
+		# 进程连自己的接口都答不上来了，留着也没用。
+		# `|| true` 不是装饰：脚本开头是 set -euo pipefail，而 grep 找不到匹配时返回 1，
+		# 于是「没有任务在跑」这个最常见的情况会让整条管道失败、脚本当场退出，重启那几行
+		# 根本执行不到。第一版就是这么写的，测试时它一声不吭地什么也没做。
+		running="$(curl -s --max-time 3 "http://127.0.0.1:${PORT}/jobs?limit=100" 2>/dev/null \
+			| grep -c '"status":"\(queued\|processing\|running\|pending\)"' || true)"
+		if [[ "${running:-0}" -gt 0 ]]; then
+			echo "但后台还有 ${running} 个任务在进行中，重启会让它们从头再来。"
+			read -r -p "确认重启请按回车，按 Ctrl+C 取消…" _ || exit 1
+		fi
+		# shellcheck disable=SC2086
+		kill $stale_pids 2>/dev/null || true
+		for _ in $(seq 1 40); do
+			curl -s --max-time 1 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 || break
+			sleep 0.25
+		done
+		if curl -s --max-time 1 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+			fail "旧进程没有退出（PID: ${stale_pids}）。请手动结束它后重新双击启动。"
+		fi
+		echo "旧进程已停止，继续启动新的。"
+	else
+		fail "端口 ${PORT} 被其他程序占用（不是 FluentFlow Local）。
 请先退出那个程序，或设置 FLUENTFLOW_LOCAL_PORT 换一个端口后重试。"
+	fi
 fi
 
 VENV_PY="${REPO}/venv/bin/python"
@@ -78,6 +116,13 @@ cd "$REPO"
 echo ""
 echo "FluentFlow Local 正在启动：${APP_URL}"
 echo "日志文件：${LOG_FILE}"
-echo "停止方式：在本窗口按 Ctrl+C，或直接关闭窗口。"
+# 「关闭窗口即停止」只在有终端窗口时成立。桌面上的 FluentFlow Local.app 是用
+# nohup 拉起这个脚本的，没有窗口可关，照原样打印会给出一条做不到的指示。
+if [[ -t 1 ]]; then
+	echo "停止方式：在本窗口按 Ctrl+C，或直接关闭窗口。"
+else
+	echo "停止方式：本次是后台启动（没有终端窗口）。停止请执行："
+	echo "  lsof -ti:${PORT} | xargs kill"
+fi
 echo ""
 exec "$VENV_PY" -m uvicorn backend.local_main:app --host 127.0.0.1 --port "$PORT" 2>&1 | tee -a "$LOG_FILE"

@@ -29,6 +29,39 @@ function Get-LocalHealth {
     }
 }
 
+function Test-AppPageServes {
+    # /health answering is not the same as the app being usable. A process that
+    # had run for eleven days kept returning 200 on /health while serving the
+    # page as headers only — Content-Length set, zero bytes of body — so the
+    # launcher reported "already running" and opened a blank window. Probe the
+    # address the browser will actually load.
+    try {
+        $page = Invoke-WebRequest -UseBasicParsing -Uri $AppUrl -TimeoutSec 5
+        return ($page.StatusCode -eq 200 -and $page.RawContentLength -gt 0)
+    } catch {
+        return $false
+    }
+}
+
+function Get-PortOwnerIds {
+    try {
+        return @(Get-NetTCPConnection -LocalPort ([int]$Port) -State Listen -ErrorAction Stop |
+            Select-Object -ExpandProperty OwningProcess -Unique)
+    } catch {
+        return @()
+    }
+}
+
+function Get-RunningJobCount {
+    try {
+        $jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?limit=100" -TimeoutSec 3
+        return @($jobs.jobs | Where-Object { $_.status -in @("queued", "processing", "running", "pending") }).Count
+    } catch {
+        # The instance cannot answer for itself, so there is nothing worth keeping.
+        return 0
+    }
+}
+
 function Test-PortListening {
     $client = New-Object System.Net.Sockets.TcpClient
     try {
@@ -52,11 +85,40 @@ if ($health) {
     # /health nests the edition marker under "runtime"; reading it from the
     # top level made a healthy running instance look like a foreign process.
     if ($health.runtime -and $health.runtime.execution -eq "local") {
-        Write-Host "FluentFlow Local is already running. Opening the workspace."
-        Start-Process $AppUrl
-        exit 0
+        if (Test-AppPageServes) {
+            Write-Host "FluentFlow Local is already running. Opening the workspace."
+            Start-Process $AppUrl
+            exit 0
+        }
+        Write-Host ""
+        Write-Host "! FluentFlow Local on port $Port still answers its health check but no longer serves the page." -ForegroundColor Yellow
+        Write-Host "  This is usually a process that has been running too long. Restarting it." -ForegroundColor Yellow
+        Write-Host ""
+        $ownerIds = Get-PortOwnerIds
+        if ($ownerIds.Count -eq 0) {
+            Fail "Could not identify the process holding port $Port. Stop it manually and try again."
+        }
+        # Double-clicking the launcher is already the decision to use the app, so a
+        # broken instance is restarted without asking. The one case worth stopping
+        # for is real work in flight: a dead interface does not mean a dead job, and
+        # a three-hour transcription killed halfway starts over from nothing.
+        $running = Get-RunningJobCount
+        if ($running -gt 0) {
+            Write-Host "$running job(s) are still in progress; restarting makes them start over."
+            Read-Host "Press Enter to restart anyway, or Ctrl+C to cancel" | Out-Null
+        }
+        foreach ($id in $ownerIds) { Stop-Process -Id $id -ErrorAction SilentlyContinue }
+        for ($i = 0; $i -lt 40; $i++) {
+            if (-not (Get-LocalHealth)) { break }
+            Start-Sleep -Milliseconds 250
+        }
+        if (Get-LocalHealth) {
+            Fail "The old process did not exit (PID: $($ownerIds -join ', ')). End it manually and launch again."
+        }
+        Write-Host "Old process stopped. Starting a fresh one."
+    } else {
+        Fail "Port $Port is already serving a different application. Stop that application or set FLUENTFLOW_LOCAL_PORT to another port."
     }
-    Fail "Port $Port is already serving a different application. Stop that application or set FLUENTFLOW_LOCAL_PORT to another port."
 }
 if (Test-PortListening) {
     Fail "Port $Port is occupied, but it is not FluentFlow Local. Stop that application or set FLUENTFLOW_LOCAL_PORT to another port."

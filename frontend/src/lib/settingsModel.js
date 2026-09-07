@@ -11,6 +11,16 @@ export const NOTE_MODE_OPTIONS = [
     {value: 'chapter_coverage', labelEn: 'Chapter coverage', labelZh: '完整覆盖笔记'},
 ];
 
+// Which way in the start page opens on. Both entries stay available either way;
+// this only decides which one is already selected, because someone who works from
+// files on this machine should not have to click past a link box every time.
+export const SOURCE_MODES = ['link', 'upload'];
+export const DEFAULT_SOURCE_MODE = 'link';
+
+export const normalizeSourceMode = (value) => (
+    SOURCE_MODES.includes(String(value || '').trim()) ? String(value).trim() : DEFAULT_SOURCE_MODE
+);
+
 export const LARK_EXPORT_ROUTE_OPENAPI = 'openapi';
 export const LARK_EXPORT_ROUTE_LOCAL_CLI = 'local_cli';
 
@@ -93,6 +103,14 @@ export const sanitizeSettings = (settings={}) => {
         next.noteMode = 'auto';
     }
     next.sttModel = normalizeSttModel(next.sttModel);
+    // Speaker separation defaults to on for every material: a meeting is the
+    // case that needs it, nobody opens Settings before uploading one, and a
+    // single-speaker recording just yields one speaker. Only the absent key is
+    // filled in — someone who switched it off stays switched off.
+    next.speakerDiarization = next.speakerDiarization === undefined || next.speakerDiarization === null
+        ? true
+        : !!next.speakerDiarization;
+    next.defaultSourceMode = normalizeSourceMode(next.defaultSourceMode);
     next.larkExportRoute = larkExportRouteFromSettings(next);
     next.larkViaCli = isLocalLarkExportRoute(next.larkExportRoute);
     return next;
