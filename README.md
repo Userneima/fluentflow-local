@@ -43,6 +43,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\setup-lo
 
 有显卡时转录用 large-v3，没有时用 medium。运行库缺失会退回 CPU 并在启动检查里说明缺什么。
 
+## Windows（含 NVIDIA 显卡转录）
+
+在 PowerShell 里跑一次：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\setup-local.ps1
+```
+
+它会建 `.venv`、装依赖、构建前端，并且在检测到 NVIDIA 显卡时把 CUDA 12 与 cuDNN 9 运行库装进这个虚拟环境。不需要装机器级 CUDA Toolkit，但显卡驱动要在。
+
+已经装好、只想补 GPU 运行库：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-windows-gpu.txt
+```
+
+有显卡时转录用 large-v3，没有时用 medium。运行库缺失会退回 CPU 并在启动检查里说明缺什么。
+
 ## License
 
 FluentFlow Local 使用 GNU Affero General Public License v3.0 或更高版本（AGPL-3.0-or-later）。如果你修改本项目并将其作为网络服务提供，AGPL 可能要求向该服务用户提供相应源代码；这不是法律意见，请阅读仓库中的 `LICENSE` 并自行取得法律建议。
