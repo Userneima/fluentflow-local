@@ -55,6 +55,16 @@ def default_source_dir() -> Path:
     return runtime_path("FLUENTFLOW_SOURCE_DIR", "sources")
 
 
+def default_diarization_model_dir() -> Path:
+    """Where local speaker-diarization model files live.
+
+    pyannote normally fetches these from Hugging Face on first use. Where the
+    Hugging Face file CDN is unreachable, `scripts/fetch_diarization_models.py`
+    fills this directory from ModelScope instead and the loader prefers it.
+    """
+    return runtime_path("FLUENTFLOW_DIARIZATION_MODEL_DIR", "models", "pyannote")
+
+
 def default_artifact_dir() -> Path:
     return runtime_path("FLUENTFLOW_ARTIFACT_DIR", "artifacts")
 

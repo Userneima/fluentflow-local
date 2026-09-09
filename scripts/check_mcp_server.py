@@ -20,6 +20,7 @@ EXPECTED_TOOLS = {
     "get_task_package",
     "diagnose_task",
     "regenerate_note",
+    "debreath_task",
     "export_result",
 }
 

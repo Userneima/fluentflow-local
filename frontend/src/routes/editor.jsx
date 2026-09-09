@@ -10,10 +10,19 @@ import {
     resolveSystemPromptFromSettings,
 } from '../lib/promptPresets.js';
 import SvgIcon from '../components/SvgIcon.jsx';
+import EditorSplitHandle from '../components/EditorSplitHandle.jsx';
+import {
+    loadHeaderPinned,
+    loadSplitRatio,
+    saveHeaderPinned,
+    saveSplitRatio,
+    splitPaneStyles,
+} from '../lib/editorLayoutPrefs.js';
 import {
     API_BASE,
     createTaskId,
     effectiveSttProvider,
+    submittedSttProvider,
     autoSizeTextarea,
     buildTranscriptEditRecords,
     composeTranscriptText,
@@ -49,12 +58,17 @@ import {
 import {useApp} from '../app/AppContext.jsx';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
+import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
+import CutFlowBar from '../components/CutFlowBar.jsx';
 import {FeishuExportPrompt, RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
 import {
     jobOptionsForResult,
     isLikelyVideoFile,
     isVideoResultSource,
+    isAutoCutFlow,
+    cutFlowSummary,
     localSourceFileMatchesResult,
+    playbackMediaChoice,
     shouldKeepVideoReviewMounted,
     summaryFailureNextStep,
     formatElapsedMinuteSecond,
@@ -186,8 +200,11 @@ const Editor = ({hosted = null}) => {
     const [hydrationFailed, setHydrationFailed] = useState(false);
     const [transcriptView, setTranscriptView] = useState('bilingual');
     const [editRecordsOpen, setEditRecordsOpen] = useState(false);
+    const [headerPinned, setHeaderPinned] = useState(loadHeaderPinned);
+    const [splitRatio, setSplitRatio] = useState(loadSplitRatio);
     const mediaRef = useRef(null);
     const mediaInputRef = useRef(null);
+    const splitContainerRef = useRef(null);
     const transcriptScrollRef = useRef(null);
     const segmentRefs = useRef({});
     const resultJobOptions = useMemo(() => resultAccess.jobOptions || jobOptionsForResult(result), [
@@ -374,6 +391,46 @@ const Editor = ({hosted = null}) => {
             loadMediaFile(matchedLocalSourceFile);
             return () => { cancelled = true; };
         }
+        // The file this transcript belongs to, which for a task that was cut
+        // before transcription is the shortened one. Loading the recording instead
+        // would leave every seek and every highlighted line drifting further out
+        // the longer it plays, with nothing on screen saying why.
+        const preferred = playbackMediaChoice(result);
+        // Same rule one step earlier: if this task's material is the cut file and
+        // there is no cut file to load, nothing else may take its place — not the
+        // recording, not the saved audio. The bar at the top says why.
+        if (isAutoCutFlow(result) && !preferred?.isCut) {
+            setMediaError(lang === 'zh' ? '剪后文件读不到了' : 'The cut file cannot be read');
+            setMediaLoading(false);
+            return () => { cancelled = true; };
+        }
+        if (preferred?.isCut && canPersistResult) {
+            setMediaLoading(true);
+            const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
+            fetchArtifact(result.task_id, preferred.kind, preferred.filename, resultJobOptions)
+                .then((file) => { if (!cancelled) loadMediaFile(file); })
+                .catch((cutErr) => {
+                    if (cancelled) return;
+                    // No falling back to the recording when the transcript came from
+                    // the cut file. The original is longer, so every line and every
+                    // seek would point at the wrong moment while the page looked
+                    // perfectly normal. Say it is unavailable instead.
+                    if (!isAutoCutFlow(result) && result.source_file_available) {
+                        fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
+                            .then((file) => { if (!cancelled) loadMediaFile(file); })
+                            .catch((sourceErr) => {
+                                if (!cancelled) {
+                                    setMediaError(sourceErr.message || cutErr.message || 'Source file unavailable');
+                                    setMediaLoading(false);
+                                }
+                            });
+                        return;
+                    }
+                    setMediaError(cutErr.message || 'Cut file unavailable');
+                    setMediaLoading(false);
+                });
+            return () => { cancelled = true; };
+        }
         if (result.task_id && result.source_file_available && canPersistResult) {
             setMediaLoading(true);
             fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
@@ -519,6 +576,16 @@ const Editor = ({hosted = null}) => {
         isLikelyVideoFile(matchedLocalSourceFile || result?.filename)
         && (matchedLocalSourceFile || (result?.task_id && result?.source_file_available))
     );
+    const playingCutVersion = !matchedLocalSourceFile && playbackMediaChoice(result)?.isCut === true;
+    // What already happened to this recording, for the one line under the title.
+    // Gated on the same condition as the badge above: the bar's sentence is about
+    // what is playing, so once the reader has pointed the player at a file of their
+    // own it would be describing something that is no longer on screen.
+    const cutFlow = matchedLocalSourceFile ? null : cutFlowSummary(result);
+    // No cut file means nothing may play, so this has to be said rather than left
+    // as an empty player. Either the record of the file is gone, or reading it
+    // failed — the effect above refuses to substitute the recording in both cases.
+    const cutFileUnavailable = !!cutFlow && (!cutFlow.mediaArtifact || (!!mediaError && !mediaUrl));
     const canShowVideoReview = isVideoResultSource(result, matchedLocalSourceFile);
     const canUseVideoReview = canShowVideoReview && mediaKind === 'video' && !!mediaUrl && segments.length > 0;
     const activeReviewMode = canUseVideoReview ? transcriptReviewMode : 'text';
@@ -946,8 +1013,9 @@ const Editor = ({hosted = null}) => {
         }
         const settings = loadSettings();
         const sttModel = normalizeSttModel(settings.sttModel);
-        const sttProvider = effectiveSttProvider(settings, runtimeConfig);
-        if (!(await (hosted?.ensureSttReady?.({sttProvider, showToast, lang}) ?? true))) return;
+        const sttProvider = submittedSttProvider(settings, runtimeConfig);
+        const runningSttProvider = effectiveSttProvider(settings, runtimeConfig);
+        if (!(await (hosted?.ensureSttReady?.({sttProvider: runningSttProvider, showToast, lang}) ?? true))) return;
         const retranscribeErrorMessage = (err) => {
             return hosted?.retranscribeErrorMessage?.({error: err, sttProvider, lang})
                 || err?.message || (lang === 'zh' ? '重新转录失败' : 'Retranscription failed');
@@ -1143,7 +1211,58 @@ const Editor = ({hosted = null}) => {
             setDownloading(null);
         }
     };
+    // Hands over the cut file itself. The bar deliberately does not name a
+    // directory — the owner of a finished task could not find the file precisely
+    // because the old copy described a filesystem instead of giving it to them.
+    const handleDownloadCutFile = async () => {
+        const artifact = cutFlow?.mediaArtifact;
+        if (!artifact || !result?.task_id) return;
+        const name = String(artifact.filename || '').split('/').pop()
+            || `${resultDownloadName || result.filename || 'media'}_debreath.mp4`;
+        try {
+            const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
+            const file = await fetchArtifact(result.task_id, 'debreath_media', name, resultJobOptions);
+            downloadBrowserFile(file, name);
+            recordDownload('cut_media_downloaded', 'video');
+            showToast(t('dl.success'));
+        } catch (err) {
+            showToast(err.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable'), false);
+        }
+    };
     const mediaProgress = playbackDuration > 0 ? Math.min(100, Math.max(0, mediaCurrentTime / playbackDuration * 100)) : 0;
+
+    // Playback is when the media panel needs the height most, so the page
+    // header steps aside then unless the reader pinned it open. Hovering the
+    // strip floats the full header back without resizing anything underneath.
+    const headerCollapsed = !headerPinned && mediaPlaying;
+    const togglePinnedHeader = () => {
+        setHeaderPinned((pinned) => {
+            const next = !pinned;
+            saveHeaderPinned(next);
+            return next;
+        });
+    };
+    const pinHeaderLabel = headerPinned
+        ? (lang === 'zh' ? '已固定' : 'Pinned')
+        : (lang === 'zh' ? '固定' : 'Pin');
+    const pinHeaderTitle = headerPinned
+        ? (lang === 'zh' ? '取消固定：播放时自动折叠顶栏' : 'Unpin: collapse the header during playback')
+        : (lang === 'zh' ? '固定顶栏：播放时也保持展开' : 'Pin the header so it stays open during playback');
+    const pinHeaderButton = (
+        <button
+            type="button"
+            onClick={togglePinnedHeader}
+            aria-pressed={headerPinned}
+            title={pinHeaderTitle}
+            className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#e4e0e0] bg-white px-2.5 text-[11px] font-bold text-[#666] transition hover:bg-[#efeeee] hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65 dark:hover:bg-white/[0.1] dark:hover:text-white"
+        >
+            <SvgIcon name={headerPinned ? 'pin' : 'pin_off'} className="text-[15px]"/>
+            <span className="hidden sm:inline">{pinHeaderLabel}</span>
+        </button>
+    );
+    const paneStyles = splitPaneStyles(splitRatio);
+    const commitSplitRatio = (ratio) => saveSplitRatio(ratio === undefined ? splitRatio : ratio);
+    const resetSplitRatio = () => { setSplitRatio(null); saveSplitRatio(null); };
 
     return (
     <div className="ml-[var(--sidebar-offset)] min-h-dvh bg-[#f8f7fb] pb-8 text-[#111111] dark:bg-[#101010] dark:text-white/[0.92]">
@@ -1219,6 +1338,21 @@ const Editor = ({hosted = null}) => {
         />
         <main className="h-dvh overflow-hidden px-4 pb-4 pt-5 xl:px-5 2xl:px-6">
             <div className="mx-auto h-full min-h-0 w-full flex flex-col gap-3">
+                <div className="group/header relative shrink-0">
+                {headerCollapsed && (
+                    <div className="flex h-9 items-center gap-2 rounded-[14px] border border-[#e4e0e0] bg-white/85 px-3 dark:border-white/[0.12] dark:bg-white/[0.06]">
+                        <h1 className="min-w-0 flex-1 truncate text-sm font-extrabold text-[#111111] dark:text-white" title={rawEditorTitle}>
+                            {rawEditorTitle}
+                        </h1>
+                        <span className="hidden shrink-0 text-[11px] font-semibold text-[#888] md:inline dark:text-white/45">
+                            {lang === 'zh' ? '悬停显示操作' : 'Hover for actions'}
+                        </span>
+                        {pinHeaderButton}
+                    </div>
+                )}
+                <div className={headerCollapsed
+                    ? 'pointer-events-none absolute inset-x-0 top-0 z-30 rounded-[18px] border border-[#e4e0e0] bg-white/95 px-3 py-2 opacity-0 shadow-[0_24px_60px_-30px_rgba(17,17,17,.6)] backdrop-blur transition-opacity duration-150 group-hover/header:pointer-events-auto group-hover/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:opacity-100 dark:border-white/[0.12] dark:bg-[#151515]/95 dark:shadow-[0_24px_60px_-30px_rgba(0,0,0,.85)]'
+                    : ''}>
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
                     <div className="min-w-0 pr-2">
                         <h1
@@ -1233,6 +1367,16 @@ const Editor = ({hosted = null}) => {
                                 {sttElapsedLabel}
                             </p>
                         )}
+                        {/* The record of the step the upload ran on itself. It is
+                            here rather than beside the player because it explains the
+                            whole page: the media, the subtitles and the note are one
+                            shortened file, and nothing else on screen says so. */}
+                        <CutFlowBar
+                            summary={cutFlow}
+                            lang={lang}
+                            unavailable={cutFileUnavailable}
+                            onDownload={handleDownloadCutFile}
+                        />
                         {isReadOnlyResult && resultNotice && (
                             <div className="mt-2 flex max-w-2xl items-start gap-2 rounded-[12px] border border-[#d6dcff] bg-[#eef2ff] px-3 py-2 text-xs font-semibold leading-relaxed text-[#46536f] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white/72">
                                 <SvgIcon name="info" className="mt-0.5 shrink-0 text-[15px] text-primary"/>
@@ -1278,7 +1422,10 @@ const Editor = ({hosted = null}) => {
                             <SvgIcon name={exporting ? 'sync' : 'cloud_upload'} className={`text-[17px] ${exporting?'animate-spin':''}`}/>
                             <span>{t('edit.export')}</span>
                         </button>
+                        {pinHeaderButton}
                     </div>
+                </div>
+                </div>
                 </div>
 
                 <PromptTemplateDialog
@@ -1308,8 +1455,8 @@ const Editor = ({hosted = null}) => {
                     handleBuiltinExtraChange={handleBuiltinExtraChange}
                 />
 
-                        <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
-                            <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
+                        <div ref={splitContainerRef} className="flex min-h-0 flex-1 gap-0 overflow-hidden">
+                            <section style={paneStyles.left} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
                                 <div className="border-b border-[#e4e0e0] px-4 py-3 dark:border-white/[0.12]">
                                     <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                                         <div className="min-w-0">
@@ -1619,6 +1766,15 @@ const Editor = ({hosted = null}) => {
                                                 <button type="button" onClick={()=>setFollowPlayback(v=>!v)} className={`rounded-[12px] px-2.5 py-1.5 text-xs font-bold transition ${followPlayback?'bg-[#eef2ff] text-primary dark:bg-white/[0.1] dark:text-white':'bg-[#efeeee] text-[#666] dark:bg-white/[0.08] dark:text-white/60'}`}>
                                                     {t('edit.followPlayback')}
                                                 </button>
+                                                {/* Which of the two files is playing. Both exist for a
+                                                    cut task and they are different lengths, so leaving
+                                                    this out makes the timeline unexplainable. */}
+                                                {playingCutVersion && (
+                                                    <span className="inline-flex items-center gap-1 rounded-[12px] bg-[#eef2ff] px-2 py-1 text-[11px] font-bold text-primary dark:bg-white/[0.1] dark:text-white">
+                                                        <SvgIcon name="content_cut" className="text-[13px]"/>
+                                                        {lang === 'zh' ? '剪后的版本' : 'Cut version'}
+                                                    </span>
+                                                )}
                                                 <span className="text-xs font-mono text-on-surface-variant ml-auto">{fmtTime(mediaCurrentTime)} / {fmtTime(playbackDuration || mediaCurrentTime)}</span>
                                             </div>
                                             <input
@@ -1646,9 +1802,27 @@ const Editor = ({hosted = null}) => {
                                 </div>
                             </>
                         )}
+                        {/* No de-breath entry here any more. Removing the breath gaps
+                            is what an upload does to itself, so a panel asking the user
+                            to run it described a flow that no longer exists — the owner
+                            saw it on a finished task and asked what it was for. The
+                            record of the automatic step is the bar under the title.
+                            Tasks processed before the automatic flow simply do not
+                            mention it; re-uploading is the way to give one the
+                            treatment, and the Agent API still exposes the action for a
+                            script that wants it. */}
                             </section>
 
-                            <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] xl:w-[38rem] xl:flex-none 2xl:w-[42rem] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
+                            <EditorSplitHandle
+                                containerRef={splitContainerRef}
+                                ratio={splitRatio}
+                                onChange={setSplitRatio}
+                                onCommit={commitSplitRatio}
+                                onReset={resetSplitRatio}
+                                lang={lang}
+                            />
+
+                            <section style={paneStyles.right} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] xl:w-[38rem] xl:flex-none 2xl:w-[42rem] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
                                 <div className="flex items-center justify-between gap-3 border-b border-[#e4e0e0] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                     <h2 className="flex items-center gap-2 font-headline text-base font-extrabold text-[#111111] dark:text-white">
                                         <SvgIcon name="psychology" className="text-[#111111] dark:text-white"/>
@@ -1740,6 +1914,20 @@ const Editor = ({hosted = null}) => {
                                     )}
                                     </div>
                                 )}
+                                {/* Same rule as the de-breath entry, and gone for the
+                                    same reason: an upload already wrote this note from
+                                    the cut file, so an entry offering to write it was
+                                    offering to redo finished work. The note above *is*
+                                    that note.
+
+                                    What replaced it is not an action but an account:
+                                    which frames the note was written from, and which
+                                    ones it was given and ignored. */}
+                                <NoteEvidenceStrip
+                                    result={result}
+                                    lang={lang}
+                                    onSeek={(seconds) => seekMediaTo(seconds)}
+                                />
                                 <div className="flex justify-end border-t border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                     <Link to={agentWorkflowHref} className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#dedada] bg-white px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]">
                                         <SvgIcon name="route" className="text-sm"/>

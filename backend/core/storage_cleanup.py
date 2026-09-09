@@ -5,6 +5,7 @@ server_helpers imports."""
 
 from __future__ import annotations
 
+import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,11 +16,61 @@ from backend.core.storage_paths import (
     _edited_transcript_dir,
     _source_storage_dir,
     _transcript_edit_records_dir,
+    _video_source_storage_dir,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def managed_roots() -> list[Path]:
+    """The directories FluentFlow created and may therefore delete inside.
+
+    Everything else on the machine belongs to somebody. Resolved on each call
+    because the runtime data directory is configurable.
+    """
+    roots: list[Path] = []
+    for factory in (
+        _source_storage_dir,
+        _video_source_storage_dir,
+        _artifact_storage_dir,
+        _edited_transcript_dir,
+        _transcript_edit_records_dir,
+    ):
+        try:
+            roots.append(factory().resolve())
+        except OSError:  # pragma: no cover - an unresolvable root cannot contain anything
+            continue
+    return roots
+
+
+def is_managed_path(path: Path) -> bool:
+    """Whether deleting this path is FluentFlow's business.
+
+    True only for paths *inside* one of its own storage roots — a root itself is
+    not deletable either, because emptying the whole store is never what one
+    task's cleanup meant.
+    """
+    try:
+        target = Path(path).expanduser().resolve()
+    except OSError:
+        return False
+    return any(root in target.parents for root in managed_roots())
 
 
 def remove_tree(path: Path) -> bool:
+    """Delete a file or directory FluentFlow owns, and refuse anything else.
+
+    The refusal is the point. Retention cleanup deletes paths recorded on a job,
+    and one of those fields is filled in from wherever the source came from — so
+    a wrong field, on a flow that reads a user's own folder, is the difference
+    between losing a note and deleting somebody's original recording. Containment
+    is checked here rather than at each call site, because the call sites are the
+    thing that will be added to.
+    """
     if not path.exists():
+        return False
+    if not is_managed_path(path):
+        logger.warning("refusing to delete a path outside FluentFlow storage: %s", path)
         return False
     if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)

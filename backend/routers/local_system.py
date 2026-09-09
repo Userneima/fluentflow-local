@@ -14,6 +14,7 @@ from backend.core.local_config import (
     save_preferences,
     save_sensitive_settings,
 )
+from backend.core import local_intake_flow
 from backend.core.local_limits_config import (
     max_media_duration_seconds,
     max_queue_files,
@@ -97,7 +98,15 @@ def runtime_config() -> dict[str, Any]:
         "limits": _limits(),
         # Wired by the local processing router: POST /jobs/{id}/retry re-runs
         # from the stored source file on the local hub.
-        "features": {"job_retry_from_stored_source": True},
+        "features": {
+            "job_retry_from_stored_source": True,
+            # Whether this edition writes the note itself, from the cut media.
+            # When it does, the pipeline's own note stage never runs — and the
+            # settings that only steer that stage (illustrate the note, which
+            # note strategy) steer nothing, so the page must not offer them.
+            # Switchable by env, so the page asks rather than assuming.
+            "writes_its_own_note": local_intake_flow.auto_note_enabled(),
+        },
     }
 
 

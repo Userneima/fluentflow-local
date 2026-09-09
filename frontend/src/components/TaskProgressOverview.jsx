@@ -14,15 +14,27 @@ import {
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 
-const stageLabel = (stage, lang) => {
+const stageLabel = (stage, lang, {audioOnly = false} = {}) => {
     const isZh = lang === 'zh';
     const labels = {
         queued: isZh ? '排队中' : 'Queued',
         upload: isZh ? '接收材料' : 'Receiving',
         resolving: isZh ? '解析链接' : 'Resolving link',
-        downloading: isZh ? '下载视频' : 'Downloading',
+        downloading: audioOnly
+            ? (isZh ? '下载音频' : 'Downloading audio')
+            : (isZh ? '下载视频' : 'Downloading video'),
         saving: isZh ? '保存来源' : 'Saving source',
-        audio: isZh ? '提取音频' : 'Extracting audio',
+        // Named here because it is long. An upload removes its own breath gaps
+        // before anything reads the file, which on a 24-minute recording is a
+        // full re-encode and many minutes of CPU. Without a name it fell into the
+        // generic "处理中" at 2% and read as a hung task — which is exactly how it
+        // was reported.
+        prepare_media: isZh ? '剪掉气口（要几分钟）' : 'Removing breath gaps (minutes)',
+        // Extracting audio *from* an audio file is the product misreading what it
+        // was given. It converts either way; only the word is wrong.
+        audio: audioOnly
+            ? (isZh ? '准备音频' : 'Preparing audio')
+            : (isZh ? '提取音频' : 'Extracting audio'),
         stt: isZh ? '转录中' : 'Transcribing',
         transcript_ready: isZh ? '转录完成' : 'Transcript ready',
         cleanup: isZh ? '整理转录' : 'Cleaning transcript',
@@ -34,6 +46,64 @@ const stageLabel = (stage, lang) => {
         done: isZh ? '已完成' : 'Done',
     };
     return labels[stage] || (isZh ? '处理中' : 'Processing');
+};
+
+const MediaPreparation = ({prep, lang}) => {
+    // The cut, explained where there is room to explain it. The records card says
+    // the outcome in three words; the reason it declined is a sentence, and the
+    // engine's own spot-check warning is the only thing that can tell a user the
+    // threshold did not suit this material — every count looks reasonable while a
+    // faint room is being cut close to the speech.
+    if (!prep) return null;
+    const isZh = lang === 'zh';
+    const declined = prep.used_for_transcription === false;
+    const cuts = Number(prep.cut_count) || 0;
+    const removed = Number(prep.removed_seconds) || 0;
+    const kept = Number(prep.kept_seconds) || 0;
+    const lines = [];
+    if (declined) {
+        lines.push(isZh
+            ? '这次按原文件转写和写笔记，没有用剪后的版本。'
+            : 'The recording was transcribed and the note written from it, not from a cut version.');
+        if (prep.not_used_reason) lines.push(prep.not_used_reason);
+    } else if (cuts > 0) {
+        lines.push(isZh
+            ? `剪掉 ${cuts} 处，删掉 ${fmtElapsed(removed)}，剩 ${fmtElapsed(kept)}；转写和笔记都基于这份剪后文件。`
+            : `${cuts} cuts, ${fmtElapsed(removed)} removed, ${fmtElapsed(kept)} left; the transcript and note both come from that file.`);
+        if (prep.delivered_path) {
+            lines.push((isZh ? '剪后文件：' : 'Cut file: ') + prep.delivered_path);
+        }
+    } else {
+        lines.push(isZh
+            ? '没有找到可剪的空白，素材保持原样。'
+            : 'Nothing quiet enough to remove; the material is unchanged.');
+    }
+    if (prep.render_verified === false) {
+        lines.push(isZh
+            ? '剪出来的文件没通过自检，文件保留了但没有用于后面的步骤。'
+            : 'The cut file failed its own check; it was kept but not used downstream.');
+    }
+    if (prep.threshold_choice?.adapted && prep.threshold_choice?.reason) {
+        lines.push(prep.threshold_choice.reason);
+    }
+    if (prep.error) lines.push(prep.error);
+    return (
+        <div className="mt-4 rounded-[15px] border border-[#dedada] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
+            <p className="text-[11px] font-extrabold text-[#676970] dark:text-white/[0.72]">
+                {isZh ? '去气口这一步做了什么' : 'What the breath-gap pass did'}
+            </p>
+            {lines.map((line) => (
+                <p key={line} className="mt-1.5 text-[13px] font-semibold leading-5 text-[#111111] dark:text-white">
+                    {line}
+                </p>
+            ))}
+            {(prep.warnings || []).map((warning) => (
+                <p key={warning} className="mt-1.5 rounded-[10px] bg-[#fffaeb] px-2.5 py-1.5 text-[12px] font-semibold leading-5 text-[#b54708] dark:bg-[#f79009]/[0.14] dark:text-[#fdb022]">
+                    {warning}
+                </p>
+            ))}
+        </div>
+    );
 };
 
 const normalizeTask = (pageData, currentJob) => {
@@ -152,7 +222,7 @@ const noteWordCountTag = (pageData, lang) => {
 
 const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
     const {lang, t} = useI18n();
-    const {cancelJob, cancelGuestTrialJob} = useApi();
+    const {cancelJobRecord} = useApi();
     const {currentJob, setCurrentJob} = useApp();
     const [cancelBusy, setCancelBusy] = useState(false);
     const [cancelError, setCancelError] = useState('');
@@ -178,7 +248,10 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
         ? `${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, '0')}`
         : '';
     const fileSizeText = task.fileSizeMb ? fmtBytes(task.fileSizeMb * 1024 * 1024) : '';
-    const currentStageLabel = stageLabel(task.stage, lang);
+    const audioOnlyTask = /\.(mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i.test(String(task.sourceFilename || ''))
+        || String(task.sourceType || '').toLowerCase() === 'audio'
+        || String(task.sourceType || '').toLowerCase() === 'audio_file';
+    const currentStageLabel = stageLabel(task.stage, lang, {audioOnly: audioOnlyTask});
     const displayTitle = String(task.title || '').trim();
     const headline = failed
         ? (isZh ? '需要处理这个失败任务' : 'This task needs attention')
@@ -214,11 +287,7 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
         setCancelBusy(true);
         setCancelError('');
         try {
-            if (activeCurrentJob.guestTrial) {
-                await cancelGuestTrialJob(activeCurrentJob.taskId, activeCurrentJob.guestToken);
-            } else {
-                await cancelJob(activeCurrentJob.taskId, {sttProvider: activeCurrentJob.sttProvider});
-            }
+            await cancelJobRecord(activeCurrentJob);
             setCurrentJob((prev) => prev?.taskId === activeCurrentJob.taskId ? null : prev);
         } catch (exc) {
             setCancelError(exc.message || String(exc));
@@ -247,11 +316,11 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
     const infoCards = activeCurrentJob ? [
         {label: isZh ? '已用时间' : 'Elapsed', value: fmtElapsed(activeJobElapsed)},
         {label: isZh ? '文件大小' : 'File size', value: activeJobFileSize},
-        {label: isZh ? '转录路线' : 'Route', value: activeJobRoute || route || stageLabel(task.stage, lang)},
+        {label: isZh ? '转录路线' : 'Route', value: activeJobRoute || route || currentStageLabel},
         {label: isZh ? '摘要模式' : 'Summary mode', value: activeJobSummaryMode},
     ] : [
         {label: isZh ? '来源' : 'Source', value: source},
-        {label: isZh ? '处理路线' : 'Route', value: route || stageLabel(task.stage, lang)},
+        {label: isZh ? '处理路线' : 'Route', value: route || currentStageLabel},
         {label: isZh ? '文件信息' : 'File', value: [fileSizeText, durationText].filter(Boolean).join(' · ')},
         {label: isZh ? '判断材料类型' : 'Material type', value: materialJudgment, wrap: true},
     ];
@@ -347,6 +416,8 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
                     <InfoTile key={item.label} label={item.label} value={item.value} wrap={item.wrap}/>
                 ))}
             </div>
+
+            <MediaPreparation prep={pageData?.media_preparation} lang={lang}/>
         </section>
     );
 };

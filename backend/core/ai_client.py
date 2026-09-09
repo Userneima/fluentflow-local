@@ -12,6 +12,7 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from backend.core.ai_usage import record_token_usage
 from backend.core.ai_config import (
     DEEPSEEK_BASE_URL,
     OPENAI_BASE_URL,
@@ -80,6 +81,23 @@ def _get_client(*, provider: str, api_key: str | None = None) -> OpenAI:
     return OpenAI(api_key=key, base_url=_provider_base_url(provider))
 
 
+def _provider_of(client: OpenAI) -> str:
+    """Recover the provider from the client's base URL.
+
+    Callers pass a client, not a provider name, so this avoids changing ten
+    call sites in ai_summarizer just to label token usage.
+    """
+
+    base = str(getattr(client, "base_url", "") or "")
+    if "dashscope" in base:
+        return "qwen"
+    if "deepseek" in base:
+        return "deepseek"
+    if base:
+        return "openai"
+    return "unknown"
+
+
 def _chat(
     client: OpenAI,
     model: str,
@@ -96,6 +114,7 @@ def _chat(
         ],
         temperature=temperature,
     )
+    record_token_usage(provider=_provider_of(client), model=model, response=resp)
     msg = resp.choices[0].message
     return (msg.content or "").strip()
 
@@ -134,6 +153,7 @@ def _vision_chat(
         ],
         temperature=temperature,
     )
+    record_token_usage(provider=_provider_of(client), model=model, response=resp)
     msg = resp.choices[0].message
     return (msg.content or "").strip()
 

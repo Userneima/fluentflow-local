@@ -12,6 +12,8 @@ import {
     Trash2,
     XCircle,
 } from 'lucide-react';
+import {fmtDurationCompact} from '../lib/format.js';
+import {downloadBrowserFile} from './editor-helpers.js';
 import {
     fmtElapsed,
     fmtBytes,
@@ -22,7 +24,6 @@ import {
     jobToHistoryEntry,
     jobToCurrentJob,
     sortJobsForHistoryView,
-    sttProviderLabel,
     useApi,
     useI18n,
 } from '../app/shared.jsx';
@@ -222,15 +223,37 @@ const statusLabel = (job, lang) => {
     return lang === 'zh' ? '处理中' : 'Running';
 };
 
+// Whether this task's material has no picture. Copy that says "提取音频" or "录像"
+// about an uploaded .m4a is not a translation slip — it tells the user the product
+// misunderstood what they gave it.
+export const isAudioOnlySource = (job) => {
+    const type = String(job?.source_type || job?.result?.source || '').toLowerCase();
+    if (type.startsWith('video') || type === 'queue_upload') return false;
+    if (type === 'audio' || type === 'audio_file') return true;
+    const name = String(job?.source_filename || job?.result?.filename || '');
+    if (/\.(mp4|mov|avi|mkv|webm|m4v|flv|wmv|mpe?g)$/i.test(name)) return false;
+    return /\.(mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i.test(name);
+};
+
 const stageLabel = (job, lang) => {
     const isZh = lang === 'zh';
+    const audioOnly = isAudioOnlySource(job);
     const labels = {
         upload: isZh ? '接收材料' : 'Receiving',
         queued: isZh ? '等待开始' : 'Waiting',
         resolving: isZh ? '解析链接' : 'Resolving link',
-        downloading: isZh ? '下载视频' : 'Downloading',
+        downloading: audioOnly
+            ? (isZh ? '下载音频' : 'Downloading audio')
+            : (isZh ? '下载视频' : 'Downloading video'),
         saving: isZh ? '保存来源' : 'Saving source',
-        audio: isZh ? '提取音频' : 'Extracting audio',
+        // Named in this map because the pipeline has this stage now; without it the
+        // card fell through to the generic status and a working cut read as stalled.
+        prepare_media: isZh ? '剪掉气口（要几分钟）' : 'Removing breath gaps (minutes)',
+        // "提取音频" from an audio file is the product telling the user it thinks
+        // they uploaded a video. It is still converting — just not extracting.
+        audio: audioOnly
+            ? (isZh ? '准备音频' : 'Preparing audio')
+            : (isZh ? '提取音频' : 'Extracting audio'),
         stt: isZh ? '语音转写' : 'Transcribing',
         transcript_ready: isZh ? '整理转录' : 'Transcript ready',
         summary: isZh ? '生成笔记' : 'Generating note',
@@ -239,7 +262,38 @@ const stageLabel = (job, lang) => {
     return labels[job?.stage] || statusLabel(job, lang);
 };
 
-const liveStageDetail = (job, lang) => {
+// Which task this one is behind, and how long it has been behind it.
+//
+// Recordings are processed one at a time, so most of "queued" is an ordinary
+// wait — but the card said the same words whether the queue was moving or not,
+// and a row of them on an idle machine was indistinguishable from a row of them
+// on a working one. Naming the task ahead and the time waited is what separates
+// them. It has to be the time, not a threshold: a lecture legitimately holds the
+// queue for hours, so nothing here can decide on the reader's behalf that a wait
+// has gone on too long.
+const queueWaitDetail = (job, lang, aheadName = '') => {
+    const wait = job?.metadata?.queue_wait;
+    const waitingFor = String(wait?.waiting_for || '').trim();
+    if (!waitingFor) return '';
+    const since = Date.parse(wait?.since || '');
+    const waited = Number.isFinite(since) ? fmtElapsed((Date.now() - since) / 1000) : '';
+    // The recording's own name, because that is what the reader recognises on
+    // this page. A task id identifies the right row to a developer and nothing
+    // at all to the person who queued five lectures; it is the fallback only
+    // when the task ahead is not one of the rows on screen.
+    const ahead = aheadName || waitingFor;
+    if (lang === 'zh') {
+        return `在等「${ahead}」处理完${waited ? `，已经等了 ${waited}` : ''}。一次只处理一个；前面那个要先剪掉气口再转写，素材长的话这一步就要几分钟。`;
+    }
+    return `Waiting for "${ahead}"${waited ? `, ${waited} so far` : ''}. One at a time; that task removes its breath gaps before transcribing, which takes minutes on long material.`;
+};
+
+const liveStageDetail = (job, lang, aheadName = '') => {
+    // Ahead of the snapshot's own line: the snapshot describes the step this task
+    // will run, which for a task that has not started is the least useful true
+    // thing on the card.
+    const waiting = queueWaitDetail(job, lang, aheadName);
+    if (waiting) return waiting;
     const snapshotStep = Array.isArray(job?.task_snapshot?.steps)
         ? job.task_snapshot.steps.find((step) => step?.id === job.task_snapshot?.current_step)
         : null;
@@ -250,7 +304,21 @@ const liveStageDetail = (job, lang) => {
     const byteText = loaded && total ? ` · ${loaded} / ${total}` : (loaded ? ` · ${loaded}` : '');
     if (progressMeta.message) return `${progressMeta.message}${byteText}`;
     if (normalizeTaskState(job) === TASK_STATE_QUEUED) {
-        return lang === 'zh' ? '已经加入队列，会按顺序开始处理。' : 'Queued and waiting for its turn.';
+        // Say why the wait can be long. One task runs at a time, and the task
+        // ahead now starts by re-encoding its whole recording to remove the
+        // breath gaps — minutes on a long video. "Queued" alone made a working
+        // queue look stalled.
+        return lang === 'zh'
+            ? '已经加入队列，会按顺序开始处理。前面那个任务要先剪掉气口再转写，素材长的话这一步要几分钟。'
+            : 'Queued and waiting for its turn. The task ahead removes its breath gaps before transcribing, which takes minutes on long material.';
+    }
+    if (job?.stage === 'prepare_media') {
+        const material = isAudioOnlySource(job)
+            ? (lang === 'zh' ? '录音' : 'recording')
+            : (lang === 'zh' ? '录像' : 'video');
+        return lang === 'zh'
+            ? `正在把${material}里的空白剪掉，之后的转写和笔记都基于剪好的那份。素材长的话要几分钟，没有百分比可报。`
+            : `Removing the quiet stretches from the ${material}; the transcript and note will both come from the shortened file. Minutes on long material, with no percentage to report.`;
     }
     return lang === 'zh' ? '进度会在这里持续更新，离开本页也不会中断任务。' : 'Progress keeps updating here; leaving this page will not stop the task.';
 };
@@ -281,87 +349,142 @@ const sourceLabel = (job, lang) => {
     return isZh ? '本地文件' : 'Local file';
 };
 
-const routeLabel = (job, lang) => {
-    const provider = String(
-        job?.metadata?.queue_options?.stt_provider
-        || job?.metadata?.stt_provider
-        || job?.result?.stt_provider
-        || ''
-    );
-    return sttProviderLabel(provider, lang) || (lang === 'zh' ? '按任务决定' : 'Task default');
-};
-
-const fileInfoLabel = (job) => {
+// Size and length, and for a link the platform it came from.
+//
+// The platform used to have a tile of its own, next to a column that read
+// "本地视频文件" on every card — the words were the same every time in an edition
+// whose material is local files, and they were squeezing the cut, which is
+// different on every recording. Folded in here the one case that carried real
+// information keeps it: where a downloaded video came from is not visible anywhere
+// else on the card, while "this is a local file" was already obvious from the row
+// above it.
+const fileInfoLabel = (job, lang) => {
     const sizeMb = Number(job?.source_file_size_mb || job?.metadata?.file_size_mb || 0) || 0;
     const durationSec = Number(job?.result?.audio_duration_seconds || job?.source_duration_seconds || job?.metadata?.duration_seconds || 0) || 0;
     const parts = [];
+    if ((job?.source_type || job?.result?.source || '') === 'video_link') parts.push(sourceLabel(job, lang));
     if (sizeMb) parts.push(fmtFileSize(sizeMb));
     if (durationSec) parts.push(fmtElapsed(durationSec));
     return parts.join(' · ') || '-';
 };
 
-const materialTypeLabel = (value, lang) => {
+// What the cut actually did to this recording, or why it did not.
+//
+// This replaced the "处理路线" tile, which said "本地转写" on every card in an
+// edition that only transcribes locally — a column of identical words. The cut is
+// the opposite: it is different per recording, it is the reason the result is
+// shorter than the upload, and it is the number worth seeing at a glance.
+// Where the cut file ended up, but only when that is not the ordinary outcome.
+//
+// Three states, and two of them are worth a sentence:
+//
+//   null  — an upload. There is no "beside the original" to deliver to, because
+//           the original FluentFlow holds *is* the copy. Worth saying once,
+//           because the owner's folder does not get the file and they will go
+//           looking for it there.
+//   true  — the in-place entry did what it always does. Silent: a line repeating
+//           it on every card is a column of the same words, and the name is the
+//           recording's own with a suffix. Nothing there to learn.
+//   false — it tried and could not. Loud, and with the reason, because a file the
+//           owner expected in their folder is not in it.
+//
+// What the earlier version got wrong was not "no line per card" — it was that
+// nothing anywhere said this happens at all, so the owner never knew to expect a
+// file. That belongs where they choose the entry, not on a hundred records.
+export const cutFileDelivery = (job, lang) => {
     const isZh = lang === 'zh';
-    const labels = {
-        course_transcript_file: isZh ? '课程字幕文件' : 'Course subtitle file',
-        course_material: isZh ? '课程材料' : 'Course material',
-        lecture_material: isZh ? '讲座材料' : 'Lecture material',
-        sharing_session_material: isZh ? '分享讨论材料' : 'Sharing session',
-        interview_material: isZh ? '访谈材料' : 'Interview material',
-        meeting_material: isZh ? '会议材料' : 'Meeting material',
-        research_material: isZh ? '研究材料' : 'Research material',
-        briefing_material: isZh ? '资料解读材料' : 'Briefing material',
-        training_material: isZh ? '培训材料' : 'Training material',
-        learning_material: isZh ? '学习材料' : 'Learning material',
-        course_video_pending_content: isZh ? '待转录课程视频' : 'Course video pending transcript',
-        lecture_video_pending_content: isZh ? '待转录讲座视频' : 'Lecture video pending transcript',
-        learning_material_pending_content: isZh ? '待判断学习材料' : 'Learning material pending transcript',
-        course_or_lecture_pending_content: isZh ? '学习材料' : 'Learning material',
-        course_notes: isZh ? '课程材料' : 'Course material',
-        lecture_notes: isZh ? '讲座材料' : 'Lecture material',
-        learning_notes: isZh ? '学习材料' : 'Learning material',
-        course: isZh ? '课程材料' : 'Course material',
-        lecture: isZh ? '讲座材料' : 'Lecture material',
-        interview: isZh ? '访谈材料' : 'Interview material',
-        meeting: isZh ? '会议材料' : 'Meeting material',
-        research: isZh ? '研究材料' : 'Research material',
-        career_talk: isZh ? '经验访谈' : 'Career talk',
-        product_training: isZh ? '产品培训' : 'Product training',
-    };
-    return labels[String(value || '').trim()] || String(value || '').trim();
-};
-
-const materialDecisionFromLog = (job) => {
-    const entries = job?.decision_log?.entries || job?.result?.decision_log?.entries || [];
-    if (!Array.isArray(entries)) return '';
-    const entry = entries.find((item) => {
-        const id = String(item?.id || '').toLowerCase();
-        const title = String(item?.title || '').toLowerCase();
-        return id === 'material_classification' || title.includes('判断材料类型') || title.includes('material classification');
-    });
-    const status = String(entry?.status || '').toLowerCase();
-    const decision = String(entry?.decision || '').trim();
-    if (!decision || status === 'pending' || decision === '待判断' || decision.toLowerCase() === 'pending') return '';
-    return decision;
-};
-
-const materialLabel = (job, lang) => {
-    const value = String(
-        job?.metadata?.material_type_label
-        || job?.metadata?.material_type
-        || job?.result?.material_type
-        || job?.result?.processing_plan?.material?.type
-        || job?.result?.processing_plan?.goal?.primary
-        || ''
-    ).trim();
-    if (value) return materialTypeLabel(value, lang);
-    const loggedDecision = materialDecisionFromLog(job);
-    if (loggedDecision) return loggedDecision;
-    const completed = normalizeTaskState(job) === TASK_STATE_COMPLETED || normalizeTaskState(job) === TASK_STATE_CACHED_ONLY;
-    if (completed && (job?.result || job?.summary_status === 'completed')) {
-        return lang === 'zh' ? '学习材料' : 'Learning material';
+    const state = job?.result?.debreath;
+    if (!state || typeof state !== 'object') return null;
+    // Nothing was rendered, so there was nothing to put anywhere.
+    if (state.used_for_transcription === false || state.already_cut || state.not_worth_rendering) return null;
+    if (!state.rendered && state.status !== 'completed') return null;
+    if (state.delivered === false) {
+        return {
+            tone: 'error',
+            text: state.delivery_error || (isZh
+                ? '剪后文件没能存到原文件旁边。任务里这份还在，可以下载。'
+                : 'The cut file could not be saved next to the original. The task still has it, and it can be downloaded.'),
+        };
     }
-    return lang === 'zh' ? '待判断' : 'Pending';
+    // Positive evidence, not a missing field. An in-place task always records the
+    // outcome either way, so absence could equally mean "recorded before this was
+    // built" — and telling the owner an old record was an upload when it was not
+    // sends them looking in the wrong place. A task with no folder behind it is
+    // the one that really has nowhere to deliver to.
+    if (state.delivered === undefined || state.delivered === null) {
+        if (job?.metadata?.folder_intake) return null;
+        return {
+            tone: 'note',
+            text: isZh
+                ? '这份是上传处理的，剪后文件留在应用里，没有进你的文件夹——可以从这里下载。'
+                : 'This one was uploaded, so the cut file stayed in the app rather than going into your folder — download it here.',
+        };
+    }
+    return null;
+};
+
+export const debreathTile = (job, lang) => {
+    const isZh = lang === 'zh';
+    const state = job?.result?.debreath;
+    // Absence means never cut. It has to stay distinguishable from "cut and found
+    // nothing", which is why the list payload carries this block at all: without it
+    // a freshly cut task reported "未剪" on this very card.
+    if (!state || typeof state !== 'object') {
+        return {value: isZh ? '未剪（旧任务）' : 'Not cut (older task)'};
+    }
+    const plan = state.plan || {};
+    const cuts = Number(plan.cut_count) || 0;
+    const removed = Number(plan.removed_seconds) || 0;
+    if (state.status === 'running') return {value: isZh ? '正在剪…' : 'Cutting…'};
+    if (state.status === 'failed') return {value: isZh ? '没成功' : 'Failed'};
+    if (state.not_worth_rendering) {
+        // Measured, not declined: there was almost nothing to remove, so the file was
+        // left alone rather than re-exported whole for a fraction of a second.
+        return {value: isZh ? '几乎没空白可剪' : 'Almost nothing to cut'};
+    }
+    if (state.already_cut) {
+        // Not the same answer as declining. Declining is bad news — the note is about
+        // the recording. This is not: the file arrived already shortened, so the pass
+        // was skipped to save a pointless re-encode.
+        return {value: isZh ? '本来就是剪后版本' : 'Already cut'};
+    }
+    if (state.used_for_transcription === false && state.not_used_reason) {
+        // The cut declined and the recording was transcribed. Saying "cut" here
+        // would be the one wrong answer, because the note is not about a cut file.
+        // Why it declined is a sentence, and a sentence truncated into a tile is
+        // worth less than nothing — it lives on the task's own page.
+        return {value: isZh ? '按原片处理' : 'Used the original'};
+    }
+    if (!cuts) return {value: isZh ? '没有可剪的空白' : 'Nothing to cut'};
+    const removedText = fmtDurationCompact(removed);
+    const value = isZh ? `剪掉 ${cuts} 处，省 ${removedText}` : `${cuts} cuts, ${removedText} saved`;
+    // No line for the file landing beside the original: that is the normal outcome,
+    // and a card that narrates the normal outcome is noise. The hint below is kept
+    // for the outcomes that are *not* obvious from the numbers.
+    if (state.render_verified === false) {
+        return {value, hint: isZh ? '没通过自检' : 'Failed its own check'};
+    }
+    return {value};
+};
+
+// The note, in one phrase. It is what the task exists to produce, so its state
+// belongs on the card — the tile it replaced ("判断材料类型") reported an internal
+// classification that changes nothing the user does next.
+export const noteTileValue = (job, lang) => {
+    const isZh = lang === 'zh';
+    const result = job?.result || {};
+    const chars = String(result.summary_markdown || '').trim().length;
+    if (chars) {
+        const fromCut = result.summary_written_from === 'debreath_media_note';
+        const base = isZh ? `${chars} 字` : `${chars} chars`;
+        return fromCut
+            ? (isZh ? `${base}（据剪后版本）` : `${base} (from the cut version)`)
+            : base;
+    }
+    if (result.summary_status === 'failed' || result.summary_error) return isZh ? '没生成' : 'Not written';
+    if (result.summary_skipped) return isZh ? '已跳过' : 'Skipped';
+    if (result.summary_status === 'pending') return isZh ? '正在写…' : 'Being written…';
+    return isZh ? '等处理' : 'Pending';
 };
 
 const statePillClass = (state) => {
@@ -414,7 +537,7 @@ const QueueUploadBanner = ({upload, lang, onCancel}) => {
     );
 };
 
-const AgentTaskCard = ({job, lang, cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, onCancel, onDelete, onOpenResult, onRetry}) => {
+const AgentTaskCard = ({job, lang, aheadName = '', retryError = '', cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onRetry}) => {
     const taskId = taskIdForJob(job);
     const state = normalizeTaskState(job);
     const live = isLiveTask(job);
@@ -432,7 +555,7 @@ const AgentTaskCard = ({job, lang, cancellingTaskId, deletingTaskId, openingTask
         ? friendlyTaskError(job?.error_reason || job?.result?.summary_error || '', lang)
         : completed
             ? (lang === 'zh' ? '处理完成，可以打开结果继续校对、下载或重生笔记。' : 'Done. Open the result to review, download, or regenerate notes.')
-            : liveStageDetail(job, lang);
+            : liveStageDetail(job, lang, aheadName);
     const failedProgressLabel = state === TASK_STATE_CANCELLED
         ? (lang === 'zh' ? '已取消' : 'Cancelled')
         : (lang === 'zh' ? '未完成' : 'Incomplete');
@@ -443,11 +566,17 @@ const AgentTaskCard = ({job, lang, cancellingTaskId, deletingTaskId, openingTask
             : `${progress}%`;
     const subtitle = completed ? taskProcessingTimeLabel(job, lang) : stageLabel(job, lang);
     const metaItems = [
-        {label: lang === 'zh' ? '来源' : 'Source', value: sourceLabel(job, lang)},
-        {label: lang === 'zh' ? '处理路线' : 'Route', value: routeLabel(job, lang)},
-        {label: lang === 'zh' ? '文件信息' : 'File', value: fileInfoLabel(job)},
-        {label: lang === 'zh' ? '判断材料类型' : 'Material', value: materialLabel(job, lang)},
+        {label: lang === 'zh' ? '文件信息' : 'File', value: fileInfoLabel(job, lang)},
+        // Three, not four, and the two that are gone were both columns of the same
+        // words: "处理路线" said 本地转写 on every card, "判断材料类型" reported an
+        // internal classification, and "来源" said 本地视频文件 for material that is
+        // always a local file. Four tiles of equal width left the cut truncated at
+        // "剪掉 639 处，省 2m …" — the one number that differs per recording was the
+        // one being cut off to make room for words that never changed.
+        {label: lang === 'zh' ? '去气口' : 'Breath gaps', ...debreathTile(job, lang)},
+        {label: lang === 'zh' ? '笔记' : 'Note', value: noteTileValue(job, lang)},
     ];
+    const delivery = cutFileDelivery(job, lang);
     return (
         <article className="rounded-[24px] border border-[#dedada] bg-white p-5 shadow-[0_18px_44px_-38px_rgba(17,17,17,.45)] dark:border-white/[0.10] dark:bg-white/[0.055] dark:shadow-none">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -523,11 +652,46 @@ const AgentTaskCard = ({job, lang, cancellingTaskId, deletingTaskId, openingTask
                     <span className="min-w-0 break-words">{detail}</span>
                 </p>
             ) : null}
-            <div className="mt-4 grid gap-2 md:grid-cols-4">
+            {/* Why the last "submit again" did not take. It names the recording's
+                own path when the file has moved, which is the one thing this
+                product cannot work out for the reader. */}
+            {retryError ? (
+                <p data-testid="retry-error" className="mt-3 inline-flex max-w-full items-start gap-2 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold leading-5 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+                    <AlertCircle className="mt-0.5 size-4 shrink-0" strokeWidth={2.15}/>
+                    <span className="min-w-0 break-words">{retryError}</span>
+                </p>
+            ) : null}
+            {/* Only the two states worth a sentence. A cut file that landed where
+                it belongs says nothing, so a card with words here is a card with
+                something to do. */}
+            {delivery ? (
+                <div className={`mt-3 flex flex-wrap items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px] font-semibold leading-5 ${
+                    delivery.tone === 'error'
+                        ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200'
+                        : 'border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]'
+                }`}>
+                    <AlertCircle className="mt-0.5 size-4 shrink-0" strokeWidth={2.15}/>
+                    <span className="min-w-0 flex-1 break-words">{delivery.text}</span>
+                    {job?.result?.artifacts?.debreath_media && (
+                        <button
+                            type="button"
+                            disabled={downloadingTaskId === taskId}
+                            onClick={() => onDownloadCut?.(job)}
+                            className="ml-auto inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[10px] border border-current/25 bg-white/70 px-2.5 text-[12px] font-extrabold transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/[0.10] dark:hover:bg-white/[0.16]"
+                        >
+                            {lang === 'zh' ? '下载剪后文件' : 'Download the cut file'}
+                        </button>
+                    )}
+                </div>
+            ) : null}
+            <div className="mt-4 grid gap-2 md:grid-cols-3">
                 {metaItems.map((item) => (
                     <div key={item.label} className="min-w-0 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-2 dark:border-white/[0.10] dark:bg-white/[0.04]">
                         <p className="text-[11px] font-extrabold text-[#85868c] dark:text-white/55">{item.label}</p>
                         <p className="mt-1 truncate text-[13px] font-extrabold text-[#111111] dark:text-white" title={item.value}>{item.value}</p>
+                        {item.hint ? (
+                            <p className="mt-0.5 truncate text-[11px] font-semibold text-[#85868c] dark:text-white/45" title={item.hint}>{item.hint}</p>
+                        ) : null}
                     </div>
                 ))}
             </div>
@@ -541,7 +705,7 @@ const AgentTasks = () => {
     // longer keeps a private jobs state, warm cache, or writes the cache
     // (plan Stage 3b).
     const {currentJob, setCurrentJob, setLastResult, addToHistory, removeFromHistory, runtimeConfig, tasks: jobs, ingestJobs, markCancelled, revertCancelled, restoreTask, abortPendingUpload} = useApp();
-    const {getJob, cancelJob, deleteJob, retryJob, createVideoSourceJob, fetchJobSourceFile, enqueueProcessFiles} = useApi();
+    const {getJob, cancelJob, deleteJob, retryJob, createVideoSourceJob, fetchJobSourceFile, fetchJobArtifactFile, enqueueProcessFiles} = useApi();
     const location = useLocation();
     const navigate = useNavigate();
     const seededJob = location.state?.job && typeof location.state.job === 'object' ? location.state.job : null;
@@ -549,6 +713,12 @@ const AgentTasks = () => {
     const [openingTaskId, setOpeningTaskId] = useState('');
     const [deletingTaskId, setDeletingTaskId] = useState('');
     const [retryingTaskId, setRetryingTaskId] = useState('');
+    // A refusal to re-run belongs on the card that was refused, not in the page
+    // banner: that banner is cleared by every successful poll, and this page polls
+    // while any task is live, so the reason a retry did not happen was wiped
+    // before it could be read. The button just spun and nothing appeared.
+    const [retryError, setRetryError] = useState(null);
+    const [downloadingTaskId, setDownloadingTaskId] = useState('');
     const queueUploadJob = currentJob?.queueUpload ? currentJob : null;
     const currentJobRecords = useMemo(() => jobsFromCurrentJob(currentJob), [currentJob]);
     // The shared list already reflects history + cache; merge in the live
@@ -557,6 +727,20 @@ const AgentTasks = () => {
         mergeJobs(currentJobRecords, jobs).slice(0, 30)
     ), [currentJobRecords, jobs]);
     const liveJobs = useMemo(() => displayJobs.filter(isLiveTask), [displayJobs]);
+    // The name of whichever task a waiting one is behind. Looked up here because
+    // only the list knows both rows; the waiting job's own record carries the id
+    // and nothing a reader would recognise.
+    const titleByTaskId = useMemo(() => {
+        const byId = new Map();
+        displayJobs.forEach((job) => {
+            const id = taskIdForJob(job);
+            if (id) byId.set(id, jobDisplayTitle(job, lang));
+        });
+        return byId;
+    }, [displayJobs, lang]);
+    const queueAheadName = (job) => (
+        titleByTaskId.get(String(job?.metadata?.queue_wait?.waiting_for || '').trim()) || ''
+    );
     const hasLiveOrUploadingJobs = Boolean(queueUploadJob) || liveJobs.length > 0;
     const queuedCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_QUEUED).length;
     const runningCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_RUNNING || normalizeTaskState(job) === TASK_STATE_UPLOADING).length;
@@ -666,6 +850,7 @@ const AgentTasks = () => {
         if (!taskId || isLiveTask(job)) return;
         setRetryingTaskId(taskId);
         setError(null);
+        setRetryError(null);
         try {
             const options = retryOptionsForJob(job);
             const sourceKind = mediaSourceForJob(job);
@@ -691,7 +876,7 @@ const AgentTasks = () => {
             }
             throw new Error(lang === 'zh' ? '这条记录的来源暂不支持直接重新提交，请从开始处理页重新提交。' : 'This record source cannot be resubmitted directly yet. Submit it again from the start page.');
         } catch (err) {
-            setError(friendlyTaskError(err.message || String(err), lang));
+            setRetryError({taskId, message: friendlyTaskError(err.message || String(err), lang)});
         } finally {
             setRetryingTaskId('');
         }
@@ -705,6 +890,28 @@ const AgentTasks = () => {
         } catch (err) {
             if (err.status !== 404 || primaryOptions.sttProvider === 'local') throw err;
             return getJob(taskId, {sttProvider: 'local'});
+        }
+    };
+
+    // Hand over the cut file itself.
+    //
+    // Offered only on the two cards that say something: one whose cut file stayed
+    // in the app because the drop had no folder to go back to, and one whose copy
+    // beside the original failed. On every other card the file is already in the
+    // owner's folder and a download button would be offering them what they have.
+    const downloadCutFile = async (job) => {
+        const taskId = taskIdForJob(job);
+        const artifact = job?.result?.artifacts?.debreath_media;
+        if (!taskId || !artifact) return;
+        const name = String(artifact.filename || '').split('/').pop() || `${taskId}_debreath.mp4`;
+        setDownloadingTaskId(taskId);
+        try {
+            const file = await fetchJobArtifactFile(taskId, 'debreath_media', name, {sttProvider: 'local'});
+            downloadBrowserFile(file, name);
+        } catch (error) {
+            window.alert(error?.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable'));
+        } finally {
+            setDownloadingTaskId('');
         }
     };
 
@@ -812,12 +1019,16 @@ const AgentTasks = () => {
                             key={taskIdForJob(job)}
                             job={job}
                             lang={lang}
+                            aheadName={queueAheadName(job)}
+                            retryError={retryError?.taskId === taskIdForJob(job) ? retryError.message : ''}
                             cancellingTaskId={cancellingTaskId}
                             deletingTaskId={deletingTaskId}
                             openingTaskId={openingTaskId}
                             retryingTaskId={retryingTaskId}
                             onCancel={cancelLiveJob}
                             onDelete={deleteTerminalJob}
+                            downloadingTaskId={downloadingTaskId}
+                            onDownloadCut={downloadCutFile}
                             onOpenResult={openResult}
                             onRetry={retryTerminalJob}
                         />

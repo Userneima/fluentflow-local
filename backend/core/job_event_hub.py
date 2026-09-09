@@ -61,12 +61,20 @@ class JobEventHub:
             except asyncio.QueueFull:
                 pass
 
-    async def start(self, task_id: str, runner: Any) -> None:
+    async def start(self, task_id: str, runner: Any) -> bool:
+        """Start the runner for this task, and say whether one was created.
+
+        A task id that is already running is left alone, and the answer is False.
+        Callers that hand the runner something to release afterwards — the local
+        edition's serial chain does — need to know that nothing will run it, or
+        they wait on a release that can never come.
+        """
         async with self._lock:
             existing = self._tasks.get(task_id)
             if existing and not existing.done():
-                return
+                return False
             self._tasks[task_id] = asyncio.create_task(runner())
+            return True
 
     async def subscribe(self, task_id: str, since: int = 0) -> AsyncGenerator[str, None]:
         from backend.core.job_store import get_job

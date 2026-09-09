@@ -7,9 +7,11 @@ from fastapi.responses import FileResponse
 from backend.core.frontend_paths import local_frontend_index_path
 
 
+# NOTE: "agent" is NOT an API prefix — /agent is the processing-records SPA
+# page. The Agent API lives under /agent/v1 only, blocked separately below so
+# a direct visit or refresh of /agent still serves the app.
 LOCAL_API_PREFIXES = frozenset(
     {
-        "agent",
         "credentials",
         "events",
         "export-lark",
@@ -77,9 +79,14 @@ def create_local_spa_router(index_path: Optional[Path] = None) -> APIRouter:
 
     @router.get("/{client_path:path}", include_in_schema=False)
     def serve_frontend_route(client_path: str) -> FileResponse:
-        first_segment = (client_path or "").split("/", 1)[0]
+        path = client_path or ""
+        first_segment = path.split("/", 1)[0]
         blocked_prefixes = LOCAL_API_PREFIXES | RESERVED_PREFIXES | {"assets"}
         if first_segment in blocked_prefixes or "." in first_segment:
+            raise HTTPException(status_code=404, detail="Not Found")
+        # /agent is the SPA processing-records page; only the Agent API
+        # namespace /agent/v1 is an API surface.
+        if path == "agent/v1" or path.startswith("agent/v1/"):
             raise HTTPException(status_code=404, detail="Not Found")
         return serve_index()
 

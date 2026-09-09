@@ -26,6 +26,9 @@ export const LOCAL_FRONTEND_CAPABILITIES = Object.freeze({
     localFeishuExport: true,
     videoLinkResolution: true,
     jobCancellation: true,
+    // Mechanical silence removal on a finished task's own source file. Local
+    // because ffmpeg and the file are both on this machine; no model, no upload.
+    breathGapRemoval: true,
     agentApi: true,
 });
 

@@ -1,0 +1,12 @@
+# NVIDIA runtime DLLs used by CTranslate2/faster-whisper on Windows.
+#
+# Keep these in the project virtual environment instead of relying on a
+# machine-wide CUDA Toolkit. The NVIDIA display driver is still required.
+#
+# cuDNN 9 pairs with the CUDA 12 CTranslate2 wheel that faster-whisper 1.2
+# installs; CTranslate2 dropped cuDNN 8 in 4.5. If these ever have to go back
+# to cuDNN 8, ctranslate2 has to be pinned to 4.4.0 in the same change, and
+# `_REQUIRED_DLLS` in `backend/core/windows_gpu_runtime.py` has to name
+# cudnn64_8.dll again.
+nvidia-cublas-cu12>=12.4,<13
+nvidia-cudnn-cu12>=9,<10

@@ -9,6 +9,7 @@ import {
 import {
     createTaskId,
     effectiveSttProvider,
+    submittedSttProvider,
     fileNameStem,
     fmtFileSize,
     friendlyTaskError,
@@ -16,6 +17,7 @@ import {
     historyEntryToResult,
     jobToCurrentJob,
     larkExportRouteFromSettings,
+    normalizeSourceMode,
     normalizeSttModel,
     resultToHistoryEntry,
     timeAgo,
@@ -46,6 +48,11 @@ const platformItems = [
 // trial behavior and direct-upload options arrive through the route wrapper,
 // so the local bundle does not carry their API calls or state transitions.
 const MediaText = ({hosted = null}) => {
+    // Whether the service behind this page is on the same machine as the files.
+    // The system file dialog and the "where does this dropped file live" lookup
+    // are both local-edition routes; a hosted server has neither, and asking it
+    // would break the only way in.
+    const canReadThisMachine = !hosted;
     const {t, lang} = useI18n();
     const {
         history,
@@ -65,16 +72,27 @@ const MediaText = ({hosted = null}) => {
         summarizeTranscriptFile,
         cancelJob,
         checkHealth,
+        chooseLocalMedia,
+        chooseLocalFolder,
+        processLocalFolder,
+        locateDroppedFile,
+        processLocalPaths,
     } = useApi();
     const {loadSettings} = useSettings();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
+    // How many files were just dropped that this machine could not place. Says
+    // what is different about them, once, at the moment it becomes true.
+    const [droppedWithoutPath, setDroppedWithoutPath] = useState(0);
     const mode = searchParams.get('mode') === 'subtitle' ? 'subtitle' : 'media';
-    const [sourceMode, setSourceMode] = useState('link');
+    // Which way in this page opens on, from settings. Someone whose material is
+    // always files on this machine was clicking past the link box every time.
+    const [sourceMode, setSourceMode] = useState(() => normalizeSourceMode(loadSettings().defaultSourceMode));
     const [videoLinkInput, setVideoLinkInput] = useState('');
     const [uploadError, setUploadError] = useState(null);
     const [processingResult, setProcessingResult] = useState(null);
     const [submitting, setSubmitting] = useState(false);
+    const [choosing, setChoosing] = useState(false);
     const fileInputRef = useRef(null);
     const subtitleInputRef = useRef(null);
     const abortRef = useRef(null);
@@ -147,8 +165,11 @@ const MediaText = ({hosted = null}) => {
         setLastResult(null);
         const settings = loadSettings();
         const sttModel = normalizeSttModel(settings.sttModel);
-        const sttProvider = effectiveSttProvider(settings, runtimeConfig);
-        if (!(await ensureSttReady({sttProvider, setUploadError, lang}))) return;
+        // Sent only when the user actually chose an engine; null lets the
+        // server apply its own default.
+        const sttProvider = submittedSttProvider(settings, runtimeConfig);
+        // Checked against the engine that will really run.
+        if (!(await ensureSttReady({sttProvider: effectiveSttProvider(settings, runtimeConfig), setUploadError, lang}))) return;
 
         if (await hosted?.submitMediaFiles?.({
             selectedFiles,
@@ -257,6 +278,174 @@ const MediaText = ({hosted = null}) => {
 
     };
 
+    // Pick a recording through the machine's own dialog instead of the browser's.
+    //
+    // The browser's picker hands this page bytes and a name, never the folder, so
+    // an uploaded recording has no "next to the original" for its cut version to
+    // land in. The system dialog returns a real path: the file is then read where
+    // it is — no gigabyte copied into the store first — and the cut version is
+    // written beside it. Local edition only; if the dialog is unavailable the
+    // backend says so and the ordinary upload above still works.
+    // Queue recordings this machine can name by path: read where they are, no copy
+    // into the store, and the cut version written beside the original. Shared by
+    // the picker and by a drop whose file was found on disk, because from here on
+    // the two are the same thing — a path.
+    const queueLocalPaths = async (paths) => {
+        // Every task queued here spends one call of the local Claude subscription
+        // automatically. One file is the ordinary flow; thirty at once is a
+        // different order of magnitude of someone's allowance, so it is confirmed.
+        if (paths.length > 1) {
+            const confirmText = lang === 'zh'
+                ? `选了 ${paths.length} 个文件。每个都会自动去气口、转写，并用一次 Claude 额度写笔记。继续吗？`
+                : `${paths.length} files selected. Each one is cut, transcribed, and gets a note written with one call of your Claude allowance. Continue?`;
+            if (!window.confirm(confirmText)) return null;
+        }
+        const settings = loadSettings();
+        return processLocalPaths(paths, {
+            skipSummary: !!settings.skipAiSummary,
+            sttModel: normalizeSttModel(settings.sttModel),
+            sttSpeed: settings.sttSpeed || 'balanced',
+            speakerDiarization: !!settings.speakerDiarization,
+            voiceEnhance: !!settings.voiceEnhance,
+        });
+    };
+
+    // A drop, taken as far as this machine can take it.
+    //
+    // The browser gives the page a dropped file's bytes and three labels, never
+    // its folder. Uploading is what that leaves — a second copy of a gigabyte in
+    // the store, and no "beside the original" for the cut file. But the service
+    // is on the same machine as the file, so before uploading anything the labels
+    // go out and it looks in the folders it has already been sent to. Found means
+    // the copy never happens; not found means the upload, which is what a drop
+    // did before this existed.
+    const handleDroppedMedia = async (files) => {
+        // Only this machine can be asked where a file lives. A server has no
+        // business being asked, and no route to answer with.
+        if (!canReadThisMachine) {
+            startMediaFiles(files);
+            return;
+        }
+        const located = await Promise.all(files.map((file) => locateDroppedFile?.(file)));
+        if (!located.every((hit) => hit?.path)) {
+            setDroppedWithoutPath(files.length);
+            startMediaFiles(files);
+            return;
+        }
+        setDroppedWithoutPath(0);
+        try {
+            const queued = await queueLocalPaths(located.map((hit) => hit.path));
+            if (queued) navigate('/agent');
+        } catch (error) {
+            setUploadError(error?.message || (lang === 'zh' ? '处理失败' : 'Could not start processing'));
+        }
+    };
+
+    const handleChooseFromComputer = async () => {
+        if (choosing || submitting) return;
+        setChoosing(true);
+        setUploadError(null);
+        try {
+            const chosen = await chooseLocalMedia({prompt: lang === 'zh' ? '选择要做笔记的录像' : 'Choose a recording'});
+            if (chosen?.cancelled) return;
+            const files = Array.isArray(chosen?.files) ? chosen.files : [];
+            const usable = files.filter((item) => item?.usable && item?.path);
+            const rejected = files.filter((item) => item && !item.usable);
+            if (!usable.length) {
+                setUploadError(rejected[0]?.reason || (lang === 'zh' ? '没有可处理的文件。' : 'Nothing usable was chosen.'));
+                return;
+            }
+            // The system dialog allows multiple selections, and every task queued here
+            // spends one call of the local Claude subscription automatically. One file
+            // is the flow the owner asked for; thirty at once is a different order of
+            // magnitude of someone's allowance, so the count is confirmed first.
+            setDroppedWithoutPath(0);
+            const queued = await queueLocalPaths(usable.map((item) => item.path));
+            if (!queued) return;
+            if (rejected.length) {
+                // Partly usable is a real outcome: say what was left out rather
+                // than silently processing a subset.
+                setUploadError(
+                    lang === 'zh'
+                        ? `已开始处理 ${queued?.count || 0} 个；跳过 ${rejected.length} 个：${rejected[0]?.reason || ''}`
+                        : `Started ${queued?.count || 0}; skipped ${rejected.length}: ${rejected[0]?.reason || ''}`
+                );
+            }
+            navigate('/agent');
+        } catch (error) {
+            setUploadError(error?.message || (lang === 'zh' ? '选择文件失败' : 'Could not choose a file'));
+        } finally {
+            setChoosing(false);
+        }
+    };
+
+    // The entry this edition is actually for: the recordings are already on the
+    // disk, in a folder. Uploading a morning's material one file at a time is
+    // asking someone to copy gigabytes they already have, and the browser's own
+    // picker cannot hand over a folder at all.
+    //
+    // The folder is chosen and its contents reported in one call, because the
+    // count is what the decision is about — a folder is however many Claude calls
+    // it has recordings in it, and that has to be on screen before the button,
+    // not discovered afterwards.
+    const handleChooseFolder = async () => {
+        if (choosing || submitting) return;
+        setChoosing(true);
+        setUploadError(null);
+        try {
+            const chosen = await chooseLocalFolder({
+                prompt: lang === 'zh' ? '选择装着录像的文件夹' : 'Choose a folder of recordings',
+            });
+            if (chosen?.cancelled) return;
+            const count = Number(chosen?.count) || 0;
+            if (!count) {
+                setUploadError(lang === 'zh'
+                    ? '这个文件夹里没有可以处理的录音或录像。'
+                    : 'There is nothing in that folder this can process.');
+                return;
+            }
+            // What was left out, said before the run rather than discovered in the
+            // records afterwards. A second pass over a folder skips what the first
+            // one produced, and that is the number that explains "I chose ten and
+            // it started six".
+            const skipped = [];
+            if (chosen.skipped_cut_files) {
+                skipped.push(lang === 'zh'
+                    ? `${chosen.skipped_cut_files} 个是上次剪出来的成品，跳过`
+                    : `${chosen.skipped_cut_files} already cut by a previous pass, skipped`);
+            }
+            if (chosen.skipped_unsupported) {
+                skipped.push(lang === 'zh'
+                    ? `${chosen.skipped_unsupported} 个不是音视频，跳过`
+                    : `${chosen.skipped_unsupported} not audio or video, skipped`);
+            }
+            if (chosen.truncated) {
+                skipped.push(lang === 'zh'
+                    ? `一次最多 ${chosen.limit} 个，这次只取前 ${count} 个`
+                    : `at most ${chosen.limit} at a time, so only the first ${count} are taken`);
+            }
+            const tail = skipped.length ? `\n（${skipped.join('；')}）` : '';
+            const confirmText = lang === 'zh'
+                ? `要处理这个文件夹里的 ${count} 个录像吗？每个都会自动去气口、转写，并用一次 Claude 额度写笔记。${tail}`
+                : `Process ${count} recordings in this folder? Each is cut, transcribed, and gets a note written with one call of your Claude allowance.${tail}`;
+            if (!window.confirm(confirmText)) return;
+            const settings = loadSettings();
+            setDroppedWithoutPath(0);
+            await processLocalFolder(chosen.path, {
+                skipSummary: !!settings.skipAiSummary,
+                sttModel: normalizeSttModel(settings.sttModel),
+                sttSpeed: settings.sttSpeed || 'balanced',
+                speakerDiarization: !!settings.speakerDiarization,
+                voiceEnhance: !!settings.voiceEnhance,
+            });
+            navigate('/agent');
+        } catch (error) {
+            setUploadError(error?.message || (lang === 'zh' ? '选择文件夹失败' : 'Could not choose a folder'));
+        } finally {
+            setChoosing(false);
+        }
+    };
+
     const handleVideoLinkSubmit = async () => {
         if (hosted?.blockVideoLink?.({setUploadError, lang})) return;
         const input = videoLinkInput.trim();
@@ -270,8 +459,11 @@ const MediaText = ({hosted = null}) => {
         setLastSourceFile(null);
         const settings = loadSettings();
         const sttModel = normalizeSttModel(settings.sttModel);
-        const sttProvider = effectiveSttProvider(settings, runtimeConfig);
-        if (!(await ensureSttReady({sttProvider, setUploadError, lang}))) return;
+        // Sent only when the user actually chose an engine; null lets the
+        // server apply its own default.
+        const sttProvider = submittedSttProvider(settings, runtimeConfig);
+        // Checked against the engine that will really run.
+        if (!(await ensureSttReady({sttProvider: effectiveSttProvider(settings, runtimeConfig), setUploadError, lang}))) return;
         const ac = new AbortController();
         abortRef.current = ac;
         setSubmitting(true);
@@ -379,7 +571,7 @@ const MediaText = ({hosted = null}) => {
         if (mode === 'subtitle' || (files.length === 1 && transcriptExts.test(files[0].name))) {
             handleSubtitleSelect(files);
         } else {
-            startMediaFiles(files);
+            handleDroppedMedia(files);
         }
     };
 
@@ -487,14 +679,52 @@ const MediaText = ({hosted = null}) => {
                                         />
                                     </div>
                                 ) : (
+                                    // Clicking opens the system dialog rather than
+                                    // the browser's, on the edition that has one. A
+                                    // server does not: its file dialog would open on
+                                    // the server's own desktop, so the hosted product
+                                    // keeps the browser picker this used to open.
                                     <button
                                         type="button"
-                                        onClick={() => fileInputRef.current?.click()}
-                                        className="flex min-h-[180px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
+                                        onClick={canReadThisMachine ? handleChooseFromComputer : () => fileInputRef.current?.click()}
+                                        disabled={submitting || choosing}
+                                        className="flex min-h-[180px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
                                     >
-                                        <SvgIcon name="upload-file" className="mb-3 size-8 text-[#111111] dark:text-white"/>
+                                        <SvgIcon name={choosing ? 'sync' : 'upload-file'} className={`mb-3 size-8 text-[#111111] dark:text-white ${choosing ? 'animate-spin' : ''}`}/>
                                         <span className="text-lg font-extrabold">{lang === 'zh' ? '拖放或选择音视频文件' : 'Drop or choose media files'}</span>
                                         <span className="mt-2 text-sm font-semibold text-[#777] dark:text-white/55">MP4 / MOV / MP3 / WAV / M4A</span>
+                                        {/* Said once, here, where the choice is made.
+                                            The product has always put the cut file in
+                                            the owner's folder and has never told them
+                                            so — the only place it was written was the
+                                            hover text of a button that no longer
+                                            exists. Repeating it on every processing
+                                            record instead would be a column of the
+                                            same words; this is the moment it decides
+                                            anything. */}
+                                        <span className="mt-3 max-w-[46ch] text-[13px] font-semibold leading-relaxed text-[#8a8a8a] dark:text-white/45">
+                                            {lang === 'zh'
+                                                ? '剪掉气口后的视频会存回原片旁边，原片不动。拖进来的文件如果认不出位置，就只能留在应用里，到时候会说明。'
+                                                : 'The de-breathed video is saved next to the original, which is left untouched. A dropped file this machine cannot place stays in the app instead, and says so.'}
+                                        </span>
+                                    </button>
+                                )}
+
+                                {/* The folder entry, next to the file one rather
+                                    than inside it: choosing one recording and
+                                    choosing a morning's worth are different
+                                    decisions, and only the second one needs the
+                                    count confirmed. Local edition only — a server
+                                    asked for a folder would read its own disk. */}
+                                {sourceMode !== 'link' && canReadThisMachine && (
+                                    <button
+                                        type="button"
+                                        onClick={handleChooseFolder}
+                                        disabled={submitting || choosing}
+                                        className="mt-3 inline-flex h-12 w-full items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] transition hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]"
+                                    >
+                                        <SvgIcon name="folder" className="size-4"/>
+                                        {lang === 'zh' ? '处理整个文件夹' : 'Process a whole folder'}
                                     </button>
                                 )}
                             </div>
@@ -513,12 +743,6 @@ const MediaText = ({hosted = null}) => {
                         )}
 
                         <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-end">
-                            {mode === 'media' && sourceMode === 'upload' && (
-                                <button type="button" onClick={() => fileInputRef.current?.click()} disabled={submitting} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
-                                    <SvgIcon name="upload-file" className="size-4"/>
-                                    {lang === 'zh' ? '选择文件' : 'Choose files'}
-                                </button>
-                            )}
                             {mode === 'subtitle' && (
                                 <button type="button" onClick={() => subtitleInputRef.current?.click()} disabled={submitting} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
                                     <SvgIcon name="subtitles" className="size-4"/>
@@ -526,13 +750,26 @@ const MediaText = ({hosted = null}) => {
                                 </button>
                             )}
                             {mode === 'media' && sourceMode === 'link' && (
-                                <button type="button" onClick={handleVideoLinkSubmit} disabled={submitting} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] bg-[#111111] px-7 text-sm font-extrabold text-white hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-[#111111] dark:hover:bg-[#e8e8e8]">
+                                <button type="button" onClick={handleVideoLinkSubmit} disabled={submitting} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-7 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
                                     {submitting ? <SvgIcon name="sync" className="size-4 animate-spin"/> : <SvgIcon name="arrow-right" className="size-4"/>}
                                     {lang === 'zh' ? '开始生成笔记' : 'Start'}
                                 </button>
                             )}
                         </div>
 
+                        {/* Only when it is true, and only about the files it is true
+                            of. A drop this machine could place is silent, because
+                            nothing about it is different. */}
+                        {droppedWithoutPath > 0 && (
+                            <div className="mt-5 flex items-start gap-2 rounded-[16px] border border-[#f5c86b] bg-[#fffaf0] px-4 py-3 text-sm font-semibold leading-relaxed text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]">
+                            <SvgIcon name="info" className="mt-0.5 size-4 shrink-0"/>
+                            <p>
+                                {lang === 'zh'
+                                    ? '这份是拷进应用里处理的——拖进来的文件不带它在硬盘上的位置，所以剪后文件不会出现在原片旁边，只能从处理记录里下载。想让它落回原文件夹，点上面那块区域重新选一次。'
+                                    : 'This one was copied into the app to be processed — a dropped file does not carry where it lives, so the cut version cannot land beside the original and has to be downloaded from the processing records. To have it land in your folder, click the area above and pick it again.'}
+                            </p>
+                            </div>
+                        )}
                         {uploadError && <div className="mt-5 rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-300">{uploadError}</div>}
                         {processingResult && <div className="mt-5 rounded-[16px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">{t('dash.done')} <button type="button" onClick={() => navigate('/editor')} className="underline hover:no-underline">{t('dash.viewEditor')}</button></div>}
                     </div>
