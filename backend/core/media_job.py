@@ -17,7 +17,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import shutil
 import tempfile
 import time
@@ -38,7 +37,7 @@ from backend.core.ai_summarizer import (
     visual_requests_to_frame_segments,
 )
 from backend.core.media_probe import media_duration_seconds
-from backend.core.media_job_stages import export_note_to_lark
+from backend.core.media_job_stages import export_note_to_lark, label_speakers
 from backend.core.media_job_outcome import (
     TerminalReport,
     _log_task_completed,
@@ -70,12 +69,7 @@ from backend.core.result_artifacts import (
     _attach_result_artifacts,
     _write_file_artifact,
 )
-from backend.core.speaker_diarization import (
-    assign_speakers_to_segments,
-    build_speaker_annotated_transcript,
-    diarization_status,
-    diarize_audio,
-)
+from backend.core.speaker_diarization import build_speaker_annotated_transcript
 from backend.core.voice_enhance import enhance_voice, measure_presence, stt_audio_source
 from backend.core.stt_process import drain_queue, start_transcription_process, terminate_process
 from backend.core.storage_paths import _artifact_storage_dir
@@ -396,38 +390,6 @@ def _finalize_result_storage(ctx: MediaJobContext, result: dict[str, Any]) -> di
     job = get_job(ctx.task_id_value)
     metadata = job.get("metadata") if isinstance(job, dict) else None
     return ctx.finalize_result_storage(ctx.task_id_value, result, metadata)
-
-_DIARIZATION_EXECUTOR: ThreadPoolExecutor | None = None
-
-
-def _diarization_executor() -> ThreadPoolExecutor:
-    """A pool of its own for diarization, because a timed-out run leaks a thread.
-
-    `asyncio.wait_for` stops waiting; it cannot stop the thread, which stays
-    inside pyannote's model download for the life of the process. On the shared
-    default executor those leaked threads accumulate until nothing else can run
-    — every ffmpeg call, transcription and summarizer call in this module goes
-    through `run_in_executor` — which is the same silent hang the timeout exists
-    to prevent, arrived at more slowly. One worker is deliberate: a second
-    diarization queues behind a stuck one and then hits its own budget, which
-    degrades to "no speaker labels" instead of blocking the pipeline.
-    """
-    global _DIARIZATION_EXECUTOR
-    if _DIARIZATION_EXECUTOR is None:
-        _DIARIZATION_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="diarization")
-    return _DIARIZATION_EXECUTOR
-
-
-def _diarization_timeout_seconds(duration_seconds: float | None) -> float:
-    """Budget for one diarization run: generous per audio minute, still bounded.
-
-    Diarizing a long recording legitimately takes minutes on CPU, so the floor
-    is high enough not to cut real work short. The cap is what keeps a stalled
-    model download from holding a task forever.
-    """
-    audio_seconds = float(duration_seconds or 0.0)
-    return min(2700.0, max(600.0, audio_seconds * 2.0))
-
 
 def _raw_segment_payload(segment: Any) -> dict[str, Any]:
     """Persist everything the engine gave us for this segment.
@@ -949,144 +911,14 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             _raw_segment_payload(s)
             for s in tr.segments
         ]
-        speaker_payload: dict[str, Any] = {
-            "requested": diarization_requested,
-            "available": True if uses_remote_stt else diarization_status()["available"],
-            "applied": False,
-        }
-        if diarization_requested and uses_remote_stt:
-            speakers = sorted({
-                str(segment.get("speaker"))
-                for segment in segments_payload
-                if isinstance(segment, dict) and segment.get("speaker")
-            })
-            if speakers:
-                speaker_payload.update({
-                    "applied": True,
-                    "backend": getattr(tr, "model_source", None) or "cloud_transcription",
-                    "speaker_count": len(speakers),
-                })
-                log_event(
-                    task_id=task_id_value,
-                    event_name="speaker_diarization_completed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    stage="speaker_diarization",
-                    success=True,
-                    metadata=event_metadata(
-                        route="/process",
-                        backend=getattr(tr, "model_source", None) or "cloud_transcription",
-                        speaker_count=len(speakers),
-                    ),
-                )
-            else:
-                error_reason = (
-                    getattr(tr, "diarization_error", None)
-                    or f"{stt_provider_label(stt_provider_value)} did not return speaker labels"
-                )
-                speaker_payload.update({
-                    "applied": False,
-                    "backend": getattr(tr, "model_source", None) or "cloud_transcription",
-                    "error_reason": error_reason,
-                })
-                log_event(
-                    task_id=task_id_value,
-                    event_name="speaker_diarization_failed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    stage="speaker_diarization",
-                    success=False,
-                    error_reason=error_reason,
-                    metadata=event_metadata(route="/process", backend=getattr(tr, "model_source", None) or "cloud_transcription"),
-                )
-        elif diarization_requested:
-            diarization_started_at = time.perf_counter()
-            try:
-                # Bounded on purpose. pyannote fetches its models on first use
-                # and `from_pretrained` has no timeout of its own: on a slow
-                # link it neither fails nor finishes, and a 2026-09-03 run sat
-                # in it for over an hour with the task stuck at "stt" and no
-                # error anywhere. Speaker labels are optional, so give them a
-                # budget and move on without them when it is spent. The
-                # executor thread is left to finish its download, which warms
-                # the cache for the next run.
-                turns = await asyncio.wait_for(
-                    loop.run_in_executor(_diarization_executor(), lambda: diarize_audio(out_audio)),
-                    timeout=_diarization_timeout_seconds(duration_sec),
-                )
-                segments_payload = assign_speakers_to_segments(segments_payload, turns)
-                speaker_payload.update({
-                    "applied": True,
-                    "speaker_count": len({turn.speaker for turn in turns}),
-                    "turn_count": len(turns),
-                })
-                log_event(
-                    task_id=task_id_value,
-                    event_name="speaker_diarization_completed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    stage="speaker_diarization",
-                    duration_seconds=round(time.perf_counter() - diarization_started_at, 3),
-                    success=True,
-                    metadata=event_metadata(route="/process", speaker_count=speaker_payload["speaker_count"]),
-                )
-            except asyncio.TimeoutError:
-                budget = _diarization_timeout_seconds(duration_sec)
-                error_reason = (
-                    f"说话人区分超过 {int(budget)} 秒预算，已跳过。"
-                    "首次使用需要下载 pyannote 模型；下载完成后重试即可。"
-                )
-                speaker_payload.update({"applied": False, "error_reason": error_reason})
-                logger.warning("Speaker diarization timed out for %s: %s", task_id_value, error_reason)
-                log_event(
-                    task_id=task_id_value,
-                    event_name="speaker_diarization_failed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    stage="speaker_diarization",
-                    duration_seconds=round(time.perf_counter() - diarization_started_at, 3),
-                    success=False,
-                    error_reason=error_reason,
-                    metadata=event_metadata(route="/process", failure_scope="optional_speaker_diarization", timed_out=True),
-                )
-            except Exception as exc:
-                error_reason = str(exc)
-                speaker_payload.update({
-                    "applied": False,
-                    "error_reason": error_reason,
-                })
-                logger.warning("Speaker diarization skipped for %s: %s", task_id_value, error_reason)
-                log_event(
-                    task_id=task_id_value,
-                    event_name="speaker_diarization_failed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    stage="speaker_diarization",
-                    duration_seconds=round(time.perf_counter() - diarization_started_at, 3),
-                    success=False,
-                    error_reason=error_reason,
-                    metadata=event_metadata(route="/process", failure_scope="optional_speaker_diarization"),
-                )
-        # Recorded here rather than in the summary stage: the local edition
-        # switches that stage off and writes the note from the cut media
-        # afterwards, so a flag set inside it is missing on exactly the flow
-        # that runs it. Two or more speakers is what makes any note built from
-        # these segments carry labels.
-        speaker_payload["segments_labeled"] = len({
-            str(segment.get("speaker"))
-            for segment in segments_payload
-            if isinstance(segment, dict) and segment.get("speaker")
-        }) >= 2
+        segments_payload, speaker_payload = await label_speakers(
+            ctx,
+            transcription=tr,
+            segments_payload=segments_payload,
+            duration_sec=duration_sec,
+            audio_path=out_audio,
+            uses_remote_stt=uses_remote_stt,
+        )
         source_language = _normalized_source_language(getattr(tr, "language", None)) or _normalized_source_language(language)
         bilingual_segments: list[dict[str, Any]] = []
         translation_status = "not_applicable"

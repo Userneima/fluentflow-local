@@ -116,7 +116,7 @@ def test_note_prompt_carries_attribution_rule_only_when_labeled() -> None:
 
 
 def test_diarization_budget_scales_with_audio_and_stays_bounded() -> None:
-    from backend.core.media_job import _diarization_timeout_seconds
+    from backend.core.media_job_stages import _diarization_timeout_seconds
 
     # A short clip still gets a floor: model loading is slower than the audio.
     assert _diarization_timeout_seconds(None) == 600.0
@@ -253,7 +253,7 @@ def test_torch_compat_serialises_overlapping_loads() -> None:
 
 def test_diarization_runs_off_the_shared_executor() -> None:
     """A timed-out run leaks its thread; it must not be one the pipeline needs."""
-    from backend.core.media_job import _diarization_executor
+    from backend.core.media_job_stages import _diarization_executor
 
     executor = _diarization_executor()
 
