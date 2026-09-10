@@ -40,13 +40,27 @@ Hosted 那边也留了一条专门测这个场景的用例。移植后确认那�
 在分离后只剩 `processing.py`，所以那边的验证没有覆盖第二条路径。这是本次移植
 需要额外留意的地方。
 
-**本仓库的依赖一个都没装。** 没有 `node_modules/`（`npm run test:frontend` 报
-`vitest: command not found`），也没有 `venv/` 或 `.venv/`（系统 `python3` 里
-没有 `pytest`）。这是一个刚从版本分离建出来的仓库，还没有人在里面跑过东西。
+**环境已经装好，基线已经跑过。** Python 环境在 `.venv/`，Node 依赖已安装。
+2026-09-10 在这个环境上跑出的基线，四条全绿：
 
-移过来的改动后端前端都有，两边都要能跑测试才谈得上验证，所以装环境是真正的
-第一步，不是准备工作。Node 依赖有 `package-lock.json`；Python 依赖清单
-是 `requirements-local.txt`，说话人标注另有 `requirements-speaker.txt`。
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 后端测试 | `.venv/bin/python -m pytest tests/ -q` | 525 passed |
+| 后端静态检查 | `.venv/bin/python -m pylint backend/ --errors-only --disable=import-error,no-member` | 无输出 |
+| 前端测试 | `npm run test:frontend` | 123 passed |
+| 前端 lint 与构建 | `npm run lint:frontend`、`npm run build:frontend` | 通过 |
+
+开工前自己重跑一遍，用你当时的数字当基线，不要沿用上面这四个：它们是一次
+测量，不是承诺。
+
+**这个环境是 Python 3.14，CI 用的是 3.10**（见 `.github/workflows/ci.yml`）。
+机器上没有 3.10，Xcode 自带的 3.9 装不上依赖（`requirements-local.txt` 里
+写了原因）。3.14 上全部依赖都装成功、测试也全过，但版本差异真实存在：如果
+出现本地绿而 CI 挂，先怀疑这里。
+
+`pytest` 和 `pylint` 不在 `requirements-local.txt` 里，CI 单独装它们，本地
+也是单独装的。跑后端检查一律走 `.venv/bin/python -m ...`，不要用系统
+`python3`。
 
 **本仓库的上下文提供了移过来的代码要读的全部字段**：`friendly_error`、
 `stt_provider_labeler`、`auto_lark_exporter`、`diarization_requested`、`loop`、
@@ -105,20 +119,14 @@ Hosted 那边也留了一条专门测这个场景的用例。移植后确认那�
 
 ## 第一步
 
-把测试跑起来，两边都要。在此之前不要动任何代码：移植一段未经验证的流水线
-改动，是这次交接最不该发生的事。
-
-装依赖（Node 和 Python），然后确认下面这些都能出结果：
+在干净的工作区上重跑一遍上面那四条检查，把你自己的数字记下来当基线。后面每
+移一刀都跟它比，这是判断一刀有没有移坏的唯一依据。
 
 ```bash
 git status --short
+.venv/bin/python -m pytest tests/ -q
 npm run test:frontend
 ```
 
-以及后端的 `pytest`（用你建的那个环境跑，不要用系统 `python3`）。
-
-把这次的通过数记下来当基线，后面每刀都跟它比。**如果装环境卡住，停下来说清楚
-卡在哪，不要跳过验证直接移植。**
-
-基线拿到之后，从上面列表的第 1 刀开始：读
+基线拿到之后，从来源提交列表的第 1 刀开始：读
 `git -C ../fluentflow show 314dd5d1`，先回答「需要你判断的」里的第一条，再动手。
