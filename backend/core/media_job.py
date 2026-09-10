@@ -11,7 +11,6 @@ from typing import Any, AsyncGenerator, Optional
 import functools
 import json
 import os
-import subprocess
 import uuid
 import urllib.parse
 from dataclasses import asdict, dataclass
@@ -22,7 +21,6 @@ from concurrent.futures import ThreadPoolExecutor
 import shutil
 import tempfile
 import time
-import wave
 import logging
 
 from fastapi import Request
@@ -39,6 +37,7 @@ from backend.core.ai_summarizer import (
     summarize_transcript_with_metadata,
     visual_requests_to_frame_segments,
 )
+from backend.core.media_probe import media_duration_seconds
 from backend.core.media_preflight import SILENCE_GUARD_ENV, media_guard_enabled
 from backend.core.media_intake import path_size_mb
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
@@ -177,29 +176,9 @@ def _log_task_completed(
     )
 
 
-def _media_duration_seconds(path: Path | str) -> float | None:
-    try:
-        with wave.open(str(path), "rb") as wav:
-            frame_rate = wav.getframerate()
-            if frame_rate > 0:
-                return wav.getnframes() / frame_rate
-    except Exception:
-        pass
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        return None
-    try:
-        result = subprocess.run(
-            [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        value = float((result.stdout or "").strip())
-        return value if value > 0 else None
-    except Exception:
-        return None
+# Probed through media_probe. Kept as a module-level name here because tests
+# monkeypatch it on this module.
+_media_duration_seconds = media_duration_seconds
 
 
 def _duration_limit_error(
