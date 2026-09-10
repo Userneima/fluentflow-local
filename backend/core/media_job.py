@@ -38,6 +38,7 @@ from backend.core.ai_summarizer import (
     visual_requests_to_frame_segments,
 )
 from backend.core.media_probe import media_duration_seconds
+from backend.core.media_job_stages import export_note_to_lark
 from backend.core.media_job_outcome import (
     TerminalReport,
     _log_task_completed,
@@ -1614,76 +1615,13 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         if do_lark:
             current_stage = "export"
             yield _sse({"stage": "export", "progress": 90})
-            exporter = ctx.auto_lark_exporter
-            if not exporter:
-                raise RuntimeError("Media job context is missing an automatic Lark export policy")
-            export_target = "unknown"
-            doc_title = ""
-            log_event(
-                task_id=task_id_value,
-                event_name="lark_export_started",
-                source_type=source_type,
-                source_filename=source_filename,
-                source_duration_seconds=round(duration_sec, 1),
-                source_file_size_mb=source_file_size_mb,
-                transcript_length=_text_len(transcript_text),
-                summary_length=_text_len(summary_md),
-                stage="export",
-                export_target=export_target,
-                metadata=event_metadata(route="/process", trigger="auto", doc_title=doc_title),
+            lark_success = await export_note_to_lark(
+                ctx,
+                result=result,
+                duration_sec=duration_sec,
+                transcript_text=transcript_text,
+                summary_md=summary_md,
             )
-            export_started_at = time.perf_counter()
-            try:
-                export = await loop.run_in_executor(None, lambda: exporter(
-                    task_id=task_id_value, summary_markdown=summary_md,
-                    filename_stem=display_title_value or Path(source_filename or "media").stem,
-                    form_title=title or display_title_value, lark_export_route=lark_export_route,
-                    lark_via_cli=lark_via_cli, lark_app_id=lark_app_id,
-                    lark_app_secret=lark_app_secret, folder_token=folder_token,
-                    account_user=ctx.account_user,
-                ))
-                doc_title = export["doc_title"]
-                export_target = export["export_target"]
-                resp = export["response"]
-                result["lark_doc_title"] = doc_title
-                result["lark_response"] = resp
-                lark_success = True
-                feishu_doc_url = resp.get("url") if isinstance(resp, dict) else None
-                log_event(
-                    task_id=task_id_value,
-                    event_name="lark_export_completed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    transcript_length=_text_len(transcript_text),
-                    summary_length=_text_len(summary_md),
-                    stage="export",
-                    duration_seconds=round(time.perf_counter() - export_started_at, 3),
-                    success=True,
-                    export_target=export_target,
-                    feishu_doc_url=feishu_doc_url,
-                    metadata=event_metadata(route="/process", trigger="auto", doc_title=doc_title),
-                )
-            except Exception as e:
-                result["lark_error"] = friendly_error_message(e)
-                lark_success = False
-                log_event(
-                    task_id=task_id_value,
-                    event_name="lark_export_completed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    transcript_length=_text_len(transcript_text),
-                    summary_length=_text_len(summary_md),
-                    stage="export",
-                    duration_seconds=round(time.perf_counter() - export_started_at, 3),
-                    success=False,
-                    error_reason=friendly_error_message(e),
-                    export_target=export_target,
-                    metadata=event_metadata(route="/process", trigger="auto", doc_title=doc_title, raw_error=str(e)),
-                )
 
         # ── Done ───────────────────────────────────────────
         quota_final = _finalize_task_usage(
