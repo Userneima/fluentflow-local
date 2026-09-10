@@ -38,12 +38,18 @@ from backend.core.ai_summarizer import (
     visual_requests_to_frame_segments,
 )
 from backend.core.media_probe import media_duration_seconds
+from backend.core.media_job_outcome import (
+    TerminalReport,
+    _log_task_completed,
+    _text_len,
+    report_cancelled,
+    report_failed,
+)
 from backend.core.media_preflight import SILENCE_GUARD_ENV, media_guard_enabled
 from backend.core.media_intake import path_size_mb
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 from backend.core.event_context import (
     event_metadata,
-    pipeline_mode,
     runtime_context_metadata,
 )
 from backend.core.event_logger import log_event
@@ -89,10 +95,6 @@ from backend.core.visual_evidence import (
 logger = logging.getLogger(__name__)
 
 
-def _text_len(value: str | None) -> int:
-    return len(value or "")
-
-
 def _stt_realtime_factor(
     stt_elapsed_seconds: float | None,
     duration_seconds: float | None,
@@ -127,53 +129,6 @@ def _cleanup_payload(cleanup_result: Any) -> dict[str, Any]:
         "issues": [asdict(item) for item in cleanup_result.issues[:20]],
         "issue_count": len(cleanup_result.issues),
     }
-
-
-def _log_task_completed(
-    *,
-    task_id: str,
-    started_at: float,
-    final_status: str,
-    source_type: str | None = None,
-    source_filename: str | None = None,
-    source_duration_seconds: float | None = None,
-    source_file_size_mb: float | None = None,
-    transcript_length: int | None = None,
-    summary_length: int | None = None,
-    summary_status: str | None = None,
-    lark_requested: bool | None = None,
-    lark_success: bool | None = None,
-    stt_provider: str | None = None,
-    stt_provider_labeler: Any = None,
-    completion_reason: str | None = None,
-) -> None:
-    total_duration = round(time.perf_counter() - started_at, 3)
-    log_event(
-        task_id=task_id,
-        event_name="task_completed",
-        source_type=source_type,
-        source_filename=source_filename,
-        source_duration_seconds=source_duration_seconds,
-        source_file_size_mb=source_file_size_mb,
-        transcript_length=transcript_length,
-        summary_length=summary_length,
-        stage="done" if final_status == "completed" else final_status,
-        duration_seconds=total_duration,
-        success=final_status == "completed",
-        metadata=event_metadata(
-            **runtime_context_metadata(),
-            final_status=final_status,
-            total_duration_seconds=total_duration,
-            summary_status=summary_status,
-            lark_requested=lark_requested,
-            lark_success=lark_success,
-            stt_provider=stt_provider,
-            stt_provider_label=(stt_provider_labeler(stt_provider) if stt_provider and stt_provider_labeler else None),
-            source_type=source_type,
-            pipeline_mode=pipeline_mode(source_type),
-            completion_reason=completion_reason,
-        ),
-    )
 
 
 # Probed through media_probe. Kept as a module-level name here because tests
@@ -432,16 +387,6 @@ def _finalize_task_usage(
         reason=reason,
         stt_provider=ctx.stt_provider_value,
     )
-
-
-def _release_task_usage(ctx: MediaJobContext, *, reason: str, metadata: dict[str, Any]) -> None:
-    if ctx.release_task_usage:
-        ctx.release_task_usage(
-            client_id=ctx.client_id,
-            task_id=ctx.task_id_value,
-            reason=reason,
-            metadata=metadata,
-        )
 
 
 def _finalize_result_storage(ctx: MediaJobContext, result: dict[str, Any]) -> dict[str, Any]:
@@ -1780,102 +1725,36 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         yield _sse({"stage": "done", "progress": 100, "result": result})
 
     except asyncio.CancelledError:
-        logger.info("Processing stream cancelled by client at stage=%s", current_stage)
-        if stt_process is not None and stt_process.is_alive():
-            terminate_process(stt_process)
-        _release_task_usage(
-            ctx,
-            reason="Task cancelled before completion",
-            metadata={"stage": current_stage},
-        )
-        source_duration_for_cancel = duration_sec or duration_estimate_sec
-        _log_task_completed(
-            task_id=task_id_value,
-            started_at=task_started_at,
-            final_status="cancelled",
-            source_type=source_type,
-            source_filename=source_filename,
-            source_duration_seconds=round(source_duration_for_cancel, 1) if source_duration_for_cancel is not None else None,
-            source_file_size_mb=source_file_size_mb,
-            transcript_length=_text_len(transcript_text),
-            summary_length=_text_len(summary_md),
-            summary_status=summary_status,
-            lark_requested=do_lark,
-            lark_success=lark_success,
-            stt_provider=stt_provider_value,
-            stt_provider_labeler=stt_provider_label,
-            completion_reason="client_disconnect",
-        )
-        upsert_job(
-            task_id=task_id_value,
-            status="cancelled",
-            stage=current_stage,
-            source_type=source_type,
-            source_filename=source_filename,
-            source_file_size_mb=source_file_size_mb,
-            summary_status=summary_status,
-            error_reason="client_disconnect",
+        report_cancelled(
+            TerminalReport(
+                ctx=ctx,
+                current_stage=current_stage,
+                stt_process=stt_process,
+                duration_sec=duration_sec,
+                duration_estimate_sec=duration_estimate_sec,
+                transcript_text=transcript_text,
+                summary_md=summary_md,
+                summary_status=summary_status,
+                lark_success=lark_success,
+                cloud_stt_metadata=cloud_stt_metadata,
+            )
         )
         raise
     except Exception as exc:
-        logger.exception("Processing failed")
-        friendly_error = friendly_error_message(exc)
-        if stt_process is not None and stt_process.is_alive():
-            terminate_process(stt_process)
-        if summary_status is None and current_stage == "summary":
-            summary_status = "failed"
-        _release_task_usage(
-            ctx,
-            reason="Task failed before charge finalization",
-            metadata={"stage": current_stage, "raw_error": str(exc)},
-        )
-        log_event(
-            task_id=task_id_value,
-            event_name="task_failed",
-            source_type=source_type,
-            source_filename=source_filename,
-            source_file_size_mb=source_file_size_mb,
-            stage=current_stage,
-            success=False,
-            error_reason=friendly_error,
-            metadata=event_metadata(
-                route="/process",
-                stt_provider=stt_provider_value,
-                **cloud_stt_metadata,
-                raw_error=str(exc),
+        friendly_error = report_failed(
+            TerminalReport(
+                ctx=ctx,
+                current_stage=current_stage,
+                stt_process=stt_process,
+                duration_sec=duration_sec,
+                duration_estimate_sec=duration_estimate_sec,
+                transcript_text=transcript_text,
+                summary_md=summary_md,
+                summary_status=summary_status,
+                lark_success=lark_success,
+                cloud_stt_metadata=cloud_stt_metadata,
             ),
-        )
-        _log_task_completed(
-            task_id=task_id_value,
-            started_at=task_started_at,
-            final_status="failed",
-            source_type=source_type,
-            source_filename=source_filename,
-            source_duration_seconds=round(duration_sec, 1) if duration_sec is not None else None,
-            source_file_size_mb=source_file_size_mb,
-            transcript_length=_text_len(transcript_text),
-            summary_length=_text_len(summary_md),
-            summary_status=summary_status,
-            lark_requested=do_lark,
-            lark_success=lark_success,
-            stt_provider=stt_provider_value,
-            stt_provider_labeler=stt_provider_label,
-            completion_reason=current_stage,
-        )
-        upsert_job(
-            task_id=task_id_value,
-            status="failed",
-            stage=current_stage,
-            progress=0,
-            source_type=source_type,
-            source_filename=source_filename,
-            source_file_size_mb=source_file_size_mb,
-            summary_status=summary_status,
-            error_reason=friendly_error,
-            metadata={
-                "stt_provider": stt_provider_value,
-                **cloud_stt_metadata,
-            },
+            exc,
         )
         yield _sse({"stage": "error", "progress": 0, "error": friendly_error})
     finally:
