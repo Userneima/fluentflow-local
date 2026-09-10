@@ -37,7 +37,11 @@ from backend.core.ai_summarizer import (
     visual_requests_to_frame_segments,
 )
 from backend.core.media_probe import media_duration_seconds
-from backend.core.media_job_stages import export_note_to_lark, label_speakers
+from backend.core.media_job_stages import (
+    clean_transcript,
+    export_note_to_lark,
+    label_speakers,
+)
 from backend.core.media_job_outcome import (
     TerminalReport,
     _log_task_completed,
@@ -73,7 +77,6 @@ from backend.core.speaker_diarization import build_speaker_annotated_transcript
 from backend.core.voice_enhance import enhance_voice, measure_presence, stt_audio_source
 from backend.core.stt_process import drain_queue, start_transcription_process, terminate_process
 from backend.core.storage_paths import _artifact_storage_dir
-from backend.core.transcript_cleaner import clean_repeated_transcript
 from backend.core.transcript_correction import (
     correction_result_fields,
     correct_transcript_segments,
@@ -390,26 +393,6 @@ def _finalize_result_storage(ctx: MediaJobContext, result: dict[str, Any]) -> di
     job = get_job(ctx.task_id_value)
     metadata = job.get("metadata") if isinstance(job, dict) else None
     return ctx.finalize_result_storage(ctx.task_id_value, result, metadata)
-
-def _raw_segment_payload(segment: Any) -> dict[str, Any]:
-    """Persist everything the engine gave us for this segment.
-
-    Word timings used to be dropped here even when the engine returned them, so
-    a stored transcript could only ever answer "which sentence", never "which
-    word". Getting them back costs another transcription — real money — so
-    anything the provider paid to compute is written down.
-    """
-    payload: dict[str, Any] = {
-        "start": segment.start,
-        "end": segment.end,
-        "text": segment.text,
-        "speaker": getattr(segment, "speaker", None),
-    }
-    words = getattr(segment, "words", None)
-    if words:
-        payload["words"] = [dict(word) for word in words]
-    return payload
-
 
 def _enforce_history_retention(ctx: MediaJobContext) -> None:
     if ctx.enforce_history_retention: ctx.enforce_history_retention(ctx.client_id)
@@ -882,35 +865,11 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 base_result["transcript_media"] = TRANSCRIPT_MEDIA_SOURCE
         if uses_remote_stt:
             base_result["cloud_transcription"] = remote_stt_policy.result_diagnostics(cloud_stt_metadata)
-        cleanup_started_at = time.perf_counter()
-        cleanup_result = clean_repeated_transcript(tr.segments)
-        if cleanup_result.applied_count > 0:
-            log_event(
-                task_id=task_id_value,
-                event_name="transcript_cleanup_completed",
-                source_type=source_type,
-                source_filename=source_filename,
-                source_duration_seconds=round(duration_sec, 1),
-                source_file_size_mb=source_file_size_mb,
-                transcript_length=cleanup_result.cleaned_length,
-                stage="transcript_cleanup",
-                duration_seconds=round(time.perf_counter() - cleanup_started_at, 3),
-                success=True,
-                metadata=event_metadata(
-                    route="/process",
-                    cleanup_issue_count=len(cleanup_result.issues),
-                    cleanup_applied_count=cleanup_result.applied_count,
-                    cleanup_removed_segment_count=cleanup_result.removed_segment_count,
-                    cleanup_raw_length=cleanup_result.raw_length,
-                    cleanup_cleaned_length=cleanup_result.cleaned_length,
-                ),
-            )
+        cleanup_result, raw_segments_payload = clean_transcript(
+            ctx, transcription=tr, duration_sec=duration_sec
+        )
         transcript_text = cleanup_result.cleaned_text
         segments_payload = list(cleanup_result.cleaned_segments)
-        raw_segments_payload = [
-            _raw_segment_payload(s)
-            for s in tr.segments
-        ]
         segments_payload, speaker_payload = await label_speakers(
             ctx,
             transcription=tr,

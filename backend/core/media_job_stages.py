@@ -27,6 +27,7 @@ from backend.core.speaker_diarization import (
     diarization_status,
     diarize_audio,
 )
+from backend.core.transcript_cleaner import clean_repeated_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -325,3 +326,66 @@ async def export_note_to_lark(
         **common,
     )
     return True
+
+
+def _raw_segment_payload(segment: Any) -> dict[str, Any]:
+    """Persist everything the engine gave us for this segment.
+
+    Word timings used to be dropped here even when the engine returned them, so
+    a stored transcript could only ever answer "which sentence", never "which
+    word". Getting them back costs another transcription — real money — so
+    anything the provider paid to compute is written down.
+    """
+    payload: dict[str, Any] = {
+        "start": segment.start,
+        "end": segment.end,
+        "text": segment.text,
+        "speaker": getattr(segment, "speaker", None),
+    }
+    words = getattr(segment, "words", None)
+    if words:
+        payload["words"] = [dict(word) for word in words]
+    return payload
+
+
+def clean_transcript(
+    ctx: Any,
+    *,
+    transcription: Any,
+    duration_sec: float | None,
+) -> tuple[Any, list[dict[str, Any]]]:
+    """Strip the engine's repetition artefacts, keeping the raw take alongside.
+
+    Returns the whole cleanup result and the untouched segments. The result is
+    handed back rather than unpacked because the job record keeps both takes
+    and a count of what was changed: cleanup is a judgement call, and re-running
+    the transcription to undo it costs money.
+    """
+    started_at = time.perf_counter()
+    cleanup_result = clean_repeated_transcript(transcription.segments)
+    if cleanup_result.applied_count > 0:
+        log_event(
+            task_id=ctx.task_id_value,
+            event_name="transcript_cleanup_completed",
+            source_type=ctx.source_type,
+            source_filename=ctx.source_filename,
+            source_duration_seconds=(
+                round(duration_sec, 1) if duration_sec is not None else None
+            ),
+            source_file_size_mb=ctx.source_file_size_mb,
+            transcript_length=cleanup_result.cleaned_length,
+            stage="transcript_cleanup",
+            duration_seconds=round(time.perf_counter() - started_at, 3),
+            success=True,
+            metadata=event_metadata(
+                route="/process",
+                cleanup_issue_count=len(cleanup_result.issues),
+                cleanup_applied_count=cleanup_result.applied_count,
+                cleanup_removed_segment_count=cleanup_result.removed_segment_count,
+                cleanup_raw_length=cleanup_result.raw_length,
+                cleanup_cleaned_length=cleanup_result.cleaned_length,
+            ),
+        )
+    return cleanup_result, [
+        _raw_segment_payload(segment) for segment in transcription.segments
+    ]
