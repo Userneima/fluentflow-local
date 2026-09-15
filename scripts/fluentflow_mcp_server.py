@@ -37,6 +37,58 @@ def _client_id(value: str | None = None) -> str:
     return (value or os.environ.get("FLUENTFLOW_CLIENT_ID") or DEFAULT_CLIENT_ID).strip() or DEFAULT_CLIENT_ID
 
 
+# API bases already confirmed to be the Local edition of FluentFlow.
+#
+# Two editions ship the same MCP tool names and accept the same JSON, so a tool
+# call proves nothing about which backend is listening. The hosted backend has no
+# local-file entry and answers a path submission with a generic
+# "Provide a video link input or transcript_text". On 2026-09-15 that reply was
+# read as "the MCP tool is newer than this backend", and a recording job that the
+# product could have done end to end fell back to standalone scripts, losing cloud
+# transcription and the automatic note. /health is the discriminator that reading
+# the rejection text is not: only the Local edition reports
+# ``runtime.execution == "local"``.
+_LOCAL_EDITION_CONFIRMED: set[str] = set()
+
+
+def _edition_refusal(api_base: str) -> dict[str, Any] | None:
+    """Why this backend cannot serve local Agent calls, or None when it can.
+
+    Only confirmation is cached. A refusal re-probes on the next call, so whoever
+    starts FluentFlow Local after reading one gets through without a restart.
+    """
+    if api_base in _LOCAL_EDITION_CONFIRMED:
+        return None
+    try:
+        health = api_request("GET", api_base, "/health", timeout=5)
+    except FluentFlowApiError as exc:
+        return {
+            "ok": False,
+            "error": (
+                f"FluentFlow Local 没有在 {api_base} 应答（{exc}）。"
+                "请双击桌面上的「FluentFlow Local」启动它，等它把浏览器打开之后重试。"
+            ),
+            "status": None,
+            "payload": None,
+        }
+    runtime = health.get("runtime") if isinstance(health.get("runtime"), dict) else {}
+    if str(runtime.get("execution") or "").strip().lower() != "local":
+        return {
+            "ok": False,
+            "error": (
+                f"{api_base} 上应答的后端不是 FluentFlow Local"
+                f"（app_version={health.get('app_version') or '未知'}）。"
+                "云端版按设计只收视频链接和转录稿，不收本机文件路径；它拒绝提交，"
+                "不代表本地处理这个功能不存在。请退掉占用这个端口的进程，"
+                "改用桌面上的「FluentFlow Local」启动本地版后重试。"
+            ),
+            "status": None,
+            "payload": None,
+        }
+    _LOCAL_EDITION_CONFIRMED.add(api_base)
+    return None
+
+
 def _agent_request(
     method: str,
     path: str,
@@ -46,10 +98,14 @@ def _agent_request(
     client_id: str | None = None,
     timeout: float = 60,
 ) -> dict[str, Any]:
+    base = normalize_api_base(api_base)
+    refusal = _edition_refusal(base)
+    if refusal is not None:
+        return refusal
     try:
         return api_request(
             method,
-            normalize_api_base(api_base),
+            base,
             path,
             payload=payload,
             client_id=_client_id(client_id),
