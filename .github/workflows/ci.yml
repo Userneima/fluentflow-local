@@ -28,6 +28,11 @@ jobs:
         with:
           python-version: '3.10'
           cache: pip
+          # This repository's dependency file is requirements-local.txt. Without
+          # naming it, the cache step looks for requirements.txt, fails to find
+          # one, and the job ends before pip, pylint or pytest ever run — which
+          # is how this workflow reported red while checking nothing.
+          cache-dependency-path: requirements-local.txt
       - run: pip install -r requirements-local.txt
       - run: pip install pytest pylint
       - run: python3 -m pylint backend/ --errors-only --disable=import-error,no-member
