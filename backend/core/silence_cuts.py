@@ -117,6 +117,35 @@ BITRATE_CEILING_MARGIN = 0.95
 # transcribes sits down there.
 MIN_TRUSTED_VIDEO_BITRATE = 50_000
 
+# How far apart to put keyframes on the hardware path. VideoToolbox's own default
+# is around twelve frames — a fifth of a second on 60fps material — and under a
+# bitrate ceiling that is not a size question but a legibility one: a keyframe is
+# a whole picture paid for out of the same budget, so the budget buys hundreds of
+# bad ones instead of a few good ones and the differences between them.
+#
+# Measured on 2026-09-15, 60 seconds of a 1920x1080 60fps screen recording
+# carrying 517 kbps, held to its own rate: the default wrote 301 keyframes and the
+# text in the result could not be read at any magnification; five seconds wrote
+# 13, matched the source at 3x, and came out 37% smaller because it no longer
+# needed the whole budget. On a 6 Mbps recording the same defect shows up only as
+# size, because at that rate there is enough budget to waste.
+#
+# Five seconds rather than the source's own interval: the number lived with is a
+# fixed one either way, and libx264's default keyint of 250 frames is already in
+# this range, so the two encoders do not disagree about the same file. It also
+# bounds what reads this output later — the visual-note pass detects picture
+# changes with `-skip_frame nokey`, so the keyframe interval is the finest look
+# it can take.
+#
+# How much this is worth depends on the material, and the measurement above is a
+# screen recording, where the picture is mostly still and a keyframe is therefore
+# nearly all redundant. Two live-action recordings measured the same day — a
+# 640x360 25fps interview at 266 kbps and a 1024x576 30fps cut-heavy explainer at
+# 1709 kbps — came out 8% and 3.5% smaller, with the face at 5x indistinguishable
+# from the same encode without the setting. So it is the right direction on
+# anything, and the large win belongs to screen recordings specifically.
+HARDWARE_KEYFRAME_SECONDS = 5.0
+
 # How much room the normalize pass gets above the source's own bitrate. Its
 # output never reaches the user, so this ceiling is there to bound scratch disk,
 # not the delivered file — and starting the cutting pass from an intermediate
@@ -1092,7 +1121,12 @@ def hardware_encode_enabled() -> bool:
     }
 
 
-def _with_hardware_video_encoder(args: Sequence[str], ceiling_bps: float) -> list[str]:
+def _with_hardware_video_encoder(
+    args: Sequence[str],
+    ceiling_bps: float,
+    *,
+    fps: float = DEFAULT_RENDER_FPS,
+) -> list[str]:
     """Swap the software video encoder for the media engine, when asked and safe.
 
     The media engine has no `-crf`: quality-targeted encoding is a software idea,
@@ -1105,6 +1139,11 @@ def _with_hardware_video_encoder(args: Sequence[str], ceiling_bps: float) -> lis
     No trusted measurement means no hardware encode. Guessing a bitrate for a file
     whose own rate could not be read is how a lecture comes back unreadable, and
     on a screen recording those pictures are what the note is written from.
+
+    The keyframe interval is set rather than left to the encoder for the same
+    reason the bitrate is: videotoolbox's default spends the whole ceiling on
+    keyframes and delivers a file whose text cannot be read. See
+    ``HARDWARE_KEYFRAME_SECONDS``.
     """
     if not hardware_encode_enabled() or ceiling_bps <= 0:
         return list(args)
@@ -1118,7 +1157,14 @@ def _with_hardware_video_encoder(args: Sequence[str], ceiling_bps: float) -> lis
         kept.append(args[index])
         index += 1
     target = int(ceiling_bps * BITRATE_CEILING_MARGIN)
-    return ["-c:v", "h264_videotoolbox", "-b:v", str(target), *kept]
+    rate = float(fps) if fps and float(fps) > 0 else float(DEFAULT_RENDER_FPS)
+    keyframe_interval = max(1, round(rate * HARDWARE_KEYFRAME_SECONDS))
+    return [
+        "-c:v", "h264_videotoolbox",
+        "-b:v", str(target),
+        "-g", str(keyframe_interval),
+        *kept,
+    ]
 
 
 def resolve_scale_width(
@@ -1176,7 +1222,7 @@ def normalize_to_constant_frame_rate(
         runner=runner,
     )
     headroom = ceiling * NORMALIZE_BITRATE_HEADROOM
-    encode = _with_hardware_video_encoder(encode, headroom) + _bitrate_ceiling_args(headroom)
+    encode = _with_hardware_video_encoder(encode, headroom, fps=fps) + _bitrate_ceiling_args(headroom)
     result = runner([
         _ffmpeg_path(), "-hide_banner", "-loglevel", "error",
         "-i", str(source), "-vf", ",".join(filters),
@@ -1217,6 +1263,7 @@ def encode_args_for_source(
     output: Path | str,
     *,
     audio_only: bool,
+    fps: float | None = None,
     runner: CommandRunner = run_command,
 ) -> tuple[str, ...]:
     """Encoder settings for this container, held under what the source itself spent.
@@ -1233,6 +1280,10 @@ def encode_args_for_source(
 
     Nothing measurable means nothing is capped: an unreadable bitrate leaves the
     previous behaviour exactly as it was.
+
+    ``fps`` is the rate the render is about to write at, which the hardware path
+    needs to space its keyframes. A caller that has already settled on one passes
+    it rather than paying for the same probe twice.
     """
     args = list(default_encode_args(output, audio_only=audio_only))
     audio_target = _parse_bitrate_bps(_option_value(args, "-b:a"))
@@ -1248,7 +1299,11 @@ def encode_args_for_source(
     # recording should not come back as stereo 48kHz.
     args = _with_source_audio_shape(args, source, runner=runner)
     ceiling = bitrate_ceiling_bps(source, audio_bitrate_bps=audio_target, runner=runner)
-    return tuple(_with_hardware_video_encoder(args, ceiling) + _bitrate_ceiling_args(ceiling))
+    rate = fps if fps and float(fps) > 0 else source_frame_rate(source, runner=runner)
+    return tuple(
+        _with_hardware_video_encoder(args, ceiling, fps=rate or DEFAULT_RENDER_FPS)
+        + _bitrate_ceiling_args(ceiling)
+    )
 
 
 def _render_batch(
@@ -1321,7 +1376,9 @@ def render_keeps(
     source = Path(media)
     out = Path(output)
     if encode_args is None:
-        encode_args = encode_args_for_source(source, out, audio_only=audio_only, runner=runner)
+        encode_args = encode_args_for_source(
+            source, out, audio_only=audio_only, fps=fps, runner=runner,
+        )
     target_width = None if audio_only else resolve_scale_width(source, scale_width, runner=runner)
     out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(work_dir) if work_dir else out.parent / f".render-{uuid.uuid4().hex}"
@@ -1466,7 +1523,9 @@ def render_cut_plan(
         # intermediate: that intermediate has already been re-encoded once, and
         # its bitrate is the inflation this ceiling exists to prevent rather than
         # a reading of the source.
-        encode_args = encode_args_for_source(source, out, audio_only=audio_only, runner=runner)
+        encode_args = encode_args_for_source(
+            source, out, audio_only=audio_only, fps=fps, runner=runner,
+        )
     stage = Path(work_dir) if work_dir else out.parent / f".debreath-{uuid.uuid4().hex}"
     stage.mkdir(parents=True, exist_ok=True)
     source_skew = 0.0 if audio_only else stream_skew_seconds(source, runner=runner)

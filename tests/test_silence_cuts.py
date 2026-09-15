@@ -925,6 +925,74 @@ def test_an_unmeasurable_source_stays_on_software(tmp_path, fake_tools, monkeypa
     assert "libx264" in implausible, "an implausible probe is refused"
 
 
+def test_the_media_engine_is_told_where_to_put_keyframes(tmp_path, fake_tools, monkeypatch):
+    """Left to itself videotoolbox writes one about every twelve frames, and under
+    a bitrate ceiling that costs the picture rather than bytes.
+
+    Measured on 60 seconds of a 1920x1080 60fps screen recording carrying 517
+    kbps, held to its own rate: the default put 301 keyframes in the file and the
+    text in it could not be read at any magnification, because a keyframe is a
+    whole picture paid for out of the ceiling and the ceiling was buying hundreds
+    of bad ones. Five seconds put in 13, matched the source at 3x, and came out
+    37% smaller.
+
+    That size figure is a screen recording's, where a keyframe is nearly all
+    redundant. Two live-action recordings measured the same day came out 8% and
+    3.5% smaller with no visible difference either way, so the setting is right
+    on anything and the large win is a screen recording's specifically.
+    """
+    monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "1")
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    runner = _SourceProbe(bitrates={("in.mp4", "v:0"): 400000})
+
+    args = sc.encode_args_for_source(
+        source, tmp_path / "out.mp4", audio_only=False, fps=60, runner=runner,
+    )
+
+    assert args[args.index("-g") + 1] == "300", "five seconds at the rate being written"
+
+
+def test_the_keyframe_interval_follows_the_rate_the_render_writes(tmp_path, fake_tools, monkeypatch):
+    """`-g` counts frames, so the same interval in seconds is a different number
+    at every rate. Both encodes are checked, because the normalize pass writes the
+    intermediate that every batch then reads."""
+    monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "1")
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    runner = _SourceProbe(
+        bitrates={("in.mp4", "v:0"): 400000},
+        frame_rates={"in.mp4": "60/1", "normalized.mp4": "60/1"},
+    )
+
+    sc.render_cut_plan(
+        source,
+        build_cut_plan(30.0, _silences((10.0, 12.0))),
+        tmp_path / "out.mp4",
+        runner=runner,
+    )
+
+    encodes = [command for command in runner.commands if "h264_videotoolbox" in command]
+    assert encodes, "the hardware encoder was asked for"
+    assert all(command[command.index("-g") + 1] == "300" for command in encodes)
+
+
+def test_software_encoding_is_left_to_its_own_keyframe_spacing(tmp_path, fake_tools, monkeypatch):
+    """x264's default keyint of 250 frames is already in the range this is aiming
+    for, and it inserts one at a scene change besides. The setting is there to
+    correct videotoolbox, not to override an encoder that had it right."""
+    monkeypatch.delenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", raising=False)
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    runner = _SourceProbe(bitrates={("in.mp4", "v:0"): 400000})
+
+    args = sc.encode_args_for_source(
+        source, tmp_path / "out.mp4", audio_only=False, fps=60, runner=runner,
+    )
+
+    assert "-g" not in args
+
+
 # ── downscaling, for the sources where bitrate alone cannot help ────────────
 
 def test_downscaling_is_paid_once_in_the_normalize_pass(tmp_path, fake_tools):
