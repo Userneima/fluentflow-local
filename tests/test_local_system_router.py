@@ -19,6 +19,10 @@ def test_local_system_routes_report_local_runtime(monkeypatch, tmp_path):
 
     assert health["status"] == "ok"
     assert health["runtime"]["execution"] == "local"
+    # Declared, not inferred: a client routing between the two editions reads this
+    # instead of guessing from an intake rejection.
+    assert health["edition"] == "local"
+    assert "local_path" in health["accepted_agent_inputs"]
     assert runtime["auth_mode"] == "open"
     assert runtime["allowed_stt_providers"] == ["local"]
     assert runtime["default_stt_provider"] == "local"

@@ -46,6 +46,7 @@ from backend.core.local_request_scope import (
 from backend.core.note_title import resolve_lark_doc_title
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.storage_paths import _artifact_storage_dir
+from backend.core.edition_identity import INTAKE_REJECTION
 from backend.routers.local_feishu_export import _local_lark_export_target
 from backend.routers.local_job_debreath import start_local_debreath
 from backend.routers.local_job_visual_note import start_local_visual_note
@@ -270,7 +271,9 @@ async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...
             "package": _task_package_response(job or {"task_id": task_id_value, "result": result}),
         }
 
-    raise HTTPException(status_code=400, detail="Provide a video link input or transcript_text")
+    # Name this edition in the refusal. An input list alone leaves the caller unable
+    # to tell a missing capability from the wrong backend answering.
+    raise HTTPException(status_code=400, detail=INTAKE_REJECTION)
 
 
 @router.get("/tasks/{task_id}")

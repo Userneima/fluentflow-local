@@ -18,6 +18,22 @@
 - 文档中出现的“上游导出”“镜像”“上一版从 Hosted 生成”只能作为历史背景，不是当前维护指令。
 - 需要改 Hosted 时，切换到 `fluentflow` 仓库并读取其 `AGENTS.md`；不要在本仓库做未经验证的反向同步。
 
+## 两个版本在同一台机器上怎么区分
+
+本地版占 8000（桌面 `FluentFlow Local.app`、`launchers/macos/FluentFlowLocal.command`），
+托管版在开发机上用 8001。两版都提供 `/agent/v1/...`，但入口能力不同，所以身份由后端自己声明，
+不靠调用方推断：`/health` 带 `edition`、`edition_label`、`accepted_agent_inputs`，字段来自
+`backend/core/edition_identity.py`。托管版仓库有它自己的一份，值不同；改一边要一起改另一边，
+否则声明和判断会分叉。
+
+`scripts/fluentflow_mcp_server.py` 是客户端，两个仓库各有一份，连哪个后端由
+`FLUENTFLOW_API_BASE` 决定。需要本地版的两个工具（`submit_local_media`、
+`write_note_from_cut_media`）在发请求前先读一次 `/health` 的 `edition`，对端不是本地版就说明
+是哪个版本在应答、该起哪一个。身份每次现读不缓存：这套机制要防的就是同一个端口上换了后端。
+
+本机 Agent API 要靠仓库根目录 `.env` 里的 `FLUENTFLOW_ACCESS_TOKEN` 打开，值要和调用方
+（例如 `~/.claude.json` 的 MCP 条目）一致，否则提交返回 401。
+
 ## 协作与交接
 
 开始新任务时先确定目标是 Local 还是 Hosted；目标不清时先问，不要跨仓库猜测。交接、任务说明、PR 和提交信息必须写明 edition / repository。跨仓库移植必须记录来源提交、目标仓库验证和未移植部分；这不是同步或导出。

@@ -518,3 +518,14 @@ def test_a_local_path_is_queued_through_the_page_entry_helper(agent_stack, monke
     assert body["package_url"] == "/agent/v1/tasks/t-local-1/package"
     assert seen["source"] == media
     assert seen["origin"]["chosen_with"] == "agent_api"
+
+
+def test_empty_submission_names_this_edition(agent_stack) -> None:
+    # An input list alone reads like a missing capability rather than a malformed
+    # call, and both editions used to answer with the same sentence (2026-09-15).
+    client = TestClient(_app())
+
+    response = client.post("/agent/v1/tasks", json={}, headers=_HEADERS)
+
+    assert response.status_code == 400
+    assert "FluentFlow Local" in response.json()["detail"]

@@ -30,62 +30,71 @@ def _app_version() -> str:
         return "0.0.0"
 
 
-SERVER_INFO = {"name": "fluentflow", "version": _app_version()}
+SERVER_INFO = {"name": "fluentflow-local", "version": _app_version()}
 
 
 def _client_id(value: str | None = None) -> str:
     return (value or os.environ.get("FLUENTFLOW_CLIENT_ID") or DEFAULT_CLIENT_ID).strip() or DEFAULT_CLIENT_ID
 
 
-# API bases already confirmed to be the Local edition of FluentFlow.
+# Which FluentFlow is answering, asked rather than assumed.
 #
-# Two editions ship the same MCP tool names and accept the same JSON, so a tool
-# call proves nothing about which backend is listening. The hosted backend has no
-# local-file entry and answers a path submission with a generic
-# "Provide a video link input or transcript_text". On 2026-09-15 that reply was
-# read as "the MCP tool is newer than this backend", and a recording job that the
-# product could have done end to end fell back to standalone scripts, losing cloud
-# transcription and the automatic note. /health is the discriminator that reading
-# the rejection text is not: only the Local edition reports
-# ``runtime.execution == "local"``.
-_LOCAL_EDITION_CONFIRMED: set[str] = set()
+# Two editions serve the same ``/agent/v1`` routes with different intake, and for
+# a while both answered on 127.0.0.1:8000. The rejection a path submission gets
+# from the hosted edition lists the inputs that one accepts and never says which
+# backend replied, so on 2026-09-15 it was read as "the MCP tool is newer than
+# this backend" and a job this edition could have done fell back to standalone
+# scripts. ``/health`` now declares the edition; only the tools that actually
+# need one ask, so pointing this client at either backend still works for the
+# ten tools both editions serve.
+_START_HINT = "请双击桌面上的「FluentFlow Local」启动它，等它把浏览器打开之后重试。"
 
 
-def _edition_refusal(api_base: str) -> dict[str, Any] | None:
-    """Why this backend cannot serve local Agent calls, or None when it can.
+def _unreachable(api_base: str, reason: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": f"FluentFlow Local 没有在 {api_base} 应答（{reason}）。{_START_HINT}",
+        "status": None,
+        "payload": None,
+    }
 
-    Only confirmation is cached. A refusal re-probes on the next call, so whoever
-    starts FluentFlow Local after reading one gets through without a restart.
+
+def _backend_edition(api_base: str) -> tuple[str, dict[str, Any] | None]:
+    """The edition answering at ``api_base``, or the error payload explaining why not.
+
+    Probed per call rather than cached: the case this exists for is a backend
+    being swapped on a port, and a cached identity is wrong exactly then. One
+    loopback GET is nothing beside submitting a media job.
     """
-    if api_base in _LOCAL_EDITION_CONFIRMED:
-        return None
     try:
         health = api_request("GET", api_base, "/health", timeout=5)
     except FluentFlowApiError as exc:
+        return "", _unreachable(api_base, str(exc))
+    edition = str(health.get("edition") or "").strip().lower()
+    if not edition:
+        # A backend from before /health declared its edition: runtime.execution
+        # was the only discriminator then, and only the local edition set it.
+        runtime = health.get("runtime") if isinstance(health.get("runtime"), dict) else {}
+        edition = "local" if str(runtime.get("execution") or "").strip().lower() == "local" else "hosted"
+    return edition, None
+
+
+def _require_local_edition(api_base: str) -> dict[str, Any] | None:
+    """Why this tool cannot run against ``api_base``, or None when it can."""
+    edition, failure = _backend_edition(api_base)
+    if failure is not None:
+        return failure
+    if edition != "local":
         return {
             "ok": False,
             "error": (
-                f"FluentFlow Local 没有在 {api_base} 应答（{exc}）。"
-                "请双击桌面上的「FluentFlow Local」启动它，等它把浏览器打开之后重试。"
+                f"{api_base} 上应答的是 FluentFlow Hosted，这个工具要的是 FluentFlow Local。"
+                "托管版按设计不收本机文件路径，它拒绝提交并不代表本地处理这个功能不存在。"
+                f"{_START_HINT}"
             ),
             "status": None,
             "payload": None,
         }
-    runtime = health.get("runtime") if isinstance(health.get("runtime"), dict) else {}
-    if str(runtime.get("execution") or "").strip().lower() != "local":
-        return {
-            "ok": False,
-            "error": (
-                f"{api_base} 上应答的后端不是 FluentFlow Local"
-                f"（app_version={health.get('app_version') or '未知'}）。"
-                "云端版按设计只收视频链接和转录稿，不收本机文件路径；它拒绝提交，"
-                "不代表本地处理这个功能不存在。请退掉占用这个端口的进程，"
-                "改用桌面上的「FluentFlow Local」启动本地版后重试。"
-            ),
-            "status": None,
-            "payload": None,
-        }
-    _LOCAL_EDITION_CONFIRMED.add(api_base)
     return None
 
 
@@ -99,9 +108,6 @@ def _agent_request(
     timeout: float = 60,
 ) -> dict[str, Any]:
     base = normalize_api_base(api_base)
-    refusal = _edition_refusal(base)
-    if refusal is not None:
-        return refusal
     try:
         return api_request(
             method,
@@ -113,6 +119,10 @@ def _agent_request(
             timeout=timeout,
         )
     except FluentFlowApiError as exc:
+        if exc.status is None:
+            # No HTTP status means nothing answered. Say how to start it instead of
+            # handing the caller a bare "Connection refused" to interpret.
+            return _unreachable(base, str(exc))
         return {
             "ok": False,
             "error": str(exc),
@@ -141,8 +151,11 @@ def submit_local_media(
     Local edition only, and the backend refuses it from anywhere but localhost. One
     file per call on purpose: a task has one id, and a call that queued five of them
     would have nothing to return and nothing to point at when one failed. For a whole
-    folder, loop — or use scripts/debreath_batch.py, which needs no backend at all.
+    folder, loop over this call.
     """
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
     return _agent_request(
         "POST",
         "/agent/v1/tasks",
@@ -366,6 +379,9 @@ def write_note_from_cut_media(
     ``cut_media_note`` block: ``basis`` there is measured from the note's own
     citations, so ``transcript_only`` means nothing was written from a picture.
     """
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
     payload: dict[str, Any] = {}
     if restore_previous_note:
         payload["restore_previous_note"] = True
@@ -460,8 +476,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "description": (
             "Submit one audio or video file that stays where it is, by absolute path "
             "on this machine. Local edition only; the backend accepts it from localhost "
-            "only. One file per call — loop for a folder, or use "
-            "scripts/debreath_batch.py to process a folder without a running backend."
+            "only, and this tool says so plainly when the other edition is the one "
+            "answering. One file per call — loop for a folder."
         ),
         "inputSchema": {
             "type": "object",

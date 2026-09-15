@@ -350,7 +350,18 @@ def test_a_finished_note_suggests_nothing(agent_job):
 
 # ── the MCP tool wraps the stable path ─────────────────────────────────────
 
-def test_the_mcp_tool_defaults_to_the_free_call(monkeypatch):
+@pytest.fixture()
+def local_edition(monkeypatch):
+    """Skip the client's edition probe: these tests are about the payload it sends.
+
+    ``write_note_from_cut_media`` reads the backend's ``/health`` edition first,
+    because the hosted backend has no visual-note route and says so in a way that
+    reads like a missing feature rather than the wrong backend.
+    """
+    monkeypatch.setattr(mcp, "_require_local_edition", lambda api_base: None)
+
+
+def test_the_mcp_tool_defaults_to_the_free_call(monkeypatch, local_edition):
     seen: dict[str, Any] = {}
 
     def fake_request(method, path, **kwargs):
@@ -366,7 +377,7 @@ def test_the_mcp_tool_defaults_to_the_free_call(monkeypatch):
     assert seen["payload"] == {"preview": True}, "reading must not cost the user money"
 
 
-def test_the_mcp_tool_can_run_it_and_can_switch_notes(monkeypatch):
+def test_the_mcp_tool_can_run_it_and_can_switch_notes(monkeypatch, local_edition):
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(
         mcp, "_agent_request", lambda method, path, **kwargs: seen.append(kwargs) or {"ok": True}
