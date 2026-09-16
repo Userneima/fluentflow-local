@@ -23,8 +23,9 @@ bash launchers/macos/setup-local.sh
 它会建虚拟环境、装 Python 和前端依赖、构建前端、下载转录模型，最后在桌面生成
 「FluentFlow Local.app」。装完双击桌面图标即可使用，不需要再开终端。
 
-FFmpeg 和 Node.js 缺失时脚本会问一句要不要用 Homebrew 装；Homebrew 本身需要你
-自己先装（https://brew.sh）。加 `--skip-desktop` 可以不生成桌面图标。
+整个过程不需要你回答任何问题。FFmpeg 和 Node.js 缺失时会用 Homebrew 直接装上；
+Homebrew 本身需要你自己先装（https://brew.sh），那一步要输密码。`--skip-desktop`
+不生成桌面图标，`--skip-model` 不下转录模型（留到第一次转录时再下）。
 
 ### Windows
 
@@ -32,9 +33,9 @@ FFmpeg 和 Node.js 缺失时脚本会问一句要不要用 Homebrew 装；Homebr
 powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\setup-local.ps1
 ```
 
-同样是一次装完。检测到 NVIDIA 显卡时，它会把 CUDA 12 与 cuDNN 9 运行库装进这个
-虚拟环境；不需要装机器级 CUDA Toolkit，但显卡驱动要在。FFmpeg 缺失时会问一句
-要不要用 winget 装。
+同样是一次装完，同样不问问题。检测到 NVIDIA 显卡时，它会把 CUDA 12 与 cuDNN 9
+运行库装进这个虚拟环境；不需要装机器级 CUDA Toolkit，但显卡驱动要在。FFmpeg 缺失
+时会用 winget 直接装上。`-SkipModel` 不下转录模型。
 
 已经装好、只想补 GPU 运行库：
 

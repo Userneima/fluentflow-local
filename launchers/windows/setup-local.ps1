@@ -1,7 +1,17 @@
 # One-time Windows setup for FluentFlow Local.
 # Creates the project virtual environment, installs project-owned GPU runtime
-# DLLs when an NVIDIA adapter is present, builds the frontend, and creates the
-# Desktop launcher.  It never installs a machine-wide CUDA Toolkit.
+# DLLs when an NVIDIA adapter is present, builds the frontend, downloads the
+# transcription model, and creates the Desktop launcher. It never installs a
+# machine-wide CUDA Toolkit.
+#
+# It asks nothing along the way. Running this script is the decision; every
+# question it could ask (FFmpeg, the model) has one sensible answer, and asking
+# only chops the wait into pieces the user has to sit through. Missing pieces
+# are installed, each step says what it is doing, and only a failure stops it.
+#
+#   ... -SkipModel   do not download the transcription model
+param([switch]$SkipModel)
+
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -34,12 +44,13 @@ if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
     -not (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
     $Winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if ($Winget) {
-        Write-Host "FFmpeg was not found (transcoding and frame extraction need it)."
-        $Reply = Read-Host "Install it with winget now? [Y/n]"
-        if ($Reply -match '^[Nn]') {
-            throw "Install FFmpeg (winget install Gyan.FFmpeg), then run this script again."
-        }
-        Invoke-Checked $Winget.Source @("install", "--id", "Gyan.FFmpeg", "-e", "--source", "winget")
+        Write-Host "FFmpeg was not found (transcoding and frame extraction need it). Installing it..."
+        # The agreement switches are what make this unattended: without them
+        # winget stops on a prompt the user did not ask to be shown.
+        Invoke-Checked $Winget.Source @(
+            "install", "--id", "Gyan.FFmpeg", "-e", "--source", "winget",
+            "--accept-source-agreements", "--accept-package-agreements"
+        )
         Write-Host "FFmpeg installed. If the next step cannot find it, open a new PowerShell window so PATH is refreshed."
     } else {
         throw "FFmpeg was not found. Install it (winget install Gyan.FFmpeg) and make sure ffmpeg.exe and ffprobe.exe are on PATH, then run this script again."
@@ -96,10 +107,14 @@ try {
 # Downloaded here rather than inside the user's first transcription, where the
 # wait has no progress and no explanation. A failure is not fatal: the model can
 # be fetched later, and the first run falls back to downloading it itself.
-Write-Host "Preparing the transcription model..."
-& $Python (Join-Path $Repo "scripts\stt_model.py") "fetch" "--ask"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "The model was not downloaded. The first transcription will retry it, or run scripts\stt_model.py fetch later."
+if ($SkipModel) {
+    Write-Host "Skipping the transcription model; the first transcription will download it."
+} else {
+    Write-Host "Preparing the transcription model..."
+    & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "The model was not downloaded. The first transcription will retry it, or run scripts\stt_model.py fetch later."
+    }
 }
 
 Write-Host "Checking local runtime..."

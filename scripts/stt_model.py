@@ -62,21 +62,7 @@ def _fetch(args: argparse.Namespace) -> int:
         print(f"\n✓ 已经下载过了：{existing}")
         return 0
 
-    size = _format_size(download_size_bytes(plan))
-    if args.ask:
-        if not sys.stdin.isatty():
-            print(f"\n跳过下载（没有可交互的终端）。第一次转录时会自动下载 {size}。")
-            return 0
-        try:
-            reply = input(f"\n需要下载 {size}。现在下载吗？不下的话第一次转录时会下。[Y/n] ")
-        except EOFError:
-            reply = "n"
-        if reply.strip().lower().startswith("n"):
-            print("跳过。第一次转录时会自动下载。")
-            return 0
-        print()
-    else:
-        print(f"\n需要下载 {size}，请保持网络畅通…\n")
+    print(f"\n需要下载 {_format_size(download_size_bytes(plan))}，请保持网络畅通…\n")
 
     try:
         path = ensure_downloaded(plan)
@@ -107,11 +93,6 @@ def main() -> int:
         default=None,
         choices=("auto", "mlx", "faster_whisper"),
         help="强制使用某条转录路径（默认自动选择）",
-    )
-    fetch.add_argument(
-        "--ask",
-        action="store_true",
-        help="下载前先问一次（安装脚本用）。没有终端可问时跳过下载并说明原因。",
     )
     fetch.set_defaults(handler=_fetch)
 

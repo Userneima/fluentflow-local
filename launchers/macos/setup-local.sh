@@ -2,25 +2,33 @@
 # FluentFlow Local 的 macOS 一次性安装脚本。
 #
 # 和 Windows 的 setup-local.ps1 对等：建项目虚拟环境、装 Python 依赖、装前端
-# 依赖并构建、跑就绪检查，最后在桌面生成「FluentFlow Local.app」。装完双击桌面
-# 图标即可使用，不需要再开终端。
+# 依赖并构建、下好转录模型、跑就绪检查，最后在桌面生成「FluentFlow Local.app」。
+# 装完双击桌面图标即可使用，不需要再开终端。
 #
-# 它只动两个地方：仓库里的 .venv / node_modules / frontend/dist-local，以及桌面
-# 上的启动器。不装机器级的东西——FFmpeg 缺失时只给出 brew 命令并询问，不会背着
-# 用户改系统。
+# 中途不问问题。跑这个脚本就是要用这个产品，而它问得出口的每一样东西（FFmpeg、
+# Node.js、转录模型）都是必需品，答案只有一个；把它们做成问句，只是把等待切成
+# 几段，让用户没法走开。所以缺什么装什么，每步开始前说一句在装什么，失败了才停
+# 下来说话。
+#
+# 它动的地方：仓库里的 .venv / node_modules / frontend/dist-local，桌面上的启动
+# 器，以及用 Homebrew 补上缺失的 FFmpeg 和 Node.js。Homebrew 自己不会被装——那
+# 一步要密码，得你自己来。
 #
 # 用法：
 #   bash launchers/macos/setup-local.sh
 #   bash launchers/macos/setup-local.sh --skip-desktop   # 不生成桌面 App
+#   bash launchers/macos/setup-local.sh --skip-model     # 不下转录模型（第一次转录时再下）
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 SKIP_DESKTOP=0
+SKIP_MODEL=0
 for arg in "$@"; do
 	case "$arg" in
 	--skip-desktop) SKIP_DESKTOP=1 ;;
+	--skip-model) SKIP_MODEL=1 ;;
 	-h | --help)
 		# 打印开头的注释块：跳过 shebang，遇到第一行非注释就停。写死行号的话，
 		# 以后在注释里多加一句，帮助信息末尾就会冒出一行 set -euo pipefail。
@@ -28,7 +36,7 @@ for arg in "$@"; do
 		exit 0
 		;;
 	*)
-		echo "未知参数：$arg（可用：--skip-desktop）" >&2
+		echo "未知参数：$arg（可用：--skip-desktop --skip-model）" >&2
 		exit 2
 		;;
 	esac
@@ -51,16 +59,8 @@ step "检查 FFmpeg"
 if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
 	echo "已安装：$(command -v ffmpeg)"
 elif command -v brew >/dev/null 2>&1; then
-	echo "未找到 FFmpeg（转码和抽帧都要用它）。"
-	if [[ -t 0 ]]; then
-		read -r -p "现在用 Homebrew 安装吗？[Y/n] " reply || reply="n"
-		case "${reply:-Y}" in
-		[Nn]*) fail "请先执行 brew install ffmpeg，然后重新运行本脚本。" ;;
-		esac
-		brew install ffmpeg || fail "brew install ffmpeg 失败，请手动安装后重试。"
-	else
-		fail "请先执行 brew install ffmpeg，然后重新运行本脚本。"
-	fi
+	echo "未找到 FFmpeg（转码和抽帧都要用它），正在用 Homebrew 安装…"
+	brew install ffmpeg || fail "brew install ffmpeg 失败，请手动安装后重试。"
 else
 	fail "未找到 FFmpeg，也没有 Homebrew。
 请先安装 Homebrew（https://brew.sh）再执行 brew install ffmpeg，
@@ -175,12 +175,8 @@ step "安装前端依赖并构建"
 # 和上面的 FFmpeg 同样对待。之前这里是直接报错让用户自己去装 Node，而 FFmpeg
 # 缺失时脚本会主动问一句——同一个脚本里两种待遇，先遇到哪个全看运气。
 if ! command -v npm >/dev/null 2>&1; then
-	if command -v brew >/dev/null 2>&1 && [[ -t 0 ]]; then
-		echo "未找到 Node.js（构建前端界面要用它）。"
-		read -r -p "现在用 Homebrew 安装吗？[Y/n] " reply || reply="n"
-		case "${reply:-Y}" in
-		[Nn]*) fail "请先安装 Node.js（brew install node），然后重新运行本脚本。" ;;
-		esac
+	if command -v brew >/dev/null 2>&1; then
+		echo "未找到 Node.js（构建前端界面要用它），正在用 Homebrew 安装…"
 		brew install node || fail "brew install node 失败，请手动安装后重试。"
 	else
 		fail "未找到 npm。请先安装 Node.js（brew install node，或到 https://nodejs.org 下载），
@@ -215,9 +211,13 @@ npm run "$BUILD_SCRIPT" || fail "前端构建失败。"
 # 视频，才开始等几 GB 的模型，而那个等待没有任何进度可看。下载失败不让整个安装
 # 失败——模型随时可以补，环境不必重装。
 step "准备转录模型"
-"$VENV_PY" "${REPO}/scripts/stt_model.py" fetch --ask ||
-	echo "（模型没有下成。第一次转录时会自动重试，也可以稍后手动运行
+if [[ "$SKIP_MODEL" -eq 1 ]]; then
+	echo "按要求跳过。第一次转录时会自动下载。"
+else
+	"$VENV_PY" "${REPO}/scripts/stt_model.py" fetch ||
+		echo "（模型没有下成。第一次转录时会自动重试，也可以稍后手动运行
   ${VENV_PY} ${REPO}/scripts/stt_model.py fetch）"
+fi
 
 # --- 6. 就绪检查 -----------------------------------------------------------
 step "启动前检查"
