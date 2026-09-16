@@ -7,31 +7,34 @@
 
 ## 安装
 
-需要 Python 3.10 或更高版本、Node.js 和 FFmpeg。AI 与飞书凭据装完后在应用的设置页里填写。
+先把代码拿到本地：
+
+```bash
+git clone https://github.com/Userneima/fluentflow-local.git
+cd fluentflow-local
+```
 
 ### macOS
-
-在仓库目录里执行一次：
 
 ```bash
 bash launchers/macos/setup-local.sh
 ```
 
-它会创建虚拟环境、安装依赖、构建前端、跑一遍启动前检查，并在桌面生成「FluentFlow Local.app」。之后双击桌面图标即可启动，不必再打开终端。缺 FFmpeg 时它会先问一句要不要用 Homebrew 安装，再继续后面耗时的步骤。
+它会建虚拟环境、装 Python 和前端依赖、构建前端、下载转录模型，最后在桌面生成
+「FluentFlow Local.app」。装完双击桌面图标即可使用，不需要再开终端。
 
-只想装好运行环境、不要桌面图标，加 `--skip-desktop`。
+FFmpeg 和 Node.js 缺失时脚本会问一句要不要用 Homebrew 装；Homebrew 本身需要你
+自己先装（https://brew.sh）。加 `--skip-desktop` 可以不生成桌面图标。
 
-Apple Silicon 上会自动装 mlx-whisper 走加速转录，其他机器用 faster-whisper 在 CPU 上转。
-
-### Windows（含 NVIDIA 显卡转录）
-
-在 PowerShell 里执行一次：
+### Windows
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\setup-local.ps1
 ```
 
-它会建 `.venv`、装依赖、构建前端，并且在检测到 NVIDIA 显卡时把 CUDA 12 与 cuDNN 9 运行库装进这个虚拟环境。不需要装机器级 CUDA Toolkit，但显卡驱动要在。
+同样是一次装完。检测到 NVIDIA 显卡时，它会把 CUDA 12 与 cuDNN 9 运行库装进这个
+虚拟环境；不需要装机器级 CUDA Toolkit，但显卡驱动要在。FFmpeg 缺失时会问一句
+要不要用 winget 装。
 
 已经装好、只想补 GPU 运行库：
 
@@ -39,7 +42,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\setup-lo
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows-gpu.txt
 ```
 
-有显卡时转录用 large-v3，没有时用 medium。运行库缺失会退回 CPU 并在启动检查里说明缺什么。
+有显卡时转录用 large-v3，没有时自动降到 medium。运行库缺失会退回 CPU，并在启动
+检查里说明缺什么。
 
 ### 手动安装
 
@@ -48,10 +52,48 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements-local.txt
 npm install
 npm run build:frontend
+.venv/bin/python scripts/stt_model.py fetch
 .venv/bin/python -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000
 ```
 
-运行数据默认保存在系统应用数据目录（例如 macOS 的 `~/Library/Application Support/FluentFlow`），不在仓库中。
+需要 Python 3.10 以上和 FFmpeg。AI 与飞书凭据在应用的设置页里填写。运行数据默认
+保存在系统应用数据目录（macOS 是 `~/Library/Application Support/FluentFlow`），
+不在仓库中。
+
+## 需要多少磁盘空间
+
+在一台 Apple Silicon Mac 上实测：
+
+| | 占用 |
+| --- | --- |
+| Python 依赖（`.venv`） | 1.7 GB |
+| 前端依赖与构建产物 | 0.2 GB |
+| 转录模型 large-v3 | 3.1 GB |
+
+加上系统层的 Xcode 命令行工具、Homebrew、FFmpeg 和 Node.js，一台全新的 Mac 从
+零到跑完第一个任务约 6 GB。之后每个任务还会在应用数据目录里留下媒体、抽帧和中间
+产物，那部分随使用增长，没有上限。
+
+只用 CPU 转录的机器会自动改用 medium（约 1.5 GB），不会下载跑不动的那个模型。
+
+## 卸载
+
+```bash
+bash launchers/macos/uninstall-local.sh            # 只卸程序
+bash launchers/macos/uninstall-local.sh --models   # 连转录模型一起
+bash launchers/macos/uninstall-local.sh --data     # 连任务数据一起
+bash launchers/macos/uninstall-local.sh --all --dry-run   # 先看看要删什么
+```
+
+Windows 用 `launchers\windows\uninstall-local.ps1`，开关是 `-Models`、`-Data`、
+`-All`、`-DryRun`。
+
+默认只删虚拟环境、前端依赖、桌面启动器和日志，这些重装就回来。转录模型和任务
+数据各自需要显式开口：模型住在 Hugging Face 的公共缓存里，脚本只删本产品下载过
+的那几个目录；任务数据删掉无法恢复，所以会再确认一次。
+
+FFmpeg、Node.js、Homebrew 和 Python 不会被动，它们是系统工具。代码目录留给你自己
+删——卸载脚本就在里面。
 
 ## Development
 
@@ -62,7 +104,14 @@ npm run test:frontend
 .venv/bin/python -m pytest tests/ -q
 ```
 
-`npm run build:frontend` 生成本地版由 `backend.local_main` 提供的 `frontend/dist-local`。不要提交该构建目录、`.env`、媒体、任务数据库或导出内容。
+`npm run build:frontend` 生成本地版由 `backend.local_main` 提供的 `frontend/dist-local`。
+不要提交该构建目录、`.env`、媒体、任务数据库或导出内容。
+
+启动前的环境检查可以单独跑，它会说明转录会走哪条路、模型在不在本机：
+
+```bash
+.venv/bin/python scripts/check_local_readiness.py
+```
 
 ## License
 

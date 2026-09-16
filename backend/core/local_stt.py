@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from backend.core.local_stt_policy import DEFAULT_LOCAL_STT_MODEL
 from backend.core.windows_gpu_runtime import configure_windows_gpu_runtime
 
 # Before the import below, not after: CTranslate2 loads its CUDA libraries when
@@ -57,7 +58,7 @@ _STT_SPEED_PROFILES: dict[str, dict[str, Any]] = {
     },
 }
 
-DEFAULT_MODEL_SIZE = "large-v3"
+DEFAULT_MODEL_SIZE = DEFAULT_LOCAL_STT_MODEL
 
 # Which local engine runs. "auto" takes the Apple GPU when this machine has it
 # and faster-whisper everywhere else; the explicit values exist so a support
@@ -178,6 +179,74 @@ def _model_for_device(model_size: str, device: str) -> str:
     if alias == "large-v3" and not device.startswith("cuda"):
         return "medium"
     return alias
+
+
+# faster-whisper publishes its CTranslate2 conversions under this prefix, and
+# its own `download_model` resolves a size to the same repository. The tests
+# assert that against the library's table, so an upstream rename fails there
+# rather than turning into an installer that downloads nothing.
+_FASTER_WHISPER_REPO_PREFIX = "Systran/faster-whisper-"
+_FASTER_WHISPER_WEIGHTS_FILENAME = "model.bin"
+
+
+@dataclass(frozen=True)
+class PlannedModel:
+    """Which weights a transcription started right now would load.
+
+    The installer and the readiness report both need this, and both have to
+    read it from here rather than from the size the user asked for. On a
+    CPU-only machine `_model_for_device` sends the run to medium, so an
+    installer that pre-downloaded large-v3 would have spent 3GB on a file no
+    run ever opens — and the readiness report would call the machine ready
+    while the model it will really load is still missing.
+    """
+
+    engine: str
+    model_size: str
+    repo_id: str
+    weights_filename: str
+    requested_size: str
+    local_dir: Path | None = None
+    note: str | None = None
+
+    @property
+    def downgraded(self) -> bool:
+        return self.model_size != self.requested_size
+
+
+def planned_model(
+    model_size: str = DEFAULT_MODEL_SIZE,
+    *,
+    engine: str | None = None,
+    device: str = "auto",
+) -> PlannedModel:
+    """Resolve the lane, the device and the size the way a real run resolves them."""
+    requested = (model_size or DEFAULT_MODEL_SIZE).strip()
+    lane, lane_reason = resolve_local_stt_engine(engine)
+
+    if lane == "mlx":
+        return PlannedModel(
+            engine="mlx",
+            model_size=local_stt_mlx.resolve_size(requested),
+            repo_id=local_stt_mlx.resolve_repo(requested),
+            weights_filename=local_stt_mlx.WEIGHTS_FILENAME,
+            requested_size=requested,
+            note=lane_reason,
+        )
+
+    effective_device, device_reason = _resolve_stt_device(device)
+    size = _model_for_device(requested, effective_device)
+    local = _LOCAL_MODEL_DIR / size
+    notes = [note for note in (lane_reason, device_reason) if note]
+    return PlannedModel(
+        engine="faster_whisper",
+        model_size=size,
+        repo_id=f"{_FASTER_WHISPER_REPO_PREFIX}{size}",
+        weights_filename=_FASTER_WHISPER_WEIGHTS_FILENAME,
+        requested_size=requested,
+        local_dir=local if (local / _FASTER_WHISPER_WEIGHTS_FILENAME).is_file() else None,
+        note="；".join(notes) if notes else None,
+    )
 
 
 def _is_large_v3(model_size: str | None) -> bool:

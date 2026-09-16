@@ -27,6 +27,25 @@ function Test-NvidiaAdapter {
     }
 }
 
+# Checked before anything downloads. FFmpeg is required, and the pip install
+# below takes a long time: finding out at the readiness check means the user
+# waited through the whole install to be told one thing was missing.
+if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
+    -not (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
+    $Winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if ($Winget) {
+        Write-Host "FFmpeg was not found (transcoding and frame extraction need it)."
+        $Reply = Read-Host "Install it with winget now? [Y/n]"
+        if ($Reply -match '^[Nn]') {
+            throw "Install FFmpeg (winget install Gyan.FFmpeg), then run this script again."
+        }
+        Invoke-Checked $Winget.Source @("install", "--id", "Gyan.FFmpeg", "-e", "--source", "winget")
+        Write-Host "FFmpeg installed. If the next step cannot find it, open a new PowerShell window so PATH is refreshed."
+    } else {
+        throw "FFmpeg was not found. Install it (winget install Gyan.FFmpeg) and make sure ffmpeg.exe and ffprobe.exe are on PATH, then run this script again."
+    }
+}
+
 if (-not (Test-Path $Python)) {
     $PyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
     if (-not $PyLauncher) {
@@ -72,6 +91,15 @@ try {
     Invoke-Checked $Npm.Source @("run", $BuildScript)
 } finally {
     Pop-Location
+}
+
+# Downloaded here rather than inside the user's first transcription, where the
+# wait has no progress and no explanation. A failure is not fatal: the model can
+# be fetched later, and the first run falls back to downloading it itself.
+Write-Host "Preparing the transcription model..."
+& $Python (Join-Path $Repo "scripts\stt_model.py") "fetch" "--ask"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "The model was not downloaded. The first transcription will retry it, or run scripts\stt_model.py fetch later."
 }
 
 Write-Host "Checking local runtime..."

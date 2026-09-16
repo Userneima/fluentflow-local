@@ -45,7 +45,7 @@ from backend.core.local_limits_config import (
 )
 from backend.core.local_request_scope import request_client_id, request_is_localhost
 from backend.core.local_retention_config import source_retention_days
-from backend.core.local_stt_policy import LOCAL_STT_PROVIDER
+from backend.core.local_stt_policy import DEFAULT_LOCAL_STT_MODEL, LOCAL_STT_PROVIDER
 from backend.core.local_keyframe_provider import extract_keyframes as extract_local_keyframes
 from backend.core.local_task_detail import build_task_snapshot
 from backend.core.media_intake import (
@@ -359,7 +359,7 @@ def _local_media_job_context(
         quota_reservation=None,
         task_started_at=time.perf_counter(),
         loop=asyncio.get_event_loop(),
-        model_size=(options.get("stt_model") or "").strip() or "medium",
+        model_size=(options.get("stt_model") or "").strip() or DEFAULT_LOCAL_STT_MODEL,
         speed_profile=(options.get("stt_speed") or "").strip() or "balanced",
         language="auto",
         stt_provider_value=LOCAL_STT_PROVIDER,

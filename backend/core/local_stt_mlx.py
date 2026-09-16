@@ -44,6 +44,11 @@ _MLX_REPOS: dict[str, str] = {
 }
 _DEFAULT_REPO = _MLX_REPOS["large-v3"]
 
+# The file every one of those repos keeps its weights in. The installer and the
+# readiness report look for it to answer "is this model already on the disk",
+# which they cannot do by importing the model without also loading it.
+WEIGHTS_FILENAME = "weights.npz"
+
 # Keep a little silence on each side of a speech run so word onsets and trailing
 # consonants are not clipped by the cut itself.
 _PAD_SECONDS = 0.4
@@ -94,6 +99,22 @@ def unavailable_reason() -> str | None:
 
 def is_available() -> bool:
     return unavailable_reason() is None
+
+
+def supported_sizes() -> tuple[str, ...]:
+    """The sizes this lane has weights for, in the product's own vocabulary."""
+    return tuple(_MLX_REPOS)
+
+
+def resolve_size(model_size: str | None) -> str:
+    """The size this lane will really load, which is not always the one asked for.
+
+    `resolve_repo` already collapses an unknown size onto the default repo; this
+    returns the same decision as a size, so a caller reporting "which model will
+    run" cannot report one thing while `resolve_repo` downloads another.
+    """
+    requested = (model_size or "").strip()
+    return requested if requested in _MLX_REPOS else "large-v3"
 
 
 def resolve_repo(model_size: str | None) -> str:

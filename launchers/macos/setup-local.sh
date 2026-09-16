@@ -172,8 +172,21 @@ fi
 
 # --- 4. 前端 ---------------------------------------------------------------
 step "安装前端依赖并构建"
-command -v npm >/dev/null 2>&1 ||
-	fail "未找到 npm。请先安装 Node.js（brew install node），然后重新运行本脚本。"
+# 和上面的 FFmpeg 同样对待。之前这里是直接报错让用户自己去装 Node，而 FFmpeg
+# 缺失时脚本会主动问一句——同一个脚本里两种待遇，先遇到哪个全看运气。
+if ! command -v npm >/dev/null 2>&1; then
+	if command -v brew >/dev/null 2>&1 && [[ -t 0 ]]; then
+		echo "未找到 Node.js（构建前端界面要用它）。"
+		read -r -p "现在用 Homebrew 安装吗？[Y/n] " reply || reply="n"
+		case "${reply:-Y}" in
+		[Nn]*) fail "请先安装 Node.js（brew install node），然后重新运行本脚本。" ;;
+		esac
+		brew install node || fail "brew install node 失败，请手动安装后重试。"
+	else
+		fail "未找到 npm。请先安装 Node.js（brew install node，或到 https://nodejs.org 下载），
+然后重新运行本脚本。"
+	fi
+fi
 
 cd "$REPO"
 if [[ -f package-lock.json ]]; then
@@ -197,12 +210,21 @@ fi
 echo "构建：npm run ${BUILD_SCRIPT}"
 npm run "$BUILD_SCRIPT" || fail "前端构建失败。"
 
-# --- 5. 就绪检查 -----------------------------------------------------------
+# --- 5. 转录模型 -----------------------------------------------------------
+# 不下这一步也能装完，但「安装完成」四个字会变成谎话：用户双击图标、丢进第一个
+# 视频，才开始等几 GB 的模型，而那个等待没有任何进度可看。下载失败不让整个安装
+# 失败——模型随时可以补，环境不必重装。
+step "准备转录模型"
+"$VENV_PY" "${REPO}/scripts/stt_model.py" fetch --ask ||
+	echo "（模型没有下成。第一次转录时会自动重试，也可以稍后手动运行
+  ${VENV_PY} ${REPO}/scripts/stt_model.py fetch）"
+
+# --- 6. 就绪检查 -----------------------------------------------------------
 step "启动前检查"
 "$VENV_PY" "${REPO}/scripts/check_local_readiness.py" ||
 	fail "环境未就绪，请按上面的提示处理后重新运行本脚本。"
 
-# --- 6. 桌面启动器 ---------------------------------------------------------
+# --- 7. 桌面启动器 ---------------------------------------------------------
 if [[ "$SKIP_DESKTOP" -eq 1 ]]; then
 	echo ""
 	echo "✓ 安装完成（按要求跳过了桌面启动器）。"

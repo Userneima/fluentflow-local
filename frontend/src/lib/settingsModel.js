@@ -130,7 +130,7 @@ export const noteModeLabel = (mode, lang) => {
     return found ? (lang === 'zh' ? found.labelZh : found.labelEn) : (mode || 'auto');
 };
 
-export const DEFAULT_STT_MODEL = 'medium';
+export const DEFAULT_STT_MODEL = 'large-v3';
 
 // The cloud STT provider policy lives behind the edition seam in
 // `lib/sttPolicy.js` (hosted implementation in the cloud-only
