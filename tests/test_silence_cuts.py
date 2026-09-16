@@ -1483,3 +1483,52 @@ def test_the_part_ceiling_is_measured_on_the_original_not_the_intermediate(tmp_p
     assert _ceiling_of(_render_commands(runner)[0]) == 266_000, (
         "280 kbps off the original, not 64 kbps off the intermediate"
     )
+
+
+def test_the_scratch_copy_is_sized_by_the_busiest_minute_not_the_average(tmp_path, fake_tools):
+    """Every batch reads its frames from the normalized intermediate, so detail
+    squeezed out there cannot be restored by any later ceiling. On a recording
+    that runs 14 kbps of black screen then 278 kbps of document, an average-derived
+    scratch ceiling flattened the document to 95 kbps before the cutting pass saw
+    it: raising only the per-part ceiling moved that frame from 0.32 to 0.37 of the
+    source's sharpness, and sizing this pass by the busiest minute took it to 0.92.
+    """
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    quiet = {second: 2_000 for second in range(0, 120)}      # 16 kbps
+    busy = {second: 35_000 for second in range(120, 180)}    # 280 kbps
+    runner = _SourceProbe(
+        bitrates={("in.mp4", "v:0"): 67_000},
+        second_bytes={"in.mp4": {**quiet, **busy}},
+    )
+
+    sc.normalize_to_constant_frame_rate(source, tmp_path / "normalized.mp4", runner=runner)
+
+    command = next(c for c in runner.commands if "normalized.mp4" in " ".join(c))
+    ceiling = int(command[command.index("-maxrate:v") + 1])
+    assert ceiling > 300_000, (
+        "the busiest minute is 280 kbps; 1.5x that, not 1.5x the 67 kbps average"
+    )
+
+
+def test_the_scratch_ceiling_never_drops_below_the_old_one(tmp_path, fake_tools):
+    """A uniform recording has no busy minute to find. Taking the larger of the two
+    keeps this from becoming a downgrade on the material it was already right for."""
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    runner = _SourceProbe(
+        bitrates={("in.mp4", "v:0"): 752_000},
+        second_bytes={"in.mp4": {second: 94_000 for second in range(0, 120)}},
+    )
+
+    sc.normalize_to_constant_frame_rate(source, tmp_path / "normalized.mp4", runner=runner)
+
+    command = next(c for c in runner.commands if "normalized.mp4" in " ".join(c))
+    ceiling = int(command[command.index("-maxrate:v") + 1])
+    assert ceiling >= int(752_000 * sc.NORMALIZE_BITRATE_HEADROOM * sc.BITRATE_CEILING_MARGIN)
+
+
+def test_peak_window_reads_the_busy_stretch_not_the_mean():
+    seconds = [1_000] * 600 + [50_000] * 120
+    assert sc.peak_window_bitrate_bps(seconds) > 300_000
+    assert sc.peak_window_bitrate_bps(()) == 0.0

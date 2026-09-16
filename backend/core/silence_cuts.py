@@ -153,6 +153,16 @@ HARDWARE_KEYFRAME_SECONDS = 5.0
 # picture. 1.5 is a judgement, not a measurement.
 NORMALIZE_BITRATE_HEADROOM = 1.5
 
+# The window the normalize ceiling is measured over, and which of those windows
+# sets it. A minute is long enough that one keyframe does not decide the answer,
+# and short enough that a dense twenty-minute passage is not averaged away by the
+# hour of black screen in front of it. Measured on a 2.5-hour recording that runs
+# 14 kbps of black then 200-278 kbps of document: the file average is 67 kbps and
+# the busiest minute is 273, so an average-derived scratch ceiling flattened the
+# only readable part before the cutting pass ever saw it.
+PEAK_WINDOW_SECONDS = 60
+PEAK_WINDOW_PERCENTILE = 95.0
+
 # Audio-only sources take a shorter path: no frame rate to normalize, no picture
 # to renumber, and no audio/video skew to measure. Everything that makes video
 # cutting delicate simply does not apply, so those steps are skipped rather than
@@ -440,6 +450,40 @@ def ranges_bitrate_bps(second_bytes: Sequence[int], ranges: Sequence[TimeRange])
     if span <= 0:
         return 0.0
     return total * 8.0 / span
+
+
+def peak_window_bitrate_bps(
+    second_bytes: Sequence[int],
+    *,
+    window_seconds: int = PEAK_WINDOW_SECONDS,
+    percentile: float = PEAK_WINDOW_PERCENTILE,
+) -> float:
+    """The busiest sustained stretch of the source, not its average.
+
+    A minute is long enough that a single keyframe does not set the answer and
+    short enough that a twenty-minute dense passage is not averaged away by the
+    hour of black screen before it. The percentile rather than the maximum for
+    the same reason: one anomalous window should not size a whole encode.
+
+    0 when there is nothing to measure, which reads the same as an unreadable
+    probe everywhere else here.
+    """
+    if not second_bytes or window_seconds < 1:
+        return 0.0
+    windows = [
+        sum(second_bytes[start:start + window_seconds]) * 8.0
+        / min(window_seconds, len(second_bytes) - start)
+        for start in range(0, len(second_bytes), window_seconds)
+        if len(second_bytes) - start >= min(window_seconds, len(second_bytes))
+        or start + window_seconds <= len(second_bytes)
+    ]
+    if not windows:
+        windows = [sum(second_bytes) * 8.0 / len(second_bytes)]
+    windows.sort()
+    position = (len(windows) - 1) * max(0.0, min(100.0, percentile)) / 100.0
+    lower = int(position)
+    upper = min(lower + 1, len(windows) - 1)
+    return windows[lower] + (windows[upper] - windows[lower]) * (position - lower)
 
 
 def _with_ceiling_values(args: Sequence[str], ceiling_bps: float) -> list[str]:
@@ -1296,6 +1340,18 @@ def normalize_to_constant_frame_rate(
         audio_bitrate_bps=_parse_bitrate_bps(_option_value(encode, "-b:a")),
         runner=runner,
     )
+    # Measured on the busiest minute, not on the file average. This intermediate
+    # is what every batch below reads its frames from, so detail squeezed out
+    # here cannot be put back by a later ceiling however generous: on the
+    # recording above, raising only the per-part ceiling moved its document
+    # section from 0.64 to 0.73 of the source's sharpness and no further, because
+    # the frames reaching the cutting pass had already been flattened to 95 kbps.
+    # The file is scratch and is deleted when the render finishes, so the cost of
+    # being generous here is disk for the length of one job, not a larger
+    # delivered file — that is still capped by what the source spent.
+    if ceiling > 0:
+        peak = peak_window_bitrate_bps(video_second_bytes(source, runner=runner))
+        ceiling = max(ceiling, peak)
     headroom = ceiling * NORMALIZE_BITRATE_HEADROOM
     encode = _with_hardware_video_encoder(encode, headroom, fps=fps) + _bitrate_ceiling_args(headroom)
     result = runner([
