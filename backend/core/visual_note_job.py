@@ -52,7 +52,7 @@ import json
 import logging
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -386,6 +386,7 @@ def describe(
         "transcript_chars": 0,
         "transcript_chars_dropped": 0,
         "transcript_covered_until": "",
+        "transcript_parts": 0,
         "media": None,
         "subtitle_timeline": None,
         "media_warnings": [],
@@ -438,20 +439,19 @@ def describe(
         payload["reason"] = str(exc)
         return payload
     payload["subtitle_timeline"] = timeline
-    fitted = claude_vision.transcript_for_request(transcript)
-    payload["transcript_chars"] = fitted.chars_sent
-    payload["transcript_chars_dropped"] = fitted.chars_dropped
-    payload["transcript_covered_until"] = fitted.covered_until
-    if fitted.chars_dropped:
-        # Said here, in the free preview, because here is the only place it is
-        # still useful: after the run the money is spent and the note is written.
-        # A recording this long has to be split before it is worth paying for.
-        covered = (
-            f"只覆盖到 {fitted.covered_until}，" if fitted.covered_until else ""
-        )
+    parts = claude_vision.transcript_parts(transcript)
+    payload["transcript_chars"] = sum(len(part.text) for part in parts)
+    payload["transcript_chars_dropped"] = 0
+    payload["transcript_covered_until"] = ""
+    payload["transcript_parts"] = len(parts)
+    if len(parts) > 1:
+        # Said here, in the free preview, because this is where the number that
+        # changes — what the run will cost — is still actionable. It is no longer
+        # a warning that content will be missing: it says the recording needs more
+        # than one request and will get them.
         payload["media_warnings"].append(
-            f"这段录音太长，一次请求装不下：{covered}后面还有 {fitted.chars_dropped} 个字的讲话"
-            f"不会进入这份笔记。先把录像切成几段分别处理，才能覆盖完整。"
+            f"这段录像一次请求装不下，会分 {len(parts)} 段来写，最后合成一份笔记。"
+            f"覆盖是完整的，代价是这一次要发 {len(parts)} 次请求。"
         )
     if not transcript:
         payload["reason"] = "这个任务没有带时间点的转录文字，没法写这份笔记"
@@ -709,6 +709,48 @@ def _rewrite_image_targets(markdown: str, task_id: str, frames: list[FrameInput]
     return _IMAGE_RE.sub(replace, markdown or "")
 
 
+def _joined_draft(drafts, parts):
+    """One note out of the parts, without paying a model to staple them together.
+
+    Each part was told to write only its own stretch and to start at a second
+    level heading, so joining is mechanical: the sections follow each other in
+    recording order under whatever title the first part gave. A stitching pass
+    would cost another request to delete introductions the first pass had been
+    instructed not to write.
+
+    The counts reported are the whole run's, not the last part's, so "how much of
+    this recording did the note actually read" stays answerable afterwards.
+    """
+    if not drafts:
+        raise VisualNoteError("没有生成任何笔记内容")
+    first = drafts[0]
+    if len(drafts) == 1:
+        return first
+    sections = []
+    for draft, part in zip(drafts, parts):
+        body = (draft.markdown or "").strip()
+        if not body:
+            continue
+        span = (
+            f"（{part.starts_at}–{part.ends_at}）"
+            if part.starts_at and part.ends_at
+            else ""
+        )
+        sections.append(f"<!-- 第 {part.index}/{part.total} 部分{span} -->\n\n{body}")
+    markdown = "\n\n".join(sections)
+    frames_sent = [frame for draft in drafts for frame in draft.frames_sent]
+    frames_opened = [name for draft in drafts for name in draft.frames_opened]
+    return replace(
+        first,
+        markdown=markdown,
+        frames_sent=frames_sent,
+        frames_opened=frames_opened,
+        transcript_chars=sum(draft.transcript_chars for draft in drafts),
+        transcript_chars_dropped=0,
+        transcript_covered_until="",
+    )
+
+
 def run_visual_note(
     task_id: str,
     *,
@@ -786,7 +828,23 @@ def run_visual_note(
                 "frames_sent": [_frame_record(task_id, frame) for frame in frames],
             },
         )
-        draft = write(transcript, frames, api_key=api_key)
+        # A recording is never too long to write about, only too long for one
+        # request. Truncating was the old answer and it produced the worst kind
+        # of wrong result: a note that stops two thirds of the way through and
+        # reads like a finished one. Each part is written from its own stretch of
+        # transcript and its own pictures, and the parts are joined below.
+        parts = claude_vision.transcript_parts(transcript)
+        drafts = []
+        for part in parts:
+            part_frames = claude_vision.frames_for_part(frames, part)
+            if len(parts) > 1:
+                _store(
+                    task_id,
+                    client_id=client_id,
+                    state={"stage": f"writing {part.index}/{part.total}"},
+                )
+            drafts.append(write(part.text, part_frames, api_key=api_key, part=part))
+        draft = _joined_draft(drafts, parts)
         cited = cited_frames(draft.markdown, frames)
         markdown = _rewrite_image_targets(draft.markdown, task_id, frames)
         artifact = write_text_artifact(

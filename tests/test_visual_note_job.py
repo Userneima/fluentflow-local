@@ -326,53 +326,67 @@ def test_lines_that_lost_their_audio_are_reported_before_the_button(job_store, k
 def test_a_talk_too_long_for_one_request_is_said_before_anything_is_paid_for(
     job_store, key, monkeypatch
 ):
-    """The preview is free and the run is not, so this is the only moment the
-    warning is worth anything: afterwards the money is spent and the note is
-    written. A recording this long has to be split first."""
-    monkeypatch.setattr(cv, "MAX_TRANSCRIPT_CHARS", 30)
+    """The preview is free and the run is not, so this is where the number that
+    changes has to appear. It is no longer a warning that content will go missing
+    — the recording is split until it fits — but how many requests this will take
+    is still the user's to know before paying for them."""
+    monkeypatch.setattr(cv, "MAX_TRANSCRIPT_CHARS", 20)
 
     described = vn.describe(TASK, job_store, api_key=None)
 
-    assert described["transcript_chars_dropped"] > 0
-    assert described["transcript_chars"] <= 30
-    assert described["transcript_covered_until"], "where to split is the actionable part"
-    assert any("一次请求装不下" in item for item in described["media_warnings"])
-    assert any("切成几段" in item for item in described["media_warnings"])
+    assert described["transcript_parts"] > 1
+    assert described["transcript_chars_dropped"] == 0, "nothing is left out any more"
+    assert not described["transcript_covered_until"]
+    assert any("分" in item and "段" in item for item in described["media_warnings"])
+    assert any("覆盖是完整的" in item for item in described["media_warnings"])
 
 
 def test_a_talk_that_fits_says_nothing_about_length(job_store, key):
     described = vn.describe(TASK, job_store, api_key=None)
 
+    assert described["transcript_parts"] == 1
     assert described["transcript_chars_dropped"] == 0
     assert not any("一次请求装不下" in item for item in described["media_warnings"])
 
 
-def test_the_finished_note_carries_what_it_could_not_read(job_store, tmp_path):
-    """Somebody opening this note next week has no preview to go back to, so a
-    note that covers half a lecture has to say so on its own face."""
+def test_a_recording_too_long_for_one_request_is_no_longer_reported_as_unread(job_store, tmp_path):
+    """This used to be the "note covers half a lecture, say so on its face" test.
+    It is now the test that there is no such note: the recording is split until it
+    fits, so nothing is left unread and a leftover count would tell the reader the
+    note is short when it is complete."""
+    import backend.core.claude_vision as _cv
+    original = _cv.MAX_TRANSCRIPT_CHARS
+    _cv.MAX_TRANSCRIPT_CHARS = 20
+    try:
+        updated = _run(tmp_path, "", writer=_recording_writer())
+    finally:
+        _cv.MAX_TRANSCRIPT_CHARS = original
+
+    state = vn.visual_note_state(updated["result"])
+    assert state["transcript_chars_dropped"] == 0
+    assert not state["transcript_covered_until"]
+
+
+def test_a_writer_that_truncates_on_its_own_still_has_it_recorded(job_store, tmp_path):
+    """The split removes the product's own truncation, not a writer's. A channel
+    that drops content for its own reasons still has to be able to say so, or the
+    silent-half-note failure comes back through a different door."""
     def short_writer(transcript, frames, **_kwargs):
-        fitted = cv.transcript_for_request(transcript)
         return VisualNoteDraft(
             markdown="正文。",
             basis_note="",
             model="claude-opus-5",
             frames_sent=list(frames),
-            transcript_chars=fitted.chars_sent,
-            transcript_chars_dropped=fitted.chars_dropped,
-            transcript_covered_until=fitted.covered_until,
+            transcript_chars=10,
+            transcript_chars_dropped=25,
+            transcript_covered_until="0:55",
         )
 
-    import backend.core.claude_vision as _cv
-    original = _cv.MAX_TRANSCRIPT_CHARS
-    _cv.MAX_TRANSCRIPT_CHARS = 30
-    try:
-        updated = _run(tmp_path, "", writer=short_writer)
-    finally:
-        _cv.MAX_TRANSCRIPT_CHARS = original
+    updated = _run(tmp_path, "", writer=short_writer)
 
     state = vn.visual_note_state(updated["result"])
-    assert state["transcript_chars_dropped"] > 0
-    assert state["transcript_covered_until"]
+    assert state["transcript_chars_dropped"] == 25
+    assert state["transcript_covered_until"] == "0:55"
 
 
 # ── the "it read the pictures" claim is measured, not asserted ──────────────
@@ -720,3 +734,72 @@ def test_an_ineligible_task_is_refused_with_the_reason_not_accepted(client):
 
 def test_an_unknown_task_is_a_404(client):
     assert client.post("/jobs/nope/visual-note", json={"preview": True}).status_code == 404
+
+
+# ── a recording longer than one request still gets a note that covers it ─────
+
+def _recording_writer():
+    """A writer that records each call, and answers with that part's own text."""
+    calls: list[dict] = []
+
+    def write(transcript, frames, **kwargs):
+        part = kwargs.get("part")
+        calls.append({
+            "transcript": transcript,
+            "frames": list(frames),
+            "part": part,
+        })
+        label = f"第{part.index}段" if part is not None else "整篇"
+        return VisualNoteDraft(
+            markdown=f"## {label}\n\n{label}的内容。",
+            basis_note="看过画面",
+            model="claude-opus-5",
+            frames_sent=list(frames),
+            transcript_chars=len(transcript),
+        )
+
+    write.calls = calls  # type: ignore[attr-defined]
+    return write
+
+
+def test_a_transcript_too_long_for_one_request_is_written_in_parts(job_store, tmp_path, monkeypatch):
+    """Truncating produced the worst kind of wrong result: a note that stops two
+    thirds of the way through and reads like a finished one. The recording is not
+    too long to write about, only too long for one request."""
+    monkeypatch.setattr(vn.claude_vision, "MAX_TRANSCRIPT_CHARS", 20)
+    writer = _recording_writer()
+
+    updated = _run(tmp_path, "", writer=writer)
+
+    assert len(writer.calls) > 1, "one call per part, not one truncated call"
+    assert all(call["part"] is not None for call in writer.calls)
+    assert [call["part"].index for call in writer.calls] == list(
+        range(1, len(writer.calls) + 1)
+    ), "parts are written in recording order"
+    note = vn.visual_note_state(updated["result"])["markdown"]
+    for call in writer.calls:
+        assert f"第{call['part'].index}段的内容" in note, "every part reaches the finished note"
+
+
+def test_nothing_is_reported_as_dropped_once_the_whole_thing_was_written(job_store, tmp_path, monkeypatch):
+    """The "N characters did not fit" number is the truncation warning. Splitting
+    is what makes it zero — leaving it set would tell the reader the note is
+    short when it is complete."""
+    monkeypatch.setattr(vn.claude_vision, "MAX_TRANSCRIPT_CHARS", 20)
+
+    updated = _run(tmp_path, "", writer=_recording_writer())
+
+    state = vn.visual_note_state(updated["result"])
+    assert state.get("transcript_chars_dropped", 0) == 0
+    assert not state.get("transcript_covered_until")
+
+
+def test_a_short_recording_is_still_one_request(job_store, tmp_path):
+    """Nearly every recording fits. Splitting one that does not need it would pay
+    for a second request and break the note into sections for no reason."""
+    writer = _recording_writer()
+
+    _run(tmp_path, "", writer=writer)
+
+    assert len(writer.calls) == 1
+    assert writer.calls[0]["part"].total == 1

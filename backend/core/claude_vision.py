@@ -135,6 +135,144 @@ def transcript_for_request(transcript: str) -> TranscriptForRequest:
         covered_until=stamp.group(1) if stamp else "",
     )
 
+@dataclass(frozen=True)
+class TranscriptPart:
+    """One request's worth of transcript, and where it sits in the recording."""
+
+    text: str
+    index: int
+    total: int
+    starts_at: str = ""
+    ends_at: str = ""
+
+    @property
+    def only_part(self) -> bool:
+        return self.total <= 1
+
+
+def transcript_parts(transcript: str, *, max_chars: int | None = None) -> list[TranscriptPart]:
+    """Split a transcript into as many requests as it takes to cover all of it.
+
+    Truncating was the old answer and it was the wrong shape of answer: a note
+    that silently stops two thirds of the way through reads like a complete one,
+    so nothing about it looks wrong. A recording is not too long to write about,
+    it is too long for one request.
+
+    Splits on line boundaries, because the lines are what carry the timestamps
+    and half a sentence is not something to hand a model. Each part records the
+    stamps it runs between so the note can say which stretch it covers and the
+    frames for that stretch can be picked out.
+    """
+    # Read at call time, not bound as a default: the limit is a property of the
+    # request this run is about to make, and a test that moves it expects the
+    # next call to honour the new one.
+    max_chars = MAX_TRANSCRIPT_CHARS if max_chars is None else max_chars
+    text = (transcript or "").strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [TranscriptPart(text=text, index=1, total=1,
+                               starts_at=_first_stamp(text), ends_at=_last_stamp(text))]
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_chars:
+            chunks.append(remaining)
+            break
+        head = remaining[:max_chars]
+        boundary = head.rfind("\n")
+        cut = boundary if boundary > 0 else max_chars
+        chunks.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip("\n")
+    total = len(chunks)
+    return [
+        TranscriptPart(
+            text=chunk,
+            index=position,
+            total=total,
+            starts_at=_first_stamp(chunk),
+            ends_at=_last_stamp(chunk),
+        )
+        for position, chunk in enumerate(chunks, start=1)
+    ]
+
+
+def _first_stamp(text: str) -> str:
+    for line in text.splitlines():
+        found = _TIMESTAMP_AT_LINE_START.match(line)
+        if found:
+            return found.group(1)
+    return ""
+
+
+def _last_stamp(text: str) -> str:
+    for line in reversed(text.splitlines()):
+        found = _TIMESTAMP_AT_LINE_START.match(line)
+        if found:
+            return found.group(1)
+    return ""
+
+
+def stamp_seconds(stamp: str) -> float | None:
+    """A transcript stamp as seconds. Minutes are not wrapped at sixty here."""
+    minutes, _, seconds = (stamp or "").partition(":")
+    try:
+        return int(minutes) * 60 + int(seconds)
+    except ValueError:
+        return None
+
+
+def frames_for_part(frames: list[FrameInput], part: TranscriptPart) -> list[FrameInput]:
+    """The pictures that belong to this stretch of the recording.
+
+    Sending all of them to every part would spend the budget on the same twenty
+    pictures each time and leave most of the recording unillustrated, which is
+    the whole-file version of the bug the split exists to fix. A frame with no
+    timestamp cannot be placed, so it goes to the first part rather than being
+    dropped or repeated.
+    """
+    if part.only_part:
+        return list(frames)
+    start = stamp_seconds(part.starts_at)
+    end = stamp_seconds(part.ends_at)
+    if start is None or end is None:
+        return list(frames)
+    chosen = []
+    for frame in frames:
+        at = frame.timestamp_seconds
+        if at is None:
+            if part.index == 1:
+                chosen.append(frame)
+            continue
+        if start <= at <= end:
+            chosen.append(frame)
+    return chosen
+
+
+def part_instruction(part: TranscriptPart) -> str:
+    """What to tell the model about writing one stretch of a longer recording.
+
+    Each part writes only its own stretch. The alternative — let every part write
+    a whole note and stitch them afterwards — pays for an extra pass whose job is
+    to delete the introductions and conclusions the first pass was told to write.
+    """
+    if part.only_part:
+        return ""
+    span = (
+        f"（{part.starts_at} 到 {part.ends_at}）"
+        if part.starts_at and part.ends_at
+        else ""
+    )
+    return (
+        f"\n\n这是同一段录像的第 {part.index} 部分，共 {part.total} 部分{span}。"
+        "你手上的转录文字和截图都只属于这一部分。\n"
+        "- 只写这一部分讲了什么。不要写整篇的开场介绍，不要写总结收尾，"
+        "不要提「上一部分」或「接下来」——这些会和别的部分重复。\n"
+        "- 从二级标题开始写，不要写一级标题：整篇的标题由合并时统一给。\n"
+        "- 这一部分开头可能接着上一部分的话说到一半，照常写你看到的内容，不用解释缺了前文。"
+    )
+
+
 _IMAGE_MEDIA_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -402,8 +540,13 @@ def write_visual_note(
     model: str | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     client: Any | None = None,
+    part: TranscriptPart | None = None,
 ) -> VisualNoteDraft:
     """Send the transcript and the frames to Claude and return the note it wrote.
+
+    ``part`` says this request covers one stretch of a longer recording: its text
+    is used as given rather than truncated, and the system prompt gains the
+    instruction that keeps a section from being written as a whole note.
 
     Streamed because a full lecture note can run long, and a non-streaming
     request with this ``max_tokens`` risks an idle-connection timeout rather
@@ -414,8 +557,11 @@ def write_visual_note(
     text = (transcript or "").strip()
     if not text:
         raise ClaudeVisionError("这个任务还没有转录文字，无法生成笔记")
-    fitted = transcript_for_request(text)
-    text = fitted.text
+    if part is None:
+        fitted = transcript_for_request(text)
+        text = fitted.text
+    else:
+        text = part.text
     picked = spread_across(frames, MAX_FRAMES)
     chosen_model = (model or "").strip() or configured_model()
 
@@ -423,7 +569,7 @@ def write_visual_note(
     request = {
         "model": chosen_model,
         "max_tokens": max_tokens,
-        "system": SYSTEM_PROMPT,
+        "system": SYSTEM_PROMPT + (part_instruction(part) if part is not None else ""),
         "messages": [{"role": "user", "content": build_user_content(text, picked)}],
         "output_config": {"format": {"type": "json_schema", "schema": NOTE_SCHEMA}},
     }
@@ -524,6 +670,11 @@ __all__ = [
     "FRAME_ATTACH_MAX",
     "MAX_FRAMES",
     "MAX_TRANSCRIPT_CHARS",
+    "TranscriptPart",
+    "transcript_parts",
+    "part_instruction",
+    "frames_for_part",
+    "stamp_seconds",
     "VisualNoteDraft",
     "build_user_content",
     "configured_model",

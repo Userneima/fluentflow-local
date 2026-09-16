@@ -48,6 +48,8 @@ from backend.core.claude_vision import (
     spread_across,
     MAX_TRANSCRIPT_CHARS,
     transcript_for_request,
+    TranscriptPart,
+    part_instruction,
     NOTE_SCHEMA,
     SYSTEM_PROMPT,
     ClaudeVisionError,
@@ -404,6 +406,7 @@ def write_visual_note(
     api_key: str | None = None,  # noqa: ARG001 - this channel never uses one
     model: str | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    part: TranscriptPart | None = None,
 ) -> VisualNoteDraft:
     """Run the local Claude Code login on this errand and return the note.
 
@@ -431,8 +434,16 @@ def write_visual_note(
     text = (transcript or "").strip()
     if not text:
         raise ClaudeVisionError("这个任务还没有转录文字，无法生成笔记")
-    fitted = transcript_for_request(text)
-    text = fitted.text
+    if part is None:
+        fitted = transcript_for_request(text)
+        text = fitted.text
+        dropped, covered = fitted.chars_dropped, fitted.covered_until
+    else:
+        # One stretch of a longer recording: it was split to fit, so nothing is
+        # dropped and the instruction that keeps a section from being written as
+        # a whole note rides along with the prompt.
+        text = part.text
+        dropped, covered = 0, ""
     chosen_model = (model or "").strip() or configured_model()
     execute = runner if runner is not None else subprocess.run
 
@@ -443,7 +454,10 @@ def write_visual_note(
     # the best note this line of work has produced, that reason was gone — and the
     # pass had cost $1.19 of that run's $3.82 while choosing nothing.
     picked = spread_across(list(frames), FRAME_ATTACH_MAX)
-    command = _command(chosen_model, [], inline=True)
+    command = _command(
+        chosen_model, [], inline=True,
+        system_prompt=SYSTEM_PROMPT + (part_instruction(part) if part is not None else ""),
+    )
     payload, _tool_reads = _run_cli(command, build_inline_message(text, picked), execute)
 
     parsed = _parse_note(_payload_text(payload))
@@ -460,8 +474,8 @@ def write_visual_note(
         # side of the wire put it there. No tool calls to read it out of.
         frames_opened=[frame.filename for frame in picked],
         transcript_chars=len(text),
-        transcript_chars_dropped=fitted.chars_dropped,
-        transcript_covered_until=fitted.covered_until,
+        transcript_chars_dropped=dropped,
+        transcript_covered_until=covered,
         usage=_usage_from_payload(payload),
     )
 

@@ -149,3 +149,71 @@ def test_a_fixed_budget_is_spread_over_the_whole_recording():
     assert gaps <= {5, 6}, "evenly, not clustered"
     assert spread_across(frames, 200) == frames, "fewer frames than budget is everything"
     assert spread_across([], 20) == [] and spread_across(frames, 0) == []
+
+
+# ── one request's worth at a time ────────────────────────────────────────────
+
+def _lines(count: int, start: int = 0) -> str:
+    return "\n".join(
+        f"[{(start + i) // 60}:{(start + i) % 60:02d}] 第 {start + i} 句话的内容"
+        for i in range(count)
+    )
+
+
+def test_a_long_transcript_is_split_at_line_boundaries():
+    """Half a sentence is not something to hand a model, and the lines are what
+    carry the timestamps."""
+    text = _lines(400)
+    parts = cv.transcript_parts(text, max_chars=500)
+
+    assert len(parts) > 1
+    assert all(len(p.text) <= 500 for p in parts)
+    assert [p.index for p in parts] == list(range(1, len(parts) + 1))
+    assert all(p.total == len(parts) for p in parts)
+    rejoined = "\n".join(p.text for p in parts)
+    assert rejoined == text, "splitting loses nothing and duplicates nothing"
+
+
+def test_a_short_transcript_is_one_part_and_says_so():
+    parts = cv.transcript_parts(_lines(3), max_chars=10_000)
+    assert len(parts) == 1
+    assert parts[0].only_part
+    assert cv.part_instruction(parts[0]) == "", "a whole note needs no section rules"
+
+
+def test_each_part_carries_the_stamps_it_runs_between():
+    parts = cv.transcript_parts(_lines(400), max_chars=500)
+    assert parts[0].starts_at == "0:00"
+    assert cv.stamp_seconds(parts[0].ends_at) is not None
+    for earlier, later in zip(parts, parts[1:]):
+        assert cv.stamp_seconds(earlier.ends_at) <= cv.stamp_seconds(later.starts_at)
+
+
+def test_frames_are_handed_to_the_part_they_belong_to():
+    """Sending every frame to every part spends the budget on the same pictures
+    each time and leaves most of the recording unillustrated."""
+    parts = cv.transcript_parts(_lines(400), max_chars=500)
+    frames = [
+        cv.FrameInput(filename=f"f{second}.jpg", path=Path(f"/tmp/f{second}.jpg"),
+                      timestamp_seconds=float(second))
+        for second in range(0, 400, 10)
+    ]
+
+    groups = [cv.frames_for_part(frames, part) for part in parts]
+
+    assert sum(len(g) for g in groups) <= len(frames), "no frame is sent twice"
+    assert any(g for g in groups), "somebody gets pictures"
+    for part, group in zip(parts, groups):
+        start, end = cv.stamp_seconds(part.starts_at), cv.stamp_seconds(part.ends_at)
+        for frame in group:
+            assert start <= frame.timestamp_seconds <= end
+
+
+def test_an_unplaceable_frame_goes_to_the_first_part_rather_than_vanishing():
+    parts = cv.transcript_parts(_lines(400), max_chars=500)
+    orphan = cv.FrameInput(filename="x.jpg", path=Path("/tmp/x.jpg"), timestamp_seconds=None)
+
+    groups = [cv.frames_for_part([orphan], part) for part in parts]
+
+    assert orphan in groups[0]
+    assert all(orphan not in g for g in groups[1:])
