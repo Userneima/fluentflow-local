@@ -1416,3 +1416,70 @@ def test_ranges_bitrate_reads_only_the_kept_stretches(tmp_path):
     assert busy_only > across_both * 1.9
     assert sc.ranges_bitrate_bps((), [TimeRange(0.0, 19.0)]) == 0.0
     assert sc.ranges_bitrate_bps(seconds, []) == 0.0
+
+
+def test_the_pipeline_path_actually_varies_the_part_ceilings(tmp_path, fake_tools):
+    """render_cut_plan hands down its own encode args, and an earlier version of
+    this feature read that as "the caller chose these, leave them alone" — so the
+    per-part ceiling never once ran where it was needed. Rendering a plan is the
+    only path a user's recording takes."""
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    quiet = {second: 2_000 for second in range(0, 10)}
+    busy = {second: 35_000 for second in range(10, 20)}
+    runner = _SourceProbe(
+        bitrates={("in.mp4", "v:0"): 67_000},
+        second_bytes={"in.mp4": {**quiet, **busy}},
+    )
+    plan = sc.CutPlan(
+        source_duration_seconds=20.0,
+        cuts=[TimeRange(9.0, 10.0)],
+        keeps=[TimeRange(0.0, 9.0), TimeRange(10.0, 19.0)],
+        silences_found=1,
+        noise_db=-30.0,
+        min_silence_seconds=0.25,
+        padding_seconds=0.1,
+    )
+
+    sc.render_cut_plan(
+        source, plan, tmp_path / "out.mp4",
+        ranges_per_batch=1, workers=1, runner=runner,
+    )
+
+    ceilings = [_ceiling_of(command) for command in _render_commands(runner)]
+    assert 266_000 in ceilings, (
+        "the document stretch is held to what the source spent on it, not to the file average"
+    )
+
+
+def test_the_part_ceiling_is_measured_on_the_original_not_the_intermediate(tmp_path, fake_tools):
+    """The batches are cut from a normalized copy that has already been re-encoded.
+    Measuring that copy would read the normalize pass's output back as if it were
+    the recording."""
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    runner = _SourceProbe(
+        bitrates={("in.mp4", "v:0"): 67_000},
+        second_bytes={
+            "in.mp4": {second: 35_000 for second in range(0, 20)},
+            "normalized.mp4": {second: 8_000 for second in range(0, 20)},
+        },
+    )
+    plan = sc.CutPlan(
+        source_duration_seconds=20.0,
+        cuts=[],
+        keeps=[TimeRange(0.0, 19.0)],
+        silences_found=0,
+        noise_db=-30.0,
+        min_silence_seconds=0.25,
+        padding_seconds=0.1,
+    )
+
+    sc.render_cut_plan(
+        source, plan, tmp_path / "out.mp4",
+        ranges_per_batch=25, workers=1, runner=runner,
+    )
+
+    assert _ceiling_of(_render_commands(runner)[0]) == 266_000, (
+        "280 kbps off the original, not 64 kbps off the intermediate"
+    )

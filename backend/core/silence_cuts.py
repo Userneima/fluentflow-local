@@ -1442,15 +1442,23 @@ def render_keeps(
     encode_args: Sequence[str] | None = None,
     audio_only: bool = False,
     scale_width: int | None = None,
+    ceiling_source: Path | str | None = None,
     work_dir: Path | str | None = None,
     runner: CommandRunner = run_command,
 ) -> int:
-    """Render the kept ranges in batches and concatenate them. Returns batch count."""
+    """Render the kept ranges in batches and concatenate them. Returns batch count.
+
+    ``ceiling_source`` is the file the per-part bitrate ceilings are measured on.
+    It exists because the frames being read are usually not the frames that carry
+    the answer: the cutting pass reads a normalized intermediate, and that
+    intermediate has already been re-encoded once. Left unset, the media being
+    rendered is measured — which is right when it is also the original.
+    """
     if not keeps:
         raise SilenceCutError("nothing to render: the plan keeps no ranges")
     source = Path(media)
     out = Path(output)
-    caller_set_encode_args = encode_args is not None
+    derived_encode_args = encode_args is None
     if encode_args is None:
         encode_args = encode_args_for_source(
             source, out, audio_only=audio_only, fps=fps, runner=runner,
@@ -1463,9 +1471,14 @@ def render_keeps(
     # itself had spent, and the text came back unreadable. The parts are already
     # rendered one ffmpeg call at a time, so each one can be held to what the source
     # spent on the frames that part is keeping.
+    #
+    # A caller that both chose the settings and named nothing to measure is taken
+    # at its word and gets them unchanged; naming a ceiling_source is how the
+    # pipeline says "these settings are mine, the measurement is that file's".
     second_bytes: tuple[int, ...] = ()
-    if not audio_only and not caller_set_encode_args and "-maxrate:v" in encode_args:
-        second_bytes = video_second_bytes(source, runner=runner)
+    measured = Path(ceiling_source) if ceiling_source else (source if derived_encode_args else None)
+    if measured is not None and not audio_only and "-maxrate:v" in encode_args:
+        second_bytes = video_second_bytes(measured, runner=runner)
     target_width = None if audio_only else resolve_scale_width(source, scale_width, runner=runner)
     out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(work_dir) if work_dir else out.parent / f".render-{uuid.uuid4().hex}"
@@ -1644,6 +1657,11 @@ def render_cut_plan(
             workers=workers,
             encode_args=encode_args,
             audio_only=audio_only,
+            # Same reason the encode args above are read off the original: the
+            # normalized intermediate the batches are cut from has already been
+            # re-encoded, so its per-second profile is that pass's output, not a
+            # reading of what the recording carried.
+            ceiling_source=source,
             work_dir=stage / "parts",
             runner=runner,
         )
