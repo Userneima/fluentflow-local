@@ -385,6 +385,81 @@ def container_bitrate_bps(media: Path | str, runner: CommandRunner = run_command
     return probe_float(media, ["-show_entries", "format=bit_rate"], runner=runner)
 
 
+def video_second_bytes(media: Path | str, runner: CommandRunner = run_command) -> tuple[int, ...]:
+    """How many bytes of picture the source spends in each whole second of itself.
+
+    One ffprobe pass over the video packet table. The point is that a recording's
+    bitrate is not one number: a lecture that shows a black screen for the first
+    eighty-five minutes and a dense document for the last twenty carries 14 kbps
+    and 278 kbps in the same file. A ceiling taken from the average of those is
+    set by the black, and starves the only part anybody needs to read.
+
+    Empty when the container declares no packet sizes (Matroska is the common
+    case), which every caller has to treat as "measure it the old way" rather
+    than as "spends nothing".
+    """
+    raw = probe_value(
+        media,
+        ["-select_streams", "v:0", "-show_entries", "packet=pts_time,size"],
+        runner=runner,
+    )
+    seconds: dict[int, int] = {}
+    for line in raw.splitlines():
+        stamp, _, size = line.strip().partition(",")
+        try:
+            index, count = int(float(stamp)), int(size)
+        except ValueError:
+            continue
+        if index < 0:
+            continue
+        seconds[index] = seconds.get(index, 0) + count
+    if not seconds:
+        return ()
+    return tuple(seconds.get(index, 0) for index in range(max(seconds) + 1))
+
+
+def ranges_bitrate_bps(second_bytes: Sequence[int], ranges: Sequence[TimeRange]) -> float:
+    """What the source spent per second across exactly the stretches being kept.
+
+    Silence is cheap to encode, so measuring across the gaps as well would drag
+    the answer back down towards the average this exists to get away from. 0 when
+    there is nothing to measure, which reads the same as an unreadable probe.
+    """
+    if not second_bytes or not ranges:
+        return 0.0
+    total = 0
+    span = 0.0
+    last = len(second_bytes)
+    for item in ranges:
+        first_index = max(0, int(item.start))
+        stop_index = min(last, int(item.end) + 1)
+        if stop_index <= first_index:
+            continue
+        total += sum(second_bytes[first_index:stop_index])
+        span += stop_index - first_index
+    if span <= 0:
+        return 0.0
+    return total * 8.0 / span
+
+
+def _with_ceiling_values(args: Sequence[str], ceiling_bps: float) -> list[str]:
+    """Re-point already-built encoder settings at a different ceiling.
+
+    Only the rate-control numbers move. Which encoder, which pixel format, which
+    audio shape are decided once for the whole file and stay decided: the parts
+    are concatenated with `-c copy`, and a stream that changes encoder halfway
+    through is not one file.
+    """
+    if ceiling_bps <= 0:
+        return list(args)
+    target = str(int(ceiling_bps * BITRATE_CEILING_MARGIN))
+    out = list(args)
+    for index in range(len(out) - 1):
+        if out[index] in {"-maxrate:v", "-bufsize:v", "-b:v"}:
+            out[index + 1] = target
+    return out
+
+
 def video_width(media: Path | str, runner: CommandRunner = run_command) -> int:
     raw = probe_value(media, ["-select_streams", "v:0", "-show_entries", "stream=width"], runner=runner)
     try:
@@ -1375,10 +1450,22 @@ def render_keeps(
         raise SilenceCutError("nothing to render: the plan keeps no ranges")
     source = Path(media)
     out = Path(output)
+    caller_set_encode_args = encode_args is not None
     if encode_args is None:
         encode_args = encode_args_for_source(
             source, out, audio_only=audio_only, fps=fps, runner=runner,
         )
+    # The whole-file ceiling is the right average and the wrong budget for any one
+    # stretch of a recording whose content changes. Measured per second, meeting 15
+    # of one training-camp archive carries 14 kbps of black screen for eighty-five
+    # minutes and 200-278 kbps of document for the last twenty; its average is
+    # 67 kbps, so every readable minute was encoded at a quarter of what the source
+    # itself had spent, and the text came back unreadable. The parts are already
+    # rendered one ffmpeg call at a time, so each one can be held to what the source
+    # spent on the frames that part is keeping.
+    second_bytes: tuple[int, ...] = ()
+    if not audio_only and not caller_set_encode_args and "-maxrate:v" in encode_args:
+        second_bytes = video_second_bytes(source, runner=runner)
     target_width = None if audio_only else resolve_scale_width(source, scale_width, runner=runner)
     out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(work_dir) if work_dir else out.parent / f".render-{uuid.uuid4().hex}"
@@ -1390,9 +1477,17 @@ def render_keeps(
     try:
         def one(job: tuple[int, list[TimeRange]]) -> Path:
             index, batch = job
+            args = encode_args
+            if second_bytes:
+                spent = ranges_bitrate_bps(second_bytes, batch)
+                # Below the trust floor the reading is treated as a bad probe, the
+                # same judgement the whole-file ceiling makes; the batch keeps the
+                # file-wide number rather than being held to a few kbps.
+                if spent >= MIN_TRUSTED_VIDEO_BITRATE:
+                    args = _with_ceiling_values(encode_args, spent)
             return _render_batch(
                 source, batch, stage / f"part{index:04d}{out.suffix or '.mp4'}",
-                fps=fps, encode_args=encode_args, audio_only=audio_only,
+                fps=fps, encode_args=args, audio_only=audio_only,
                 scale_width=target_width, runner=runner,
             )
 

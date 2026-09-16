@@ -637,9 +637,13 @@ class _SourceProbe(_FakeRender):
         frame_rates=None,
         channels=0,
         sample_rate=0,
+        second_bytes=None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
+        # Bytes of picture per whole second of the source, the reading a real
+        # packet table gives. None means the container declares none.
+        self.second_bytes = dict(second_bytes or {})
         self.frame_rates = dict(frame_rates or {})
         self.channels = channels
         self.sample_rate = sample_rate
@@ -668,6 +672,11 @@ class _SourceProbe(_FakeRender):
                 answer = self.channels
             elif "stream=sample_rate" in command:
                 answer = self.sample_rate
+            elif "packet=pts_time,size" in command:
+                rows = self.second_bytes.get(name)
+                if rows is None:
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                answer = "\n".join(f"{second},{count}" for second, count in sorted(rows.items()))
             if answer is not None:
                 return subprocess.CompletedProcess(command, 0, f"{answer}\n", "")
         else:
@@ -1279,3 +1288,131 @@ def test_a_threshold_that_would_cut_speech_is_pulled_under_it(monkeypatch, tmp_p
     assert chosen == -31.4
     assert why["adapted"] is True and why.get("separable") is not False
     assert "会切进说话声" in why["reason"]
+
+
+def _render_commands(runner: _SourceProbe) -> list[list[str]]:
+    return [command for command in runner.commands if "-af" in command]
+
+
+def _ceiling_of(command: list[str]) -> int:
+    return int(command[command.index("-maxrate:v") + 1])
+
+
+def test_each_part_is_held_to_what_the_source_spent_on_the_frames_it_keeps(tmp_path, fake_tools):
+    """A recording whose content changes gets one ceiling per part, not one average.
+
+    Meeting 15 of a training-camp archive: eighty-five minutes of black screen at
+    14 kbps, then a dense document at 200-278 kbps. Its declared average is
+    67 kbps, and the document was rendered at a quarter of what the source had
+    spent on it — unreadable. The parts are separate ffmpeg calls, so each is
+    capped by its own stretch of the source.
+    """
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    quiet = {second: 2_000 for second in range(0, 10)}        # 16 kbps
+    busy = {second: 35_000 for second in range(10, 20)}       # 280 kbps
+    runner = _SourceProbe(
+        bitrates={("in.mp4", "v:0"): 67_000},
+        second_bytes={"in.mp4": {**quiet, **busy}},
+    )
+
+    sc.render_keeps(
+        source,
+        [TimeRange(0.0, 9.0), TimeRange(10.0, 19.0)],
+        tmp_path / "out.mp4",
+        ranges_per_batch=1,
+        workers=1,
+        runner=runner,
+    )
+
+    commands = _render_commands(runner)
+    assert len(commands) == 2, "one part per batch"
+    assert _ceiling_of(commands[0]) == 63_650, "the file average: the quiet stretch is below the trust floor"
+    assert _ceiling_of(commands[1]) == 266_000, "280 kbps, less the 5% margin — what the document itself carried"
+    assert _ceiling_of(commands[1]) > _ceiling_of(commands[0]), (
+        "the point of the change: the readable part is no longer paying for the black one"
+    )
+
+
+def test_the_part_ceiling_moves_the_buffer_with_it(tmp_path, fake_tools):
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    runner = _SourceProbe(
+        bitrates={("in.mp4", "v:0"): 67_000},
+        second_bytes={"in.mp4": {second: 35_000 for second in range(0, 10)}},
+    )
+
+    sc.render_keeps(
+        source, [TimeRange(0.0, 9.0)], tmp_path / "out.mp4",
+        ranges_per_batch=1, workers=1, runner=runner,
+    )
+
+    command = _render_commands(runner)[0]
+    assert command[command.index("-bufsize:v") + 1] == "266000", (
+        "a buffer left at the file average would throttle the raised ceiling anyway"
+    )
+
+
+def test_a_container_with_no_packet_table_is_rendered_exactly_as_before(tmp_path, fake_tools):
+    """Matroska declares no packet sizes. Nothing measurable means nothing changes."""
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    runner = _SourceProbe(bitrates={("in.mp4", "v:0"): 752_000})
+
+    sc.render_keeps(
+        source, [TimeRange(0.0, 5.0), TimeRange(6.0, 9.0)], tmp_path / "out.mp4",
+        ranges_per_batch=1, workers=1, runner=runner,
+    )
+
+    for command in _render_commands(runner):
+        assert _ceiling_of(command) == 714_400, "752 kbps, less the margin, on every part"
+
+
+def test_encode_args_the_caller_chose_are_not_re_pointed_per_part(tmp_path, fake_tools):
+    """Passing encode_args explicitly is how a caller opts out of source-derived
+    settings; measuring the source anyway would take that choice back."""
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    runner = _SourceProbe(
+        bitrates={("in.mp4", "v:0"): 67_000},
+        second_bytes={"in.mp4": {second: 35_000 for second in range(0, 20)}},
+    )
+    chosen = ("-c:v", "libx264", "-crf", "18", "-maxrate:v", "111000", "-bufsize:v", "111000")
+
+    sc.render_keeps(
+        source, [TimeRange(0.0, 9.0), TimeRange(10.0, 19.0)], tmp_path / "out.mp4",
+        ranges_per_batch=1, workers=1, encode_args=chosen, runner=runner,
+    )
+
+    for command in _render_commands(runner):
+        assert _ceiling_of(command) == 111_000
+
+
+def test_a_part_that_measures_below_the_trust_floor_keeps_the_file_ceiling(tmp_path, fake_tools):
+    """A few kbps is read as a bad probe, not as a budget — the same judgement the
+    whole-file ceiling already makes."""
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    runner = _SourceProbe(
+        bitrates={("in.mp4", "v:0"): 600_000},
+        second_bytes={"in.mp4": {second: 100 for second in range(0, 10)}},
+    )
+
+    sc.render_keeps(
+        source, [TimeRange(0.0, 9.0)], tmp_path / "out.mp4",
+        ranges_per_batch=1, workers=1, runner=runner,
+    )
+
+    assert _ceiling_of(_render_commands(runner)[0]) == 570_000, "600 kbps, less the margin"
+
+
+def test_ranges_bitrate_reads_only_the_kept_stretches(tmp_path):
+    """Silence is cheap to encode, so averaging across the gaps drags the answer
+    back towards the file average this exists to get away from."""
+    seconds = [1_000] * 10 + [50_000] * 10
+    across_both = sc.ranges_bitrate_bps(seconds, [TimeRange(0.0, 19.0)])
+    busy_only = sc.ranges_bitrate_bps(seconds, [TimeRange(10.0, 19.0)])
+
+    assert busy_only > across_both * 1.9
+    assert sc.ranges_bitrate_bps((), [TimeRange(0.0, 19.0)]) == 0.0
+    assert sc.ranges_bitrate_bps(seconds, []) == 0.0
