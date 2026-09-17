@@ -87,9 +87,10 @@ def test_concurrency_of_one_is_still_a_serial_queue(monkeypatch):
     assert second is not None and second[0] == "a"
 
 
-def test_the_queue_actually_runs_more_than_one_job():
-    """The tests above all read QUEUE_CONCURRENCY, so they pass just as well
-    against a serial queue — they check the mechanism, not the setting. This one
-    checks the setting, because "someone put it back to 1" is the regression
-    that would silently double this archive's wall clock again."""
-    assert lp.QUEUE_CONCURRENCY >= 2
+def test_the_concurrency_setting_is_what_this_machine_was_measured_at():
+    """The tests above all read QUEUE_CONCURRENCY, so they pass against any
+    value — they check the mechanism, not the setting. This one pins the setting,
+    because raising it is a memory decision and not a free one: measured at 2 on
+    a 16GB machine, load went from ~50 to ~102 in fifteen minutes with swap
+    nearly exhausted, which is the shape that precedes a tenfold slowdown."""
+    assert lp.QUEUE_CONCURRENCY == 1

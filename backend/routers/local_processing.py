@@ -184,7 +184,13 @@ _QUEUE_TAIL: dict[str, Any] = {"task_id": None, "event": None}
 # Two rather than more because the render is also the memory peak, and this is
 # a 16GB machine: a single 1440p job has been observed pushing the system into
 # swap on its own.
-QUEUE_CONCURRENCY = 2
+# Set to 2 and measured on this 16GB machine: both jobs did progress, but system
+# load went from ~50 to ~102 within fifteen minutes with swap free down to a few
+# hundred MB. The failure mode that follows is not a stall but a collapse — the
+# same machine under that pressure rendered at a tenth of its healthy rate and
+# did not recover until the load came off. One job at a time is slower and does
+# not do that.
+QUEUE_CONCURRENCY = 1
 
 # The last few jobs handed out, newest last. A job waits on the one
 # QUEUE_CONCURRENCY places behind it, which is nothing at all until that many
