@@ -172,6 +172,25 @@ async def _persist_uploaded_source(
 # difference checkable — the hub knows whether that task is still running.
 _QUEUE_TAIL: dict[str, Any] = {"task_id": None, "event": None}
 
+# How many jobs may be in flight at once. The chain above is what makes the
+# queue serial: each job waits on its predecessor's event. Waiting on the job
+# two places back instead lets two run together, which is worth doing because
+# the two expensive phases do not compete for the same resource — the render is
+# four ffmpeg processes on as many cores as it is given, and the transcription
+# that follows it is one model on one. Measured on this archive with the queue
+# strictly serial: a three-hour lecture spent about half its wall clock in each
+# phase with the other half of the machine idle.
+#
+# Two rather than more because the render is also the memory peak, and this is
+# a 16GB machine: a single 1440p job has been observed pushing the system into
+# swap on its own.
+QUEUE_CONCURRENCY = 2
+
+# The last few jobs handed out, newest last. A job waits on the one
+# QUEUE_CONCURRENCY places behind it, which is nothing at all until that many
+# have been queued.
+_QUEUE_RECENT: list[dict[str, Any]] = []
+
 # How often a waiting runner looks up from the event to ask whether the job
 # ahead of it still exists. Not a limit on how long a job may take: a lecture
 # takes hours and that is normal, so nothing here ever cuts a live job short.
@@ -262,11 +281,32 @@ async def _await_predecessor(
 
 
 def _queue_tail_barrier() -> Optional[tuple[Optional[str], asyncio.Event]]:
-    """The job this one has to wait for, or None when the queue is empty."""
-    event = _QUEUE_TAIL["event"]
-    if event is None:
+    """The job this one has to wait for, or None when it can start now.
+
+    With QUEUE_CONCURRENCY at 1 this is the previous job and the queue is
+    strictly serial, which is what it used to be unconditionally.
+    """
+    if len(_QUEUE_RECENT) < QUEUE_CONCURRENCY:
         return None
-    return (_QUEUE_TAIL["task_id"], event)
+    ahead = _QUEUE_RECENT[-QUEUE_CONCURRENCY]
+    event = ahead["event"]
+    if event is None or event.is_set():
+        return None
+    return (ahead["task_id"], event)
+
+
+def _queue_tail_record(task_id: Optional[str], done: asyncio.Event) -> None:
+    """Remember this job as the newest, and forget the ones nobody can wait on.
+
+    Trimming matters: the list is process-local and an archive run puts hundreds
+    of jobs through it.
+    """
+    _QUEUE_RECENT.append({"task_id": task_id, "event": done})
+    keep = max(QUEUE_CONCURRENCY, 1) + 1
+    if len(_QUEUE_RECENT) > keep:
+        del _QUEUE_RECENT[:-keep]
+    _QUEUE_TAIL["task_id"] = task_id
+    _QUEUE_TAIL["event"] = done
 
 
 async def _write_note_after_transcript(task_id: str, client_id: Optional[str]) -> None:
@@ -796,8 +836,7 @@ async def queue_process(
         )
         previous = _queue_tail_barrier()
         done = asyncio.Event()
-        _QUEUE_TAIL["task_id"] = task_id_value
-        _QUEUE_TAIL["event"] = done
+        _queue_tail_record(task_id_value, done)
         started = await JOB_EVENTS.start(
             task_id_value,
             functools.partial(
@@ -909,8 +948,7 @@ async def queue_local_media_file(
     )
     previous = _queue_tail_barrier()
     done = asyncio.Event()
-    _QUEUE_TAIL["task_id"] = task_id_value
-    _QUEUE_TAIL["event"] = done
+    _queue_tail_record(task_id_value, done)
     started = await JOB_EVENTS.start(
         task_id_value,
         functools.partial(

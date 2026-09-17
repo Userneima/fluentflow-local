@@ -89,7 +89,10 @@ MAX_FOLLOWED_FRAME_RATE = 120
 # memory" while a 17-term one was fine. Batching removes the limit entirely —
 # 1300 cuts on a 3h19m video render fine — so this is not a cap on cut count.
 DEFAULT_RANGES_PER_BATCH = 25
-DEFAULT_RENDER_WORKERS = 4
+# Three rather than four since the queue began running two jobs at once: the
+# render is the memory peak of a job, and two of them on a 16GB machine is what
+# this trades a little single-job speed to stay clear of.
+DEFAULT_RENDER_WORKERS = 3
 
 DEFAULT_ENCODE_ARGS = (
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
