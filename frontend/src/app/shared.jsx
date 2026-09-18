@@ -8,18 +8,10 @@ import {
 import { _dl } from '../lib/download.js';
 import { getDirectUploadTransport } from './directUploadTransport.js';
 import { getHostedApiExtension } from './hostedApiExtension.js';
+import { currentApiBase } from '../lib/apiBase.js';
 
-/** API 根路径：线上与后端同域时用相对路径；本地前端单独跑在其它端口时指向本机 8000。 */
-export const API_BASE = (() => {
-    const normalize = (value) => String(value || '').trim().replace(/\/+$/, '');
-    const configured = normalize(window.FLUENTFLOW_CONFIG?.apiBase || localStorage.getItem('fluentflow_api_base'));
-    if (configured) return configured;
-    const { hostname, port } = window.location;
-    if (!hostname) return "http://127.0.0.1:8000";
-    const local = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-    if (local && port && port !== "8000") return "http://127.0.0.1:8000";
-    return "";
-})();
+/** API 根路径。判据见 lib/apiBase.js：默认同源，只有 Vite 开发服务器才跨端口。 */
+export const API_BASE = currentApiBase();
 
 export const ACCESS_TOKEN_KEY = 'fluentflow_access_token';
 export const CLIENT_ID_KEY = 'fluentflow_client_id';

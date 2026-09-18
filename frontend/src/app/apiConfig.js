@@ -1,16 +1,8 @@
 import { shouldUseLocalSingleUserClientId } from '../lib/localExecution.js';
 import { createApiClient } from './apiClient.js';
+import { currentApiBase } from '../lib/apiBase.js';
 
-export const API_BASE = (() => {
-    const normalize = (value) => String(value || '').trim().replace(/\/+$/, '');
-    const configured = normalize(window.FLUENTFLOW_CONFIG?.apiBase || localStorage.getItem('fluentflow_api_base'));
-    if (configured) return configured;
-    const { hostname, port } = window.location;
-    if (!hostname) return "http://127.0.0.1:8000";
-    const local = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-    if (local && port && port !== "8000") return "http://127.0.0.1:8000";
-    return "";
-})();
+export const API_BASE = currentApiBase();
 
 export const ACCESS_TOKEN_KEY = 'fluentflow_access_token';
 const CLIENT_ID_KEY = 'fluentflow_client_id';
