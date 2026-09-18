@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# This repository is public, so pull requests can come from forks. The checks
+# only read the tree and never publish anything, so the token they get should
+# be able to do the same.
+permissions:
+  contents: read
+
 jobs:
   frontend:
     runs-on: ubuntu-latest
