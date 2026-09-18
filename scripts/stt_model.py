@@ -11,7 +11,7 @@ the Hugging Face cache, which every other tool on the machine shares, so the
 directories to remove are the ones this product actually downloads and nothing
 that merely looks similar.
 
-Which model gets fetched is not this script's decision either: it asks
+Which model gets fetched is not this script's decision: it asks
 `local_stt.planned_model()`, the same resolution a real transcription goes
 through, so a machine that will transcribe on medium does not download
 large-v3 and then never open it.
@@ -19,25 +19,25 @@ large-v3 and then never open it.
     python scripts/stt_model.py fetch
     python scripts/stt_model.py fetch --size medium
     python scripts/stt_model.py fetch --engine faster_whisper
+    python scripts/stt_model.py fetch --mirror        # 直接用镜像源
     python scripts/stt_model.py cache-paths
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Both of these are standard-library-only on purpose: the download endpoint has
+# to be chosen before anything imports `huggingface_hub`, which reads it into a
+# constant at import time. That is why the heavy imports below live inside the
+# handlers instead of at the top of the file.
+from backend.core import hf_endpoint  # noqa: E402
 from backend.core.local_stt_policy import DEFAULT_LOCAL_STT_MODEL  # noqa: E402
-from backend.core.local_stt_assets import (  # noqa: E402
-    cache_dirs,
-    cached_weights_path,
-    download_size_bytes,
-    ensure_downloaded,
-    planned_model,
-)
 
 
 def _format_size(total: int | None) -> str:
@@ -46,7 +46,30 @@ def _format_size(total: int | None) -> str:
     return f"约 {total / 1_000_000_000:.1f} GB"
 
 
+def _choose_endpoint(args: argparse.Namespace) -> None:
+    """Decide where the weights come from, before the download library loads."""
+    if args.mirror:
+        os.environ[hf_endpoint.ENDPOINT_ENV] = hf_endpoint.MIRROR_ENDPOINT
+        print(f"下载源：{hf_endpoint.MIRROR_ENDPOINT}（按 --mirror 指定）")
+        return
+    if args.no_mirror:
+        os.environ[hf_endpoint.ENDPOINT_ENV] = hf_endpoint.DEFAULT_ENDPOINT
+        print(f"下载源：{hf_endpoint.DEFAULT_ENDPOINT}（按 --no-mirror 指定）")
+        return
+    _, explanation = hf_endpoint.apply_to_environment()
+    print(explanation)
+
+
 def _fetch(args: argparse.Namespace) -> int:
+    _choose_endpoint(args)
+
+    from backend.core.local_stt_assets import (
+        cached_weights_path,
+        download_size_bytes,
+        ensure_downloaded,
+        planned_model,
+    )
+
     plan = planned_model(args.size or DEFAULT_LOCAL_STT_MODEL, engine=args.engine)
 
     lane = "Apple 芯片加速（mlx-whisper）" if plan.engine == "mlx" else "faster-whisper"
@@ -63,12 +86,16 @@ def _fetch(args: argparse.Namespace) -> int:
         return 0
 
     print(f"\n需要下载 {_format_size(download_size_bytes(plan))}，请保持网络畅通…\n")
-
     try:
         path = ensure_downloaded(plan)
     except Exception as exc:  # noqa: BLE001 - a download failure is the user's to read
         print(f"\n✗ 下载失败：{exc}", file=sys.stderr)
-        print("  可以稍后重试；第一次转录时也会自动下载。", file=sys.stderr)
+        print(
+            "  可以稍后重试；第一次转录时也会自动下载。"
+            f"网络到 {hf_endpoint.DEFAULT_ENDPOINT} 不通时，"
+            "可以加 --mirror 换用镜像源。",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"\n✓ 下载完成：{path}")
@@ -77,6 +104,8 @@ def _fetch(args: argparse.Namespace) -> int:
 
 def _cache_paths(_args: argparse.Namespace) -> int:
     """One existing directory per line, for a shell to size up or delete."""
+    from backend.core.local_stt_assets import cache_dirs
+
     for path in cache_dirs():
         print(path)
     return 0
@@ -93,6 +122,17 @@ def main() -> int:
         default=None,
         choices=("auto", "mlx", "faster_whisper"),
         help="强制使用某条转录路径（默认自动选择）",
+    )
+    source = fetch.add_mutually_exclusive_group()
+    source.add_argument(
+        "--mirror",
+        action="store_true",
+        help=f"直接用镜像源 {hf_endpoint.MIRROR_ENDPOINT}，不先试主站",
+    )
+    source.add_argument(
+        "--no-mirror",
+        action="store_true",
+        help="只用主站，连不上就报错",
     )
     fetch.set_defaults(handler=_fetch)
 

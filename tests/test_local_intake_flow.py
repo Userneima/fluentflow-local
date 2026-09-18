@@ -311,10 +311,27 @@ def _finished_task(**result_extra) -> None:
     )
 
 
-def test_a_finished_task_with_no_note_wants_one(tmp_path):
+def test_a_finished_task_with_no_note_wants_one(tmp_path, monkeypatch):
+    # The key is what makes the note-writing channel reachable at all; without
+    # one this asks about a note that could not be written anyway.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-configured")
     _finished_task()
 
     assert flow.note_is_wanted(TASK, "anonymous") is True
+
+
+def test_a_finished_task_is_left_alone_when_no_note_channel_is_reachable(tmp_path, monkeypatch):
+    """The task is fine; this machine simply has nothing to write the note with.
+
+    Saying yes here would queue a note that refuses a second later, and the
+    page would show a failure where the pipeline's own text note belongs.
+    """
+    monkeypatch.delenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("FLUENTFLOW_CLAUDE_CLI", "/nonexistent/claude")
+    _finished_task()
+
+    assert flow.note_is_wanted(TASK, "anonymous") is False
 
 
 def test_a_task_that_already_has_a_note_is_left_alone(tmp_path):
@@ -745,3 +762,39 @@ def test_a_file_from_a_folder_this_machine_has_never_seen_is_not_found(tmp_path)
 def test_nothing_is_searched_for_without_a_name_or_a_size(tmp_path):
     assert local_folder_intake.locate_dropped_file("", 4096, [tmp_path]) is None
     assert local_folder_intake.locate_dropped_file("week-8.mp4", 0, [tmp_path]) is None
+
+
+# ── whether the automatic note can actually run ────────────────────────────
+
+
+def test_the_automatic_note_stands_down_when_this_machine_cannot_reach_claude(monkeypatch):
+    """Otherwise a fresh install gets no note at all.
+
+    The switch being on turns the pipeline's own text note off, so that the
+    user does not receive two. On a machine with no key and no subscription
+    channel the visual note then refuses, and switching the other one off has
+    bought nothing but silence. `auto_note_will_run` is what the submit route
+    asks instead, so that machine keeps the text note it can actually produce.
+    """
+    monkeypatch.setenv("FLUENTFLOW_LOCAL_AUTO_NOTE", "1")
+    monkeypatch.delenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("FLUENTFLOW_CLAUDE_CLI", "/nonexistent/claude")
+
+    assert flow.auto_note_enabled() is True
+    assert flow.auto_note_will_run() is False
+
+
+def test_the_automatic_note_runs_when_a_key_is_configured(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_LOCAL_AUTO_NOTE", "1")
+    monkeypatch.setenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", "api_key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-configured")
+
+    assert flow.auto_note_will_run() is True
+
+
+def test_the_switch_being_off_still_wins(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_LOCAL_AUTO_NOTE", "0")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-configured")
+
+    assert flow.auto_note_will_run() is False

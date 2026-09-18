@@ -109,7 +109,8 @@ def _transcription_checks() -> list[ReadinessCheck]:
         detail = (
             f"转录模型 {plan.model_size} 尚未下载（{plan.repo_id}）。"
             "第一次转录会自动下载，需要几 GB 空间和一段等待；"
-            "也可以先运行 python scripts/stt_model.py fetch 下好。"
+            "也可以先运行 python scripts/stt_model.py fetch 下好"
+            "（网络到 huggingface.co 不通时它会自动改用镜像源）。"
         )
     checks.append(ReadinessCheck(name="stt-model", ok=present, required=False, detail=detail))
     return checks

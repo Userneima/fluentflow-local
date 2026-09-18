@@ -10,20 +10,24 @@ provider — a run that cannot reach Claude fails and says so, rather than
 quietly producing a note from DeepSeek or Qwen and calling it the same thing.
 
 This module picks between them and hands back a small object describing the
-choice, so the page can say "this will use the Claude subscription on this Mac"
-*before* the button rather than after the bill. The choice is never silent: the
-channel's name goes into the preview, into the job result, and into the note's
-recorded provenance.
+choice, so the page can say which one is about to be spent *before* the button
+rather than after the bill. The choice is never silent: the channel's name goes
+into the preview, into the job result, and into the note's recorded provenance.
 
-Scope: the subscription channel exists because FluentFlow Local is a private
-tool on its maintainer's own machine. See ``claude_code_note`` for the boundary
-and ``docs/claude_agent_sdk_deferred_plan.md`` for the evidence behind it.
+The key is the default and the subscription is opt-in, which is the opposite of
+what this file did while FluentFlow Local was one person's private tool. The
+reason is distribution: Anthropic does not allow a third-party product to offer
+claude.ai login or subscription rate limits to its users, and a release is a
+third-party product. Someone running this from source on their own machine
+against their own login is not, which is why the channel stays and is reached
+through ``FLUENTFLOW_VISUAL_NOTE_CHANNEL`` instead of being deleted. See
+``claude_code_note`` for the rest of that boundary.
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from backend.core import claude_code_note, claude_vision
@@ -93,15 +97,15 @@ def _api_key_channel(api_key: str | None) -> Channel:
 def resolve_channel(api_key: str | None = None) -> Channel:
     """Pick the channel this machine will actually use.
 
-    The subscription comes first when nothing is forced, because it is the one
-    that asks the user for nothing. The API-key path is not deleted and not
-    deprecated: it is what a machine without Claude Code falls back to, and it
-    is what this feature has to return to if FluentFlow Local ever stops being
-    one person's private tool.
+    The user's own key comes first, and the subscription is only reached when
+    it is asked for by name. A build that goes out to other people must not
+    spend a claude.ai login on its own initiative; a source checkout on the
+    maintainer's machine still can, by setting the preference.
 
-    When neither works, the refusal is the subscription's — "log in once in the
-    terminal" is a smaller thing to ask than "go create an API key", and the key
-    remains available to anyone who prefers it via ``FLUENTFLOW_VISUAL_NOTE_CHANNEL``.
+    When the key is missing, the refusal is the key's, plus the way out this
+    particular machine actually has: the subscription hint appears only where
+    Claude Code is installed, because telling someone to switch to a channel
+    they cannot run is worse than saying nothing.
     """
     forced = preferred_channel()
     if forced == CHANNEL_SUBSCRIPTION:
@@ -109,13 +113,21 @@ def resolve_channel(api_key: str | None = None) -> Channel:
     if forced == CHANNEL_ANTHROPIC_KEY:
         return _api_key_channel(api_key)
 
-    subscription = _subscription_channel()
-    if subscription.available:
-        return subscription
     api = _api_key_channel(api_key)
     if api.available:
         return api
-    return subscription
+
+    subscription = _subscription_channel()
+    if subscription.available:
+        return replace(
+            api,
+            unavailable_reason=(
+                f"{api.unavailable_reason}\n"
+                "这台机器上装了已登录的 Claude Code：在 .env 里设 "
+                f"{_PREFERENCE_ENV}=subscription 就可以改用它，不必填 Key。"
+            ),
+        )
+    return api
 
 
 __all__ = [

@@ -417,7 +417,11 @@ def _local_media_job_context(
         # the old flow" half of the owner's decision: without this the user gets a
         # note from the text model first and the real one a minute later, which is
         # the two-notes shape the whole change exists to end.
-        summary_disabled=_truthy(options.get("skip_summary")) or local_intake_flow.auto_note_enabled(),
+        #
+        # `will_run` rather than `enabled`: a machine that cannot reach Claude
+        # never writes that note, and switching the text one off for it left a
+        # fresh install with no note at all.
+        summary_disabled=_truthy(options.get("skip_summary")) or local_intake_flow.auto_note_will_run(),
         generate_visuals=_truthy(options.get("generate_visuals")),
         source_last_modified_ms=None,
         export_to_lark=options.get("export_to_lark"),

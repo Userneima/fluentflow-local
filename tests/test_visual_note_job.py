@@ -488,20 +488,37 @@ def test_a_pure_audio_task_is_written_from_its_subtitles_and_recorded_as_such(
 
 # ── no silent substitution ─────────────────────────────────────────────────
 
-def test_with_no_login_and_no_key_it_refuses_and_says_what_to_do(job_store, monkeypatch):
-    """Neither way to reach Claude exists, so the entry names the smaller fix.
+def test_with_no_key_it_refuses_and_asks_for_the_key(job_store, monkeypatch, tmp_path):
+    """The key is what a release may ask for; a claude.ai login is not.
 
-    Logging in once in a terminal is less to ask than creating and pasting an
-    API key, so that is the sentence a user gets. The key is still an option and
-    still named in its own refusal; it is just not the first thing suggested.
+    This used to name the login first, because logging in once is less to ask
+    than creating and pasting a key. That ordering belonged to a private tool.
+    A build handed to other people cannot reach for their subscription on its
+    own, so the refusal asks for the thing the user owns.
     """
     monkeypatch.delenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", raising=False)
+    monkeypatch.setenv("FLUENTFLOW_CLAUDE_CLI", str(tmp_path / "no-claude-here"))
+
     described = vn.describe(TASK, job_store, api_key=None)
 
     assert described["eligible"] is False
     assert described["credential_configured"] is False
-    assert "claude" in described["reason"].lower()
-    assert "API Key" not in described["reason"], "a login is the ask here, not a key"
+    assert "ANTHROPIC_API_KEY" in described["reason"]
+    assert "subscription" not in described["reason"]
+
+
+def test_a_machine_with_claude_code_is_told_about_the_subscription_too(job_store, monkeypatch, tmp_path):
+    """The channel is still there for whoever is running this from source."""
+    monkeypatch.delenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", raising=False)
+    fake_cli = tmp_path / "claude"
+    fake_cli.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("FLUENTFLOW_CLAUDE_CLI", str(fake_cli))
+
+    described = vn.describe(TASK, job_store, api_key=None)
+
+    assert described["eligible"] is False
+    assert "ANTHROPIC_API_KEY" in described["reason"]
+    assert "FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription" in described["reason"]
 
 
 def test_forcing_the_key_channel_still_names_the_key(job_store, monkeypatch):

@@ -61,6 +61,18 @@ npm run build:frontend
 保存在系统应用数据目录（macOS 是 `~/Library/Application Support/FluentFlow`），
 不在仓库中。
 
+## 笔记要接你自己的模型账号
+
+转录在本机跑，不需要任何账号，也不花钱。笔记不一样，它要调模型：
+
+- 填了 Anthropic API Key，笔记由 Claude 看着画面写，能引用幻灯片和白板上的内容。
+- 没填，笔记退回 `AI_PROVIDER` 指定的服务（默认 DeepSeek）写纯文字版，只看转录稿。
+  这一步同样需要那家的 Key。
+- 一个 Key 都没有，你会拿到转录稿、字幕和剪好的音视频，但没有笔记。
+
+Key 在应用的设置页里填，不必编辑文件。可配置的项在 `distribution/local.env.example`
+里都有说明。
+
 ## 需要多少磁盘空间
 
 在一台 Apple Silicon Mac 上实测：
@@ -76,6 +88,9 @@ npm run build:frontend
 任务还会在应用数据目录里留下媒体、抽帧和中间产物，那部分随使用增长，没有上限。
 
 只用 CPU 转录的机器会自动改用 medium（约 1.5 GB），不会下载跑不动的那个模型。
+
+模型从 Hugging Face 下载。那里连不上时安装脚本会自动改用镜像 `hf-mirror.com`，也可以
+用 `HF_ENDPOINT` 指定自己的源，或者给 `scripts/stt_model.py fetch` 加 `--mirror`。
 
 ## 卸载
 

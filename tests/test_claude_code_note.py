@@ -344,10 +344,28 @@ def test_an_empty_note_is_a_failure_not_an_empty_note(frames):
 
 # ── which channel, and who is told ─────────────────────────────────────────
 
-def test_the_subscription_is_preferred_when_nothing_is_forced(monkeypatch):
+def test_the_key_is_the_default_even_on_a_signed_in_machine(monkeypatch):
+    """A build that goes out to other people must not spend a claude.ai login.
+
+    This is the opposite of what this module did while FluentFlow Local was one
+    person's private tool, and the reversal is the whole point: the subscription
+    channel is still here, but reaching it is now a decision someone makes on
+    their own machine rather than something a release does by itself.
+    """
+    monkeypatch.delenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-configured")
 
-    channel = vnc.resolve_channel()
+    channel = vnc.resolve_channel("sk-ant-configured")
+
+    assert channel.name == vnc.CHANNEL_ANTHROPIC_KEY
+    assert channel.available is True
+
+
+def test_the_subscription_runs_when_it_is_asked_for_by_name(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", "subscription")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    channel = vnc.resolve_channel(None)
 
     assert channel.name == vnc.CHANNEL_SUBSCRIPTION
     assert channel.available is True
@@ -355,14 +373,19 @@ def test_the_subscription_is_preferred_when_nothing_is_forced(monkeypatch):
     assert channel.write is ccn.write_visual_note
 
 
-def test_a_machine_without_claude_code_falls_back_to_the_key(monkeypatch):
+def test_a_missing_key_points_at_the_subscription_only_where_it_exists(monkeypatch):
+    """Telling someone to switch to a channel they cannot run is worse than silence."""
+    monkeypatch.delenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    signed_in = vnc.resolve_channel(None)
+    assert signed_in.available is False
+    assert "subscription" in (signed_in.unavailable_reason or "")
+
     monkeypatch.setenv("FLUENTFLOW_CLAUDE_CLI", "/nonexistent/claude")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-configured")
-
-    channel = vnc.resolve_channel()
-
-    assert channel.name == vnc.CHANNEL_ANTHROPIC_KEY
-    assert channel.available is True
+    without_cli = vnc.resolve_channel(None)
+    assert without_cli.available is False
+    assert "subscription" not in (without_cli.unavailable_reason or "")
 
 
 def test_the_key_can_be_forced_even_on_a_signed_in_machine(monkeypatch):

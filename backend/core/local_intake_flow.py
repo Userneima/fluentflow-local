@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.core import debreath_job, local_folder_intake, visual_note_job
+from backend.core import debreath_job, local_folder_intake, visual_note_channel, visual_note_job
 from backend.core.job_store import get_job, update_job_result, upsert_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core.storage_cleanup import is_managed_path
@@ -140,13 +140,34 @@ def _patch_result(task_id: str, client_id: str | None, fields: dict[str, Any]) -
     return update_job_result(task_id, result, client_id=client_id)
 
 
+def auto_note_will_run() -> bool:
+    """Whether the automatic note will actually produce something.
+
+    The switch being on is not enough. The note it writes is Claude reading the
+    frames, and a machine with no Anthropic key and no subscription channel
+    cannot do that — so on a fresh install the switch alone meant no note at
+    all: the pipeline's own text note had been turned off to avoid writing two,
+    and the visual one then refused.
+
+    Asked before the job starts, because that is when the pipeline decides
+    whether to write the text note itself. When this is False the user gets the
+    text note from whichever provider they configured, which is a smaller thing
+    than the visual note and says so, rather than nothing.
+    """
+    if not auto_note_enabled():
+        return False
+    return visual_note_channel.resolve_channel(
+        resolve_secret(None, "anthropic_api_key")
+    ).available
+
+
 def note_is_wanted(task_id: str, client_id: str | None) -> bool:
     """Whether this finished task should get a note written for it now.
 
     A task the caller asked to leave without a note is left without one: the
     automation replaces the old note step, it does not override an instruction.
     """
-    if not auto_note_enabled():
+    if not auto_note_will_run():
         return False
     job = get_job(task_id, client_id=client_id)
     if not job or str(job.get("status") or "") != "completed":
@@ -221,6 +242,7 @@ __all__ = [
     "AUTO_NOTE_ENV",
     "CUT_FIRST_ENV",
     "auto_note_enabled",
+    "auto_note_will_run",
     "cut_first_enabled",
     "mark_note_running",
     "note_is_wanted",
