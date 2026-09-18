@@ -237,3 +237,48 @@ def test_the_note_can_be_switched_back_and_forth_without_another_run(
     again = vn.use_generated_note(TASK)
     assert again["result"]["summary_markdown"].startswith("## 课程要点")
     assert again["result"]["summary_written_from"] == vn.SUMMARY_WRITTEN_FROM
+
+
+def test_a_re_cut_after_a_declined_one_becomes_the_file_the_note_reads(
+    synthetic_task, monkeypatch
+):
+    """The declined-then-re-cut path, which is the one faintly recorded material
+    takes.
+
+    A pre-transcription cut whose spot check finds a cut too close to speech
+    declines its own render and records used_for_transcription=False, so the
+    transcript belongs to the recording. Re-cutting with a longer minimum silence
+    then produces a real cut file — and that file, not the recording, is what the
+    note has to be written from. Leaving the flag at False sent the note step
+    looking for a recording that is not kept in the artifact store, and it
+    reported "the cut file is no longer on this machine" about a file sitting
+    right there.
+    """
+    import backend.core.visual_note_job as vn
+
+    # The state a declined pre-transcription cut leaves behind.
+    dj._store(
+        TASK,
+        client_id=None,
+        state={
+            "status": dj.STATUS_COMPLETED,
+            "stage": "done",
+            "rendered": False,
+            "used_for_transcription": False,
+            "not_used_reason": "抽查发现剪掉的部分只比紧邻的说话声低一点点，这次按原文件转写。",
+        },
+    )
+
+    cut = dj.run_debreath(TASK, min_silence_seconds=0.5)
+    state = dj.debreath_state(cut["result"])
+
+    assert state["rendered"] is True
+    assert state["used_for_transcription"] is True, (
+        "a run that produced a cut file is the file to read from"
+    )
+    assert not state.get("not_used_reason"), "the declined run's reason is stale now"
+
+    media = vn.cut_media(TASK, cut["result"])
+    assert media is not None, "the note has a file to read"
+    assert media.unchanged is False, "and it is the cut file, not the recording"
+    assert media.path.is_file()

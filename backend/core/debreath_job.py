@@ -629,6 +629,22 @@ def run_debreath(
                 # A render that fails its own checks is kept and flagged. The
                 # checks measure; they do not delete.
                 "render_verified": report.ok,
+                # There is now a cut file, so it is the file to read from — which
+                # is what this flag answers for everything downstream. Without
+                # setting it here, a run that reaches this line still carries the
+                # False left by a pre-transcription attempt that declined to use
+                # its own render, and the note step goes looking for the original
+                # recording instead. On a faintly recorded lecture that declined
+                # once and was re-cut with a longer minimum silence, that left a
+                # finished cut file on disk and a note that refused to be written,
+                # reported as "the cut file is no longer on this machine".
+                #
+                # The subtitles are remapped above, before the render, so the cut
+                # file already carries captions on its own clock; a transcript
+                # made from the recording is not a reason to send the note back to
+                # the recording.
+                "used_for_transcription": True,
+                "not_used_reason": None,
                 "finished_at": _now(),
             },
             artifacts={MEDIA_KIND: media},
