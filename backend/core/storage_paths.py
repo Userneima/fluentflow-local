@@ -39,6 +39,27 @@ def _transcript_edit_records_dir() -> Path:
     return default_transcript_edit_records_dir()
 
 
+def in_place_source_path(job: dict | None) -> Path | None:
+    """Where a by-path task's recording actually lives.
+
+    A task submitted by absolute path — the folder intake, the system file
+    dialog, the Agent API — is read where it sits and never copied into
+    FluentFlow's own store, so :func:`find_source_file` has nothing to find. Any
+    caller that treats that as "the file is gone" tells the user their recording
+    expired while it is sitting on their disk. The path was recorded when the
+    task was queued; this reads it back and confirms it is still there.
+    """
+    metadata = (job or {}).get("metadata")
+    origin = metadata.get("folder_intake") if isinstance(metadata, dict) else None
+    if not isinstance(origin, dict):
+        return None
+    recorded = str(origin.get("original_path") or "").strip()
+    if not recorded:
+        return None
+    path = Path(recorded).expanduser()
+    return path if path.is_file() else None
+
+
 def find_source_file(task_id: str) -> Path | None:
     """Return the saved ``source.*`` file for a task, if present. Edition-neutral:
     depends only on the shared source-storage directory."""

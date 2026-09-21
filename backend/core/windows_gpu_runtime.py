@@ -16,9 +16,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# cuDNN 9, not 8: CTranslate2 dropped cuDNN 8 in 4.5, and faster-whisper 1.2's
+# own notes say the current wheels need CUDA 12 with cuDNN 9 (staying on 8 means
+# pinning ctranslate2 back to 4.4.0). The DLL name carries the major version, so
+# a stale pin here fails as a missing file rather than as a load error.
 _REQUIRED_DLLS = {
     "nvidia/cublas/bin": "cublas64_12.dll",
-    "nvidia/cudnn/bin": "cudnn64_8.dll",
+    "nvidia/cudnn/bin": "cudnn64_9.dll",
 }
 _DLL_DIRECTORY_HANDLES: list[object] = []
 _REGISTERED_DLL_DIRECTORIES: set[str] = set()

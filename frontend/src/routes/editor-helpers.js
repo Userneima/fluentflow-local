@@ -76,6 +76,19 @@ export const mediaSourcePlan = (result, {localFile = null, canPersistResult = tr
     if (localFile) return [{kind: 'local-file', file: localFile}];
     const taskId = result.task_id;
     if (!taskId) return [];
+    // A task whose transcript was made from the cut file has exactly one file
+    // that its timestamps mean anything against. Loading the recording instead
+    // leaves every seek and every highlighted line drifting further out the
+    // longer it plays, with nothing on screen saying why — so the cut file is
+    // the whole plan, and an empty plan (no cut file to read) is the honest
+    // answer rather than a silently wrong one.
+    const preferred = playbackMediaChoice(result);
+    if (preferred?.isCut) {
+        return canPersistResult
+            ? [{kind: 'artifact', artifactKind: preferred.kind, filename: preferred.filename}]
+            : [];
+    }
+    if (isAutoCutFlow(result)) return [];
     const plan = [];
     const storedSource = !!result.source_file_available;
     const sourceName = result.filename || 'source';
@@ -107,6 +120,63 @@ export const activeTranscriptSegmentIndex = (segments, currentTime) => {
         else return index;
     }
     return -1;
+};
+
+// Whether this task went through the automatic flow: the gaps came out before
+// anything read the file, so the media, the subtitles and the note are all one
+// shortened file. When true the page has nothing to ask the user for — the two
+// manual entries (remove the silence / rewrite the note from the cut version) are
+// steps that already happened, and leaving them on screen makes a finished flow
+// read like an unfinished one.
+export const isAutoCutFlow = (result) => (
+    result?.debreath?.ran_before_transcription === true
+    && result?.debreath?.used_for_transcription === true
+    && result?.transcript_media === 'debreath_media'
+);
+
+// The numbers for the one-line record of that. Null when there is nothing to
+// report, so the caller renders nothing rather than an empty bar.
+export const cutFlowSummary = (result) => {
+    if (!isAutoCutFlow(result)) return null;
+    const plan = result?.debreath?.plan || {};
+    const removedSeconds = Number(plan.removed_seconds) || 0;
+    const sourceSeconds = Number(plan.source_duration_seconds) || 0;
+    const keptSeconds = Number(plan.kept_seconds) || Math.max(0, sourceSeconds - removedSeconds);
+    return {
+        cutCount: Number(plan.cut_count) || 0,
+        removedSeconds,
+        removedPercent: Number(plan.removed_percent) || 0,
+        sourceSeconds,
+        keptSeconds,
+        mediaArtifact: result?.artifacts?.debreath_media || null,
+        renderVerified: result?.debreath?.render_verified !== false,
+    };
+};
+
+// Which stored file the player should load: the one this transcript belongs to.
+//
+// Not a preference. The transcript's timestamps drive every seek, every
+// highlighted line and every jump from the note, and they only mean something
+// against one file. Playing the recording while the transcript came from the
+// shortened version puts every click progressively further off — and nothing on
+// screen would say so, which is why the result records which file it is rather
+// than leaving this to be guessed from whichever artifacts exist.
+export const playbackMediaChoice = (result) => {
+    if (!result?.task_id) return null;
+    const cutArtifact = result?.artifacts?.debreath_media;
+    const belongsToCut = result?.transcript_media === 'debreath_media'
+        || result?.playback_media_kind === 'debreath_media';
+    if (belongsToCut && cutArtifact) {
+        return {
+            kind: 'debreath_media',
+            filename: cutArtifact.filename || result.filename || 'debreath-media',
+            isCut: true,
+        };
+    }
+    if (result?.source_file_available) {
+        return {kind: 'source', filename: result?.filename || 'source', isCut: false};
+    }
+    return null;
 };
 
 export const localSourceFileMatchesResult = (file, result) => {

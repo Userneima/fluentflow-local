@@ -273,6 +273,43 @@ def list_jobs(
     return [_row_to_dict(row) if include_result else _row_to_summary_dict(row) for row in rows]
 
 
+def recent_local_folders(
+    limit: int = 8,
+    db_path: Path | str | None = None,
+) -> list[str]:
+    """Folders this machine has already been pointed at, newest first.
+
+    Two things need them and both are the same question — where does this owner
+    keep recordings? The file dialog opens in the newest one instead of wherever
+    Finder happened to be last, and a dropped file is looked for in all of them.
+
+    Only folders that still exist are returned: a directory that has been moved or
+    unplugged is not somewhere to open a dialog, and it is not somewhere a file
+    can be found.
+    """
+    resolved = resolve_db_path(db_path)
+    ensure_job_db(resolved)
+    with sqlite3.connect(resolved) as conn:
+        rows = conn.execute(
+            "SELECT metadata_json FROM jobs WHERE metadata_json LIKE '%folder_intake%' "
+            "ORDER BY updated_at DESC LIMIT 200"
+        ).fetchall()
+    folders: list[str] = []
+    for (raw,) in rows:
+        try:
+            intake = (json.loads(raw or "{}") or {}).get("folder_intake") or {}
+        except (TypeError, ValueError):
+            continue
+        folder = str(intake.get("folder") or "").strip()
+        if not folder or folder in folders:
+            continue
+        if Path(folder).is_dir():
+            folders.append(folder)
+        if len(folders) >= max(1, limit):
+            break
+    return folders
+
+
 def list_jobs_by_statuses(
     statuses: tuple[str, ...] | list[str],
     *,

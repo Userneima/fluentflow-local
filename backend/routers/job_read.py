@@ -20,6 +20,16 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.core.job_store import get_job
 from backend.core.local_media_access import LocalMediaAccess
+from backend.core.result_artifacts import (
+    DEBREATH_ARTIFACT_SUFFIXES,
+    artifact_search_dirs,
+    resolve_artifact_file,
+)
+from backend.core.visual_note_job import (
+    VISUAL_NOTE_ARTIFACT_FILENAME,
+    VISUAL_NOTE_ARTIFACT_SUFFIXES,
+    VISUAL_NOTE_KIND,
+)
 from backend.core.storage_paths import _artifact_storage_dir, find_source_file
 
 
@@ -36,7 +46,15 @@ _ARTIFACT_SUFFIXES = {
     "transcript_bilingual_vtt": ".vtt",
     "summary_md": ".md",
     "playback_audio": ".mp3",
+    "playback_audio_enhanced": ".m4a",
     "frame": ".jpg",
+    # Downloadable wherever a result is readable. The local edition has no route
+    # that starts a de-breath yet; a cut list synced from elsewhere is still a
+    # file the owner may fetch.
+    **DEBREATH_ARTIFACT_SUFFIXES,
+    # Same reasoning: downloadable wherever the result is readable, including a
+    # result synced from the machine that generated it.
+    **VISUAL_NOTE_ARTIFACT_SUFFIXES,
 }
 
 
@@ -123,14 +141,23 @@ def create_job_read_router(
 
         result = job.get("result") if isinstance(job.get("result"), dict) else {}
         artifact = (result.get("artifacts") or {}).get(kind) if isinstance(result.get("artifacts"), dict) else None
-        artifact_filename = Path(str((artifact or {}).get("filename") or "")).name if isinstance(artifact, dict) else ""
-        if artifact_filename:
-            target = target_dir / artifact_filename
-            if target.is_file():
-                return FileResponse(path=str(target), filename=target.name)
-        matches = sorted(path for path in target_dir.glob(f"*{suffix}") if path.is_file())
+        # The record may name a subdirectory — the de-breath outputs live in one —
+        # so it is resolved rather than reduced to a basename.
+        recorded = resolve_artifact_file(target_dir, (artifact or {}).get("filename")) if isinstance(artifact, dict) else None
+        if recorded is not None:
+            return FileResponse(path=str(recorded), filename=recorded.name)
+        matches = sorted(
+            file
+            for directory in artifact_search_dirs(target_dir, kind)
+            for file in directory.glob(f"*{suffix}")
+            if file.is_file()
+        )
         if kind == "summary_md":
             matches = [path for path in matches if path.name.endswith("_summary.md")]
+        elif kind == VISUAL_NOTE_KIND:
+            # Both notes are .md in the same directory, so the glob fallback has
+            # to name this one or it would serve whichever sorts first.
+            matches = [path for path in matches if path.name == VISUAL_NOTE_ARTIFACT_FILENAME]
         elif kind == "transcript_bilingual_srt":
             matches = [path for path in matches if path.name.endswith("_bilingual_zh.srt")]
         elif kind == "transcript_bilingual_vtt":

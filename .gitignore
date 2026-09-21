@@ -1,4 +1,7 @@
 .venv/
+.DS_Store
+.claude/
+.pytest_cache/
 __pycache__/
 *.py[cod]
 .env

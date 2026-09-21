@@ -96,6 +96,11 @@ _LIST_ROW_FIELDS: Final[tuple[str, ...]] = (
     "prompt_preset",
     "prompt_preset_label",
     "imported_from_local_history",
+    # Which media the transcript came from, and what the note was written from
+    # (transcript alone, or the frames as well). Both are small, and the records
+    # page and the note evidence strip render them per row.
+    "transcript_media",
+    "summary_written_from",
 )
 
 
@@ -113,6 +118,45 @@ def assert_is_list_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def _preview(value: Any) -> str:
     return str(value)[:PREVIEW_CHARS] if value else ""
+
+
+def _debreath_summary(state: Any) -> dict[str, Any] | None:
+    """The cut's counts for a list row, without its thousands of ranges.
+
+    Absence has to keep meaning "never cut", so this returns None for a task
+    that has no cut rather than an empty object — the records page distinguishes
+    the two and says so in words.
+    """
+    if not isinstance(state, dict) or not state:
+        return None
+    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    return {
+        "status": state.get("status"),
+        "stage": state.get("stage"),
+        "used_for_transcription": state.get("used_for_transcription"),
+        "already_cut": bool(state.get("already_cut")) or None,
+        "not_worth_rendering": bool(state.get("not_worth_rendering")) or None,
+        "not_used_reason": state.get("not_used_reason"),
+        "ran_before_transcription": state.get("ran_before_transcription"),
+        "render_verified": state.get("render_verified"),
+        # Three states, and the card says something for only two of them. None
+        # means an upload, where there is no "beside the original" to deliver to
+        # and nothing to report. True is the ordinary outcome of the in-place
+        # entry — also nothing to report, because a line saying it on every card
+        # is a column of the same words. False is the one worth a warning, and
+        # the reason has to travel with it or the card can only say "something
+        # went wrong".
+        "delivered": state.get("delivered"),
+        "delivered_name": state.get("delivered_name"),
+        "delivery_error": state.get("delivery_error"),
+        "plan": {
+            "cut_count": plan.get("cut_count"),
+            "removed_seconds": plan.get("removed_seconds"),
+            "removed_percent": plan.get("removed_percent"),
+            "kept_seconds": plan.get("kept_seconds"),
+            "source_duration_seconds": plan.get("source_duration_seconds"),
+        },
+    }
 
 
 def job_list_row(result: Any) -> dict[str, Any] | None:
@@ -134,6 +178,7 @@ def job_list_row(result: Any) -> dict[str, Any] | None:
         "transcript_text_preview": _preview(transcript_text),
         "transcript_text_chars": len(str(transcript_text)),
         "artifacts": result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {},
+        "debreath": _debreath_summary(result.get("debreath")),
         "lark_response": {"url": lark_response.get("url")} if lark_response and lark_response.get("url") else None,
     })
     return assert_is_list_row(row)

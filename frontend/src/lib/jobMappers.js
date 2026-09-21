@@ -228,16 +228,22 @@ export const jobDisplayTitle = (job={}, lang='zh') => {
     const result = normalizedJob.result || {};
     const metadata = normalizedJob.metadata || {};
     const videoSource = metadata.video_source || {};
-    const isLocalFileJob = !videoSource || Object.keys(videoSource).length === 0;
+    // Raw titles before display titles, and the filename last.
+    //
+    // A display title is derived, and records written before the extension
+    // stripper was fixed carry the damage ("4.5期 kickoff" stored as "4"); the
+    // raw title beside it is intact. Preferring the filename for local files
+    // dodged that too, but it also renamed every local recording on screen to
+    // its filename — and the queue line ("waiting for …") then named a file
+    // instead of the lecture the reader queued.
     const title = displayTitleForUser(
-        (isLocalFileJob && (normalizedJob.source_filename || result.filename))
-            || metadata.display_title
-            || videoSource.display_title
-            || result.display_title
-            || metadata.raw_title
+        metadata.raw_title
             || videoSource.raw_title
             || videoSource.title
             || result.raw_title
+            || metadata.display_title
+            || videoSource.display_title
+            || result.display_title
             || normalizedJob.source_filename
             || result.filename,
         normalizedJob.source_filename || result.filename,

@@ -4,7 +4,6 @@ export const AuthCtx = createContext({
     authMode:'open',
     user:null,
     guestMode:false,
-    guestTrial:null,
     canRegister:false,
     openAuth:()=>{},
     logout:async()=>{},

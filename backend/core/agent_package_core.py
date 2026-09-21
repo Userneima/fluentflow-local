@@ -13,6 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from backend.core.result_artifacts import (
+    DEBREATH_CUT_LIST_KIND,
+    DEBREATH_MEDIA_KIND,
+    DEBREATH_TRANSCRIPT_KIND,
+    VISUAL_NOTE_KIND,
+)
 from backend.core.result_schema import canonical_display_segments, canonical_raw_segments, sanitize_raw_segments
 from backend.core.title_display import display_title_for_user
 from backend.core.note_diagnosis import build_note_generation_diagnosis
@@ -215,6 +221,164 @@ def _agent_visual_key_moments(result: dict[str, Any]) -> list[dict[str, Any]]:
     return payload
 
 
+def _agent_debreath(result: dict[str, Any], artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Breath-gap removal state, flattened for an agent that has to decide.
+
+    ``available`` answers "has this been run at all", which is what separates a
+    task the agent may submit from one it should read. The numbers are lifted out
+    of the stored plan because an agent choosing whether to render again needs the
+    counts, not the 2000 ranges — those stay in the cut-list artifact, which is
+    listed here by kind so the agent can fetch it from ``artifacts``.
+
+    ``warnings`` is carried verbatim. It is where the module says the threshold may
+    not suit the material, and an agent that drops it will happily render a
+    recording whose speech was being cut.
+    """
+    raw_state = result.get("debreath")
+    state = raw_state if isinstance(raw_state, dict) else {}
+    raw_plan = state.get("plan")
+    plan = raw_plan if isinstance(raw_plan, dict) else {}
+    raw_render = state.get("render")
+    render = raw_render if isinstance(raw_render, dict) else {}
+    return {
+        "available": bool(state),
+        "status": state.get("status"),
+        "stage": state.get("stage"),
+        "started_at": state.get("started_at"),
+        "finished_at": state.get("finished_at"),
+        "error": state.get("error"),
+        "settings": state.get("settings") if isinstance(state.get("settings"), dict) else None,
+        "warnings": [_text(item) for item in (state.get("warnings") or []) if _text(item)],
+        "cut_count": plan.get("cut_count"),
+        "removed_seconds": plan.get("removed_seconds"),
+        "removed_percent": plan.get("removed_percent"),
+        "kept_seconds": plan.get("kept_seconds"),
+        "source_duration_seconds": plan.get("source_duration_seconds"),
+        "level_separation": plan.get("level_separation") if isinstance(plan.get("level_separation"), dict) else None,
+        "rendered": bool(state.get("rendered")),
+        "render_verified": state.get("render_verified"),
+        "render_failed_checks": render.get("failed_checks") if isinstance(render.get("failed_checks"), list) else [],
+        "cut_list_artifact": DEBREATH_CUT_LIST_KIND if DEBREATH_CUT_LIST_KIND in artifacts else None,
+        "media_artifact": DEBREATH_MEDIA_KIND if DEBREATH_MEDIA_KIND in artifacts else None,
+        # Subtitles on the cut file's clock. An agent that hands a caption track
+        # to the shortened media must use this one; the task's own transcript
+        # belongs to the recording before it was shortened.
+        "transcript_artifact": DEBREATH_TRANSCRIPT_KIND if DEBREATH_TRANSCRIPT_KIND in artifacts else None,
+        "transcript_timeline": state.get("transcript_timeline") if isinstance(state.get("transcript_timeline"), dict) else None,
+        "media_filename": _text(state.get("media_filename")) or None,
+    }
+
+
+def _agent_cut_media_note(result: dict[str, Any], artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """The note written from the de-breathed file, and what it was written from.
+
+    An agent reading this has to be able to tell three things apart that all
+    produce a note: the ordinary transcript note, this one, and this one after
+    somebody edited it. So the fields that matter most here are not the text —
+    that is in ``note`` — but ``media_source`` and ``subtitle_timeline``, which
+    say which file was read and whose clock its timestamps are on, and
+    ``promoted``, which says whether the task's note is currently this one.
+
+    ``basis`` is carried verbatim because it is measured from the citations, not
+    reported by the model. An agent that treats a ``transcript_only`` note as
+    having been written from pictures is making the exact claim this flow refuses
+    to make.
+    """
+    raw_state = result.get("visual_note")
+    state = raw_state if isinstance(raw_state, dict) else {}
+    media = state.get("media_source") if isinstance(state.get("media_source"), dict) else None
+    timeline = state.get("subtitle_timeline") if isinstance(state.get("subtitle_timeline"), dict) else None
+    replaced = state.get("replaced_note") if isinstance(state.get("replaced_note"), dict) else {}
+    frames_sent = state.get("frames_sent") if isinstance(state.get("frames_sent"), list) else []
+    frames_cited = state.get("frames_cited") if isinstance(state.get("frames_cited"), list) else []
+    return {
+        "available": bool(state),
+        "status": state.get("status"),
+        "stage": state.get("stage"),
+        "started_at": state.get("started_at"),
+        "finished_at": state.get("finished_at"),
+        "error": state.get("error"),
+        "markdown_chars": len(_text(state.get("markdown"))),
+        "basis": state.get("basis"),
+        "basis_note": _text(state.get("basis_note")),
+        "media_source": media,
+        "subtitle_timeline": timeline,
+        "frames_sent": len(frames_sent),
+        "frames_cited": len(frames_cited),
+        "transcript_chars": state.get("transcript_chars"),
+        "model": state.get("model"),
+        "channel": state.get("channel"),
+        # Whether the task's note is this one right now, and whether the note it
+        # displaced can still be put back.
+        "promoted": bool(state.get("promoted")),
+        "summary_written_from": _text(result.get("summary_written_from")) or None,
+        "previous_note_restorable": bool(_text(replaced.get("previous_markdown"))),
+        "note_artifact": VISUAL_NOTE_KIND if VISUAL_NOTE_KIND in artifacts else None,
+    }
+
+
+def _cut_media_note_next_actions(
+    job: dict[str, Any], note: dict[str, Any], debreath: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Only when there is a step to take.
+
+    A running note gets a wait; a failed one gets the retry with the recorded
+    reason. A finished task that never ran one gets a suggestion *only* once a
+    cut file exists, because before that the next step belongs to the de-breath
+    and suggesting both would describe two entrances to one flow.
+    """
+    task_id = job.get("task_id")
+    path = f"/agent/v1/tasks/{task_id}/visual-note"
+    if note.get("status") == "running":
+        return [{
+            "action": "wait_cut_media_note",
+            "method": "GET",
+            "path": f"/agent/v1/tasks/{task_id}/package",
+            "reason": "正在根据剪后的文件重写笔记，稍后再次读取任务包。",
+        }]
+    if note.get("status") == "failed":
+        return [{
+            "action": "write_cut_media_note",
+            "method": "POST",
+            "path": path,
+            "reason": _text(note.get("error")) or "上次重写笔记失败，可以重新发起。",
+        }]
+    if not note.get("available") and debreath.get("media_artifact"):
+        return [{
+            "action": "write_cut_media_note",
+            "method": "POST",
+            "path": path,
+            "reason": "已经有剪后的文件，可以据它重写这个任务的笔记。",
+        }]
+    return []
+
+
+def _debreath_next_actions(job: dict[str, Any], debreath: dict[str, Any]) -> list[dict[str, Any]]:
+    """Only when there is something to do about it.
+
+    A completed task with no de-breath is not a problem to fix, so it gets no
+    action — every finished task would otherwise carry one, and a list where
+    everything is suggested says nothing. A run that is still going or that failed
+    is different: there the agent has a next step.
+    """
+    task_id = job.get("task_id")
+    if debreath.get("status") == "running":
+        return [{
+            "action": "wait_debreath",
+            "method": "GET",
+            "path": f"/agent/v1/tasks/{task_id}/package",
+            "reason": "去气口正在进行，稍后再次读取任务包。",
+        }]
+    if debreath.get("status") == "failed":
+        return [{
+            "action": "debreath",
+            "method": "POST",
+            "path": f"/agent/v1/tasks/{task_id}/debreath",
+            "reason": _text(debreath.get("error")) or "上次去气口失败，可以重新发起。",
+        }]
+    return []
+
+
 def _next_actions(
     job: dict[str, Any],
     diagnosis: dict[str, Any],
@@ -271,6 +435,8 @@ def build_agent_task_package(
         or task_id
     )
     artifacts = _agent_artifacts(task_id, result, artifact_root)
+    debreath = _agent_debreath(result, artifacts)
+    cut_media_note = _agent_cut_media_note(result, artifacts)
     visual_artifacts = _agent_visual_artifacts(task_id, result, artifact_root)
     visual_evidence = _agent_visual_evidence(result, visual_artifacts)
     visual_requests = _agent_visual_requests(result)
@@ -350,6 +516,18 @@ def build_agent_task_package(
             "chapter_coverage": result.get("chapter_coverage") if isinstance(result.get("chapter_coverage"), dict) else None,
         },
         "artifacts": artifacts,
+        # The measured consonant-band deficit, plus whether a corrected take
+        # exists. Reported so an agent can decide which take to hand a listener.
+        # `transcription_take` names the take this transcript came from — the
+        # corrected one by default, the plain one when correcting failed — so a
+        # re-run can reproduce it instead of silently changing its input.
+        "audio": {
+            "presence": result.get("voice_presence") if isinstance(result.get("voice_presence"), dict) else None,
+            "enhanced_available": bool(artifacts.get("playback_audio_enhanced")),
+            "transcription_take": result.get("transcription_audio_take") or "plain",
+        },
+        "debreath": debreath,
+        "cut_media_note": cut_media_note,
         "visual": {
             "available": bool(visual_evidence),
             "evidence": visual_evidence,
@@ -377,5 +555,9 @@ def build_agent_task_package(
         package["execution"] = execution
     package["tool_trace"] = policy.build_tool_trace(result, job=job)
     package["decision_log"] = policy.build_decision_log(result, job=job, metadata=metadata)
-    package["next_actions"] = _next_actions(job, diagnosis, policy.extra_next_actions)
+    package["next_actions"] = (
+        _next_actions(job, diagnosis, policy.extra_next_actions)
+        + _debreath_next_actions(job, debreath)
+        + _cut_media_note_next_actions(job, cut_media_note, debreath)
+    )
     return package

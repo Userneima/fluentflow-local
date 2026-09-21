@@ -7,6 +7,7 @@ import {
     isUserOAuthLarkExportRoute,
     isUserOAuthLarkRouteAvailable,
     normalizeLarkExportRoute,
+    sanitizeSettings,
 } from './settingsModel.js';
 
 afterEach(() => {
@@ -49,5 +50,19 @@ describe('hosted Lark route policy (registered)', () => {
         expect(extraLarkExportRouteOptions()).toEqual([
             {value: 'user_oauth', labelZh: '标签', labelEn: 'Label', hintZh: '提示', hintEn: 'Hint'},
         ]);
+    });
+});
+
+describe('speaker diarization default', () => {
+    it('turns speaker separation on when the setting was never set', () => {
+        expect(sanitizeSettings({}).speakerDiarization).toBe(true);
+    });
+
+    it('keeps an explicit opt-out', () => {
+        expect(sanitizeSettings({speakerDiarization: false}).speakerDiarization).toBe(false);
+    });
+
+    it('keeps an explicit opt-in', () => {
+        expect(sanitizeSettings({speakerDiarization: true}).speakerDiarization).toBe(true);
     });
 });

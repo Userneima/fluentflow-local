@@ -32,6 +32,10 @@ MIUISTORE_ORIGIN = "https://sph.miuistore.com"
 MIUISTORE_HOST_SUFFIXES = ("miuistore.com",)
 DOUYIN_MEDIA_HOST_SUFFIXES = ("douyinvod.com", "amemv.com", "snssdk.com")
 BILIBILI_MEDIA_HOST_SUFFIXES = ("bilivideo.com", "hdslb.com", "akamaized.net")
+BILIBILI_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
@@ -450,7 +454,7 @@ def run_yt_dlp(
             "--add-header",
             "Origin:https://www.bilibili.com",
             "--add-header",
-            "User-Agent:Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            f"User-Agent:{BILIBILI_USER_AGENT}",
             url_arg,
         ])
     result = _run_process(args, timeout=90, cancellation_event=cancellation_event)
@@ -533,7 +537,48 @@ def _resolver_failure_reason(error: Exception) -> str:
     return reason if reason != "unknown" else "unavailable"
 
 
+# Douyin answers "fresh cookies are needed" to a share link intermittently, with
+# no pattern and no change on our side: measured 2026-09-03 on one link, the same
+# call alternated between a full JSON answer and that refusal within seconds,
+# with and without browser cookies. One attempt therefore decides a link's fate
+# on a coin flip, which is how a link that works by hand comes back
+# "暂时无法自动解析" in the product. Retried only for that reason — a genuinely
+# unsupported or private video fails the same way every time and must not be
+# hammered.
+_TRANSIENT_RESOLVER_REASONS = frozenset({"fresh_cookies_required"})
+_RESOLVER_RETRIES = 3
+# Escalating, because the refusal looks like throttling: measured on one link,
+# two attempts 2s apart still lost one run in three, while backing off further
+# recovered it.
+_RESOLVER_RETRY_SLEEP_SECONDS = 2.0
+
+
 def _resolve_with_yt_dlp_attempt(
+    url: str,
+    cookies_from_browser: str | None = None,
+    *,
+    cancellation_event: threading.Event | None = None,
+) -> tuple[ResolvedVideo | None, str | None]:
+    resolved, reason = _resolve_with_yt_dlp_once(
+        url, cookies_from_browser, cancellation_event=cancellation_event
+    )
+    attempts = 0
+    while resolved is None and reason in _TRANSIENT_RESOLVER_REASONS and attempts < _RESOLVER_RETRIES:
+        attempts += 1
+        _raise_if_cancelled(cancellation_event)
+        pause = _RESOLVER_RETRY_SLEEP_SECONDS * attempts
+        if cancellation_event is not None:
+            if cancellation_event.wait(pause):
+                _raise_if_cancelled(cancellation_event)
+        else:
+            time.sleep(pause)
+        resolved, reason = _resolve_with_yt_dlp_once(
+            url, cookies_from_browser, cancellation_event=cancellation_event
+        )
+    return resolved, reason
+
+
+def _resolve_with_yt_dlp_once(
     url: str,
     cookies_from_browser: str | None = None,
     *,
@@ -589,11 +634,14 @@ def _resolve_with_miuistore_attempt(
         _raise_if_cancelled(cancellation_event)
         if checked.get("error") != 0 or not checked.get("url"):
             return None, "unavailable"
-        query_url = urllib.parse.urljoin(MIUISTORE_ORIGIN, str(checked["url"]))
-        encrypted_url = (urllib.parse.parse_qs(urllib.parse.urlparse(query_url).query).get("url") or [None])[0]
-        if not encrypted_url:
+        # Follow the path the service handed back instead of rebuilding one.
+        # It used to answer with a `dy-r` page and now answers `dy-d`; the
+        # hardcoded name turned that rename into HTTP 400, reported as a plain
+        # "cannot resolve" (2026-09-03). Whatever it names the next one, this
+        # follows it.
+        result_url = urllib.parse.urljoin(MIUISTORE_ORIGIN, str(checked["url"]))
+        if not urllib.parse.urlparse(result_url).query:
             return None, "invalid_response"
-        result_url = f"{MIUISTORE_ORIGIN}/sph/public/dy-r?{urllib.parse.urlencode({'url': encrypted_url})}"
         page_html = fetch_text(result_url, allowed_host_suffixes=MIUISTORE_HOST_SUFFIXES)
         _raise_if_cancelled(cancellation_event)
         links = parse_miuistore_links(page_html)
@@ -623,7 +671,7 @@ def resolve_video(
     input_text: str,
     cookies_from_browser: str | None = None,
     *,
-    allow_miuistore: bool = False,
+    allow_miuistore: bool = True,
     cancellation_event: threading.Event | None = None,
 ) -> ResolvedVideo:
     _raise_if_cancelled(cancellation_event)
@@ -656,10 +704,11 @@ def resolve_video(
     if not is_douyin_url(source_url):
         raise VideoSourceResolutionError("暂时无法自动解析这个视频链接，请上传视频文件", trace)
     if not allow_miuistore:
-        # The miuistore fallback sends the extracted Douyin URL to a third party.
-        # It is opt-in: callers (the local edition) must pass explicit user
-        # consent. Without it, do not contact the third party.
-        trace.append({"provider": "miuistore", "status": "skipped", "reason": "consent_required"})
+        # The fallback runs by default: yt-dlp needs a fresh Douyin login and
+        # fails without one, so gating the only working route behind a consent
+        # flag meant Douyin links simply did not work. It sends the extracted
+        # Douyin URL to a third party, and a caller can still switch it off.
+        trace.append({"provider": "miuistore", "status": "skipped", "reason": "disabled_by_request"})
         raise VideoSourceResolutionError("暂时无法自动解析这个视频链接，请上传视频文件", trace)
     resolved, failure_reason = _resolve_with_miuistore_attempt(
         source_url, **_cancellation_kwargs(cancellation_event)
@@ -807,7 +856,22 @@ def merge_media_parts(
 
 def _yt_dlp_cookies_args(cookies_from_browser: str | None = None) -> list[str]:
     value = (cookies_from_browser or os.environ.get("YT_DLP_COOKIES_FROM_BROWSER", "")).strip()
-    return ["--cookies-from-browser", value] if value else []
+    if value:
+        return ["--cookies-from-browser", value]
+    # A headless server has no browser profile to read, so a Netscape cookie
+    # file is the only way to give it a login (Bilibili hides subtitles from
+    # anonymous requests). Ignored unless the file actually exists, so a stale
+    # setting degrades to anonymous instead of failing every download.
+    cookie_file = (os.environ.get("YT_DLP_COOKIES_FILE") or "").strip()
+    if cookie_file and Path(cookie_file).is_file():
+        return ["--cookies", cookie_file]
+    return []
+
+
+def yt_dlp_login_configured(cookies_from_browser: str | None = None) -> bool:
+    """Whether any cookie source is available for yt-dlp."""
+
+    return bool(_yt_dlp_cookies_args(cookies_from_browser))
 
 
 def check_browser_cookies(browser: str) -> dict[str, Any]:
@@ -840,12 +904,47 @@ def youtube_caption_languages() -> str:
     return (os.environ.get("FLUENTFLOW_YOUTUBE_SUB_LANGS") or "en,zh-Hans,zh-Hant,zh").strip()
 
 
+def bilibili_caption_languages() -> str:
+    """Bilibili exposes creator subtitles as zh-* and its machine ones as ai-zh."""
+
+    return (os.environ.get("FLUENTFLOW_BILIBILI_SUB_LANGS") or "zh-Hans,zh-CN,zh,ai-zh").strip()
+
+
+def caption_language_candidates(provider: str = "youtube") -> list[str]:
+    raw = bilibili_caption_languages() if provider == "bilibili" else youtube_caption_languages()
+    return [item.strip() for item in raw.split(",") if item.strip()] or ["en"]
+
+
 def youtube_caption_language_candidates() -> list[str]:
-    return [
-        item.strip()
-        for item in youtube_caption_languages().split(",")
-        if item.strip()
-    ] or ["en"]
+    return caption_language_candidates("youtube")
+
+
+def caption_provider(url: str) -> str | None:
+    """Which caption source, if any, can serve this URL without downloading media."""
+
+    try:
+        if is_youtube_url(url):
+            return "youtube"
+        if is_bilibili_url(url):
+            return "bilibili"
+    except Exception:
+        return None
+    return None
+
+
+def captions_first_provider(url: str, cookies_from_browser: str | None = None) -> str | None:
+    """The caption source to try before falling back to downloading media.
+
+    Bilibili is gated on having a login: it refuses subtitles to anonymous
+    requests ("Subtitles are only available when logged in"), so attempting it
+    without cookies is a guaranteed-failed round trip that only adds latency
+    before the media download we were going to do anyway.
+    """
+
+    provider = caption_provider(url)
+    if provider == "bilibili" and not yt_dlp_login_configured(cookies_from_browser):
+        return None
+    return provider
 
 
 def download_timeout_seconds(
@@ -896,30 +995,40 @@ def video_source_failure_reason(error: Any) -> str:
     return "unknown"
 
 
-def download_youtube_captions(
+CAPTION_PROVIDER_LABELS = {"youtube": "YouTube", "bilibili": "B 站"}
+# Spelled out per provider so Chinese spacing reads correctly in both.
+CAPTION_UNAVAILABLE_LABELS = {"youtube": "YouTube 字幕", "bilibili": "B 站字幕"}
+
+
+def download_source_captions(
     url: str,
     file_path: Path,
     on_progress: ProgressCallback | None = None,
     *,
+    provider: str | None = None,
     cookies_from_browser: str | None = None,
     cancellation_event: threading.Event | None = None,
 ) -> int:
+    """Fetch existing subtitles instead of the media, skipping STT entirely."""
+
     _raise_if_cancelled(cancellation_event)
     parse_http_url(url)
-    if not is_youtube_url(url):
-        raise RuntimeError("YouTube captions are only available for YouTube URLs")
+    resolved_provider = provider or caption_provider(url)
+    if resolved_provider not in CAPTION_PROVIDER_LABELS:
+        raise RuntimeError("这个来源不支持直接获取字幕")
+    label = CAPTION_PROVIDER_LABELS[resolved_provider]
     on_progress and on_progress(VideoSourceProgress(
         stage="downloading",
-        message="正在获取 YouTube 字幕",
+        message=f"正在获取 {label} 字幕",
         percent=None,
         loaded_bytes=None,
         total_bytes=None,
     ))
     file_path.parent.mkdir(parents=True, exist_ok=True)
     errors: list[str] = []
-    for language in youtube_caption_language_candidates():
+    for language in caption_language_candidates(resolved_provider):
         _raise_if_cancelled(cancellation_event)
-        with tempfile.TemporaryDirectory(prefix="fluentflow-youtube-captions-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="fluentflow-captions-") as temp_dir:
             output_template = str(Path(temp_dir) / "captions.%(ext)s")
             args = [
                 sys.executable,
@@ -935,8 +1044,7 @@ def download_youtube_captions(
                 "srt",
                 "-o",
                 output_template,
-                "--extractor-args",
-                "youtube:player_client=android",
+                *_caption_extractor_args(resolved_provider),
                 *_yt_dlp_cookies_args(cookies_from_browser),
                 url,
             ]
@@ -951,17 +1059,34 @@ def download_youtube_captions(
                 break
             errors.append((result.stderr or result.stdout or f"{language}: yt-dlp 字幕下载失败，退出码 {result.returncode}").strip())
     if not file_path.is_file():
-        detail = errors[-1] if errors else "这个 YouTube 视频没有可用字幕"
-        raise RuntimeError(detail or "这个 YouTube 视频没有可用字幕")
+        detail = errors[-1] if errors else f"这个{label}视频没有可用字幕"
+        raise RuntimeError(detail or f"这个{label}视频没有可用字幕")
     size_bytes = file_path.stat().st_size
     on_progress and on_progress(VideoSourceProgress(
         stage="downloading",
-        message="YouTube 字幕获取完成",
+        message=f"{label} 字幕获取完成",
         percent=100,
         loaded_bytes=size_bytes,
         total_bytes=size_bytes,
     ))
     return size_bytes
+
+
+def _caption_extractor_args(provider: str) -> list[str]:
+    if provider == "youtube":
+        return ["--extractor-args", "youtube:player_client=android"]
+    if provider == "bilibili":
+        # Same anti-crawl headers the metadata probe uses; without them Bilibili
+        # answers HTTP 412.
+        return [
+            "--add-header",
+            "Referer:https://www.bilibili.com/",
+            "--add-header",
+            "Origin:https://www.bilibili.com",
+            "--add-header",
+            f"User-Agent:{BILIBILI_USER_AGENT}",
+        ]
+    return []
 
 
 def download_yt_dlp_media(
@@ -1063,13 +1188,14 @@ def build_asset_strategy(
     file_url: str,
     filename: str,
     caption_failure_reason: str | None = None,
+    caption_source: str | None = None,
 ) -> dict[str, Any]:
     if media_type == "transcript":
         return {
             "transcript_asset": {
                 "status": "completed",
                 "kind": "subtitle",
-                "source": "youtube_captions",
+                "source": f"{caption_source or caption_provider(source_url) or 'youtube'}_captions",
                 "filename": filename,
                 "file_path": str(file_path),
                 "file_url": file_url,
@@ -1114,7 +1240,7 @@ def download_video_source(
     video_dir: Path,
     on_progress: ProgressCallback | None = None,
     cookies_from_browser: str | None = None,
-    allow_miuistore: bool = False,
+    allow_miuistore: bool = True,
     cancellation_event: threading.Event | None = None,
 ) -> SavedVideoSource:
     _raise_if_cancelled(cancellation_event)
@@ -1132,7 +1258,12 @@ def download_video_source(
         allow_miuistore=allow_miuistore,
         **_cancellation_kwargs(cancellation_event),
     )
-    media_type = "transcript" if resolved.provider == "yt-dlp" and is_youtube_url(resolved.source_url) else "video"
+    caption_source = (
+        captions_first_provider(resolved.source_url, cookies_from_browser)
+        if resolved.provider == "yt-dlp"
+        else None
+    )
+    media_type = "transcript" if caption_source else "video"
     extension = ".srt" if media_type == "transcript" else ".mp4"
     video_id, raw_title, display_title, filename = resolve_filename(resolved, title, extension=extension)
     file_path = video_dir / filename
@@ -1148,90 +1279,91 @@ def download_video_source(
             total_bytes=size_bytes,
         ))
     except FileNotFoundError:
-        if resolved.audio_url and resolved.download_url:
-            on_progress and on_progress(VideoSourceProgress(
-                stage="downloading",
-                message="正在下载并合并 B 站音视频",
-                percent=None,
-            ))
-            size_bytes = merge_media_parts(
-                resolved.download_url,
-                resolved.audio_url,
-                file_path,
-                referer=resolved.referer,
-                **_cancellation_kwargs(cancellation_event),
-            )
-            on_progress and on_progress(VideoSourceProgress(
-                stage="downloading",
-                message="视频下载完成",
-                percent=100,
-                loaded_bytes=size_bytes,
-                total_bytes=size_bytes,
-            ))
-        else:
-            if media_type == "transcript":
-                try:
-                    size_bytes = download_youtube_captions(
-                        resolved.source_url,
-                        file_path,
-                        on_progress,
-                        cookies_from_browser=cookies_from_browser,
-                        **_cancellation_kwargs(cancellation_event),
-                    )
-                except VideoSourceCancelled:
-                    raise
-                except Exception as exc:
-                    caption_failure_reason = video_source_failure_reason(exc)
-                    media_type = "video"
-                    video_id, raw_title, display_title, filename = resolve_filename(resolved, title)
-                    file_path = video_dir / filename
-                    try:
-                        size_bytes = download_yt_dlp_media(
-                            resolved.source_url,
-                            file_path,
-                            on_progress,
-                            duration_seconds=resolved.duration_seconds,
-                            estimated_size_bytes=resolved.estimated_size_bytes,
-                            cookies_from_browser=cookies_from_browser,
-                            **_cancellation_kwargs(cancellation_event),
-                        )
-                    except Exception as media_exc:
-                        raise RuntimeError(
-                            f"YouTube 字幕不可用，且原视频下载失败：{media_exc}"
-                        ) from media_exc
-            elif resolved.provider == "yt-dlp":
-                size_bytes = download_yt_dlp_media(
+        # Captions come first when the source has them: no media download, no STT,
+        # so the transcription cost for that task is zero. Any failure downgrades
+        # to the media path below rather than failing the task.
+        if media_type == "transcript":
+            try:
+                size_bytes = download_source_captions(
                     resolved.source_url,
                     file_path,
                     on_progress,
-                    duration_seconds=resolved.duration_seconds,
-                    estimated_size_bytes=resolved.estimated_size_bytes,
+                    provider=caption_source,
                     cookies_from_browser=cookies_from_browser,
                     **_cancellation_kwargs(cancellation_event),
                 )
-            elif resolved.referer:
-                size_bytes = download_file(
-                    resolved.download_url,
-                    file_path,
-                    on_progress,
-                    referer=resolved.referer,
-                    **_cancellation_kwargs(cancellation_event),
-                )
-            elif resolved.provider == "miuistore":
-                size_bytes = download_file(
-                    resolved.download_url,
-                    file_path,
-                    on_progress,
-                    allowed_host_suffixes=DOUYIN_MEDIA_HOST_SUFFIXES,
-                    **_cancellation_kwargs(cancellation_event),
-                )
-            else:
-                size_bytes = download_file(
-                    resolved.download_url,
-                    file_path,
-                    on_progress,
-                    **_cancellation_kwargs(cancellation_event),
-                )
+            except VideoSourceCancelled:
+                raise
+            except Exception as exc:
+                caption_failure_reason = video_source_failure_reason(exc)
+                media_type = "video"
+                video_id, raw_title, display_title, filename = resolve_filename(resolved, title)
+                file_path = video_dir / filename
+
+        if media_type == "video":
+            caption_label = CAPTION_UNAVAILABLE_LABELS.get(caption_source or "", "字幕")
+            try:
+                if resolved.audio_url and resolved.download_url:
+                    on_progress and on_progress(VideoSourceProgress(
+                        stage="downloading",
+                        message="正在下载并合并 B 站音视频",
+                        percent=None,
+                    ))
+                    size_bytes = merge_media_parts(
+                        resolved.download_url,
+                        resolved.audio_url,
+                        file_path,
+                        referer=resolved.referer,
+                        **_cancellation_kwargs(cancellation_event),
+                    )
+                    on_progress and on_progress(VideoSourceProgress(
+                        stage="downloading",
+                        message="视频下载完成",
+                        percent=100,
+                        loaded_bytes=size_bytes,
+                        total_bytes=size_bytes,
+                    ))
+                elif resolved.provider == "yt-dlp":
+                    size_bytes = download_yt_dlp_media(
+                        resolved.source_url,
+                        file_path,
+                        on_progress,
+                        duration_seconds=resolved.duration_seconds,
+                        estimated_size_bytes=resolved.estimated_size_bytes,
+                        cookies_from_browser=cookies_from_browser,
+                        **_cancellation_kwargs(cancellation_event),
+                    )
+                elif resolved.referer:
+                    size_bytes = download_file(
+                        resolved.download_url,
+                        file_path,
+                        on_progress,
+                        referer=resolved.referer,
+                        **_cancellation_kwargs(cancellation_event),
+                    )
+                elif resolved.provider == "miuistore":
+                    size_bytes = download_file(
+                        resolved.download_url,
+                        file_path,
+                        on_progress,
+                        allowed_host_suffixes=DOUYIN_MEDIA_HOST_SUFFIXES,
+                        **_cancellation_kwargs(cancellation_event),
+                    )
+                else:
+                    size_bytes = download_file(
+                        resolved.download_url,
+                        file_path,
+                        on_progress,
+                        **_cancellation_kwargs(cancellation_event),
+                    )
+            except VideoSourceCancelled:
+                raise
+            except Exception as media_exc:
+                if caption_failure_reason:
+                    raise RuntimeError(
+                        f"{caption_label}不可用，且原视频下载失败：{media_exc}"
+                    ) from media_exc
+                raise
 
     _raise_if_cancelled(cancellation_event)
     on_progress and on_progress(VideoSourceProgress(stage="saving", message="正在保存视频信息", percent=96))
@@ -1243,6 +1375,7 @@ def download_video_source(
         file_url=file_url,
         filename=filename,
         caption_failure_reason=caption_failure_reason,
+        caption_source=caption_source,
     )
     metadata = {
         "provider": resolved.provider,

@@ -1,8 +1,13 @@
-"""Media job pipeline extracted from routers/processing.py.
+"""The media job pipeline.
 
 Holds MediaJobContext, the _stream_media_job pipeline generator, execute_media_job,
-and the transcript-correction / source-language helpers. Re-imported by processing.py
-(facade) so route handlers and the server_helpers queue worker keep working unchanged.
+and the transcript-correction / source-language helpers. Both entry points,
+routers/local_processing.py and routers/local_video_sources.py, build their
+context through local_processing's _local_media_job_context.
+
+Blocks lifted out of the generator live in media_job_outcome (the cancelled and
+failed endings) and media_job_stages (Lark export, speaker labelling, transcript
+cleanup). Neither imports back into this module.
 """
 
 from __future__ import annotations
@@ -11,7 +16,6 @@ from typing import Any, AsyncGenerator, Optional
 import functools
 import json
 import os
-import subprocess
 import uuid
 import urllib.parse
 from dataclasses import asdict, dataclass
@@ -21,7 +25,6 @@ import asyncio
 import shutil
 import tempfile
 import time
-import wave
 import logging
 
 from fastapi import Request
@@ -39,12 +42,24 @@ from backend.core.ai_summarizer import (
     summarize_transcript_with_metadata,
     visual_requests_to_frame_segments,
 )
+from backend.core.media_probe import media_duration_seconds
+from backend.core.media_job_stages import (
+    clean_transcript,
+    export_note_to_lark,
+    label_speakers,
+)
+from backend.core.media_job_outcome import (
+    TerminalReport,
+    _log_task_completed,
+    _text_len,
+    report_cancelled,
+    report_failed,
+)
 from backend.core.media_preflight import SILENCE_GUARD_ENV, media_guard_enabled
 from backend.core.media_intake import path_size_mb
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 from backend.core.event_context import (
     event_metadata,
-    pipeline_mode,
     runtime_context_metadata,
 )
 from backend.core.event_logger import log_event
@@ -56,18 +71,18 @@ from backend.core.job_lifecycle import (
 )
 from backend.core.job_store import get_job, upsert_job
 from backend.core.result_artifacts import (
+    DEBREATH_MEDIA_KIND,
+    TRANSCRIPT_MEDIA_CUT,
+    TRANSCRIPT_MEDIA_SOURCE,
+    _attach_enhanced_playback_audio_artifact,
     _attach_playback_audio_artifact,
     _attach_result_artifacts,
     _write_file_artifact,
 )
-from backend.core.speaker_diarization import (
-    assign_speakers_to_segments,
-    diarization_status,
-    diarize_audio,
-)
+from backend.core.speaker_diarization import build_speaker_annotated_transcript
+from backend.core.voice_enhance import enhance_voice, measure_presence, stt_audio_source
 from backend.core.stt_process import drain_queue, start_transcription_process, terminate_process
 from backend.core.storage_paths import _artifact_storage_dir
-from backend.core.transcript_cleaner import clean_repeated_transcript
 from backend.core.transcript_correction import (
     correction_result_fields,
     correct_transcript_segments,
@@ -82,10 +97,6 @@ from backend.core.visual_evidence import (
 
 
 logger = logging.getLogger(__name__)
-
-
-def _text_len(value: str | None) -> int:
-    return len(value or "")
 
 
 def _stt_realtime_factor(
@@ -124,76 +135,9 @@ def _cleanup_payload(cleanup_result: Any) -> dict[str, Any]:
     }
 
 
-def _log_task_completed(
-    *,
-    task_id: str,
-    started_at: float,
-    final_status: str,
-    source_type: str | None = None,
-    source_filename: str | None = None,
-    source_duration_seconds: float | None = None,
-    source_file_size_mb: float | None = None,
-    transcript_length: int | None = None,
-    summary_length: int | None = None,
-    summary_status: str | None = None,
-    lark_requested: bool | None = None,
-    lark_success: bool | None = None,
-    stt_provider: str | None = None,
-    stt_provider_labeler: Any = None,
-    completion_reason: str | None = None,
-) -> None:
-    total_duration = round(time.perf_counter() - started_at, 3)
-    log_event(
-        task_id=task_id,
-        event_name="task_completed",
-        source_type=source_type,
-        source_filename=source_filename,
-        source_duration_seconds=source_duration_seconds,
-        source_file_size_mb=source_file_size_mb,
-        transcript_length=transcript_length,
-        summary_length=summary_length,
-        stage="done" if final_status == "completed" else final_status,
-        duration_seconds=total_duration,
-        success=final_status == "completed",
-        metadata=event_metadata(
-            **runtime_context_metadata(),
-            final_status=final_status,
-            total_duration_seconds=total_duration,
-            summary_status=summary_status,
-            lark_requested=lark_requested,
-            lark_success=lark_success,
-            stt_provider=stt_provider,
-            stt_provider_label=(stt_provider_labeler(stt_provider) if stt_provider and stt_provider_labeler else None),
-            source_type=source_type,
-            pipeline_mode=pipeline_mode(source_type),
-            completion_reason=completion_reason,
-        ),
-    )
-
-
-def _media_duration_seconds(path: Path | str) -> float | None:
-    try:
-        with wave.open(str(path), "rb") as wav:
-            frame_rate = wav.getframerate()
-            if frame_rate > 0:
-                return wav.getnframes() / frame_rate
-    except Exception:
-        pass
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        return None
-    try:
-        result = subprocess.run(
-            [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        value = float((result.stdout or "").strip())
-        return value if value > 0 else None
-    except Exception:
-        return None
+# Probed through media_probe. Kept as a module-level name here because tests
+# monkeypatch it on this module.
+_media_duration_seconds = media_duration_seconds
 
 
 def _duration_limit_error(
@@ -205,6 +149,35 @@ def _duration_limit_error(
         return None
     name = f"「{filename}」" if filename else "当前媒体"
     return f"{name}时长过长：约 {duration_seconds / 60:.1f} 分钟，当前限制为 {limit_seconds / 60:.1f} 分钟。"
+
+
+def stt_engine_refusal(
+    provider: str,
+    *,
+    has_remote_policy: bool,
+    provider_label: str,
+    local_allowed: bool = True,
+) -> str | None:
+    """Why this job must stop rather than transcribe locally, or None to proceed.
+
+    Local faster-whisper is not a silent stand-in for the engine the submitter
+    chose. On 2026-08-06 a 3-hour recording reached the local engine on the
+    2 GiB hosted box because the queue had lost the engine name; memory ran out,
+    the machine stopped answering, and two hours later the job failed with a
+    message about video downloads. Refusing costs one clear error; substituting
+    cost the whole site.
+    """
+
+    if has_remote_policy:
+        return None
+    if provider != "local":
+        return (
+            f"云端转写引擎 {provider_label} 当前不可用：未找到可用的 API Key。"
+            "任务已停止，不会退回本地转写。"
+        )
+    if not local_allowed:
+        return "本地转写在公开服务上不可用：请选择云端转写引擎后重试。"
+    return None
 
 
 def _stale_job_seconds() -> float:
@@ -351,6 +324,12 @@ class MediaJobContext:
     lark_app_id: Any
     lark_app_secret: Any
     duration_limit_seconds: float | None
+    # Whether to correct the muffled far-field profile: measure the consonant
+    # band, write a clearer take, and transcribe from it. Off unless asked,
+    # because most material does not need it and the correction damages an
+    # already-mixed soundtrack. Off also means the recognizer reads the plain
+    # audio, so an upload nobody asked about behaves exactly as it did before.
+    voice_enhance_requested: bool = False
     # Edition-owned AI credential policy. Hosted callers leave this unset and
     # retain the existing server helper behavior; local callers inject their
     # strict provider-to-key matcher.
@@ -378,6 +357,18 @@ class MediaJobContext:
     remote_stt_policy: Any = None
     friendly_error: Any = None
     stt_provider_labeler: Any = None
+    # Whether this edition may transcribe on the machine running the job. The
+    # composition root decides; the pipeline only obeys. Defaults to True so the
+    # local edition keeps working without opting in.
+    local_stt_allowed: bool = True
+    # Optional: give the pipeline a different file to work from than the one that
+    # was uploaded. Called once, before audio extraction, with (task_id, path);
+    # returns an object carrying `path`, `state` and `artifacts`, or None to leave
+    # the recording alone. The local edition injects breath-gap removal here so
+    # the transcript is made from the shortened audio and therefore carries that
+    # file's timestamps from the start — nothing downstream has to remap anything.
+    # No composition root that passes nothing behaves differently in any way.
+    media_preprocessor: Any = None
 
 
 def _finalize_task_usage(
@@ -399,17 +390,8 @@ def _finalize_task_usage(
         summary_text=summary_text,
         skip_summary=skip_summary,
         reason=reason,
+        stt_provider=ctx.stt_provider_value,
     )
-
-
-def _release_task_usage(ctx: MediaJobContext, *, reason: str, metadata: dict[str, Any]) -> None:
-    if ctx.release_task_usage:
-        ctx.release_task_usage(
-            client_id=ctx.client_id,
-            task_id=ctx.task_id_value,
-            reason=reason,
-            metadata=metadata,
-        )
 
 
 def _finalize_result_storage(ctx: MediaJobContext, result: dict[str, Any]) -> dict[str, Any]:
@@ -448,6 +430,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     language = ctx.language
     stt_provider_value = ctx.stt_provider_value
     diarization_requested = ctx.diarization_requested
+    voice_enhance_requested = bool(ctx.voice_enhance_requested)
     do_lark = ctx.do_lark
     summary_disabled = ctx.summary_disabled
     generate_visuals = ctx.generate_visuals
@@ -478,6 +461,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     remote_stt_policy = ctx.remote_stt_policy
     friendly_error_message = ctx.friendly_error
     stt_provider_label = ctx.stt_provider_labeler
+    media_preprocessor = ctx.media_preprocessor
 
     current_stage = "import"
     duration_sec: float | None = None
@@ -489,7 +473,15 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     stt_process = None
     stt_queue = None
     playback_audio_path: Path | None = None
+    enhanced_playback_audio_path: Path | None = None
+    voice_presence: dict[str, float] | None = None
+    stt_audio_take = "plain"
     cloud_stt_metadata: dict[str, Any] = {}
+    # Filled by the optional preprocessor below, merged into the result once
+    # there is one. Held here rather than written straight to the job row because
+    # the result does not exist yet at that point in the pipeline.
+    preprocess_state: dict[str, Any] = {}
+    preprocess_artifacts: dict[str, dict[str, Any]] = {}
     try:
         if secret_resolver is None:
             raise RuntimeError("Media job context is missing a secret resolver")
@@ -500,28 +492,95 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         if stt_provider_label is None:
             raise RuntimeError("Media job context is missing an STT provider label policy")
         uses_remote_stt = remote_stt_policy is not None
+        refusal = stt_engine_refusal(
+            stt_provider_value,
+            has_remote_policy=uses_remote_stt,
+            provider_label=stt_provider_label(stt_provider_value),
+            local_allowed=ctx.local_stt_allowed,
+        )
+        if refusal:
+            raise RuntimeError(refusal)
+
+        # ── Stage 0: Prepare the media the rest of the job reads ───
+        # Optional and injected. The local edition removes the breath gaps here,
+        # so everything after this line — the audio, the transcript and its
+        # timestamps, the note, the page's player — belongs to one file. It runs
+        # before the duration limit is measured on purpose: the shortened file is
+        # what the user is going to work with, so it is what should be measured.
+        if media_preprocessor is not None:
+            current_stage = "prepare_media"
+            upsert_job(task_id=task_id_value, status="running", stage="prepare_media", progress=2)
+            yield _sse({"stage": "prepare_media", "progress": 2})
+            prepared = await loop.run_in_executor(
+                None, lambda: media_preprocessor(task_id_value, in_path)
+            )
+            if prepared is not None:
+                preprocess_state = dict(getattr(prepared, "state", None) or {})
+                preprocess_artifacts = dict(getattr(prepared, "artifacts", None) or {})
+                prepared_path = getattr(prepared, "path", None)
+                if prepared_path:
+                    in_path = Path(prepared_path)
 
         # ── Stage 1: Audio extraction ──────────────────────
         current_stage = "audio"
         upsert_job(task_id=task_id_value, status="running", stage="audio", progress=5)
         yield _sse({"stage": "audio", "progress": 5})
         audio_started_at = time.perf_counter()
+
+        # Only when asked. Most material does not need correcting, the
+        # correction damages an already-mixed soundtrack, and no threshold
+        # separates those cases (see `voice_enhance`) — so an upload nobody said
+        # anything about is left alone entirely, including what the recognizer
+        # reads. Correcting it also changes what silence looks like: `loudnorm`
+        # lifts the gaps between words, which is why de-breathing measures its
+        # own threshold per file instead of trusting a constant.
+        #
+        # When asked: measure the consonant band, write a clearer take, and
+        # transcribe from that. Measured on four speakers with two whisper sizes,
+        # it transcribes at least as well and better on consonant-dense words —
+        # "IG ID / EVN ID" came back as "Agent ID / Event ID".
+        if voice_enhance_requested:
+            try:
+                reading = await loop.run_in_executor(None, lambda: measure_presence(in_path))
+                voice_presence = reading.as_dict()
+                enhanced_playback_audio_path = await loop.run_in_executor(
+                    None,
+                    lambda: enhance_voice(in_path, output_path=Path(td) / "playback_enhanced.m4a"),
+                )
+            except Exception as exc:  # noqa: BLE001 - clarity is optional, the transcript is not
+                logger.warning("Voice enhancement skipped for %s: %s", task_id_value, exc)
+                enhanced_playback_audio_path = None
+
+        # Derived from the corrected take that was just written, not by filtering
+        # the original a second time. The two are not interchangeable, and the
+        # measurement that justified feeding the recognizer corrected audio was
+        # made on this one. Filtering the original straight to a recognizer input
+        # skips a lossy generation and should be the better of the two, but when
+        # compared it dropped a company name the m4a-derived take recovered
+        # ("MyFitnessPal" survived as "MetfitnessPal", against nothing at all),
+        # so the measured path wins over the one that ought to be better.
+        stt_source, stt_audio_take = stt_audio_source(enhanced_playback_audio_path, in_path)
         if uses_remote_stt:
             audio_output_format = "mp3"
             out_audio = await loop.run_in_executor(
-                None, lambda: extract_compressed_mp3(in_path, output_path=Path(td) / "cloud_stt.mp3")
+                None, lambda: extract_compressed_mp3(stt_source, output_path=Path(td) / "cloud_stt.mp3")
             )
-            playback_audio_path = out_audio
         else:
             audio_output_format = "wav"
             out_audio = await loop.run_in_executor(
-                None, lambda: extract_stt_wav(in_path, output_path=Path(td) / "stt.wav")
+                None, lambda: extract_stt_wav(stt_source, output_path=Path(td) / "stt.wav")
             )
-            playback_audio_path = await loop.run_in_executor(
-                None, lambda: extract_compressed_mp3(in_path, output_path=Path(td) / "playback.mp3")
-            )
+        # The plain take is always kept: it is what the editor plays by default
+        # and what a re-transcription reads, so a re-run reproduces this run.
+        playback_audio_path = await loop.run_in_executor(
+            None, lambda: extract_compressed_mp3(in_path, output_path=Path(td) / "playback.mp3")
+        )
         if media_guard_enabled(SILENCE_GUARD_ENV):
-            await loop.run_in_executor(None, lambda: require_audible_audio(out_audio))
+            # Checked on the plain take on purpose. `loudnorm` lifts a near-silent
+            # recording's noise floor into audible range, so the corrected take
+            # would report sound where the recording has none.
+            await loop.run_in_executor(None, lambda: require_audible_audio(playback_audio_path))
+
         audio_elapsed_sec = time.perf_counter() - audio_started_at
         log_event(
             task_id=task_id_value,
@@ -538,6 +597,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 stt_provider_label=stt_provider_label(stt_provider_value),
                 audio_output_format=audio_output_format,
                 audio_output_size_mb=path_size_mb(out_audio),
+                stt_audio_take=stt_audio_take,
+                presence_deficit_db=(voice_presence or {}).get("presence_deficit_db"),
             ),
         )
         upsert_job(task_id=task_id_value, status="running", stage="audio", progress=20)
@@ -799,133 +860,32 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             "display_title": display_title_value,
             "source_file_available": True,
         }
+        if preprocess_state:
+            base_result["debreath"] = preprocess_state
+            # Which file this transcript describes, and therefore which file the
+            # page should play. Recorded rather than inferred: a transcript's
+            # timestamps only mean something against one file, and getting that
+            # wrong is invisible — the captions are simply progressively late.
+            if preprocess_state.get("used_for_transcription"):
+                base_result["transcript_media"] = TRANSCRIPT_MEDIA_CUT
+                base_result["playback_media_kind"] = DEBREATH_MEDIA_KIND
+            else:
+                base_result["transcript_media"] = TRANSCRIPT_MEDIA_SOURCE
         if uses_remote_stt:
             base_result["cloud_transcription"] = remote_stt_policy.result_diagnostics(cloud_stt_metadata)
-        cleanup_started_at = time.perf_counter()
-        cleanup_result = clean_repeated_transcript(tr.segments)
-        if cleanup_result.applied_count > 0:
-            log_event(
-                task_id=task_id_value,
-                event_name="transcript_cleanup_completed",
-                source_type=source_type,
-                source_filename=source_filename,
-                source_duration_seconds=round(duration_sec, 1),
-                source_file_size_mb=source_file_size_mb,
-                transcript_length=cleanup_result.cleaned_length,
-                stage="transcript_cleanup",
-                duration_seconds=round(time.perf_counter() - cleanup_started_at, 3),
-                success=True,
-                metadata=event_metadata(
-                    route="/process",
-                    cleanup_issue_count=len(cleanup_result.issues),
-                    cleanup_applied_count=cleanup_result.applied_count,
-                    cleanup_removed_segment_count=cleanup_result.removed_segment_count,
-                    cleanup_raw_length=cleanup_result.raw_length,
-                    cleanup_cleaned_length=cleanup_result.cleaned_length,
-                ),
-            )
+        cleanup_result, raw_segments_payload = clean_transcript(
+            ctx, transcription=tr, duration_sec=duration_sec
+        )
         transcript_text = cleanup_result.cleaned_text
         segments_payload = list(cleanup_result.cleaned_segments)
-        raw_segments_payload = [
-            {"start": s.start, "end": s.end, "text": s.text, "speaker": getattr(s, "speaker", None)}
-            for s in tr.segments
-        ]
-        speaker_payload: dict[str, Any] = {
-            "requested": diarization_requested,
-            "available": True if uses_remote_stt else diarization_status()["available"],
-            "applied": False,
-        }
-        if diarization_requested and uses_remote_stt:
-            speakers = sorted({
-                str(segment.get("speaker"))
-                for segment in segments_payload
-                if isinstance(segment, dict) and segment.get("speaker")
-            })
-            if speakers:
-                speaker_payload.update({
-                    "applied": True,
-                    "backend": getattr(tr, "model_source", None) or "cloud_transcription",
-                    "speaker_count": len(speakers),
-                })
-                log_event(
-                    task_id=task_id_value,
-                    event_name="speaker_diarization_completed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    stage="speaker_diarization",
-                    success=True,
-                    metadata=event_metadata(
-                        route="/process",
-                        backend=getattr(tr, "model_source", None) or "cloud_transcription",
-                        speaker_count=len(speakers),
-                    ),
-                )
-            else:
-                error_reason = (
-                    getattr(tr, "diarization_error", None)
-                    or f"{stt_provider_label(stt_provider_value)} did not return speaker labels"
-                )
-                speaker_payload.update({
-                    "applied": False,
-                    "backend": getattr(tr, "model_source", None) or "cloud_transcription",
-                    "error_reason": error_reason,
-                })
-                log_event(
-                    task_id=task_id_value,
-                    event_name="speaker_diarization_failed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    stage="speaker_diarization",
-                    success=False,
-                    error_reason=error_reason,
-                    metadata=event_metadata(route="/process", backend=getattr(tr, "model_source", None) or "cloud_transcription"),
-                )
-        elif diarization_requested:
-            diarization_started_at = time.perf_counter()
-            try:
-                turns = await loop.run_in_executor(None, lambda: diarize_audio(out_audio))
-                segments_payload = assign_speakers_to_segments(segments_payload, turns)
-                speaker_payload.update({
-                    "applied": True,
-                    "speaker_count": len({turn.speaker for turn in turns}),
-                    "turn_count": len(turns),
-                })
-                log_event(
-                    task_id=task_id_value,
-                    event_name="speaker_diarization_completed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    stage="speaker_diarization",
-                    duration_seconds=round(time.perf_counter() - diarization_started_at, 3),
-                    success=True,
-                    metadata=event_metadata(route="/process", speaker_count=speaker_payload["speaker_count"]),
-                )
-            except Exception as exc:
-                error_reason = str(exc)
-                speaker_payload.update({
-                    "applied": False,
-                    "error_reason": error_reason,
-                })
-                logger.warning("Speaker diarization skipped for %s: %s", task_id_value, error_reason)
-                log_event(
-                    task_id=task_id_value,
-                    event_name="speaker_diarization_failed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    stage="speaker_diarization",
-                    duration_seconds=round(time.perf_counter() - diarization_started_at, 3),
-                    success=False,
-                    error_reason=error_reason,
-                    metadata=event_metadata(route="/process", failure_scope="optional_speaker_diarization"),
-                )
+        segments_payload, speaker_payload = await label_speakers(
+            ctx,
+            transcription=tr,
+            segments_payload=segments_payload,
+            duration_sec=duration_sec,
+            audio_path=out_audio,
+            uses_remote_stt=uses_remote_stt,
+        )
         source_language = _normalized_source_language(getattr(tr, "language", None)) or _normalized_source_language(language)
         bilingual_segments: list[dict[str, Any]] = []
         translation_status = "not_applicable"
@@ -1049,7 +1009,24 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             base_result["note_generation_transcript_source"] = "transcript_text"
         if playback_audio_path is not None:
             base_result = _attach_playback_audio_artifact(task_id_value, base_result, playback_audio_path)
+        if enhanced_playback_audio_path is not None:
+            base_result = _attach_enhanced_playback_audio_artifact(
+                task_id_value, base_result, enhanced_playback_audio_path, voice_presence
+            )
+        elif voice_presence:
+            # Measured but not corrected: the number is still worth reporting.
+            base_result["voice_presence"] = voice_presence
+        # Which take this transcript actually came from, so a re-run can
+        # reproduce it and a reader can tell whether enhancement was in play.
+        base_result["transcription_audio_take"] = stt_audio_take
         base_result = _attach_result_artifacts(task_id_value, base_result)
+        if preprocess_artifacts:
+            # After the standard artifacts, so the cut outputs cannot be dropped
+            # by the pass that rewrites transcript and note files.
+            base_result["artifacts"] = {
+                **dict(base_result.get("artifacts") or {}),
+                **preprocess_artifacts,
+            }
         current_stage = "transcript_ready"
         log_event(
             task_id=task_id_value,
@@ -1156,9 +1133,22 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             # Mode planning is intentionally a no-op; the summarizer resolves
             # "auto" from transcript length in the same model call.
             note_mode_plan = {}
+            # The note is written from one flat string, so a speaker that only
+            # lives in a segment field never reaches the writing model. Build a
+            # prefixed copy for the note call and leave the stored transcript
+            # text alone: downstream consumers read that one.
+            note_speaker_text = build_speaker_annotated_transcript(note_segments_payload)
+            note_input_text = note_speaker_text or note_transcript_text
+            # Same dict the result carries, so whether the note actually saw
+            # speaker labels is answerable from the stored task.
+            speaker_payload["note_input_labeled"] = bool(note_speaker_text)
             summary_result = await loop.run_in_executor(
                 None,
-                lambda: summarize_transcript_with_metadata(note_transcript_text, **kwargs),
+                lambda: summarize_transcript_with_metadata(
+                    note_input_text,
+                    speaker_labeled=bool(note_speaker_text),
+                    **kwargs,
+                ),
             )
             summary_md = summary_result.markdown
             if not summary_md.strip():
@@ -1435,76 +1425,13 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         if do_lark:
             current_stage = "export"
             yield _sse({"stage": "export", "progress": 90})
-            exporter = ctx.auto_lark_exporter
-            if not exporter:
-                raise RuntimeError("Media job context is missing an automatic Lark export policy")
-            export_target = "unknown"
-            doc_title = ""
-            log_event(
-                task_id=task_id_value,
-                event_name="lark_export_started",
-                source_type=source_type,
-                source_filename=source_filename,
-                source_duration_seconds=round(duration_sec, 1),
-                source_file_size_mb=source_file_size_mb,
-                transcript_length=_text_len(transcript_text),
-                summary_length=_text_len(summary_md),
-                stage="export",
-                export_target=export_target,
-                metadata=event_metadata(route="/process", trigger="auto", doc_title=doc_title),
+            lark_success = await export_note_to_lark(
+                ctx,
+                result=result,
+                duration_sec=duration_sec,
+                transcript_text=transcript_text,
+                summary_md=summary_md,
             )
-            export_started_at = time.perf_counter()
-            try:
-                export = await loop.run_in_executor(None, lambda: exporter(
-                    task_id=task_id_value, summary_markdown=summary_md,
-                    filename_stem=display_title_value or Path(source_filename or "media").stem,
-                    form_title=title or display_title_value, lark_export_route=lark_export_route,
-                    lark_via_cli=lark_via_cli, lark_app_id=lark_app_id,
-                    lark_app_secret=lark_app_secret, folder_token=folder_token,
-                    account_user=ctx.account_user,
-                ))
-                doc_title = export["doc_title"]
-                export_target = export["export_target"]
-                resp = export["response"]
-                result["lark_doc_title"] = doc_title
-                result["lark_response"] = resp
-                lark_success = True
-                feishu_doc_url = resp.get("url") if isinstance(resp, dict) else None
-                log_event(
-                    task_id=task_id_value,
-                    event_name="lark_export_completed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    transcript_length=_text_len(transcript_text),
-                    summary_length=_text_len(summary_md),
-                    stage="export",
-                    duration_seconds=round(time.perf_counter() - export_started_at, 3),
-                    success=True,
-                    export_target=export_target,
-                    feishu_doc_url=feishu_doc_url,
-                    metadata=event_metadata(route="/process", trigger="auto", doc_title=doc_title),
-                )
-            except Exception as e:
-                result["lark_error"] = friendly_error_message(e)
-                lark_success = False
-                log_event(
-                    task_id=task_id_value,
-                    event_name="lark_export_completed",
-                    source_type=source_type,
-                    source_filename=source_filename,
-                    source_duration_seconds=round(duration_sec, 1),
-                    source_file_size_mb=source_file_size_mb,
-                    transcript_length=_text_len(transcript_text),
-                    summary_length=_text_len(summary_md),
-                    stage="export",
-                    duration_seconds=round(time.perf_counter() - export_started_at, 3),
-                    success=False,
-                    error_reason=friendly_error_message(e),
-                    export_target=export_target,
-                    metadata=event_metadata(route="/process", trigger="auto", doc_title=doc_title, raw_error=str(e)),
-                )
 
         # ── Done ───────────────────────────────────────────
         quota_final = _finalize_task_usage(
@@ -1546,102 +1473,36 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         yield _sse({"stage": "done", "progress": 100, "result": result})
 
     except asyncio.CancelledError:
-        logger.info("Processing stream cancelled by client at stage=%s", current_stage)
-        if stt_process is not None and stt_process.is_alive():
-            terminate_process(stt_process)
-        _release_task_usage(
-            ctx,
-            reason="Task cancelled before completion",
-            metadata={"stage": current_stage},
-        )
-        source_duration_for_cancel = duration_sec or duration_estimate_sec
-        _log_task_completed(
-            task_id=task_id_value,
-            started_at=task_started_at,
-            final_status="cancelled",
-            source_type=source_type,
-            source_filename=source_filename,
-            source_duration_seconds=round(source_duration_for_cancel, 1) if source_duration_for_cancel is not None else None,
-            source_file_size_mb=source_file_size_mb,
-            transcript_length=_text_len(transcript_text),
-            summary_length=_text_len(summary_md),
-            summary_status=summary_status,
-            lark_requested=do_lark,
-            lark_success=lark_success,
-            stt_provider=stt_provider_value,
-            stt_provider_labeler=stt_provider_label,
-            completion_reason="client_disconnect",
-        )
-        upsert_job(
-            task_id=task_id_value,
-            status="cancelled",
-            stage=current_stage,
-            source_type=source_type,
-            source_filename=source_filename,
-            source_file_size_mb=source_file_size_mb,
-            summary_status=summary_status,
-            error_reason="client_disconnect",
+        report_cancelled(
+            TerminalReport(
+                ctx=ctx,
+                current_stage=current_stage,
+                stt_process=stt_process,
+                duration_sec=duration_sec,
+                duration_estimate_sec=duration_estimate_sec,
+                transcript_text=transcript_text,
+                summary_md=summary_md,
+                summary_status=summary_status,
+                lark_success=lark_success,
+                cloud_stt_metadata=cloud_stt_metadata,
+            )
         )
         raise
     except Exception as exc:
-        logger.exception("Processing failed")
-        friendly_error = friendly_error_message(exc)
-        if stt_process is not None and stt_process.is_alive():
-            terminate_process(stt_process)
-        if summary_status is None and current_stage == "summary":
-            summary_status = "failed"
-        _release_task_usage(
-            ctx,
-            reason="Task failed before charge finalization",
-            metadata={"stage": current_stage, "raw_error": str(exc)},
-        )
-        log_event(
-            task_id=task_id_value,
-            event_name="task_failed",
-            source_type=source_type,
-            source_filename=source_filename,
-            source_file_size_mb=source_file_size_mb,
-            stage=current_stage,
-            success=False,
-            error_reason=friendly_error,
-            metadata=event_metadata(
-                route="/process",
-                stt_provider=stt_provider_value,
-                **cloud_stt_metadata,
-                raw_error=str(exc),
+        friendly_error = report_failed(
+            TerminalReport(
+                ctx=ctx,
+                current_stage=current_stage,
+                stt_process=stt_process,
+                duration_sec=duration_sec,
+                duration_estimate_sec=duration_estimate_sec,
+                transcript_text=transcript_text,
+                summary_md=summary_md,
+                summary_status=summary_status,
+                lark_success=lark_success,
+                cloud_stt_metadata=cloud_stt_metadata,
             ),
-        )
-        _log_task_completed(
-            task_id=task_id_value,
-            started_at=task_started_at,
-            final_status="failed",
-            source_type=source_type,
-            source_filename=source_filename,
-            source_duration_seconds=round(duration_sec, 1) if duration_sec is not None else None,
-            source_file_size_mb=source_file_size_mb,
-            transcript_length=_text_len(transcript_text),
-            summary_length=_text_len(summary_md),
-            summary_status=summary_status,
-            lark_requested=do_lark,
-            lark_success=lark_success,
-            stt_provider=stt_provider_value,
-            stt_provider_labeler=stt_provider_label,
-            completion_reason=current_stage,
-        )
-        upsert_job(
-            task_id=task_id_value,
-            status="failed",
-            stage=current_stage,
-            progress=0,
-            source_type=source_type,
-            source_filename=source_filename,
-            source_file_size_mb=source_file_size_mb,
-            summary_status=summary_status,
-            error_reason=friendly_error,
-            metadata={
-                "stt_provider": stt_provider_value,
-                **cloud_stt_metadata,
-            },
+            exc,
         )
         yield _sse({"stage": "error", "progress": 0, "error": friendly_error})
     finally:

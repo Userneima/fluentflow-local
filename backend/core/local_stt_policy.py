@@ -5,6 +5,13 @@ from __future__ import annotations
 
 LOCAL_STT_PROVIDER = "local"
 
+# The one local model size the product offers. It lives here rather than in
+# `local_stt` because the submit route needs it too, and importing `local_stt`
+# for a string would pull faster-whisper into every request path. Callers that
+# hand a size to the engine still go through `local_stt._model_for_device`,
+# which downgrades it to `medium` on a machine that cannot run it.
+DEFAULT_LOCAL_STT_MODEL = "large-v3"
+
 
 def allowed_stt_providers() -> tuple[str, ...]:
     return (LOCAL_STT_PROVIDER,)

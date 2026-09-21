@@ -4,9 +4,8 @@ video link on this machine, download it, and run the local pipeline.
 Functionally local: no accounts, quota, or rate limits; the download worker
 runs on ``local_job_runtime.JOB_EVENTS`` — the same hub the local read (SSE)
 and cancel routes use — so resolving, downloading, processing, and cancelling
-share one hub. The Douyin ``miuistore`` fallback is OFF unless the request
-explicitly consents (``options.allow_miuistore``); the remembered-choice
-consent UX belongs to the local composition-root unit. YouTube caption
+share one hub. The Douyin ``miuistore`` fallback is ON by default and can be switched off
+per request or by a remembered choice (``options.allow_miuistore``). YouTube caption
 downloads reuse the local transcript summarize core in-process instead of the
 hosted HTTP self-call.
 
@@ -363,12 +362,15 @@ async def submit_video_source_job(
         raise HTTPException(status_code=400, detail="分享文本过长")
 
     options = _queue_options_from_mapping(raw_options)
-    # Per-request consent wins; otherwise the remembered settings choice
-    # applies. Default stays OFF (design contract).
+    # Per-request choice wins; otherwise the remembered settings choice
+    # applies. Default is ON: yt-dlp needs a fresh Douyin login and fails
+    # without one, so with the fallback off a Douyin link had no working route
+    # at all.
     if "allow_miuistore" in (raw_options or {}):
         allow_miuistore = _truthy(raw_options.get("allow_miuistore"))
     else:
-        allow_miuistore = bool(get_preference("allow_miuistore"))
+        remembered = get_preference("allow_miuistore")
+        allow_miuistore = True if remembered is None else bool(remembered)
     task_id_value = claim_task_id(None, client_id=client_id)
     raw_title = title or display_title_for_source_input(input_text, input_text[:80])
     display_name = display_title_for_user(raw_title, raw_title)

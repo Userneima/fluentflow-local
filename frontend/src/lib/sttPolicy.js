@@ -18,6 +18,11 @@ const localRuntimeConfig = (config = {}) => ({
     limits: config.limits || {},
     guestTrial: {enabled: false},
     jobRetryFromStoredSource: config.features?.job_retry_from_stored_source === true,
+    // This edition writes the note itself, from the cut media, so the pipeline's
+    // own note stage never runs. Every setting that only steers that stage steers
+    // nothing, and a page offering them is offering controls with no wire behind
+    // them. Env-switchable server-side, so it is asked for rather than assumed.
+    writesItsOwnNote: config.features?.writes_its_own_note === true,
     directOssUpload: false,
 });
 
@@ -26,6 +31,9 @@ const LOCAL_STT_POLICY = {
     isCloudSttProvider: () => false,
     isCloudSttConfigured: () => true,
     effectiveSttProvider: () => LOCAL_PROVIDER,
+    // The local edition has exactly one route, so submitting it explicitly is
+    // always correct and there is no server-side default to defer to.
+    submittedSttProvider: () => LOCAL_PROVIDER,
     cloudSttMissingMessage: () => '',
     defaultRuntimeConfig: () => localRuntimeConfig(),
     normalizeRuntimeConfig: localRuntimeConfig,
@@ -54,8 +62,25 @@ export const registerSttPolicy = (policy = {}) => {
 export const normalizeSttProvider = (provider) => sttPolicy.normalizeSttProvider(provider);
 export const isCloudSttProvider = (provider) => sttPolicy.isCloudSttProvider(provider);
 export const isCloudSttConfigured = (provider, status) => sttPolicy.isCloudSttConfigured(provider, status);
+// What to SHOW as selected. Always resolves to something, falling back to the
+// default so a radio group always has one option lit.
 export const effectiveSttProvider = (settings = {}, runtimeConfig) => (
     sttPolicy.effectiveSttProvider(settings, runtimeConfig || sttPolicy.defaultRuntimeConfig())
+);
+
+// What to SEND when submitting a task — null means "say nothing and let the
+// server apply its own default".
+//
+// This distinction exists because a client that resolves the default itself and
+// sends it makes the default whatever the loaded bundle believes, not what the
+// server decided. A tab left open across a deploy kept submitting the old
+// default, which is how a task ran on the expensive engine after the cheap one
+// had already become the default server-side.
+export const submittedSttProvider = (settings = {}, runtimeConfig) => (
+    (sttPolicy.submittedSttProvider || sttPolicy.effectiveSttProvider)(
+        settings,
+        runtimeConfig || sttPolicy.defaultRuntimeConfig(),
+    )
 );
 export const cloudSttMissingMessage = (lang) => sttPolicy.cloudSttMissingMessage(lang);
 export const defaultRuntimeConfig = () => sttPolicy.defaultRuntimeConfig();

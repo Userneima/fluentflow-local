@@ -1,42 +1,50 @@
-name: CI
+name: Local CI
 
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
+# This repository is public, so pull requests can come from forks. The checks
+# only read the tree and never publish anything, so the token they get should
+# be able to do the same.
 permissions:
   contents: read
 
 jobs:
   frontend:
-    name: Frontend checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Node version comes from .nvmrc so CI and a contributor's machine agree
       # on the bundled npm. npm majors disagree about which optional-peer
       # entries belong in package-lock.json (npm 11 prunes what npm 10
       # requires), and `npm ci` fails on that difference rather than repairing
       # it — so the lock file is only reproducible against a stated version.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm run lint:frontend
-      - run: npm run test:frontend
       - run: npm run build:frontend
+      - run: npm run test:frontend
 
   backend:
-    name: Backend checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements-dev.txt
-      - run: python -m unittest discover -s tests -p 'test_*.py'
-      - run: python -m pylint backend --errors-only --disable=import-error,no-member
+          python-version: '3.10'
+          cache: pip
+          # This repository's dependency file is requirements-local.txt. Without
+          # naming it, the cache step looks for requirements.txt, fails to find
+          # one, and the job ends before pip, pylint or pytest ever run — which
+          # is how this workflow reported red while checking nothing.
+          cache-dependency-path: requirements-local.txt
+      - run: pip install -r requirements-local.txt
+      - run: pip install pytest pylint
+      - run: python3 -m pylint backend/ --errors-only --disable=import-error,no-member
+      - run: python3 -m pytest tests/ -q

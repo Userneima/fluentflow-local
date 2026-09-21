@@ -4,8 +4,11 @@ One source of truth for "can this machine actually run FluentFlow Local":
 the composition root logs failures at startup, and the launcher / CLI script
 (`scripts/check_local_readiness.py`) prints the same report before booting.
 
-Checks stay import-light on purpose: probing availability must not pull heavy
-models or start subprocess work beyond `shutil.which`.
+Checks must not load a model, download anything, or reach the network: this
+report runs on every launch, and a check that fetched 3GB to answer a question
+would be worse than the failure it was meant to report. The transcription
+checks below do import the engine module — asking a lighter question elsewhere
+is how an installer ends up downloading one model while a run loads another.
 """
 
 from __future__ import annotations
@@ -58,6 +61,66 @@ def _ffmpeg_install_hint() -> str:
     return "未找到 ffmpeg：请先安装（macOS 执行 brew install ffmpeg）。"
 
 
+def _transcription_checks() -> list[ReadinessCheck]:
+    """Which lane will run, and whether its weights are already here.
+
+    Both are reported rather than inferred. "Is it using the Apple GPU" was
+    answerable only from a line the installer printed once and nobody can see
+    again, and "why is my first video taking so long" had no answer at all
+    while a multi-gigabyte download was the reason.
+
+    Neither is required: a missing model downloads itself on first use, and the
+    slow lane still transcribes. They are here so that both facts are visible
+    before a user waits on them.
+    """
+    try:
+        from backend.core.local_stt import resolve_local_stt_engine
+        from backend.core.local_stt_assets import is_downloaded, planned_model
+    except Exception as exc:  # noqa: BLE001 - the faster-whisper check above already said so
+        return [ReadinessCheck(
+            name="stt-engine",
+            ok=False,
+            required=False,
+            detail=f"无法确定本地转录引擎：{exc}",
+        )]
+
+    checks: list[ReadinessCheck] = []
+    lane, lane_reason = resolve_local_stt_engine()
+    if lane == "mlx":
+        engine_detail = "Apple 芯片加速（mlx-whisper）"
+    elif lane_reason:
+        engine_detail = f"CPU（faster-whisper）：{lane_reason}"
+    else:
+        engine_detail = "faster-whisper"
+    checks.append(ReadinessCheck(name="stt-engine", ok=True, required=False, detail=engine_detail))
+
+    try:
+        plan = planned_model()
+        present = is_downloaded(plan)
+    except Exception as exc:  # noqa: BLE001 - never fail a launch over a status line
+        checks.append(ReadinessCheck(
+            name="stt-model",
+            ok=False,
+            required=False,
+            detail=f"无法确定转录模型状态：{exc}",
+        ))
+        return checks
+
+    if present:
+        detail = f"{plan.model_size} 已下载（{plan.repo_id}）"
+        if plan.downgraded:
+            detail += f"；这台机器跑不动 {plan.requested_size}，已按 {plan.model_size} 准备"
+    else:
+        detail = (
+            f"转录模型 {plan.model_size} 尚未下载（{plan.repo_id}）。"
+            "第一次转录会自动下载，需要几 GB 空间和一段等待；"
+            "也可以先运行 python scripts/stt_model.py fetch 下好"
+            "（网络到 huggingface.co 不通时它会自动改用镜像源）。"
+        )
+    checks.append(ReadinessCheck(name="stt-model", ok=present, required=False, detail=detail))
+    return checks
+
+
 def run_readiness_checks() -> list[ReadinessCheck]:
     checks: list[ReadinessCheck] = []
 
@@ -88,21 +151,6 @@ def run_readiness_checks() -> list[ReadinessCheck]:
                 else "未安装 faster-whisper：请运行 pip install -r requirements-local.txt。"),
     ))
 
-    if sys.platform.startswith("win"):
-        gpu_runtime = inspect_windows_gpu_runtime()
-        checks.append(ReadinessCheck(
-            name="windows-gpu-runtime",
-            ok=gpu_runtime.ready,
-            required=False,
-            detail=(
-                "NVIDIA GPU transcription runtime is ready in this project environment."
-                if gpu_runtime.ready
-                else "NVIDIA GPU runtime DLLs are missing "
-                f"({', '.join(gpu_runtime.missing_dlls)}). Automatic mode will use CPU; "
-                f"run {gpu_runtime.install_hint} to enable GPU transcription."
-            ),
-        ))
-
     ytdlp = _module_available("yt_dlp")
     checks.append(ReadinessCheck(
         name="yt-dlp",
@@ -123,6 +171,26 @@ def run_readiness_checks() -> list[ReadinessCheck]:
 
     writable, detail = _data_dir_writable()
     checks.append(ReadinessCheck(name="data-dir", ok=writable, required=True, detail=detail))
+
+    checks.extend(_transcription_checks())
+
+    # Not required: without it transcription still runs, just on the CPU. It is
+    # reported so that "why is this so slow" has an answer here rather than in
+    # a log line nobody reads.
+    if sys.platform.startswith("win"):
+        gpu_runtime = inspect_windows_gpu_runtime()
+        checks.append(ReadinessCheck(
+            name="windows-gpu-runtime",
+            ok=gpu_runtime.ready,
+            required=False,
+            detail=(
+                "NVIDIA GPU transcription runtime is ready in this project environment."
+                if gpu_runtime.ready
+                else "NVIDIA GPU runtime DLLs are missing "
+                f"({', '.join(gpu_runtime.missing_dlls)}). Transcription will use the CPU; "
+                f"run {gpu_runtime.install_hint} to enable GPU transcription."
+            ),
+        ))
 
     return checks
 

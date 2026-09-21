@@ -10,8 +10,8 @@ const WorkspaceApi = lazy(() => import('../routes/workspace-api.jsx'));
 
 // Local-edition route registry. The root opens the processing workspace
 // directly ('/' redirects to /media-text); there is no landing page, access
-// gate, admin console, or guest fallback. Tested against the manifest's
-// frontend_contract in localRoutes.test.jsx.
+// gate, admin console, or guest fallback. Its contract lives beside the
+// independently maintained route test in localRoutes.test.jsx.
 export const localRouteRegistry = [
     {path: '/', redirectTo: '/media-text'},
     {path: '/media-text', element: () => <MediaText/>},

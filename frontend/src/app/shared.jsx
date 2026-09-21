@@ -9,18 +9,10 @@ import { _dl } from '../lib/download.js';
 import { readSseResult } from '../lib/sse.js';
 import { getDirectUploadTransport } from './directUploadTransport.js';
 import { getHostedApiExtension } from './hostedApiExtension.js';
+import { currentApiBase } from '../lib/apiBase.js';
 
-/** API 根路径：线上与后端同域时用相对路径；本地前端单独跑在其它端口时指向本机 8000。 */
-export const API_BASE = (() => {
-    const normalize = (value) => String(value || '').trim().replace(/\/+$/, '');
-    const configured = normalize(window.FLUENTFLOW_CONFIG?.apiBase || localStorage.getItem('fluentflow_api_base'));
-    if (configured) return configured;
-    const { hostname, port } = window.location;
-    if (!hostname) return "http://127.0.0.1:8000";
-    const local = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-    if (local && port && port !== "8000") return "http://127.0.0.1:8000";
-    return "";
-})();
+/** API 根路径。判据见 lib/apiBase.js：默认同源，只有 Vite 开发服务器才跨端口。 */
+export const API_BASE = currentApiBase();
 
 export const ACCESS_TOKEN_KEY = 'fluentflow_access_token';
 export const CLIENT_ID_KEY = 'fluentflow_client_id';
@@ -39,15 +31,38 @@ export const shouldUseLocalSingleUserClientId = () => {
     const { hostname } = window.location;
     return hostname === '127.0.0.1' || hostname === 'localhost';
 };
+// Also written as a cookie, not only to localStorage.
+//
+// The browser loads a note's inline frames itself, as <img>, and an <img> cannot
+// carry the client-id header the fetch helper adds — so those requests arrived
+// unidentified and the server answered 404 for a task it holds. The backend has
+// always accepted this cookie as the second place to look for the same value;
+// nothing ever set it. Now that the note's pictures *are* the note, an image that
+// silently fails to load is a broken product feature, not a cosmetic gap.
+export const rememberClientIdCookie = (value) => {
+    const id = String(value || '').trim();
+    if (!id) return;
+    try {
+        document.cookie = `${CLIENT_ID_KEY}=${encodeURIComponent(id)}; path=/; max-age=31536000; samesite=lax`;
+    } catch (_) {
+        // Cookies unavailable: fetches still work through the header, and inline
+        // images stay broken. Not worth failing anything over.
+    }
+};
 export const getClientId = () => {
     if (shouldUseLocalSingleUserClientId()) {
         localStorage.setItem(CLIENT_ID_KEY, LOCAL_SINGLE_USER_CLIENT_ID);
+        rememberClientIdCookie(LOCAL_SINGLE_USER_CLIENT_ID);
         return LOCAL_SINGLE_USER_CLIENT_ID;
     }
     const existing = (localStorage.getItem(CLIENT_ID_KEY) || '').trim();
-    if (existing) return existing;
+    if (existing) {
+        rememberClientIdCookie(existing);
+        return existing;
+    }
     const next = createClientId();
     localStorage.setItem(CLIENT_ID_KEY, next);
+    rememberClientIdCookie(next);
     return next;
 };
 export const apiFetch = (input, init={}) => {
@@ -77,6 +92,7 @@ export const apiErrorMessage = (payload, fallback='Request failed') => {
 
 export { fileNameStem, stripGeneratedFilenamePrefix, displayTitleForUser, compactDisplayFilename, videoLinkDisplayTitle } from '../lib/format.js';
 export {
+    normalizeSourceMode,
     SENSITIVE_SETTING_KEYS,
     LEGACY_REMOVED_SETTING_KEYS,
     DEFAULT_DEEPSEEK_MODEL,
@@ -109,6 +125,7 @@ export {
     defaultRuntimeConfig,
     normalizeRuntimeConfig,
     effectiveSttProvider,
+    submittedSttProvider,
     cloudSttMissingMessage,
     sttRouteOptions,
     sttProviderLabel,
@@ -131,10 +148,10 @@ export const isLocalHistoryResult = (result={}) => (
 export const msgs = {
   en:{
     'nav.subtitle':'Video-to-Lark AI','nav.dashboard':'Start','nav.processing':'Processing records','nav.editor':'Editor','nav.settings':'Settings','nav.admin':'Admin','nav.newProject':'New Project','nav.search':'Search projects...','nav.projects':'Projects','nav.integrations':'Integrations',
-    'status.ready':'System ready','status.idle':'Awaiting task','status.queued':'Queued','status.resolving':'Resolving link…','status.downloading':'Downloading video…','status.saving':'Saving video…','status.upload':'Uploading…','status.audio':'Extracting audio…','status.stt':'Transcribing…','status.translation':'Translating subtitles…','status.transcript_ready':'Transcript ready','status.summary':'AI summarizing…','status.export':'Exporting to Lark…','status.done':'Done','status.failed':'Failed',
+    'status.ready':'System ready','status.idle':'Awaiting task','status.queued':'Queued','status.resolving':'Resolving link…','status.downloading':'Downloading video…','status.saving':'Saving video…','status.upload':'Uploading…','status.prepare_media':'Removing breath gaps (takes minutes)…','status.audio':'Extracting audio…','status.stt':'Transcribing…','status.translation':'Translating subtitles…','status.transcript_ready':'Transcript ready','status.summary':'AI summarizing…','status.export':'Exporting to Lark…','status.done':'Done','status.failed':'Failed',
     'dash.welcome':'Start a transcription.','dash.subtitle':'Upload media for transcription, or import an existing subtitle file to generate notes directly.','dash.totalMin':'Total Minutes','dash.noteGen':'Notes Generated','dash.minUnit':'min','dash.docUnit':'docs','dash.proTag':'Ready','dash.heroTitle':'Drop a video here to transcribe it.','dash.heroDesc':'FluentFlow extracts audio, transcribes it in the background, and prepares transcript, subtitles, and notes.','dash.selectFile':'Select Audio/Video','dash.selectSubtitle':'Import subtitles to notes','dash.subtitleHint':'Drop audio/video to transcribe, or import SRT/VTT/TXT/MD to generate notes directly.','dash.processing':'Processing…','dash.dragHint':'Drop audio/video to transcribe, or import SRT/VTT/TXT/MD to generate notes directly.','dash.linkPlaceholder':'Paste Douyin share text or a video link','dash.linkSubmit':'Fetch by link','dash.linkSubmitting':'Fetching…','dash.linkEmpty':'Paste a share text or video link first.','dash.linkQueued':'Video link is being fetched. Progress stays visible in processing records.','dash.viewTasks':'View records','dash.cloudUploadHint':'Cloud transcription runs in the background. You can leave this page and watch it from processing records.','dash.uploading':'Uploading and processing','dash.done':'Processing complete','dash.subtitleDone':'Note generated from subtitle file','dash.viewEditor':'View in Editor','dash.recent':'Recent Activity','dash.viewAll':'View All','dash.fileError':'Unsupported format. Please select a video or audio file.','dash.subtitleFileError':'Unsupported transcript file. Please select SRT, VTT, TXT, or MD.','dash.noActivity':'No activity yet. Completed jobs will appear here.','dash.justNow':'just now','dash.mAgo':'m ago','dash.hAgo':'h ago','dash.dAgo':'d ago',
     'dash.statusCompleted':'Completed','dash.statusFailed':'Failed','dash.statusProcessing':'Processing','dash.cancel':'Cancel','dash.cancelTask':'Cancel task','dash.activeTask':'Active Task','dash.elapsed':'Elapsed','dash.fileSize':'File Size','dash.cloudUploadAudio':'Cloud Audio','dash.pipeline':'Pipeline','dash.modelProfile':'Route','dash.summaryMode':'Summary Mode','dash.summaryOn':'AI summary on','dash.summaryOff':'Transcript only','dash.exportOn':'Auto Lark export','dash.exportOff':'Manual export later','dash.currentStage':'Current Stage','dash.waitingForTranscript':'You can leave this page; progress continues in processing records.','dash.transcribedTo':'Transcribed','dash.waitingSegment':'Waiting for first transcript segment','dash.progressUnknown':'Working','dash.sttMeasuring':'STT measuring','dash.sttStarting':'Starting transcription engine','dash.sttLoadingModel':'Loading local model','dash.sttChunking':'Preparing progress tracking','dash.sttPreparingAudio':'Preparing audio features','dash.sttWaitingFirst':'Waiting for the first transcript segment','dash.sttChunks':'Transcribing audio','dash.sttSegments':'Receiving transcript segments','dash.sttCloud':'Cloud transcription in progress','dash.sttCloudUpload':'Uploading audio','dash.sttCloudSubmit':'Submitting cloud job','dash.sttCloudWait':'Waiting for cloud transcription','dash.sttCloudDownload':'Downloading cloud result','dash.sttNoProgressHint':'The first transcript segment has not been produced yet. Progress will advance once local transcription emits real segments.',
-    'tasks.title':'History','tasks.subtitle':'Review previous materials, failed runs, outputs, and temporary active work.','tasks.refresh':'Refresh','tasks.open':'Open result','tasks.delete':'Delete','tasks.deleteConfirm':'Delete this record?','tasks.download':'Download','tasks.progress':'Progress','tasks.route':'Route','tasks.updated':'Updated','tasks.empty':'No history yet. Start with an upload from Start.','tasks.queued':'Queued','tasks.running':'Running','tasks.completed':'Completed','tasks.failed':'Failed','tasks.error':'Failure reason','tasks.source':'Source','tasks.summary':'Summary','tasks.detail':'Stage detail','tasks.artifacts':'Outputs','tasks.outputsReady':'Ready outputs','tasks.noOutputs':'Outputs appear here after completion.','tasks.larkDoc':'Lark doc','tasks.srt':'SRT','tasks.txt':'TXT','tasks.vtt':'VTT','tasks.bilingualSrt':'Bilingual SRT','tasks.bilingualVtt':'Bilingual VTT','tasks.md':'Summary',
+    'tasks.title':'History','tasks.subtitle':'Review previous materials, failed runs, outputs, and temporary active work.','tasks.refresh':'Refresh','tasks.open':'Open result','tasks.delete':'Delete','tasks.deleteConfirm':'Delete this record?','tasks.download':'Download','tasks.progress':'Progress','tasks.route':'Route','tasks.updated':'Updated','tasks.empty':'No history yet. Start with an upload from Start.','tasks.queued':'Queued','tasks.running':'Running','tasks.completed':'Completed','tasks.failed':'Failed','tasks.error':'Failure reason','tasks.source':'Source','tasks.summary':'Summary','tasks.detail':'Stage detail','tasks.artifacts':'Outputs','tasks.outputsReady':'Ready outputs','tasks.noOutputs':'Outputs appear here after completion.','tasks.larkDoc':'Lark doc','tasks.srt':'SRT','tasks.txt':'TXT','tasks.vtt':'VTT','tasks.bilingualSrt':'Bilingual SRT','tasks.bilingualVtt':'Bilingual VTT','tasks.md':'Summary','tasks.enhancedAudio':'Clearer voice',
     'proc.title':'Processing records','proc.subtitle':'See what the Agent will do, what it uses as evidence, and which preferences still come from Settings.','proc.noJob':'No active processing','proc.noJobDesc':'Upload a video from Start when you are ready.','proc.audioExtract':'Audio Extraction','proc.transcription':'Transcription','proc.aiSumm':'AI Summarization','proc.larkExport':'Lark Export','proc.waiting':'Waiting…','proc.running':'Running…','proc.done':'Done','proc.pipeline':'Pipeline Progress',
     'edit.title':'Editor','edit.noResult':'No result selected','edit.noResultDesc':'Choose a completed record, then review and edit its transcript and note here.','edit.chooseRecord':'Choose record','edit.transcript':'Full Transcript','edit.aiSummary':'AI Summary','edit.summaryPending':'AI summary is still generating.','edit.summarySkipped':'Transcript-only mode is enabled. Click Regenerate note when you need an AI summary.','edit.summaryFailed':'Transcript is saved, but AI summary failed. Click Regenerate note to try again.','edit.share':'Share','edit.export':'Export to Lark','edit.confidence':'AI Generated','edit.regenerate':'Regenerate note','edit.regenerating':'Regenerating…','edit.regenerateConfirmTitle':'Regenerate this note?','edit.regenerateConfirmDesc':'FluentFlow will regenerate the note from the current transcript and replace the note body. The transcript itself will not be retranscribed.','edit.regenerateConfirmAction':'Regenerate note','edit.retranscribe':'Retranscribe','edit.retranscribing':'Retranscribing…','edit.pickSourceAgain':'Choose source file','edit.retranscribeDone':'Retranscription complete','edit.retranscribeConfirmTitle':'Retranscribe this audio?','edit.retranscribeConfirmDesc':'FluentFlow will run STT again with the current Workbench settings and replace the transcript and summary for this result.','edit.retranscribeUnavailableTitle':'Source file is not available','edit.retranscribeUnavailableDesc':'Browsers cannot reopen a local file from history without your permission. Choose the original audio/video file to retranscribe it with current settings.','edit.retranscribeConfirmAction':'Start retranscription','edit.retranscribeChooseAction':'Choose original file','edit.cancel':'Cancel','edit.segments':'segments','edit.duration':'Duration','edit.sttElapsed':'Transcription time','edit.exportDone':'Export request sent','edit.exportFail':'Export failed','edit.regenDone':'Note regenerated','edit.clearHistory':'Clear History','edit.clearConfirm':'All history cleared','edit.clearConfirmAgain':'Click again to confirm','edit.copied':'Copied','edit.editedTranscript':'Edited transcript','edit.transcriptSaving':'Saving…','edit.transcriptSaved':'Saved','edit.transcriptSaveFailed':'Save failed','edit.editRecords':'Edit records','edit.editRecordsTitle':'Transcript edit records','edit.editRecordsDesc':'Each record keeps the changed sentence and nearby context. These records are saved locally with the edited transcript.','edit.editRecordsEmpty':'No changed segment has been recorded yet.','edit.before':'Before','edit.after':'After','edit.previousSentence':'Previous sentence','edit.nextSentence':'Next sentence','edit.followPlayback':'Follow playback','edit.audioUnavailable':'Choose the original audio/video to listen while editing.','edit.chooseAudio':'Choose source audio','edit.sourceLoading':'Loading source audio…',
     'prompt.label':'Prompt Template','prompt.select':'Select prompt style','prompt.customPlaceholder':'Enter your custom system prompt here...','prompt.expanded':'Collapse prompt','prompt.collapsed':'Change prompt','prompt.activeHint':'Active: ','prompt.editHint':'Edit prompt before regenerating','prompt.saveAsPreset':'Save custom as preset',
@@ -144,10 +161,10 @@ export const msgs = {
   },
   zh:{
     'nav.subtitle':'视频转飞书 AI','nav.dashboard':'开始处理','nav.processing':'处理记录','nav.editor':'编辑器','nav.settings':'设置','nav.admin':'管理','nav.newProject':'新建项目','nav.search':'搜索项目…','nav.projects':'项目','nav.integrations':'集成',
-    'status.ready':'系统就绪','status.idle':'等待任务','status.queued':'排队中','status.resolving':'解析链接中…','status.downloading':'下载视频中…','status.saving':'保存视频中…','status.upload':'上传中…','status.audio':'音频提取中…','status.stt':'转录中…','status.translation':'正在翻译字幕…','status.transcript_ready':'转录已完成','status.summary':'AI 摘要中…','status.export':'导出到飞书…','status.done':'完成','status.failed':'失败',
+    'status.ready':'系统就绪','status.idle':'等待任务','status.queued':'排队中','status.resolving':'解析链接中…','status.downloading':'下载视频中…','status.saving':'保存视频中…','status.upload':'上传中…','status.prepare_media':'正在剪掉气口，要几分钟…','status.audio':'音频提取中…','status.stt':'转录中…','status.translation':'正在翻译字幕…','status.transcript_ready':'转录已完成','status.summary':'AI 摘要中…','status.export':'导出到飞书…','status.done':'完成','status.failed':'失败',
     'dash.welcome':'开始一次转录','dash.subtitle':'上传音视频做转录，也可以直接导入已有字幕生成笔记。','dash.totalMin':'累计时长','dash.noteGen':'已生成笔记','dash.minUnit':'分钟','dash.docUnit':'份','dash.proTag':'就绪','dash.heroTitle':'把视频拖到这里开始转录。','dash.heroDesc':'FluentFlow 会自动提取音频，在后台转录，并生成转录文本、字幕和结构化笔记。','dash.selectFile':'选择音视频','dash.selectSubtitle':'导入字幕生成笔记','dash.subtitleHint':'拖放音视频开始转录；也可导入 SRT/VTT/TXT/MD 直接生成笔记。','dash.processing':'处理中…','dash.dragHint':'拖放音视频开始转录；也可导入 SRT/VTT/TXT/MD 直接生成笔记。','dash.linkPlaceholder':'粘贴抖音分享文本或视频链接','dash.linkSubmit':'通过链接获取','dash.linkSubmitting':'获取中…','dash.linkEmpty':'请先粘贴分享文本或视频链接。','dash.linkQueued':'视频链接正在获取中，进度会显示在处理记录里。','dash.viewTasks':'查看记录','dash.cloudUploadHint':'云端转录会在后台继续运行，你可以离开本页并在处理记录里查看进度。','dash.uploading':'正在上传并处理','dash.done':'处理完成','dash.subtitleDone':'已根据字幕文件生成笔记','dash.viewEditor':'在编辑器中查看','dash.recent':'最近活动','dash.viewAll':'查看全部','dash.fileError':'不支持的格式，请选择视频或音频文件。','dash.subtitleFileError':'不支持的字幕/转录文件，请选择 SRT、VTT、TXT 或 MD。','dash.noActivity':'暂无活动记录，完成的任务会显示在这里。','dash.justNow':'刚刚','dash.mAgo':'分钟前','dash.hAgo':'小时前','dash.dAgo':'天前',
     'dash.statusCompleted':'已完成','dash.statusFailed':'失败','dash.statusProcessing':'处理中','dash.cancel':'取消','dash.cancelTask':'取消任务','dash.activeTask':'当前任务','dash.elapsed':'已用时间','dash.fileSize':'文件大小','dash.cloudUploadAudio':'云端音频','dash.pipeline':'处理流水线','dash.modelProfile':'转录路线','dash.summaryMode':'摘要模式','dash.summaryOn':'生成 AI 摘要','dash.summaryOff':'仅转录','dash.exportOn':'自动导出飞书','dash.exportOff':'完成后手动导出','dash.currentStage':'当前阶段','dash.waitingForTranscript':'你可以离开本页，进度会在记录里继续更新。','dash.transcribedTo':'已转录','dash.waitingSegment':'等待第一段转录结果','dash.progressUnknown':'处理中','dash.sttMeasuring':'STT 计算中','dash.sttStarting':'正在启动转录引擎','dash.sttLoadingModel':'正在加载本地模型','dash.sttChunking':'正在准备进度追踪','dash.sttPreparingAudio':'正在准备音频特征','dash.sttWaitingFirst':'等待第一段转录结果','dash.sttChunks':'正在转录音频','dash.sttSegments':'正在接收转录片段','dash.sttCloud':'云端转录中','dash.sttCloudUpload':'正在上传音频','dash.sttCloudSubmit':'正在提交云端任务','dash.sttCloudWait':'等待云端转录','dash.sttCloudDownload':'正在下载云端结果','dash.sttNoProgressHint':'第一段转录结果还没有产出。后续会按本地转录真实返回的片段推进进度。',
-    'tasks.title':'历史记录','tasks.subtitle':'查看过去的材料、失败记录、结果产物和临时进行中的任务。','tasks.refresh':'刷新','tasks.open':'打开结果','tasks.delete':'删除记录','tasks.deleteConfirm':'删除这条记录？','tasks.download':'下载','tasks.progress':'进度','tasks.route':'路线','tasks.updated':'更新于','tasks.empty':'暂无历史记录。从开始处理页上传文件后会出现在这里。','tasks.queued':'排队中','tasks.running':'处理中','tasks.completed':'已完成','tasks.failed':'失败','tasks.error':'失败原因','tasks.source':'来源','tasks.summary':'摘要','tasks.detail':'阶段详情','tasks.artifacts':'结果产物','tasks.outputsReady':'可下载产物','tasks.noOutputs':'完成后会在这里显示下载入口。','tasks.larkDoc':'飞书文档','tasks.srt':'SRT','tasks.txt':'TXT','tasks.vtt':'VTT','tasks.bilingualSrt':'双语 SRT','tasks.bilingualVtt':'双语 VTT','tasks.md':'摘要',
+    'tasks.title':'历史记录','tasks.subtitle':'查看过去的材料、失败记录、结果产物和临时进行中的任务。','tasks.refresh':'刷新','tasks.open':'打开结果','tasks.delete':'删除记录','tasks.deleteConfirm':'删除这条记录？','tasks.download':'下载','tasks.progress':'进度','tasks.route':'路线','tasks.updated':'更新于','tasks.empty':'暂无历史记录。从开始处理页上传文件后会出现在这里。','tasks.queued':'排队中','tasks.running':'处理中','tasks.completed':'已完成','tasks.failed':'失败','tasks.error':'失败原因','tasks.source':'来源','tasks.summary':'摘要','tasks.detail':'阶段详情','tasks.artifacts':'结果产物','tasks.outputsReady':'可下载产物','tasks.noOutputs':'完成后会在这里显示下载入口。','tasks.larkDoc':'飞书文档','tasks.srt':'SRT','tasks.txt':'TXT','tasks.vtt':'VTT','tasks.bilingualSrt':'双语 SRT','tasks.bilingualVtt':'双语 VTT','tasks.md':'摘要','tasks.enhancedAudio':'人声增强版',
     'proc.title':'处理记录','proc.subtitle':'这里展示 Agent 会做什么、依据什么判断，以及哪些长期偏好来自设置页。','proc.noJob':'当前没有任务','proc.noJobDesc':'从开始处理页上传文件。','proc.audioExtract':'音频提取','proc.transcription':'语音转录','proc.aiSumm':'AI 摘要','proc.larkExport':'飞书导出','proc.waiting':'等待中…','proc.running':'运行中…','proc.done':'完成','proc.pipeline':'流水线进度',
     'edit.title':'编辑器','edit.noResult':'未选择结果','edit.noResultDesc':'从处理记录选择一条已完成结果后，在这里复查和编辑转录与笔记。','edit.chooseRecord':'选择处理记录','edit.transcript':'完整转录','edit.aiSummary':'AI 摘要','edit.summaryPending':'AI 摘要仍在生成中。','edit.summarySkipped':'当前是仅转录模式，未生成 AI 摘要。需要时可点击重生笔记。','edit.summaryFailed':'转录已保存，但 AI 摘要失败。可以点击重生笔记再试一次。','edit.share':'分享','edit.export':'导出到飞书','edit.confidence':'AI 生成','edit.regenerate':'重生笔记','edit.regenerating':'重生中…','edit.regenerateConfirmTitle':'重生当前笔记？','edit.regenerateConfirmDesc':'FluentFlow 会基于当前转录重生笔记，并替换右侧笔记正文；不会重新转录音频。','edit.regenerateConfirmAction':'确认重生笔记','edit.retranscribe':'重新转录','edit.retranscribing':'重新转录中…','edit.pickSourceAgain':'选择原文件','edit.retranscribeDone':'重新转录完成','edit.retranscribeConfirmTitle':'重新转录当前音频？','edit.retranscribeConfirmDesc':'FluentFlow 会使用当前工作台设置重新执行 STT，并替换当前结果里的转录文本和摘要。','edit.retranscribeUnavailableTitle':'当前没有可直接重转的原文件','edit.retranscribeUnavailableDesc':'浏览器不会在历史记录里长期保留本地音视频文件权限。请选择原始音视频文件，再用当前设置重新转录。','edit.retranscribeConfirmAction':'确认重新转录','edit.retranscribeChooseAction':'选择原始文件','edit.cancel':'取消','edit.segments':'段','edit.duration':'时长','edit.sttElapsed':'转录耗时','edit.exportDone':'导出请求已发送','edit.exportFail':'导出失败','edit.regenDone':'笔记已重生','edit.clearHistory':'清除记录','edit.clearConfirm':'所有记录已清除','edit.clearConfirmAgain':'再次点击确认','edit.copied':'已复制','edit.editedTranscript':'已修改转录','edit.transcriptSaving':'保存中…','edit.transcriptSaved':'已保存','edit.transcriptSaveFailed':'保存失败','edit.editRecords':'修改记录','edit.editRecordsTitle':'转录稿修改记录','edit.editRecordsDesc':'每条记录会保留修改句子和相邻上下文，并随编辑稿一起保存到本地。','edit.editRecordsEmpty':'还没有记录到分段修改。','edit.before':'修改前','edit.after':'修改后','edit.previousSentence':'上一句','edit.nextSentence':'下一句','edit.followPlayback':'跟随播放','edit.audioUnavailable':'选择原始音视频后，可边听边校对。','edit.chooseAudio':'选择原音频','edit.sourceLoading':'正在读取原音频…',
     'prompt.label':'提示词模板','prompt.select':'选择提示词风格','prompt.customPlaceholder':'在此输入自定义系统提示词…','prompt.expanded':'收起提示词','prompt.collapsed':'更换提示词','prompt.activeHint':'当前：','prompt.editHint':'重生笔记前可编辑提示词','prompt.saveAsPreset':'将自定义保存为预设',
@@ -206,6 +223,7 @@ export const useApi = () => {
         if(options.sttSpeed) fd.append("stt_speed", options.sttSpeed);
         if(options.sttLanguage) fd.append("stt_language", options.sttLanguage);
         if(options.speakerDiarization) fd.append("speaker_diarization", "true");
+        if(options.voiceEnhance) fd.append("voice_enhance", "true");
     };
     const processVideoSSE = async (file, options={}, onProgress, signal) => {
         const fd = new FormData();
@@ -309,6 +327,7 @@ export const useApi = () => {
         if(options.sttSpeed) payloadOptions.stt_speed = options.sttSpeed;
         if(options.sttLanguage) payloadOptions.stt_language = options.sttLanguage;
         if(options.speakerDiarization) payloadOptions.speaker_diarization = "true";
+        if(options.voiceEnhance) payloadOptions.voice_enhance = "true";
         if(options.cookiesFromBrowser) payloadOptions.cookies_from_browser = options.cookiesFromBrowser;
         const r = await apiFetch(`${API_BASE}/video-sources/jobs`, {
             method:"POST",
@@ -381,6 +400,11 @@ export const useApi = () => {
         if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
         return data;
     };
+    // Cancel a record the page is holding, rather than a bare task id. What a
+    // record needs to be cancelled through is edition knowledge: the default
+    // here is the only way this edition has, and the hosted extension replaces
+    // this method for the records it owns.
+    const cancelJobRecord = (job={}) => cancelJob(job.taskId, {sttProvider: job.sttProvider});
     const deleteJob = async (taskId, options={}) => {
         const headers = localExecutionHeaders(options);
         let r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}`, {method:"DELETE", headers});
@@ -465,6 +489,127 @@ export const useApi = () => {
         const blob = await r.blob();
         _dl(blob, filename || `${kind}.txt`);
     };
+    // Starts breath-gap removal and returns once it is accepted. The render takes
+    // minutes and writes its progress into the job result, so callers poll getJob
+    // rather than holding this request open. A refusal — another render running,
+    // source gone, task not finished — comes back here with its reason.
+    const startJobDebreath = async (taskId, payload={}, options={}) => {
+        const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/debreath`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json", ...localExecutionHeaders(options)},
+            body: JSON.stringify(payload || {}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
+    };
+    // Two shapes, and the cheap one is the default the page reaches for first.
+    // `{preview: true}` answers "would this work, what would it send, and whose
+    // Claude allowance pays" without spending anything; a call without it
+    // extracts frames and writes the note in the background, so callers poll
+    // getJob rather than holding this request open.
+    const startJobVisualNote = async (taskId, payload={}, options={}) => {
+        const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/visual-note`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json", ...localExecutionHeaders(options)},
+            body: JSON.stringify(payload || {}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
+    };
+    // Ask the machine to open its own file dialog, and process what comes back
+    // where it lies. The browser's picker cannot tell this page which folder a
+    // file came from, so a normal upload has no "next to the original" to save the
+    // cut version into; the system dialog answers with a real path. Local edition
+    // only — the hosted server has neither route.
+    const chooseLocalMedia = async (payload={}) => {
+        const r = await apiFetch(`${API_BASE}/local/choose-media`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json", ...localExecutionHeaders({sttProvider: 'local'})},
+            body: JSON.stringify(payload || {}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
+    };
+    // Ask this machine where a dropped file lives, before deciding to upload it.
+    //
+    // The browser hands over a dropped file's bytes plus three labels — name,
+    // size, modification time — and never its folder; a web page must not learn
+    // the shape of somebody's disk. This is not a web page. Sending only the
+    // labels lets the local service look in the folders it has already been
+    // pointed at, and a hit means the gigabyte never has to be copied at all.
+    // A miss costs nothing and the caller uploads, exactly as before.
+    const locateDroppedFile = async (file) => {
+        try {
+            const r = await apiFetch(`${API_BASE}/local/locate-dropped`, {
+                method: "POST",
+                headers: {"Content-Type":"application/json", ...localExecutionHeaders({sttProvider: 'local'})},
+                body: JSON.stringify({
+                    name: file?.name || '',
+                    size_bytes: file?.size || 0,
+                    modified_ms: file?.lastModified || null,
+                }),
+            });
+            if (!r.ok) return null;
+            const data = await r.json().catch(()=>({}));
+            return data?.found ? data : null;
+        } catch (_) {
+            // Never a reason to refuse the drop: the upload path is still there.
+            return null;
+        }
+    };
+    // Ask the machine for a folder, and get back what is in it. One call, because
+    // the count is what the next decision is about: a folder is however many
+    // Claude calls it has recordings in it. Local edition only.
+    const chooseLocalFolder = async (payload={}) => {
+        const r = await apiFetch(`${API_BASE}/local/choose-folder`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json", ...localExecutionHeaders({sttProvider: 'local'})},
+            body: JSON.stringify(payload || {}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
+    };
+    // The by-path routes read the persisted queue-option vocabulary, which is
+    // snake_case. Spreading the caller's camelCase options into the body sends
+    // keys the backend never looks at, and nothing errors: the run just quietly
+    // uses defaults. Translate here so every call site keeps one spelling.
+    const localQueueBody = (options={}) => {
+        const body = {};
+        if (options.skipSummary) body.skip_summary = "true";
+        if (options.sttModel) body.stt_model = options.sttModel;
+        if (options.sttSpeed) body.stt_speed = options.sttSpeed;
+        if (options.noteMode) body.note_mode = options.noteMode;
+        if (options.promptPreset) body.prompt_preset = options.promptPreset;
+        if (options.promptPresetLabel) body.prompt_preset_label = options.promptPresetLabel;
+        if (options.durationLimitSeconds) body.duration_limit_seconds = String(options.durationLimitSeconds);
+        if (options.speakerDiarization) body.speaker_diarization = "true";
+        if (options.voiceEnhance) body.voice_enhance = "true";
+        return body;
+    };
+    const processLocalFolder = async (path, options={}) => {
+        const r = await apiFetch(`${API_BASE}/queue/process-folder`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json", ...localExecutionHeaders({sttProvider: 'local'})},
+            body: JSON.stringify({path, ...localQueueBody(options)}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
+    };
+    const processLocalPaths = async (paths, options={}) => {
+        const r = await apiFetch(`${API_BASE}/queue/process-local-files`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json", ...localExecutionHeaders({sttProvider: 'local'})},
+            body: JSON.stringify({paths, ...localQueueBody(options)}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
+    };
     const saveTranscriptEdit = async (taskId, payload={}, options={}) => {
         const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/transcript`, {
             method: "PATCH",
@@ -516,14 +661,14 @@ export const useApi = () => {
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
     // Local-safe API methods available in every edition.
-    const baseMethods = {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, deleteJob, retryJob, getJobs, fetchJobSourceFile, getJobMediaUrl, fetchJobArtifactFile, uploadJobSourceFile, downloadJobArtifact, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
+    const baseMethods = {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobArtifact, startJobDebreath, startJobVisualNote, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth, getJobMediaUrl, uploadJobSourceFile};
     // The hosted composition root registers the hosted-only fetch helpers
     // (guest trial, account quota, admin, hosted Feishu OAuth, desktop sync).
     // The local edition registers nothing, so those methods stay absent and the
     // hosted route strings never enter this shared module.
     const hostedExtension = getHostedApiExtension();
     const hostedMethods = hostedExtension
-        ? hostedExtension({apiFetch, API_BASE, apiErrorMessage, readSseResult, appendAiOptions})
+        ? hostedExtension({apiFetch, API_BASE, apiErrorMessage, readSseResult, appendAiOptions, base: baseMethods})
         : {};
     return {...baseMethods, ...hostedMethods};
 };

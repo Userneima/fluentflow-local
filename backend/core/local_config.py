@@ -20,6 +20,11 @@ LOCAL_SENSITIVE_FIELDS = {
     "openai_api_key",
     "dashscope_api_key",
     "qwen_api_key",
+    # The user's own Anthropic key. Two entries read it: the visual-note entry,
+    # and Claude as a note provider (ai_client). Kept a separate field rather
+    # than folded into the other note-provider keys because the visual-note
+    # entry buys a different capability: without this key it refuses and says
+    # so, instead of quietly producing a subtitles-only note.
     "anthropic_api_key",
     "lark_app_id",
     "lark_app_secret",
@@ -104,9 +109,8 @@ def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = Non
     return credential_status(path=path)
 
 
-# Non-sensitive, user-remembered choices. ``allow_miuistore`` is the design
-# contract's Douyin third-party fallback consent: remembered once given, and
-# changeable in settings.
+# Non-sensitive, user-remembered choices. ``allow_miuistore`` is the Douyin
+# third-party fallback: on by default, and remembered here when switched off.
 LOCAL_PREFERENCE_FIELDS = {"allow_miuistore"}
 
 

@@ -30,11 +30,72 @@ def _app_version() -> str:
         return "0.0.0"
 
 
-SERVER_INFO = {"name": "fluentflow", "version": _app_version()}
+SERVER_INFO = {"name": "fluentflow-local", "version": _app_version()}
 
 
 def _client_id(value: str | None = None) -> str:
     return (value or os.environ.get("FLUENTFLOW_CLIENT_ID") or DEFAULT_CLIENT_ID).strip() or DEFAULT_CLIENT_ID
+
+
+# Which FluentFlow is answering, asked rather than assumed.
+#
+# Two editions serve the same ``/agent/v1`` routes with different intake, and for
+# a while both answered on 127.0.0.1:8000. The rejection a path submission gets
+# from the hosted edition lists the inputs that one accepts and never says which
+# backend replied, so on 2026-09-15 it was read as "the MCP tool is newer than
+# this backend" and a job this edition could have done fell back to standalone
+# scripts. ``/health`` now declares the edition; only the tools that actually
+# need one ask, so pointing this client at either backend still works for the
+# ten tools both editions serve.
+_START_HINT = "请双击桌面上的「FluentFlow Local」启动它，等它把浏览器打开之后重试。"
+
+
+def _unreachable(api_base: str, reason: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": f"FluentFlow Local 没有在 {api_base} 应答（{reason}）。{_START_HINT}",
+        "status": None,
+        "payload": None,
+    }
+
+
+def _backend_edition(api_base: str) -> tuple[str, dict[str, Any] | None]:
+    """The edition answering at ``api_base``, or the error payload explaining why not.
+
+    Probed per call rather than cached: the case this exists for is a backend
+    being swapped on a port, and a cached identity is wrong exactly then. One
+    loopback GET is nothing beside submitting a media job.
+    """
+    try:
+        health = api_request("GET", api_base, "/health", timeout=5)
+    except FluentFlowApiError as exc:
+        return "", _unreachable(api_base, str(exc))
+    edition = str(health.get("edition") or "").strip().lower()
+    if not edition:
+        # A backend from before /health declared its edition: runtime.execution
+        # was the only discriminator then, and only the local edition set it.
+        runtime = health.get("runtime") if isinstance(health.get("runtime"), dict) else {}
+        edition = "local" if str(runtime.get("execution") or "").strip().lower() == "local" else "hosted"
+    return edition, None
+
+
+def _require_local_edition(api_base: str) -> dict[str, Any] | None:
+    """Why this tool cannot run against ``api_base``, or None when it can."""
+    edition, failure = _backend_edition(api_base)
+    if failure is not None:
+        return failure
+    if edition != "local":
+        return {
+            "ok": False,
+            "error": (
+                f"{api_base} 上应答的是 FluentFlow Hosted，这个工具要的是 FluentFlow Local。"
+                "托管版按设计不收本机文件路径，它拒绝提交并不代表本地处理这个功能不存在。"
+                f"{_START_HINT}"
+            ),
+            "status": None,
+            "payload": None,
+        }
+    return None
 
 
 def _agent_request(
@@ -46,10 +107,11 @@ def _agent_request(
     client_id: str | None = None,
     timeout: float = 60,
 ) -> dict[str, Any]:
+    base = normalize_api_base(api_base)
     try:
         return api_request(
             method,
-            normalize_api_base(api_base),
+            base,
             path,
             payload=payload,
             client_id=_client_id(client_id),
@@ -57,6 +119,10 @@ def _agent_request(
             timeout=timeout,
         )
     except FluentFlowApiError as exc:
+        if exc.status is None:
+            # No HTTP status means nothing answered. Say how to start it instead of
+            # handing the caller a bare "Connection refused" to interpret.
+            return _unreachable(base, str(exc))
         return {
             "ok": False,
             "error": str(exc),
@@ -67,6 +133,47 @@ def _agent_request(
 
 def _options(**values: Any) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value not in (None, "")}
+
+
+def submit_local_media(
+    path: str,
+    title: str | None = None,
+    skip_summary: bool = False,
+    note_mode: str | None = None,
+    prompt_preset: str | None = None,
+    stt_model: str | None = None,
+    speaker_diarization: bool = True,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Submit one recording that stays where it is, by absolute path on this machine.
+
+    Local edition only, and the backend refuses it from anywhere but localhost. One
+    file per call on purpose: a task has one id, and a call that queued five of them
+    would have nothing to return and nothing to point at when one failed. For a whole
+    folder, loop over this call.
+    """
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _agent_request(
+        "POST",
+        "/agent/v1/tasks",
+        api_base=api_base,
+        client_id=client_id,
+        payload={
+            "path": path,
+            "input_type": "local_path",
+            "title": title,
+            "options": _options(
+                skip_summary="true" if skip_summary else "false",
+                note_mode=note_mode,
+                prompt_preset=prompt_preset,
+                stt_model=stt_model,
+                speaker_diarization="true" if speaker_diarization else "false",
+            ),
+        },
+    )
 
 
 def submit_video_link(
@@ -268,6 +375,91 @@ def export_result(
     )
 
 
+def debreath_task(
+    task_id: str,
+    min_silence_seconds: float | None = None,
+    noise_db: float | None = None,
+    padding_seconds: float | None = None,
+    render: bool = True,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Remove silent gaps from a completed task's source media, mechanically.
+
+    A distinct action rather than a package field: it starts work, and it takes
+    parameters the caller has to choose. Returns as soon as the work is accepted —
+    rendering takes minutes, so poll ``get_task_package`` and read its
+    ``debreath`` block.
+
+    ``render=False`` produces only the cut list, which is the cheap way to see how
+    much would be removed and to check the ``warnings`` before spending an encode.
+    """
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/debreath",
+        api_base=api_base,
+        client_id=client_id,
+        payload={
+            **_options(
+                min_silence_seconds=min_silence_seconds,
+                noise_db=noise_db,
+                padding_seconds=padding_seconds,
+            ),
+            "render": bool(render),
+        },
+        timeout=60,
+    )
+
+def write_note_from_cut_media(
+    task_id: str,
+    preview: bool = True,
+    replace_note: bool = True,
+    restore_previous_note: bool = False,
+    use_generated_note: bool = False,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Write a task's note from its de-breathed media, after ``debreath_task``.
+
+    The second half of one flow: ``debreath_task`` produces the shortened file
+    and the cut list, and this writes the note from that file — frames taken from
+    it, subtitles moved onto its clock. It refuses if no cut file exists yet
+    rather than reading the original recording, so call ``debreath_task`` with
+    ``render=True`` first.
+
+    ``preview`` defaults to **true** and costs nothing: it answers which file
+    would be read, how much transcript after remapping, how many frames, and
+    whose Claude allowance pays. Pass ``preview=False`` to actually run it — that
+    spends the machine owner's Claude allowance, so do not do it unasked.
+
+    By default the finished note becomes the task's note and the previous one is
+    kept and restorable. ``replace_note=False`` leaves the task's note alone;
+    ``restore_previous_note`` and ``use_generated_note`` switch between the two
+    without a model call. Poll ``get_task_package`` and read its
+    ``cut_media_note`` block: ``basis`` there is measured from the note's own
+    citations, so ``transcript_only`` means nothing was written from a picture.
+    """
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    payload: dict[str, Any] = {}
+    if restore_previous_note:
+        payload["restore_previous_note"] = True
+    elif use_generated_note:
+        payload["use_generated_note"] = True
+    elif preview:
+        payload["preview"] = True
+    else:
+        payload["replace_note"] = bool(replace_note)
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/visual-note",
+        api_base=api_base,
+        client_id=client_id,
+        payload=payload,
+        timeout=60,
+    )
+
 TOOL_FUNCTIONS = {
     "submit_video_link": submit_video_link,
     "submit_transcript": submit_transcript,
@@ -277,8 +469,11 @@ TOOL_FUNCTIONS = {
     "get_task_package": get_task_package,
     "diagnose_task": diagnose_task,
     "retry_task": retry_task,
+    "submit_local_media": submit_local_media,
     "regenerate_note": regenerate_note,
     "save_note": save_note,
+    "debreath_task": debreath_task,
+    "write_note_from_cut_media": write_note_from_cut_media,
     "export_result": export_result,
 }
 
@@ -341,6 +536,112 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "api_base": {"type": "string"},
                 "client_id": {"type": "string"},
             },
+        },
+    },
+    {
+        "name": "submit_local_media",
+        "description": (
+            "Submit one audio or video file that stays where it is, by absolute path "
+            "on this machine. Local edition only; the backend accepts it from localhost "
+            "only, and this tool says so plainly when the other edition is the one "
+            "answering. One file per call — loop for a folder."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the recording."},
+                "title": {"type": "string"},
+                "skip_summary": {"type": "boolean", "default": False},
+                "note_mode": {"type": "string"},
+                "prompt_preset": {"type": "string"},
+                "stt_model": {"type": "string"},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "debreath_task",
+        "description": (
+            "Mechanically remove silent gaps from a completed task's source media. "
+            "Acoustic detection only — no model decides which pause matters. Writes a cut "
+            "list artifact always and a rendered file when render is true; poll "
+            "get_task_package and read its debreath block for progress, counts, and warnings."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "min_silence_seconds": {
+                    "type": "number",
+                    "description": (
+                        "Shortest silence to remove, 0.02-60. Default 0.25. Raise it "
+                        "(e.g. 1.0) for faintly recorded material, where the default cuts "
+                        "close to speech."
+                    ),
+                },
+                "noise_db": {
+                    "type": "number",
+                    "description": "Silence threshold in dBFS, -90 to 0. Default -30.",
+                },
+                "padding_seconds": {
+                    "type": "number",
+                    "description": "Sliver of each removed stretch kept at both ends, 0-2. Default 0.1.",
+                },
+                "render": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "False produces only the cut list — no encode, no CPU spent.",
+                },
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "write_note_from_cut_media",
+        "description": (
+            "Write a task's note from its de-breathed media — the second half of the flow "
+            "that starts with debreath_task(render=True). Frames come from the shortened "
+            "file and the subtitles are moved onto its clock; with no cut file it refuses "
+            "instead of reading the original recording. preview defaults to true and is "
+            "free (which file, how much transcript, how many frames, whose Claude "
+            "allowance pays); preview=false spends that allowance, so ask first. The note "
+            "becomes the task's note by default, keeping the previous one restorable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "preview": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "True answers what would be sent and who pays, for free. False runs it.",
+                },
+                "replace_note": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": (
+                        "True makes the finished note the task's note, keeping the previous "
+                        "one on record. False writes it without touching the task's note."
+                    ),
+                },
+                "restore_previous_note": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Put back the note a run replaced. Free, no model call.",
+                },
+                "use_generated_note": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Make the already-written note the task's note again. Free.",
+                },
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id"],
         },
     },
     {

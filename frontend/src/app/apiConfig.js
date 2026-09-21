@@ -1,16 +1,8 @@
 import { shouldUseLocalSingleUserClientId } from '../lib/localExecution.js';
 import { createApiClient } from './apiClient.js';
+import { currentApiBase } from '../lib/apiBase.js';
 
-export const API_BASE = (() => {
-    const normalize = (value) => String(value || '').trim().replace(/\/+$/, '');
-    const configured = normalize(window.FLUENTFLOW_CONFIG?.apiBase || localStorage.getItem('fluentflow_api_base'));
-    if (configured) return configured;
-    const { hostname, port } = window.location;
-    if (!hostname) return "http://127.0.0.1:8000";
-    const local = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-    if (local && port && port !== "8000") return "http://127.0.0.1:8000";
-    return "";
-})();
+export const API_BASE = currentApiBase();
 
 export const ACCESS_TOKEN_KEY = 'fluentflow_access_token';
 const CLIENT_ID_KEY = 'fluentflow_client_id';
@@ -27,15 +19,30 @@ const createClientId = () => (
     window.crypto?.randomUUID?.()
     || `client_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
 );
+// Mirrored into a cookie for the same reason as in shared.jsx: the browser fetches
+// a note's inline frames as <img>, which cannot send the client-id header, and the
+// backend reads this cookie as the second place that value can live.
+const rememberClientIdCookie = (value) => {
+    const id = String(value || '').trim();
+    if (!id) return;
+    try {
+        document.cookie = `${CLIENT_ID_KEY}=${encodeURIComponent(id)}; path=/; max-age=31536000; samesite=lax`;
+    } catch (_) { /* cookies unavailable; fetches still carry the header */ }
+};
 const getClientId = () => {
     if (shouldUseLocalSingleUserClientId()) {
         localStorage.setItem(CLIENT_ID_KEY, LOCAL_SINGLE_USER_CLIENT_ID);
+        rememberClientIdCookie(LOCAL_SINGLE_USER_CLIENT_ID);
         return LOCAL_SINGLE_USER_CLIENT_ID;
     }
     const existing = (localStorage.getItem(CLIENT_ID_KEY) || '').trim();
-    if (existing) return existing;
+    if (existing) {
+        rememberClientIdCookie(existing);
+        return existing;
+    }
     const next = createClientId();
     localStorage.setItem(CLIENT_ID_KEY, next);
+    rememberClientIdCookie(next);
     return next;
 };
 

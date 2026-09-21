@@ -33,3 +33,17 @@
 - 前端服务商判定改为查表（`AI_PROVIDERS`）而非三元链：三元链会把未知值静默落到最后一个分支，新增服务商的典型后果就是被存成 deepseek、还配上 deepseek 的模型名。
 - `scripts/check_mcp_server.py` 改为直接读取 MCP 工具注册表，不再维护第二份工具清单（那份已经漏了一个工具，而且检查是子集比较，清单过时只会让工具悄悄不再被验证）；并修复它在非 UTF-8 的中文 Windows 环境下用 GBK 解码子进程输出、遇到含中文的任务包直接崩掉的问题。
 - 存储的任务记录去掉重复副本：一条三小时的转录曾把转录稿存 3 份、字幕分段存 3 份，1011 KB 里有 583 KB 是逐字节相同的副本或没有任何读取方的字段（`stt_raw_segments` 写两处、读零处）。写入时由 `normalize_result_for_storage` 只留一份，读取时 `normalize_result_for_read` 再补回派生字段——瘦身是存储决定，不能变成 API 变更（一度让 `GET /jobs/{id}` 对 3886 段的记录返回 `display_segments: []`）。已有记录用 `scripts/compact_job_results.py` 迁移：先备份、逐行比对读取结果、只在读取内容完全不变时才重写，`--check` 只报告，`--restore` 可回滚。本机实测 3072 KB → 772 KB。
+## 0.4.0 - 2026-09-18
+
+- 转录默认用 large-v3。此前前端每次提交都发 medium，把后端的默认盖掉了，于是为 large-v3 调过的那些判断从来没有生效过。只能用 CPU 的机器仍会自动降到 medium。
+- 转录模型在安装时就下好，不再留给用户的第一个任务。连不上 huggingface.co 时自动改用镜像源，也可以用 `HF_ENDPOINT` 或 `--mirror` 自己指定。
+- 「结合画面的笔记」默认用你自己的 Anthropic API Key。本机已登录的 Claude Code 这条路仍在，需要在 `.env` 里设 `FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription` 显式打开。
+- 没有任何 Claude 凭据时，笔记退回 `AI_PROVIDER` 指定的服务写纯文字版，而不是什么都不产出。
+- macOS 和 Windows 都新增卸载脚本 `uninstall-local.sh` / `uninstall-local.ps1`：默认只卸程序，转录模型和任务数据各自需要显式开口，可先用 `--dry-run` 看清单。
+- 安装过程不再中途提问。缺 FFmpeg 或 Node.js 直接装上，每步开始前说明在做什么。
+- 启动前的就绪检查会说明这台机器走哪条转录路径、模型在不在本机。
+
+- macOS 新增一次性安装脚本 `launchers/macos/setup-local.sh`，与 Windows 的 `setup-local.ps1` 对等：建虚拟环境、装依赖、构建前端、跑就绪检查、生成桌面启动器。
+- 本地版现在作为独立开发仓库维护；不再由线上版源码导出或被导出流程覆盖。
+- 补齐本地版的构建、测试、CI 与平台启动器，后续本地功能直接在本仓库演进。
+- 仓库边界已写入 Local 的代理入口、Claude 入口和维护文档：Hosted 与 Local 只通过显式、经验证的移植协作，不存在自动同步或导出关系。

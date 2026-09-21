@@ -1,17 +1,24 @@
 import {describe, expect, it} from 'vitest';
-import manifest from '../../../distribution/local-edition.manifest.json';
 import {localRouteRegistry} from './localRoutes.jsx';
 import {
     FORBIDDEN_SURFACE_CAPABILITY_KEYS,
     LOCAL_FRONTEND_CAPABILITIES,
 } from './localCapabilities.js';
 
-// The manifest's frontend_contract is the approved product boundary for the
-// local edition; the local registries must satisfy it mechanically.
-const contract = manifest.frontend_contract;
+// This is the local product boundary. Keep it here with the route registry,
+// rather than importing a hosted-repository export manifest.
+const contract = {
+    required_routes: ['/', '/media-text', '/agent', '/editor', '/settings', '/workspace/api', '/about'],
+    forbidden_routes: ['/admin', '/auth', '/account', '/guest-trial', '/pricing'],
+    forbidden_surfaces: [
+        'login or registration', 'guest trial', 'pricing or quota',
+        'cloud transcription', 'OSS upload', 'cross-device sync',
+        'hosted Feishu OAuth',
+    ],
+};
 const paths = localRouteRegistry.map((entry) => entry.path);
 
-describe('local route registry vs manifest frontend_contract', () => {
+describe('local route registry', () => {
     it('serves every required route', () => {
         for (const route of contract.required_routes) {
             expect(paths, `required local route missing: ${route}`).toContain(route);
@@ -26,7 +33,6 @@ describe('local route registry vs manifest frontend_contract', () => {
     });
 
     it('redirects the root straight to the processing workspace', () => {
-        expect(contract.root_behavior).toBe('redirect_to_media_text');
         const root = localRouteRegistry.find((entry) => entry.path === '/');
         expect(root?.redirectTo).toBe('/media-text');
         // A rendered-but-hidden landing page would be an element, not a
@@ -40,8 +46,8 @@ describe('local route registry vs manifest frontend_contract', () => {
     });
 });
 
-describe('local capability registry vs manifest forbidden surfaces', () => {
-    it('declares every manifest forbidden surface as unavailable', () => {
+describe('local capability registry', () => {
+    it('declares every forbidden surface as unavailable', () => {
         for (const surface of contract.forbidden_surfaces) {
             const key = FORBIDDEN_SURFACE_CAPABILITY_KEYS[surface];
             expect(key, `unmapped forbidden surface: ${surface}`).toBeTruthy();

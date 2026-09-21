@@ -36,6 +36,8 @@ from backend.core.ai_config import (
 from backend.core.ai_prompts import (
     FLUENTFLOW_SYSTEM_PROMPT,
     _NOTE_OUTPUT_GUARDRAILS,
+    _NOTE_SPEAKER_ATTRIBUTION,
+    _EVIDENCE_SPEAKER_ATTRIBUTION,
     _NOTE_CONTENT_POLICY,
     _NOTE_OUTPUT_LANGUAGE,
     _FEISHU_NOTE_FORMATTING_PREFERENCES,
@@ -167,7 +169,11 @@ from backend.core.ai_client import (
 )
 
 
-def _compose_note_system_prompt(system_prompt: str | None) -> str:
+def _compose_note_system_prompt(
+    system_prompt: str | None,
+    *,
+    speaker_labeled: bool = False,
+) -> str:
     base = (system_prompt or "").strip() or FLUENTFLOW_SYSTEM_PROMPT
     return (
         f"{base.rstrip()}"
@@ -175,6 +181,7 @@ def _compose_note_system_prompt(system_prompt: str | None) -> str:
         f"{_NOTE_OUTPUT_LANGUAGE}"
         f"{_FEISHU_NOTE_FORMATTING_PREFERENCES}"
         f"{_NOTE_OUTPUT_GUARDRAILS}"
+        f"{_NOTE_SPEAKER_ATTRIBUTION if speaker_labeled else ''}"
     )
 
 
@@ -1039,15 +1046,22 @@ def _run_chapter_coverage_mode(
     segment_chars: int,
     max_final_input_chars: int,
     progress: _ProgressReporter,
+    speaker_labeled: bool = False,
 ) -> SummaryResult:
     segments = _chapter_segments(transcript_text, segment_chars)
     valid_segment_ids = {segment["segment_id"] for segment in segments}
     progress.start("evidence", len(segments))
+    # Attribution has to survive every hop: evidence extraction reads the
+    # prefixed lines, chapter writing reads only the extracted evidence, and the
+    # style pass rewrites the whole draft. A rule on just one of them loses it.
+    evidence_system = _CHAPTER_EVIDENCE_SYSTEM + (_EVIDENCE_SPEAKER_ATTRIBUTION if speaker_labeled else "")
+    chapter_note_system = _CHAPTER_NOTE_SYSTEM + (_NOTE_SPEAKER_ATTRIBUTION if speaker_labeled else "")
+    chapter_style_system = _CHAPTER_STYLE_SYSTEM + (_NOTE_SPEAKER_ATTRIBUTION if speaker_labeled else "")
 
     def _extract_segment_evidence(batch: dict[str, Any]) -> list[Any]:
         payload = json.dumps([batch], ensure_ascii=False)
         try:
-            return _chat_json_array(client, model, _CHAPTER_EVIDENCE_SYSTEM, payload, temperature=0.1)
+            return _chat_json_array(client, model, evidence_system, payload, temperature=0.1)
         except ValueError:
             # One malformed chunk must not sink the whole note — skip it and keep
             # the rest. Logged (not silent) so lost coverage is visible.
@@ -1097,7 +1111,7 @@ def _run_chapter_coverage_mode(
             "evidence": _chapter_evidence_for(chapter),
         }, ensure_ascii=False)
         try:
-            return _strip_prompt_leakage(_chat(client, model, _CHAPTER_NOTE_SYSTEM, user, temperature=0.2))
+            return _strip_prompt_leakage(_chat(client, model, chapter_note_system, user, temperature=0.2))
         finally:
             progress.advance("chapters", len(chapters))
 
@@ -1106,7 +1120,7 @@ def _run_chapter_coverage_mode(
 
     progress.start("style", 1)
     draft = "\n\n".join(note for note in chapter_notes if note.strip())
-    final_note = _strip_prompt_leakage(_chat(client, model, _CHAPTER_STYLE_SYSTEM, draft, temperature=0.2))
+    final_note = _strip_prompt_leakage(_chat(client, model, chapter_style_system, draft, temperature=0.2))
     if not final_note:
         final_note = draft
     progress.advance("style", 1)
@@ -1258,19 +1272,24 @@ def summarize_transcript_with_metadata(
     evidence_chunk_chars: int = 8_000,
     evidence_overlap: int = 300,
     on_progress: NoteProgressCallback = None,
+    speaker_labeled: bool = False,
 ) -> SummaryResult:
     """Generate a note and return mode/chunk metadata for product analysis.
 
     `on_progress` receives {"step", "completed", "total"} as each model call
     finishes, from worker threads. Omit it and the pipeline runs exactly as
     before.
+
+    Set ``speaker_labeled`` when ``transcript`` carries「说话人 A：」line prefixes:
+    every prompt in the chain then gets the attribution rule, so the labels
+    survive evidence extraction instead of being dropped mid-pipeline.
     """
     load_dotenv()
     progress = _ProgressReporter(on_progress)
     provider_name = _normalize_provider(provider)
     client = _get_client(provider=provider_name, api_key=api_key)
     m = _normalize_model(provider_name, model)
-    prompt = _compose_note_system_prompt(system_prompt)
+    prompt = _compose_note_system_prompt(system_prompt, speaker_labeled=speaker_labeled)
     normalized_mode = _normalize_note_mode(note_mode)
     transcript_text = transcript.strip()
     transcript_length = len(transcript_text)
@@ -1305,17 +1324,20 @@ def summarize_transcript_with_metadata(
             segment_chars=evidence_chunk_chars,
             max_final_input_chars=max_final_input_chars,
             progress=progress,
+            speaker_labeled=speaker_labeled,
         )
 
     chunks = _chunk_text(transcript_text, evidence_chunk_chars, evidence_overlap)
     total = len(chunks)
     progress.start("evidence", total)
 
+    evidence_system = _EVIDENCE_SYSTEM + (_EVIDENCE_SPEAKER_ATTRIBUTION if speaker_labeled else "")
+
     def _extract_evidence(indexed_chunk: tuple[int, str]) -> str:
         idx, chunk = indexed_chunk
         user = f"这是整段转录的第 {idx + 1}/{total} 部分，请提取证据。\n\n{chunk}"
         try:
-            return _chat(client, m, _EVIDENCE_SYSTEM, user, temperature=0.2)
+            return _chat(client, m, evidence_system, user, temperature=0.2)
         finally:
             progress.advance("evidence", total)
 

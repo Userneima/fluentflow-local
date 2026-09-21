@@ -2,18 +2,23 @@ import {useState,useEffect,useRef,useCallback,useMemo} from 'react';
 import {Link} from 'react-router-dom';
 import {
     DEFAULT_PROMPT_PRESET,
-    getBuiltinExtraPromptBody,
-    getDefaultPromptBody,
-    isBuiltinPromptPresetHidden,
-    normalizeUserPresets,
     presetDisplayLabel,
     resolveSystemPromptFromSettings,
 } from '../lib/promptPresets.js';
 import SvgIcon from '../components/SvgIcon.jsx';
+import EditorSplitHandle from '../components/EditorSplitHandle.jsx';
+import {
+    loadHeaderPinned,
+    loadSplitRatio,
+    saveHeaderPinned,
+    saveSplitRatio,
+    splitPaneStyles,
+} from '../lib/editorLayoutPrefs.js';
 import {
     API_BASE,
     createTaskId,
     effectiveSttProvider,
+    submittedSttProvider,
     autoSizeTextarea,
     buildTranscriptEditRecords,
     composeTranscriptText,
@@ -50,18 +55,24 @@ import {
 import {useApp} from '../app/AppContext.jsx';
 import {noteForEditing, transcriptForEditing, transcriptLength} from '../lib/resultViews.js';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
+import {usePromptEditing} from '../lib/usePromptEditing.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import VirtualTranscriptList from '../components/VirtualTranscriptList.jsx';
+import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
+import CutFlowBar from '../components/CutFlowBar.jsx';
 import {FeishuExportPrompt, RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
 import {
     jobOptionsForResult,
     isLikelyVideoFile,
     isVideoResultSource,
+    isAutoCutFlow,
+    cutFlowSummary,
     localSourceFileMatchesResult,
     mediaSourcePlan,
     regenerateProgressLabel,
     resultEditingLock,
     activeTranscriptSegmentIndex,
+    playbackMediaChoice,
     shouldKeepVideoReviewMounted,
     summaryFailureNextStep,
     formatElapsedMinuteSecond,
@@ -117,45 +128,6 @@ const Editor = ({hosted = null}) => {
     const streamedMediaTaskRef = useRef('');
     const mediaGrantRetryRef = useRef('');
 
-    const initSettings = loadSettings();
-    let initPk = initSettings.promptPreset || DEFAULT_PROMPT_PRESET;
-    if (isBuiltinPromptPresetHidden(initPk, initSettings)) initPk = 'default';
-    const [promptKey, setPromptKey] = useState(initPk);
-    const [customText, setCustomText] = useState(initSettings.customPromptText || '');
-    const [defaultPromptEdit, setDefaultPromptEdit] = useState(() => getDefaultPromptBody(initSettings));
-    const [autoTranscriptNotesEdit, setAutoTranscriptNotesEdit] = useState(() => getBuiltinExtraPromptBody('autoTranscriptNotes', initSettings));
-    const [meetingEdit, setMeetingEdit] = useState(() => getBuiltinExtraPromptBody('meeting', initSettings));
-    const [researchEdit, setResearchEdit] = useState(() => getBuiltinExtraPromptBody('research', initSettings));
-    const [quickBulletsEdit, setQuickBulletsEdit] = useState(() => getBuiltinExtraPromptBody('quickBullets', initSettings));
-    const [userPresetEdit, setUserPresetEdit] = useState(() => {
-        if (initPk.startsWith('user_')) {
-            const p = (initSettings.userPromptPresets || []).find((x) => x.id === initPk);
-            return p?.prompt || '';
-        }
-        return '';
-    });
-    const [presetNameInput, setPresetNameInput] = useState('');
-    const [, setPresetListTick] = useState(0);
-    const [promptOpen, setPromptOpen] = useState(false);
-
-    useEffect(() => {
-        if (!promptOpen) return;
-        const s = loadSettings();
-        const pkRaw = s.promptPreset || DEFAULT_PROMPT_PRESET;
-        const pk = isBuiltinPromptPresetHidden(pkRaw, s) ? 'default' : pkRaw;
-        setPromptKey(pk);
-        setDefaultPromptEdit(getDefaultPromptBody(s));
-        setAutoTranscriptNotesEdit(getBuiltinExtraPromptBody('autoTranscriptNotes', s));
-        setMeetingEdit(getBuiltinExtraPromptBody('meeting', s));
-        setResearchEdit(getBuiltinExtraPromptBody('research', s));
-        setQuickBulletsEdit(getBuiltinExtraPromptBody('quickBullets', s));
-        setCustomText(s.customPromptText || '');
-        if (pk.startsWith('user_')) {
-            const p = (s.userPromptPresets || []).find((x) => x.id === pk);
-            setUserPresetEdit(p?.prompt || '');
-        }
-    }, [promptOpen]);
-
     const result = lastResult;
     const resultAccess = hosted?.resultAccess?.(result) || {};
     const isTransientResult = !!resultAccess.transient;
@@ -201,9 +173,12 @@ const Editor = ({hosted = null}) => {
     const [hydrationFailed, setHydrationFailed] = useState(false);
     const [transcriptView, setTranscriptView] = useState('bilingual');
     const [editRecordsOpen, setEditRecordsOpen] = useState(false);
+    const [headerPinned, setHeaderPinned] = useState(loadHeaderPinned);
+    const [splitRatio, setSplitRatio] = useState(loadSplitRatio);
     const mediaRef = useRef(null);
     const mediaInputRef = useRef(null);
     const transcriptListRef = useRef(null);
+    const splitContainerRef = useRef(null);
     const resultJobOptions = useMemo(() => resultAccess.jobOptions || jobOptionsForResult(result), [
         resultAccess.jobOptions,
         result?.stt_provider,
@@ -412,7 +387,15 @@ const Editor = ({hosted = null}) => {
         setTranscriptReviewMode('text');
         if (!result) return () => { cancelled = true; };
         const plan = mediaSourcePlan(result, {localFile: matchedLocalSourceFile, canPersistResult});
-        if (plan.length === 0) return () => { cancelled = true; };
+        if (plan.length === 0) {
+            // Empty because this task's material is the cut file and that file
+            // cannot be read. Nothing else may stand in for it, so say so
+            // rather than leaving a silent player.
+            if (isAutoCutFlow(result)) {
+                setMediaError(lang === 'zh' ? '剪后文件读不到了' : 'The cut file cannot be read');
+            }
+            return () => { cancelled = true; };
+        }
         if (plan[0].kind === 'local-file') {
             loadMediaFile(plan[0].file);
             return () => { cancelled = true; };
@@ -431,7 +414,7 @@ const Editor = ({hosted = null}) => {
             }
             streamedMediaTaskRef.current = '';
             const file = step.kind === 'artifact'
-                ? await fetchArtifact(result.task_id, 'playback_audio', step.filename, resultJobOptions)
+                ? await fetchArtifact(result.task_id, step.artifactKind || 'playback_audio', step.filename, resultJobOptions)
                 : await fetchJobSourceFile(result.task_id, step.filename, resultJobOptions);
             if (cancelled) return;
             loadMediaFile(file);
@@ -576,6 +559,16 @@ const Editor = ({hosted = null}) => {
         isLikelyVideoFile(matchedLocalSourceFile || result?.filename)
         && (matchedLocalSourceFile || (result?.task_id && result?.source_file_available))
     );
+    const playingCutVersion = !matchedLocalSourceFile && playbackMediaChoice(result)?.isCut === true;
+    // What already happened to this recording, for the one line under the title.
+    // Gated on the same condition as the badge above: the bar's sentence is about
+    // what is playing, so once the reader has pointed the player at a file of their
+    // own it would be describing something that is no longer on screen.
+    const cutFlow = matchedLocalSourceFile ? null : cutFlowSummary(result);
+    // No cut file means nothing may play, so this has to be said rather than left
+    // as an empty player. Either the record of the file is gone, or reading it
+    // failed — the effect above refuses to substitute the recording in both cases.
+    const cutFileUnavailable = !!cutFlow && (!cutFlow.mediaArtifact || (!!mediaError && !mediaUrl));
     const canShowVideoReview = isVideoResultSource(result, matchedLocalSourceFile);
     const canUseVideoReview = canShowVideoReview && segments.length > 0 && !!(
         (mediaKind === 'video' && mediaUrl)
@@ -790,102 +783,7 @@ const Editor = ({hosted = null}) => {
         sttProvider: effectiveSttProvider(settings, runtimeConfig),
     });
 
-    const presetLabel = (key) => presetDisplayLabel(key, loadSettings(), lang);
-
-    const handlePromptKeyChange = (newKey) => {
-        setPromptKey(newKey);
-        const s = loadSettings();
-        saveSettings({ ...s, promptPreset: newKey });
-        if (newKey === 'default') setDefaultPromptEdit(getDefaultPromptBody({ ...s, promptPreset: newKey }));
-        if (newKey === 'autoTranscriptNotes') setAutoTranscriptNotesEdit(getBuiltinExtraPromptBody('autoTranscriptNotes', { ...s, promptPreset: newKey }));
-        if (newKey === 'meeting') setMeetingEdit(getBuiltinExtraPromptBody('meeting', { ...s, promptPreset: newKey }));
-        if (newKey === 'research') setResearchEdit(getBuiltinExtraPromptBody('research', { ...s, promptPreset: newKey }));
-        if (newKey === 'quickBullets') setQuickBulletsEdit(getBuiltinExtraPromptBody('quickBullets', { ...s, promptPreset: newKey }));
-        if (newKey.startsWith('user_')) {
-            const p = (s.userPromptPresets || []).find((x) => x.id === newKey);
-            setUserPresetEdit(p?.prompt || '');
-        }
-    };
-
-    const handleCustomTextChange = (val) => {
-        setCustomText(val);
-        const s = loadSettings();
-        saveSettings({ ...s, customPromptText: val });
-    };
-
-    const handleDefaultPromptChange = (val) => {
-        setDefaultPromptEdit(val);
-        const s = loadSettings();
-        saveSettings({ ...s, defaultPromptOverride: val });
-    };
-
-    const handleBuiltinExtraChange = (key, val) => {
-        if (key === 'autoTranscriptNotes') setAutoTranscriptNotesEdit(val);
-        else if (key === 'meeting') setMeetingEdit(val);
-        else if (key === 'research') setResearchEdit(val);
-        else if (key === 'quickBullets') setQuickBulletsEdit(val);
-        const s = loadSettings();
-        saveSettings({ ...s, promptOverrides: { ...(s.promptOverrides || {}), [key]: val } });
-    };
-
-    const resetBuiltinExtra = (key) => {
-        if (!window.confirm(t('set.deleteBuiltinPromptConfirm'))) return;
-        const s = loadSettings();
-        const hidden = new Set(Array.isArray(s.hiddenPromptPresets) ? s.hiddenPromptPresets : []);
-        hidden.add(key);
-        const next = { ...s, hiddenPromptPresets: Array.from(hidden) };
-        if (next.promptPreset === key) next.promptPreset = 'default';
-        saveSettings(next);
-        // 如果当前选中该模板，则切回默认，避免面板状态与选中项不一致
-        if (promptKey === key) {
-            setPromptKey('default');
-            setDefaultPromptEdit(getDefaultPromptBody(next));
-        }
-        // 触发面板重新渲染：否则 hiddenPromptPresets 更新了但 UI 不会立刻消失
-        setPresetListTick((x) => x + 1);
-    };
-
-    const handleUserPresetChange = (val) => {
-        setUserPresetEdit(val);
-        const s = loadSettings();
-        const ups = (s.userPromptPresets || []).map((p) => (p.id === promptKey ? { ...p, prompt: val } : p));
-        saveSettings({ ...s, userPromptPresets: ups });
-    };
-
-    const saveCustomAsPresetFromEditor = () => {
-        const name = presetNameInput.trim();
-        if (!name || !customText.trim()) {
-            showToast(lang === 'zh' ? '请填写预设名称和提示词内容' : 'Enter a name and prompt text', false);
-            return;
-        }
-        const s = loadSettings();
-        const id = 'user_' + Date.now();
-        const next = {
-            ...s,
-            userPromptPresets: [{ id, nameZh: name, nameEn: name, prompt: customText }, ...(s.userPromptPresets || [])],
-        };
-        saveSettings(next);
-        setPresetNameInput('');
-        setPresetListTick((x) => x + 1);
-        showToast(t('set.presetSaved'));
-    };
-
-    const handleDeleteUserPreset = (id, e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        if (!window.confirm(t('set.deletePresetConfirm'))) return;
-        const s = loadSettings();
-        const ups = normalizeUserPresets(s).filter((p) => p.id !== id);
-        const next = { ...s, userPromptPresets: ups };
-        if (next.promptPreset === id) next.promptPreset = 'default';
-        saveSettings(next);
-        if (promptKey === id) {
-            setPromptKey('default');
-            setDefaultPromptEdit(getDefaultPromptBody(next));
-        }
-        setPresetListTick((x) => x + 1);
-        showToast(lang === 'zh' ? '已删除预设' : 'Preset deleted', true);
-    };
+    const promptEditing = usePromptEditing({loadSettings, saveSettings, t, lang, showToast});
 
     const handleExportLark = async () => {
         if(!result || exporting) return;
@@ -1062,8 +960,9 @@ const Editor = ({hosted = null}) => {
         }
         const settings = loadSettings();
         const sttModel = normalizeSttModel(settings.sttModel);
-        const sttProvider = effectiveSttProvider(settings, runtimeConfig);
-        if (!(await (hosted?.ensureSttReady?.({sttProvider, showToast, lang}) ?? true))) return;
+        const sttProvider = submittedSttProvider(settings, runtimeConfig);
+        const runningSttProvider = effectiveSttProvider(settings, runtimeConfig);
+        if (!(await (hosted?.ensureSttReady?.({sttProvider: runningSttProvider, showToast, lang}) ?? true))) return;
         const retranscribeErrorMessage = (err) => {
             return hosted?.retranscribeErrorMessage?.({error: err, sttProvider, lang})
                 || err?.message || (lang === 'zh' ? '重新转录失败' : 'Retranscription failed');
@@ -1259,7 +1158,58 @@ const Editor = ({hosted = null}) => {
             setDownloading(null);
         }
     };
+    // Hands over the cut file itself. The bar deliberately does not name a
+    // directory — the owner of a finished task could not find the file precisely
+    // because the old copy described a filesystem instead of giving it to them.
+    const handleDownloadCutFile = async () => {
+        const artifact = cutFlow?.mediaArtifact;
+        if (!artifact || !result?.task_id) return;
+        const name = String(artifact.filename || '').split('/').pop()
+            || `${resultDownloadName || result.filename || 'media'}_debreath.mp4`;
+        try {
+            const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
+            const file = await fetchArtifact(result.task_id, 'debreath_media', name, resultJobOptions);
+            downloadBrowserFile(file, name);
+            recordDownload('cut_media_downloaded', 'video');
+            showToast(t('dl.success'));
+        } catch (err) {
+            showToast(err.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable'), false);
+        }
+    };
     const mediaProgress = playbackDuration > 0 ? Math.min(100, Math.max(0, mediaCurrentTime / playbackDuration * 100)) : 0;
+
+    // Playback is when the media panel needs the height most, so the page
+    // header steps aside then unless the reader pinned it open. Hovering the
+    // strip floats the full header back without resizing anything underneath.
+    const headerCollapsed = !headerPinned && mediaPlaying;
+    const togglePinnedHeader = () => {
+        setHeaderPinned((pinned) => {
+            const next = !pinned;
+            saveHeaderPinned(next);
+            return next;
+        });
+    };
+    const pinHeaderLabel = headerPinned
+        ? (lang === 'zh' ? '已固定' : 'Pinned')
+        : (lang === 'zh' ? '固定' : 'Pin');
+    const pinHeaderTitle = headerPinned
+        ? (lang === 'zh' ? '取消固定：播放时自动折叠顶栏' : 'Unpin: collapse the header during playback')
+        : (lang === 'zh' ? '固定顶栏：播放时也保持展开' : 'Pin the header so it stays open during playback');
+    const pinHeaderButton = (
+        <button
+            type="button"
+            onClick={togglePinnedHeader}
+            aria-pressed={headerPinned}
+            title={pinHeaderTitle}
+            className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#e4e0e0] bg-white px-2.5 text-[11px] font-bold text-[#666] transition hover:bg-[#efeeee] hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65 dark:hover:bg-white/[0.1] dark:hover:text-white"
+        >
+            <SvgIcon name={headerPinned ? 'pin' : 'pin_off'} className="text-[15px]"/>
+            <span className="hidden sm:inline">{pinHeaderLabel}</span>
+        </button>
+    );
+    const paneStyles = splitPaneStyles(splitRatio);
+    const commitSplitRatio = (ratio) => saveSplitRatio(ratio === undefined ? splitRatio : ratio);
+    const resetSplitRatio = () => { setSplitRatio(null); saveSplitRatio(null); };
 
     return (
     <div className="ml-[var(--sidebar-offset)] min-h-dvh bg-[#f8f7fb] pb-8 text-[#111111] dark:bg-[#101010] dark:text-white/[0.92]">
@@ -1335,6 +1285,21 @@ const Editor = ({hosted = null}) => {
         />
         <main className="h-dvh overflow-hidden px-4 pb-4 pt-5 xl:px-5 2xl:px-6">
             <div className="mx-auto h-full min-h-0 w-full flex flex-col gap-3">
+                <div className="group/header relative shrink-0">
+                {headerCollapsed && (
+                    <div className="flex h-9 items-center gap-2 rounded-[14px] border border-[#e4e0e0] bg-white/85 px-3 dark:border-white/[0.12] dark:bg-white/[0.06]">
+                        <h1 className="min-w-0 flex-1 truncate text-sm font-extrabold text-[#111111] dark:text-white" title={rawEditorTitle}>
+                            {rawEditorTitle}
+                        </h1>
+                        <span className="hidden shrink-0 text-[11px] font-semibold text-[#888] md:inline dark:text-white/45">
+                            {lang === 'zh' ? '悬停显示操作' : 'Hover for actions'}
+                        </span>
+                        {pinHeaderButton}
+                    </div>
+                )}
+                <div className={headerCollapsed
+                    ? 'pointer-events-none absolute inset-x-0 top-0 z-30 rounded-[18px] border border-[#e4e0e0] bg-white/95 px-3 py-2 opacity-0 shadow-[0_24px_60px_-30px_rgba(17,17,17,.6)] backdrop-blur transition-opacity duration-150 group-hover/header:pointer-events-auto group-hover/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:opacity-100 dark:border-white/[0.12] dark:bg-[#151515]/95 dark:shadow-[0_24px_60px_-30px_rgba(0,0,0,.85)]'
+                    : ''}>
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
                     <div className="min-w-0 pr-2">
                         <h1
@@ -1349,6 +1314,16 @@ const Editor = ({hosted = null}) => {
                                 {sttElapsedLabel}
                             </p>
                         )}
+                        {/* The record of the step the upload ran on itself. It is
+                            here rather than beside the player because it explains the
+                            whole page: the media, the subtitles and the note are one
+                            shortened file, and nothing else on screen says so. */}
+                        <CutFlowBar
+                            summary={cutFlow}
+                            lang={lang}
+                            unavailable={cutFileUnavailable}
+                            onDownload={handleDownloadCutFile}
+                        />
                         {isReadOnlyResult && resultNotice && (
                             <div className="mt-2 flex max-w-2xl items-start gap-2 rounded-[12px] border border-[#d6dcff] bg-[#eef2ff] px-3 py-2 text-xs font-semibold leading-relaxed text-[#46536f] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white/72">
                                 <SvgIcon name="info" className="mt-0.5 shrink-0 text-[15px] text-primary"/>
@@ -1361,7 +1336,7 @@ const Editor = ({hosted = null}) => {
                     <div className="flex flex-wrap items-center justify-end gap-2">
                         <button
                             type="button"
-                            onClick={()=>setPromptOpen(true)}
+                            onClick={()=>promptEditing.setPromptOpen(true)}
                             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
                         >
                             <SvgIcon name="tune" className="text-[17px]"/>
@@ -1404,38 +1379,23 @@ const Editor = ({hosted = null}) => {
                             <SvgIcon name={exporting ? 'sync' : 'cloud_upload'} className={`text-[17px] ${exporting?'animate-spin':''}`}/>
                             <span>{t('edit.export')}</span>
                         </button>
+                        {pinHeaderButton}
                     </div>
+                </div>
+                </div>
                 </div>
 
                 <PromptTemplateDialog
-                    open={promptOpen}
-                    onClose={()=>setPromptOpen(false)}
+                    open={promptEditing.promptOpen}
+                    onClose={()=>promptEditing.setPromptOpen(false)}
                     t={t}
                     lang={lang}
                     settings={loadSettings()}
-                    promptKey={promptKey}
-                    presetLabel={presetLabel}
-                    handlePromptKeyChange={handlePromptKeyChange}
-                    handleDeleteUserPreset={handleDeleteUserPreset}
-                    resetBuiltinExtra={resetBuiltinExtra}
-                    defaultPromptEdit={defaultPromptEdit}
-                    handleDefaultPromptChange={handleDefaultPromptChange}
-                    userPresetEdit={userPresetEdit}
-                    handleUserPresetChange={handleUserPresetChange}
-                    customText={customText}
-                    handleCustomTextChange={handleCustomTextChange}
-                    presetNameInput={presetNameInput}
-                    setPresetNameInput={setPresetNameInput}
-                    saveCustomAsPresetFromEditor={saveCustomAsPresetFromEditor}
-                    autoTranscriptNotesEdit={autoTranscriptNotesEdit}
-                    meetingEdit={meetingEdit}
-                    researchEdit={researchEdit}
-                    quickBulletsEdit={quickBulletsEdit}
-                    handleBuiltinExtraChange={handleBuiltinExtraChange}
+                    {...promptEditing.dialogProps}
                 />
 
-                        <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
-                            <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
+                        <div ref={splitContainerRef} className="flex min-h-0 flex-1 gap-0 overflow-hidden">
+                            <section style={paneStyles.left} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
                                 <div className="border-b border-[#e4e0e0] px-4 py-3 dark:border-white/[0.12]">
                                     <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                                         <div className="min-w-0">
@@ -1674,6 +1634,15 @@ const Editor = ({hosted = null}) => {
                                                 <button type="button" onClick={()=>setFollowPlayback(v=>!v)} className={`rounded-[12px] px-2.5 py-1.5 text-xs font-bold transition ${followPlayback?'bg-[#eef2ff] text-primary dark:bg-white/[0.1] dark:text-white':'bg-[#efeeee] text-[#666] dark:bg-white/[0.08] dark:text-white/60'}`}>
                                                     {t('edit.followPlayback')}
                                                 </button>
+                                                {/* Which of the two files is playing. Both exist for a
+                                                    cut task and they are different lengths, so leaving
+                                                    this out makes the timeline unexplainable. */}
+                                                {playingCutVersion && (
+                                                    <span className="inline-flex items-center gap-1 rounded-[12px] bg-[#eef2ff] px-2 py-1 text-[11px] font-bold text-primary dark:bg-white/[0.1] dark:text-white">
+                                                        <SvgIcon name="content_cut" className="text-[13px]"/>
+                                                        {lang === 'zh' ? '剪后的版本' : 'Cut version'}
+                                                    </span>
+                                                )}
                                                 <span className="text-xs font-mono text-on-surface-variant ml-auto">{fmtTime(mediaCurrentTime)} / {fmtTime(playbackDuration || mediaCurrentTime)}</span>
                                             </div>
                                             <input
@@ -1701,9 +1670,27 @@ const Editor = ({hosted = null}) => {
                                 </div>
                             </>
                         )}
+                        {/* No de-breath entry here any more. Removing the breath gaps
+                            is what an upload does to itself, so a panel asking the user
+                            to run it described a flow that no longer exists — the owner
+                            saw it on a finished task and asked what it was for. The
+                            record of the automatic step is the bar under the title.
+                            Tasks processed before the automatic flow simply do not
+                            mention it; re-uploading is the way to give one the
+                            treatment, and the Agent API still exposes the action for a
+                            script that wants it. */}
                             </section>
 
-                            <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] xl:w-[38rem] xl:flex-none 2xl:w-[42rem] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
+                            <EditorSplitHandle
+                                containerRef={splitContainerRef}
+                                ratio={splitRatio}
+                                onChange={setSplitRatio}
+                                onCommit={commitSplitRatio}
+                                onReset={resetSplitRatio}
+                                lang={lang}
+                            />
+
+                            <section style={paneStyles.right} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] xl:w-[38rem] xl:flex-none 2xl:w-[42rem] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
                                 <div className="flex items-center justify-between gap-3 border-b border-[#e4e0e0] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                     <h2 className="flex items-center gap-2 font-headline text-base font-extrabold text-[#111111] dark:text-white">
                                         <SvgIcon name="psychology" className="text-[#111111] dark:text-white"/>
@@ -1813,6 +1800,20 @@ const Editor = ({hosted = null}) => {
                                     )}
                                     </div>
                                 )}
+                                {/* Same rule as the de-breath entry, and gone for the
+                                    same reason: an upload already wrote this note from
+                                    the cut file, so an entry offering to write it was
+                                    offering to redo finished work. The note above *is*
+                                    that note.
+
+                                    What replaced it is not an action but an account:
+                                    which frames the note was written from, and which
+                                    ones it was given and ignored. */}
+                                <NoteEvidenceStrip
+                                    result={result}
+                                    lang={lang}
+                                    onSeek={(seconds) => seekMediaTo(seconds)}
+                                />
                                 <div className="flex justify-end border-t border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                     <Link to={agentWorkflowHref} className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#dedada] bg-white px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]">
                                         <SvgIcon name="route" className="text-sm"/>

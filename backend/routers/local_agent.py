@@ -20,7 +20,7 @@ import time
 from copy import deepcopy
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
 
 from backend.core.ai_summarizer import summarize_transcript_with_metadata
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
@@ -40,7 +40,12 @@ from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
 from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core.local_request_scope import request_client_id, require_local_agent_access
+from backend.core import local_folder_intake
+from backend.core.local_request_scope import (
+    request_client_id,
+    request_is_localhost,
+    require_local_agent_access,
+)
 from backend.core.note_title import resolve_lark_doc_title
 from backend.core.note_write import (
     NOTE_SOURCE_AGENT,
@@ -49,8 +54,15 @@ from backend.core.note_write import (
 )
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.storage_paths import _artifact_storage_dir
+from backend.core.edition_identity import INTAKE_REJECTION
 from backend.routers.local_feishu_export import _local_lark_export_target
-from backend.routers.local_processing import retry_job_from_stored_source
+from backend.routers.local_job_debreath import start_local_debreath
+from backend.routers.local_job_visual_note import start_local_visual_note
+from backend.routers.local_processing import (
+    local_path_options,
+    queue_local_media_file,
+    retry_job_from_stored_source,
+)
 from backend.routers.local_video_sources import submit_video_source_job
 
 router = APIRouter(prefix="/agent/v1", dependencies=[Depends(require_local_agent_access)])
@@ -112,6 +124,43 @@ async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...
     input_type = str(payload.get("input_type") or "").strip().lower()
     options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
     client_id = _local_client_scope(request)
+    local_path = str(payload.get("path") or payload.get("local_path") or "").strip()
+
+    if local_path and input_type in {"", "local_path", "local_file", "local_media"}:
+        # A recording that stays where it is. This exists because every other entry
+        # required the file to come to FluentFlow — as an upload, a link, or a
+        # transcript — and a folder of recordings on this machine matched none of
+        # them, so the work got done by scripts that bypassed the product entirely.
+        #
+        # Localhost only, for the same reason the page entry is: a server that
+        # accepts a filesystem path reads its own disk on someone else's request.
+        if not request_is_localhost(request):
+            raise HTTPException(status_code=403, detail="只有本机能按路径处理文件。")
+        try:
+            source = local_folder_intake.resolve_media_file(local_path)
+        except local_folder_intake.FolderIntakeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # The page entry's queue helper, not a second copy of it: preflight, the task
+        # row, ownership and the terminal-state guarantee all live in there, and a
+        # parallel implementation is how one entry ends up missing a guard the other
+        # one has.
+        options_for_path, duration_limit = local_path_options(options)
+        queued = await queue_local_media_file(
+            source,
+            client_id=client_id,
+            options=options_for_path,
+            duration_limit_seconds=duration_limit,
+            route=_ROUTE,
+            origin={"chosen_with": "agent_api", "folder": str(source.parent)},
+        )
+        task_id_value = queued.get("task_id")
+        return {
+            "ok": True,
+            "task_id": task_id_value,
+            "status": queued.get("status"),
+            "package_url": f"/agent/v1/tasks/{task_id_value}/package",
+            "job": queued,
+        }
 
     if input_text and input_type in {"", "video_link", "url", "share_text"}:
         job = await submit_video_source_job(
@@ -234,7 +283,9 @@ async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...
             "package": _task_package_response(job or {"task_id": task_id_value, "result": result}),
         }
 
-    raise HTTPException(status_code=400, detail="Provide a video link input or transcript_text")
+    # Name this edition in the refusal. An input list alone leaves the caller unable
+    # to tell a missing capability from the wrong backend answering.
+    raise HTTPException(status_code=400, detail=INTAKE_REJECTION)
 
 
 _NOTE_FILTERS = ("any", "missing", "present")
@@ -400,6 +451,56 @@ async def retry_agent_task(request: Request, task_id: str) -> dict[str, Any]:
         "status": job.get("status") or "queued",
         "package_url": f"/agent/v1/tasks/{next_task_id}/package",
         "package": _task_package_response(job),
+    }
+
+
+@router.post("/tasks/{task_id}/debreath")
+def debreath_agent_task(
+    request: Request,
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """Remove the silent gaps from a finished task's source media.
+
+    Delegates to the local job route's entry, so an agent passes exactly the
+    guards the page passes — ownership, completed-only, one render at a time,
+    source present and in a supported container — instead of a second
+    implementation that can drift from it.
+    """
+    accepted = start_local_debreath(request, task_id, background_tasks, payload)
+    return {
+        **accepted,
+        "package_url": f"/agent/v1/tasks/{task_id}/package",
+        "package": _task_package_response(_job_for_request(request, task_id)),
+    }
+
+
+@router.post("/tasks/{task_id}/visual-note")
+def visual_note_agent_task(
+    request: Request,
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """Write this task's note from its de-breathed media and remapped subtitles.
+
+    Delegates to the local job route's entry, so an agent passes exactly the
+    guards the page passes — ownership, completed-only, a cut file that exists,
+    a cut list to remap the subtitles with, a reachable Claude, one run at a
+    time — instead of a second implementation that can drift from it.
+
+    ``preview: true`` is free and answers what would be sent and who pays, which
+    is the call to make first: a plain call spends the machine owner's Claude
+    allowance. ``replace_note: false`` writes the note without making it the
+    task's note; ``restore_previous_note`` and ``use_generated_note`` switch
+    between the two notes without a model call.
+    """
+    accepted = start_local_visual_note(request, task_id, background_tasks, payload)
+    return {
+        **accepted,
+        "package_url": f"/agent/v1/tasks/{task_id}/package",
+        "package": _task_package_response(_job_for_request(request, task_id)),
     }
 
 
