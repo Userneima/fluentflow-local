@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass
 
 from backend.core.frontend_paths import local_frontend_index_path
-from backend.core.runtime_paths import app_data_root
+from backend.core.runtime_paths import ensure_workspace_recorded
 from backend.core.windows_gpu_runtime import inspect_windows_gpu_runtime
 
 
@@ -39,13 +39,18 @@ def _module_available(module_name: str) -> bool:
 
 
 def _data_dir_writable() -> tuple[bool, str]:
-    root = app_data_root()
+    # Reports *where and why*, not just "ok". A workspace resolved to the wrong
+    # place, or scattered by per-path overrides, presents as an empty task list —
+    # indistinguishable from having lost every record. Startup is the one moment
+    # that can say so out loud, so it does.
+    workspace = ensure_workspace_recorded()
+    root = workspace.root
     try:
         root.mkdir(parents=True, exist_ok=True)
         probe = root / ".fluentflow-write-check"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink()
-        return True, f"数据目录可写：{root}"
+        return True, f"数据目录可写：{workspace.describe()}"
     except OSError as exc:
         return False, f"数据目录不可写（{root}）：{exc}。可用 FLUENTFLOW_DATA_DIR 指定其他目录。"
 
@@ -161,7 +166,7 @@ def run_readiness_checks() -> list[ReadinessCheck]:
         ok=bundle.exists(),
         required=False,
         detail=(f"本地前端已构建：{bundle}" if bundle.exists()
-                else "本地前端未构建：请运行 npm run build:frontend:local（API 仍可用）。"),
+                else "本地前端未构建：请运行 npm run build:frontend（API 仍可用）。"),
     ))
 
     writable, detail = _data_dir_writable()

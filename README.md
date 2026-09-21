@@ -82,6 +82,79 @@ npm run build:frontend
 Key 在应用的设置页里填，不必编辑文件。可配置的项在 `distribution/local.env.example`
 里都有说明。
 
+**这需要 API Key，不是 Claude Pro/Max 订阅**——订阅无法作为 API 凭证给第三方程序使用。
+想用订阅写笔记，走下面的 MCP 路线。
+
+纯文字笔记也可以交给 Claude：设置页的「服务商」多了 `Claude` 一项，默认模型
+`claude-opus-5`，也可选 `claude-sonnet-5` / `claude-haiku-4-5`；用 `ANTHROPIC_MODEL` 和
+`ANTHROPIC_MAX_TOKENS`（默认 64000）覆盖。选它之后建议把「笔记生成模式」设成**直接上下文**
+（`FLUENTFLOW_NOTE_MODE=direct`）：
+
+| | DeepSeek + 自动选择 | Claude + 直接上下文 |
+|---|---|---|
+| 13 万字转录 | 走完整覆盖模式，20+ 次模型调用 | **1 次调用** |
+| 连贯性 | 分章写完再拼接 | 一次读完全文再写 |
+
+那套多步流水线（切段抽证据 → 大纲 → 逐章 → 统一文风 → 覆盖度检查 → 按需返修）是为上下文
+装不下长转录的模型准备的补偿机制，默认阈值 2 万字。Claude 的上下文足够长，可以直接一次成文；
+DeepSeek 用户仍然需要多步模式，所以它原样保留。
+
+另外自动配图不再必须配置阿里云百炼：笔记服务商本身能看图时（Claude、Qwen）就用它选帧，
+只有 DeepSeek 这类纯文本服务商才回退到 Qwen。
+
+## 用 Claude Desktop 等 MCP 客户端写笔记
+
+除了本机 AI 凭证生成笔记，也可以让 MCP 客户端读走转录、用它自己的模型写笔记再存回来——
+这样走的是那个客户端的订阅，不消耗你配置的 AI 凭证。
+
+先设访问令牌启用 Agent API（不设则 `/agent/v1` 整体关闭）：
+
+```powershell
+$env:FLUENTFLOW_ACCESS_TOKEN = "自己起一个足够长的随机串"
+```
+
+再把 `scripts/fluentflow_mcp_server.py` 注册为 MCP server（stdio），需要时用
+`FLUENTFLOW_API_BASE`、`FLUENTFLOW_CLIENT_ID` 指定后端地址与客户端标识。
+
+单条的用法是：`get_task_package` 读全文转录 → 客户端写笔记 → `save_note` 存回，笔记随即
+出现在编辑器里，导出飞书照常。
+
+攒一批处理时不用逐个报 task_id，一句话就够：
+
+> 把 FluentFlow 里所有还没有笔记的任务列出来，逐个读转录写笔记，写完存回去
+
+客户端会用 `list_tasks(note="missing")` 找出待办、逐个 `get_task_package` + `save_note`。
+每行都带 `note.source`，所以第二次跑批能跳过自己写过的（`agent`）、也不会去覆盖用户手改过
+的（`editor`）。改写已有笔记时把读到的原文作为 `expected_summary_markdown` 一起传回：期间
+用户在编辑器改过笔记的话会返回 409，而不是静默覆盖。
+
+自检：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_mcp_server.py --access-token $env:FLUENTFLOW_ACCESS_TOKEN --backend-e2e
+```
+
+注意转录文本会发送给该 MCP 客户端背后的服务商；原始音视频仍然只留在本机。
+
+## 数据存放位置
+
+Windows 上转录会完整保留源文件，所以运行数据默认不放系统盘：选择可用空间最大的固定非系统盘
+（如 `D:\FluentFlow`），没有合适磁盘时回退到 `%APPDATA%\FluentFlow`。想指定目录就设
+`FLUENTFLOW_DATA_DIR`。已经在 `%APPDATA%` 下积累了记录的旧安装会继续读原目录，不会自动切换；
+需要搬到数据盘时先关闭应用，再执行 `python scripts\migrate_data_dir.py`。
+
+位置只由一处决定，优先级从高到低：
+
+| 依据 | 何时生效 |
+|---|---|
+| `FLUENTFLOW_DATA_DIR` | 显式指定某一次运行；不会被写入记录 |
+| `%LOCALAPPDATA%\FluentFlow\data-root.txt` | 迁移脚本写入，或首次运行时自动记录 |
+| 按剩余空间选盘 | 只在还没有记录时用一次，随即记录下来 |
+
+启发式只在首次运行跑一次就被固化，之后启动都是读文件——否则搬到"不是最大那块盘"的工作区会在
+下次启动时被悄悄绕开，界面看起来就像记录全丢了。启动时的 `data-dir` 检查会打印当前位置**和
+判定依据**，以及被 `FLUENTFLOW_*_PATH` / `FLUENTFLOW_*_DIR` 单独指到别处的项。
+
 ## 需要多少磁盘空间
 
 在一台 Apple Silicon Mac 上实测：
@@ -131,6 +204,10 @@ npm run test:frontend
 
 `npm run build:frontend` 生成本地版由 `backend.local_main` 提供的 `frontend/dist-local`。
 不要提交该构建目录、`.env`、媒体、任务数据库或导出内容。
+
+Node 版本以 `.nvmrc` 为准（CI 读同一个文件）。改动依赖时请用这个版本重新生成
+`package-lock.json`：npm 10 和 npm 11 对可选依赖的 peer 条目该不该写进 lock 有分歧，而
+`npm ci` 遇到差异是直接失败而不是自行修补。
 
 启动前的环境检查可以单独跑，它会说明转录会走哪条路、模型在不在本机：
 

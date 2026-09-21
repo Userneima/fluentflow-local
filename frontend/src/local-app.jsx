@@ -7,6 +7,7 @@ import ShellLayout from './app/ShellLayout.jsx';
 import {RegistryRoutes} from './app/routeRegistry.jsx';
 import {localRouteRegistry} from './app/localRoutes.jsx';
 import LocalAgentAccessPanel from './components/LocalAgentAccessPanel.jsx';
+import {installStaleBuildRecovery} from './app/staleBuildRecovery.js';
 
 // Local-edition composition root (built from frontend/local.html).
 //
@@ -22,6 +23,11 @@ import LocalAgentAccessPanel from './components/LocalAgentAccessPanel.jsx';
 // single-user value, so account and guest branches inside shared pages stay
 // inactive. No direct-upload transport is registered, so uploads always take
 // the local queue path.
+// Chunk preloads reject outside React, where no error boundary can see them;
+// ShellLayout's RouteErrorBoundary covers the rest. Both routes lead to the
+// same one-shot reload in app/staleBuildRecovery.js.
+installStaleBuildRecovery();
+
 createRoot(document.getElementById('root')).render(
     <BrowserRouter>
         <I18nProvider>

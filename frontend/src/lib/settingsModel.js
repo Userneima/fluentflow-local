@@ -1,8 +1,27 @@
-export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashscopeApiKey', 'qwenApiKey', 'larkAppId', 'larkAppSecret', 'elevenLabsApiKey'];
+export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashscopeApiKey', 'qwenApiKey', 'anthropicApiKey', 'larkAppId', 'larkAppSecret', 'elevenLabsApiKey'];
 export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi'];
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-reasoner';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
 export const DEFAULT_QWEN_MODEL = 'qwen3.7-plus';
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5';
+
+// One table per provider instead of a chained ternary in every function that
+// needs to know about providers. A ternary chain silently routes an unknown
+// value to its last branch, which is how a newly added provider ends up being
+// saved as deepseek with a deepseek model name.
+export const AI_PROVIDERS = Object.freeze({
+    deepseek: {defaultModel: DEFAULT_DEEPSEEK_MODEL, secretKey: 'deepseek_api_key'},
+    openai: {defaultModel: DEFAULT_OPENAI_MODEL, secretKey: 'openai_api_key'},
+    qwen: {defaultModel: DEFAULT_QWEN_MODEL, secretKey: 'dashscope_api_key'},
+    anthropic: {defaultModel: DEFAULT_ANTHROPIC_MODEL, secretKey: 'anthropic_api_key'},
+});
+export const DEFAULT_AI_PROVIDER = 'deepseek';
+
+export const normalizeAiProvider = (provider) => (
+    Object.hasOwn(AI_PROVIDERS, String(provider || '')) ? String(provider) : DEFAULT_AI_PROVIDER
+);
+
+export const aiProviderSecretKey = (provider) => AI_PROVIDERS[normalizeAiProvider(provider)].secretKey;
 export const SUPPORTED_FRONTEND_NOTE_MODES = new Set(['auto', 'direct', 'high_fidelity', 'chapter_coverage']);
 export const NOTE_MODE_OPTIONS = [
     {value: 'auto', labelEn: 'Auto', labelZh: '自动选择'},
@@ -81,22 +100,28 @@ export const isUserOAuthLarkExportRoute = (route) => (
 );
 
 export const normalizeAiModel = (provider, model) => {
-    const p = provider === 'openai' ? 'openai' : (provider === 'qwen' ? 'qwen' : 'deepseek');
+    const p = normalizeAiProvider(provider);
     const value = String(model || '').trim();
     if (p === 'openai') {
         return value && value.startsWith('gpt-') ? value : DEFAULT_OPENAI_MODEL;
     }
-    if (p === 'qwen') {
-        return value || DEFAULT_QWEN_MODEL;
+    if (p === 'anthropic') {
+        // Reject a model left over from another provider: sending e.g.
+        // deepseek-reasoner to Anthropic is a 404 the user reads as "Claude
+        // is broken" rather than "the model box still says deepseek".
+        return value && value.startsWith('claude-') ? value : DEFAULT_ANTHROPIC_MODEL;
     }
-    return value && value !== 'deepseek-chat' ? value : DEFAULT_DEEPSEEK_MODEL;
+    if (p === 'deepseek') {
+        return value && value !== 'deepseek-chat' ? value : DEFAULT_DEEPSEEK_MODEL;
+    }
+    return value || AI_PROVIDERS[p].defaultModel;
 };
 
 export const sanitizeSettings = (settings={}) => {
     const next = {...settings};
     SENSITIVE_SETTING_KEYS.forEach((key) => delete next[key]);
     LEGACY_REMOVED_SETTING_KEYS.forEach((key) => delete next[key]);
-    const provider = next.aiProvider === 'openai' ? 'openai' : (next.aiProvider === 'qwen' ? 'qwen' : 'deepseek');
+    const provider = normalizeAiProvider(next.aiProvider);
     next.aiProvider = provider;
     next.aiModel = normalizeAiModel(provider, next.aiModel);
     if (!SUPPORTED_FRONTEND_NOTE_MODES.has(next.noteMode)) {
@@ -120,6 +145,7 @@ export const sensitivePatchFromSettings = (settings={}) => ({
     deepseek_api_key: settings.deepseekApiKey || '',
     openai_api_key: settings.openaiApiKey || '',
     dashscope_api_key: settings.dashscopeApiKey || settings.qwenApiKey || '',
+    anthropic_api_key: settings.anthropicApiKey || '',
     lark_app_id: settings.larkAppId || '',
     lark_app_secret: settings.larkAppSecret || '',
     elevenlabs_api_key: settings.elevenLabsApiKey || '',

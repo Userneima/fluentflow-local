@@ -17,9 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Node version comes from .nvmrc so CI and a contributor's machine agree
+      # on the bundled npm. npm majors disagree about which optional-peer
+      # entries belong in package-lock.json (npm 11 prunes what npm 10
+      # requires), and `npm ci` fails on that difference rather than repairing
+      # it — so the lock file is only reproducible against a stated version.
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm run lint:frontend

@@ -236,6 +236,22 @@ def submit_transcript(
     )
 
 
+def list_tasks(
+    note: str = "any",
+    status: str | None = None,
+    limit: int = 50,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """List FluentFlow tasks, optionally only those still missing a note."""
+    query = f"?note={note}&limit={int(limit)}"
+    if status:
+        query += f"&status={status}"
+    return _agent_request(
+        "GET", f"/agent/v1/tasks{query}", api_base=api_base, client_id=client_id
+    )
+
+
 def get_task(
     task_id: str,
     api_base: str | None = None,
@@ -314,6 +330,51 @@ def regenerate_note(
     )
 
 
+def save_note(
+    task_id: str,
+    summary_markdown: str,
+    expected_summary_markdown: str | None = None,
+    author: str | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Store a note this agent wrote back into a FluentFlow task."""
+    # Built explicitly rather than through _options: an empty
+    # expected_summary_markdown is a meaningful precondition ("there was no note
+    # when I read the task"), and _options would drop it as blank.
+    payload: dict[str, Any] = {"summary_markdown": summary_markdown}
+    if expected_summary_markdown is not None:
+        payload["expected_summary_markdown"] = expected_summary_markdown
+    if author:
+        payload["author"] = author
+    return _agent_request(
+        "PUT",
+        f"/agent/v1/tasks/{task_id}/note",
+        api_base=api_base,
+        client_id=client_id,
+        payload=payload,
+        timeout=60,
+    )
+
+
+def export_result(
+    task_id: str,
+    target: str = "lark",
+    title: str | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Export a completed task note to a supported target such as Lark."""
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/exports",
+        api_base=api_base,
+        client_id=client_id,
+        payload=_options(target=target, title=title),
+        timeout=120,
+    )
+
+
 def debreath_task(
     task_id: str,
     min_silence_seconds: float | None = None,
@@ -348,7 +409,6 @@ def debreath_task(
         },
         timeout=60,
     )
-
 
 def write_note_from_cut_media(
     task_id: str,
@@ -400,28 +460,10 @@ def write_note_from_cut_media(
         timeout=60,
     )
 
-
-def export_result(
-    task_id: str,
-    target: str = "lark",
-    title: str | None = None,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Export a completed task note to a supported target such as Lark."""
-    return _agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/exports",
-        api_base=api_base,
-        client_id=client_id,
-        payload=_options(target=target, title=title),
-        timeout=120,
-    )
-
-
 TOOL_FUNCTIONS = {
     "submit_video_link": submit_video_link,
     "submit_transcript": submit_transcript,
+    "list_tasks": list_tasks,
     "get_task": get_task,
     "wait_task": wait_task,
     "get_task_package": get_task_package,
@@ -429,6 +471,7 @@ TOOL_FUNCTIONS = {
     "retry_task": retry_task,
     "submit_local_media": submit_local_media,
     "regenerate_note": regenerate_note,
+    "save_note": save_note,
     "debreath_task": debreath_task,
     "write_note_from_cut_media": write_note_from_cut_media,
     "export_result": export_result,
@@ -472,6 +515,30 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "list_tasks",
+        "description": (
+            "List FluentFlow tasks. Use note=\"missing\" to find the ones that still need a "
+            "note, then write each one with get_task_package + save_note. Each row carries "
+            "note.source, so tasks whose note you already wrote (source \"agent\") can be "
+            "skipped instead of rewritten; source \"editor\" means the user wrote it by hand "
+            "and should be left alone unless they ask."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "enum": ["any", "missing", "present"],
+                    "description": "Filter by whether the task already has a note. Default any.",
+                },
+                "status": {"type": "string", "description": "Only tasks in this job status, e.g. completed."},
+                "limit": {"type": "number", "description": "Maximum tasks to return (server caps at 200). Default 50."},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+        },
+    },
+    {
         "name": "submit_local_media",
         "description": (
             "Submit one audio or video file that stays where it is, by absolute path "
@@ -492,72 +559,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "client_id": {"type": "string"},
             },
             "required": ["path"],
-        },
-    },
-    {
-        "name": "get_task",
-        "description": "Read lightweight task status from FluentFlow.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "wait_task",
-        "description": "Wait for a task to finish or return the current running state.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "timeout_seconds": {"type": "number", "default": 30},
-                "poll_interval_seconds": {"type": "number", "default": 2},
-                "api_base": {"type": "string"},
-                "client_id": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "get_task_package",
-        "description": "Read the stable Agent Task Package for a FluentFlow task.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "diagnose_task",
-        "description": "Explain task or note generation failure state in a machine-readable form.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "retry_task",
-        "description": "Retry a failed task from its retained source media when available.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "regenerate_note",
-        "description": "Regenerate a task note from the stored transcript.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "note_mode": {"type": "string", "default": "auto"},
-                "prompt_preset": {"type": "string"},
-                "api_base": {"type": "string"},
-                "client_id": {"type": "string"},
-            },
-            "required": ["task_id"],
         },
     },
     {
@@ -644,6 +645,100 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_task",
+        "description": "Read lightweight task status from FluentFlow.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "wait_task",
+        "description": "Wait for a task to finish or return the current running state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "timeout_seconds": {"type": "number", "default": 30},
+                "poll_interval_seconds": {"type": "number", "default": 2},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "get_task_package",
+        "description": "Read the stable Agent Task Package for a FluentFlow task.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "diagnose_task",
+        "description": "Explain task or note generation failure state in a machine-readable form.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "retry_task",
+        "description": "Retry a failed task from its retained source media when available.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "regenerate_note",
+        "description": "Regenerate a task note from the stored transcript.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "note_mode": {"type": "string", "default": "auto"},
+                "prompt_preset": {"type": "string"},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "save_note",
+        "description": (
+            "Store a note you wrote yourself as this task's note, instead of having "
+            "FluentFlow generate one. Read the transcript with get_task_package first. "
+            "When you are rewriting an existing note, pass the note you read as "
+            "expected_summary_markdown so the write is refused with a conflict rather "
+            "than overwriting an edit the user made in the meantime."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "summary_markdown": {"type": "string", "description": "The note body, in Markdown."},
+                "expected_summary_markdown": {
+                    "type": "string",
+                    "description": "The note body as you last read it; empty string if the task had no note.",
+                },
+                "author": {
+                    "type": "string",
+                    "description": "Who wrote this note, recorded for provenance (e.g. claude-desktop).",
+                },
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id", "summary_markdown"],
+        },
+    },
+    {
         "name": "export_result",
         "description": "Export a completed task note to a supported target such as Lark.",
         "inputSchema": {
@@ -705,7 +800,13 @@ def handle_jsonrpc_message(message: dict[str, Any]) -> dict[str, Any] | None:
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": SERVER_INFO,
-                "instructions": "Use FluentFlow tools to submit video or transcript tasks, wait for them, inspect task packages, diagnose failures, regenerate notes, and export results.",
+                "instructions": (
+                    "Use FluentFlow tools to submit video or transcript tasks, wait for them, "
+                    "inspect task packages, diagnose failures, regenerate notes, and export results. "
+                    "To write notes yourself instead of having FluentFlow generate them, find the "
+                    "tasks with list_tasks(note=\"missing\"), read each transcript with "
+                    "get_task_package, and store each result with save_note."
+                ),
             },
         )
     if method == "server/discover":
@@ -731,7 +832,23 @@ def handle_jsonrpc_message(message: dict[str, Any]) -> dict[str, Any] | None:
     return _error(message_id, -32601, f"Method not found: {method}")
 
 
+def force_utf8_stdio() -> None:
+    """Pin stdin/stdout to UTF-8 before any frame is read or written.
+
+    MCP frames are UTF-8 JSON and this product's content is mostly Chinese, but
+    stdio otherwise follows the console codepage — so on a non-UTF-8 Windows
+    locale the first Chinese character in a task package kills the server. It has
+    to be fixed here rather than by the client's launch environment: the whole
+    point is to work under whatever MCP client starts the process.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
+
+
 def run_stdio() -> None:
+    force_utf8_stdio()
     for line in sys.stdin:
         text = line.strip()
         if not text:

@@ -4,6 +4,7 @@ import {
     pickDisplayTranscriptSegments,
     pickTranscriptSegments,
 } from './format.js';
+import { hasNote, normalizedBodyFields } from './resultViews.js';
 import { normalizeTaskState } from './taskState.js';
 
 export const RESULT_SCHEMA_VERSION = '2';
@@ -53,7 +54,7 @@ const text = (value) => String(value || '');
 export const normalizeSummaryStatus = (status, result={}) => {
     const value = text(status).trim().toLowerCase();
     if (['completed', 'failed', 'skipped', 'pending'].includes(value)) return value;
-    if (text(result.summary_markdown).trim()) return 'completed';
+    if (hasNote(result)) return 'completed';
     if (result.summary_skipped) return 'skipped';
     if (text(result.summary_error).trim()) return 'failed';
     return value || null;
@@ -71,10 +72,14 @@ export const normalizeResultPayload = (value={}) => {
         ...(schemaVersion && schemaVersion !== RESULT_SCHEMA_VERSION
             ? {result_schema_migrated_from: schemaVersion}
             : {}),
-        transcript_text: source.transcript_text || source.transcript_text_preview || '',
+        // `result_partial` marks a payload that carries previews rather than
+        // the record (a job list row, a browser cache row).
+        result_partial: !!source.result_partial,
+        // Previews stay in their own fields; `resultViews.js` owns the body
+        // field names and decides which a given caller may read.
+        ...normalizedBodyFields(source),
         raw_segments: rawSegments,
         display_segments: displaySegments,
-        summary_markdown: source.summary_markdown || '',
         summary_status: normalizeSummaryStatus(source.summary_status, source),
     };
 };

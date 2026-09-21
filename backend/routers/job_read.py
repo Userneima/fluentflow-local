@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.core.job_store import get_job
+from backend.core.local_media_access import LocalMediaAccess
 from backend.core.result_artifacts import (
     DEBREATH_ARTIFACT_SUFFIXES,
     artifact_search_dirs,
@@ -61,6 +62,7 @@ def create_job_read_router(
     *,
     request_client_scope: Callable[[Request], Optional[str]],
     job_events: JobEventStream,
+    media_access: LocalMediaAccess | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -83,6 +85,38 @@ def create_job_read_router(
         if not source:
             raise HTTPException(status_code=404, detail="Source file not found")
         return FileResponse(path=str(source), filename=source.name)
+
+    @router.post("/jobs/{task_id}/media-session")
+    def create_media_session(request: Request, task_id: str) -> dict[str, str | int]:
+        """Issue a short-lived URL for a browser video or audio element.
+
+        The initial POST carries the normal client-id header.  The returned URL
+        is then safe for a native media request, which cannot carry that header.
+        """
+        if media_access is None:
+            raise HTTPException(status_code=404, detail="Media streaming is unavailable")
+        client_id = request_client_scope(request)
+        if not get_job(task_id, client_id=client_id) or not find_source_file(task_id):
+            raise HTTPException(status_code=404, detail="Source file not found")
+        grant = media_access.issue(task_id, client_id or "anonymous")
+        return {
+            "media_url": f"/jobs/{task_id}/media?access_token={grant.token}",
+            "expires_in": media_access.ttl_seconds(),
+        }
+
+    @router.get("/jobs/{task_id}/media")
+    def stream_job_media(task_id: str, access_token: str = "") -> FileResponse:
+        """Stream retained source media with HTTP Range support via FileResponse."""
+        if media_access is None or not media_access.allows(access_token, task_id):
+            raise HTTPException(status_code=404, detail="Source media not found")
+        source = find_source_file(task_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source media not found")
+        return FileResponse(
+            path=str(source),
+            media_type="video/mp4" if source.suffix.lower() in {".mp4", ".m4v"} else None,
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
 
     @router.get("/jobs/{task_id}/artifacts/{kind}")
     def download_job_artifact(request: Request, task_id: str, kind: str) -> FileResponse:

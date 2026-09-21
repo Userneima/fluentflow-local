@@ -15,6 +15,14 @@ EXECUTION_SCOPE_LOCAL = "local"
 
 LOCAL_REQUEST_HOSTS = {"127.0.0.1", "localhost", "::1", "testclient"}
 
+# The identity the local single-user workspace owns its jobs under. Jobs are
+# scoped by client id, so anything reading the workspace — the browser app, the
+# Agent API, the MCP server — has to agree on this exact string or it queries a
+# different, empty workspace and reports that the user has no tasks.
+# Mirrored in frontend/src/app/apiConfig.js; pinned by
+# tests/test_client_id_contract.py.
+LOCAL_SINGLE_USER_CLIENT_ID = "local-single-user"
+
 LOCAL_EXECUTION_EXACT_PATHS = {
     "/process",
     "/queue/process",

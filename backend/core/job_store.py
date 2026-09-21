@@ -9,15 +9,29 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from backend.core.runtime_paths import default_job_db_path
+from backend.core.job_views import job_list_row
 from backend.core.result_schema import normalize_result_for_read, normalize_result_for_storage
 from backend.core.title_display import display_title_for_user
 
 logger = logging.getLogger(__name__)
 
+# Snapshot of the configured path at import time, kept for callers that want to
+# report "which database would this process use". It must NEVER be a default
+# argument: Python binds defaults once at import, so every function that took
+# `db_path=DEFAULT_DB_PATH` ignored any later redirection of the configured
+# path — a test that pointed FluentFlow at a temp database still wrote job rows
+# into the developer's real one. Use `resolve_db_path` instead.
 DEFAULT_DB_PATH = default_job_db_path()
+
+
+def resolve_db_path(db_path: Path | str | None = None) -> Path:
+    """Resolve an explicit path, or the configured default at call time."""
+    if db_path is None:
+        return default_job_db_path()
+    return Path(db_path)
 
 
 SCHEMA_SQL = """
@@ -103,8 +117,8 @@ def _merged_metadata_for_upsert(
     return {**existing, **metadata}
 
 
-def ensure_job_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
-    path = Path(db_path)
+def ensure_job_db(db_path: Path | str | None = None) -> None:
+    path = resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA_SQL)
@@ -121,14 +135,15 @@ def create_job_if_absent(
     client_id: str | None = None,
     stage: str | None = None,
     progress: float | None = None,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> bool:
     """Atomically reserve a task id without changing an existing job."""
     if not task_id:
         return False
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+    with sqlite3.connect(db_path, timeout=10) as conn:
         cursor = conn.execute(
             """
             INSERT INTO jobs (
@@ -155,16 +170,17 @@ def upsert_job(
     error_reason: str | None = None,
     result: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> None:
     if not task_id:
         return
+    db_path = resolve_db_path(db_path)
     last_exc = None
     for attempt in range(3):
         try:
             ensure_job_db(db_path)
             now = _now_iso()
-            with sqlite3.connect(Path(db_path)) as conn:
+            with sqlite3.connect(db_path) as conn:
                 merged_metadata = _merged_metadata_for_upsert(conn, task_id, metadata)
                 conn.execute(
                     """
@@ -216,11 +232,12 @@ def upsert_job(
 
 def get_job(
     task_id: str,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any] | None:
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if client_id is not None:
             row = conn.execute(
@@ -234,13 +251,14 @@ def get_job(
 
 def list_jobs(
     limit: int = 50,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
     client_id: str | None = None,
     include_result: bool = True,
 ) -> list[dict[str, Any]]:
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     safe_limit = max(1, min(int(limit or 50), 200))
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if client_id is not None:
             rows = conn.execute(
@@ -257,7 +275,7 @@ def list_jobs(
 
 def recent_local_folders(
     limit: int = 8,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> list[str]:
     """Folders this machine has already been pointed at, newest first.
 
@@ -269,8 +287,9 @@ def recent_local_folders(
     unplugged is not somewhere to open a dialog, and it is not somewhere a file
     can be found.
     """
-    ensure_job_db(db_path)
-    with sqlite3.connect(Path(db_path)) as conn:
+    resolved = resolve_db_path(db_path)
+    ensure_job_db(resolved)
+    with sqlite3.connect(resolved) as conn:
         rows = conn.execute(
             "SELECT metadata_json FROM jobs WHERE metadata_json LIKE '%folder_intake%' "
             "ORDER BY updated_at DESC LIMIT 200"
@@ -294,16 +313,17 @@ def recent_local_folders(
 def list_jobs_by_statuses(
     statuses: tuple[str, ...] | list[str],
     *,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
     include_result: bool = False,
 ) -> list[dict[str, Any]]:
     """Return every job in the requested states without the UI list cap."""
     status_values = [str(status).strip() for status in statuses if str(status).strip()]
     if not status_values:
         return []
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     placeholders = ",".join("?" for _ in status_values)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"SELECT * FROM jobs WHERE status IN ({placeholders}) ORDER BY updated_at DESC",
@@ -317,18 +337,19 @@ def list_jobs_by_statuses(
 
 def list_job_summaries(
     limit: int = 50,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
     client_id: str | None = None,
 ) -> list[dict[str, Any]]:
     return list_jobs(limit=limit, db_path=db_path, client_id=client_id, include_result=False)
 
 
 def list_jobs_for_retention(
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
     client_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if client_id is not None:
             rows = conn.execute(
@@ -343,15 +364,16 @@ def list_jobs_for_retention(
 def update_job_result(
     task_id: str,
     result: dict[str, Any],
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
     client_id: str | None = None,
     touch_updated_at: bool = True,
 ) -> dict[str, Any] | None:
     if not task_id:
         return None
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if client_id is not None:
             row = conn.execute(
@@ -376,6 +398,28 @@ def update_job_result(
     return _row_to_dict(updated) if updated else None
 
 
+# The only parts of a result a note regeneration would overwrite.
+#
+# The compare-and-swap below used to require the *whole* result dict to be
+# byte-identical to the snapshot taken before generation. That made every
+# unrelated background write veto a finished note: a retention sweep, an
+# artifact refresh, or — as actually happened — a summary autosave that stored
+# the very same text and only bumped `summary_edited_at`. Nine minutes of
+# generation were discarded because a timestamp moved.
+#
+# Comparing the note and the transcript it was written from keeps the guarantee
+# that matters (a real edit is never clobbered) and drops the false positives.
+NOTE_CONFLICT_FIELDS: Final[tuple[str, ...]] = ("summary_markdown", "transcript_text")
+
+
+def note_conflict_fingerprint(result: Any) -> tuple[str, ...] | None:
+    """The editable state a regeneration competes with, or None for no result."""
+    data = normalize_result_for_read(result)
+    if not isinstance(data, dict):
+        return None
+    return tuple(str(data.get(field) or "") for field in NOTE_CONFLICT_FIELDS)
+
+
 def finalize_job_result_if_unchanged(
     task_id: str,
     expected_result: Any,
@@ -386,16 +430,17 @@ def finalize_job_result_if_unchanged(
     progress: float | None,
     summary_status: str,
     error_reason: str | None = None,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Finalize an existing job only while its result still matches the caller's snapshot."""
     task_id_value = str(task_id or "").strip()
     if not task_id_value:
         return None
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+    with sqlite3.connect(db_path, timeout=10) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
         if client_id is None:
@@ -408,11 +453,11 @@ def finalize_job_result_if_unchanged(
                 "SELECT * FROM jobs WHERE task_id = ? AND client_id = ?",
                 (task_id_value, client_id),
             ).fetchone()
-        current_result = (
-            normalize_result_for_read(_json_loads(row["result_json"])) if row else None
+        current_fingerprint = (
+            note_conflict_fingerprint(_json_loads(row["result_json"])) if row else None
         )
-        expected = normalize_result_for_read(expected_result)
-        if row is None or row["status"] == "cancelled" or current_result != expected:
+        expected_fingerprint = note_conflict_fingerprint(expected_result)
+        if row is None or row["status"] == "cancelled" or current_fingerprint != expected_fingerprint:
             conn.rollback()
             return None
         conn.execute(
@@ -446,7 +491,7 @@ def append_job_result_list_item(
     field: str,
     item: dict[str, Any],
     *,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Append one result item atomically while preserving concurrent edits."""
@@ -454,9 +499,10 @@ def append_job_result_list_item(
     field_value = str(field or "").strip()
     if not task_id_value or not field_value:
         return None
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+    with sqlite3.connect(db_path, timeout=10) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
         if client_id is None:
@@ -498,16 +544,17 @@ def enqueue_job_step(
     priority: int = 100,
     max_attempts: int = 1,
     run_after_at: str | None = None,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> dict[str, Any] | None:
     task_id = str(task_id or "").strip()
     step_type = str(step_type or "").strip()
     if not task_id or not step_type:
         return None
     key = str(step_key or f"{task_id}:{step_type}").strip()
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute(
             """
@@ -578,15 +625,16 @@ def acquire_next_job_step(
     *,
     step_types: tuple[str, ...] | list[str] | None = None,
     lock_timeout_seconds: float = 3600,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> dict[str, Any] | None:
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     now = _now_iso()
     lock_id = uuid.uuid4().hex
     step_type_values = [str(value).strip() for value in (step_types or []) if str(value).strip()]
     cutoff_ts = time.time() - max(float(lock_timeout_seconds or 3600), 60.0)
     cutoff = datetime.fromtimestamp(cutoff_ts, timezone.utc).astimezone().isoformat(timespec="seconds")
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+    with sqlite3.connect(db_path, timeout=10) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
         type_clause = ""
@@ -634,7 +682,7 @@ def complete_job_step(
     *,
     lock_id: str,
     result: dict[str, Any] | None = None,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> dict[str, Any] | None:
     return _finish_job_step(
         step_id,
@@ -642,7 +690,7 @@ def complete_job_step(
         status="completed",
         result=result,
         error_reason=None,
-        db_path=db_path,
+        db_path=resolve_db_path(db_path),
     )
 
 
@@ -650,14 +698,15 @@ def heartbeat_job_step(
     step_id: int,
     *,
     lock_id: str,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> bool:
     """Extend a running step lease only while this worker still owns it."""
     if not step_id or not str(lock_id or "").strip():
         return False
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         cursor = conn.execute(
             """
             UPDATE job_steps
@@ -676,12 +725,13 @@ def fail_job_step(
     error_reason: str,
     result: dict[str, Any] | None = None,
     retry: bool = False,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> dict[str, Any] | None:
+    db_path = resolve_db_path(db_path)
     if retry:
         ensure_job_db(db_path)
         now = _now_iso()
-        with sqlite3.connect(Path(db_path)) as conn:
+        with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM job_steps WHERE id = ? AND status = 'running' AND lock_id = ?",
@@ -728,14 +778,15 @@ def fail_job_step(
 def cancel_job_steps(
     task_id: str,
     *,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> int:
     task_id = str(task_id or "").strip()
     if not task_id:
         return 0
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         cursor = conn.execute(
             """
             UPDATE job_steps
@@ -752,8 +803,9 @@ def list_job_steps(
     task_id: str | None = None,
     statuses: tuple[str, ...] | list[str] | None = None,
     limit: int = 100,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     safe_limit = max(1, min(int(limit or 100), 500))
     where: list[str] = []
@@ -767,7 +819,7 @@ def list_job_steps(
         where.append(f"status IN ({placeholders})")
         params.extend(status_values)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"SELECT * FROM job_steps {where_sql} ORDER BY id ASC LIMIT ?",
@@ -778,11 +830,12 @@ def list_job_steps(
 
 def requeue_running_job_steps(
     *,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
 ) -> int:
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         cursor = conn.execute(
             """
             UPDATE job_steps
@@ -801,11 +854,11 @@ def _finish_job_step(
     status: str,
     result: dict[str, Any] | None,
     error_reason: str | None,
-    db_path: Path | str,
+    db_path: Path,
 ) -> dict[str, Any] | None:
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.execute(
             """
@@ -822,11 +875,12 @@ def _finish_job_step(
     return _step_row_to_dict(row) if row else None
 
 
-def migrate_job_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> int:
+def migrate_job_display_titles(db_path: Path | str | None = None) -> int:
     """Backfill raw/display title semantics for existing job rows."""
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     changed = 0
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM jobs").fetchall()
         for row in rows:
@@ -897,12 +951,13 @@ def migrate_job_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> int:
 
 def delete_jobs(
     task_ids: list[str] | tuple[str, ...],
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str | None = None,
     client_id: str | None = None,
 ) -> int:
     ids = [str(task_id).strip() for task_id in task_ids if str(task_id).strip()]
     if not ids:
         return 0
+    db_path = resolve_db_path(db_path)
     ensure_job_db(db_path)
     placeholders = ",".join("?" for _ in ids)
     params: list[Any] = list(ids)
@@ -910,7 +965,7 @@ def delete_jobs(
     if client_id is not None:
         where += " AND client_id = ?"
         params.append(client_id)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite3.connect(db_path) as conn:
         rows = conn.execute(f"SELECT task_id FROM jobs WHERE {where}", params).fetchall()
         allowed_ids = [str(row[0]) for row in rows]
         if allowed_ids:
@@ -962,120 +1017,8 @@ def _step_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _debreath_summary(state: Any) -> dict[str, Any] | None:
-    """The cut's counts for a list row, without its thousands of ranges.
-
-    Absence has to keep meaning "never cut", so this returns None for a task that
-    has no cut rather than an empty object — the records page distinguishes the two
-    and says so in words.
-    """
-    if not isinstance(state, dict) or not state:
-        return None
-    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
-    return {
-        "status": state.get("status"),
-        "stage": state.get("stage"),
-        "used_for_transcription": state.get("used_for_transcription"),
-        "already_cut": bool(state.get("already_cut")) or None,
-        "not_worth_rendering": bool(state.get("not_worth_rendering")) or None,
-        "not_used_reason": state.get("not_used_reason"),
-        "ran_before_transcription": state.get("ran_before_transcription"),
-        "render_verified": state.get("render_verified"),
-        # Three states, and the card says something for only two of them. None
-        # means an upload, where there is no "beside the original" to deliver to
-        # and nothing to report. True is the ordinary outcome of the in-place
-        # entry — also nothing to report, because a line saying it on every card
-        # is a column of the same words. False is the one worth a warning, and
-        # the reason has to travel with it or the card can only say "something
-        # went wrong".
-        "delivered": state.get("delivered"),
-        "delivered_name": state.get("delivered_name"),
-        "delivery_error": state.get("delivery_error"),
-        "plan": {
-            "cut_count": plan.get("cut_count"),
-            "removed_seconds": plan.get("removed_seconds"),
-            "removed_percent": plan.get("removed_percent"),
-            "kept_seconds": plan.get("kept_seconds"),
-            "source_duration_seconds": plan.get("source_duration_seconds"),
-        },
-    }
-
-
-def _result_summary(result: Any) -> dict[str, Any] | None:
-    result = normalize_result_for_read(result)
-    if not isinstance(result, dict):
-        return None
-    lark_response = result.get("lark_response") if isinstance(result.get("lark_response"), dict) else None
-    summary_markdown = result.get("summary_markdown") or ""
-    transcript_text = result.get("transcript_text") or result.get("transcript_text_preview") or ""
-    return {
-        "task_id": result.get("task_id"),
-        "status": result.get("status"),
-        "filename": result.get("filename"),
-        "raw_title": result.get("raw_title"),
-        "display_title": result.get("display_title"),
-        "audio_duration_seconds": result.get("audio_duration_seconds"),
-        "stt_elapsed_seconds": result.get("stt_elapsed_seconds"),
-        "stt_realtime_factor": result.get("stt_realtime_factor"),
-        "stt_provider": result.get("stt_provider"),
-        "stt_provider_label": result.get("stt_provider_label"),
-        "stt_model": result.get("stt_model"),
-        "stt_speed": result.get("stt_speed"),
-        "stt_language": result.get("stt_language"),
-        "detected_language": result.get("detected_language"),
-        "source_language": result.get("source_language"),
-        "subtitle_mode": result.get("subtitle_mode"),
-        "translation_status": result.get("translation_status"),
-        "translation_error": result.get("translation_error"),
-        "summary_status": result.get("summary_status"),
-        "summary_error": result.get("summary_error"),
-        "summary_skipped": result.get("summary_skipped"),
-        "summary_markdown": str(summary_markdown)[:240] if summary_markdown else "",
-        "summary_preview": str(summary_markdown)[:240] if summary_markdown else "",
-        "transcript_text": str(transcript_text)[:240] if transcript_text else "",
-        "transcript_text_preview": str(transcript_text)[:240] if transcript_text else "",
-        "artifacts": result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {},
-        # The cut, in counts only. The list is an allowlist on purpose — a result
-        # carries megabytes of segments and every list query would read them — but
-        # leaving the cut out entirely made the records page report "未剪（旧任务）"
-        # for a task that had just been cut, because absence read as "never ran".
-        # The ranges stay in the artifact; these are the numbers a card shows.
-        "debreath": _debreath_summary(result.get("debreath")),
-        # Which file the transcript and the note belong to. One line each, and the
-        # only way a list row can say the note describes the shortened version.
-        "transcript_media": result.get("transcript_media"),
-        "summary_written_from": result.get("summary_written_from"),
-        "lark_response": {"url": lark_response.get("url")} if lark_response and lark_response.get("url") else None,
-        "feishu_doc_url": result.get("feishu_doc_url"),
-        "lark_error": result.get("lark_error"),
-        "source_fingerprint": result.get("source_fingerprint"),
-        "playback_audio_available": result.get("playback_audio_available"),
-        "source_file_available": result.get("source_file_available"),
-        "requested_note_mode": result.get("requested_note_mode"),
-        "resolved_note_mode": result.get("resolved_note_mode"),
-        "note_mode_chunk_count": result.get("note_mode_chunk_count"),
-        "note_mode_segment_count": result.get("note_mode_segment_count"),
-        "note_mode_evidence_count": result.get("note_mode_evidence_count"),
-        "note_mode_chapter_count": result.get("note_mode_chapter_count"),
-        "note_mode_important_evidence_count": result.get("note_mode_important_evidence_count"),
-        "note_mode_covered_important_evidence_count": result.get("note_mode_covered_important_evidence_count"),
-        "note_mode_coverage_missing_count": result.get("note_mode_coverage_missing_count"),
-        "note_mode_plan_reason": result.get("note_mode_plan_reason"),
-        "note_mode_plan_confidence": result.get("note_mode_plan_confidence"),
-        "note_mode_plan_warnings": result.get("note_mode_plan_warnings"),
-        "note_mode_plan_provider": result.get("note_mode_plan_provider"),
-        "note_mode_plan_model": result.get("note_mode_plan_model"),
-        "note_mode_plan_fallback": result.get("note_mode_plan_fallback"),
-        "note_mode_plan_error": result.get("note_mode_plan_error"),
-        "note_mode_plan_selected_mode": result.get("note_mode_plan_selected_mode"),
-        "prompt_preset": result.get("prompt_preset"),
-        "prompt_preset_label": result.get("prompt_preset_label"),
-        "imported_from_local_history": result.get("imported_from_local_history"),
-    }
-
-
 def _row_to_summary_dict(row: sqlite3.Row) -> dict[str, Any]:
-    result = _result_summary(_json_loads(row["result_json"]))
+    result = job_list_row(_json_loads(row["result_json"]))
     return {
         "task_id": row["task_id"],
         "created_at": row["created_at"],

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "edition": "local",
+  "python_local": [
+    "faster-whisper>=1.0.0",
+    "opencc-python-reimplemented>=0.1.7",
+    "moviepy>=1.0.3",
+    "openai>=1.0.0",
+    "anthropic>=0.40.0",
+    "lark-oapi>=1.0.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.32.0",
+    "python-dotenv>=1.0.0",
+    "yt-dlp>=2025.10.14"
+  ],
+  "frontend_contract": {
+    "root_behavior": "redirect_to_media_text",
+    "required_routes": [
+      "/",
+      "/media-text",
+      "/agent",
+      "/editor",
+      "/settings",
+      "/workspace/api",
+      "/about"
+    ],
+    "forbidden_routes": [
+      "/login",
+      "/register",
+      "/guest",
+      "/admin",
+      "/pricing",
+      "/quota"
+    ],
+    "forbidden_surfaces": [
+      "commercial landing page",
+      "login or registration",
+      "guest trial",
+      "pricing or quota",
+      "cloud transcription",
+      "OSS upload",
+      "cross-device sync",
+      "hosted Feishu OAuth"
+    ]
+  }
+}

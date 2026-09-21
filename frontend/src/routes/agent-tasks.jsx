@@ -13,6 +13,7 @@ import {
     XCircle,
 } from 'lucide-react';
 import {fmtDurationCompact} from '../lib/format.js';
+import {noteLength} from '../lib/resultViews.js';
 import {downloadBrowserFile} from './editor-helpers.js';
 import {
     fmtElapsed,
@@ -473,7 +474,10 @@ export const debreathTile = (job, lang) => {
 export const noteTileValue = (job, lang) => {
     const isZh = lang === 'zh';
     const result = job?.result || {};
-    const chars = String(result.summary_markdown || '').trim().length;
+    // Through the view helper, not off the payload: a list row carries the
+    // note's length and a preview, never the note itself, so reading
+    // summary_markdown here counted every task as having no note.
+    const chars = noteLength(result);
     if (chars) {
         const fromCut = result.summary_written_from === 'debreath_media_note';
         const base = isZh ? `${chars} 字` : `${chars} chars`;

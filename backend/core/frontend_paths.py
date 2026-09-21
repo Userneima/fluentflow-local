@@ -4,7 +4,7 @@ from pathlib import Path
 FRONTEND_ROOT = Path(__file__).resolve().parents[2] / "frontend"
 FRONTEND_DIST_DIR = FRONTEND_ROOT / "dist"
 
-# Local-edition bundle (npm run build:frontend:local). Its entry document is
+# Local-edition bundle (npm run build:frontend). Its entry document is
 # local.html — the build has no index.html on purpose, so the hosted and
 # local outputs can never be confused for each other.
 FRONTEND_LOCAL_DIST_DIR = FRONTEND_ROOT / "dist-local"

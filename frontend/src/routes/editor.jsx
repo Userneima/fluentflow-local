@@ -43,6 +43,7 @@ import {
     normalizeSttModel,
     pickTranscriptBaselineSegments,
     pickTranscriptSegments,
+    readSseResult,
     resultToHistoryEntry,
     resultDisplayTitle,
     shouldUseLocalSingleUserClientId,
@@ -52,9 +53,11 @@ import {
     useSettings,
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
+import {noteForEditing, transcriptForEditing, transcriptLength} from '../lib/resultViews.js';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import {usePromptEditing} from '../lib/usePromptEditing.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
+import VirtualTranscriptList from '../components/VirtualTranscriptList.jsx';
 import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
 import {FeishuExportPrompt, RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
@@ -65,6 +68,10 @@ import {
     isAutoCutFlow,
     cutFlowSummary,
     localSourceFileMatchesResult,
+    mediaSourcePlan,
+    regenerateProgressLabel,
+    resultEditingLock,
+    activeTranscriptSegmentIndex,
     playbackMediaChoice,
     shouldKeepVideoReviewMounted,
     summaryFailureNextStep,
@@ -76,6 +83,11 @@ import {
 // The default editor is the local workspace. Hosted result access, visitor
 // trial artifacts, account OAuth, and cross-device read-only policy are
 // supplied by HostedEditorWorkspace.jsx only in the hosted route.
+// How many times a dropped regeneration stream is re-attached before giving up.
+// Generation keeps running server-side either way; this only bounds how long
+// the button keeps trying to watch it.
+const REGENERATE_REATTACH_LIMIT = 5;
+
 const Editor = ({hosted = null}) => {
     const {t, lang} = useI18n();
     const {
@@ -89,10 +101,11 @@ const Editor = ({hosted = null}) => {
         addLarkExport,
         runtimeConfig,
     } = useApp();
-    const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit} = useApi();
+    const {processVideoSSE, fetchJobSourceFile, getJobMediaUrl, fetchJobArtifactFile, uploadJobSourceFile, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit} = useApi();
     const {loadSettings, saveSettings} = useSettings();
     const [exporting, setExporting] = useState(false);
     const [regenerating, setRegenerating] = useState(false);
+    const [regenerateProgress, setRegenerateProgress] = useState(null);
     const [retranscribing, setRetranscribing] = useState(false);
     const [downloading, setDownloading] = useState(null);
     const [toast, setToast] = useState(null);
@@ -112,6 +125,8 @@ const Editor = ({hosted = null}) => {
     const summaryDraftResultKeyRef = useRef('');
     const playbackSaveRef = useRef(0);
     const mediaObjectUrlRef = useRef('');
+    const streamedMediaTaskRef = useRef('');
+    const mediaGrantRetryRef = useRef('');
 
     const result = lastResult;
     const resultAccess = hosted?.resultAccess?.(result) || {};
@@ -121,7 +136,7 @@ const Editor = ({hosted = null}) => {
     const canPersistResult = !isTransientResult && !isReadOnlyResult;
     const matchedLocalSourceFile = localSourceFileMatchesResult(lastSourceFile, result) ? lastSourceFile : null;
     const resultSegmentCount = pickTranscriptSegments(result).length;
-    const resultTextLength = (result?.transcript_text || '').length;
+    const resultTextLength = transcriptLength(result);
     const resultKey = result
         ? `${result.task_id || result.filename || 'current_result'}:${result.transcript_edited ? 'edited' : `${resultSegmentCount}:${resultTextLength}`}`
         : 'empty_result';
@@ -162,15 +177,22 @@ const Editor = ({hosted = null}) => {
     const [splitRatio, setSplitRatio] = useState(loadSplitRatio);
     const mediaRef = useRef(null);
     const mediaInputRef = useRef(null);
+    const transcriptListRef = useRef(null);
     const splitContainerRef = useRef(null);
-    const transcriptScrollRef = useRef(null);
-    const segmentRefs = useRef({});
     const resultJobOptions = useMemo(() => resultAccess.jobOptions || jobOptionsForResult(result), [
         resultAccess.jobOptions,
         result?.stt_provider,
         result?.playback_audio_storage,
         result?.source_file_storage,
     ]);
+    // Mirrors the hydration effect's own preconditions: lock only what
+    // hydration can actually come back and unlock. Everything that writes —
+    // the change handlers, both autosave effects, regenerate, export — checks
+    // this before touching the record.
+    const editingLock = resultEditingLock(result, {
+        hydrationFailed,
+        hydratable: !!result?.task_id && !isLocalHistoryResult(result),
+    });
 
     useEffect(() => {
         if (!result?.task_id || transcriptUnsaved) {
@@ -184,8 +206,10 @@ const Editor = ({hosted = null}) => {
             return;
         }
         const currentSegments = pickTranscriptSegments(result);
-        const currentText = result.transcript_text || '';
-        const needsHydration = currentSegments.length === 0 || currentText.length <= 260;
+        const currentText = transcriptForEditing(result) || '';
+        // `result_partial` is the explicit signal; the length checks stay as a
+        // fallback for payloads that predate the flag.
+        const needsHydration = !!result.result_partial || currentSegments.length === 0 || currentText.length <= 260;
         if (!needsHydration || hydratedTaskIdsRef.current.has(result.task_id)) {
             setHydratingResult(false);
             if (!needsHydration) setHydrationFailed(false);
@@ -201,10 +225,16 @@ const Editor = ({hosted = null}) => {
                 const full = job?.result;
                 if (cancelled || !full) return;
                 const fullSegments = pickTranscriptSegments(full);
-                const fullText = full.transcript_text || '';
+                const fullText = transcriptForEditing(full) || '';
                 const currentDisplayCount = pickDisplayTranscriptSegments(result, currentSegments).length;
                 const fullDisplayCount = pickDisplayTranscriptSegments(full, fullSegments).length;
-                if (fullSegments.length > currentSegments.length || fullText.length > currentText.length || fullDisplayCount > currentDisplayCount) {
+                // A partial payload is always replaced, even when it happens to
+                // hold as much transcript as the record: its note is a preview,
+                // and leaving the flag set would keep the editor locked.
+                if (result.result_partial
+                    || fullSegments.length > currentSegments.length
+                    || fullText.length > currentText.length
+                    || fullDisplayCount > currentDisplayCount) {
                     const fullBaselineSegments = pickTranscriptBaselineSegments(full);
                     setLastResult(hosted?.mergeHydratedResult?.(full, result) || full);
                     setEditedSegments(fullSegments.map((seg) => ({...seg})));
@@ -240,7 +270,7 @@ const Editor = ({hosted = null}) => {
         if (result.transcript_edited && transcriptUnsaved) return;
         const sourceSegments = pickTranscriptSegments(result);
         const baselineSourceSegments = pickTranscriptBaselineSegments(result);
-        const sourceText = result.transcript_text || '';
+        const sourceText = transcriptForEditing(result) || '';
         setEditedSegments(sourceSegments.map((seg) => ({...seg})));
         setEditedTranscript(composeTranscriptText(sourceSegments, sourceText));
         setBaselineSegments((prev) => {
@@ -263,15 +293,15 @@ const Editor = ({hosted = null}) => {
         }
         if (summaryDraftResultKeyRef.current !== summaryResultKey) {
             summaryDraftResultKeyRef.current = summaryResultKey;
-            setSummaryDraft(result.summary_markdown || '');
+            setSummaryDraft(noteForEditing(result) || '');
             setSummaryUnsaved(false);
             setSummarySaveStatus(result.summary_edited ? 'saved' : 'idle');
             return;
         }
         if (summaryUnsaved) return;
-        setSummaryDraft(result.summary_markdown || '');
+        setSummaryDraft(noteForEditing(result) || '');
         setSummarySaveStatus(result.summary_edited ? 'saved' : 'idle');
-    }, [summaryResultKey, result?.summary_markdown, result?.summary_edited, summaryUnsaved]);
+    }, [summaryResultKey, noteForEditing(result), result?.summary_edited, summaryUnsaved]);
 
     const applyTranscriptEdit = useCallback((nextSegments, nextText) => {
         if (!result) return;
@@ -293,16 +323,26 @@ const Editor = ({hosted = null}) => {
         setLastResult(updated);
     }, [baselineSegments, result, setLastResult]);
 
-    const handleSegmentTextChange = (index, text) => {
-        const nextSegments = editedSegments.map((seg, i) => i === index ? {...seg, text} : seg);
-        applyTranscriptEdit(nextSegments, composeTranscriptText(nextSegments, editedTranscript));
-    };
+    const handleSegmentTextChange = useCallback((index, text) => {
+        setEditedSegments((previous) => {
+            const current = previous[index];
+            if (!current || current.text === text) return previous;
+            const next = previous.slice();
+            next[index] = {...current, text};
+            return next;
+        });
+        setTranscriptDirty(true);
+        setTranscriptUnsaved(true);
+        setTranscriptSaveStatus(result?.task_id ? 'saving' : 'failed');
+    }, [result?.task_id]);
 
     const handlePlainTranscriptChange = (text) => {
         applyTranscriptEdit([], text);
     };
 
     const handleSummaryChange = useCallback((text) => {
+        // Never let an edit made against a preview become the draft of record.
+        if (editingLock) return;
         setSummaryDraft(text);
         setSummaryUnsaved(true);
         setSummarySaveStatus(result?.task_id && canPersistResult ? 'saving' : 'local');
@@ -316,16 +356,16 @@ const Editor = ({hosted = null}) => {
             summary_edited: true,
             summary_edited_at: new Date().toISOString(),
         });
-    }, [canPersistResult, result, setLastResult]);
+    }, [canPersistResult, editingLock, result, setLastResult]);
 
     const summaryMarkdownForEditor = summaryUnsaved
         ? summaryDraft
-        : (summaryDraft || result?.summary_markdown || '');
+        : (summaryDraft || noteForEditing(result) || '');
 
-    const replaceMediaUrl = useCallback((nextUrl = '') => {
+    const replaceMediaUrl = useCallback((nextUrl = '', {objectUrl = false} = {}) => {
         const previousUrl = mediaObjectUrlRef.current;
         if (previousUrl && previousUrl !== nextUrl) URL.revokeObjectURL(previousUrl);
-        mediaObjectUrlRef.current = nextUrl;
+        mediaObjectUrlRef.current = objectUrl ? nextUrl : '';
         setMediaUrl(nextUrl);
     }, []);
 
@@ -333,7 +373,7 @@ const Editor = ({hosted = null}) => {
         if (!file) return;
         const url = URL.createObjectURL(file);
         setMediaKind(isLikelyVideoFile(file) ? 'video' : 'audio');
-        replaceMediaUrl(url);
+        replaceMediaUrl(url, {objectUrl: true});
         setMediaError('');
         setMediaLoading(false);
     }, [replaceMediaUrl]);
@@ -344,107 +384,81 @@ const Editor = ({hosted = null}) => {
         setMediaError('');
         setMediaLoading(false);
         setMediaKind('audio');
+        setTranscriptReviewMode('text');
         if (!result) return () => { cancelled = true; };
-        if (matchedLocalSourceFile) {
-            loadMediaFile(matchedLocalSourceFile);
+        const plan = mediaSourcePlan(result, {localFile: matchedLocalSourceFile, canPersistResult});
+        if (plan.length === 0) {
+            // Empty because this task's material is the cut file and that file
+            // cannot be read. Nothing else may stand in for it, so say so
+            // rather than leaving a silent player.
+            if (isAutoCutFlow(result)) {
+                setMediaError(lang === 'zh' ? '剪后文件读不到了' : 'The cut file cannot be read');
+            }
             return () => { cancelled = true; };
         }
-        // The file this transcript belongs to, which for a task that was cut
-        // before transcription is the shortened one. Loading the recording instead
-        // would leave every seek and every highlighted line drifting further out
-        // the longer it plays, with nothing on screen saying why.
-        const preferred = playbackMediaChoice(result);
-        // Same rule one step earlier: if this task's material is the cut file and
-        // there is no cut file to load, nothing else may take its place — not the
-        // recording, not the saved audio. The bar at the top says why.
-        if (isAutoCutFlow(result) && !preferred?.isCut) {
-            setMediaError(lang === 'zh' ? '剪后文件读不到了' : 'The cut file cannot be read');
+        if (plan[0].kind === 'local-file') {
+            loadMediaFile(plan[0].file);
+            return () => { cancelled = true; };
+        }
+        const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
+        const attachStep = async (step) => {
+            if (step.kind === 'stream') {
+                const url = await getJobMediaUrl(result.task_id, resultJobOptions);
+                if (cancelled) return;
+                streamedMediaTaskRef.current = result.task_id;
+                setMediaKind(step.mediaKind);
+                replaceMediaUrl(url);
+                setMediaError('');
+                setMediaLoading(false);
+                return;
+            }
+            streamedMediaTaskRef.current = '';
+            const file = step.kind === 'artifact'
+                ? await fetchArtifact(result.task_id, step.artifactKind || 'playback_audio', step.filename, resultJobOptions)
+                : await fetchJobSourceFile(result.task_id, step.filename, resultJobOptions);
+            if (cancelled) return;
+            loadMediaFile(file);
+        };
+        setMediaLoading(true);
+        (async () => {
+            let lastError = null;
+            for (const step of plan) {
+                if (cancelled) return;
+                try {
+                    await attachStep(step);
+                    return;
+                } catch (err) {
+                    lastError = err;
+                }
+            }
+            if (cancelled) return;
+            setMediaError(lastError?.message || 'Source file unavailable');
             setMediaLoading(false);
-            return () => { cancelled = true; };
-        }
-        if (preferred?.isCut && canPersistResult) {
-            setMediaLoading(true);
-            const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
-            fetchArtifact(result.task_id, preferred.kind, preferred.filename, resultJobOptions)
-                .then((file) => { if (!cancelled) loadMediaFile(file); })
-                .catch((cutErr) => {
-                    if (cancelled) return;
-                    // No falling back to the recording when the transcript came from
-                    // the cut file. The original is longer, so every line and every
-                    // seek would point at the wrong moment while the page looked
-                    // perfectly normal. Say it is unavailable instead.
-                    if (!isAutoCutFlow(result) && result.source_file_available) {
-                        fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
-                            .then((file) => { if (!cancelled) loadMediaFile(file); })
-                            .catch((sourceErr) => {
-                                if (!cancelled) {
-                                    setMediaError(sourceErr.message || cutErr.message || 'Source file unavailable');
-                                    setMediaLoading(false);
-                                }
-                            });
-                        return;
-                    }
-                    setMediaError(cutErr.message || 'Cut file unavailable');
-                    setMediaLoading(false);
-                });
-            return () => { cancelled = true; };
-        }
-        if (result.task_id && result.source_file_available && canPersistResult) {
-            setMediaLoading(true);
-            fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
-                .then((file) => { if (!cancelled) loadMediaFile(file); })
-                .catch((sourceErr) => {
-                    if (!cancelled && result.artifacts?.playback_audio) {
-                        const playbackArtifact = result.artifacts.playback_audio;
-                        const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
-                        fetchArtifact(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, resultJobOptions)
-                            .then((file) => { if (!cancelled) loadMediaFile(file); })
-                            .catch((err) => {
-                                if (!cancelled) {
-                                    setMediaError(err.message || sourceErr.message || 'Source file unavailable');
-                                    setMediaLoading(false);
-                                }
-                            });
-                        return;
-                    }
-                    if (!cancelled) {
-                        setMediaError(sourceErr.message || 'Source file unavailable');
-                        setMediaLoading(false);
-                    }
-                });
-            return () => { cancelled = true; };
-        }
-        const playbackArtifact = result.artifacts?.playback_audio;
-        if (result.task_id && playbackArtifact) {
-            setMediaLoading(true);
-            const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
-            const artifactOptions = resultJobOptions;
-            fetchArtifact(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, artifactOptions)
-                .then((file) => { if (!cancelled) loadMediaFile(file); })
-                .catch((err) => {
-                    if (!cancelled && result.source_file_available && canPersistResult) {
-                        fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
-                            .then((file) => { if (!cancelled) loadMediaFile(file); })
-                            .catch((sourceErr) => {
-                                if (!cancelled) {
-                                    setMediaError(sourceErr.message || err.message || 'Audio file unavailable');
-                                    setMediaLoading(false);
-                                }
-                            });
-                        return;
-                    }
-                    if (!cancelled) {
-                        setMediaError(err.message || 'Audio file unavailable');
-                        setMediaLoading(false);
-                    }
-            });
-            return () => { cancelled = true; };
-        }
+        })();
         return () => { cancelled = true; };
     }, [mediaSourceKey, canPersistResult, hosted, resultJobOptions, replaceMediaUrl]);
 
+    // A streaming grant expires while the editor stays open, so the first play
+    // after a long idle would otherwise fail with no way back except choosing
+    // the file again. Re-issue the grant once per attached URL and resume.
+    const handleMediaElementError = useCallback(async () => {
+        const taskId = streamedMediaTaskRef.current;
+        if (!taskId || mediaGrantRetryRef.current === mediaUrl) return;
+        mediaGrantRetryRef.current = mediaUrl;
+        try {
+            replaceMediaUrl(await getJobMediaUrl(taskId, resultJobOptions));
+            setMediaError('');
+        } catch (err) {
+            setMediaError(err.message || 'Source media unavailable');
+        }
+    }, [mediaUrl, replaceMediaUrl, resultJobOptions]);
+
     const segments = editedSegments;
-    const transcript = editedTranscript || result?.transcript_text || '';
+    const transcript = useMemo(() => (
+        segments.length > 0
+            ? composeTranscriptText(segments, transcriptForEditing(result) || '')
+            : (editedTranscript || transcriptForEditing(result) || '')
+    ), [editedTranscript, transcriptForEditing(result), segments]);
     const editRecords = useMemo(
         () => buildTranscriptEditRecords(baselineSegments, segments, result),
         [baselineSegments, segments, result?.transcript_edit_records]
@@ -468,7 +482,10 @@ const Editor = ({hosted = null}) => {
         || result?.summary_status === 'completed'
         || !!result?.summary_edited
     );
-    const canEditSummary = hasEditableSummary && !isReadOnlyResult;
+    const canEditSummary = hasEditableSummary && !isReadOnlyResult && !editingLock;
+    const regenerateStatusLabel = regenerateProgressLabel(regenerateProgress, {
+        fallback: t('edit.regenerating'),
+    });
     const summarySaveLabel = summarySaveStatus === 'saving'
         ? (lang === 'zh' ? '保存中' : 'Saving')
         : summarySaveStatus === 'saved'
@@ -484,24 +501,32 @@ const Editor = ({hosted = null}) => {
         () => simpleMd(summary, {renderImages: !hasInlineVisualEvidence || visualEvidenceVisible}),
         [summary, hasInlineVisualEvidence, visualEvidenceVisible]
     );
-    const displayTranscriptSegments = pickDisplayTranscriptSegments(result, segments);
-    const bilingualTranscriptSegments = displayTranscriptSegments
-        .filter((seg) => String(seg.text_zh || '').trim());
+    const displayTranscriptSegments = useMemo(
+        () => pickDisplayTranscriptSegments(result, segments),
+        [result, segments],
+    );
+    const bilingualTranscriptSegments = useMemo(
+        () => displayTranscriptSegments.filter((seg) => String(seg.text_zh || '').trim()),
+        [displayTranscriptSegments],
+    );
     const hasBilingualTranscript = bilingualTranscriptSegments.length > 0;
     const visibleTranscriptView = hasBilingualTranscript && transcriptView !== 'raw' ? 'bilingual' : 'raw';
-    const visibleTranscriptSegments = visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments;
+    const visibleTranscriptSegments = useMemo(
+        () => visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments,
+        [bilingualTranscriptSegments, segments, visibleTranscriptView],
+    );
     const isTranscriptHydrationPending = !!result?.task_id
         && !transcriptUnsaved
         && !isLocalHistoryResult(result)
         && segments.length === 0
-        && (result.transcript_text || '').length > 0
+        && transcriptLength(result) > 0
         && !hydrationFailed
         && (!hydratedTaskIdsRef.current.has(result.task_id) || hydratingResult);
     const isTranscriptHydrationFailed = !!result?.task_id
         && !transcriptUnsaved
         && !isLocalHistoryResult(result)
         && segments.length === 0
-        && (result.transcript_text || '').length > 0
+        && transcriptLength(result) > 0
         && hydrationFailed;
     const canUseStoredSource = !!result?.source_file_available && !!result?.task_id;
     const canUsePlaybackAudio = !!result?.artifacts?.playback_audio && !!result?.task_id;
@@ -545,20 +570,17 @@ const Editor = ({hosted = null}) => {
     // failed — the effect above refuses to substitute the recording in both cases.
     const cutFileUnavailable = !!cutFlow && (!cutFlow.mediaArtifact || (!!mediaError && !mediaUrl));
     const canShowVideoReview = isVideoResultSource(result, matchedLocalSourceFile);
-    const canUseVideoReview = canShowVideoReview && mediaKind === 'video' && !!mediaUrl && segments.length > 0;
+    const canUseVideoReview = canShowVideoReview && segments.length > 0 && !!(
+        (mediaKind === 'video' && mediaUrl)
+        || matchedLocalSourceFile
+        || result?.source_file_available
+    );
     const activeReviewMode = canUseVideoReview ? transcriptReviewMode : 'text';
     const shouldShowVideoReview = shouldKeepVideoReviewMounted({activeReviewMode});
-    const activeSegmentIndex = visibleTranscriptSegments.length > 0
-        ? (() => {
-            const found = visibleTranscriptSegments.findIndex((seg, index) => {
-            const start = Number(seg.start) || 0;
-            const nextStart = Number(visibleTranscriptSegments[index + 1]?.start);
-            const end = Number(seg.end) || (Number.isFinite(nextStart) ? nextStart : start + 6);
-            return mediaCurrentTime >= start && mediaCurrentTime < end;
-            });
-            return found >= 0 ? found : -1;
-        })()
-        : -1;
+    const activeSegmentIndex = useMemo(
+        () => activeTranscriptSegmentIndex(visibleTranscriptSegments, mediaCurrentTime),
+        [mediaCurrentTime, visibleTranscriptSegments],
+    );
     const updateMediaCurrentTime = useCallback((time, options={}) => {
         const next = Math.max(0, Number(time) || 0);
         setMediaCurrentTime(next);
@@ -618,15 +640,8 @@ const Editor = ({hosted = null}) => {
     useEffect(() => {
         const followIndex = activeSegmentIndex;
         if (!followPlayback || followIndex < 0 || !mediaPlaying) return;
-        const node = segmentRefs.current[followIndex];
-        if (node) node.scrollIntoView({block:'center', behavior:'smooth'});
+        transcriptListRef.current?.scrollToIndex(followIndex);
     }, [activeSegmentIndex, followPlayback, mediaPlaying]);
-
-    useEffect(() => {
-        const root = transcriptScrollRef.current;
-        if (!root) return;
-        root.querySelectorAll('textarea[data-transcript-segment="true"]').forEach(autoSizeTextarea);
-    }, [segments]);
 
     useEffect(() => {
         const persistBeforeBackground = () => {
@@ -649,6 +664,9 @@ const Editor = ({hosted = null}) => {
 
     useEffect(() => {
         if (!result?.task_id || !transcriptUnsaved) return;
+        // Autosave is the step that turns a preview into permanent data loss.
+        // It never runs against a payload the editor knows is partial.
+        if (editingLock) return;
         if (!canPersistResult) {
             setTranscriptSaveStatus('idle');
             return;
@@ -680,10 +698,11 @@ const Editor = ({hosted = null}) => {
                 });
         }, 800);
         return () => clearTimeout(timer);
-    }, [result?.task_id, transcriptUnsaved, transcript, segments, visibleEditRecords, canPersistResult, resultJobOptions]);
+    }, [result?.task_id, transcriptUnsaved, transcript, segments, visibleEditRecords, canPersistResult, resultJobOptions, editingLock]);
 
     useEffect(() => {
         if (!summaryUnsaved) return;
+        if (editingLock) return;
         if (!result?.task_id || !canPersistResult) {
             setSummarySaveStatus('local');
             return;
@@ -712,11 +731,38 @@ const Editor = ({hosted = null}) => {
                 });
         }, 800);
         return () => clearTimeout(timer);
-    }, [result?.task_id, summaryUnsaved, summaryDraft, canPersistResult, resultJobOptions]);
+    }, [result?.task_id, summaryUnsaved, summaryDraft, canPersistResult, resultJobOptions, editingLock]);
 
     const seekToSegment = (seg) => {
         if (seg?.start == null) return;
         seekMediaTo(Number(seg.start) || 0);
+    };
+
+    const openVideoReview = async () => {
+        if (!canUseVideoReview || mediaLoading) return;
+        persistMediaPosition();
+        if (mediaKind === 'video' && mediaUrl) {
+            setTranscriptReviewMode('video');
+            return;
+        }
+        if (matchedLocalSourceFile) {
+            loadMediaFile(matchedLocalSourceFile);
+            setTranscriptReviewMode('video');
+            return;
+        }
+        if (!result?.task_id || !result?.source_file_available) return;
+        setMediaLoading(true);
+        setMediaError('');
+        try {
+            const nextUrl = await getJobMediaUrl(result.task_id, resultJobOptions);
+            replaceMediaUrl(nextUrl);
+            setMediaKind('video');
+            setTranscriptReviewMode('video');
+        } catch (err) {
+            setMediaError(err.message || 'Source media unavailable');
+        } finally {
+            setMediaLoading(false);
+        }
     };
 
     const togglePlayback = () => {
@@ -819,8 +865,15 @@ const Editor = ({hosted = null}) => {
             return;
         }
         if(!transcript || regenerating) return;
+        // Regenerating from a preview would feed 240 characters to the model
+        // and then overwrite the real note with the result.
+        if (editingLock) {
+            showToast(lang === 'zh' ? '完整记录还没读取到，请稍后重试。' : 'The full record has not loaded yet. Try again shortly.', false);
+            return;
+        }
         if (hosted?.blockRegenerate?.({result, showToast, lang})) return;
         setRegenerating(true);
+        setRegenerateProgress(null);
         try {
             const settings = loadSettings();
             const fd = new FormData();
@@ -836,16 +889,47 @@ const Editor = ({hosted = null}) => {
             if(activePrompt) fd.append('system_prompt', activePrompt);
             fd.append('prompt_preset', settings.promptPreset || DEFAULT_PROMPT_PRESET);
             fd.append('prompt_preset_label', presetDisplayLabel(settings.promptPreset || DEFAULT_PROMPT_PRESET, settings, lang));
-            const r = await apiFetch(`${API_BASE}/regenerate-summary`, {method:'POST', body:fd});
-            if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||'Regeneration failed');
-            const data = await r.json();
+            // Streamed so the wait is explained rather than endured: note
+            // generation is minutes of model calls, and a bare spinner made a
+            // normal run indistinguishable from a hang.
+            //
+            // The stream is only a view of the work — the server runs it as a
+            // job task. A backgrounded tab or a dropped socket therefore does
+            // not cancel anything, and re-attaching from the last event index
+            // resumes the same run instead of starting a second one.
+            let since = 0;
+            const track = (event) => {
+                if (Number.isInteger(event?.event_index)) since = event.event_index + 1;
+                setRegenerateProgress({
+                    percent: Math.round(Number(event.progress) || 0),
+                    label: (lang === 'zh' ? event.note_step_label : event.note_step_label_en) || '',
+                    completed: Number(event.note_step_completed) || 0,
+                    total: Number(event.note_step_total) || 0,
+                });
+            };
+            let response = await apiFetch(`${API_BASE}/regenerate-summary/stream`, {method:'POST', body:fd});
+            if(!response.ok) throw new Error((await response.json().catch(()=>({}))).detail||'Regeneration failed');
+            let data = null;
+            for(let attempt = 0; data === null; attempt += 1){
+                try {
+                    data = await readSseResult(response, track);
+                } catch(streamErr) {
+                    if(streamErr.serverStage || attempt >= REGENERATE_REATTACH_LIMIT) throw streamErr;
+                    const reattached = await apiFetch(
+                        `${API_BASE}/jobs/${encodeURIComponent(activeTaskId)}/events?since=${since}`,
+                        {headers: localExecutionHeaders({sttProvider: 'local'})},
+                    ).catch(() => null);
+                    if(!reattached?.ok) throw streamErr;
+                    response = reattached;
+                }
+            }
                     setLastResult({
                         ...result,
                         task_id: data.task_id || activeTaskId,
                         transcript_text: transcript,
                         segments,
                         transcript_edited: transcriptDirty || !!result.transcript_edited,
-                        summary_markdown: data.summary_markdown,
+                        summary_markdown: noteForEditing(data) || '',
                         summary_skipped: false,
                         summary_status: data.summary_status || 'completed',
                         summary_error: null,
@@ -864,7 +948,7 @@ const Editor = ({hosted = null}) => {
                         });
             showToast(t('edit.regenDone'));
         } catch(err) { showToast(err.message, false); }
-        finally { setRegenerating(false); }
+        finally { setRegenerating(false); setRegenerateProgress(null); }
     };
 
     const runRetranscribe = async (file) => {
@@ -1010,7 +1094,7 @@ const Editor = ({hosted = null}) => {
         }
         if (!result?.task_id || !canPersistResult) return;
         try {
-            const data = await uploadJobPlaybackAudio(result.task_id, file);
+            const data = await uploadJobSourceFile(result.task_id, file, resultJobOptions);
             if (data?.result) {
                 setLastResult(data.result);
                 addToHistory(resultToHistoryEntry(data.result, {
@@ -1018,7 +1102,7 @@ const Editor = ({hosted = null}) => {
                     name: data.result.filename || file.name,
                 }));
             }
-            showToast(lang === 'zh' ? '原音频已保存，下次打开不用重选。' : 'Source audio saved for next time.');
+            showToast(lang === 'zh' ? '原视频已保存，下次打开不用重选。' : 'Source video saved for next time.');
         } catch (err) {
             showToast(
                 lang === 'zh'
@@ -1261,11 +1345,21 @@ const Editor = ({hosted = null}) => {
                         <button
                             type="button"
                             onClick={()=>setRegenerateConfirmOpen(true)}
-                            disabled={isTransientResult||isReadOnlyResult||regenerating||!transcript}
-                            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
+                            disabled={isTransientResult||isReadOnlyResult||regenerating||!transcript||!!editingLock}
+                            title={regenerateStatusLabel || undefined}
+                            className="relative inline-flex h-10 items-center justify-center gap-1.5 overflow-hidden rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
                         >
-                            <SvgIcon name={regenerating ? 'sync' : 'refresh'} className={`text-[17px] ${regenerating?'animate-spin':''}`}/>
-                            <span>{regenerating ? t('edit.regenerating') : t('edit.regenerate')}</span>
+                            {regenerating && (
+                                // A filling bar behind the label: the step text
+                                // says what is running, this says how far in.
+                                <span
+                                    aria-hidden="true"
+                                    className="absolute inset-y-0 left-0 bg-primary/15 transition-[width] duration-500 ease-out"
+                                    style={{width: `${regenerateProgress?.percent || 0}%`}}
+                                />
+                            )}
+                            <SvgIcon name={regenerating ? 'sync' : 'refresh'} className={`relative text-[17px] ${regenerating?'animate-spin':''}`}/>
+                            <span className="relative">{regenerating ? (regenerateStatusLabel || t('edit.regenerating')) : t('edit.regenerate')}</span>
                         </button>
                         <button
                             type="button"
@@ -1279,7 +1373,7 @@ const Editor = ({hosted = null}) => {
                         <button
                             type="button"
                             onClick={handleExportLark}
-                            disabled={isTransientResult||exporting||!summary}
+                            disabled={isTransientResult||exporting||!summary||!!editingLock}
                             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] bg-[#111111] px-4 text-xs font-extrabold text-white transition hover:bg-[#2a2a2a] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
                         >
                             <SvgIcon name={exporting ? 'sync' : 'cloud_upload'} className={`text-[17px] ${exporting?'animate-spin':''}`}/>
@@ -1351,8 +1445,8 @@ const Editor = ({hosted = null}) => {
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        onClick={()=>{ if (canUseVideoReview) { persistMediaPosition(); setTranscriptReviewMode('video'); } }}
-                                                        disabled={!canUseVideoReview}
+                                                        onClick={openVideoReview}
+                                                        disabled={!canUseVideoReview || mediaLoading}
                                                         title={!canUseVideoReview ? (lang === 'zh' ? '选择原视频并保留时间戳后可用' : 'Available after choosing source video with timestamps') : undefined}
                                                         className={`inline-flex h-full items-center justify-center rounded-[10px] px-2.5 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:text-[#9a9a9a] disabled:hover:bg-transparent disabled:hover:text-[#9a9a9a] dark:disabled:text-white/28 dark:disabled:hover:text-white/28 ${
                                                             activeReviewMode === 'video'
@@ -1427,6 +1521,7 @@ const Editor = ({hosted = null}) => {
                                         ref={mediaRef}
                                         src={mediaUrl || undefined}
                                         controls
+                                        preload="metadata"
                                         className="max-h-[min(58vh,36rem)] w-full shrink-0 rounded-[18px] bg-black object-contain"
                                         onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
                                         onLoadedMetadata={(e)=>restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0)}
@@ -1434,113 +1529,40 @@ const Editor = ({hosted = null}) => {
                                         onPlay={()=>setMediaPlaying(true)}
                                             onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
                                             onEnded={()=>setMediaPlaying(false)}
+                                            onError={handleMediaElementError}
                                         />
-                                    <div ref={transcriptScrollRef} className="hide-scrollbar min-h-[10rem] flex-1 overflow-y-auto rounded-[18px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]">
-                                        <div className="divide-y divide-[#e4e0e0] dark:divide-white/[0.08]">
-                                            {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
-                                                <div
-                                                    key={`video-review-bilingual-${i}`}
-                                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                                    className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${i===activeSegmentIndex ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`}
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        onClick={()=>seekToSegment(seg)}
-                                                        className={`pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${i===activeSegmentIndex ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`}
-                                                    >
-                                                        {fmtTime(seg.start)}
-                                                    </button>
-                                                    <div className="min-w-0">
-                                                        <p className="whitespace-pre-wrap text-sm font-semibold leading-snug text-[#111111] dark:text-white">
-                                                            {seg.text}
-                                                        </p>
-                                                        <p className="mt-1.5 border-l-2 border-primary/25 pl-3 text-sm font-semibold leading-snug text-[#666] dark:text-white/68">
-                                                            {seg.text_zh}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            )) : segments.map((seg,i) => (
-                                                <div
-                                                    key={`video-review-${i}`}
-                                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                                    className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${i===activeSegmentIndex ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`}
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        onClick={()=>seekToSegment(seg)}
-                                                        className={`pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${i===activeSegmentIndex ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`}
-                                                    >
-                                                        {fmtTime(seg.start)}
-                                                    </button>
-                                                    <textarea
-                                                        data-transcript-segment="true"
-                                                        value={seg.text || ''}
-                                                        ref={(node)=>{ if(node) autoSizeTextarea(node); }}
-                                                        onChange={(e)=>{ autoSizeTextarea(e.target); handleSegmentTextChange(i, e.target.value); }}
-                                                        readOnly={isReadOnlyResult}
-                                                        onFocus={()=>setFollowPlayback(false)}
-                                                        rows={1}
-                                                        className="min-h-[1.45rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-semibold leading-snug text-[#111111] focus:ring-0 dark:text-white"
-                                                    />
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
+                                    <VirtualTranscriptList
+                                        ref={transcriptListRef}
+                                        activeIndex={activeSegmentIndex}
+                                        bilingual={visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0}
+                                        formatTime={fmtTime}
+                                        onFocusSegment={() => setFollowPlayback(false)}
+                                        onSeek={seekToSegment}
+                                        onSegmentChange={handleSegmentTextChange}
+                                        readOnly={isReadOnlyResult || !!editingLock}
+                                        resizeTextarea={autoSizeTextarea}
+                                        segments={visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments}
+                                        variant="video"
+                                    />
                                 </div>
                             </div>
                         ) : (
                             <>
-                        <div ref={transcriptScrollRef} className="hide-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
-                            {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
-                                <div
-                                    key={`bilingual-${i}`}
-                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                    className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${i===activeSegmentIndex && mediaUrl ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={()=>seekToSegment(seg)}
-                                        className={`flex flex-col items-start justify-start pt-[1px] font-mono text-xs tabular-nums transition ${i===activeSegmentIndex && mediaUrl ? 'font-bold text-primary' : 'text-[#777] hover:text-primary dark:text-white/45'}`}
-                                    >
-                                        <span className="block">{fmtTime(seg.start)}</span>
-                                        <span className="mt-0.5 block text-[10px] opacity-70">{fmtTime(seg.end)}</span>
-                                    </button>
-                                    <div className="min-w-0 flex-1">
-                                        <p className="whitespace-pre-wrap text-sm font-medium leading-snug text-[#111111] dark:text-white">
-                                            {seg.text}
-                                        </p>
-                                        <p className="mt-1.5 border-l-2 border-primary/25 pl-3 text-sm font-medium leading-snug text-[#666] dark:text-white/65">
-                                            {seg.text_zh}
-                                        </p>
-                                    </div>
-                                </div>
-                            )) : segments.length > 0 ? segments.map((seg,i) => (
-                                <div
-                                    key={i}
-                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                    className={`group grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${i===activeSegmentIndex && mediaUrl ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={()=>seekToSegment(seg)}
-                                        className={`pt-[1px] text-left font-mono text-xs tabular-nums transition ${i===activeSegmentIndex && mediaUrl ? 'font-bold text-primary' : 'text-[#8a8a8a] hover:text-primary dark:text-white/40'}`}
-                                    >
-                                        {fmtTime(seg.start)}
-                                    </button>
-                                    <div className="min-w-0 flex-1">
-                                        <textarea
-                                            data-transcript-segment="true"
-                                            value={seg.text || ''}
-                                            ref={autoSizeTextarea}
-                                                        onChange={(e)=>{ autoSizeTextarea(e.target); handleSegmentTextChange(i, e.target.value); }}
-                                                        readOnly={isReadOnlyResult}
-                                            onFocus={()=>setFollowPlayback(false)}
-                                            rows={1}
-                                            className="min-h-[1.75rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-medium leading-snug text-[#111111] focus:ring-0 dark:text-white"
-                                        />
-                                    </div>
-                                        </div>
-                                )) : isTranscriptHydrationPending ? (
+                        {segments.length > 0 ? (
+                            <VirtualTranscriptList
+                                ref={transcriptListRef}
+                                activeIndex={activeSegmentIndex}
+                                bilingual={visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0}
+                                formatTime={fmtTime}
+                                highlightActive={!!mediaUrl}
+                                onFocusSegment={() => setFollowPlayback(false)}
+                                onSeek={seekToSegment}
+                                onSegmentChange={handleSegmentTextChange}
+                                readOnly={isReadOnlyResult || !!editingLock}
+                                resizeTextarea={autoSizeTextarea}
+                                segments={visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments}
+                            />
+                        ) : isTranscriptHydrationPending ? (
                                     <div className="flex min-h-[320px] items-center justify-center rounded-[16px] border border-dashed border-outline-variant bg-surface-container-low px-4 py-8 text-center">
                                         <div className="max-w-[28rem]">
                                             <SvgIcon name="sync" className="mx-auto mb-3 h-5 w-5 animate-spin text-primary"/>
@@ -1583,24 +1605,25 @@ const Editor = ({hosted = null}) => {
                                     <textarea
                                         value={transcript}
                                         onChange={(e)=>handlePlainTranscriptChange(e.target.value)}
-                                        readOnly={isReadOnlyResult}
+                                        readOnly={isReadOnlyResult || !!editingLock}
                                         onFocus={()=>setFollowPlayback(false)}
                                         className="min-h-[320px] w-full flex-1 resize-none whitespace-pre-wrap border-none bg-transparent p-0 text-sm font-medium leading-relaxed text-[#111111] focus:ring-0 dark:text-white"
                                     />
                                     </div>
                                 )}
-                                </div>
                                 <div className="border-t border-[#e4e0e0] bg-[#fbfbfb]/90 p-4 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                         <video
                                             ref={mediaRef}
                                             src={mediaUrl || undefined}
                                             className="hidden"
+                                            preload="metadata"
                                             onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
                                             onLoadedMetadata={(e)=>restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0)}
                                             onSeeked={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true})}
                                             onPlay={()=>setMediaPlaying(true)}
                                             onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
                                             onEnded={()=>setMediaPlaying(false)}
+                                            onError={handleMediaElementError}
                                         />
                                     {mediaUrl ? (
                                         <div className="space-y-3">
@@ -1698,7 +1721,7 @@ const Editor = ({hosted = null}) => {
                                         )}
                                         <DropdownMenu
                                             trigger={
-                                                <button disabled={!summary || !!downloading} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]">
+                                                <button disabled={!summary || !!downloading || !!editingLock} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]">
                                                     <SvgIcon name={downloading ? 'sync' : 'download'} className={`text-sm ${downloading?'animate-spin':''}`}/>
                                                     {downloading ? t('dl.generating') : t('dl.summary')}
                                             </button>
@@ -1737,7 +1760,25 @@ const Editor = ({hosted = null}) => {
                                     </>
                                 ) : (
                                     <div className="hide-scrollbar min-h-0 flex-1 overflow-y-auto p-6 text-[#111111] dark:text-white">
-                                    {hasEditableSummary ? (
+                                    {editingLock === 'loading' ? (
+                                        <p className="flex items-center gap-2 text-sm italic text-[#666] dark:text-white/60">
+                                            <SvgIcon name="sync" className="animate-spin text-base"/>
+                                            {lang === 'zh' ? '正在读取完整笔记…' : 'Loading the full note…'}
+                                        </p>
+                                    ) : editingLock === 'unavailable' ? (
+                                        <div className="space-y-2 text-sm text-[#666] dark:text-white/60">
+                                            <p className="italic">
+                                                {lang === 'zh'
+                                                    ? '读取完整笔记失败，这里只有列表里的摘要预览。'
+                                                    : 'Could not load the full note; this is only the list preview.'}
+                                            </p>
+                                            <p className="rounded-[14px] border border-error/20 bg-error-container px-3 py-2 text-xs font-semibold leading-relaxed text-on-error-container">
+                                                {lang === 'zh'
+                                                    ? '编辑与自动保存已停用，以免预览覆盖完整笔记。请刷新页面后重试。'
+                                                    : 'Editing and autosave are off so the preview cannot overwrite the full note. Refresh and try again.'}
+                                            </p>
+                                        </div>
+                                    ) : hasEditableSummary ? (
                                         <div
                                             ref={summaryRef}
                                             className="max-w-none text-base font-semibold leading-8 text-[#111111] dark:text-white [&_a]:text-primary [&_blockquote]:border-l-4 [&_blockquote]:border-primary/30 [&_blockquote]:pl-4 [&_blockquote]:text-[#555] dark:[&_blockquote]:text-white/70 [&_h1]:mb-4 [&_h1]:mt-6 [&_h1]:font-headline [&_h1]:text-2xl [&_h1]:font-extrabold [&_h2]:mb-3 [&_h2]:mt-6 [&_h2]:font-headline [&_h2]:text-xl [&_h2]:font-extrabold [&_h3]:mb-2 [&_h3]:mt-5 [&_h3]:font-headline [&_h3]:text-lg [&_h3]:font-extrabold [&_li]:my-1.5 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-3 [&_strong]:font-extrabold [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6"

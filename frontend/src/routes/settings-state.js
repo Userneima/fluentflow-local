@@ -3,6 +3,8 @@ import {
     DEFAULT_DEEPSEEK_MODEL,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_QWEN_MODEL,
+    DEFAULT_ANTHROPIC_MODEL,
+    aiProviderSecretKey,
     effectiveSttProvider,
     extraLarkExportRouteOptions,
     isLocalLarkExportRoute,
@@ -145,11 +147,12 @@ export const useSettingsPageState = () => {
         deepseek: DEFAULT_DEEPSEEK_MODEL,
         openai: DEFAULT_OPENAI_MODEL,
         qwen: DEFAULT_QWEN_MODEL,
+        anthropic: DEFAULT_ANTHROPIC_MODEL,
     };
-    const activeAiSecretKey = aiProvider === 'openai' ? 'openai_api_key' : (aiProvider === 'qwen' ? 'dashscope_api_key' : 'deepseek_api_key');
-    const activeAiConfigured = aiProvider === 'openai'
-        ? credentialStatus?.openai_api_key_configured
-        : (aiProvider === 'qwen' ? credentialConfigured(credentialStatus, 'dashscope_api_key') : credentialStatus?.deepseek_api_key_configured);
+    // Looked up rather than chained: a ternary chain routes an unknown provider
+    // into its last branch, so adding one used to mean saving it as deepseek.
+    const activeAiSecretKey = aiProviderSecretKey(aiProvider);
+    const activeAiConfigured = credentialConfigured(credentialStatus, activeAiSecretKey);
     const sttProvider = effectiveSttProvider(settings, runtimeConfig);
     const larkExportRoute = larkExportRouteFromSettings(settings);
     // Extra routes (today: the hosted account-OAuth route) come from the

@@ -492,6 +492,13 @@ def build_agent_task_package(
             "status": note_status,
             "markdown": _text(result.get("summary_markdown")),
             "markdown_chars": len(_text(result.get("summary_markdown"))),
+            # Who last wrote this note. Without it an agent re-reading a task
+            # cannot tell its own write from a human edit or pipeline output,
+            # and would regenerate over work somebody just did by hand.
+            "edited": bool(result.get("summary_edited")),
+            "edited_at": result.get("summary_edited_at"),
+            "source": result.get("summary_source"),
+            "source_label": result.get("summary_source_label"),
             "diagnosis": diagnosis,
             "requested_mode": result.get("requested_note_mode"),
             "resolved_mode": result.get("resolved_note_mode"),

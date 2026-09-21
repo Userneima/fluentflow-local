@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reconcileTaskList, entryToJob, jobToHistoryEntry } from './jobMappers.js';
+import { reconcileTaskList, entryToJob, jobToHistoryEntry, jobDisplayTitle, readCachedAccountJobs, resultDisplayTitle, writeCachedAccountJobs } from './jobMappers.js';
 import { normalizeTaskState } from './taskState.js';
 
 // Each test locks one historically-recurring list-reconciliation regression so
@@ -201,5 +201,79 @@ describe('entryToJob round trip', () => {
     it('returns null for a missing entry or one without a task id', () => {
         expect(entryToJob(null)).toBeNull();
         expect(entryToJob({ name: 'no id' })).toBeNull();
+    });
+});
+
+// The browser cache cannot hold a full transcript and note for 100 records, so
+// it stores 240-char previews. It used to store them under `summary_markdown`
+// and `transcript_text`, which let the editor open a cached row as if it were
+// the record and autosave the preview over a 13k-char note.
+describe('cached rows declare themselves partial', () => {
+    const FULL_NOTE = `# 完整笔记\n\n${'这是一段很长的笔记正文。'.repeat(50)}`;
+    const FULL_TRANSCRIPT = '这是一段很长的转录文本。'.repeat(100);
+
+    const withFakeLocalStorage = (run) => {
+        const store = new Map();
+        const previous = globalThis.localStorage;
+        globalThis.localStorage = {
+            getItem: (key) => (store.has(key) ? store.get(key) : null),
+            setItem: (key, value) => store.set(key, String(value)),
+            removeItem: (key) => store.delete(key),
+        };
+        try { return run(); } finally { globalThis.localStorage = previous; }
+    };
+
+    const roundTrip = () => withFakeLocalStorage(() => {
+        writeCachedAccountJobs('local', [makeJob('c1', {
+            client_id: 'local',
+            result: {
+                task_id: 'c1',
+                summary_markdown: FULL_NOTE,
+                summary_status: 'completed',
+                transcript_text: FULL_TRANSCRIPT,
+            },
+        })]);
+        return readCachedAccountJobs('local')[0].result;
+    });
+
+    it('never writes truncated text under the canonical field names', () => {
+        // Absent, not empty: a cached row has no body field at all, so nothing
+        // downstream can read one and treat the value as the note.
+        const cached = roundTrip();
+        expect('summary_markdown' in cached).toBe(false);
+        expect('transcript_text' in cached).toBe(false);
+    });
+
+    it('marks the cached row partial and keeps the previews', () => {
+        const cached = roundTrip();
+        expect(cached.result_partial).toBe(true);
+        expect(cached.summary_preview).toBe(FULL_NOTE.slice(0, 240));
+        expect(cached.transcript_text_preview).toBe(FULL_TRANSCRIPT.slice(0, 240));
+    });
+
+    it('carries the partial flag through the history round trip', () => {
+        const entry = jobToHistoryEntry({...makeJob('c1'), result: roundTrip()});
+        expect(entry.resultPartial).toBe(true);
+        expect(entryToJob(entry).result.result_partial).toBe(true);
+    });
+
+    it('leaves a freshly fetched full record editable', () => {
+        const entry = jobToHistoryEntry(makeJob('c2', {
+            result: {task_id: 'c2', summary_markdown: FULL_NOTE, transcript_text: FULL_TRANSCRIPT},
+        }));
+        expect(entry.resultPartial).toBe(false);
+        expect(entryToJob(entry).result.result_partial).toBe(false);
+    });
+});
+
+describe('source filename display', () => {
+    it('keeps a decimal chapter prefix in local media filenames', () => {
+        const result = {
+            filename: '4.5期从零到一实战kickoff和组队.mp4',
+            raw_title: '4.5期从零到一实战kickoff和组队',
+            display_title: '4',
+        };
+        expect(resultDisplayTitle(result)).toBe('4.5期从零到一实战kickoff和组队');
+        expect(jobDisplayTitle({source_filename: result.filename, result})).toBe('4.5期从零到一实战kickoff和组队');
     });
 });

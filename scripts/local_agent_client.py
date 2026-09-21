@@ -8,13 +8,25 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from backend.core.local_request_scope import LOCAL_SINGLE_USER_CLIENT_ID  # noqa: E402
 
 
 DEFAULT_API_BASE = "http://127.0.0.1:8000"
-DEFAULT_CLIENT_ID = "local-client"
+# Must be the workspace the browser app writes to. This used to be
+# "local-client", a distinct identity, so an MCP client saw an empty task list on
+# a machine with a full one — and creating tasks through it filed them somewhere
+# the app could not show.
+DEFAULT_CLIENT_ID = LOCAL_SINGLE_USER_CLIENT_ID
 
 
 class FluentFlowApiError(RuntimeError):

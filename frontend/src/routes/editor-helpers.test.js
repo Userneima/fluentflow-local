@@ -1,7 +1,56 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+import { activeTranscriptSegmentIndex, mediaSourcePlan, playbackMediaChoice, regenerateProgressLabel, resultEditingLock, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+
+describe('regenerateProgressLabel', () => {
+    it('counts through a fan-out step so a long wait reads as movement', () => {
+        expect(regenerateProgressLabel({label: '撰写章节', completed: 3, total: 7})).toBe('撰写章节 3/7');
+    });
+
+    it('drops the counter for a single-call step', () => {
+        expect(regenerateProgressLabel({label: '检查覆盖度', completed: 0, total: 1})).toBe('检查覆盖度');
+    });
+
+    it('never shows more completed than the step has', () => {
+        expect(regenerateProgressLabel({label: '提取要点', completed: 9, total: 7})).toBe('提取要点 7/7');
+    });
+
+    it('falls back before the first step event arrives', () => {
+        expect(regenerateProgressLabel(null, {fallback: '重生中…'})).toBe('重生中…');
+        expect(regenerateProgressLabel({label: '   '}, {fallback: '重生中…'})).toBe('重生中…');
+    });
+});
+
+describe('resultEditingLock', () => {
+    // A job-list row carried a 240-char preview under `summary_markdown`. The
+    // editor opened it, autosave fired, and a 13k-char note became the stub.
+    it('locks a partial payload so autosave cannot overwrite the record', () => {
+        expect(resultEditingLock({task_id: 't1', result_partial: true, summary_markdown: '# 预览'}))
+            .toBe('loading');
+    });
+
+    it('keeps the lock and reports it differently once hydration has failed', () => {
+        expect(resultEditingLock({task_id: 't1', result_partial: true}, {hydrationFailed: true}))
+            .toBe('unavailable');
+    });
+
+    it('leaves a fully hydrated record editable', () => {
+        expect(resultEditingLock({task_id: 't1', summary_markdown: '# 完整笔记'})).toBeNull();
+        expect(resultEditingLock({task_id: 't1', result_partial: false}, {hydrationFailed: true})).toBeNull();
+    });
+
+    // An imported browser-history entry has no server record behind it, so
+    // locking it would strand it read-only with nothing to recover.
+    it('does not lock a payload that hydration can never unlock', () => {
+        expect(resultEditingLock({result_partial: true}, {hydratable: false})).toBeNull();
+    });
+
+    it('has nothing to lock without a result', () => {
+        expect(resultEditingLock(null)).toBeNull();
+        expect(resultEditingLock(undefined)).toBeNull();
+    });
+});
 
 describe('shouldKeepVideoReviewMounted', () => {
     it('keeps the player mounted while playback is between subtitle segments', () => {
@@ -10,6 +59,64 @@ describe('shouldKeepVideoReviewMounted', () => {
 
     it('does not render the video-review layout after switching back to text review', () => {
         expect(shouldKeepVideoReviewMounted({activeReviewMode: 'text', activeSegmentIndex: 3})).toBe(false);
+    });
+});
+
+describe('mediaSourcePlan', () => {
+    const storedVideo = {
+        task_id: 'task-1',
+        filename: 'kickoff.mp4',
+        source_file_available: true,
+        artifacts: {playback_audio: {filename: 'kickoff_audio.mp3'}},
+    };
+
+    it('streams a retained video after a restart instead of asking for the file again', () => {
+        // No in-memory File survives a restart, so the reselect prompt must not
+        // be the first thing a record with a retained source falls back to.
+        const plan = mediaSourcePlan(storedVideo);
+        expect(plan[0]).toEqual({kind: 'stream', mediaKind: 'video'});
+        expect(plan.map((step) => step.kind)).toEqual(['stream', 'artifact', 'download']);
+    });
+
+    it('prefers the file the user just picked over any server copy', () => {
+        const file = {name: 'kickoff.mp4', size: 10};
+        expect(mediaSourcePlan(storedVideo, {localFile: file})).toEqual([{kind: 'local-file', file}]);
+    });
+
+    it('falls back to the saved playback audio when the source has expired', () => {
+        const expired = {...storedVideo, source_file_available: false};
+        expect(mediaSourcePlan(expired).map((step) => step.kind)).toEqual(['artifact']);
+    });
+
+    it('marks a retained audio-only source as audio playback', () => {
+        const storedAudio = {task_id: 'task-2', filename: 'talk.m4a', source_file_available: true};
+        expect(mediaSourcePlan(storedAudio)).toEqual([
+            {kind: 'stream', mediaKind: 'audio'},
+            {kind: 'download', filename: 'talk.m4a'},
+        ]);
+    });
+
+    it('skips the full-source download for results that cannot be persisted', () => {
+        expect(mediaSourcePlan(storedVideo, {canPersistResult: false}).map((step) => step.kind))
+            .toEqual(['stream', 'artifact']);
+    });
+
+    it('has nothing to attach without a task or a result', () => {
+        expect(mediaSourcePlan(null)).toEqual([]);
+        expect(mediaSourcePlan({filename: 'orphan.mp3'})).toEqual([]);
+    });
+});
+
+describe('activeTranscriptSegmentIndex', () => {
+    const segments = [
+        {start: 0, end: 3},
+        {start: 3, end: 6},
+        {start: 6, end: 9},
+    ];
+
+    it('finds the active segment without scanning the full transcript', () => {
+        expect(activeTranscriptSegmentIndex(segments, 6.5)).toBe(2);
+        expect(activeTranscriptSegmentIndex(segments, 9)).toBe(-1);
     });
 });
 

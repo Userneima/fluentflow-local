@@ -290,6 +290,26 @@ _opencc_converter: Any | None = None
 _opencc_checked = False
 
 
+def _resolve_stt_device(device: str) -> tuple[str, str | None]:
+    """Avoid a late DLL crash when automatic GPU selection lacks its runtime."""
+    requested = (device or "auto").strip().lower()
+    runtime = configure_windows_gpu_runtime()
+    if requested == "auto" and runtime.supported_platform and not runtime.ready:
+        message = (
+            "Windows NVIDIA runtime is missing "
+            f"({', '.join(runtime.missing_dlls)}); using CPU. "
+            f"Run {runtime.install_hint} in the FluentFlow virtual environment to enable GPU transcription."
+        )
+        logger.warning(message)
+        return "cpu", message
+    return requested, None
+
+
+def _is_cuda_runtime_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(token in message for token in ("cublas", "cudnn", "cuda", "nvcuda"))
+
+
 def _to_simplified_chinese(text: str) -> str:
     """Convert Traditional Chinese output to Simplified when OpenCC is available."""
     global _opencc_converter, _opencc_checked

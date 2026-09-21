@@ -1,4 +1,9 @@
-export const fileNameStem = (name) => (name || "").replace(/\.[^/.]+$/, "") || "";
+import { noteForDisplay, transcriptForDisplay } from './resultViews.js';
+
+const DISPLAY_FILE_EXTENSION_RE = /\.(?:mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus|srt|vtt|txt|md)$/i;
+// Titles may contain dots (for example, "4.5期 kickoff"). Only strip a
+// supported source extension, rather than treating the final dot as one.
+export const fileNameStem = (name) => String(name || "").replace(DISPLAY_FILE_EXTENSION_RE, "") || "";
 export const stripGeneratedFilenamePrefix = (name) => String(name || '').replace(/^(?:[0-9]{10,24}|BV[a-zA-Z0-9]{8,})[-_]+/, '');
 export const displayTitleForUser = (value, fallback='') => {
     const clean = stripGeneratedFilenamePrefix(fileNameStem(value)).trim();
@@ -517,11 +522,11 @@ export const friendlyTaskError = (message, lang='zh') => {
 };
 
 export const noteGenerationDiagnosis = (result={}, lang='zh') => {
-    const summary = String(result?.summary_markdown || '').trim();
+    const summary = noteForDisplay(result).trim();
     const status = String(result?.summary_status || '').trim().toLowerCase();
     const stage = String(result?.stage || '').trim().toLowerCase();
     const rawError = String(result?.summary_error || result?.error_reason || '').trim();
-    const hasTranscript = !!String(result?.transcript_text || result?.transcript_text_preview || '').trim()
+    const hasTranscript = !!transcriptForDisplay(result).trim()
         || (Array.isArray(result?.raw_segments) && result.raw_segments.length > 0)
         || (Array.isArray(result?.display_segments) && result.display_segments.length > 0);
     const zh = lang === 'zh';

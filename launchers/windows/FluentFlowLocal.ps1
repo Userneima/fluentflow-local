@@ -52,6 +52,50 @@ function Get-PortOwnerIds {
     }
 }
 
+# Stopping the listener is not enough on this machine: a venv interpreter
+# re-execs the base interpreter, so the process holding the port is a child of
+# the one the previous launcher started, and killing only the child leaves the
+# parent behind. These two walk up to the outermost FluentFlow python and take
+# the whole tree.
+function Test-FluentFlowProcess($Process) {
+    return $Process -and $Process.CommandLine -and $Process.CommandLine -match "backend\.local_main"
+}
+
+function Get-FluentFlowServerProcess {
+    $owners = @(
+        Get-NetTCPConnection -LocalPort ([int]$Port) -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique
+    )
+    if (-not $owners) { return @() }
+
+    $byId = @{}
+    foreach ($item in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) {
+        $byId[[int]$item.ProcessId] = $item
+    }
+
+    $selected = @{}
+    foreach ($owner in $owners) {
+        $process = $byId[[int]$owner]
+        if (-not (Test-FluentFlowProcess $process)) { return $null }
+        while ($true) {
+            $parent = $byId[[int]$process.ParentProcessId]
+            if (Test-FluentFlowProcess $parent) { $process = $parent } else { break }
+        }
+        $pending = @($process)
+        while ($pending.Count -gt 0) {
+            $current = $pending[0]
+            $pending = @($pending | Select-Object -Skip 1)
+            $selected[[int]$current.ProcessId] = $current
+            foreach ($candidate in $byId.Values) {
+                if ([int]$candidate.ParentProcessId -eq [int]$current.ProcessId -and (Test-FluentFlowProcess $candidate)) {
+                    $pending += $candidate
+                }
+            }
+        }
+    }
+    return @($selected.Values)
+}
+
 function Get-RunningJobCount {
     try {
         $jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?limit=100" -TimeoutSec 3
@@ -107,7 +151,15 @@ if ($health) {
             Write-Host "$running job(s) are still in progress; restarting makes them start over."
             Read-Host "Press Enter to restart anyway, or Ctrl+C to cancel" | Out-Null
         }
-        foreach ($id in $ownerIds) { Stop-Process -Id $id -ErrorAction SilentlyContinue }
+        $tree = Get-FluentFlowServerProcess
+        if ($null -ne $tree -and $tree.Count -gt 0) {
+            foreach ($process in ($tree | Sort-Object ProcessId -Descending)) {
+                if ([int]$process.ProcessId -eq $PID) { continue }
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            foreach ($id in $ownerIds) { Stop-Process -Id $id -ErrorAction SilentlyContinue }
+        }
         for ($i = 0; $i -lt 40; $i++) {
             if (-not (Get-LocalHealth)) { break }
             Start-Sleep -Milliseconds 250

@@ -33,7 +33,7 @@ def test_local_spa_reports_a_missing_frontend_index(tmp_path):
     # A missing bundle is a setup problem, not a routing 404: tell the user
     # exactly how to build the local frontend.
     assert response.status_code == 503
-    assert "build:frontend:local" in response.json()["detail"]
+    assert "build:frontend" in response.json()["detail"]
 
 
 def test_local_spa_defaults_to_the_local_bundle_entry():

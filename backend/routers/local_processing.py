@@ -380,6 +380,7 @@ def _local_media_job_context(
     deepseek_api_key: Optional[str] = None,
     openai_api_key: Optional[str] = None,
     qwen_api_key: Optional[str] = None,
+    anthropic_api_key: Optional[str] = None,
     duration_limit_seconds: float | None = None,
 ) -> MediaJobContext:
     """Build the pipeline context with the local edition's invariants: local
@@ -431,6 +432,7 @@ def _local_media_job_context(
         deepseek_api_key=deepseek_api_key,
         openai_api_key=openai_api_key,
         qwen_api_key=qwen_api_key,
+        anthropic_api_key=anthropic_api_key,
         ai_provider=options.get("ai_provider"),
         ai_model=options.get("ai_model"),
         note_mode=options.get("note_mode"),
@@ -513,6 +515,7 @@ async def process_media(
     deepseek_api_key: Optional[str] = Form(None),
     openai_api_key: Optional[str] = Form(None),
     qwen_api_key: Optional[str] = Form(None),
+    anthropic_api_key: Optional[str] = Form(None),
     ai_provider: Optional[str] = Form(None),
     ai_model: Optional[str] = Form(None),
     note_mode: Optional[str] = Form(None),
@@ -637,6 +640,7 @@ async def process_media(
         deepseek_api_key=deepseek_api_key,
         openai_api_key=openai_api_key,
         qwen_api_key=qwen_api_key,
+        anthropic_api_key=anthropic_api_key,
         duration_limit_seconds=effective_duration_limit,
     )
 
@@ -674,6 +678,7 @@ async def queue_process(
     deepseek_api_key: Optional[str] = Form(None),
     openai_api_key: Optional[str] = Form(None),
     qwen_api_key: Optional[str] = Form(None),
+    anthropic_api_key: Optional[str] = Form(None),
     ai_provider: Optional[str] = Form(None),
     ai_model: Optional[str] = Form(None),
     note_mode: Optional[str] = Form(None),
@@ -842,6 +847,7 @@ async def queue_process(
             deepseek_api_key=deepseek_api_key,
             openai_api_key=openai_api_key,
             qwen_api_key=qwen_api_key,
+            anthropic_api_key=anthropic_api_key,
             duration_limit_seconds=effective_duration_limit,
         )
         previous = _queue_tail_barrier()

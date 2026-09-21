@@ -344,6 +344,7 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
                     <option value="deepseek">DeepSeek</option>
                     <option value="openai">OpenAI</option>
                     <option value="qwen">Qwen</option>
+                    <option value="anthropic">Claude</option>
                 </select>
             </div>
             <div className="space-y-2">
@@ -353,6 +354,12 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
                         <option value="gpt-5.4-mini">gpt-5.4-mini</option>
                         <option value="gpt-5.4">gpt-5.4</option>
                         <option value="gpt-5.5">gpt-5.5</option>
+                    </select>
+                ) : aiProvider === 'anthropic' ? (
+                    <select className={inputClass} value={aiModel} onChange={e=>updateSettingNow({aiModel:e.target.value})}>
+                        <option value="claude-opus-5">claude-opus-5</option>
+                        <option value="claude-sonnet-5">claude-sonnet-5</option>
+                        <option value="claude-haiku-4-5">claude-haiku-4-5</option>
                     </select>
                 ) : aiProvider === 'qwen' ? (
                     <select className={inputClass} value={aiModel} onChange={e=>updateSettingNow({aiModel:e.target.value})}>
@@ -365,7 +372,7 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
                 )}
             </div>
             <div className="space-y-2 md:col-span-2">
-                <label className={fieldLabelClass}>{aiProvider === 'openai' ? t('set.openaiKey') : (aiProvider === 'qwen' ? t('set.dashscopeKey') : t('set.deepseekKey'))}</label>
+                <label className={fieldLabelClass}>{aiProvider === 'openai' ? t('set.openaiKey') : (aiProvider === 'qwen' ? t('set.dashscopeKey') : (aiProvider === 'anthropic' ? t('set.anthropicKey') : t('set.deepseekKey')))}</label>
                 <p className="text-xs leading-relaxed text-on-surface-variant">{secretRetentionText(activeAiConfigured)}</p>
                 <div className="flex gap-2">
                     <input className={inputClass} placeholder={secretInputPlaceholder(activeAiConfigured)} type="password" value={secretDraft[activeAiSecretKey] || ''} onChange={e=>setSecretDraft(d=>({...d, [activeAiSecretKey]: e.target.value}))}/>

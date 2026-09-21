@@ -96,7 +96,7 @@ const Settings = () => {
             >
                 <TextModelKeyRows
                     state={state}
-                    extraKey={aiProvider !== 'qwen' && !uploadWritesItsOwnNote && (
+                    extraKey={aiProvider !== 'qwen' && aiProvider !== 'anthropic' && !uploadWritesItsOwnNote && (
                         <DashscopeKeyField
                             state={state}
                             description={lang === 'zh'

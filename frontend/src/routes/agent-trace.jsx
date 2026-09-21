@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import {API_BASE, apiFetch, localExecutionHeaders, noteModeLabel, useI18n, noteGenerationDiagnosis} from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
+import {hasNote, noteForDisplay, noteLength, transcriptForDisplay, transcriptForEditing} from '../lib/resultViews.js';
 import TaskProgressOverview from '../components/TaskProgressOverview.jsx';
 import {normalizeTaskState} from '../lib/taskState.js';
 
@@ -558,7 +559,7 @@ const pageDataFromJobSnapshot = (job, fallbackTaskId, lang) => {
     } : generatedDiagnosis;
     const noteStatus = result.summary_skipped
         ? 'skipped'
-        : result.summary_markdown
+        : hasNote(result)
             ? 'completed'
             : result.summary_status || diagnosis.status || 'pending';
     const decisionLog = job.decision_log && typeof job.decision_log === 'object'
@@ -603,12 +604,12 @@ const pageDataFromJobSnapshot = (job, fallbackTaskId, lang) => {
         },
         transcript: {
             available: !!(
-                String(result.transcript_text || result.transcript_text_preview || '').trim()
+                transcriptForDisplay(result).trim()
                 || (Array.isArray(result.raw_segments) && result.raw_segments.length)
                 || (Array.isArray(result.display_segments) && result.display_segments.length)
             ),
-            text: result.transcript_text || '',
-            preview: result.transcript_text_preview || result.transcript_text || '',
+            text: transcriptForEditing(result) || '',
+            preview: transcriptForDisplay(result),
             raw_segments: Array.isArray(result.raw_segments) ? result.raw_segments : [],
             display_segments: Array.isArray(result.display_segments) ? result.display_segments : [],
             corrected_text: result.corrected_transcript_text || '',
@@ -626,8 +627,8 @@ const pageDataFromJobSnapshot = (job, fallbackTaskId, lang) => {
         },
         note: {
             status: noteStatus,
-            markdown: result.summary_markdown || '',
-            markdown_chars: String(result.summary_markdown || '').length,
+            markdown: noteForDisplay(result),
+            markdown_chars: noteLength(result),
             diagnosis: {
                 ...diagnosis,
                 next_action: diagnosis.nextAction || '',
@@ -647,7 +648,7 @@ const pageDataFromJobSnapshot = (job, fallbackTaskId, lang) => {
             next_action: diagnosis.nextAction || '',
             retryable: !!diagnosis.canRegenerate,
         },
-        actions: Array.isArray(snapshot.actions) && snapshot.actions.length ? snapshot.actions : (result.summary_markdown ? [{
+        actions: Array.isArray(snapshot.actions) && snapshot.actions.length ? snapshot.actions : (hasNote(result) ? [{
             id: 'open_result',
             label: lang === 'zh' ? '打开结果' : 'Open result',
             method: 'GET',

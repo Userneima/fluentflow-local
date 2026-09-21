@@ -20,10 +20,11 @@ LOCAL_SENSITIVE_FIELDS = {
     "openai_api_key",
     "dashscope_api_key",
     "qwen_api_key",
-    # The user's own Anthropic key, used only by the visual-note entry. Kept a
-    # separate field rather than folded into the note-provider keys because it
-    # buys a different capability: without it that entry refuses and says so,
-    # instead of quietly producing a subtitles-only note.
+    # The user's own Anthropic key. Two entries read it: the visual-note entry,
+    # and Claude as a note provider (ai_client). Kept a separate field rather
+    # than folded into the other note-provider keys because the visual-note
+    # entry buys a different capability: without this key it refuses and says
+    # so, instead of quietly producing a subtitles-only note.
     "anthropic_api_key",
     "lark_app_id",
     "lark_app_secret",
