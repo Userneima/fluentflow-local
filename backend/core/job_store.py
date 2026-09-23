@@ -283,25 +283,40 @@ def get_job(
 
 
 def list_jobs(
-    limit: int = 50,
+    limit: int | None = 50,
     db_path: Path | str = DEFAULT_DB_PATH,
     client_id: str | None = None,
     include_result: bool = True,
+    updated_since: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Jobs newest first.
+
+    ``limit=None`` returns every job: the records page lists all of them, not a
+    window. ``updated_since`` keeps only rows written at or after that stored
+    ``updated_at`` value, so a poll can ask for what changed instead of reading
+    and summarising every result again. It is inclusive because the stamp has
+    one-second precision; re-sending a row the caller already has is harmless.
+    """
     ensure_job_db(db_path)
-    safe_limit = max(1, min(int(limit or 50), 200))
+    clauses: list[str] = []
+    params: list[Any] = []
+    if client_id is not None:
+        clauses.append("client_id = ?")
+        params.append(client_id)
+    since = str(updated_since or "").strip()
+    if since:
+        clauses.append("updated_at >= ?")
+        params.append(since)
+    sql = "SELECT * FROM jobs"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY updated_at DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(max(1, int(limit or 50)))
     with sqlite3.connect(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
-        if client_id is not None:
-            rows = conn.execute(
-                "SELECT * FROM jobs WHERE client_id = ? ORDER BY updated_at DESC LIMIT ?",
-                (client_id, safe_limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM jobs ORDER BY updated_at DESC LIMIT ?",
-                (safe_limit,),
-            ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [_row_to_dict(row) if include_result else _row_to_summary_dict(row) for row in rows]
 
 
@@ -366,11 +381,94 @@ def list_jobs_by_statuses(
 
 
 def list_job_summaries(
-    limit: int = 50,
+    limit: int | None = 50,
     db_path: Path | str = DEFAULT_DB_PATH,
     client_id: str | None = None,
+    updated_since: str | None = None,
 ) -> list[dict[str, Any]]:
-    return list_jobs(limit=limit, db_path=db_path, client_id=client_id, include_result=False)
+    return list_jobs(
+        limit=limit,
+        db_path=db_path,
+        client_id=client_id,
+        include_result=False,
+        updated_since=updated_since,
+    )
+
+
+RESTART_INTERRUPTION_KEY = "restart_interruption"
+
+
+def list_unacknowledged_restart_interruptions(
+    *,
+    client_id: str | None = None,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
+    """Failed jobs a service restart cut off that nobody has been told about yet.
+
+    Recovery stamps the interruption on the job's metadata; acknowledging it adds
+    ``acknowledged_at``. Kept in the store rather than the browser so the notice
+    shows once on this machine whichever window opens first.
+    """
+    ensure_job_db(db_path)
+    sql = (
+        "SELECT * FROM jobs WHERE status = 'failed'"
+        f" AND json_extract(metadata_json, '$.{RESTART_INTERRUPTION_KEY}') IS NOT NULL"
+        f" AND json_extract(metadata_json, '$.{RESTART_INTERRUPTION_KEY}.acknowledged_at') IS NULL"
+    )
+    params: list[Any] = []
+    if client_id is not None:
+        sql += " AND client_id = ?"
+        params.append(client_id)
+    sql += " ORDER BY created_at ASC"
+    with sqlite3.connect(Path(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, params).fetchall()
+    return [_row_to_summary_dict(row) for row in rows]
+
+
+def acknowledge_restart_interruptions(
+    task_ids: list[str] | tuple[str, ...],
+    *,
+    client_id: str | None = None,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> list[str]:
+    """Mark these interruptions as seen. Returns the ids that changed.
+
+    Leaves ``updated_at`` alone: the task itself did not change, and bumping it
+    would reorder the records list for a notice being closed.
+    """
+    ids = [str(task_id).strip() for task_id in task_ids or [] if str(task_id).strip()]
+    if not ids:
+        return []
+    ensure_job_db(db_path)
+    now = _now_iso()
+    changed: list[str] = []
+    with sqlite3.connect(Path(db_path)) as conn:
+        for task_id in ids:
+            if client_id is not None:
+                row = conn.execute(
+                    "SELECT metadata_json FROM jobs WHERE task_id = ? AND client_id = ?",
+                    (task_id, client_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT metadata_json FROM jobs WHERE task_id = ?", (task_id,)
+                ).fetchone()
+            if not row:
+                continue
+            metadata = _json_loads(row[0])
+            if not isinstance(metadata, dict):
+                continue
+            interruption = metadata.get(RESTART_INTERRUPTION_KEY)
+            if not isinstance(interruption, dict) or interruption.get("acknowledged_at"):
+                continue
+            metadata[RESTART_INTERRUPTION_KEY] = {**interruption, "acknowledged_at": now}
+            conn.execute(
+                "UPDATE jobs SET metadata_json = ? WHERE task_id = ?",
+                (_json_dumps(metadata), task_id),
+            )
+            changed.append(task_id)
+    return changed
 
 
 def list_jobs_for_retention(

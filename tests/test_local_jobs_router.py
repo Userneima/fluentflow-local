@@ -31,7 +31,7 @@ _JOB = {
 def test_local_jobs_list_reads_the_local_owner_and_uses_local_projection(monkeypatch):
     seen: list[str | None] = []
 
-    def fake_summaries(*, limit, client_id):
+    def fake_summaries(*, limit, client_id, **_kwargs):
         seen.append(client_id)
         return [dict(_JOB)]
 
@@ -47,7 +47,7 @@ def test_local_jobs_list_reads_the_local_owner_and_uses_local_projection(monkeyp
 def test_local_jobs_list_is_the_same_whichever_client_id_is_sent(monkeypatch):
     seen: list[str | None] = []
 
-    def fake_summaries(*, limit, client_id):
+    def fake_summaries(*, limit, client_id, **_kwargs):
         seen.append(client_id)
         return []
 

@@ -723,8 +723,9 @@ const AgentTasks = () => {
     const currentJobRecords = useMemo(() => jobsFromCurrentJob(currentJob), [currentJob]);
     // The shared list already reflects history + cache; merge in the live
     // currentJob record for immediate progress display.
+    // Every task is listed and counted; there is no display window.
     const displayJobs = useMemo(() => (
-        mergeJobs(currentJobRecords, jobs).slice(0, 30)
+        mergeJobs(currentJobRecords, jobs)
     ), [currentJobRecords, jobs]);
     const liveJobs = useMemo(() => displayJobs.filter(isLiveTask), [displayJobs]);
     // The name of whichever task a waiting one is behind. Looked up here because
@@ -745,11 +746,9 @@ const AgentTasks = () => {
     const queuedCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_QUEUED).length;
     const runningCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_RUNNING || normalizeTaskState(job) === TASK_STATE_UPLOADING).length;
 
-    // Shared fetch + polling (see lib/useJobPolling.js). /agent warns only when
-    // every fetch fails and uses task-oriented wording.
+    // Shared fetch + polling (see lib/useJobPolling.js), with task-oriented wording.
     const {loading, error, setError, loadJobs} = useJobPolling({
         hasLiveJobs: hasLiveOrUploadingJobs,
-        errorOnAllOnly: true,
         refreshFailedZh: '任务刷新失败，已保留本地缓存。',
         refreshFailedEn: 'Failed to refresh tasks. Local cache is preserved.',
     });
@@ -956,7 +955,7 @@ const AgentTasks = () => {
                         </h1>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                        <button type="button" onClick={loadJobs} className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] bg-white px-4 text-[13px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]">
+                        <button type="button" onClick={() => loadJobs({full: true})} className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] bg-white px-4 text-[13px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]">
                             <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} strokeWidth={2.15}/>
                             {lang === 'zh' ? '刷新' : 'Refresh'}
                         </button>

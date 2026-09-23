@@ -40,7 +40,7 @@ TIMEOUT_SECONDS = 3
 
 
 def count_for_scope(base_url: str, client_id: str | None) -> int | None:
-    request = urllib.request.Request(base_url.rstrip("/") + "/jobs?limit=100")
+    request = urllib.request.Request(base_url.rstrip("/") + "/jobs")
     if client_id:
         request.add_header("X-FluentFlow-Client-Id", client_id)
     try:

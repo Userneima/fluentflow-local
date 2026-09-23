@@ -1,8 +1,10 @@
 import {Suspense, useEffect, useState} from 'react';
 import SideNav from '../components/SideNav.jsx';
+import InterruptedTasksDialog from '../components/InterruptedTasksDialog.jsx';
 
 // Shared workspace frame: sidebar (with persisted collapse state) plus the
-// routed content area.
+// routed content area, and the app-level notice for tasks a service restart
+// interrupted (it has to appear on whichever page is open).
 const ShellLayout = ({sideNavProps = {}, children}) => {
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('fluentflow_sidebar_collapsed') === '1');
 
@@ -21,6 +23,7 @@ const ShellLayout = ({sideNavProps = {}, children}) => {
                     {children}
                 </Suspense>
             </div>
+            <InterruptedTasksDialog/>
         </div>
     );
 };

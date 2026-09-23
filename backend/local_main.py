@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 
@@ -27,7 +28,13 @@ load_project_env()
 from backend.core.app_factory import create_app
 from backend.core.debreath_job import recover_stranded_renders
 from backend.core.frontend_paths import FRONTEND_LOCAL_DIST_DIR
-from backend.core.job_store import adopt_jobs_for_owner, list_jobs_by_statuses, sync_summary_status_column, upsert_job
+from backend.core.job_store import (
+    RESTART_INTERRUPTION_KEY,
+    adopt_jobs_for_owner,
+    list_jobs_by_statuses,
+    sync_summary_status_column,
+    upsert_job,
+)
 from backend.core.local_http_boundary import local_boundary_middleware
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.local_readiness import (
@@ -77,8 +84,15 @@ def recover_stale_jobs() -> int:
     queued/running job from a previous run can never resume by itself; leaving
     it would show as stuck forever. Failed state keeps the local retry action
     available when the stored source still exists.
+
+    Each one is also stamped with ``restart_interruption`` so the app can tell
+    the user once, on whichever page is open, that these were cut off by the
+    restart — a failed card among many is easy to miss — and offer to re-run
+    them. Whether it had started matters to the reader: a queued task lost
+    nothing, a running one lost its progress.
     """
     recovered = 0
+    interrupted_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     for job in list_jobs_by_statuses(("queued", "running")):
         task_id = str(job.get("task_id") or "")
         if not task_id:
@@ -90,6 +104,16 @@ def recover_stale_jobs() -> int:
             stage="recovery",
             progress=0,
             error_reason="服务重启中断了这个任务：请重新提交，或对仍保留源文件的任务使用重试。",
+            metadata={
+                RESTART_INTERRUPTION_KEY: {
+                    "interrupted_at": interrupted_at,
+                    "started": job.get("status") == "running",
+                    "stage": job.get("stage"),
+                    "progress": job.get("progress"),
+                },
+                # A job that was waiting its turn is not waiting any more.
+                "queue_wait": None,
+            },
         )
         recovered += 1
     return recovered

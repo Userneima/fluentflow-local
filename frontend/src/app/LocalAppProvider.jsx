@@ -71,7 +71,7 @@ export const LocalAppProvider = ({children}) => {
         cancelledRef.current = new Set();
         hydratedRef.current = true;
         setTasks(reconcileTaskList({cached, accountId: LOCAL_SCOPE}));
-        apiFetch(`${API_BASE}/jobs?limit=100`, {headers: localExecutionHeaders({sttProvider: 'local'})})
+        apiFetch(`${API_BASE}/jobs`, {headers: localExecutionHeaders({sttProvider: 'local'})})
             .then(async (response) => response.ok ? response.json() : {})
             .then((data) => {
                 if (!active) return;

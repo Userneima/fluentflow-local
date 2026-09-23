@@ -451,13 +451,37 @@ export const useApi = () => {
         if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
         return data;
     };
-    const getJobs = async (limit=100, options={}) => {
-        const r = await apiFetch(`${API_BASE}/jobs?limit=${encodeURIComponent(limit)}`, {
+    // Every task, not a window: the records page lists all of them. A poll
+    // passes `updatedSince` (the newest `updated_at` it already holds) to get
+    // only the rows written since, instead of every summary again.
+    const getJobs = async (options={}) => {
+        const params = new URLSearchParams();
+        if(options.updatedSince) params.set('updated_since', options.updatedSince);
+        const query = params.toString();
+        const r = await apiFetch(`${API_BASE}/jobs${query ? `?${query}` : ''}`, {
             headers: localExecutionHeaders(options),
         });
         if(!r.ok) throw new Error('Jobs unavailable');
         const data = await r.json();
         return Array.isArray(data?.jobs) ? data.jobs : [];
+    };
+    const getInterruptedJobs = async () => {
+        const r = await apiFetch(`${API_BASE}/jobs/interrupted`, {
+            headers: localExecutionHeaders({sttProvider: 'local'}),
+        });
+        if(!r.ok) throw new Error('Interrupted tasks unavailable');
+        const data = await r.json();
+        return Array.isArray(data?.tasks) ? data.tasks : [];
+    };
+    const acknowledgeInterruptedJobs = async (taskIds=[]) => {
+        const r = await apiFetch(`${API_BASE}/jobs/interrupted/acknowledge`, {
+            method: "POST",
+            headers: {...localExecutionHeaders({sttProvider: 'local'}), 'Content-Type': 'application/json'},
+            body: JSON.stringify({task_ids: taskIds}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
     };
     const downloadJobArtifact = async (taskId, kind, filename, options={}) => {
         const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(kind)}`, {
@@ -637,7 +661,7 @@ export const useApi = () => {
         return await r.json();
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
 };
 
 export const useSettings = () => {
