@@ -33,7 +33,7 @@ const serviceSections = [
         title: '用到的外部服务',
         body: [
             '写笔记和翻译会把转录文本和标题发给你在设置里填的 AI 服务商（DeepSeek、OpenAI、通义千问等），费用记在你自己的账号上。图文笔记会把从视频里截的画面发给 Claude。',
-            '导出飞书用的是你自己的飞书应用；下载视频链接会连接对应的视频平台；第一次用说话人区分时，会从 Hugging Face 下载模型。这些服务的价格、速度和内容政策由服务商决定，随时可能变。',
+            '导出飞书用的是你自己的飞书应用；下载视频链接会连接对应的视频平台，没有在设置里选浏览器登录态时，抖音链接会交给第三方解析服务 miuistore 去解析；第一次用说话人区分时，会从 Hugging Face 下载模型。这些服务的价格、速度和内容政策由服务商决定，随时可能变。',
         ],
     },
     {
@@ -68,7 +68,7 @@ const privacySections = [
     {
         title: '什么时候会发出去',
         body: [
-            '只在你用到下面这些功能时才发，而且只发这一项需要的内容：写笔记和翻译，发转录文本和标题给你选的 AI 服务商；图文笔记，发截取的画面给 Claude；导出飞书，发笔记内容到你的飞书；下载视频链接，访问对应的视频平台。',
+            '只在你用到下面这些功能时才发，而且只发这一项需要的内容：写笔记和翻译，发转录文本和标题给你选的 AI 服务商；图文笔记，发截取的画面给 Claude；导出飞书，发笔记内容到你的飞书；下载视频链接，访问对应的视频平台；没有选浏览器登录态时，抖音链接会发给第三方解析服务 miuistore。',
         ],
     },
     {
@@ -102,7 +102,7 @@ const privacySections = [
 const enServiceSections = [
     {title: 'What it does', body: ['FluentFlow Local turns videos, audio, subtitle files, and video links into transcripts, subtitles, and notes, and can export them.', 'It is a tool for studying and organizing material. It does not give legal, medical, financial, or other professional advice.']},
     {title: 'Where it runs', body: ['The app runs on your own computer and only accepts connections from that computer. Transcription uses a speech recognition model on this machine, so your audio does not leave it to be transcribed.', 'Writing notes, translating, exporting to Feishu, and downloading video links need the internet. See the next section.']},
-    {title: 'Outside services it uses', body: ['Notes and translations send the transcript and title to the AI provider you set up in Settings (DeepSeek, OpenAI, Qwen, and others), billed to your own account. Illustrated notes send frames taken from the video to Claude.', 'Feishu export uses your own Feishu app. Downloading a video link connects to that video platform. The first time you use speaker labels, the model is downloaded from Hugging Face. Pricing, speed, and content policies of these services are set by the providers and can change at any time.']},
+    {title: 'Outside services it uses', body: ['Notes and translations send the transcript and title to the AI provider you set up in Settings (DeepSeek, OpenAI, Qwen, and others), billed to your own account. Illustrated notes send frames taken from the video to Claude.', 'Feishu export uses your own Feishu app. Downloading a video link connects to that video platform; without a browser login selected in Settings, Douyin links are sent to the third-party resolver miuistore. The first time you use speaker labels, the model is downloaded from Hugging Face. Pricing, speed, and content policies of these services are set by the providers and can change at any time.']},
     {title: 'Your content', body: ['Make sure you have the right to transcribe, download, analyze, or export the material, including platform video links, course videos, meeting recordings, and subtitle files.', 'Do not add unlawful, infringing, or confidential material you are not allowed to handle.']},
     {title: 'Check the results', body: ['Transcripts, translations, subtitle breaks, and AI notes can contain typos, gaps, bad line breaks, or misreadings. Listen back to the original for anything important.', 'Retranscribing, regenerating a note, and deleting a task overwrite or remove the current result. You will be asked to confirm first.']},
     {title: 'Changes', body: ['FluentFlow Local is changing quickly. Pages, features, and data formats may change, and visible changes are listed on the Changelog page.']},
@@ -110,7 +110,7 @@ const enServiceSections = [
 
 const enPrivacySections = [
     {title: 'Where your data lives', body: ['Task records, source files, transcripts, notes, and exports are stored in the app data folder on this computer. FluentFlow Local has no server of its own and no accounts.']},
-    {title: 'When anything leaves this computer', body: ['Only when you use one of these features, and only what that feature needs: notes and translations send the transcript and title to the AI provider you chose; illustrated notes send extracted frames to Claude; Feishu export sends the note to your Feishu; downloading a video link contacts that video platform.']},
+    {title: 'When anything leaves this computer', body: ['Only when you use one of these features, and only what that feature needs: notes and translations send the transcript and title to the AI provider you chose; illustrated notes send extracted frames to Claude; Feishu export sends the note to your Feishu; downloading a video link contacts that video platform, and without a browser login selected, Douyin links are sent to the third-party resolver miuistore.']},
     {title: 'Activity records', body: ['The app records each task\'s processing steps and errors on this computer to help diagnose failures. These records are not sent anywhere.']},
     {title: 'Retention and deletion', body: ['Source files are kept for 7 days and results for 30 days by default, then cleaned up automatically. You can delete any task from the task list at any time.', 'Recent items in the browser live only in that browser. Clearing them does not delete tasks on this computer.']},
     {title: 'Keys', body: ['The AI provider keys and Feishu app credentials you enter are stored in local configuration and used only when calling that service.', 'Settings only shows whether a key is set, never the full key. To change one, enter it again.']},

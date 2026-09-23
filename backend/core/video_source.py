@@ -6,6 +6,7 @@ import hashlib
 import html
 import ipaddress
 import json
+import logging
 import os
 import re
 import shutil
@@ -24,6 +25,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core.title_display import display_title_for_user
+
+logger = logging.getLogger(__name__)
 
 SOURCE_INFO_FILE = "视频链接相关信息.md"
 DEFAULT_MAX_VIDEO_BYTES = 600 * 1024 * 1024
@@ -429,6 +432,78 @@ def resolve_direct_video(url: str) -> ResolvedVideo | None:
     )
 
 
+# A browser name alone makes yt-dlp read that browser's most recently used
+# profile, which is often not the one logged in to the site: measured 2026-09-23
+# on a Chrome with four profiles, the default pick held no Douyin cookies and
+# every Douyin link failed "fresh cookies are needed", while naming either of
+# the two profiles that had visited Douyin resolved the same link at once.
+_SITE_COOKIE_DOMAINS = (
+    (("douyin.com", "iesdouyin.com"), "douyin.com"),
+    (("bilibili.com", "b23.tv"), "bilibili.com"),
+    (("youtube.com", "youtu.be"), "youtube.com"),
+)
+_PROFILE_CHOICE_TTL_SECONDS = 600.0
+_profile_choice_cache: dict[tuple[str, str], tuple[float, str]] = {}
+
+
+def _cookie_domain_for_url(url: str) -> str | None:
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    for hosts, domain in _SITE_COOKIE_DOMAINS:
+        if any(host == h or host.endswith("." + h) for h in hosts):
+            return domain
+    return None
+
+
+def browser_cookie_spec(browser: str | None, url: str) -> str | None:
+    """The ``--cookies-from-browser`` value to use for ``url``.
+
+    For a browser with profiles, named without one, picks the profile holding
+    the most cookies for the link's site. Anything already naming a profile, a
+    browser without profiles, or a lookup that fails is passed through as given.
+    """
+    value = (browser or "").strip()
+    if not value or ":" in value:
+        return value or None
+    domain = _cookie_domain_for_url(url)
+    if not domain:
+        return value
+    key = (value.lower(), domain)
+    cached = _profile_choice_cache.get(key)
+    now = time.monotonic()
+    if cached and now - cached[0] < _PROFILE_CHOICE_TTL_SECONDS:
+        return cached[1]
+    choice = value
+    try:
+        from yt_dlp.cookies import (
+            CHROMIUM_BASED_BROWSERS,
+            _get_chromium_based_browser_settings,
+            extract_cookies_from_browser,
+        )
+
+        if value.lower() in CHROMIUM_BASED_BROWSERS:
+            settings = _get_chromium_based_browser_settings(value.lower())
+            root = Path(settings["browser_dir"])
+            profiles = sorted(
+                p.name for p in root.iterdir()
+                if p.is_dir() and (p.name == "Default" or p.name.startswith("Profile "))
+            ) if root.is_dir() else []
+            best, best_count = None, 0
+            for profile in profiles:
+                try:
+                    jar = extract_cookies_from_browser(value.lower(), profile)
+                except Exception:  # noqa: BLE001 - one unreadable profile must not stop the rest
+                    continue
+                count = sum(1 for c in jar if domain in (getattr(c, "domain", "") or ""))
+                if count > best_count:
+                    best, best_count = profile, count
+            if best:
+                choice = f"{value}:{best}"
+    except Exception:  # noqa: BLE001 - fall back to yt-dlp's own pick
+        logger.debug("browser profile lookup failed for %s", value, exc_info=True)
+    _profile_choice_cache[key] = (now, choice)
+    return choice
+
+
 def run_yt_dlp(
     url: str,
     cookies_from_browser: str | None = None,
@@ -436,7 +511,9 @@ def run_yt_dlp(
     cancellation_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     args = [sys.executable, "-m", "yt_dlp", "--dump-single-json", "--skip-download", "--no-playlist", url]
-    cookies = (cookies_from_browser or os.environ.get("YT_DLP_COOKIES_FROM_BROWSER", "")).strip()
+    cookies = browser_cookie_spec(
+        cookies_from_browser or os.environ.get("YT_DLP_COOKIES_FROM_BROWSER", ""), url
+    )
     if cookies:
         args.insert(3, "--cookies-from-browser")
         args.insert(4, cookies)
@@ -696,6 +773,15 @@ def resolve_video(
         resolved.resolution_trace = [{"provider": "yt-dlp", "status": "selected"}]
         return resolved
     trace.append({"provider": "yt-dlp", "status": "failed", "reason": failure_reason or "unavailable"})
+    login_browser = (cookies_from_browser or os.environ.get("YT_DLP_COOKIES_FROM_BROWSER", "")).strip()
+    if failure_reason == "fresh_cookies_required" and login_browser and is_douyin_url(source_url):
+        # Cookies were sent and Douyin still wants fresh ones: the login in the
+        # browser has gone stale, and only the user can renew it.
+        browser_label = login_browser.split(":", 1)[0].capitalize()
+        raise VideoSourceResolutionError(
+            f"抖音的登录信息过期了：在 {browser_label} 里打开 douyin.com 登录一次，再重试这个链接。",
+            trace,
+        )
     if is_bilibili_url(source_url):
         raise VideoSourceResolutionError(
             "这个 B 站链接需要登录后才能下载。请在设置里选择“用浏览器登录态下载高清”，或改为上传本地视频。",
@@ -709,6 +795,11 @@ def resolve_video(
         # flag meant Douyin links simply did not work. It sends the extracted
         # Douyin URL to a third party, and a caller can still switch it off.
         trace.append({"provider": "miuistore", "status": "skipped", "reason": "disabled_by_request"})
+        raise VideoSourceResolutionError("暂时无法自动解析这个视频链接，请上传视频文件", trace)
+    if login_browser:
+        # With the user's own browser login available, the link is not handed
+        # to a third party: the fallback exists for machines without one.
+        trace.append({"provider": "miuistore", "status": "skipped", "reason": "browser_login_configured"})
         raise VideoSourceResolutionError("暂时无法自动解析这个视频链接，请上传视频文件", trace)
     resolved, failure_reason = _resolve_with_miuistore_attempt(
         source_url, **_cancellation_kwargs(cancellation_event)
@@ -854,10 +945,10 @@ def merge_media_parts(
     return file_path.stat().st_size
 
 
-def _yt_dlp_cookies_args(cookies_from_browser: str | None = None) -> list[str]:
+def _yt_dlp_cookies_args(cookies_from_browser: str | None = None, url: str = "") -> list[str]:
     value = (cookies_from_browser or os.environ.get("YT_DLP_COOKIES_FROM_BROWSER", "")).strip()
     if value:
-        return ["--cookies-from-browser", value]
+        return ["--cookies-from-browser", browser_cookie_spec(value, url) if url else value]
     # A headless server has no browser profile to read, so a Netscape cookie
     # file is the only way to give it a login (Bilibili hides subtitles from
     # anonymous requests). Ignored unless the file actually exists, so a stale
@@ -1045,7 +1136,7 @@ def download_source_captions(
                 "-o",
                 output_template,
                 *_caption_extractor_args(resolved_provider),
-                *_yt_dlp_cookies_args(cookies_from_browser),
+                *_yt_dlp_cookies_args(cookies_from_browser, url),
                 url,
             ]
             result = _run_process(
@@ -1123,7 +1214,7 @@ def download_yt_dlp_media(
         "best[ext=mp4]/best",
         "-o",
         str(file_path),
-        *_yt_dlp_cookies_args(cookies_from_browser),
+        *_yt_dlp_cookies_args(cookies_from_browser, url),
     ]
     try:
         if is_youtube_url(url):

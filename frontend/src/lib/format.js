@@ -201,6 +201,18 @@ export const diagnoseTaskError = (message, lang='zh') => {
 
     const patterns = [
         [
+            raw.includes('抖音的登录信息过期了'),
+            taskErrorDiagnosis({
+                code: 'douyin_login_expired',
+                titleZh: '抖音登录信息过期',
+                titleEn: 'Douyin login expired',
+                detailZh: raw,
+                detailEn: 'Douyin needs a fresh login in your browser before this link can be read.',
+                nextZh: '在浏览器里打开 douyin.com 登录一次，再重试这个链接。',
+                nextEn: 'Open douyin.com in your browser, sign in once, then retry this link.',
+            }),
+        ],
+        [
             raw.includes('失去了访问自己程序文件夹的权限') || (lower.includes('operation not permitted') && !raw.includes('/')),
             taskErrorDiagnosis({
                 code: 'backend_folder_access_lost',

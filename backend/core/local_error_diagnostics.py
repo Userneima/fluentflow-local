@@ -124,6 +124,13 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "视频下载时间过长，可能是文件较大或当前网络较慢。",
             "稍后重试，或上传本地视频。",
         )
+    if "抖音的登录信息过期了" in raw:
+        return _diag(
+            "douyin_login_expired",
+            "抖音登录信息过期",
+            raw,
+            "在浏览器里打开 douyin.com 登录一次，再重试这个链接。",
+        )
     if "暂时无法自动解析这个视频链接" in raw:
         return _diag(
             "video_link_parse_failed",
