@@ -420,16 +420,12 @@ def unavailable_reason(api_key: str | None = None) -> str | None:
     if not sdk_available():
         return (
             "本机还没有安装调用 Claude 所需的组件。在项目目录运行 "
-            "`./venv/bin/pip install -r requirements.txt` 后重启服务即可。"
+            "`.venv/bin/pip install -r requirements-local.txt` 后重启服务即可。"
         )
     if not resolve_api_key(api_key):
-        # Deliberately names only the .env path: the field is accepted by the
-        # local settings API but the settings page has no input for it yet, and
-        # sending someone to look for a box that is not there is worse than
-        # telling them the file to edit.
         return (
             "还没有配置 Anthropic 的 API Key，无法请 Claude 看画面。"
-            "在项目的 .env 里写入 ANTHROPIC_API_KEY=你的密钥，然后重启本地服务。"
+            "在设置页「笔记」一栏填入 Anthropic API Key 后重试，不必重启。"
             "没有这个 Key 时不会改用别的模型冒充「看过画面」。"
         )
     return None

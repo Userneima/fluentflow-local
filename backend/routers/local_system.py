@@ -11,10 +11,11 @@ from backend.core.local_config import (
     LOCAL_SENSITIVE_FIELDS,
     credential_status,
     load_preferences,
+    resolve_secret,
     save_preferences,
     save_sensitive_settings,
 )
-from backend.core import local_intake_flow
+from backend.core import local_intake_flow, visual_note_channel
 from backend.core.local_limits_config import (
     max_media_duration_seconds,
     max_queue_files,
@@ -67,7 +68,16 @@ def version() -> dict[str, Any]:
 
 @router.get("/credentials/status")
 def get_credentials_status() -> dict[str, Any]:
-    return credential_status()
+    # Whether the visual note can run is not the same as whether its key is
+    # filled in: a source checkout can route it through the local Claude Code
+    # login instead. The start page warns "no note" from this, so it has to be
+    # the channel the note would actually use, not a guess from key fields.
+    return {
+        **credential_status(),
+        "visual_note_available": visual_note_channel.resolve_channel(
+            resolve_secret(None, "anthropic_api_key")
+        ).available,
+    }
 
 
 @router.post("/credentials")

@@ -503,7 +503,7 @@ def test_with_no_key_it_refuses_and_asks_for_the_key(job_store, monkeypatch, tmp
 
     assert described["eligible"] is False
     assert described["credential_configured"] is False
-    assert "ANTHROPIC_API_KEY" in described["reason"]
+    assert "Anthropic API Key" in described["reason"]
     assert "subscription" not in described["reason"]
 
 
@@ -517,7 +517,7 @@ def test_a_machine_with_claude_code_is_told_about_the_subscription_too(job_store
     described = vn.describe(TASK, job_store, api_key=None)
 
     assert described["eligible"] is False
-    assert "ANTHROPIC_API_KEY" in described["reason"]
+    assert "Anthropic API Key" in described["reason"]
     assert "FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription" in described["reason"]
 
 
@@ -527,7 +527,7 @@ def test_forcing_the_key_channel_still_names_the_key(job_store, monkeypatch):
     described = vn.describe(TASK, job_store, api_key=None)
 
     assert described["eligible"] is False
-    assert "ANTHROPIC_API_KEY" in described["reason"]
+    assert "Anthropic API Key" in described["reason"]
 
 
 def test_other_providers_keys_do_not_stand_in_for_a_claude_one(job_store, monkeypatch):

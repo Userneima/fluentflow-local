@@ -77,6 +77,7 @@ const MediaText = ({hosted = null}) => {
         processLocalFolder,
         locateDroppedFile,
         processLocalPaths,
+        getCredentialsStatus,
     } = useApi();
     const {loadSettings} = useSettings();
     const navigate = useNavigate();
@@ -98,6 +99,18 @@ const MediaText = ({hosted = null}) => {
     const abortRef = useRef(null);
 
     useEffect(() => { checkHealth(); }, []);
+    // A fresh install has no model key, and nothing else on this page says so:
+    // the first job would finish with a transcript and no note, and the person
+    // would only then learn there was a setting to fill in. Said once, here,
+    // before they spend a job finding out.
+    const [noNoteKey, setNoNoteKey] = useState(false);
+    useEffect(() => {
+        getCredentialsStatus?.().then((status) => {
+            if (!status || status.visual_note_available) return;
+            const textKeys = ['deepseek', 'openai', 'dashscope', 'qwen'];
+            setNoNoteKey(!textKeys.some((key) => status[`${key}_api_key_configured`]));
+        }).catch(() => {});
+    }, []);
     useEffect(() => {
         if (mode === 'subtitle') setSourceMode('upload');
     }, [mode]);
@@ -614,6 +627,15 @@ const MediaText = ({hosted = null}) => {
             <section className="mx-auto h-dvh max-w-[1280px] overflow-y-auto px-8 py-9 hide-scrollbar">
                 <input ref={fileInputRef} type="file" multiple accept="video/*,audio/*,.mp4,.mov,.avi,.mkv,.webm,.mp3,.wav,.flac,.aac,.ogg,.m4a,.wma,.opus" onChange={handleMediaInput} className="hidden"/>
                 <input ref={subtitleInputRef} type="file" accept=".srt,.vtt,.txt,.md,text/plain,text/markdown" onChange={handleSubtitleSelect} className="hidden"/>
+
+                {noNoteKey && (
+                    <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-[#ecd9a8] bg-[#fff8e6] px-4 py-3 text-sm text-[#5c4a1a] dark:border-[#6b5a2a] dark:bg-[#2a2415] dark:text-[#f0dfb0]">
+                        <span>{lang === 'zh'
+                            ? '还没有填写模型 Key。现在处理只会得到转录稿和字幕，没有笔记。'
+                            : 'No model key yet. Jobs will produce a transcript and subtitles, but no note.'}</span>
+                        <Link to="/settings" className="shrink-0 font-extrabold underline">{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>
+                    </div>
+                )}
 
                 <div className="mb-7 flex flex-wrap items-center justify-center gap-3">
                     <span className="text-sm font-bold text-[#8a8a8a] dark:text-white/40">{lang === 'zh' ? '目前支持：' : 'Supported:'}</span>

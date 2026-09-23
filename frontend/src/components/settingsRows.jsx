@@ -401,6 +401,38 @@ export const DashscopeKeyField = ({state, description}) => {
     );
 };
 
+// The key the note written after an upload uses by default. Not in the advanced
+// fold: without it (or a text-model key) the person gets a transcript and no
+// note, so it is the one key a first-time user has to find.
+export const AnthropicKeyField = ({state}) => {
+    const {lang} = useI18n();
+    const {
+        credentialStatus, credentialConfigured, secretDraft, setSecretDraft, saveSecret,
+        secretSaving, secretFeedback, secretRetentionText, secretInputPlaceholder,
+    } = state;
+    const configured = credentialConfigured(credentialStatus, 'anthropic_api_key');
+    return (
+        <div className="space-y-2">
+            <label className={fieldLabelClass}>Anthropic API Key</label>
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+                {lang === 'zh'
+                    ? '填了它，Claude 会结合画面写笔记，能引用幻灯片和白板上的内容。没填时改用「高级 · 模型密钥」里的文本模型写纯文字版；两处都没填，只会得到转录稿和字幕。'
+                    : 'With this key, Claude writes the note while looking at the video frames, so it can quote slides and whiteboards. Without it the text model under “Advanced · Model keys” writes a text-only note; with neither, you get the transcript and subtitles only.'}
+                {' '}
+                <a className="font-semibold text-primary underline" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
+                    {lang === 'zh' ? '在 Anthropic 控制台创建 Key' : 'Create a key in the Anthropic Console'}
+                </a>
+            </p>
+            <p className="text-xs leading-relaxed text-on-surface-variant">{secretRetentionText(configured)}</p>
+            <div className="flex gap-2">
+                <input className={inputClass} placeholder={secretInputPlaceholder(configured)} type="password" value={secretDraft.anthropic_api_key || ''} onChange={e=>setSecretDraft(d=>({...d, anthropic_api_key: e.target.value}))}/>
+                <button type="button" disabled={secretSaving || !secretDraft.anthropic_api_key} onClick={()=>saveSecret('anthropic_api_key')} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
+            </div>
+            <SecretFeedback feedback={secretFeedback} keyName="anthropic_api_key" lang={lang}/>
+        </div>
+    );
+};
+
 export const FeishuAppCredentialRows = ({state}) => {
     const {lang} = useI18n();
     const {credentialStatus, secretDraft, setSecretDraft, saveSecret, secretSaving, secretFeedback, secretStatusText} = state;

@@ -49,3 +49,20 @@ def test_local_credentials_accept_only_user_owned_secrets(monkeypatch, tmp_path)
     assert response.json()["deepseek_api_key_configured"] is True
     assert "hosted_api_key_configured" not in response.json()
     assert "user-key" not in str(response.json())
+
+
+def test_credential_status_says_whether_the_visual_note_can_run(monkeypatch, tmp_path):
+    # The start page warns "you will get no note" from this flag, so it has to
+    # follow the key saved on the settings page, not only the environment.
+    monkeypatch.setenv("FLUENTFLOW_CONFIG_PATH", str(tmp_path / "config.json"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Pinned to the key channel: a checkout whose .env opts into the Claude Code
+    # subscription would otherwise report the note as available with no key.
+    monkeypatch.setenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", "api_key")
+    client = _client()
+
+    assert client.get("/credentials/status").json()["visual_note_available"] is False
+
+    client.post("/credentials", json={"anthropic_api_key": "sk-ant-test"})
+
+    assert client.get("/credentials/status").json()["visual_note_available"] is True

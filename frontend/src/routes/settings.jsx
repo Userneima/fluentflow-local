@@ -1,6 +1,7 @@
 import {Section} from '../components/settingsPrimitives.jsx';
 import {
     AdvancedKeysFold,
+    AnthropicKeyField,
     AutoExportRow,
     AutoIllustrateRow,
     ClearHistoryDialog,
@@ -41,6 +42,19 @@ const Settings = () => {
     return (
         <SettingsPageShell overlays={<ClearHistoryDialog state={state}/>}>
             <Section
+                id="notes"
+                title={lang === 'zh' ? '笔记' : 'Notes'}
+                description={lang === 'zh'
+                    ? '写笔记要调用模型，用的是你自己的模型账号。转录不需要。'
+                    : 'Writing a note calls a model on your own account. Transcription does not.'}
+            >
+                <div className="grid gap-3 p-5">
+                    <AnthropicKeyField state={state}/>
+                    {!uploadWritesItsOwnNote && <AutoIllustrateRow state={state}/>}
+                </div>
+            </Section>
+
+            <Section
                 id="transcription"
                 title={lang === 'zh' ? '转录' : 'Transcription'}
                 description={lang === 'zh'
@@ -63,17 +77,6 @@ const Settings = () => {
                 <DefaultSourceRow state={state}/>
             </Section>
 
-            {!uploadWritesItsOwnNote && (
-                <Section
-                    id="notes"
-                    title={lang === 'zh' ? '笔记' : 'Notes'}
-                    description={lang === 'zh' ? 'AI 生成笔记时的偏好。' : 'Preferences for AI-generated notes.'}
-                >
-                    <div className="p-5">
-                        <AutoIllustrateRow state={state}/>
-                    </div>
-                </Section>
-            )}
 
             <Section id="export" title={lang === 'zh' ? '导出' : 'Export'} description={lang === 'zh' ? '把笔记同步到飞书云文档。' : 'Sync notes to Feishu cloud docs.'}>
                 <div className="grid gap-3 p-5 md:grid-cols-2">
@@ -90,9 +93,9 @@ const Settings = () => {
             <AdvancedKeysFold
                 description={uploadWritesItsOwnNote
                     ? (lang === 'zh'
-                        ? '文本模型和它的密钥。上传后自动生成的笔记不经过这里——那份由本机登录的 Claude 写。这里只管编辑器里手动「重生笔记」和英文素材的翻译。'
-                        : 'The text model and its key. The note an upload writes for itself does not come from here — that one is written by the Claude login on this machine. This steers the editor’s manual rewrite and the translation of English material.')
-                    : (lang === 'zh' ? '服务商、模型和 API 密钥，进阶才需要展开。普通用户可忽略。' : 'Providers, models, and API keys. Open only if you know you need it.')}
+                        ? '文本模型和它的密钥。没填 Anthropic API Key 时，上传后的笔记由这里的模型写成纯文字版；编辑器里手动「重生笔记」和英文素材的翻译也用它。'
+                        : 'The text model and its key. Without an Anthropic API Key, the note an upload writes comes from this model as text only; the editor’s manual rewrite and the translation of English material use it too.')
+                    : (lang === 'zh' ? '写笔记用的文本模型和它的密钥。默认 DeepSeek，Key 在 platform.deepseek.com 创建。' : 'The text model that writes notes, and its key. DeepSeek by default; create a key at platform.deepseek.com.')}
             >
                 <TextModelKeyRows
                     state={state}

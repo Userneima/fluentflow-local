@@ -5,7 +5,7 @@
 # machine-wide CUDA Toolkit.
 #
 # It asks nothing along the way. Running this script is the decision; every
-# question it could ask (FFmpeg, the model) has one sensible answer, and asking
+# question it could ask (Python, Node.js, FFmpeg, the model) has one sensible answer, and asking
 # only chops the wait into pieces the user has to sit through. Missing pieces
 # are installed, each step says what it is doing, and only a failure stops it.
 #
@@ -24,6 +24,31 @@ function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed ($LASTEXITCODE): $FilePath $($Arguments -join ' ')"
     }
+}
+
+# A package winget just installed is not on this session's PATH until it is
+# re-read from the registry; without this the next Get-Command misses it and the
+# script tells the user to install the thing it installed a moment ago.
+function Update-SessionPath {
+    $env:Path = @(
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        [Environment]::GetEnvironmentVariable("Path", "User")
+    ) -join ";"
+}
+
+# Same treatment as FFmpeg below: required, one sensible answer, so install it
+# with winget instead of stopping to send the user off to a download page.
+function Install-WithWinget([string]$Id, [string]$What) {
+    $Winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if (-not $Winget) {
+        throw "$What was not found, and winget is not available to install it. Install $What yourself, then run this script again."
+    }
+    Write-Host "$What was not found. Installing it with winget..."
+    Invoke-Checked $Winget.Source @(
+        "install", "--id", $Id, "-e", "--source", "winget",
+        "--accept-source-agreements", "--accept-package-agreements"
+    )
+    Update-SessionPath
 }
 
 function Test-NvidiaAdapter {
@@ -58,9 +83,27 @@ if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
 }
 
 if (-not (Test-Path $Python)) {
+    # The dependencies need 3.10 or newer; an older `py -3` builds a venv that
+    # then fails deep inside pip with an error that never mentions the version.
     $PyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
-    if (-not $PyLauncher) {
-        throw "Python 3 was not found. Install Python 3, then run this script again."
+    $PythonOk = $false
+    if ($PyLauncher) {
+        # try/catch because Windows PowerShell 5.1 turns a native command's
+        # stderr into a terminating error under ErrorActionPreference=Stop, and
+        # py.exe with no Python installed writes exactly that.
+        try {
+            & $PyLauncher.Source -3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>$null
+            $PythonOk = ($LASTEXITCODE -eq 0)
+        } catch {
+            $PythonOk = $false
+        }
+    }
+    if (-not $PythonOk) {
+        Install-WithWinget "Python.Python.3.12" "Python 3.10 or newer"
+        $PyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
+        if (-not $PyLauncher) {
+            throw "Python was installed but py.exe is not on PATH yet. Open a new PowerShell window and run this script again."
+        }
     }
     Write-Host "Creating project virtual environment..."
     Invoke-Checked $PyLauncher.Source @("-3", "-m", "venv", $Venv)
@@ -78,13 +121,15 @@ if (Test-NvidiaAdapter) {
 
 $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if (-not $Npm) {
-    throw "npm was not found. Install a supported Node.js version, then run this script again."
+    Install-WithWinget "OpenJS.NodeJS.LTS" "Node.js"
+    $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $Npm) {
+        throw "Node.js was installed but npm is not on PATH yet. Open a new PowerShell window and run this script again."
+    }
 }
 
-# The exported local tree renames the local build to `build:frontend`; upstream
-# that name belongs to the hosted frontend and the local one is
-# `build:frontend:local`. Picking by what package.json actually declares keeps
-# this script correct in both trees instead of silently building the wrong one.
+# Picked by what package.json declares rather than hard-coded, so a renamed
+# build script fails loudly here instead of silently building nothing.
 $BuildScript = "build:frontend"
 $PackageJson = Join-Path $Repo "package.json"
 if (Test-Path $PackageJson) {
