@@ -150,35 +150,6 @@ def _duration_limit_error(
     return f"{name}时长过长：约 {duration_seconds / 60:.1f} 分钟，当前限制为 {limit_seconds / 60:.1f} 分钟。"
 
 
-def stt_engine_refusal(
-    provider: str,
-    *,
-    has_remote_policy: bool,
-    provider_label: str,
-    local_allowed: bool = True,
-) -> str | None:
-    """Why this job must stop rather than transcribe locally, or None to proceed.
-
-    Local faster-whisper is not a silent stand-in for the engine the submitter
-    chose. On 2026-08-06 a 3-hour recording reached the local engine on the
-    2 GiB hosted box because the queue had lost the engine name; memory ran out,
-    the machine stopped answering, and two hours later the job failed with a
-    message about video downloads. Refusing costs one clear error; substituting
-    cost the whole site.
-    """
-
-    if has_remote_policy:
-        return None
-    if provider != "local":
-        return (
-            f"云端转写引擎 {provider_label} 当前不可用：未找到可用的 API Key。"
-            "任务已停止，不会退回本地转写。"
-        )
-    if not local_allowed:
-        return "本地转写在公开服务上不可用：请选择云端转写引擎后重试。"
-    return None
-
-
 def _stale_job_seconds() -> float:
     try:
         return max(float(os.environ.get("FLUENTFLOW_STALE_JOB_SECONDS", "7200")), 60.0)
@@ -335,13 +306,8 @@ class MediaJobContext:
     enforce_history_retention: Any = None
     secret_resolver: Any = None
     keyframe_extractor: Any = None
-    remote_stt_policy: Any = None
     friendly_error: Any = None
     stt_provider_labeler: Any = None
-    # Whether this edition may transcribe on the machine running the job. The
-    # composition root decides; the pipeline only obeys. Defaults to True so the
-    # local edition keeps working without opting in.
-    local_stt_allowed: bool = True
     # Optional: give the pipeline a different file to work from than the one that
     # was uploaded. Called once, before audio extraction, with (task_id, path);
     # returns an object carrying `path`, `state` and `artifacts`, or None to leave
@@ -412,7 +378,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     secret_resolver = ctx.secret_resolver
     ai_kwargs_builder = ctx.ai_kwargs_builder
     keyframe_extractor = ctx.keyframe_extractor
-    remote_stt_policy = ctx.remote_stt_policy
     friendly_error_message = ctx.friendly_error
     stt_provider_label = ctx.stt_provider_labeler
     media_preprocessor = ctx.media_preprocessor
@@ -430,7 +395,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     enhanced_playback_audio_path: Path | None = None
     voice_presence: dict[str, float] | None = None
     stt_audio_take = "plain"
-    cloud_stt_metadata: dict[str, Any] = {}
     # Filled by the optional preprocessor below, merged into the result once
     # there is one. Held here rather than written straight to the job row because
     # the result does not exist yet at that point in the pipeline.
@@ -445,15 +409,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             raise RuntimeError("Media job context is missing an error presentation policy")
         if stt_provider_label is None:
             raise RuntimeError("Media job context is missing an STT provider label policy")
-        uses_remote_stt = remote_stt_policy is not None
-        refusal = stt_engine_refusal(
-            stt_provider_value,
-            has_remote_policy=uses_remote_stt,
-            provider_label=stt_provider_label(stt_provider_value),
-            local_allowed=ctx.local_stt_allowed,
-        )
-        if refusal:
-            raise RuntimeError(refusal)
 
         # ── Stage 0: Prepare the media the rest of the job reads ───
         # Optional and injected. The local edition removes the breath gaps here,
@@ -514,16 +469,10 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         # ("MyFitnessPal" survived as "MetfitnessPal", against nothing at all),
         # so the measured path wins over the one that ought to be better.
         stt_source, stt_audio_take = stt_audio_source(enhanced_playback_audio_path, in_path)
-        if uses_remote_stt:
-            audio_output_format = "mp3"
-            out_audio = await loop.run_in_executor(
-                None, lambda: extract_compressed_mp3(stt_source, output_path=Path(td) / "cloud_stt.mp3")
-            )
-        else:
-            audio_output_format = "wav"
-            out_audio = await loop.run_in_executor(
-                None, lambda: extract_stt_wav(stt_source, output_path=Path(td) / "stt.wav")
-            )
+        audio_output_format = "wav"
+        out_audio = await loop.run_in_executor(
+            None, lambda: extract_stt_wav(stt_source, output_path=Path(td) / "stt.wav")
+        )
         # The plain take is always kept: it is what the editor plays by default
         # and what a re-transcription reads, so a re-run reproduces this run.
         playback_audio_path = await loop.run_in_executor(
@@ -596,48 +545,77 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
 
         stt_started_at = time.perf_counter()
         stt_timeout = _stale_job_seconds()
-        if uses_remote_stt:
-            cloud_stt_metadata = remote_stt_policy.initial_metadata(out_audio, duration_estimate_sec)
+        stt_process, stt_queue = start_transcription_process(
+            out_audio,
+            model_size=model_size,
+            speed_profile=speed_profile,
+            language=language,
+        )
+        stt_result = None
+        stt_error: str | None = None
+        last_sent_progress = 22.0
+        last_emit_at = time.perf_counter()
+        while True:
+            if time.perf_counter() - stt_started_at > stt_timeout:
+                if stt_process is not None and stt_process.is_alive():
+                    stt_process.terminate()
+                    stt_process.join(timeout=5)
+                raise RuntimeError("STT processing timed out")
+            for message in drain_queue(stt_queue):
+                message_type = message.get("type")
+                if message_type == "progress":
+                    safe_frac = max(0.0, min(float(message.get("value") or 0), 1.0))
+                    progress_state["stt_progress"] = safe_frac
+                    progress_state["latest"] = max(
+                        float(progress_state.get("latest") or 22.0),
+                        22 + safe_frac * 38,  # 22–60 range
+                    )
+                    if duration_estimate_sec:
+                        progress_state["transcribed_seconds"] = safe_frac * duration_estimate_sec
+                elif message_type == "status":
+                    status = message.get("status") or progress_state["stt_status"]
+                    progress_state["stt_status"] = status
+                    progress_state["latest"] = max(
+                        float(progress_state.get("latest") or 22.0),
+                        status_progress_floor.get(str(status), 22.0),
+                    )
+                elif message_type == "result":
+                    stt_result = message.get("result")
+                elif message_type == "error":
+                    stt_error = message.get("error") or "STT worker failed"
 
-            def on_remote_stt_progress(status: str, metadata: dict[str, Any] | None = None) -> None:
-                progress_state["stt_status"] = status
-                if metadata:
-                    cloud_stt_metadata.update(metadata)
+            if stt_result is not None:
+                break
+            if stt_error:
+                raise RuntimeError(stt_error)
+            if stt_process is not None and not stt_process.is_alive():
+                for message in drain_queue(stt_queue):
+                    if message.get("type") == "result":
+                        stt_result = message.get("result")
+                    elif message.get("type") == "error":
+                        stt_error = message.get("error") or "STT worker failed"
+                if stt_result is not None:
+                    break
+                if stt_error:
+                    raise RuntimeError(stt_error)
+                raise RuntimeError(f"STT worker exited unexpectedly with code {stt_process.exitcode}")
 
-            progress_state["stt_status"] = remote_stt_policy.initial_status
-            remote_stt_task = loop.run_in_executor(
-                None,
-                lambda: remote_stt_policy.transcribe(
-                    out_audio,
-                    language=language,
-                    diarization_enabled=diarization_requested,
-                    timeout=stt_timeout,
-                    progress_callback=on_remote_stt_progress,
-                ),
-            )
-            last_emit_at = time.perf_counter()
-            while not remote_stt_task.done():
-                await asyncio.sleep(1)
-                now = time.perf_counter()
-                if now - stt_started_at > stt_timeout:
-                    remote_stt_task.cancel()
-                    try:
-                        await remote_stt_task
-                    except Exception:
-                        pass
-                    raise RuntimeError("STT processing timed out")
-                if now - last_emit_at < 2:
-                    continue
+            await asyncio.sleep(0.5)
+            latest_progress = float(progress_state.get("latest") or 22.0)
+            now = time.perf_counter()
+            if latest_progress >= last_sent_progress + 1 or now - last_emit_at >= 2:
+                last_sent_progress = max(last_sent_progress, latest_progress)
                 last_emit_at = now
                 upsert_job(
                     task_id=task_id_value,
                     status="running",
                     stage="stt",
-                    progress=25,
+                    progress=round(latest_progress, 1),
                     metadata={
                         "stt_provider": stt_provider_value,
                         "stt_provider_label": stt_provider_label(stt_provider_value),
-                        **cloud_stt_metadata,
+                        "stt_progress": round(float(progress_state.get("stt_progress") or 0), 4),
+                        "transcribed_seconds": round(float(progress_state.get("transcribed_seconds") or 0), 1),
                         "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
                         "stt_elapsed_seconds": round(now - stt_started_at, 1),
                         "stt_status": progress_state.get("stt_status"),
@@ -645,104 +623,17 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 )
                 yield _sse({
                     "stage": "stt",
-                    "progress": 25,
-                    **cloud_stt_metadata,
+                    "progress": round(latest_progress, 1),
+                    "stt_progress": round(float(progress_state.get("stt_progress") or 0), 4),
+                    "transcribed_seconds": round(float(progress_state.get("transcribed_seconds") or 0), 1),
                     "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
                     "stt_elapsed_seconds": round(now - stt_started_at, 1),
                     "stt_status": progress_state.get("stt_status"),
                     "stt_provider": stt_provider_value,
                 })
-            tr = remote_stt_task.result()
-        else:
-            stt_process, stt_queue = start_transcription_process(
-                out_audio,
-                model_size=model_size,
-                speed_profile=speed_profile,
-                language=language,
-            )
-            stt_result = None
-            stt_error: str | None = None
-            last_sent_progress = 22.0
-            last_emit_at = time.perf_counter()
-            while True:
-                if time.perf_counter() - stt_started_at > stt_timeout:
-                    if stt_process is not None and stt_process.is_alive():
-                        stt_process.terminate()
-                        stt_process.join(timeout=5)
-                    raise RuntimeError("STT processing timed out")
-                for message in drain_queue(stt_queue):
-                    message_type = message.get("type")
-                    if message_type == "progress":
-                        safe_frac = max(0.0, min(float(message.get("value") or 0), 1.0))
-                        progress_state["stt_progress"] = safe_frac
-                        progress_state["latest"] = max(
-                            float(progress_state.get("latest") or 22.0),
-                            22 + safe_frac * 38,  # 22–60 range
-                        )
-                        if duration_estimate_sec:
-                            progress_state["transcribed_seconds"] = safe_frac * duration_estimate_sec
-                    elif message_type == "status":
-                        status = message.get("status") or progress_state["stt_status"]
-                        progress_state["stt_status"] = status
-                        progress_state["latest"] = max(
-                            float(progress_state.get("latest") or 22.0),
-                            status_progress_floor.get(str(status), 22.0),
-                        )
-                    elif message_type == "result":
-                        stt_result = message.get("result")
-                    elif message_type == "error":
-                        stt_error = message.get("error") or "STT worker failed"
-
-                if stt_result is not None:
-                    break
-                if stt_error:
-                    raise RuntimeError(stt_error)
-                if stt_process is not None and not stt_process.is_alive():
-                    for message in drain_queue(stt_queue):
-                        if message.get("type") == "result":
-                            stt_result = message.get("result")
-                        elif message.get("type") == "error":
-                            stt_error = message.get("error") or "STT worker failed"
-                    if stt_result is not None:
-                        break
-                    if stt_error:
-                        raise RuntimeError(stt_error)
-                    raise RuntimeError(f"STT worker exited unexpectedly with code {stt_process.exitcode}")
-
-                await asyncio.sleep(0.5)
-                latest_progress = float(progress_state.get("latest") or 22.0)
-                now = time.perf_counter()
-                if latest_progress >= last_sent_progress + 1 or now - last_emit_at >= 2:
-                    last_sent_progress = max(last_sent_progress, latest_progress)
-                    last_emit_at = now
-                    upsert_job(
-                        task_id=task_id_value,
-                        status="running",
-                        stage="stt",
-                        progress=round(latest_progress, 1),
-                        metadata={
-                            "stt_provider": stt_provider_value,
-                            "stt_provider_label": stt_provider_label(stt_provider_value),
-                            "stt_progress": round(float(progress_state.get("stt_progress") or 0), 4),
-                            "transcribed_seconds": round(float(progress_state.get("transcribed_seconds") or 0), 1),
-                            "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
-                            "stt_elapsed_seconds": round(now - stt_started_at, 1),
-                            "stt_status": progress_state.get("stt_status"),
-                        },
-                    )
-                    yield _sse({
-                        "stage": "stt",
-                        "progress": round(latest_progress, 1),
-                        "stt_progress": round(float(progress_state.get("stt_progress") or 0), 4),
-                        "transcribed_seconds": round(float(progress_state.get("transcribed_seconds") or 0), 1),
-                        "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
-                        "stt_elapsed_seconds": round(now - stt_started_at, 1),
-                        "stt_status": progress_state.get("stt_status"),
-                        "stt_provider": stt_provider_value,
-                    })
-            if stt_process is not None:
-                stt_process.join(timeout=2)
-            tr = stt_result
+        if stt_process is not None:
+            stt_process.join(timeout=2)
+        tr = stt_result
         stt_elapsed_sec = time.perf_counter() - stt_started_at
         upsert_job(
             task_id=task_id_value,
@@ -752,7 +643,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             metadata={
                 "stt_provider": stt_provider_value,
                 "stt_provider_label": stt_provider_label(stt_provider_value),
-                **cloud_stt_metadata,
                 "stt_progress": 1,
                 "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
             },
@@ -761,7 +651,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             "stage": "stt",
             "progress": 60,
             "stt_progress": 1,
-            **cloud_stt_metadata,
             "transcribed_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
             "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
             "stt_provider": stt_provider_value,
@@ -770,7 +659,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         duration_sec = tr.duration or (tr.segments[-1].end if tr.segments else 0)
         stt_realtime_factor = _stt_realtime_factor(stt_elapsed_sec, duration_sec)
         transcript_text = tr.text
-        stt_model_for_result = remote_stt_policy.model_name if uses_remote_stt else model_size
+        stt_model_for_result = model_size
         log_event(
             task_id=task_id_value,
             event_name="stt_completed",
@@ -791,7 +680,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 stt_model=stt_model_for_result,
                 stt_speed=speed_profile,
                 stt_language=language,
-                **cloud_stt_metadata,
                 device_requested=getattr(tr, "device_requested", None) or "auto",
                 device_resolved=getattr(tr, "device_resolved", None),
                 vad_filter=getattr(tr, "vad_filter", None),
@@ -825,8 +713,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 base_result["playback_media_kind"] = DEBREATH_MEDIA_KIND
             else:
                 base_result["transcript_media"] = TRANSCRIPT_MEDIA_SOURCE
-        if uses_remote_stt:
-            base_result["cloud_transcription"] = remote_stt_policy.result_diagnostics(cloud_stt_metadata)
         cleanup_result, raw_segments_payload = clean_transcript(
             ctx, transcription=tr, duration_sec=duration_sec
         )
@@ -834,11 +720,9 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         segments_payload = list(cleanup_result.cleaned_segments)
         segments_payload, speaker_payload = await label_speakers(
             ctx,
-            transcription=tr,
             segments_payload=segments_payload,
             duration_sec=duration_sec,
             audio_path=out_audio,
-            uses_remote_stt=uses_remote_stt,
         )
         source_language = _normalized_source_language(getattr(tr, "language", None)) or _normalized_source_language(language)
         bilingual_segments: list[dict[str, Any]] = []
@@ -1398,7 +1282,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 summary_md=summary_md,
                 summary_status=summary_status,
                 lark_success=lark_success,
-                cloud_stt_metadata=cloud_stt_metadata,
             )
         )
         raise
@@ -1414,7 +1297,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 summary_md=summary_md,
                 summary_status=summary_status,
                 lark_success=lark_success,
-                cloud_stt_metadata=cloud_stt_metadata,
             ),
             exc,
         )

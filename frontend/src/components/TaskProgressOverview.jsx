@@ -183,19 +183,17 @@ const routeLabel = (route, isZh) => {
     const model = String(route?.stt_model || '').trim();
     const modelText = model ? `${model}${isZh ? ' 模型' : ' model'}` : '';
     if (transcription === 'transcript_file') return isZh ? '导入字幕整理' : 'subtitle import';
-    if (transcription === 'local' || provider === 'local') {
+    // Every transcription in this app runs on this machine, including records
+    // whose stored provider still names an old cloud engine.
+    if (transcription || provider) {
         return [isZh ? '本地转写' : 'local transcription', modelText].filter(Boolean).join(isZh ? ' · ' : ' · ');
-    }
-    if (transcription === 'cloud' || provider) {
-        return [isZh ? '云端转写' : 'cloud transcription', provider, modelText].filter(Boolean).join(isZh ? ' · ' : ' · ');
     }
     return '';
 };
 
 const currentJobRouteLabel = (job, isZh) => {
     if (!job || job.sourceType === 'transcript_file') return isZh ? '导入字幕整理' : 'subtitle import';
-    const local = String(job.sttProvider || '').toLowerCase() === 'local';
-    const route = local ? (isZh ? '本地转写' : 'local transcription') : (isZh ? '云端转写' : 'cloud transcription');
+    const route = isZh ? '本地转写' : 'local transcription';
     const model = job.sttModel ? `${job.sttModel}${isZh ? ' 模型' : ' model'}` : '';
     return [route, model, job.sttSpeed].filter(Boolean).join(' / ');
 };

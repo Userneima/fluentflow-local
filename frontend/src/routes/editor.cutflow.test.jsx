@@ -11,7 +11,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {cleanup, render, screen, waitFor} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 
-const runtimeConfig = {publicMode: false, allowedSttProviders: ['local'], defaultSttProvider: 'local', limits: {}};
+const runtimeConfig = {allowedSttProviders: ['local'], defaultSttProvider: 'local', limits: {}};
 
 let lastResult = null;
 let artifactFetch = null;

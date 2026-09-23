@@ -25,7 +25,6 @@ def _queue_options_from_form(
     stt_speed: Optional[str],
     stt_language: Optional[str],
     stt_provider: Optional[str],
-    elevenlabs_api_key: Optional[str],
     speaker_diarization: Optional[str],
     voice_enhance: Optional[str] = None,
     lark_app_id: Optional[str],

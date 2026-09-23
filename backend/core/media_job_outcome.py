@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from backend.core.event_context import (
@@ -103,7 +103,6 @@ class TerminalReport:
     summary_md: str = ""
     summary_status: str | None = None
     lark_success: bool | None = None
-    cloud_stt_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _stop_stt_process(report: TerminalReport) -> None:
@@ -174,7 +173,6 @@ def report_failed(report: TerminalReport, exc: Exception) -> str:
         metadata=event_metadata(
             route="/process",
             stt_provider=ctx.stt_provider_value,
-            **report.cloud_stt_metadata,
             raw_error=str(exc),
         ),
     )
@@ -207,9 +205,6 @@ def report_failed(report: TerminalReport, exc: Exception) -> str:
         source_file_size_mb=ctx.source_file_size_mb,
         summary_status=report.summary_status,
         error_reason=friendly_error,
-        metadata={
-            "stt_provider": ctx.stt_provider_value,
-            **report.cloud_stt_metadata,
-        },
+        metadata={"stt_provider": ctx.stt_provider_value},
     )
     return friendly_error

@@ -9,7 +9,6 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {cleanup, render, screen} from '@testing-library/react';
 
 const runtimeConfig = {
-    publicMode: false,
     allowedSttProviders: ['local'],
     defaultSttProvider: 'local',
     showMaintainerSettings: true,

@@ -73,11 +73,9 @@ def _diarization_timeout_seconds(duration_seconds: float | None) -> float:
 async def label_speakers(
     ctx: Any,
     *,
-    transcription: Any,
     segments_payload: list[dict[str, Any]],
     duration_sec: float | None,
     audio_path: Any,
-    uses_remote_stt: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Attach speaker labels to the segments, and describe what happened.
 
@@ -86,13 +84,12 @@ async def label_speakers(
     recorded and swallowed, because a transcript without labels is still the
     thing the user asked for.
 
-    A cloud engine returns its own labels with the transcript, so that branch
-    only counts what came back. A local run has to diarize the audio itself,
-    which is the expensive, hang-prone path the timeout exists for.
+    Diarizing the audio is the expensive, hang-prone path the timeout exists
+    for.
     """
     speaker_payload: dict[str, Any] = {
         "requested": ctx.diarization_requested,
-        "available": True if uses_remote_stt else diarization_status()["available"],
+        "available": diarization_status()["available"],
         "applied": False,
     }
     rounded_duration = round(duration_sec, 1) if duration_sec is not None else None
@@ -104,48 +101,7 @@ async def label_speakers(
         "source_file_size_mb": ctx.source_file_size_mb,
         "stage": "speaker_diarization",
     }
-    engine_backend = getattr(transcription, "model_source", None) or "cloud_transcription"
-
-    if ctx.diarization_requested and uses_remote_stt:
-        speakers = sorted({
-            str(segment.get("speaker"))
-            for segment in segments_payload
-            if isinstance(segment, dict) and segment.get("speaker")
-        })
-        if speakers:
-            speaker_payload.update({
-                "applied": True,
-                "backend": engine_backend,
-                "speaker_count": len(speakers),
-            })
-            log_event(
-                event_name="speaker_diarization_completed",
-                success=True,
-                metadata=event_metadata(
-                    route="/process",
-                    backend=engine_backend,
-                    speaker_count=len(speakers),
-                ),
-                **common,
-            )
-        else:
-            error_reason = (
-                getattr(transcription, "diarization_error", None)
-                or f"{ctx.stt_provider_labeler(ctx.stt_provider_value)} did not return speaker labels"
-            )
-            speaker_payload.update({
-                "applied": False,
-                "backend": engine_backend,
-                "error_reason": error_reason,
-            })
-            log_event(
-                event_name="speaker_diarization_failed",
-                success=False,
-                error_reason=error_reason,
-                metadata=event_metadata(route="/process", backend=engine_backend),
-                **common,
-            )
-    elif ctx.diarization_requested:
+    if ctx.diarization_requested:
         started_at = time.perf_counter()
         budget = _diarization_timeout_seconds(duration_sec)
         try:

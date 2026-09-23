@@ -1,7 +1,7 @@
 """FluentFlow Local edition backend composition root.
 
 Assembles ONLY local routers on the shared app factory: no accounts, quota,
-admin, OSS, ElevenLabs, hosted OAuth, or desktop-sync surfaces exist in this
+admin, OSS, cloud transcription, hosted OAuth, or desktop-sync surfaces exist in this
 application. The HTTP boundary middleware keeps the server loopback-only by
 default, and startup recovers jobs stranded by a previous shutdown.
 

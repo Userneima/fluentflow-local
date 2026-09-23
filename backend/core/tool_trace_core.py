@@ -2,14 +2,13 @@
 
 The trace maps real execution events into an inspectable ordered list of
 steps derived from result fields, job metadata, and stage markers that
-already exist in the system. Provider-specific vendor naming for cloud STT is
-injected by the edition facade (``tool_trace.py`` on the hosted side) so this
-core stays free of hosted provider terms.
+already exist in the system. Transcription in this edition always runs on the
+local machine, so the STT step is always the local engine.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any
 
 TOOL_TRACE_VERSION = "1"
 
@@ -25,7 +24,6 @@ def _tool_label(tool_id: str, result: dict[str, Any], job: dict[str, Any]) -> st
         "save_source": "保存源文件",
         "extract_audio": "提取音频",
         "local_stt": "本地转录",
-        "cloud_stt": "云端转录",
         "diarize_speakers": "说话人区分",
         "cleanup_transcript": "清洗转录",
         "rebuild_paragraphs": "重组段落",
@@ -40,8 +38,6 @@ def _tool_label(tool_id: str, result: dict[str, Any], job: dict[str, Any]) -> st
 def _tool_vendor(tool_id: str, result: dict[str, Any], job: dict[str, Any]) -> str | None:
     if tool_id == "local_stt":
         return "faster-whisper"
-    if tool_id == "cloud_stt":
-        return "cloud-stt"
     if tool_id == "diarize_speakers":
         return "pyannote"
     if tool_id in ("generate_note", "plan_note_mode"):
@@ -72,10 +68,6 @@ def _step_metadata(tool_id: str, result: dict[str, Any], job: dict[str, Any]) ->
         meta["language"] = result.get("detected_language") or result.get("source_language")
         meta["realtime_factor"] = result.get("stt_realtime_factor")
         meta["device"] = result.get("stt_device")
-    elif tool_id == "cloud_stt":
-        meta["language"] = result.get("source_language")
-        meta["provider"] = result.get("stt_provider")
-        meta["model"] = result.get("stt_model")
     elif tool_id == "diarize_speakers":
         speaker_info = result.get("speaker_diarization")
         if isinstance(speaker_info, dict):
@@ -151,7 +143,6 @@ def build_tool_trace(
     result: dict[str, Any],
     *,
     job: dict[str, Any] | None = None,
-    cloud_stt_vendor: Optional[Callable[[str], str | None]] = None,
 ) -> dict[str, Any]:
     result = result if isinstance(result, dict) else {}
     job = job if isinstance(job, dict) else {}
@@ -179,8 +170,7 @@ def build_tool_trace(
 
     # Step 3: STT (audio/video/link only)
     if has_audio:
-        stt_provider = _text(result.get("stt_provider"))
-        stt_tool = "local_stt" if stt_provider == "local" else "cloud_stt"
+        stt_tool = "local_stt"
         stt_error = _text(result.get("stt_error"))
         stt_dur = result.get("stt_elapsed_seconds")
         stt_step = _make_step(stt_tool, result, job,
@@ -253,15 +243,6 @@ def build_tool_trace(
         ))
         if lark_status == "failed":
             error_steps.append("export_lark")
-
-    # Edition facades name the cloud STT vendor (this core has no provider map).
-    if cloud_stt_vendor is not None:
-        provider = _text(result.get("stt_provider") or job.get("stt_provider"))
-        for step in steps:
-            if step.get("tool") == "cloud_stt":
-                vendor = cloud_stt_vendor(provider)
-                if vendor:
-                    step["vendor"] = vendor
 
     # Build overall trace
     trace_status = "completed"

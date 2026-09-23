@@ -109,13 +109,3 @@ def test_a_summary_status_already_set_is_not_overwritten(ctx, recorded):
     report = outcome.TerminalReport(ctx=ctx, current_stage="summary", summary_status="skipped")
     outcome.report_failed(report, RuntimeError("boom"))
     assert report.summary_status == "skipped"
-
-
-def test_the_cloud_transcription_detail_survives_into_the_failure_record(ctx, recorded):
-    report = outcome.TerminalReport(
-        ctx=ctx, current_stage="stt", cloud_stt_metadata={"stt_request_id": "req-9"}
-    )
-    outcome.report_failed(report, RuntimeError("boom"))
-    failed = [e for e in recorded.events if e["event_name"] == "task_failed"][-1]
-    assert failed["metadata"]["stt_request_id"] == "req-9"
-    assert recorded.jobs[-1]["metadata"]["stt_request_id"] == "req-9"

@@ -266,22 +266,10 @@ export const diagnoseTaskError = (message, lang='zh') => {
                 code: 'diarization_unsupported',
                 titleZh: '说话人区分不可用',
                 titleEn: 'Diarization unavailable',
-                detailZh: '本地说话人区分模型无法处理当前音频长度。请关闭说话人区分，或切换云端转录。',
-                detailEn: 'Local diarization cannot handle this audio length. Disable diarization or use cloud transcription.',
+                detailZh: '本地说话人区分模型无法处理当前音频长度。请关闭说话人区分。',
+                detailEn: 'Local diarization cannot handle this audio length. Disable diarization.',
                 nextZh: '关闭说话人区分后重试。',
                 nextEn: 'Disable diarization and retry.',
-            }),
-        ],
-        [
-            lower.includes('eof occurred in violation of protocol') || lower.includes('broken pipe'),
-            taskErrorDiagnosis({
-                code: 'cloud_upload_failed',
-                titleZh: '云端上传失败',
-                titleEn: 'Cloud upload failed',
-                detailZh: '云端上传中断：通常是网络或云端转录服务断开连接。请重试；如果文件很大，先压缩或拆分音频。',
-                detailEn: 'Cloud upload was interrupted. Retry, or reduce/split the audio for very large files.',
-                nextZh: '检查网络后重试，或改用本地转录。',
-                nextEn: 'Check the network and retry, or use local transcription.',
             }),
         ],
         [
@@ -334,32 +322,6 @@ export const diagnoseTaskError = (message, lang='zh') => {
                 detailEn: 'Transcription was stopped at the time limit, usually because the recording is long or the chosen engine cannot finish it on this machine.',
                 nextZh: '在设置里把「转录速度」调成「快速」后重试；如果素材很长，先拆成几段再处理。',
                 nextEn: 'Set Transcription speed to Fast in settings and retry, or split a long recording into parts.',
-            }),
-        ],
-        [
-            raw.includes('本地转写在公开服务上不可用'),
-            taskErrorDiagnosis({
-                code: 'local_stt_not_available',
-                titleZh: '本地转写在公开服务上不可用',
-                titleEn: 'Local transcription is not available here',
-                detailZh: '这台服务器不提供本地转写。任务已停止，没有改用其他引擎。',
-                detailEn: 'This server does not run local transcription. The task stopped instead of switching engines.',
-                nextZh: '在设置里选择云端转写引擎后重新提交。',
-                nextEn: 'Pick a cloud engine in settings and submit again.',
-                retryable: false,
-            }),
-        ],
-        [
-            raw.includes('云端转写引擎') && lower.includes('未找到可用的 api key'),
-            taskErrorDiagnosis({
-                code: 'cloud_stt_key_missing',
-                titleZh: '云端转写引擎不可用',
-                titleEn: 'The cloud transcription engine is unavailable',
-                detailZh: '所选云端转写引擎没有可用的 API Key，任务已停止，不会退回本地转写。',
-                detailEn: 'The selected cloud engine has no usable API key. The task stopped rather than falling back to local transcription.',
-                nextZh: '联系维护者补齐该引擎的 API Key，或改用另一个已配置的云端引擎。',
-                nextEn: 'Ask the maintainer to configure the key, or pick another cloud engine.',
-                retryable: false,
             }),
         ],
         [
@@ -597,9 +559,6 @@ export const sttStatusLabel = (status, t) => {
         waiting_first_segment: 'dash.sttWaitingFirst',
         transcribing_chunks: 'dash.sttChunks',
         transcribing_segments: 'dash.sttSegments',
-        elevenlabs_uploading: 'dash.sttCloudUpload',
-        elevenlabs_processing: 'dash.sttCloudWait',
-        elevenlabs_normalizing: 'dash.sttCloudDownload',
     }[status || ''];
     return key ? t(key) : t('dash.waitingSegment');
 };

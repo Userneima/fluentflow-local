@@ -1,5 +1,7 @@
-export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashscopeApiKey', 'qwenApiKey', 'larkAppId', 'larkAppSecret', 'elevenLabsApiKey'];
-export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi'];
+export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashscopeApiKey', 'qwenApiKey', 'larkAppId', 'larkAppSecret'];
+// Keys an older build could leave in stored settings. elevenLabsApiKey belonged
+// to a cloud transcription engine this app does not have; it is dropped, never sent.
+export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi', 'elevenLabsApiKey'];
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-reasoner';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
 export const DEFAULT_QWEN_MODEL = 'qwen3.7-plus';
@@ -85,7 +87,6 @@ export const sensitivePatchFromSettings = (settings={}) => ({
     dashscope_api_key: settings.dashscopeApiKey || settings.qwenApiKey || '',
     lark_app_id: settings.larkAppId || '',
     lark_app_secret: settings.larkAppSecret || '',
-    elevenlabs_api_key: settings.elevenLabsApiKey || '',
 });
 
 export const noteModeLabel = (mode, lang) => {

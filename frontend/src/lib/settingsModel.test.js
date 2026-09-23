@@ -4,6 +4,7 @@ import {
     LARK_EXPORT_ROUTE_OPENAPI,
     normalizeLarkExportRoute,
     sanitizeSettings,
+    sensitivePatchFromSettings,
 } from './settingsModel.js';
 
 describe('Lark export route', () => {
@@ -31,5 +32,13 @@ describe('speaker diarization default', () => {
 
     it('keeps an explicit opt-in', () => {
         expect(sanitizeSettings({speakerDiarization: true}).speakerDiarization).toBe(true);
+    });
+});
+
+describe('old cloud transcription settings', () => {
+    it('drops a stored ElevenLabs key instead of keeping or sending it', () => {
+        const stored = {elevenLabsApiKey: 'old-key', sttProvider: 'elevenlabs'};
+        expect(sanitizeSettings(stored)).not.toHaveProperty('elevenLabsApiKey');
+        expect(sensitivePatchFromSettings(stored)).not.toHaveProperty('elevenlabs_api_key');
     });
 });

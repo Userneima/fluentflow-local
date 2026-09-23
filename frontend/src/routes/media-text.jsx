@@ -742,7 +742,7 @@ const MediaText = () => {
                             </div>
                             <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
                                 <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{lang === 'zh' ? '转录路线' : 'Transcription'}</p>
-                                <p className="mt-1 truncate text-sm font-extrabold">{currentJob.sttProvider ? (String(currentJob.sttProvider).toLowerCase() === 'local' ? (lang === 'zh' ? '本地' : 'Local') : (lang === 'zh' ? '云端' : 'Cloud')) : '-'}</p>
+                                <p className="mt-1 truncate text-sm font-extrabold">{currentJob.sttProvider ? (lang === 'zh' ? '本地' : 'Local') : '-'}</p>
                             </div>
                             <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
                                 <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{lang === 'zh' ? 'STT 模型' : 'STT model'}</p>

@@ -6,7 +6,6 @@
 const LOCAL_PROVIDER = 'local';
 
 const localRuntimeConfig = (config = {}) => ({
-    publicMode: false,
     allowedSttProviders: [LOCAL_PROVIDER],
     defaultSttProvider: LOCAL_PROVIDER,
     showMaintainerSettings: config.show_maintainer_settings !== false,
@@ -19,15 +18,14 @@ const localRuntimeConfig = (config = {}) => ({
     writesItsOwnNote: config.features?.writes_its_own_note === true,
 });
 
+// Every stored or submitted value, including a cloud engine name left in an
+// older browser's settings, means local transcription here.
 export const normalizeSttProvider = () => LOCAL_PROVIDER;
-export const isCloudSttProvider = () => false;
-export const isCloudSttConfigured = () => true;
 // What to SHOW as selected in the transcription picker.
 export const effectiveSttProvider = () => LOCAL_PROVIDER;
 // What to SEND when submitting a task. There is one route, so submitting it
 // explicitly is always correct and there is no server-side default to defer to.
 export const submittedSttProvider = () => LOCAL_PROVIDER;
-export const cloudSttMissingMessage = () => '';
 export const defaultRuntimeConfig = () => localRuntimeConfig();
 export const normalizeRuntimeConfig = (config = {}) => localRuntimeConfig(config);
 // Options for the settings-page transcription picker: [{value, label,

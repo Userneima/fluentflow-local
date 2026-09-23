@@ -1,10 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {
-    cloudSttMissingMessage,
     defaultRuntimeConfig,
     effectiveSttProvider,
-    isCloudSttConfigured,
-    isCloudSttProvider,
     normalizeRuntimeConfig,
     normalizeSttProvider,
     sttProviderLabel,
@@ -17,9 +14,6 @@ describe('local transcription policy', () => {
     it('knows exactly one transcription route', () => {
         expect(normalizeSttProvider('anything')).toBe('local');
         expect(effectiveSttProvider({sttProvider: 'cloud'}, defaultRuntimeConfig())).toBe('local');
-        expect(isCloudSttProvider('cloud')).toBe(false);
-        expect(isCloudSttConfigured('cloud', {})).toBe(true);
-        expect(cloudSttMissingMessage('zh')).toBe('');
     });
 
     it('normalizes runtime config to local-only providers', () => {
@@ -31,9 +25,15 @@ describe('local transcription policy', () => {
         });
         expect(config.allowedSttProviders).toEqual(['local']);
         expect(config.defaultSttProvider).toBe('local');
-        expect(config.publicMode).toBe(false);
         expect(config.jobRetryFromStoredSource).toBe(true);
         expect(config.limits).toEqual({max_file_mb: 10});
+    });
+
+    it('treats a cloud engine left in old stored settings as local', () => {
+        for (const legacy of ['elevenlabs', 'dashscope', 'cloud']) {
+            expect(normalizeSttProvider(legacy)).toBe('local');
+            expect(effectiveSttProvider({sttProvider: legacy}, defaultRuntimeConfig())).toBe('local');
+        }
     });
 
     it('offers a single local route option and label', () => {
