@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {useApi, useAuth, useI18n} from '../app/shared.jsx';
+import {useApi, useI18n} from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import {markBackendJob} from './taskState.js';
 
@@ -20,19 +20,13 @@ import {markBackendJob} from './taskState.js';
 //  - refreshFailedZh / refreshFailedEn: the page's refresh-failed wording.
 export function useJobPolling({hasLiveJobs, errorOnAllOnly = false, refreshFailedZh, refreshFailedEn}) {
     const {lang} = useI18n();
-    const {authMode, user} = useAuth();
     const {tasks: jobs, ingestJobs} = useApp();
     const {getJobs} = useApi();
 
-    const canUseTaskCache = authMode !== 'accounts' || !!user?.id;
-    const [loading, setLoading] = useState(() => canUseTaskCache && jobs.length === 0);
+    const [loading, setLoading] = useState(() => jobs.length === 0);
     const [error, setError] = useState(null);
 
     const loadJobs = useCallback(async () => {
-        if (!canUseTaskCache) {
-            setLoading(false);
-            return;
-        }
         const results = await Promise.allSettled([
             getJobs(100),
             getJobs(100, {sttProvider: 'local'}),
@@ -48,7 +42,7 @@ export function useJobPolling({hasLiveJobs, errorOnAllOnly = false, refreshFaile
         if (fetchedJobs.length) ingestJobs(fetchedJobs);
         setError(shouldWarn ? (lang === 'zh' ? refreshFailedZh : refreshFailedEn) : null);
         setLoading(false);
-    }, [canUseTaskCache, getJobs, lang, ingestJobs, errorOnAllOnly, refreshFailedZh, refreshFailedEn]);
+    }, [getJobs, lang, ingestJobs, errorOnAllOnly, refreshFailedZh, refreshFailedEn]);
 
     const loadJobsRef = useRef(loadJobs);
     useEffect(() => { loadJobsRef.current = loadJobs; }, [loadJobs]);
@@ -64,5 +58,5 @@ export function useJobPolling({hasLiveJobs, errorOnAllOnly = false, refreshFaile
         };
     }, [hasLiveJobs]);
 
-    return {loading, setLoading, error, setError, loadJobs, loadJobsRef, canUseTaskCache};
+    return {loading, setLoading, error, setError, loadJobs, loadJobsRef};
 }

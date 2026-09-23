@@ -35,7 +35,7 @@ from fastapi.testclient import TestClient
 
 import backend.core.debreath_job as dj
 import backend.core.visual_note_job as vn
-import backend.routers.job_visual_note as jvn
+import backend.routers.local_job_visual_note as jvn
 import backend.routers.local_agent as local_agent
 from backend.core.local_agent_package import build_agent_task_package
 from backend.core.result_artifacts import VISUAL_NOTE_KIND, artifact_target_path

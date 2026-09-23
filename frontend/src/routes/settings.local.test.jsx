@@ -15,7 +15,6 @@ const runtimeConfig = {
     showMaintainerSettings: true,
     writesItsOwnNote: true,
     limits: {},
-    guestTrial: {enabled: false},
 };
 
 let stored = {};

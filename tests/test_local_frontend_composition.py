@@ -88,28 +88,12 @@ def test_local_root_uses_the_account_free_state_provider():
 
 
 def test_local_frontend_graph_omits_extracted_hosted_api_module():
-    """The hosted-only fetch helpers (guest trial, quota, admin, hosted Feishu
-    OAuth, desktop sync) were inverted out of shared.jsx into hostedApi.js,
-    registered only by the hosted composition root. It must be unreachable from
-    the local root, while the registry seam (hostedApiExtension.js) stays."""
     graph = _frontend_import_graph(LOCAL_ROOT)
     assert "frontend/src/app/hostedApi.js" not in graph
-    assert "frontend/src/app/hostedApiExtension.js" in graph
 
 
-# Source terms fully removed from the local import graph. The hosted route
-# strings left with the API-helper inversion (hostedApi.js); the cloud STT
-# provider left with the STT policy seam (sttPolicy.js defaults to the local
-# policy, app.jsx registers HOSTED_STT_POLICY, and settings/agent-tasks render
-# policy-provided options and labels instead of naming the provider); the
-# guest-trial cancel left when the record-cancel seam landed (shared pages call
-# cancelJobRecord, whose default is the only cancel this edition has and whose
-# hosted override routes a trial record through the trial's own token); the
-# hosted Feishu-OAuth route identifier left when the Lark route policy default
-# flipped to the local edition (app.jsx registers HOSTED_LARK_EXPORT_POLICY,
-# the settings page renders policy-provided extra route options, and
-# settingsModel keeps only the plain legacy stored values as migration
-# inputs that remap to the fallback when no OAuth route is registered).
+# Hosted route strings, provider names, and storage keys that must not appear
+# anywhere in the local import graph.
 LOCAL_GRAPH_CLEARED_SOURCE_TERMS = (
     "/guest-trial",
     "/desktop-sync/",

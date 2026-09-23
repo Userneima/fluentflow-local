@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import backend.routers.job_read as job_read
+import backend.routers.local_job_read as local_job_read
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.routers.local_job_read import router
 
@@ -25,7 +25,7 @@ def test_events_missing_job_returns_404(monkeypatch):
         scoped.append((task_id, client_id))
         return None
 
-    monkeypatch.setattr(job_read, "get_job", missing)
+    monkeypatch.setattr(local_job_read, "get_job", missing)
 
     response = _client().get("/jobs/nope/events", headers=_HEADERS)
 
@@ -37,7 +37,7 @@ def test_events_stream_uses_local_hub(monkeypatch):
     async def fake_subscribe(task_id, *, since=0):
         yield f"data: {task_id}:{since}\n\n"
 
-    monkeypatch.setattr(job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id})
+    monkeypatch.setattr(local_job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id})
     monkeypatch.setattr(JOB_EVENTS, "subscribe", fake_subscribe)
 
     response = _client().get("/jobs/local-1/events?since=3", headers=_HEADERS)
@@ -50,14 +50,14 @@ def test_events_stream_uses_local_hub(monkeypatch):
 # ---- source -----------------------------------------------------------------
 
 def test_source_missing_job_returns_404(monkeypatch):
-    monkeypatch.setattr(job_read, "get_job", lambda task_id, client_id=None: None)
+    monkeypatch.setattr(local_job_read, "get_job", lambda task_id, client_id=None: None)
     response = _client().get("/jobs/local-1/source", headers=_HEADERS)
     assert response.status_code == 404
 
 
 def test_source_missing_file_returns_404(monkeypatch):
-    monkeypatch.setattr(job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id})
-    monkeypatch.setattr(job_read, "find_source_file", lambda task_id: None)
+    monkeypatch.setattr(local_job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id})
+    monkeypatch.setattr(local_job_read, "find_source_file", lambda task_id: None)
     response = _client().get("/jobs/local-1/source", headers=_HEADERS)
     assert response.status_code == 404
 
@@ -65,8 +65,8 @@ def test_source_missing_file_returns_404(monkeypatch):
 def test_source_returns_saved_file(monkeypatch, tmp_path):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video-bytes")
-    monkeypatch.setattr(job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id})
-    monkeypatch.setattr(job_read, "find_source_file", lambda task_id: source)
+    monkeypatch.setattr(local_job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id})
+    monkeypatch.setattr(local_job_read, "find_source_file", lambda task_id: source)
 
     response = _client().get("/jobs/local-1/source", headers=_HEADERS)
 
@@ -77,8 +77,8 @@ def test_source_returns_saved_file(monkeypatch, tmp_path):
 # ---- artifacts --------------------------------------------------------------
 
 def test_artifact_unknown_kind_returns_404(monkeypatch, tmp_path):
-    monkeypatch.setattr(job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id})
-    monkeypatch.setattr(job_read, "_artifact_storage_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id})
+    monkeypatch.setattr(local_job_read, "_artifact_storage_dir", lambda: tmp_path)
     response = _client().get("/jobs/local-1/artifacts/unknown_kind", headers=_HEADERS)
     assert response.status_code == 404
 
@@ -87,8 +87,8 @@ def test_artifact_returns_summary_markdown(monkeypatch, tmp_path):
     task_dir = tmp_path / "local-1"
     task_dir.mkdir()
     (task_dir / "note_summary.md").write_text("# Note", encoding="utf-8")
-    monkeypatch.setattr(job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id, "result": {}})
-    monkeypatch.setattr(job_read, "_artifact_storage_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id, "result": {}})
+    monkeypatch.setattr(local_job_read, "_artifact_storage_dir", lambda: tmp_path)
 
     response = _client().get("/jobs/local-1/artifacts/summary_md", headers=_HEADERS)
 
@@ -98,8 +98,8 @@ def test_artifact_returns_summary_markdown(monkeypatch, tmp_path):
 
 def test_artifact_frame_rejects_path_traversal(monkeypatch, tmp_path):
     (tmp_path / "local-1").mkdir()
-    monkeypatch.setattr(job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id, "result": {}})
-    monkeypatch.setattr(job_read, "_artifact_storage_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_job_read, "get_job", lambda task_id, client_id=None: {"task_id": task_id, "result": {}})
+    monkeypatch.setattr(local_job_read, "_artifact_storage_dir", lambda: tmp_path)
     response = _client().get("/jobs/local-1/artifacts/frame?file=../secret", headers=_HEADERS)
     assert response.status_code == 404
 
@@ -107,7 +107,6 @@ def test_artifact_frame_rejects_path_traversal(monkeypatch, tmp_path):
 # ---- graph boundary ---------------------------------------------------------
 
 def test_local_job_read_stays_off_server_helpers():
-    for path in ("backend/routers/local_job_read.py", "backend/routers/job_read.py"):
-        source = Path(path).read_text(encoding="utf-8")
-        assert "import backend.core.server_helpers" not in source
-        assert "from backend.core.server_helpers" not in source
+    source = Path("backend/routers/local_job_read.py").read_text(encoding="utf-8")
+    assert "import backend.core.server_helpers" not in source
+    assert "from backend.core.server_helpers" not in source

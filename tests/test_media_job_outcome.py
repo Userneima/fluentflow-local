@@ -1,8 +1,8 @@
 """Guards for the two ways a media job ends.
 
 These paths run only when something goes wrong, so they are the least exercised
-and the most expensive to get wrong: a run that ends without releasing its quota
-silently bills the user for work they never received.
+and the most expensive to get wrong: a run that ends without a terminal record
+leaves the task looking alive forever.
 """
 
 import types
@@ -23,7 +23,6 @@ class _StubProcess:
 
 @pytest.fixture
 def ctx():
-    released = []
     return types.SimpleNamespace(
         task_id_value="task-1",
         client_id="client-1",
@@ -35,8 +34,6 @@ def ctx():
         stt_provider_value="local",
         stt_provider_labeler=lambda name: f"label:{name}",
         friendly_error=lambda exc: f"friendly:{exc}",
-        release_task_usage=lambda **kwargs: released.append(kwargs),
-        released=released,
     )
 
 
@@ -47,13 +44,6 @@ def recorded(monkeypatch):
     monkeypatch.setattr(outcome, "log_event", lambda **kw: events.append(kw))
     monkeypatch.setattr(outcome, "terminate_process", lambda proc: setattr(proc, "terminated", True))
     return types.SimpleNamespace(jobs=jobs, events=events)
-
-
-def test_a_cancelled_run_gives_its_quota_back(ctx, recorded):
-    outcome.report_cancelled(outcome.TerminalReport(ctx=ctx, current_stage="stt"))
-    assert len(ctx.released) == 1
-    assert ctx.released[0]["task_id"] == "task-1"
-    assert ctx.released[0]["client_id"] == "client-1"
 
 
 def test_a_cancelled_run_is_recorded_as_cancelled_at_the_stage_it_reached(ctx, recorded):
@@ -84,12 +74,11 @@ def test_a_cancelled_run_reports_the_estimate_when_no_duration_was_measured(ctx,
     assert completed["source_duration_seconds"] == 61.4
 
 
-def test_a_failed_run_gives_its_quota_back_and_returns_what_to_show(ctx, recorded):
+def test_a_failed_run_returns_what_to_show(ctx, recorded):
     message = outcome.report_failed(
         outcome.TerminalReport(ctx=ctx, current_stage="stt"), RuntimeError("boom")
     )
     assert message == "friendly:boom"
-    assert len(ctx.released) == 1
 
 
 def test_a_failed_run_is_recorded_as_failed_with_no_progress(ctx, recorded):
@@ -130,15 +119,3 @@ def test_the_cloud_transcription_detail_survives_into_the_failure_record(ctx, re
     failed = [e for e in recorded.events if e["event_name"] == "task_failed"][-1]
     assert failed["metadata"]["stt_request_id"] == "req-9"
     assert recorded.jobs[-1]["metadata"]["stt_request_id"] == "req-9"
-
-
-def test_a_job_context_without_quota_release_is_tolerated(recorded):
-    """The local composition root passes no quota policy at all."""
-    ctx = types.SimpleNamespace(
-        task_id_value="t", client_id=None, task_started_at=0.0,
-        source_type=None, source_filename=None, source_file_size_mb=None,
-        do_lark=False, stt_provider_value=None, stt_provider_labeler=None,
-        friendly_error=lambda exc: str(exc), release_task_usage=None,
-    )
-    outcome.report_cancelled(outcome.TerminalReport(ctx=ctx))
-    assert recorded.jobs[-1]["status"] == "cancelled"

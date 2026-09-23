@@ -8,26 +8,15 @@ import {RegistryRoutes} from './app/routeRegistry.jsx';
 import {localRouteRegistry} from './app/localRoutes.jsx';
 import LocalAgentAccessPanel from './components/LocalAgentAccessPanel.jsx';
 
-// Local-edition composition root (built from frontend/local.html).
-//
-// The STT and Lark-route policy seams (lib/sttPolicy.js, lib/settingsModel.js)
-// DEFAULT to the local edition, so nothing is registered here: there is one
-// local transcription route, the Feishu export falls back to the user's own
-// app credentials, and stored hosted-OAuth route values remap to it. The
-// sidebar is likewise the default account-free SideNav — only the hosted
-// AppShell passes HostedSideNav into ShellLayout.
-//
-// There is no landing page, AccessGate, or admin surface here: the app opens
-// the processing workspace directly and AuthCtx keeps its default open
-// single-user value, so account and guest branches inside shared pages stay
-// inactive. No direct-upload transport is registered, so uploads always take
-// the local queue path.
+// App entry (built from frontend/local.html). There is no landing page, access
+// gate, or admin surface: the app opens the processing workspace directly as a
+// single local user.
 createRoot(document.getElementById('root')).render(
     <BrowserRouter>
         <I18nProvider>
             <LocalAppProvider>
                 <ShellLayout sideNavProps={{agentAccessPanel: LocalAgentAccessPanel}}>
-                    <RegistryRoutes registry={localRouteRegistry} ctx={{}}/>
+                    <RegistryRoutes registry={localRouteRegistry}/>
                 </ShellLayout>
             </LocalAppProvider>
         </I18nProvider>

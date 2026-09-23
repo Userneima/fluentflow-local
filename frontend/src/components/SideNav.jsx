@@ -38,15 +38,11 @@ const isNavItemActive = (itemPath, pathname) => {
     return pathname === itemPath || pathname.startsWith(`${itemPath}/`);
 };
 
-// Edition-neutral sidebar shell. The DEFAULT (account=null) is the local
-// edition: no hosted account surface exists here at all — the bottom entry
-// is a plain menu (language, theme, agent access, about). Edition shells
-// inject both their optional account controls and their Agent access panel;
-// this shared shell never imports an account API surface.
+// Sidebar shell. The bottom entry is a plain menu (language, theme, agent
+// access, about); the Agent access panel is passed in by the app entry.
 const SideNav = ({
     collapsed = false,
     onToggle = () => {},
-    account = null,
     agentAccessPanel: AgentAccessPanel = null,
 }) => {
     const {t, lang, toggleLang} = useI18n();
@@ -90,30 +86,20 @@ const SideNav = ({
         return () => document.removeEventListener('keydown', handler);
     }, [agentAccessOpen]);
 
-    const closeMenu = useCallback(() => setMenuOpen(false), []);
-
-    const baseItems = [
+    const items = [
         {path:'/media-text', icon:Video, label: lang === 'zh' ? '视频转写与总结' : 'Media notes'},
         {path:'/agent', icon:SlidersHorizontal, k:'nav.processing'},
         {path:'/editor', icon:FilePenLine, k:'nav.editor'},
         {path:'/settings', icon:Settings, k:'nav.settings'},
     ];
-    // Injection point: the hosted account surface filters (guest trial) and
-    // extends (admin console) the nav; the local shell uses it as-is.
-    const items = account?.mapNavItems ? account.mapNavItems(baseItems) : baseItems;
 
     const versionInfo = window.FLUENTFLOW_CONFIG?.version || {};
     const versionLabel = versionInfo.version ? `v${versionInfo.version}` : 'local';
     const versionDetail = [versionInfo.shortCommit, versionInfo.dirty ? 'dirty' : null].filter(Boolean).join(' · ');
     const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
     const ThemeIcon = isDark ? Sun : Moon;
-    const entry = account?.entry || {
-        title: lang === 'zh' ? '菜单' : 'Menu',
-        subtitle: lang === 'zh' ? '语言、主题与关于' : 'Language, theme & about',
-        Icon: Menu,
-    };
-    const EntryIcon = entry.Icon;
-    const footerUser = account?.footerUser || null;
+    const entryTitle = lang === 'zh' ? '菜单' : 'Menu';
+    const entrySubtitle = lang === 'zh' ? '语言、主题与关于' : 'Language, theme & about';
     const legalLinks = [
         {path: '/about/service', icon: FileText, label: lang === 'zh' ? '服务条款' : 'Terms'},
         {path: '/about/privacy', icon: ShieldCheck, label: lang === 'zh' ? '隐私政策' : 'Privacy'},
@@ -148,9 +134,6 @@ const SideNav = ({
                     </button>
                 </div>
 
-                {/* Injection point: hosted sign-in entry above the nav. */}
-                {account?.loginEntry ? account.loginEntry({collapsed}) : null}
-
                 <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden">
                     {items.map((it) => {
                         const active = isNavItemActive(it.path, loc.pathname);
@@ -174,48 +157,25 @@ const SideNav = ({
                 </nav>
 
                 <div className={`relative mt-auto border-t border-[#e5e5e5] dark:border-white/[0.12] ${collapsed ? 'pt-5' : 'pt-4'}`} ref={menuRef}>
-                    {footerUser ? (
-                        <button
-                            type="button"
-                            onClick={() => setMenuOpen((v) => !v)}
-                            className={`w-full rounded-[14px] border border-[#e5e5e5] bg-white text-left shadow-[0_1px_2px_rgba(17,17,17,0.03)] transition hover:border-[#d9d9d9] hover:bg-[#f7f7f7] dark:border-white/[0.12] dark:bg-white/[0.06] dark:hover:border-white/[0.18] dark:hover:bg-white/[0.09] ${collapsed ? 'mx-auto flex size-12 justify-center px-0 py-2' : 'flex items-center gap-2.5 px-2.5 py-2'}`}
-                            title={collapsed ? footerUser.title : undefined}
-                        >
-                            <span className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-[#efeeee] text-xs font-extrabold text-[#111111] dark:bg-white/[0.12] dark:text-white">
-                                {footerUser.initial}
+                    <button
+                        type="button"
+                        onClick={() => setMenuOpen((v) => !v)}
+                        className={`w-full rounded-[14px] border border-[#e5e5e5] bg-white text-left shadow-[0_1px_2px_rgba(17,17,17,0.03)] transition hover:border-[#d9d9d9] hover:bg-[#f7f7f7] dark:border-white/[0.12] dark:bg-white/[0.06] dark:hover:border-white/[0.18] dark:hover:bg-white/[0.09] ${collapsed ? 'mx-auto flex size-12 justify-center px-0 py-2' : 'flex items-center gap-2.5 px-2.5 py-2'}`}
+                        title={collapsed ? entryTitle : undefined}
+                    >
+                        <span className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-[#efeeee] text-[#6b6c72] dark:bg-white/[0.12] dark:text-white/70">
+                            <Menu className="size-4" strokeWidth={2.15}/>
+                        </span>
+                        {!collapsed && (
+                            <span className="min-w-0">
+                                <span className="block truncate text-[13px] font-semibold leading-4 text-[#111111] dark:text-white">{entryTitle}</span>
+                                <span className="block truncate text-[11px] leading-4 text-[#85868c] dark:text-white/55">{entrySubtitle}</span>
                             </span>
-                            {!collapsed && (
-                                <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-[13px] font-semibold leading-4 text-[#111111] dark:text-white">{footerUser.title}</span>
-                                    {footerUser.subtitle != null && (
-                                        <span className="block truncate text-[11px] leading-4 text-[#85868c] dark:text-white/55">{footerUser.subtitle}</span>
-                                    )}
-                                </span>
-                            )}
-                        </button>
-                    ) : (
-                        <button
-                            type="button"
-                            onClick={() => setMenuOpen((v) => !v)}
-                            className={`w-full rounded-[14px] border border-[#e5e5e5] bg-white text-left shadow-[0_1px_2px_rgba(17,17,17,0.03)] transition hover:border-[#d9d9d9] hover:bg-[#f7f7f7] dark:border-white/[0.12] dark:bg-white/[0.06] dark:hover:border-white/[0.18] dark:hover:bg-white/[0.09] ${collapsed ? 'mx-auto flex size-12 justify-center px-0 py-2' : 'flex items-center gap-2.5 px-2.5 py-2'}`}
-                            title={collapsed ? entry.title : undefined}
-                        >
-                            <span className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-[#efeeee] text-[#6b6c72] dark:bg-white/[0.12] dark:text-white/70">
-                                <EntryIcon className="size-4" strokeWidth={2.15}/>
-                            </span>
-                            {!collapsed && (
-                                <span className="min-w-0">
-                                    <span className="block truncate text-[13px] font-semibold leading-4 text-[#111111] dark:text-white">{entry.title}</span>
-                                    <span className="block truncate text-[11px] leading-4 text-[#85868c] dark:text-white/55">{entry.subtitle}</span>
-                                </span>
-                            )}
-                        </button>
-                    )}
+                        )}
+                    </button>
 
                     {menuOpen && (
                         <div className="absolute bottom-0 left-full z-50 ml-2 w-52 rounded-[14px] border border-[#e5e5e5] bg-white p-2 shadow-[0_12px_40px_-18px_rgba(17,17,17,.35)] dark:border-white/[0.12] dark:bg-[#101010]">
-                            {/* Injection point: hosted menu header (balance and auth actions). */}
-                            {account?.menuHeader ? account.menuHeader({closeMenu}) : null}
                             <div className="flex flex-col gap-0.5">
                                 <button
                                     type="button"
@@ -276,8 +236,6 @@ const SideNav = ({
                                     </div>
                                 )}
                             </div>
-                            {/* Injection point: hosted sign-out action. */}
-                            {account?.menuFooter ? account.menuFooter({closeMenu}) : null}
                             <div className="mt-1 rounded-[10px] px-3 py-2 text-[11px] font-semibold leading-relaxed text-[#85868c] dark:text-white/45">
                                 <div className="flex items-center justify-between gap-2">
                                     <span>FluentFlow</span>

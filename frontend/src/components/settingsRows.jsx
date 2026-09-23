@@ -19,10 +19,9 @@ import {
     useI18n,
 } from '../app/shared.jsx';
 
-// The individual settings controls, edition-neutral. Each row takes the page
-// state (see routes/settings-state.js) and renders one control; which rows a
-// page shows, and in what order, is each edition's own page file. Nothing here
-// asks which edition is rendering it.
+// The individual settings controls. Each row takes the page state (see
+// routes/settings-state.js) and renders one control; which rows the page shows,
+// and in what order, is decided in routes/settings.jsx.
 
 // `overlays` are the page's fixed dialogs. They render inside this wrapper
 // rather than beside it so they keep inheriting the page's own text color.
@@ -234,8 +233,8 @@ export const AutoExportRow = ({state}) => {
 };
 
 export const LarkExportRouteRow = ({state}) => {
-    const {t, lang} = useI18n();
-    const {updateSettingNow, larkExportRoute, extraLarkRouteOptions, larkRouteHint} = state;
+    const {t} = useI18n();
+    const {updateSettingNow, larkExportRoute, larkRouteHint} = state;
     return (
         <div className={`flex items-start justify-between gap-3 ${cellBase}`}>
             <span className="min-w-0">
@@ -253,9 +252,6 @@ export const LarkExportRouteRow = ({state}) => {
                     });
                 }}
             >
-                {extraLarkRouteOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{lang === 'zh' ? option.labelZh : option.labelEn}</option>
-                ))}
                 <option value={LARK_EXPORT_ROUTE_OPENAPI}>{t('set.larkRouteOpenapi')}</option>
                 <option value={LARK_EXPORT_ROUTE_LOCAL_CLI}>{t('set.larkRouteLocalCli')}</option>
             </select>
@@ -308,8 +304,7 @@ export const LocalHistoryRow = ({state}) => {
     );
 };
 
-// The advanced fold's shell. The description differs by edition (what the text
-// model is actually used for is not the same thing in both), so it is passed in.
+// The advanced fold's shell. The page passes in its description.
 export const AdvancedKeysFold = ({description, children}) => {
     const {lang} = useI18n();
     return (
@@ -335,8 +330,8 @@ const KEY_CONSOLE_URLS = {
     qwen: 'https://bailian.console.aliyun.com/',
 };
 
-// Text-model provider, model, and the key that provider needs. `extraKey` is a
-// second key field some editions offer alongside it.
+// Text-model provider, model, and the key that provider needs. `extraKey` is an
+// optional second key field rendered alongside it.
 export const TextModelKeyRows = ({state, extraKey = null}) => {
     const {t, lang} = useI18n();
     const {
@@ -392,7 +387,7 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
 };
 
 // The DashScope key as a separate field, for when it is not the text-model key.
-// What it is for is not the same in both editions, so the copy is passed in.
+// The page passes in the copy that says what it is for.
 export const DashscopeKeyField = ({state, description}) => {
     const {t, lang} = useI18n();
     const {

@@ -290,8 +290,6 @@ class MediaJobContext:
     source_file_size_mb: float | None
     max_upload_mb: Any
     duration_preflight_sec: float | None
-    quota_estimate: Any
-    quota_reservation: Any
     task_started_at: float
     loop: Any
     model_size: str
@@ -317,7 +315,6 @@ class MediaJobContext:
     system_prompt: Any
     prompt_preset: Any
     prompt_preset_label: Any
-    account_user: dict[str, Any] | None
     title: Any
     lark_app_id: Any
     lark_app_secret: Any
@@ -328,25 +325,11 @@ class MediaJobContext:
     # already-mixed soundtrack. Off also means the recognizer reads the plain
     # audio, so an upload nobody asked about behaves exactly as it did before.
     voice_enhance_requested: bool = False
-    # Edition-owned AI credential policy. Hosted callers leave this unset and
-    # retain the existing server helper behavior; local callers inject their
-    # strict provider-to-key matcher.
+    # AI credential policy: the caller's strict provider-to-key matcher.
     ai_kwargs_builder: Any = None
-    # Event hub the worker publishes to. Defaults to the hosted hub via
-    # execute_media_job when unset; a local composition root can inject the
-    # local hub so live progress and cancellation share one hub.
+    # Event hub the worker publishes to, shared with live progress and
+    # cancellation. Required: execute_media_job refuses to run without it.
     job_events: Any = None
-    # Whether the terminal job state is propagated to the hosted desktop-sync
-    # service. Hosted default is True; the local edition must pass False so a
-    # local worker never triggers cloud side effects.
-    sync_terminal_result: bool = True
-    # Hosted composition owns the actual sync action. Keeping it out of the
-    # worker makes the local pipeline independent of the desktop-sync module.
-    terminal_result_sync: Any = None
-    # Account quota is a hosted lifecycle concern. Local contexts leave both
-    # hooks empty so terminal processing cannot touch account quota state.
-    finalize_task_usage: Any = None
-    release_task_usage: Any = None
     finalize_result_storage: Any = None
     auto_lark_exporter: Any = None
     enforce_history_retention: Any = None
@@ -367,29 +350,6 @@ class MediaJobContext:
     # file's timestamps from the start — nothing downstream has to remap anything.
     # No composition root that passes nothing behaves differently in any way.
     media_preprocessor: Any = None
-
-
-def _finalize_task_usage(
-    ctx: MediaJobContext,
-    *,
-    duration_seconds: float | None,
-    transcript_text: str,
-    summary_text: str,
-    skip_summary: bool,
-    reason: str | None = None,
-) -> dict[str, Any] | None:
-    if not ctx.finalize_task_usage:
-        return None
-    return ctx.finalize_task_usage(
-        client_id=ctx.client_id,
-        task_id=ctx.task_id_value,
-        duration_seconds=duration_seconds,
-        transcript_text=transcript_text,
-        summary_text=summary_text,
-        skip_summary=skip_summary,
-        reason=reason,
-        stt_provider=ctx.stt_provider_value,
-    )
 
 
 def _finalize_result_storage(ctx: MediaJobContext, result: dict[str, Any]) -> dict[str, Any]:
@@ -419,8 +379,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     source_file_size_mb = ctx.source_file_size_mb
     max_upload_mb = ctx.max_upload_mb
     duration_preflight_sec = ctx.duration_preflight_sec
-    quota_estimate = ctx.quota_estimate
-    quota_reservation = ctx.quota_reservation
     task_started_at = ctx.task_started_at
     loop = ctx.loop
     model_size = ctx.model_size
@@ -447,7 +405,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     system_prompt = ctx.system_prompt
     prompt_preset = ctx.prompt_preset
     prompt_preset_label = ctx.prompt_preset_label
-    account_user = ctx.account_user
     title = ctx.title
     lark_app_id = ctx.lark_app_id
     lark_app_secret = ctx.lark_app_secret
@@ -1065,16 +1022,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 metadata=event_metadata(route="/process", reason="transcript_only_mode"),
             )
             result = result_for_transcript_only(base_result)
-            quota_final = _finalize_task_usage(
-                ctx,
-                duration_seconds=duration_sec,
-                transcript_text=transcript_text,
-                summary_text="",
-                skip_summary=True,
-                reason="Finalize transcript-only task charge",
-            )
-            if quota_final:
-                result["quota"] = quota_final
             result = _attach_result_artifacts(task_id_value, result)
             result = _finalize_result_storage(ctx, result)
             upsert_job(
@@ -1261,16 +1208,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             )
             result = result_for_summary_failure(base_result, summary_error)
             result.update({key: value for key, value in note_mode_plan.items() if key.startswith("note_mode_plan_")})
-            quota_final = _finalize_task_usage(
-                ctx,
-                duration_seconds=duration_sec,
-                transcript_text=note_transcript_text,
-                summary_text="",
-                skip_summary=True,
-                reason="Finalize transcription charge after summary failure",
-            )
-            if quota_final:
-                result["quota"] = quota_final
             result = _attach_result_artifacts(task_id_value, result)
             result = _finalize_result_storage(ctx, result)
             upsert_job(
@@ -1420,15 +1357,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             )
 
         # ── Done ───────────────────────────────────────────
-        quota_final = _finalize_task_usage(
-            ctx,
-            duration_seconds=duration_sec,
-            transcript_text=note_transcript_text,
-            summary_text=summary_md,
-            skip_summary=False,
-        )
-        if quota_final:
-            result["quota"] = quota_final
         result = _attach_result_artifacts(task_id_value, result)
         result = _finalize_result_storage(ctx, result)
         _log_task_completed(
@@ -1530,17 +1458,7 @@ async def execute_media_job(ctx: MediaJobContext) -> None:
             {"stage": "error", "progress": 0, "error": str(exc)},
         )
     finally:
-        job = get_job(ctx.task_id_value)
         if not terminal_sent:
+            job = get_job(ctx.task_id_value)
             if job and job.get("status") in {"completed", "failed", "cancelled"}:
                 await hub.publish(ctx.task_id_value, JobEventHub.event_from_job(job))
-        if (
-            ctx.sync_terminal_result
-            and ctx.terminal_result_sync
-            and job
-            and job.get("status") in {"completed", "failed", "cancelled"}
-        ):
-            try:
-                await asyncio.to_thread(ctx.terminal_result_sync, job)
-            except Exception:  # pragma: no cover - local sync must never hide a completed task
-                logger.exception("Terminal result synchronization could not be queued for %s", ctx.task_id_value)

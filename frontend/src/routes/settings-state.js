@@ -4,7 +4,6 @@ import {
     DEFAULT_OPENAI_MODEL,
     DEFAULT_QWEN_MODEL,
     effectiveSttProvider,
-    extraLarkExportRouteOptions,
     isLocalLarkExportRoute,
     larkExportRouteFromSettings,
     normalizeAiModel,
@@ -15,10 +14,8 @@ import {
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 
-// Everything the settings page needs to read and write, with no page layout and
-// no edition knowledge. Both editions build their own page on top of this, so a
-// stored setting, a credential, or the clear-history flow is written once and
-// cannot drift between the two.
+// Everything the settings page needs to read and write, with no page layout:
+// stored settings, credentials, and the clear-history flow.
 export const useSettingsPageState = () => {
     const {t, lang} = useI18n();
     const {loadSettings, saveSettings} = useSettings();
@@ -152,13 +149,7 @@ export const useSettingsPageState = () => {
         : (aiProvider === 'qwen' ? credentialConfigured(credentialStatus, 'dashscope_api_key') : credentialStatus?.deepseek_api_key_configured);
     const sttProvider = effectiveSttProvider(settings, runtimeConfig);
     const larkExportRoute = larkExportRouteFromSettings(settings);
-    // Extra routes (today: the hosted account-OAuth route) come from the
-    // edition policy with their own labels and hint copy.
-    const extraLarkRouteOptions = extraLarkExportRouteOptions();
-    const selectedExtraLarkRoute = extraLarkRouteOptions.find((option) => option.value === larkExportRoute);
-    const larkRouteHint = selectedExtraLarkRoute
-        ? (lang === 'zh' ? selectedExtraLarkRoute.hintZh : selectedExtraLarkRoute.hintEn)
-        : (isLocalLarkExportRoute(larkExportRoute) ? t('set.larkRouteLocalCliHint') : t('set.larkRouteOpenapiHint'));
+    const larkRouteHint = isLocalLarkExportRoute(larkExportRoute) ? t('set.larkRouteLocalCliHint') : t('set.larkRouteOpenapiHint');
     const pyannoteTokenConfigured = !!(credentialStatus?.pyannote_auth_token_configured || diarizationStatus?.auth_configured);
 
     return {
@@ -202,7 +193,6 @@ export const useSettingsPageState = () => {
         activeAiConfigured,
         // Feishu export route.
         larkExportRoute,
-        extraLarkRouteOptions,
         larkRouteHint,
         // Speaker diarization model token.
         pyannoteTokenConfigured,

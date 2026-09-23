@@ -84,16 +84,6 @@ def _log_task_completed(
     )
 
 
-def _release_task_usage(ctx: Any, *, reason: str, metadata: dict[str, Any]) -> None:
-    if ctx.release_task_usage:
-        ctx.release_task_usage(
-            client_id=ctx.client_id,
-            task_id=ctx.task_id_value,
-            reason=reason,
-            metadata=metadata,
-        )
-
-
 @dataclass
 class TerminalReport:
     """The pipeline state an ended run has to report.
@@ -122,17 +112,12 @@ def _stop_stt_process(report: TerminalReport) -> None:
 
 
 def report_cancelled(report: TerminalReport) -> None:
-    """Record a run the client walked away from, and give its quota back."""
+    """Record a run the client walked away from."""
     ctx = report.ctx
     logger.info(
         "Processing stream cancelled by client at stage=%s", report.current_stage
     )
     _stop_stt_process(report)
-    _release_task_usage(
-        ctx,
-        reason="Task cancelled before completion",
-        metadata={"stage": report.current_stage},
-    )
     source_duration = report.duration_sec or report.duration_estimate_sec
     _log_task_completed(
         task_id=ctx.task_id_value,
@@ -166,7 +151,7 @@ def report_cancelled(report: TerminalReport) -> None:
 
 
 def report_failed(report: TerminalReport, exc: Exception) -> str:
-    """Record a run that raised, give its quota back, and return what to show.
+    """Record a run that raised, and return what to show.
 
     Mutates `report.summary_status` when the job died inside the summary stage,
     because the caller has no other way to learn that the note never landed.
@@ -177,11 +162,6 @@ def report_failed(report: TerminalReport, exc: Exception) -> str:
     _stop_stt_process(report)
     if report.summary_status is None and report.current_stage == "summary":
         report.summary_status = "failed"
-    _release_task_usage(
-        ctx,
-        reason="Task failed before charge finalization",
-        metadata={"stage": report.current_stage, "raw_error": str(exc)},
-    )
     log_event(
         task_id=ctx.task_id_value,
         event_name="task_failed",

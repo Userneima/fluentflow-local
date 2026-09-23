@@ -110,15 +110,9 @@ const imageTypeFromSource = (src, contentType='') => {
     return 'jpg';
 };
 
-// API-relative artifact path prefixes. The local edition only ever emits
-// 'jobs/' URLs; the hosted root registers its extra guest-trial prefix at
-// boot so this shared module carries no hosted route strings.
-const API_RELATIVE_PATH_PREFIXES = ['jobs/'];
-export const registerApiRelativePathPrefix = (prefix) => {
-    const value = String(prefix || '').trim();
-    if(value && !API_RELATIVE_PATH_PREFIXES.includes(value)) API_RELATIVE_PATH_PREFIXES.push(value);
-};
-const isApiRelativePath = (raw) => API_RELATIVE_PATH_PREFIXES.some((p) => raw.startsWith(p));
+// Artifact URLs the backend emits relative to the API root ('jobs/...').
+const API_RELATIVE_PATH_PREFIX = 'jobs/';
+const isApiRelativePath = (raw) => raw.startsWith(API_RELATIVE_PATH_PREFIX);
 
 const docxImageTarget = (src) => {
     let raw = String(src || '').trim();

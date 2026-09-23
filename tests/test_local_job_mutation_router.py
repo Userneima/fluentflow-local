@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import backend.routers.job_mutation as job_mutation
+import backend.routers.local_job_mutation as local_job_mutation
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.routers.local_job_mutation import router
 
@@ -23,7 +23,7 @@ def test_cancel_missing_job_returns_404(monkeypatch):
         scoped.append((task_id, client_id))
         return None
 
-    monkeypatch.setattr(job_mutation, "get_job", missing)
+    monkeypatch.setattr(local_job_mutation, "get_job", missing)
 
     response = _client().post("/jobs/nope/cancel", headers=_HEADERS)
 
@@ -33,7 +33,7 @@ def test_cancel_missing_job_returns_404(monkeypatch):
 
 def test_cancel_terminal_job_returns_409(monkeypatch):
     monkeypatch.setattr(
-        job_mutation, "get_job",
+        local_job_mutation, "get_job",
         lambda task_id, client_id=None: {"task_id": task_id, "status": "completed"},
     )
 
@@ -59,15 +59,15 @@ def test_cancel_running_job_marks_cancelled_and_reconciles_hub(monkeypatch):
     logged: list[dict] = []
 
     monkeypatch.setattr(
-        job_mutation, "get_job",
+        local_job_mutation, "get_job",
         lambda task_id, client_id=None: {
             "task_id": task_id, "status": "running", "stage": "stt",
             "progress": 40, "client_id": "desktop-a",
         },
     )
-    monkeypatch.setattr(job_mutation, "cancel_job_steps", lambda task_id: 2)
-    monkeypatch.setattr(job_mutation, "upsert_job", lambda **kwargs: upserts.append(kwargs))
-    monkeypatch.setattr(job_mutation, "log_event", lambda **kwargs: logged.append(kwargs))
+    monkeypatch.setattr(local_job_mutation, "cancel_job_steps", lambda task_id: 2)
+    monkeypatch.setattr(local_job_mutation, "upsert_job", lambda **kwargs: upserts.append(kwargs))
+    monkeypatch.setattr(local_job_mutation, "log_event", lambda **kwargs: logged.append(kwargs))
     monkeypatch.setattr(JOB_EVENTS, "cancel", fake_cancel)
     monkeypatch.setattr(JOB_EVENTS, "publish", fake_publish)
 
@@ -96,7 +96,7 @@ def test_delete_missing_job_returns_404(monkeypatch):
         scoped.append((task_id, client_id))
         return None
 
-    monkeypatch.setattr(job_mutation, "get_job", missing)
+    monkeypatch.setattr(local_job_mutation, "get_job", missing)
 
     response = _client().delete("/jobs/nope", headers=_HEADERS)
 
@@ -106,7 +106,7 @@ def test_delete_missing_job_returns_404(monkeypatch):
 
 def test_delete_active_job_returns_409(monkeypatch):
     monkeypatch.setattr(
-        job_mutation, "get_job",
+        local_job_mutation, "get_job",
         lambda task_id, client_id=None: {"task_id": task_id, "status": "running"},
     )
 
@@ -121,15 +121,15 @@ def test_delete_completed_job_cleans_files_and_deletes_scoped(monkeypatch):
     deleted: list[tuple[list[str], str | None]] = []
 
     monkeypatch.setattr(
-        job_mutation, "get_job",
+        local_job_mutation, "get_job",
         lambda task_id, client_id=None: {"task_id": task_id, "status": "completed", "metadata": {"m": 1}},
     )
     monkeypatch.setattr(
-        job_mutation, "cleanup_task_all_files",
+        local_job_mutation, "cleanup_task_all_files",
         lambda task_id, metadata=None: cleaned.append((task_id, metadata)) or {},
     )
     monkeypatch.setattr(
-        job_mutation, "delete_jobs",
+        local_job_mutation, "delete_jobs",
         lambda ids, client_id=None: deleted.append((ids, client_id)) or 1,
     )
 
@@ -143,11 +143,11 @@ def test_delete_completed_job_cleans_files_and_deletes_scoped(monkeypatch):
 
 def test_delete_fallback_post_route_works(monkeypatch):
     monkeypatch.setattr(
-        job_mutation, "get_job",
+        local_job_mutation, "get_job",
         lambda task_id, client_id=None: {"task_id": task_id, "status": "completed"},
     )
-    monkeypatch.setattr(job_mutation, "cleanup_task_all_files", lambda task_id, metadata=None: {})
-    monkeypatch.setattr(job_mutation, "delete_jobs", lambda ids, client_id=None: 1)
+    monkeypatch.setattr(local_job_mutation, "cleanup_task_all_files", lambda task_id, metadata=None: {})
+    monkeypatch.setattr(local_job_mutation, "delete_jobs", lambda ids, client_id=None: 1)
 
     response = _client().post("/jobs/t1/delete", headers=_HEADERS)
 
@@ -157,11 +157,11 @@ def test_delete_fallback_post_route_works(monkeypatch):
 
 def test_delete_returns_404_when_store_reports_nothing_deleted(monkeypatch):
     monkeypatch.setattr(
-        job_mutation, "get_job",
+        local_job_mutation, "get_job",
         lambda task_id, client_id=None: {"task_id": task_id, "status": "completed"},
     )
-    monkeypatch.setattr(job_mutation, "cleanup_task_all_files", lambda task_id, metadata=None: {})
-    monkeypatch.setattr(job_mutation, "delete_jobs", lambda ids, client_id=None: 0)
+    monkeypatch.setattr(local_job_mutation, "cleanup_task_all_files", lambda task_id, metadata=None: {})
+    monkeypatch.setattr(local_job_mutation, "delete_jobs", lambda ids, client_id=None: 0)
 
     response = _client().delete("/jobs/t1", headers=_HEADERS)
 
@@ -169,7 +169,6 @@ def test_delete_returns_404_when_store_reports_nothing_deleted(monkeypatch):
 
 
 def test_local_job_mutation_stays_off_server_helpers():
-    for path in ("backend/routers/local_job_mutation.py", "backend/routers/job_mutation.py"):
-        source = Path(path).read_text(encoding="utf-8")
-        assert "import backend.core.server_helpers" not in source
-        assert "from backend.core.server_helpers" not in source
+    source = Path("backend/routers/local_job_mutation.py").read_text(encoding="utf-8")
+    assert "import backend.core.server_helpers" not in source
+    assert "from backend.core.server_helpers" not in source

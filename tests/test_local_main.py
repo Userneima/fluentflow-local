@@ -16,9 +16,9 @@ from fastapi.testclient import TestClient
 
 from backend.core import job_store
 import backend.local_main as local_main
-import backend.routers.job_edit as job_edit
-import backend.routers.job_mutation as job_mutation
-import backend.routers.job_query as job_query
+import backend.routers.local_job_edit as local_job_edit
+import backend.routers.local_job_mutation as local_job_mutation
+import backend.routers.local_jobs as local_jobs
 from backend.local_main import create_local_app, recover_stale_jobs
 
 _REQUIRED_ROUTE_PREFIXES = (
@@ -105,24 +105,24 @@ def scoped_stack(monkeypatch, tmp_path):
     """Real tmp SQLite behind the assembled app's job routers."""
     jobs_db = tmp_path / "jobs.sqlite"
     monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path / "data"))
-    for module in (job_query, job_mutation, job_edit):
+    for module in (local_jobs, local_job_mutation, local_job_edit):
         monkeypatch.setattr(
             module, "get_job", functools.partial(job_store.get_job, db_path=jobs_db),
             raising=False,
         )
     monkeypatch.setattr(
-        job_mutation, "upsert_job", functools.partial(job_store.upsert_job, db_path=jobs_db)
+        local_job_mutation, "upsert_job", functools.partial(job_store.upsert_job, db_path=jobs_db)
     )
     monkeypatch.setattr(
-        job_mutation, "cancel_job_steps",
+        local_job_mutation, "cancel_job_steps",
         functools.partial(job_store.cancel_job_steps, db_path=jobs_db),
     )
     monkeypatch.setattr(
-        job_edit, "update_job_result",
+        local_job_edit, "update_job_result",
         functools.partial(job_store.update_job_result, db_path=jobs_db),
         raising=False,
     )
-    monkeypatch.setattr(job_mutation, "log_event", lambda **values: None)
+    monkeypatch.setattr(local_job_mutation, "log_event", lambda **values: None)
     job_store.upsert_job(
         task_id="b-task",
         status="running",

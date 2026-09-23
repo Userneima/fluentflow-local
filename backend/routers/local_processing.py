@@ -383,8 +383,7 @@ def _local_media_job_context(
     duration_limit_seconds: float | None = None,
 ) -> MediaJobContext:
     """Build the pipeline context with the local edition's invariants: local
-    STT, no quota/account, the local event hub, and no desktop-sync side
-    effects. ``options`` uses the persisted queue-options vocabulary so the
+    STT and the local event hub. ``options`` uses the persisted queue-options vocabulary so the
     upload and retry entries cannot drift apart."""
     return MediaJobContext(
         task_id_value=task_id,
@@ -401,8 +400,6 @@ def _local_media_job_context(
         source_file_size_mb=source_file_size_mb,
         max_upload_mb=max_upload_mb(),
         duration_preflight_sec=duration_preflight_sec,
-        quota_estimate=None,
-        quota_reservation=None,
         task_started_at=time.perf_counter(),
         loop=asyncio.get_event_loop(),
         model_size=(options.get("stt_model") or "").strip() or DEFAULT_LOCAL_STT_MODEL,
@@ -438,7 +435,6 @@ def _local_media_job_context(
         system_prompt=options.get("system_prompt"),
         prompt_preset=options.get("prompt_preset"),
         prompt_preset_label=options.get("prompt_preset_label"),
-        account_user=None,
         title=options.get("title"),
         lark_app_id=None,
         lark_app_secret=None,
@@ -449,7 +445,6 @@ def _local_media_job_context(
         friendly_error=friendly_error,
         stt_provider_labeler=_local_stt_provider_label,
         job_events=JOB_EVENTS,
-        sync_terminal_result=False,
         finalize_result_storage=_finalize_local_result_storage,
         auto_lark_exporter=_auto_export_local_lark,
         enforce_history_retention=_enforce_local_history_retention,

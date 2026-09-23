@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import backend.routers.client_events as client_events
+import backend.routers.local_events as local_events
 from backend.routers.local_events import router
 
 
@@ -13,7 +13,7 @@ def _client() -> TestClient:
 
 def test_local_events_keep_only_safe_client_metadata(monkeypatch):
     logged: list[dict] = []
-    monkeypatch.setattr(client_events, "log_event", lambda **values: logged.append(values))
+    monkeypatch.setattr(local_events, "log_event", lambda **values: logged.append(values))
 
     response = _client().post(
         "/events",
@@ -38,7 +38,7 @@ def test_local_cancel_event_checks_the_scoped_job(monkeypatch):
         requested.append((task_id, client_id))
         return None
 
-    monkeypatch.setattr(client_events, "get_job", missing_job)
+    monkeypatch.setattr(local_events, "get_job", missing_job)
 
     response = _client().post(
         "/events",

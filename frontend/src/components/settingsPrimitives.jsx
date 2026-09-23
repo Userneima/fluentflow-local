@@ -1,8 +1,7 @@
 import SvgIcon from './SvgIcon.jsx';
 
-// Edition-neutral building blocks for the settings pages. Both editions build
-// their own page out of these plus the rows in settingsRows.jsx; nothing here
-// knows which edition is rendering it.
+// Building blocks for the settings page, used together with the rows in
+// settingsRows.jsx.
 export const Section = ({id, title, description, children}) => (
     <section id={id} className="scroll-mt-7 rounded-[18px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
         <div className="border-b border-[#ece8e8] px-5 py-4 dark:border-white/[0.1]">

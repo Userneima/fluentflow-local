@@ -22,15 +22,15 @@ import {
 import {LARK_EXPORT_ROUTE_OPENAPI} from '../app/shared.jsx';
 import {useSettingsPageState} from './settings-state.js';
 
-// The local edition's settings page.
+// The settings page.
 //
-// It lists the sections this edition actually has. There is one transcription
+// It lists the sections this app actually has. There is one transcription
 // route and it runs here, so there is no route picker and no "cloud or local"
 // copy; every device-side control (speed, browser login, the diarization model
 // token) is simply present instead of asking whether local transcription is
 // allowed. The only thing still asked at runtime is whether an upload writes
 // its own note, because that is a switch the person running the server can
-// turn off, not a fact about the edition.
+// turn off, not a fixed fact about the app.
 const Settings = () => {
     const state = useSettingsPageState();
     const {lang, runtimeConfig, diarizationStatus, aiProvider, larkExportRoute} = state;

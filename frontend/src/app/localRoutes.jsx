@@ -8,7 +8,7 @@ const Settings = lazy(() => import('../routes/settings.jsx'));
 const About = lazy(() => import('../routes/about.jsx'));
 const WorkspaceApi = lazy(() => import('../routes/workspace-api.jsx'));
 
-// Local-edition route registry. The root opens the processing workspace
+// Route registry. The root opens the processing workspace
 // directly ('/' redirects to /media-text); there is no landing page, access
 // gate, admin console, or guest fallback. Its contract lives beside the
 // independently maintained route test in localRoutes.test.jsx.

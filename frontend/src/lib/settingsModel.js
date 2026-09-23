@@ -24,51 +24,17 @@ export const normalizeSourceMode = (value) => (
 export const LARK_EXPORT_ROUTE_OPENAPI = 'openapi';
 export const LARK_EXPORT_ROUTE_LOCAL_CLI = 'local_cli';
 
-// Stored values of the hosted account-OAuth export route. These are migration
-// inputs only: when no OAuth route is registered (the local default), a
-// previously stored value remaps to the fallback so a fresh or migrated local
-// install never lands on a dead route.
+// Route values an older build could store for a Feishu account-OAuth export.
+// This build has no such route, so a stored value remaps to the app-credential
+// route instead of leaving an existing user's saved setting on a dead route.
 const LEGACY_HOSTED_OAUTH_ROUTE_ALIASES = ['user_oauth', 'feishu_user', 'feishu_user_oauth', 'lark_user_oauth'];
-
-// Edition-owned Lark route policy. The DEFAULT is the local edition: the
-// user's own app credentials are the fallback and no account-OAuth route
-// exists. The hosted composition root restores its historical behavior at
-// boot by registering HOSTED_LARK_EXPORT_POLICY (hostedSettingsModel.js).
-const LOCAL_LARK_ROUTE_POLICY = Object.freeze({
-    fallbackRoute: LARK_EXPORT_ROUTE_OPENAPI,
-    userOAuthRoute: null,
-    userOAuthOption: null,
-});
-
-let larkRoutePolicy = LOCAL_LARK_ROUTE_POLICY;
-
-// Full replace; call with no argument to reset to the local default.
-export const configureLarkExportRoutes = ({fallbackRoute, userOAuthRoute, userOAuthOption} = {}) => {
-    larkRoutePolicy = {
-        fallbackRoute: fallbackRoute || LOCAL_LARK_ROUTE_POLICY.fallbackRoute,
-        userOAuthRoute: userOAuthRoute || null,
-        userOAuthOption: userOAuthOption || null,
-    };
-};
-
-export const isUserOAuthLarkRouteAvailable = () => !!larkRoutePolicy.userOAuthRoute;
-
-// Extra selectable route options the edition policy registered (today: the
-// hosted account-OAuth route with its labels and hint copy).
-export const extraLarkExportRouteOptions = () => (
-    larkRoutePolicy.userOAuthRoute && larkRoutePolicy.userOAuthOption
-        ? [{value: larkRoutePolicy.userOAuthRoute, ...larkRoutePolicy.userOAuthOption}]
-        : []
-);
 
 export const normalizeLarkExportRoute = (value, legacyViaCli=false) => {
     const route = String(value || '').trim();
     if (route === LARK_EXPORT_ROUTE_LOCAL_CLI || route === 'lark_cli') return LARK_EXPORT_ROUTE_LOCAL_CLI;
-    if (LEGACY_HOSTED_OAUTH_ROUTE_ALIASES.includes(route)) {
-        return larkRoutePolicy.userOAuthRoute || larkRoutePolicy.fallbackRoute;
-    }
+    if (LEGACY_HOSTED_OAUTH_ROUTE_ALIASES.includes(route)) return LARK_EXPORT_ROUTE_OPENAPI;
     if (route === LARK_EXPORT_ROUTE_OPENAPI || route === 'lark_openapi') return LARK_EXPORT_ROUTE_OPENAPI;
-    return legacyViaCli ? LARK_EXPORT_ROUTE_LOCAL_CLI : larkRoutePolicy.fallbackRoute;
+    return legacyViaCli ? LARK_EXPORT_ROUTE_LOCAL_CLI : LARK_EXPORT_ROUTE_OPENAPI;
 };
 
 export const larkExportRouteFromSettings = (settings={}) => (
@@ -76,9 +42,6 @@ export const larkExportRouteFromSettings = (settings={}) => (
 );
 
 export const isLocalLarkExportRoute = (route) => normalizeLarkExportRoute(route) === LARK_EXPORT_ROUTE_LOCAL_CLI;
-export const isUserOAuthLarkExportRoute = (route) => (
-    !!larkRoutePolicy.userOAuthRoute && normalizeLarkExportRoute(route) === larkRoutePolicy.userOAuthRoute
-);
 
 export const normalizeAiModel = (provider, model) => {
     const p = provider === 'openai' ? 'openai' : (provider === 'qwen' ? 'qwen' : 'deepseek');
@@ -132,12 +95,8 @@ export const noteModeLabel = (mode, lang) => {
 
 export const DEFAULT_STT_MODEL = 'large-v3';
 
-// The cloud STT provider policy lives behind the edition seam in
-// `lib/sttPolicy.js` (hosted implementation in the cloud-only
-// `hostedSettingsModel.js`). This module keeps only the user-owned settings
-// model: AI/Feishu credentials, note modes, Lark route helpers, and the local
-// STT model. The local edition always transcribes locally, so it needs no
-// cloud provider negotiation here.
+// Transcription always runs locally with one model, so there is no model
+// choice to negotiate; the transcription route itself lives in lib/sttPolicy.js.
 export const normalizeSttModel = (_model) => (
     DEFAULT_STT_MODEL
 );

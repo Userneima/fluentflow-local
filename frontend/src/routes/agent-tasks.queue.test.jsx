@@ -33,11 +33,6 @@ vi.mock('../app/AppContext.jsx', () => ({
     }),
 }));
 
-vi.mock('../app/auth.jsx', async () => {
-    const actual = await vi.importActual('../app/auth.jsx');
-    return {...actual, useAuth: () => ({authMode: 'single_user', user: null})};
-});
-
 vi.mock('../app/shared.jsx', async () => {
     const actual = await vi.importActual('../app/shared.jsx');
     return {

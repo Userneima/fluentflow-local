@@ -32,7 +32,6 @@ def _ctx(exporter, **overrides):
         lark_app_id="app",
         lark_app_secret="secret",
         folder_token="folder",
-        account_user=None,
         auto_lark_exporter=exporter,
         friendly_error=lambda exc: f"friendly:{exc}",
         loop=_Loop(),

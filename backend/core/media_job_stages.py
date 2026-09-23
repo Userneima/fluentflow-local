@@ -289,7 +289,6 @@ async def export_note_to_lark(
                 lark_app_id=ctx.lark_app_id,
                 lark_app_secret=ctx.lark_app_secret,
                 folder_token=ctx.folder_token,
-                account_user=ctx.account_user,
             ),
         )
     except Exception as exc:

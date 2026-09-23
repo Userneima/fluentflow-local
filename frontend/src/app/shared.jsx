@@ -6,8 +6,6 @@ import {
     sanitizeSettings,
 } from '../lib/settingsModel.js';
 import { _dl } from '../lib/download.js';
-import { getDirectUploadTransport } from './directUploadTransport.js';
-import { getHostedApiExtension } from './hostedApiExtension.js';
 import { currentApiBase } from '../lib/apiBase.js';
 
 /** API 根路径。判据见 lib/apiBase.js：默认同源，只有 Vite 开发服务器才跨端口。 */
@@ -103,9 +101,7 @@ export {
     LARK_EXPORT_ROUTE_LOCAL_CLI,
     normalizeLarkExportRoute,
     larkExportRouteFromSettings,
-    extraLarkExportRouteOptions,
     isLocalLarkExportRoute,
-    isUserOAuthLarkExportRoute,
     normalizeAiModel,
     sanitizeSettings,
     sensitivePatchFromSettings,
@@ -176,8 +172,6 @@ export const I18nProvider = ({children}) => {
     return <I18nCtx.Provider value={{t,lang,toggleLang}}>{children}</I18nCtx.Provider>;
 };
 export const useI18n = () => useContext(I18nCtx);
-
-export {AuthCtx, useAuth} from './auth.jsx';
 
 export { accountJobsCacheKey, readCachedAccountJobs, writeCachedAccountJobs, cacheJobRecord, mergeCachedJobs, sortJobsForHistoryView, hasTranscriptResult, historyStatusFromJob, jobVisibleInHistory, resultDisplayTitle, jobDisplayTitle, resultToHistoryEntry, jobToHistoryEntry, jobToCurrentJob, historyEntryToResult } from '../lib/jobMappers.js';
 
@@ -265,23 +259,6 @@ export const useApi = () => {
     // UI forever. A watchdog aborts the request if no bytes move (and no server
     // response arrives) for `stallMs`.
     const enqueueProcessFiles = (files, options={}, {onProgress, signal, stallMs=120000}={}) => {
-        // The direct-upload transport is registered by the hosted composition
-        // root only; without one (local edition) uploads always take the
-        // regular queue path below.
-        const directUpload = options.directOssUpload ? getDirectUploadTransport() : null;
-        if (directUpload) {
-            return directUpload({
-                files,
-                options,
-                apiBase: API_BASE,
-                fetcher: apiFetch,
-                normalizeLarkRoute: normalizeLarkExportRoute,
-                isLocalLarkRoute: isLocalLarkExportRoute,
-                onProgress,
-                signal,
-                stallMs,
-            });
-        }
         return new Promise((resolve, reject) => {
         const fd = new FormData();
         Array.from(files || []).forEach((file) => fd.append("files", file));
@@ -418,10 +395,7 @@ export const useApi = () => {
         if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
         return data;
     };
-    // Cancel a record the page is holding, rather than a bare task id. What a
-    // record needs to be cancelled through is edition knowledge: the default
-    // here is the only way this edition has, and the hosted extension replaces
-    // this method for the records it owns.
+    // Cancel a record the page is holding, rather than a bare task id.
     const cancelJobRecord = (job={}) => cancelJob(job.taskId, {sttProvider: job.sttProvider});
     const deleteJob = async (taskId, options={}) => {
         const headers = localExecutionHeaders(options);
@@ -528,8 +502,7 @@ export const useApi = () => {
     // Ask the machine to open its own file dialog, and process what comes back
     // where it lies. The browser's picker cannot tell this page which folder a
     // file came from, so a normal upload has no "next to the original" to save the
-    // cut version into; the system dialog answers with a real path. Local edition
-    // only — the hosted server has neither route.
+    // cut version into; the system dialog answers with a real path.
     const chooseLocalMedia = async (payload={}) => {
         const r = await apiFetch(`${API_BASE}/local/choose-media`, {
             method: "POST",
@@ -569,7 +542,7 @@ export const useApi = () => {
     };
     // Ask the machine for a folder, and get back what is in it. One call, because
     // the count is what the next decision is about: a folder is however many
-    // Claude calls it has recordings in it. Local edition only.
+    // Claude calls it has recordings in it.
     const chooseLocalFolder = async (payload={}) => {
         const r = await apiFetch(`${API_BASE}/local/choose-folder`, {
             method: "POST",
@@ -667,17 +640,7 @@ export const useApi = () => {
         return await r.json();
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    // Local-safe API methods available in every edition.
-    const baseMethods = {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
-    // The hosted composition root registers the hosted-only fetch helpers
-    // (guest trial, account quota, admin, hosted Feishu OAuth, desktop sync).
-    // The local edition registers nothing, so those methods stay absent and the
-    // hosted route strings never enter this shared module.
-    const hostedExtension = getHostedApiExtension();
-    const hostedMethods = hostedExtension
-        ? hostedExtension({apiFetch, API_BASE, apiErrorMessage, readSseResult, appendAiOptions, base: baseMethods})
-        : {};
-    return {...baseMethods, ...hostedMethods};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
 };
 
 export const useSettings = () => {

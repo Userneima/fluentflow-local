@@ -1,4 +1,4 @@
-import {afterEach, describe, expect, it} from 'vitest';
+import {describe, expect, it} from 'vitest';
 import {
     cloudSttMissingMessage,
     defaultRuntimeConfig,
@@ -7,18 +7,13 @@ import {
     isCloudSttProvider,
     normalizeRuntimeConfig,
     normalizeSttProvider,
-    registerSttPolicy,
     sttProviderLabel,
     sttRouteOptions,
 } from './sttPolicy.js';
 
 const t = (key) => key;
 
-afterEach(() => {
-    registerSttPolicy();
-});
-
-describe('default policy is the local edition', () => {
+describe('local transcription policy', () => {
     it('knows exactly one transcription route', () => {
         expect(normalizeSttProvider('anything')).toBe('local');
         expect(effectiveSttProvider({sttProvider: 'cloud'}, defaultRuntimeConfig())).toBe('local');
@@ -37,9 +32,7 @@ describe('default policy is the local edition', () => {
         expect(config.allowedSttProviders).toEqual(['local']);
         expect(config.defaultSttProvider).toBe('local');
         expect(config.publicMode).toBe(false);
-        expect(config.guestTrial).toEqual({enabled: false});
         expect(config.jobRetryFromStoredSource).toBe(true);
-        expect(config.directOssUpload).toBe(false);
         expect(config.limits).toEqual({max_file_mb: 10});
     });
 
@@ -51,20 +44,5 @@ describe('default policy is the local edition', () => {
         expect(sttProviderLabel('local', 'zh')).toBe('本地转写');
         // Unknown providers get no label; pages show their own fallback copy.
         expect(sttProviderLabel('cloud', 'zh')).toBe(null);
-    });
-});
-
-describe('policy registration', () => {
-    it('lets a composition root replace the policy and reset restores local', () => {
-        registerSttPolicy({
-            isCloudSttProvider: (provider) => provider === 'cloud',
-            sttProviderLabel: () => 'Registered',
-        });
-        expect(isCloudSttProvider('cloud')).toBe(true);
-        expect(sttProviderLabel('x', 'en')).toBe('Registered');
-        // Unregistered functions keep the local default.
-        expect(normalizeSttProvider('cloud')).toBe('local');
-        registerSttPolicy();
-        expect(isCloudSttProvider('cloud')).toBe(false);
     });
 });
