@@ -3,7 +3,7 @@ import {useEffect, useState} from 'react';
 import {useI18n} from '../app/shared.jsx';
 import SvgIcon from '../components/SvgIcon.jsx';
 
-const UPDATED_AT = '2026-06-29';
+const UPDATED_AT = '2026-09-23';
 const CHANGELOG_UPDATED_AT = globalThis.window?.FLUENTFLOW_CONFIG?.version?.changelogUpdatedAt
     || globalThis.window?.FLUENTFLOW_CONFIG?.version?.buildTime
     || `${UPDATED_AT}T00:00:00+08:00`;
@@ -16,126 +16,105 @@ const legalNav = [
 
 const serviceSections = [
     {
-        title: '服务范围',
+        title: '它做什么',
         body: [
-            'FluentFlow 用于把视频、音频、字幕文件和视频链接整理为转录文本、字幕文件、结构化笔记和导出内容。',
-            '它是学习、研究和知识整理工具，不提供法律、医疗、投资、考试报名或其他专业决策建议。',
+            'FluentFlow Local 把视频、音频、字幕文件和视频链接整理成转录文本、字幕和笔记，也能导出。',
+            '它是学习和整理资料的工具，不提供法律、医疗、投资或其他专业建议。',
         ],
     },
     {
-        title: '账号、额度与任务',
+        title: '在哪里处理',
         body: [
-            '账号用于隔离处理记录、额度、导出记录和任务恢复数据。额度可能按任务预估、预留和最终结算，实际消耗取决于音视频长度、转录路线、摘要模式和第三方服务成本。',
-            '管理员或测试账号可能显示额度豁免。系统可能限制提交频率、上传体积、每日任务数或异常请求，以保护服务稳定性。',
+            '程序装在你自己的电脑上，只接受这台电脑自己的访问。转录用本机的语音识别模型完成，音频不会因为转录离开这台电脑。',
+            '写笔记、翻译、导出飞书和下载视频链接需要联网，见下一条。',
         ],
     },
     {
-        title: '用户内容与授权',
+        title: '用到的外部服务',
         body: [
-            '你应确认自己有权上传、转录、下载、分析或导出相关材料，包括抖音等平台链接、课程视频、会议录音、字幕文件和文档。',
-            '不要上传违法、侵权、未授权、包含敏感个人信息或商业秘密且你无权处理的内容。',
+            '写笔记和翻译会把转录文本和标题发给你在设置里填的 AI 服务商（DeepSeek、OpenAI、通义千问等），费用记在你自己的账号上。图文笔记会把从视频里截的画面发给 Claude。',
+            '导出飞书用的是你自己的飞书应用；下载视频链接会连接对应的视频平台；第一次用说话人区分时，会从 Hugging Face 下载模型。这些服务的价格、速度和内容政策由服务商决定，随时可能变。',
         ],
     },
     {
-        title: '本地与云端处理',
+        title: '你的内容',
         body: [
-            '本地路线会尽量在你的本机后端处理音视频和转录任务，适合隐私材料和个人工作流。',
-            '云端路线会把完成任务所需的文件、链接、文本、任务状态或摘要请求发送到 FluentFlow 后端及配置的第三方服务。线上纯云端环境可能不提供本地转录入口。',
+            '你要确认自己有权转录、下载、分析或导出这些材料，包括平台视频链接、课程视频、会议录音和字幕文件。',
+            '没有权利处理的违法、侵权或涉密内容，不要放进来。',
         ],
     },
     {
-        title: '第三方服务',
+        title: '结果要人工核对',
         body: [
-            'FluentFlow 可能调用 ElevenLabs、OpenAI、DeepSeek、飞书 / Lark、视频下载工具或其他配置的服务商完成转录、摘要、翻译、导出和账号能力。',
-            '第三方服务的可用性、价格、速度、配额和内容政策可能变化，这些变化可能影响 FluentFlow 的结果和成本。',
+            '转录、翻译、字幕切分和 AI 笔记都可能有错字、遗漏、断句错误或理解偏差，重要材料请回听原音频核对。',
+            '重新转录、重新生成笔记和删除任务会覆盖或删除当前结果，操作前会有确认提示。',
         ],
     },
     {
-        title: '结果责任',
+        title: '版本变化',
         body: [
-            '转录、翻译、字幕切分和 AI 笔记可能出现错字、遗漏、断句错误、理解偏差或幻觉。重要材料应回听原音频、检查字幕并人工确认。',
-            '重新转录、重生笔记和删除记录等操作可能覆盖或移除当前结果。涉及删除或覆盖的入口会尽量提供确认提示，但你仍应在关键操作前自行确认。',
-        ],
-    },
-    {
-        title: '服务变更',
-        body: [
-            'FluentFlow 仍在快速迭代中，页面、接口、任务路线、额度规则、数据结构和第三方服务商可能调整。',
-            '用户可见变化会尽量记录在版本更新页；重大不兼容变化应在部署和发布说明中标注。',
+            'FluentFlow Local 还在快速迭代，页面、功能和数据格式都可能调整，看得到的变化会记在「版本更新」页。',
         ],
     },
 ];
 
 const privacySections = [
     {
-        title: '我们处理哪些数据',
+        title: '存在哪里',
         body: [
-            '为完成任务，FluentFlow 可能处理你提交的音视频文件、字幕文件、视频链接、视频标题、转录文本、翻译文本、AI 笔记、导出记录、任务状态、错误信息和必要的账号信息。',
-            '如果启用账号系统，系统会处理邮箱、用户 ID、角色、额度和登录状态。管理员页面可能显示用于运营和排障的账号与任务摘要。',
+            '任务记录、原始文件、转录、笔记和导出文件都存在这台电脑的应用数据目录里。FluentFlow Local 没有自己的服务器，也没有账号。',
         ],
     },
     {
-        title: '本地历史与服务器任务',
+        title: '什么时候会发出去',
         body: [
-            '浏览器本地历史主要用于快速打开最近处理结果，它保存在当前浏览器环境中。清除本地历史不会删除服务器任务。',
-            '服务器任务用于后台处理、跨设备同步、恢复进度、下载产物和排查失败。删除服务器任务会按后端规则清理可删除的任务记录与产物。',
+            '只在你用到下面这些功能时才发，而且只发这一项需要的内容：写笔记和翻译，发转录文本和标题给你选的 AI 服务商；图文笔记，发截取的画面给 Claude；导出飞书，发笔记内容到你的飞书；下载视频链接，访问对应的视频平台。',
         ],
     },
     {
-        title: '文件、链接和原始材料',
+        title: '使用记录',
         body: [
-            '上传文件或粘贴视频链接后，系统可能下载、提取音频、保存临时文件、生成字幕和缓存中间结果，以便转录、重试、重新生成摘要或导出。',
-            '本地路线的文件通常保留在本机运行环境；云端路线的文件和中间产物可能保存在服务器或对象存储中，具体取决于部署配置。',
-        ],
-    },
-    {
-        title: '第三方共享',
-        body: [
-            '当任务需要云端转录、AI 摘要、翻译或飞书导出时，完成任务所需的音频、文本、标题、摘要或导出内容可能发送给相应服务商。',
-            '请不要把 FluentFlow 当作加密保险箱使用。高敏感材料应优先使用本地路线，并确认本机和后端配置符合你的隐私要求。',
+            '程序会在本机记下每个任务的处理步骤和出错信息，用来排查失败。这些记录不会发到任何地方。',
         ],
     },
     {
         title: '保留与删除',
         body: [
-            '不同部署可能采用不同的数据保留策略。当前产品会为任务恢复、历史查看和导出下载保留必要记录，直到用户删除、管理员清理或部署策略到期。',
-            '你可以在记录或设置页删除可删除记录。某些日志、账务、配额或安全记录可能因排障、审计或防滥用需要保留一段时间。',
+            '原始文件默认保留 7 天，处理结果默认保留 30 天，到期自动清理，你也可以随时在任务列表里删掉某条任务。',
+            '浏览器里的最近记录只存在当前浏览器，清掉它不会删除电脑上的任务。',
         ],
     },
     {
-        title: '密钥与凭证',
+        title: '密钥',
         body: [
-            'OpenAI、DeepSeek、ElevenLabs、飞书和 pyannote 等密钥应只保存在服务端或本机安全配置中，不应提交到代码仓库。',
-            '设置页只显示凭证是否已配置，不应回显完整密钥。更换密钥时需要重新输入。',
+            '你填的 AI 服务商密钥和飞书应用凭证存在本机配置里，只在调用对应服务时使用。',
+            '设置页只显示有没有配置，不显示完整密钥，更换时要重新输入。',
         ],
     },
     {
-        title: '你的选择',
+        title: '你能控制什么',
         body: [
-            '你可以选择本地或云端转录路线、清除浏览器本地历史、删除可删除的处理记录，或退出账号。',
-            '如果你不希望材料发送给第三方服务，请不要使用云端转录、云端摘要、翻译或飞书导出等依赖外部服务的能力。',
+            '如果想让材料完全留在本机，只用转录就行，不开 AI 笔记、翻译、飞书导出和视频链接下载。',
         ],
     },
 ];
 
 const enServiceSections = [
-    {title: 'Service scope', body: ['FluentFlow turns videos, audio, subtitle files, and video links into transcripts, subtitle files, structured notes, and exportable content.', 'It is a learning and knowledge-work tool, not legal, medical, financial, exam-registration, or other professional advice.']},
-    {title: 'Accounts, balance, and records', body: ['Accounts isolate processing records, balance, exports, and recovery data. Balance may be estimated, reserved, and finalized based on media length, route, note mode, and third-party costs.', 'Admin or test accounts may be quota-exempt. The system may limit submission rate, upload size, daily jobs, or abnormal requests to keep the service stable.']},
-    {title: 'User content and permission', body: ['You should confirm that you have permission to upload, transcribe, download, analyze, or export the material, including video links, course videos, meeting recordings, subtitles, and documents.', 'Do not upload unlawful, infringing, unauthorized, sensitive, or confidential material that you are not allowed to process.']},
-    {title: 'Local and cloud processing', body: ['Local routes try to process media and transcription jobs on your local backend, which is better for private material and personal workflows.', 'Cloud routes send required files, links, text, job status, or note requests to the FluentFlow backend and configured third-party services. Cloud-only deployments may not provide local transcription.']},
-    {title: 'Third-party services', body: ['FluentFlow may call ElevenLabs, OpenAI, DeepSeek, Feishu / Lark, video download tools, or other configured providers for transcription, notes, translation, exports, and account features.', 'Provider availability, pricing, speed, quota, and content policies may change and can affect FluentFlow results and costs.']},
-    {title: 'Result responsibility', body: ['Transcription, translation, subtitle segmentation, and AI notes may contain typos, omissions, bad breaks, misunderstandings, or hallucinations. Review important material against the original source.', 'Retranscribing, regenerating notes, and deleting records may overwrite or remove current results. Dangerous actions should show confirmation, but you should still check before acting.']},
-    {title: 'Service changes', body: ['FluentFlow is still evolving. Pages, APIs, processing routes, balance rules, data shapes, and providers may change.', 'User-visible changes should be tracked in the changelog. Major breaking changes should be called out in release notes.']},
+    {title: 'What it does', body: ['FluentFlow Local turns videos, audio, subtitle files, and video links into transcripts, subtitles, and notes, and can export them.', 'It is a tool for studying and organizing material. It does not give legal, medical, financial, or other professional advice.']},
+    {title: 'Where it runs', body: ['The app runs on your own computer and only accepts connections from that computer. Transcription uses a speech recognition model on this machine, so your audio does not leave it to be transcribed.', 'Writing notes, translating, exporting to Feishu, and downloading video links need the internet. See the next section.']},
+    {title: 'Outside services it uses', body: ['Notes and translations send the transcript and title to the AI provider you set up in Settings (DeepSeek, OpenAI, Qwen, and others), billed to your own account. Illustrated notes send frames taken from the video to Claude.', 'Feishu export uses your own Feishu app. Downloading a video link connects to that video platform. The first time you use speaker labels, the model is downloaded from Hugging Face. Pricing, speed, and content policies of these services are set by the providers and can change at any time.']},
+    {title: 'Your content', body: ['Make sure you have the right to transcribe, download, analyze, or export the material, including platform video links, course videos, meeting recordings, and subtitle files.', 'Do not add unlawful, infringing, or confidential material you are not allowed to handle.']},
+    {title: 'Check the results', body: ['Transcripts, translations, subtitle breaks, and AI notes can contain typos, gaps, bad line breaks, or misreadings. Listen back to the original for anything important.', 'Retranscribing, regenerating a note, and deleting a task overwrite or remove the current result. You will be asked to confirm first.']},
+    {title: 'Changes', body: ['FluentFlow Local is changing quickly. Pages, features, and data formats may change, and visible changes are listed on the Changelog page.']},
 ];
 
 const enPrivacySections = [
-    {title: 'Data we process', body: ['To complete jobs, FluentFlow may process uploaded media, subtitle files, video links, video titles, transcripts, translations, AI notes, export records, job status, errors, and necessary account data.', 'When accounts are enabled, the system processes email, user ID, role, balance, and login status. Admin pages may show account and job summaries for operations and debugging.']},
-    {title: 'Local history and server jobs', body: ['Browser history helps reopen recent results quickly and is stored in the current browser environment. Clearing local history does not delete server jobs.', 'Server jobs support background processing, cross-device sync, progress recovery, artifact downloads, and failure diagnosis. Deleting server jobs follows backend cleanup rules.']},
-    {title: 'Files, links, and source material', body: ['After you upload a file or paste a video link, the system may download, extract audio, save temporary files, generate subtitles, and cache intermediate results for transcription, retry, note regeneration, or export.', 'Local route files usually stay in the local runtime. Cloud route files and artifacts may be stored on the server or object storage, depending on deployment.']},
-    {title: 'Third-party sharing', body: ['When a job needs cloud transcription, AI notes, translation, or Feishu export, required audio, text, titles, notes, or export content may be sent to the relevant provider.', 'Do not treat FluentFlow as an encrypted vault. Use local routes for highly sensitive material and verify that your local/backend configuration fits your privacy needs.']},
-    {title: 'Retention and deletion', body: ['Deployments may use different retention policies. The product keeps necessary records for job recovery, history, and downloads until users delete them, admins clean them, or deployment policies expire.', 'You can delete eligible records from Records or Settings. Some logs, billing, quota, or security records may be retained for troubleshooting, audit, or abuse prevention.']},
-    {title: 'Secrets and credentials', body: ['OpenAI, DeepSeek, ElevenLabs, Feishu, pyannote, and other credentials should live only in server or local secure configuration, never in the repository.', 'Settings should only show whether a credential is configured and should not reveal full secrets. Replacing a secret requires entering it again.']},
-    {title: 'Your choices', body: ['You can choose local or cloud transcription, clear browser history, delete eligible processing records, or sign out.', 'If you do not want material sent to third-party providers, do not use cloud transcription, cloud notes, translation, Feishu export, or other external-service features.']},
+    {title: 'Where your data lives', body: ['Task records, source files, transcripts, notes, and exports are stored in the app data folder on this computer. FluentFlow Local has no server of its own and no accounts.']},
+    {title: 'When anything leaves this computer', body: ['Only when you use one of these features, and only what that feature needs: notes and translations send the transcript and title to the AI provider you chose; illustrated notes send extracted frames to Claude; Feishu export sends the note to your Feishu; downloading a video link contacts that video platform.']},
+    {title: 'Activity records', body: ['The app records each task\'s processing steps and errors on this computer to help diagnose failures. These records are not sent anywhere.']},
+    {title: 'Retention and deletion', body: ['Source files are kept for 7 days and results for 30 days by default, then cleaned up automatically. You can delete any task from the task list at any time.', 'Recent items in the browser live only in that browser. Clearing them does not delete tasks on this computer.']},
+    {title: 'Keys', body: ['The AI provider keys and Feishu app credentials you enter are stored in local configuration and used only when calling that service.', 'Settings only shows whether a key is set, never the full key. To change one, enter it again.']},
+    {title: 'Your choices', body: ['To keep material entirely on this computer, use transcription only and leave AI notes, translation, Feishu export, and video link downloads off.']},
 ];
 
 const isChangelogEntryTitle = (title) => (
@@ -286,11 +265,11 @@ const About = () => {
     const title = zh ? activeMeta.zh : activeMeta.en;
     const intro = {
         service: zh
-            ? '这些条款用来说明 FluentFlow 的服务边界、账号额度、用户内容责任、本地与云端处理方式。'
-            : 'These terms explain FluentFlow service boundaries, account balance, user content responsibilities, and local/cloud processing.',
+            ? '这些条款说明 FluentFlow Local 做什么、在哪里处理你的材料，以及你和它各自负责的部分。'
+            : 'These terms explain what FluentFlow Local does, where it handles your material, and what you and it are each responsible for.',
         privacy: zh
-            ? '这里说明 FluentFlow 在完成转录、摘要、导出和任务同步时会处理哪些数据，以及你可以怎样控制这些数据。'
-            : 'This policy explains what FluentFlow processes for transcription, notes, exports, and task sync, and how you can control that data.',
+            ? '这里说明 FluentFlow Local 在你电脑上存了什么、什么时候会把什么发出去，以及怎么删除。'
+            : 'This policy explains what FluentFlow Local stores on your computer, when anything is sent out, and how to delete it.',
         changelog: zh
             ? '这里展示最近的产品变化。它来自项目更新日志，不是单独维护的一份页面文案。'
             : 'This page shows recent product changes from the project changelog instead of a separately maintained copy.',
@@ -347,8 +326,8 @@ const About = () => {
 
                 <p className="mt-4 text-xs font-semibold leading-relaxed text-[#85868c] dark:text-white/45">
                     {zh
-                        ? '这是一份产品说明级文本，不是法律意见。正式公开收费或大规模商用前，应该请法律专业人士按实际主体、地区和服务商协议复核。'
-                        : 'This is product-level wording, not legal advice. Before public paid launch or large-scale commercial use, have legal counsel review it against the actual entity, region, and provider agreements.'}
+                        ? '这份文字说明的是产品的实际行为，不是法律意见。'
+                        : 'This text describes how the product actually behaves. It is not legal advice.'}
                 </p>
             </div>
         </main>
