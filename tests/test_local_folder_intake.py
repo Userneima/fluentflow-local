@@ -30,6 +30,7 @@ import pytest
 import backend.core.debreath_job as dj
 import backend.core.local_folder_intake as fi
 import backend.core.local_intake_flow as flow
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.silence_cuts import CutPlan, RenderReport, TimeRange
 
 TASK = "task-folder-intake"
@@ -455,7 +456,7 @@ def in_place_task(local_client, folder, monkeypatch):
         "/queue/process-local-files", json={"paths": [str(recording)]}
     ).json()
     task_id = body["queued"][0]["task_id"]
-    job_store.upsert_job(task_id=task_id, status="failed", client_id="anonymous")
+    job_store.upsert_job(task_id=task_id, status="failed", client_id=LOCAL_OWNER_ID)
     ran.clear()
     return {"task_id": task_id, "recording": recording, "ran": ran}
 

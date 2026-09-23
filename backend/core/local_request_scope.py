@@ -59,13 +59,15 @@ def normalize_client_id(value: Optional[str]) -> Optional[str]:
     return safe[:96] or None
 
 
+# The one owner every task on this machine belongs to. Local has one user, but
+# its callers each send their own client id (the page, the MCP server, scripts,
+# a second browser), and scoping by that id split one person's history four
+# ways: tasks submitted through Claude never showed up on the page.
+LOCAL_OWNER_ID = "local-single-user"
+
+
 def request_client_id(request: Optional[Request]) -> Optional[str]:
-    if request is None:
-        return None
-    return normalize_client_id(
-        request.headers.get("x-fluentflow-client-id")
-        or request.cookies.get("fluentflow_client_id")
-    )
+    return LOCAL_OWNER_ID
 
 
 def request_is_localhost(request: Request) -> bool:

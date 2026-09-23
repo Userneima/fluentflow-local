@@ -29,3 +29,16 @@ def test_local_error_diagnostics_keep_unknown_detail():
 
     assert diagnosis["code"] == "unknown_error"
     assert diagnosis["detail"] == "vendor exploded with code 999"
+
+
+def test_a_backend_that_lost_its_own_folder_is_not_told_to_retry():
+    for raw in ("[Errno 1] Operation not permitted", "后台服务失去了访问自己程序文件夹的权限（macOS 隐私保护），转写没法启动。"):
+        diagnosis = diagnose_error(raw)
+        assert diagnosis["code"] == "backend_folder_access_lost"
+        assert diagnosis["retryable"] is False
+        assert "文稿" in diagnosis["next_action"]
+
+
+def test_a_permission_error_on_a_named_file_is_not_mistaken_for_the_folder():
+    diagnosis = diagnose_error("[Errno 1] Operation not permitted: '/Volumes/USB/a.mov'")
+    assert diagnosis["code"] != "backend_folder_access_lost"

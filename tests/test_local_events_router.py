@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.routers.local_events as local_events
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.routers.local_events import router
 
 
@@ -48,7 +49,7 @@ def test_local_cancel_event_checks_the_scoped_job(monkeypatch):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Job not found"}
-    assert requested == [("missing", "desktop-two")]
+    assert requested == [("missing", LOCAL_OWNER_ID)]
 
 
 def test_local_events_reject_unknown_event_names():

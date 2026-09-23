@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 import backend.core.claude_code_note as ccn
 import backend.core.debreath_job as dj
 import backend.core.visual_note_job as vn
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.job_store import get_job, upsert_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core.result_artifacts import VISUAL_NOTE_KIND
@@ -84,10 +85,9 @@ def synthetic_task(monkeypatch):
     upsert_job(
         task_id=TASK,
         status="completed",
-        # The scope the local edition's routes read for a request with no client
-        # header, so the download assertions below go through the real guard
-        # rather than around it.
-        client_id="anonymous",
+        # The one owner the local edition's routes read, so the download
+        # assertions below go through the real guard rather than around it.
+        client_id=LOCAL_OWNER_ID,
         result={
             "task_id": TASK,
             "filename": "lecture.mp4",

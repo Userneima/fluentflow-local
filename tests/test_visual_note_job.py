@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 import backend.core.claude_vision as cv
 import backend.core.debreath_job as dj
 import backend.core.visual_note_job as vn
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.claude_vision import FrameInput, VisualNoteDraft
 from backend.core.result_artifacts import artifact_target_path
 from backend.local_main import create_local_app
@@ -721,7 +722,7 @@ def test_a_preview_costs_nothing_and_still_reports_why_it_cannot_run(client):
     upsert_job(
         task_id="preview-task",
         status="completed",
-        client_id="anonymous",
+        client_id=LOCAL_OWNER_ID,
         result={"task_id": "preview-task", "filename": "talk.m4a"},
     )
 
@@ -740,7 +741,7 @@ def test_an_ineligible_task_is_refused_with_the_reason_not_accepted(client):
     upsert_job(
         task_id="refuse-task",
         status="completed",
-        client_id="anonymous",
+        client_id=LOCAL_OWNER_ID,
         result={"task_id": "refuse-task", "filename": "talk.m4a"},
     )
 
@@ -821,3 +822,59 @@ def test_a_short_recording_is_still_one_request(job_store, tmp_path):
 
     assert len(writer.calls) == 1
     assert writer.calls[0]["part"].total == 1
+
+
+def test_a_task_submitted_by_path_writes_its_note_from_the_users_own_file(
+    job_store, monkeypatch, tmp_path
+):
+    """The cut was declined, so the note reads the recording. A task submitted by
+    path was never copied into FluentFlow's store: the recording is the user's own
+    file where it sits, and that is where the note must look."""
+    original = tmp_path / "meeting.m4a"
+    original.write_bytes(b"pretend audio")
+    monkeypatch.setattr(vn, "find_source_file", lambda _t: None)
+    job_store["metadata"] = {"folder_intake": {"original_path": str(original)}}
+    job_store["result"]["debreath"] = {
+        "status": "completed", "rendered": True, "used_for_transcription": False
+    }
+
+    media = vn.cut_media(TASK, job_store["result"])
+
+    assert media is not None and media.path == original and media.unchanged is True
+
+
+def test_a_moved_recording_is_named_instead_of_blamed_on_the_cut(
+    job_store, monkeypatch, tmp_path
+):
+    gone = tmp_path / "moved-away.m4a"
+    monkeypatch.setattr(vn, "find_source_file", lambda _t: None)
+    job_store["metadata"] = {"folder_intake": {"original_path": str(gone)}}
+    job_store["result"]["debreath"] = {
+        "status": "completed", "rendered": False, "used_for_transcription": False
+    }
+
+    reason = vn._cut_media_reason(TASK, job_store["result"])
+
+    assert str(gone) in reason and "放回" in reason
+    assert "剪辑表" not in reason
+
+
+def test_a_note_left_pending_by_a_killed_process_stops_saying_it_is_coming(monkeypatch):
+    rows = [
+        {"task_id": "no-note", "client_id": LOCAL_OWNER_ID, "result": {
+            "visual_note": {"status": vn.STATUS_RUNNING}, "summary_status": "pending"}},
+        {"task_id": "old-note", "client_id": LOCAL_OWNER_ID, "result": {
+            "visual_note": {"status": vn.STATUS_RUNNING}, "summary_status": "pending",
+            "summary_markdown": "# 上一版笔记"}},
+    ]
+    saved: dict[str, dict] = {}
+    monkeypatch.setattr(vn, "list_jobs_by_statuses", lambda *_a, **_k: rows)
+    monkeypatch.setattr(
+        vn, "update_job_result",
+        lambda task_id, result, **_k: saved.__setitem__(task_id, result) or True,
+    )
+
+    assert vn.recover_stranded_notes() == 2
+    assert saved["no-note"]["summary_status"] == "failed"
+    assert "重新写" in saved["no-note"]["summary_error"]
+    assert saved["old-note"]["summary_status"] == "completed"

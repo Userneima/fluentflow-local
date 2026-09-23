@@ -114,6 +114,56 @@ def ensure_job_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_client_updated_at ON jobs(client_id, updated_at)")
 
 
+def adopt_jobs_for_owner(owner: str, db_path: Path | str = DEFAULT_DB_PATH) -> int:
+    """Give every task in the database to ``owner``; return how many moved.
+
+    Tasks were once filed under whichever client id the caller sent, so one
+    person's history is spread across several ids. The database is copied next
+    to itself before the first change, so the old ownership can be restored by
+    putting that copy back.
+    """
+    path = Path(db_path)
+    if not path.exists():
+        return 0
+    with sqlite3.connect(path) as conn:
+        (count,) = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE client_id IS NULL OR client_id != ?", (owner,)
+        ).fetchone()
+    if not count:
+        return 0
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = path.with_name(f"{path.stem}.backup-before-owner-merge-{stamp}{path.suffix}")
+    with sqlite3.connect(path) as source, sqlite3.connect(backup) as target:
+        source.backup(target)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE jobs SET client_id = ? WHERE client_id IS NULL OR client_id != ?", (owner, owner)
+        )
+    logger.info("Moved %s tasks to the local owner; previous database kept at %s", count, backup)
+    return count
+
+
+def sync_summary_status_column(db_path: Path | str = DEFAULT_DB_PATH) -> int:
+    """Bring the summary_status column back in line with each stored result.
+
+    Notes rewritten after a failed automatic attempt used to leave the column
+    saying "failed" while the result held the finished note.
+    """
+    path = Path(db_path)
+    if not path.exists():
+        return 0
+    with sqlite3.connect(path) as conn:
+        cursor = conn.execute(
+            """
+            UPDATE jobs SET summary_status = json_extract(result_json, '$.summary_status')
+            WHERE json_valid(result_json)
+              AND json_extract(result_json, '$.summary_status') IN ('completed', 'failed', 'skipped')
+              AND summary_status IS NOT json_extract(result_json, '$.summary_status')
+            """
+        )
+        return cursor.rowcount or 0
+
+
 def create_job_if_absent(
     *,
     task_id: str,
@@ -362,15 +412,20 @@ def update_job_result(
             row = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
         if row is None:
             return None
+        # The column follows the result: a note rewritten, restored or edited
+        # after the automatic attempt failed must not keep reporting that failure.
+        summary_status = result.get("summary_status") if isinstance(result, dict) else None
+        if not isinstance(summary_status, str) or not summary_status:
+            summary_status = None
         if touch_updated_at:
             conn.execute(
-                "UPDATE jobs SET updated_at = ?, result_json = ? WHERE task_id = ?",
-                (now, _result_json_dumps(result), task_id),
+                "UPDATE jobs SET updated_at = ?, result_json = ?, summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
+                (now, _result_json_dumps(result), summary_status, task_id),
             )
         else:
             conn.execute(
-                "UPDATE jobs SET result_json = ? WHERE task_id = ?",
-                (_result_json_dumps(result), task_id),
+                "UPDATE jobs SET result_json = ?, summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
+                (_result_json_dumps(result), summary_status, task_id),
             )
         updated = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
     return _row_to_dict(updated) if updated else None

@@ -73,7 +73,7 @@ from backend.core.result_artifacts import (
     resolve_artifact_file,
     write_text_artifact,
 )
-from backend.core.storage_paths import _artifact_storage_dir, find_source_file
+from backend.core.storage_paths import _artifact_storage_dir, find_source_file, in_place_source_path
 
 logger = logging.getLogger(__name__)
 
@@ -201,8 +201,9 @@ def cut_media(task_id: str, result: dict[str, Any]) -> CutMedia | None:
     plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
 
     def recording() -> CutMedia | None:
-        """The uploaded recording, as this note's material."""
-        source = find_source_file(task_id)
+        """The recording, as this note's material: FluentFlow's own copy, or the
+        user's file where it sits for a task submitted by path."""
+        source = find_source_file(task_id) or in_place_source_path(get_job(task_id))
         if not source:
             return None
         return CutMedia(
@@ -242,6 +243,16 @@ def cut_media(task_id: str, result: dict[str, Any]) -> CutMedia | None:
     )
 
 
+def _missing_recording_reason(task_id: str, why: str) -> str:
+    job = get_job(task_id) or {}
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    origin = metadata.get("folder_intake") if isinstance(metadata.get("folder_intake"), dict) else {}
+    recorded = str(origin.get("original_path") or "").strip()
+    if recorded:
+        return f"{why}，但它已经不在 {recorded} 了。把文件放回这个位置，再写笔记。"
+    return f"{why}，但本机已经找不到这个任务的录音了（可能已过保留期）。重新提交这个文件再写笔记。"
+
+
 def _cut_media_reason(task_id: str, result: dict[str, Any]) -> str:
     """Why there is no file to write from, as the step to go and do.
 
@@ -259,8 +270,10 @@ def _cut_media_reason(task_id: str, result: dict[str, Any]) -> str:
         reason = str(state.get("error") or "").strip()
         return f"上一次去气口没成功{('：' + reason) if reason else ''}。先把那一步跑通，再写笔记。"
     plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    if state.get("used_for_transcription") is False:
+        return _missing_recording_reason(task_id, "这次转写用的是原录音，笔记也要读原录音")
     if not state.get("rendered") and plan.get("cut_count") == 0:
-        return "去气口没找到可剪的空白，但本机已经找不到这个任务的媒体文件了，没法读它写笔记。"
+        return _missing_recording_reason(task_id, "去气口没找到可剪的空白，笔记要读原录音")
     if not state.get("rendered"):
         return "上一次只生成了剪辑表，还没有剪后的文件。回到「去气口」点「剪掉空白并生成成品」。"
     return "剪后的文件已经不在本机了（可能已过保留期）。重新跑一次「去气口」就能再写笔记。"
@@ -1015,6 +1028,14 @@ def recover_stranded_notes() -> int:
             "error": "服务重启中断了这次笔记重写，剪后的文件还在，重新发起即可。",
             "finished_at": _now(),
         }
+        # The automatic flow marks the note "pending" before it starts; left
+        # alone, the task would say a note is on its way forever.
+        if result.get("summary_status") == "pending":
+            if str(result.get("summary_markdown") or "").strip():
+                result["summary_status"] = "completed"
+            else:
+                result["summary_status"] = "failed"
+                result["summary_error"] = "服务重启中断了笔记生成，重新写一次笔记即可。"
         if update_job_result(task_id, result, client_id=job.get("client_id")):
             recovered += 1
     return recovered

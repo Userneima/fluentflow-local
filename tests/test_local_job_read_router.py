@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.routers.local_job_read as local_job_read
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.routers.local_job_read import router
 
@@ -30,7 +31,7 @@ def test_events_missing_job_returns_404(monkeypatch):
     response = _client().get("/jobs/nope/events", headers=_HEADERS)
 
     assert response.status_code == 404
-    assert scoped == [("nope", "desktop-a")]
+    assert scoped == [("nope", LOCAL_OWNER_ID)]
 
 
 def test_events_stream_uses_local_hub(monkeypatch):

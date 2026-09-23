@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.routers.local_job_mutation as local_job_mutation
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.routers.local_job_mutation import router
 
@@ -28,7 +29,7 @@ def test_cancel_missing_job_returns_404(monkeypatch):
     response = _client().post("/jobs/nope/cancel", headers=_HEADERS)
 
     assert response.status_code == 404
-    assert scoped == [("nope", "desktop-a")]
+    assert scoped == [("nope", LOCAL_OWNER_ID)]
 
 
 def test_cancel_terminal_job_returns_409(monkeypatch):
@@ -101,7 +102,7 @@ def test_delete_missing_job_returns_404(monkeypatch):
     response = _client().delete("/jobs/nope", headers=_HEADERS)
 
     assert response.status_code == 404
-    assert scoped == [("nope", "desktop-a")]
+    assert scoped == [("nope", LOCAL_OWNER_ID)]
 
 
 def test_delete_active_job_returns_409(monkeypatch):
@@ -138,7 +139,7 @@ def test_delete_completed_job_cleans_files_and_deletes_scoped(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"ok": True, "task_id": "t1", "deleted": True}
     assert cleaned == [("t1", {"m": 1})]
-    assert deleted == [(["t1"], "desktop-a")]
+    assert deleted == [(["t1"], LOCAL_OWNER_ID)]
 
 
 def test_delete_fallback_post_route_works(monkeypatch):

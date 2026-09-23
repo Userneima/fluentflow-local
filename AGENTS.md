@@ -21,3 +21,13 @@ current workflow. If the task is for Hosted, switch to the independent
 ## Validation
 
 Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests. Do not push, deploy, tag, or change a release version unless explicitly requested.
+
+## Restarting the backend
+
+Queued and running tasks live in the backend process. Restarting it marks every
+one of them failed, and in practice every "服务重启中断了这个任务" failure on
+record came from an agent restarting the service to load new code while its own
+batch was still queued. Before stopping or restarting the backend on port 8000,
+run `python3 launchers/macos/count_active_jobs.py http://127.0.0.1:8000`; restart
+only when it prints `0`. Otherwise wait for the queue to drain, or test the new
+code on another port.

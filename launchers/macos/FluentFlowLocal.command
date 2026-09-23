@@ -55,13 +55,16 @@ if [[ -n "$health" ]]; then
 		# 唯一要停下来问的情况是后台真的在转东西：界面坏了不代表任务坏了，一段三小时
 		# 的视频转到一半被杀掉，得从头再来。查不到任务列表就照常重启 —— 那说明这个
 		# 进程连自己的接口都答不上来了，留着也没用。
-		# `|| true` 不是装饰：脚本开头是 set -euo pipefail，而 grep 找不到匹配时返回 1，
-		# 于是「没有任务在跑」这个最常见的情况会让整条管道失败、脚本当场退出，重启那几行
-		# 根本执行不到。第一版就是这么写的，测试时它一声不吭地什么也没做。
-		running="$(curl -s --max-time 3 "http://127.0.0.1:${PORT}/jobs?limit=100" 2>/dev/null \
-			| grep -c '"status":"\(queued\|processing\|running\|pending\)"' || true)"
-		if [[ "${running:-0}" -gt 0 ]]; then
-			echo "但后台还有 ${running} 个任务在进行中，重启会让它们从头再来。"
+		# 数任务交给 count_active_jobs.py，和桌面 App 的重启确认用同一个口径。
+		# 它只用标准库，所以用系统 python3，不依赖后面才找的虚拟环境。-1 表示查不清，
+		# 也要多问一句。
+		running="$(python3 "${REPO}/launchers/macos/count_active_jobs.py" "http://127.0.0.1:${PORT}" 2>/dev/null || echo -1)"
+		if [[ "${running:--1}" != "0" ]]; then
+			if [[ "$running" == "-1" ]]; then
+				echo "查不清后台有没有任务在进行，重启可能会打断正在转写的任务。"
+			else
+				echo "但后台还有 ${running} 个任务在进行中，重启会让它们从头再来。"
+			fi
 			read -r -p "确认重启请按回车，按 Ctrl+C 取消…" _ || exit 1
 		fi
 		# shellcheck disable=SC2086

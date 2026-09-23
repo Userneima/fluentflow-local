@@ -1,4 +1,4 @@
-"""Local composition root: route contract, HTTP boundary, cross-client proof,
+"""Local composition root: route contract, HTTP boundary, single-owner proof,
 and stale-job recovery."""
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from backend.core import job_store
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.local_main as local_main
 import backend.routers.local_job_edit as local_job_edit
 import backend.routers.local_job_mutation as local_job_mutation
@@ -98,7 +99,7 @@ def test_non_loopback_override_env(monkeypatch):
     assert _get_as_peer("203.0.113.5").status_code == 200
 
 
-# ---- cross-client boundary through the assembled app (P2.4 acceptance) -------------
+# ---- one owner through the assembled app ------------------------------------------
 
 @pytest.fixture()
 def scoped_stack(monkeypatch, tmp_path):
@@ -126,7 +127,7 @@ def scoped_stack(monkeypatch, tmp_path):
     job_store.upsert_job(
         task_id="b-task",
         status="running",
-        client_id="desktop-b",
+        client_id=LOCAL_OWNER_ID,
         stage="stt",
         progress=40,
         result={"task_id": "b-task", "transcript_text": "B 的内容"},
@@ -135,22 +136,79 @@ def scoped_stack(monkeypatch, tmp_path):
     return jobs_db
 
 
-def test_client_a_cannot_read_or_mutate_client_b(scoped_stack):
+def test_any_client_id_reads_and_mutates_the_same_task(scoped_stack):
+    # The page, the MCP server and scripts each send their own client id (or
+    # none). Local has one user, so a task filed by one caller must be visible
+    # and editable from every other.
     client = TestClient(create_local_app())
     a = {"x-fluentflow-client-id": "desktop-a"}
     b = {"x-fluentflow-client-id": "desktop-b"}
 
-    assert client.get("/jobs/b-task", headers=a).status_code == 404
-    assert client.post("/jobs/b-task/cancel", headers=a).status_code == 404
-    assert client.patch(
-        "/jobs/b-task/transcript", headers=a, json={"transcript_text": "篡改"}
-    ).status_code == 404
+    for headers in (a, b, {}):
+        response = client.get("/jobs/b-task", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["result"]["transcript_text"] == "B 的内容"
 
-    # Untouched, and still fully accessible to its owner.
-    stored = job_store.get_job("b-task", db_path=scoped_stack, client_id="desktop-b")
-    assert stored["status"] == "running"
-    assert stored["result"]["transcript_text"] == "B 的内容"
-    assert client.get("/jobs/b-task", headers=b).status_code == 200
+    edited = client.patch(
+        "/jobs/b-task/transcript", headers=a, json={"transcript_text": "A 改过的内容"}
+    )
+    assert edited.status_code == 200
+    assert client.post("/jobs/b-task/cancel", headers={}).status_code == 200
+
+    stored = job_store.get_job("b-task", db_path=scoped_stack, client_id=LOCAL_OWNER_ID)
+    assert stored["status"] == "cancelled"
+    assert stored["result"]["transcript_text"] == "A 改过的内容"
+
+    # A task id that exists nowhere is still a 404, whoever asks.
+    for headers in (a, {}):
+        assert client.get("/jobs/no-such-task", headers=headers).status_code == 404
+        assert client.post("/jobs/no-such-task/cancel", headers=headers).status_code == 404
+
+
+def test_adopt_jobs_for_owner_moves_every_task_once_and_backs_up_first(tmp_path):
+    import sqlite3
+
+    jobs_db = tmp_path / "jobs.sqlite"
+    for task_id, client_id in (
+        ("page-task", "desktop-a"),
+        ("mcp-task", "mcp-server"),
+        ("old-task", "anonymous"),
+        ("orphan-task", "anonymous"),
+        ("owned-task", LOCAL_OWNER_ID),
+    ):
+        job_store.upsert_job(
+            task_id=task_id, status="completed", client_id=client_id, db_path=jobs_db
+        )
+    with sqlite3.connect(jobs_db) as conn:
+        conn.execute("UPDATE jobs SET client_id = NULL WHERE task_id = 'orphan-task'")
+
+    def backups():
+        return sorted(tmp_path.glob("*.backup-before-owner-merge-*"))
+
+    assert job_store.adopt_jobs_for_owner(LOCAL_OWNER_ID, db_path=jobs_db) == 4
+    with sqlite3.connect(jobs_db) as conn:
+        owners = {row[0] for row in conn.execute("SELECT client_id FROM jobs")}
+    assert owners == {LOCAL_OWNER_ID}
+    assert len(backups()) == 1
+    with sqlite3.connect(backups()[0]) as conn:
+        (orphan_owner,) = conn.execute(
+            "SELECT client_id FROM jobs WHERE task_id = 'orphan-task'"
+        ).fetchone()
+    assert orphan_owner is None, "the backup keeps the ownership from before the move"
+
+    # Nothing left to move: no change and no second backup.
+    assert job_store.adopt_jobs_for_owner(LOCAL_OWNER_ID, db_path=jobs_db) == 0
+    assert len(backups()) == 1
+
+
+def test_adopt_jobs_for_owner_leaves_an_all_owned_database_alone(tmp_path):
+    jobs_db = tmp_path / "jobs.sqlite"
+    job_store.upsert_job(
+        task_id="owned-task", status="completed", client_id=LOCAL_OWNER_ID, db_path=jobs_db
+    )
+
+    assert job_store.adopt_jobs_for_owner(LOCAL_OWNER_ID, db_path=jobs_db) == 0
+    assert list(tmp_path.glob("*.backup-before-owner-merge-*")) == []
 
 
 # ---- startup recovery ----------------------------------------------------------------

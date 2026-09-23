@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
 import queue
 import traceback
 from multiprocessing.process import BaseProcess
@@ -67,6 +68,13 @@ def _transcribe_worker(
         )
 
 
+STT_FOLDER_ACCESS_LOST = (
+    "后台服务失去了访问自己程序文件夹的权限（macOS 隐私保护），转写没法启动。"
+    "退出 FluentFlow 再重新打开；如果还是这样，到「系统设置 → 隐私与安全性 → 文件与文件夹」，"
+    "给用来启动 FluentFlow 的终端或应用打开「文稿」权限。"
+)
+
+
 def start_transcription_process(
     audio_path: str | Path,
     *,
@@ -81,6 +89,14 @@ def start_transcription_process(
     initial_prompt: str | None = None,
 ) -> tuple[BaseProcess, mp.Queue]:
     """Start STT in a subprocess and return ``(process, queue)``."""
+    # Spawning asks for the current directory first. On macOS a long-running
+    # backend can lose permission to its own folder (it sits under ~/Documents,
+    # which is privacy-protected), and the spawn then dies with a bare
+    # "[Errno 1] Operation not permitted" that retrying never fixes.
+    try:
+        os.getcwd()
+    except PermissionError as exc:
+        raise RuntimeError(STT_FOLDER_ACCESS_LOST) from exc
     ctx = mp.get_context("spawn")
     out_queue: mp.Queue = ctx.Queue()
     process = ctx.Process(

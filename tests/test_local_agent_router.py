@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import backend.core.local_entry_guards as guards
 from backend.core import job_store
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.routers.local_agent as local_agent
 import backend.routers.local_video_sources as local_video_sources
 from backend.routers.local_agent import router as agent_router
@@ -162,7 +163,7 @@ def test_transcript_task_uses_strict_local_keys(monkeypatch, agent_stack):
 
 def test_transcript_task_rejects_duplicate_task_id(monkeypatch, agent_stack):
     job_store.upsert_job(
-        task_id="taken-1", status="completed", client_id="desktop-a",
+        task_id="taken-1", status="completed", client_id=LOCAL_OWNER_ID,
         db_path=agent_stack["jobs_db"],
     )
     r = TestClient(_app()).post(
@@ -264,12 +265,20 @@ def test_video_link_worker_keeps_agent_route_identity(monkeypatch, agent_stack):
     assert listed.json()["jobs"] == []
 
 
-def test_cross_client_task_is_not_visible(agent_stack):
+def test_task_filed_by_another_caller_is_visible_to_the_agent(agent_stack):
+    # The page and the MCP server send different client ids; a task submitted
+    # from one must show up in the other, because local has a single user.
     job_store.upsert_job(
-        task_id="their-1", status="completed", client_id="desktop-b",
+        task_id="page-1", status="completed", client_id=LOCAL_OWNER_ID,
         db_path=agent_stack["jobs_db"],
     )
-    r = TestClient(_app()).get("/agent/v1/tasks/their-1", headers=_HEADERS)
+    for client_id in ("desktop-b", "mcp-server"):
+        r = TestClient(_app()).get(
+            "/agent/v1/tasks/page-1",
+            headers={**_HEADERS, "x-fluentflow-client-id": client_id},
+        )
+        assert r.status_code == 200
+    r = TestClient(_app()).get("/agent/v1/tasks/no-such-task", headers=_HEADERS)
     assert r.status_code == 404
 
 
@@ -277,7 +286,7 @@ def test_cross_client_task_is_not_visible(agent_stack):
 
 def test_note_regenerate_updates_result(monkeypatch, agent_stack):
     job_store.upsert_job(
-        task_id="t-r1", status="completed", client_id="desktop-a", stage="done",
+        task_id="t-r1", status="completed", client_id=LOCAL_OWNER_ID, stage="done",
         result={"task_id": "t-r1", "transcript_text": "旧的文字", "summary_markdown": "旧"},
         db_path=agent_stack["jobs_db"],
     )
@@ -288,13 +297,13 @@ def test_note_regenerate_updates_result(monkeypatch, agent_stack):
     r = TestClient(_app()).post("/agent/v1/tasks/t-r1/note/regenerate", headers=_HEADERS, json={})
     assert r.status_code == 200
     assert r.json()["package"]["note"]["markdown"] == "# 新笔记"
-    stored = job_store.get_job("t-r1", db_path=agent_stack["jobs_db"], client_id="desktop-a")
+    stored = job_store.get_job("t-r1", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID)
     assert stored["result"]["summary_markdown"] == "# 新笔记"
 
 
 def test_note_regenerate_without_transcript_is_400(agent_stack):
     job_store.upsert_job(
-        task_id="t-r2", status="completed", client_id="desktop-a",
+        task_id="t-r2", status="completed", client_id=LOCAL_OWNER_ID,
         result={"task_id": "t-r2"}, db_path=agent_stack["jobs_db"],
     )
     r = TestClient(_app()).post("/agent/v1/tasks/t-r2/note/regenerate", headers=_HEADERS, json={})
@@ -303,19 +312,19 @@ def test_note_regenerate_without_transcript_is_400(agent_stack):
 
 def test_note_regenerate_rejects_concurrent_edit(monkeypatch, agent_stack):
     job_store.upsert_job(
-        task_id="t-r3", status="completed", client_id="desktop-a", stage="done",
+        task_id="t-r3", status="completed", client_id=LOCAL_OWNER_ID, stage="done",
         result={"task_id": "t-r3", "transcript_text": "旧的文字", "summary_markdown": "旧"},
         db_path=agent_stack["jobs_db"],
     )
 
     def summarize(transcript, **kwargs):
         job = job_store.get_job(
-            "t-r3", db_path=agent_stack["jobs_db"], client_id="desktop-a"
+            "t-r3", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID
         )
         edited = dict(job["result"])
         edited["summary_markdown"] = "用户生成期间的编辑"
         job_store.upsert_job(
-            task_id="t-r3", status="completed", client_id="desktop-a",
+            task_id="t-r3", status="completed", client_id=LOCAL_OWNER_ID,
             result=edited, db_path=agent_stack["jobs_db"],
         )
         return _summary_result("# AI 新稿")
@@ -327,14 +336,14 @@ def test_note_regenerate_rejects_concurrent_edit(monkeypatch, agent_stack):
 
     assert r.status_code == 409
     stored = job_store.get_job(
-        "t-r3", db_path=agent_stack["jobs_db"], client_id="desktop-a"
+        "t-r3", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID
     )
     assert stored["result"]["summary_markdown"] == "用户生成期间的编辑"
 
 
 def test_note_regenerate_rejects_edit_saved_after_conflict_check(monkeypatch, agent_stack):
     job_store.upsert_job(
-        task_id="t-r4", status="completed", client_id="desktop-a", stage="done",
+        task_id="t-r4", status="completed", client_id=LOCAL_OWNER_ID, stage="done",
         result={"task_id": "t-r4", "transcript_text": "旧的文字", "summary_markdown": "旧"},
         db_path=agent_stack["jobs_db"],
     )
@@ -346,12 +355,12 @@ def test_note_regenerate_rejects_edit_saved_after_conflict_check(monkeypatch, ag
 
     def edit_after_check(task_id, result):
         job = job_store.get_job(
-            task_id, db_path=agent_stack["jobs_db"], client_id="desktop-a"
+            task_id, db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID
         )
         edited = dict(job["result"])
         edited["summary_markdown"] = "用户在检查后保存的编辑"
         job_store.upsert_job(
-            task_id=task_id, status="completed", client_id="desktop-a",
+            task_id=task_id, status="completed", client_id=LOCAL_OWNER_ID,
             result=edited, db_path=agent_stack["jobs_db"],
         )
         return result
@@ -363,7 +372,7 @@ def test_note_regenerate_rejects_edit_saved_after_conflict_check(monkeypatch, ag
 
     assert r.status_code == 409
     stored = job_store.get_job(
-        "t-r4", db_path=agent_stack["jobs_db"], client_id="desktop-a"
+        "t-r4", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID
     )
     assert stored["result"]["summary_markdown"] == "用户在检查后保存的编辑"
 
@@ -391,7 +400,7 @@ def test_wait_rejects_non_numeric_or_non_finite_timing(field, value, monkeypatch
 
 def test_export_records_export_and_rejects_hosted_oauth(monkeypatch, agent_stack):
     job_store.upsert_job(
-        task_id="t-e1", status="completed", client_id="desktop-a",
+        task_id="t-e1", status="completed", client_id=LOCAL_OWNER_ID,
         result={"task_id": "t-e1", "summary_markdown": "# 笔记"},
         db_path=agent_stack["jobs_db"],
     )
@@ -410,7 +419,7 @@ def test_export_records_export_and_rejects_hosted_oauth(monkeypatch, agent_stack
     body = r.json()
     assert body["export"]["route"] == "lark_cli"
     assert body["export"]["url"] == "https://example.feishu.cn/wiki/w1"
-    stored = job_store.get_job("t-e1", db_path=agent_stack["jobs_db"], client_id="desktop-a")
+    stored = job_store.get_job("t-e1", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID)
     assert stored["result"]["exports"][0]["url"] == "https://example.feishu.cn/wiki/w1"
 
     oauth = client.post(
@@ -423,19 +432,19 @@ def test_export_records_export_and_rejects_hosted_oauth(monkeypatch, agent_stack
 
 def test_export_preserves_edit_saved_during_remote_call(monkeypatch, agent_stack):
     job_store.upsert_job(
-        task_id="t-e2", status="completed", client_id="desktop-a", stage="done",
+        task_id="t-e2", status="completed", client_id=LOCAL_OWNER_ID, stage="done",
         result={"task_id": "t-e2", "summary_markdown": "导出前旧稿"},
         db_path=agent_stack["jobs_db"],
     )
 
     def export(title, markdown):
         job = job_store.get_job(
-            "t-e2", db_path=agent_stack["jobs_db"], client_id="desktop-a"
+            "t-e2", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID
         )
         edited = dict(job["result"])
         edited["summary_markdown"] = "用户导出期间的编辑"
         job_store.upsert_job(
-            task_id="t-e2", status="completed", client_id="desktop-a",
+            task_id="t-e2", status="completed", client_id=LOCAL_OWNER_ID,
             result=edited, db_path=agent_stack["jobs_db"],
         )
         return {"ok": True, "url": "https://example.feishu.cn/wiki/w2"}
@@ -449,7 +458,7 @@ def test_export_preserves_edit_saved_during_remote_call(monkeypatch, agent_stack
 
     assert r.status_code == 200
     stored = job_store.get_job(
-        "t-e2", db_path=agent_stack["jobs_db"], client_id="desktop-a"
+        "t-e2", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID
     )
     assert stored["result"]["summary_markdown"] == "用户导出期间的编辑"
     assert stored["result"]["exports"][0]["url"] == "https://example.feishu.cn/wiki/w2"

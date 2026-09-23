@@ -259,6 +259,16 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "飞书导出失败。",
             "检查本机登录、应用凭据和目标文档权限后重试。",
         )
+    if "失去了访问自己程序文件夹的权限" in raw or (
+        "operation not permitted" in lowered and "/" not in raw
+    ):
+        return _diag(
+            "backend_folder_access_lost",
+            "后台服务没有文件夹权限",
+            "后台服务失去了访问自己程序文件夹的权限（macOS 隐私保护），重试不会好。",
+            "退出 FluentFlow 再重新打开；还不行就到「系统设置 → 隐私与安全性 → 文件与文件夹」，给启动它的终端或应用打开「文稿」权限。",
+            retryable=False,
+        )
     if "视频下载失败" in raw:
         return _diag(
             "video_download_failed",

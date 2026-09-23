@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.routers.local_job_edit as local_job_edit
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.routers.local_job_edit import router
 
 _HEADERS = {"x-fluentflow-client-id": "desktop-a"}
@@ -70,7 +71,7 @@ def test_transcript_edit_persists_scoped(monkeypatch):
     result = r.json()["result"]
     assert result["transcript_text"] == "hello world"
     assert result["transcript_edited"] is True
-    assert scoped == ["desktop-a"]
+    assert scoped == [LOCAL_OWNER_ID]
 
 
 def test_transcript_backup_failure_returns_500(monkeypatch):

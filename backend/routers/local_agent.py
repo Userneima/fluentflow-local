@@ -286,7 +286,7 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             "status": job.get("status"),
             "stage": job.get("stage"),
             "progress": job.get("progress"),
-            "summary_status": job.get("summary_status"),
+            "summary_status": (job.get("result") or {}).get("summary_status") or job.get("summary_status"),
         },
         "package_url": f"/agent/v1/tasks/{task_id}/package",
     }

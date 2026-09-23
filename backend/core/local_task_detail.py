@@ -7,7 +7,7 @@ from typing import Any
 from backend.core.local_decision_log import build_decision_log as build_local_decision_log
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.note_diagnosis import build_note_generation_diagnosis
-from backend.core.storage_paths import find_source_file
+from backend.core.storage_paths import find_source_file, in_place_source_path
 from backend.core.task_detail_core import (
     build_task_detail as build_task_detail_core,
     build_task_snapshot as build_task_snapshot_core,
@@ -129,11 +129,14 @@ class LocalTaskDetailPolicy:
 
     @staticmethod
     def is_source_retryable(job: dict[str, Any]) -> bool:
-        # Local retry re-runs from the stored source file via the local
-        # /jobs/{id}/retry route; offer it only when that file still exists.
+        # Local retry re-runs via /jobs/{id}/retry from FluentFlow's stored copy
+        # or, for a task submitted by path, from the user's file where it sits;
+        # offer it whenever the route would find one of them.
         if _text(job.get("status")) != "failed":
             return False
-        return find_source_file(_text(job.get("task_id"))) is not None
+        if find_source_file(_text(job.get("task_id"))) is not None:
+            return True
+        return in_place_source_path(job) is not None
 
     @staticmethod
     def additional_stage_step(_stage: str) -> str | None:

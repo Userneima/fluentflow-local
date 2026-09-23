@@ -82,3 +82,18 @@ def test_local_task_detail_offers_retry_when_stored_source_exists(monkeypatch):
 
     action_ids = {action["id"] for action in detail["actions"]}
     assert "retry" in action_ids
+
+
+def test_a_by_path_task_is_retryable_while_its_file_is_where_it_was(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_task_detail, "find_source_file", lambda _task_id: None)
+    original = tmp_path / "lecture.mp4"
+    job = {
+        "task_id": "in-place-1",
+        "status": "failed",
+        "metadata": {"folder_intake": {"original_path": str(original)}},
+    }
+    policy = local_task_detail.LocalTaskDetailPolicy
+
+    assert policy.is_source_retryable(job) is False
+    original.write_bytes(b"video")
+    assert policy.is_source_retryable(job) is True

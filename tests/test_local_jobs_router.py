@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.routers.local_jobs as local_jobs
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core import local_task_detail
 from backend.routers.local_jobs import router
 
@@ -27,7 +28,7 @@ _JOB = {
 }
 
 
-def test_local_jobs_list_scopes_by_client_and_uses_local_projection(monkeypatch):
+def test_local_jobs_list_reads_the_local_owner_and_uses_local_projection(monkeypatch):
     seen: list[str | None] = []
 
     def fake_summaries(*, limit, client_id):
@@ -39,11 +40,11 @@ def test_local_jobs_list_scopes_by_client_and_uses_local_projection(monkeypatch)
     response = _client().get("/jobs", headers={"x-fluentflow-client-id": "desktop-a"})
 
     assert response.status_code == 200
-    assert seen == ["desktop-a"]
+    assert seen == [LOCAL_OWNER_ID]
     assert response.json()["jobs"][0]["task_snapshot"] == local_task_detail.build_task_snapshot(_JOB)
 
 
-def test_local_jobs_are_isolated_between_clients(monkeypatch):
+def test_local_jobs_list_is_the_same_whichever_client_id_is_sent(monkeypatch):
     seen: list[str | None] = []
 
     def fake_summaries(*, limit, client_id):
@@ -56,9 +57,9 @@ def test_local_jobs_are_isolated_between_clients(monkeypatch):
     _client().get("/jobs", headers={"x-fluentflow-client-id": "desktop-b"})
     _client().get("/jobs")
 
-    # Two identified clients see only their own scope; a request without a client
-    # id collapses to a single anonymous scope, never a global unscoped read.
-    assert seen == ["desktop-a", "desktop-b", "anonymous"]
+    # Local has one user: the page, the MCP server and scripts send different
+    # client ids (or none), and every one of them must read the same task list.
+    assert seen == [LOCAL_OWNER_ID, LOCAL_OWNER_ID, LOCAL_OWNER_ID]
 
 
 def test_local_job_read_uses_local_snapshot(monkeypatch):
@@ -73,7 +74,7 @@ def test_local_job_read_uses_local_snapshot(monkeypatch):
     response = _client().get("/jobs/local-1", headers={"x-fluentflow-client-id": "desktop-a"})
 
     assert response.status_code == 200
-    assert scoped == [("local-1", "desktop-a")]
+    assert scoped == [("local-1", LOCAL_OWNER_ID)]
     assert response.json()["task_snapshot"] == local_task_detail.build_task_snapshot(_JOB)
 
 

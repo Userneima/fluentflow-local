@@ -27,8 +27,9 @@ load_project_env()
 from backend.core.app_factory import create_app
 from backend.core.debreath_job import recover_stranded_renders
 from backend.core.frontend_paths import FRONTEND_LOCAL_DIST_DIR
-from backend.core.job_store import list_jobs_by_statuses, upsert_job
+from backend.core.job_store import adopt_jobs_for_owner, list_jobs_by_statuses, sync_summary_status_column, upsert_job
 from backend.core.local_http_boundary import local_boundary_middleware
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.local_readiness import (
     failed_required_checks,
     format_report,
@@ -105,6 +106,12 @@ async def lifespan(app: FastAPI):
         logger.warning("Local readiness issues:\n%s", format_report(checks))
     else:
         logger.info("Local readiness: all required checks passed")
+    adopted = adopt_jobs_for_owner(LOCAL_OWNER_ID)
+    if adopted:
+        logger.info("Startup moved %s tasks filed under other client ids to the local owner", adopted)
+    synced = sync_summary_status_column()
+    if synced:
+        logger.info("Startup corrected the note status of %s tasks", synced)
     recovered = recover_stale_jobs()
     if recovered:
         logger.info("Startup recovery marked %s stranded local jobs as failed", recovered)

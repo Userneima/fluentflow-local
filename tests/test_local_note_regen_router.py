@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 import backend.core.local_entry_guards as guards
 import backend.routers.local_note_regen as local_note_regen
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.routers.local_note_regen import router
 
 _HEADERS = {"x-fluentflow-client-id": "desktop-a"}
@@ -45,7 +46,7 @@ def _install_store(monkeypatch):
         job = jobs.get(task_id)
         if job is None:
             return None
-        if client_id is not None and job.get("client_id", "desktop-a") != client_id:
+        if client_id is not None and job.get("client_id", LOCAL_OWNER_ID) != client_id:
             return None
         return job
 
@@ -123,7 +124,7 @@ def test_regenerate_merges_into_existing_job(monkeypatch):
     assert captured["note_mode"] == "direct"
     job = jobs["t1"]
     assert job["status"] == "completed"
-    assert job["client_id"] == "desktop-a"
+    assert job["client_id"] == LOCAL_OWNER_ID
     assert job["result"]["filename"] == "a.mp4"  # existing result preserved
     assert job["result"]["summary_markdown"].startswith("# 笔记")
 
@@ -132,7 +133,7 @@ def test_regenerate_does_not_overwrite_note_edited_while_ai_runs(monkeypatch):
     jobs, events = _install_store(monkeypatch)
     jobs["t1"] = {
         "task_id": "t1",
-        "client_id": "desktop-a",
+        "client_id": LOCAL_OWNER_ID,
         "status": "completed",
         "result": {
             "task_id": "t1",
@@ -166,7 +167,7 @@ def test_regenerate_does_not_overwrite_edit_saved_after_conflict_check(monkeypat
     jobs, events = _install_store(monkeypatch)
     jobs["t-late"] = {
         "task_id": "t-late",
-        "client_id": "desktop-a",
+        "client_id": LOCAL_OWNER_ID,
         "status": "completed",
         "result": {
             "task_id": "t-late",

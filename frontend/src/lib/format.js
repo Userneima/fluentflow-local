@@ -201,6 +201,19 @@ export const diagnoseTaskError = (message, lang='zh') => {
 
     const patterns = [
         [
+            raw.includes('失去了访问自己程序文件夹的权限') || (lower.includes('operation not permitted') && !raw.includes('/')),
+            taskErrorDiagnosis({
+                code: 'backend_folder_access_lost',
+                titleZh: '后台服务没有文件夹权限',
+                titleEn: 'The background service lost folder access',
+                detailZh: '后台服务失去了访问自己程序文件夹的权限（macOS 隐私保护），重试不会好。',
+                detailEn: 'The background service lost permission to its own folder (macOS privacy protection). Retrying will not help.',
+                nextZh: '退出 FluentFlow 再重新打开；还不行就到「系统设置 → 隐私与安全性 → 文件与文件夹」，给启动它的终端或应用打开「文稿」权限。',
+                nextEn: 'Quit and reopen FluentFlow. If it persists, open System Settings → Privacy & Security → Files and Folders and allow Documents for the terminal or app that starts FluentFlow.',
+                retryable: false,
+            }),
+        ],
+        [
             lower.includes('queued transcript summary request failed') && (lower.includes('401') || lower.includes('login') || lower.includes('auth') || lower.includes('account')),
             taskErrorDiagnosis({
                 code: 'auth_required',
