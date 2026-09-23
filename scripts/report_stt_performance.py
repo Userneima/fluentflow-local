@@ -31,20 +31,6 @@ def _average_numeric(rows: list[dict[str, Any]], metadata_key: str) -> float | N
     return round(sum(numbers) / len(numbers), 3)
 
 
-def _average_first_numeric(rows: list[dict[str, Any]], metadata_keys: tuple[str, ...]) -> float | None:
-    values: list[float] = []
-    for row in rows:
-        metadata = row.get("metadata") or {}
-        for key in metadata_keys:
-            value = metadata.get(key)
-            if isinstance(value, (int, float)):
-                values.append(float(value))
-                break
-    if not values:
-        return None
-    return round(sum(values) / len(values), 3)
-
-
 def _detected_languages(rows: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = defaultdict(int)
     for row in rows:
@@ -202,8 +188,6 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
             "sample_count": len(rows),
             "inferred_provider_count": inferred_count,
             "detected_languages": _detected_languages(rows),
-            "avg_cloud_upload_audio_size_mb": _average_first_numeric(rows, ("elevenlabs_audio_size_mb",)),
-            "avg_cloud_upload_duration_seconds": _average_first_numeric(rows, ("elevenlabs_duration_seconds",)),
             "source_duration_seconds": round(row_duration_sum, 3),
             "stt_elapsed_seconds": round(row_stt_sum, 3),
             "weighted_realtime_factor": round(row_factor, 4) if row_factor else None,
@@ -224,8 +208,6 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
             "stt_language": key[5],
             "sample_count": len(rows),
             "detected_languages": _detected_languages(rows),
-            "avg_cloud_upload_audio_size_mb": _average_first_numeric(rows, ("elevenlabs_audio_size_mb",)),
-            "avg_cloud_upload_duration_seconds": _average_first_numeric(rows, ("elevenlabs_duration_seconds",)),
             "source_duration_seconds": round(row_duration_sum, 3),
             "stt_elapsed_seconds": round(row_stt_sum, 3),
             "weighted_realtime_factor": round(row_factor, 4) if row_factor else None,
@@ -268,15 +250,13 @@ def write_markdown(summary: dict[str, Any], output: Path | None) -> None:
         "",
         "## Providers",
         "",
-        "| Provider | Samples | Inferred provider | Detected languages | Avg cloud upload MB | Avg cloud upload sec | Duration sec | STT sec | Factor | Speed |",
-        "| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Provider | Samples | Inferred provider | Detected languages | Duration sec | STT sec | Factor | Speed |",
+        "| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |",
     ]
     for row in summary["providers"]:
         lines.append(
             f"| {row['stt_provider']} | {row['sample_count']} | {row['inferred_provider_count']} | "
             f"{_format_detected_languages(row['detected_languages'])} | "
-            f"{row['avg_cloud_upload_audio_size_mb'] if row['avg_cloud_upload_audio_size_mb'] is not None else 'n/a'} | "
-            f"{row['avg_cloud_upload_duration_seconds'] if row['avg_cloud_upload_duration_seconds'] is not None else 'n/a'} | "
             f"{row['source_duration_seconds']} | {row['stt_elapsed_seconds']} | "
             f"{row['weighted_realtime_factor']} | "
             f"{str(row['weighted_realtime_speed']) + 'x' if row['weighted_realtime_speed'] is not None else 'unavailable'} |"
@@ -285,8 +265,8 @@ def write_markdown(summary: dict[str, Any], output: Path | None) -> None:
         "",
         "## Groups",
         "",
-        "| Provider | Runtime | Model | Speed | Requested language | Detected languages | Samples | Avg cloud upload MB | Duration sec | STT sec | Factor | Speed |",
-        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Provider | Runtime | Model | Speed | Requested language | Detected languages | Samples | Duration sec | STT sec | Factor | Speed |",
+        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
     ])
     for row in summary["groups"]:
         runtime = f"{row['runtime_os']} / {row['runtime_machine']}"
@@ -294,7 +274,6 @@ def write_markdown(summary: dict[str, Any], output: Path | None) -> None:
             f"| {row['stt_provider']} | {runtime} | {row['stt_model']} | {row['stt_speed']} | {row['stt_language']} | "
             f"{_format_detected_languages(row['detected_languages'])} | "
             f"{row['sample_count']} | "
-            f"{row['avg_cloud_upload_audio_size_mb'] if row['avg_cloud_upload_audio_size_mb'] is not None else 'n/a'} | "
             f"{row['source_duration_seconds']} | {row['stt_elapsed_seconds']} | "
             f"{row['weighted_realtime_factor']} | "
             f"{str(row['weighted_realtime_speed']) + 'x' if row['weighted_realtime_speed'] is not None else 'unavailable'} |"
