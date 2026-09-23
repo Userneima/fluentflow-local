@@ -4,66 +4,6 @@
 import SvgIcon from '../components/SvgIcon.jsx';
 import {fmtTime, useI18n} from '../app/shared.jsx';
 
-export const FeishuExportPrompt = ({onCancel, onConnect, connecting, reconnect = false}) => {
-    const {t, lang} = useI18n();
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="feishuExportPromptTitle">
-            <div className="w-full max-w-lg overflow-hidden rounded-[24px] border border-[#e4e0e0] bg-white shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
-                <div className="flex items-start gap-4 border-b border-[#e4e0e0] px-6 py-5 dark:border-white/[0.12]">
-                    <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[14px] bg-[#eef2ff] text-primary dark:bg-white/[0.08] dark:text-white">
-                        <SvgIcon name="cloud_done" className=""/>
-                    </div>
-                    <div className="min-w-0">
-                        <h2 id="feishuExportPromptTitle" className="font-headline text-xl font-extrabold text-[#111111] dark:text-white">
-                            {reconnect
-                                ? (lang === 'zh' ? '重新连接飞书账号' : 'Reconnect Feishu')
-                                : (lang === 'zh' ? '先连接飞书账号' : 'Connect Feishu first')}
-                        </h2>
-                        <p className="mt-2 text-sm font-medium leading-relaxed text-[#666] dark:text-white/60">
-                            {reconnect
-                                ? (lang === 'zh'
-                                    ? '飞书应用已更新导出权限。重新确认一次授权后，之后导出仍会直接写入你的飞书空间。'
-                                    : 'Feishu export permissions were updated. Approve once more, then future exports will continue going straight to your space.')
-                                : (lang === 'zh'
-                                ? '当前导出路线会写入你自己的飞书空间。连接一次后，之后导出不需要填写 App ID、Secret 或 token。'
-                                : 'This export route writes to your own Feishu space. Connect once; future exports do not ask for app IDs, secrets, or tokens.')}
-                        </p>
-                        <div className="mt-4 rounded-[16px] border border-[#e4e0e0] bg-[#f8f7fb] p-3 text-xs font-semibold leading-relaxed text-on-surface-variant dark:border-white/[0.12] dark:bg-white/[0.06]">
-                            {reconnect
-                                ? (lang === 'zh'
-                                    ? '确认后会跳转到飞书；完成授权后回到这里，再点击“导出到飞书”。'
-                                    : 'You will be sent to Feishu. After approval, return here and select Export to Lark again.')
-                                : (lang === 'zh'
-                                ? '连接完成后回到编辑器，再点击“导出到飞书”。'
-                                : 'After connecting, return to the editor and click Export to Lark again.')}
-                        </div>
-                    </div>
-                </div>
-                <div className="flex flex-col-reverse gap-3 px-6 py-4 sm:flex-row sm:justify-end">
-                    <button
-                        type="button"
-                        onClick={onCancel}
-                        className="rounded-[13px] bg-[#efeeee] px-4 py-2 text-sm font-bold text-[#111111] transition hover:bg-[#e4e0e0] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]"
-                    >
-                        {t('edit.cancel')}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={onConnect}
-                        disabled={connecting}
-                        className="inline-flex items-center justify-center gap-2 rounded-[13px] bg-[#111111] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#2a2a2a] disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
-                    >
-                        <SvgIcon name={connecting ? 'sync' : 'cloud_done'} className={`text-base ${connecting ? 'animate-spin' : ''}`}/>
-                        {reconnect
-                            ? (lang === 'zh' ? '重新连接飞书' : 'Reconnect Feishu')
-                            : (lang === 'zh' ? '连接飞书' : 'Connect Feishu')}
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
 export const RegenerateConfirmDialog = ({transcriptTitle, onCancel, onConfirm}) => {
     const {t, lang} = useI18n();
     return (

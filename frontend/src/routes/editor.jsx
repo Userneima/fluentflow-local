@@ -57,7 +57,7 @@ import {usePromptEditing} from '../lib/usePromptEditing.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
-import {FeishuExportPrompt, RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
+import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
 import {
     jobOptionsForResult,
     isLikelyVideoFile,
@@ -73,10 +73,7 @@ import {
     downloadBrowserFile,
 } from './editor-helpers.js';
 
-// The default editor is the local workspace. Hosted result access, visitor
-// trial artifacts, account OAuth, and cross-device read-only policy are
-// supplied by HostedEditorWorkspace.jsx only in the hosted route.
-const Editor = ({hosted = null}) => {
+const Editor = () => {
     const {t, lang} = useI18n();
     const {
         lastResult,
@@ -99,9 +96,6 @@ const Editor = ({hosted = null}) => {
     const [larkUrl, setLarkUrl] = useState(null);
     const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
     const [retranscribeConfirmOpen, setRetranscribeConfirmOpen] = useState(false);
-    const [feishuExportPromptOpen, setFeishuExportPromptOpen] = useState(false);
-    const [feishuExportConnecting, setFeishuExportConnecting] = useState(false);
-    const [feishuReconnectRequired, setFeishuReconnectRequired] = useState(false);
     const [visualEvidenceVisible, setVisualEvidenceVisible] = useState(true);
     const summaryRef = useRef(null);
     const retranscribeInputRef = useRef(null);
@@ -114,11 +108,6 @@ const Editor = ({hosted = null}) => {
     const mediaObjectUrlRef = useRef('');
 
     const result = lastResult;
-    const resultAccess = hosted?.resultAccess?.(result) || {};
-    const isTransientResult = !!resultAccess.transient;
-    const isReadOnlyResult = !!resultAccess.readOnly;
-    const resultNotice = resultAccess.notice || '';
-    const canPersistResult = !isTransientResult && !isReadOnlyResult;
     const matchedLocalSourceFile = localSourceFileMatchesResult(lastSourceFile, result) ? lastSourceFile : null;
     const resultSegmentCount = pickTranscriptSegments(result).length;
     const resultTextLength = (result?.transcript_text || '').length;
@@ -165,8 +154,7 @@ const Editor = ({hosted = null}) => {
     const splitContainerRef = useRef(null);
     const transcriptScrollRef = useRef(null);
     const segmentRefs = useRef({});
-    const resultJobOptions = useMemo(() => resultAccess.jobOptions || jobOptionsForResult(result), [
-        resultAccess.jobOptions,
+    const resultJobOptions = useMemo(() => jobOptionsForResult(result), [
         result?.stt_provider,
         result?.playback_audio_storage,
         result?.source_file_storage,
@@ -194,9 +182,7 @@ const Editor = ({hosted = null}) => {
         setHydratingResult(true);
         setHydrationFailed(false);
         let cancelled = false;
-        const jobRequest = hosted?.getResultJob?.(result.task_id, resultJobOptions)
-            || getJob(result.task_id, resultJobOptions);
-        jobRequest
+        getJob(result.task_id, resultJobOptions)
             .then((job) => {
                 const full = job?.result;
                 if (cancelled || !full) return;
@@ -206,7 +192,7 @@ const Editor = ({hosted = null}) => {
                 const fullDisplayCount = pickDisplayTranscriptSegments(full, fullSegments).length;
                 if (fullSegments.length > currentSegments.length || fullText.length > currentText.length || fullDisplayCount > currentDisplayCount) {
                     const fullBaselineSegments = pickTranscriptBaselineSegments(full);
-                    setLastResult(hosted?.mergeHydratedResult?.(full, result) || full);
+                    setLastResult(full);
                     setEditedSegments(fullSegments.map((seg) => ({...seg})));
                     setEditedTranscript(composeTranscriptText(fullSegments, fullText));
                     setBaselineSegments((prev) => {
@@ -226,7 +212,7 @@ const Editor = ({hosted = null}) => {
                 if (!cancelled) setHydratingResult(false);
             });
         return () => { cancelled = true; };
-    }, [resultKey, transcriptUnsaved, hosted, resultJobOptions]);
+    }, [resultKey, transcriptUnsaved, resultJobOptions]);
 
     useEffect(() => {
         if (!result) {
@@ -305,7 +291,7 @@ const Editor = ({hosted = null}) => {
     const handleSummaryChange = useCallback((text) => {
         setSummaryDraft(text);
         setSummaryUnsaved(true);
-        setSummarySaveStatus(result?.task_id && canPersistResult ? 'saving' : 'local');
+        setSummarySaveStatus(result?.task_id ? 'saving' : 'local');
         if (!result) return;
         setLastResult({
             ...result,
@@ -316,7 +302,7 @@ const Editor = ({hosted = null}) => {
             summary_edited: true,
             summary_edited_at: new Date().toISOString(),
         });
-    }, [canPersistResult, result, setLastResult]);
+    }, [result, setLastResult]);
 
     const summaryMarkdownForEditor = summaryUnsaved
         ? summaryDraft
@@ -362,10 +348,9 @@ const Editor = ({hosted = null}) => {
             setMediaLoading(false);
             return () => { cancelled = true; };
         }
-        if (preferred?.isCut && canPersistResult) {
+        if (preferred?.isCut) {
             setMediaLoading(true);
-            const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
-            fetchArtifact(result.task_id, preferred.kind, preferred.filename, resultJobOptions)
+            fetchJobArtifactFile(result.task_id, preferred.kind, preferred.filename, resultJobOptions)
                 .then((file) => { if (!cancelled) loadMediaFile(file); })
                 .catch((cutErr) => {
                     if (cancelled) return;
@@ -389,15 +374,14 @@ const Editor = ({hosted = null}) => {
                 });
             return () => { cancelled = true; };
         }
-        if (result.task_id && result.source_file_available && canPersistResult) {
+        if (result.task_id && result.source_file_available) {
             setMediaLoading(true);
             fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
                 .then((file) => { if (!cancelled) loadMediaFile(file); })
                 .catch((sourceErr) => {
                     if (!cancelled && result.artifacts?.playback_audio) {
                         const playbackArtifact = result.artifacts.playback_audio;
-                        const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
-                        fetchArtifact(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, resultJobOptions)
+                        fetchJobArtifactFile(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, resultJobOptions)
                             .then((file) => { if (!cancelled) loadMediaFile(file); })
                             .catch((err) => {
                                 if (!cancelled) {
@@ -417,12 +401,10 @@ const Editor = ({hosted = null}) => {
         const playbackArtifact = result.artifacts?.playback_audio;
         if (result.task_id && playbackArtifact) {
             setMediaLoading(true);
-            const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
-            const artifactOptions = resultJobOptions;
-            fetchArtifact(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, artifactOptions)
+            fetchJobArtifactFile(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, resultJobOptions)
                 .then((file) => { if (!cancelled) loadMediaFile(file); })
                 .catch((err) => {
-                    if (!cancelled && result.source_file_available && canPersistResult) {
+                    if (!cancelled && result.source_file_available) {
                         fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
                             .then((file) => { if (!cancelled) loadMediaFile(file); })
                             .catch((sourceErr) => {
@@ -441,7 +423,7 @@ const Editor = ({hosted = null}) => {
             return () => { cancelled = true; };
         }
         return () => { cancelled = true; };
-    }, [mediaSourceKey, canPersistResult, hosted, resultJobOptions, replaceMediaUrl]);
+    }, [mediaSourceKey, resultJobOptions, replaceMediaUrl]);
 
     const segments = editedSegments;
     const transcript = editedTranscript || result?.transcript_text || '';
@@ -468,7 +450,6 @@ const Editor = ({hosted = null}) => {
         || result?.summary_status === 'completed'
         || !!result?.summary_edited
     );
-    const canEditSummary = hasEditableSummary && !isReadOnlyResult;
     const summarySaveLabel = summarySaveStatus === 'saving'
         ? (lang === 'zh' ? '保存中' : 'Saving')
         : summarySaveStatus === 'saved'
@@ -649,10 +630,6 @@ const Editor = ({hosted = null}) => {
 
     useEffect(() => {
         if (!result?.task_id || !transcriptUnsaved) return;
-        if (!canPersistResult) {
-            setTranscriptSaveStatus('idle');
-            return;
-        }
         const seq = ++transcriptSaveSeqRef.current;
         setTranscriptSaveStatus('saving');
         const timer = setTimeout(() => {
@@ -680,11 +657,11 @@ const Editor = ({hosted = null}) => {
                 });
         }, 800);
         return () => clearTimeout(timer);
-    }, [result?.task_id, transcriptUnsaved, transcript, segments, visibleEditRecords, canPersistResult, resultJobOptions]);
+    }, [result?.task_id, transcriptUnsaved, transcript, segments, visibleEditRecords, resultJobOptions]);
 
     useEffect(() => {
         if (!summaryUnsaved) return;
-        if (!result?.task_id || !canPersistResult) {
+        if (!result?.task_id) {
             setSummarySaveStatus('local');
             return;
         }
@@ -712,7 +689,7 @@ const Editor = ({hosted = null}) => {
                 });
         }, 800);
         return () => clearTimeout(timer);
-    }, [result?.task_id, summaryUnsaved, summaryDraft, canPersistResult, resultJobOptions]);
+    }, [result?.task_id, summaryUnsaved, summaryDraft, resultJobOptions]);
 
     const seekToSegment = (seg) => {
         if (seg?.start == null) return;
@@ -741,19 +718,11 @@ const Editor = ({hosted = null}) => {
 
     const handleExportLark = async () => {
         if(!result || exporting) return;
-        if (hosted?.blockResultExport?.({result, showToast, lang})) return;
         setExporting(true);
         let larkExportRoute = larkExportRouteFromSettings(loadSettings());
         try {
             const settings = loadSettings();
             larkExportRoute = larkExportRouteFromSettings(settings);
-            if (await hosted?.prepareLarkExport?.({
-                route: larkExportRoute,
-                setFeishuReconnectRequired,
-                setFeishuExportPromptOpen,
-                showToast,
-                lang,
-            })) return;
             const fd = new FormData();
             fd.append('markdown', summary || '');
             fd.append('title', fileNameStem(resultDownloadName));
@@ -783,43 +752,14 @@ const Editor = ({hosted = null}) => {
             if(exportUrl) addLarkExport({url:exportUrl, title: dispTitle, timestamp:Date.now()});
             showToast(t('edit.exportDone'));
         } catch(err) {
-            if (!(await hosted?.handleLarkExportError?.({
-                error: err,
-                route: larkExportRoute,
-                setFeishuReconnectRequired,
-                setFeishuExportPromptOpen,
-                showToast,
-                lang,
-            }))) {
-                showToast(t('edit.exportFail')+': '+err.message, false);
-            }
+            showToast(t('edit.exportFail')+': '+err.message, false);
         }
         finally { setExporting(false); }
     };
 
-    const connectFeishuForExport = async () => {
-        setFeishuExportConnecting(true);
-        if (!hosted?.connectFeishuForExport) return;
-        try {
-            const nextUrl = `${window.location.pathname || '/editor'}${window.location.search || ''}`;
-            const data = await hosted.connectFeishuForExport(nextUrl);
-            window.location.assign(data.authorize_url);
-        } catch {
-            showToast(lang === 'zh'
-                ? '飞书连接暂不可用，请下载 Markdown，或稍后再试。'
-                : 'Feishu connection is unavailable. Download Markdown or try again later.', false);
-            setFeishuExportConnecting(false);
-        }
-    };
-
     const handleRegenerate = async () => {
         setRegenerateConfirmOpen(false);
-        if (isReadOnlyResult) {
-            showToast(resultNotice || (lang === 'zh' ? '此结果不可修改。' : 'This result is read-only.'), false);
-            return;
-        }
         if(!transcript || regenerating) return;
-        if (hosted?.blockRegenerate?.({result, showToast, lang})) return;
         setRegenerating(true);
         try {
             const settings = loadSettings();
@@ -877,12 +817,9 @@ const Editor = ({hosted = null}) => {
         const settings = loadSettings();
         const sttModel = normalizeSttModel(settings.sttModel);
         const sttProvider = submittedSttProvider(settings, runtimeConfig);
-        const runningSttProvider = effectiveSttProvider(settings, runtimeConfig);
-        if (!(await (hosted?.ensureSttReady?.({sttProvider: runningSttProvider, showToast, lang}) ?? true))) return;
-        const retranscribeErrorMessage = (err) => {
-            return hosted?.retranscribeErrorMessage?.({error: err, sttProvider, lang})
-                || err?.message || (lang === 'zh' ? '重新转录失败' : 'Retranscription failed');
-        };
+        const retranscribeErrorMessage = (err) => (
+            err?.message || (lang === 'zh' ? '重新转录失败' : 'Retranscription failed')
+        );
         const taskId = createTaskId();
         const sourceType = /\.(mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i.test(file.name) ? "audio" : "video";
         const fileSizeMb = Math.round(file.size / 1024 / 1024 * 1000) / 1000;
@@ -950,16 +887,11 @@ const Editor = ({hosted = null}) => {
     };
 
     const handleRetranscribe = () => {
-        if (isReadOnlyResult) {
-            showToast(resultNotice || (lang === 'zh' ? '此结果不可重新转录。' : 'This result cannot be retranscribed.'), false);
-            return;
-        }
         setRetranscribeConfirmOpen(true);
     };
 
     const confirmRetranscribe = async () => {
         setRetranscribeConfirmOpen(false);
-        if (hosted?.blockRetranscribe?.({result, showToast, lang})) return;
         const fetchPlaybackAudioForRetranscribe = async () => {
             const artifact = result?.artifacts?.playback_audio;
             if (!result?.task_id || !artifact) throw new Error(t('edit.retranscribeUnavailableTitle'));
@@ -1004,11 +936,7 @@ const Editor = ({hosted = null}) => {
         if (!file) return;
         setLastSourceFile(file);
         loadMediaFile(file);
-        if (isReadOnlyResult) {
-            showToast(resultNotice || (lang === 'zh' ? '此结果只会在当前浏览器播放。' : 'This result plays only in this browser.'));
-            return;
-        }
-        if (!result?.task_id || !canPersistResult) return;
+        if (!result?.task_id) return;
         try {
             const data = await uploadJobPlaybackAudio(result.task_id, file);
             if (data?.result) {
@@ -1083,8 +1011,7 @@ const Editor = ({hosted = null}) => {
         const name = String(artifact.filename || '').split('/').pop()
             || `${resultDownloadName || result.filename || 'media'}_debreath.mp4`;
         try {
-            const fetchArtifact = hosted?.fetchResultArtifact || fetchJobArtifactFile;
-            const file = await fetchArtifact(result.task_id, 'debreath_media', name, resultJobOptions);
+            const file = await fetchJobArtifactFile(result.task_id, 'debreath_media', name, resultJobOptions);
             downloadBrowserFile(file, name);
             recordDownload('cut_media_downloaded', 'video');
             showToast(t('dl.success'));
@@ -1145,14 +1072,6 @@ const Editor = ({hosted = null}) => {
                     <SvgIcon name="close" className="text-sm"/>
                 </button>
                                                 </div>
-        )}
-        {feishuExportPromptOpen && (
-            <FeishuExportPrompt
-                onCancel={()=>setFeishuExportPromptOpen(false)}
-                onConnect={connectFeishuForExport}
-                connecting={feishuExportConnecting}
-                reconnect={feishuReconnectRequired}
-            />
         )}
         {regenerateConfirmOpen && (
             <RegenerateConfirmDialog
@@ -1240,14 +1159,6 @@ const Editor = ({hosted = null}) => {
                             unavailable={cutFileUnavailable}
                             onDownload={handleDownloadCutFile}
                         />
-                        {isReadOnlyResult && resultNotice && (
-                            <div className="mt-2 flex max-w-2xl items-start gap-2 rounded-[12px] border border-[#d6dcff] bg-[#eef2ff] px-3 py-2 text-xs font-semibold leading-relaxed text-[#46536f] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white/72">
-                                <SvgIcon name="info" className="mt-0.5 shrink-0 text-[15px] text-primary"/>
-                                <p>
-                                    {resultNotice}
-                                </p>
-                            </div>
-                        )}
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
                         <button
@@ -1261,7 +1172,7 @@ const Editor = ({hosted = null}) => {
                         <button
                             type="button"
                             onClick={()=>setRegenerateConfirmOpen(true)}
-                            disabled={isTransientResult||isReadOnlyResult||regenerating||!transcript}
+                            disabled={regenerating||!transcript}
                             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
                         >
                             <SvgIcon name={regenerating ? 'sync' : 'refresh'} className={`text-[17px] ${regenerating?'animate-spin':''}`}/>
@@ -1270,7 +1181,7 @@ const Editor = ({hosted = null}) => {
                         <button
                             type="button"
                             onClick={handleRetranscribe}
-                            disabled={isTransientResult||isReadOnlyResult||retranscribing||retranscribeBlockedByJob}
+                            disabled={retranscribing||retranscribeBlockedByJob}
                             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#666] transition hover:bg-[#efeeee] hover:text-[#111111] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65 dark:hover:bg-white/[0.1] dark:hover:text-white"
                         >
                             <SvgIcon name={retranscribing ? 'sync' : 'record_voice_over'} className={`text-[17px] ${retranscribing?'animate-spin':''}`}/>
@@ -1279,7 +1190,7 @@ const Editor = ({hosted = null}) => {
                         <button
                             type="button"
                             onClick={handleExportLark}
-                            disabled={isTransientResult||exporting||!summary}
+                            disabled={exporting||!summary}
                             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] bg-[#111111] px-4 text-xs font-extrabold text-white transition hover:bg-[#2a2a2a] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
                         >
                             <SvgIcon name={exporting ? 'sync' : 'cloud_upload'} className={`text-[17px] ${exporting?'animate-spin':''}`}/>
@@ -1477,8 +1388,7 @@ const Editor = ({hosted = null}) => {
                                                         value={seg.text || ''}
                                                         ref={(node)=>{ if(node) autoSizeTextarea(node); }}
                                                         onChange={(e)=>{ autoSizeTextarea(e.target); handleSegmentTextChange(i, e.target.value); }}
-                                                        readOnly={isReadOnlyResult}
-                                                        onFocus={()=>setFollowPlayback(false)}
+                                                                                                                onFocus={()=>setFollowPlayback(false)}
                                                         rows={1}
                                                         className="min-h-[1.45rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-semibold leading-snug text-[#111111] focus:ring-0 dark:text-white"
                                                     />
@@ -1533,8 +1443,7 @@ const Editor = ({hosted = null}) => {
                                             value={seg.text || ''}
                                             ref={autoSizeTextarea}
                                                         onChange={(e)=>{ autoSizeTextarea(e.target); handleSegmentTextChange(i, e.target.value); }}
-                                                        readOnly={isReadOnlyResult}
-                                            onFocus={()=>setFollowPlayback(false)}
+                                                                                                    onFocus={()=>setFollowPlayback(false)}
                                             rows={1}
                                             className="min-h-[1.75rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-medium leading-snug text-[#111111] focus:ring-0 dark:text-white"
                                         />
@@ -1583,8 +1492,7 @@ const Editor = ({hosted = null}) => {
                                     <textarea
                                         value={transcript}
                                         onChange={(e)=>handlePlainTranscriptChange(e.target.value)}
-                                        readOnly={isReadOnlyResult}
-                                        onFocus={()=>setFollowPlayback(false)}
+                                                                                onFocus={()=>setFollowPlayback(false)}
                                         className="min-h-[320px] w-full flex-1 resize-none whitespace-pre-wrap border-none bg-transparent p-0 text-sm font-medium leading-relaxed text-[#111111] focus:ring-0 dark:text-white"
                                     />
                                     </div>
@@ -1721,7 +1629,7 @@ const Editor = ({hosted = null}) => {
                                         />
                                     </div>
                                 </div>
-                                {hasEditableSummary && canEditSummary ? (
+                                {hasEditableSummary ? (
                                     <>
                                         <RichNoteEditor
                                             key={summaryResultKey}
@@ -1737,13 +1645,7 @@ const Editor = ({hosted = null}) => {
                                     </>
                                 ) : (
                                     <div className="hide-scrollbar min-h-0 flex-1 overflow-y-auto p-6 text-[#111111] dark:text-white">
-                                    {hasEditableSummary ? (
-                                        <div
-                                            ref={summaryRef}
-                                            className="max-w-none text-base font-semibold leading-8 text-[#111111] dark:text-white [&_a]:text-primary [&_blockquote]:border-l-4 [&_blockquote]:border-primary/30 [&_blockquote]:pl-4 [&_blockquote]:text-[#555] dark:[&_blockquote]:text-white/70 [&_h1]:mb-4 [&_h1]:mt-6 [&_h1]:font-headline [&_h1]:text-2xl [&_h1]:font-extrabold [&_h2]:mb-3 [&_h2]:mt-6 [&_h2]:font-headline [&_h2]:text-xl [&_h2]:font-extrabold [&_h3]:mb-2 [&_h3]:mt-5 [&_h3]:font-headline [&_h3]:text-lg [&_h3]:font-extrabold [&_li]:my-1.5 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-3 [&_strong]:font-extrabold [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6"
-                                            dangerouslySetInnerHTML={{__html: renderedSummary}}
-                                        />
-                                    ) : result.summary_skipped ? (
+                                    {result.summary_skipped ? (
                                         <p className="text-sm italic text-[#666] dark:text-white/60">{t('edit.summarySkipped')}</p>
                                     ) : result.summary_status === 'failed' || result.summary_error ? (
                                         <div className="space-y-2 text-sm text-[#666] dark:text-white/60">

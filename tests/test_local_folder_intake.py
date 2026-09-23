@@ -423,48 +423,6 @@ def test_a_dropped_file_nobody_has_seen_is_answered_no_not_guessed(local_client,
     assert body["found"] is False and "path" not in body
 
 
-# ── the local-only entries must not be reached from the hosted product ─────
-#
-# `media-text.jsx` is one file and both editions render it: the hosted route
-# renders it through `HostedMediaText.jsx`, which passes a `hosted` prop. The
-# system file dialog and the dropped-file lookup are local-edition routes — a
-# route-parity test above already refuses to mount them on a hosted server — so
-# a page that calls them unconditionally breaks the hosted product's only way in.
-#
-# This was not caught when it happened. The assertions on that file all read its
-# source for the presence of copy, and none of them ask who is allowed to call
-# what.
-
-
-def test_the_upload_area_does_not_ask_a_server_to_open_a_file_dialog():
-    """A server's file dialog would open on the server's own desktop, and the
-    route is not mounted there at all — the click would simply fail."""
-    source = Path("frontend/src/routes/media-text.jsx").read_text(encoding="utf-8")
-
-    assert "canReadThisMachine ? handleChooseFromComputer" in source, (
-        "the drop area must fall back to the browser picker when the service is "
-        "not on this machine"
-    )
-
-
-def test_the_dropped_file_lookup_is_asked_only_of_this_machine():
-    source = Path("frontend/src/routes/media-text.jsx").read_text(encoding="utf-8")
-    body = source[source.index("const handleDroppedMedia"):]
-    guard = body.index("if (!canReadThisMachine)")
-    lookup = body.index("locateDroppedFile")
-
-    assert guard < lookup, "the lookup must be behind the guard, not after it"
-
-
-def test_the_guard_comes_from_the_edition_that_rendered_the_page():
-    """`hosted` is the prop the hosted composition root passes and the local one
-    never does, so it is the honest signal — not a runtime-config flag that a
-    local instance could be talked out of."""
-    source = Path("frontend/src/routes/media-text.jsx").read_text(encoding="utf-8")
-
-    assert "const canReadThisMachine = !hosted;" in source
-
-
 # ── running one of these again ─────────────────────────────────────────────
 #
 # Retry looks for the recording in FluentFlow's own store, which is exactly where

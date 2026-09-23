@@ -35,7 +35,6 @@ import SvgIcon from '../components/SvgIcon.jsx';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
 const transcriptExts = /\.(srt|vtt|txt|md)$/i;
-const audioExts = /\.(mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
 
 const platformItems = [
     {label: '抖音', tone: 'bg-[#111111] text-white', icon: 'douyin'},
@@ -44,15 +43,7 @@ const platformItems = [
     {label: '本地文件', tone: 'bg-[#efeeee] text-[#111111]', icon: 'local-file'},
 ];
 
-// The local media workspace owns the normal queue path. Hosted-only visitor
-// trial behavior and direct-upload options arrive through the route wrapper,
-// so the local bundle does not carry their API calls or state transitions.
-const MediaText = ({hosted = null}) => {
-    // Whether the service behind this page is on the same machine as the files.
-    // The system file dialog and the "where does this dropped file live" lookup
-    // are both local-edition routes; a hosted server has neither, and asking it
-    // would break the only way in.
-    const canReadThisMachine = !hosted;
+const MediaText = () => {
     const {t, lang} = useI18n();
     const {
         history,
@@ -94,7 +85,6 @@ const MediaText = ({hosted = null}) => {
     const [processingResult, setProcessingResult] = useState(null);
     const [submitting, setSubmitting] = useState(false);
     const [choosing, setChoosing] = useState(false);
-    const fileInputRef = useRef(null);
     const subtitleInputRef = useRef(null);
     const abortRef = useRef(null);
 
@@ -128,27 +118,6 @@ const MediaText = ({hosted = null}) => {
         cookiesFromBrowser: settings.videoCookiesBrowser || '',
     });
 
-    const ensureSttReady = hosted?.ensureSttReady || (async () => true);
-
-    const applyProgressEvent = (ev) => {
-        setCurrentJob((prev) => prev ? {
-            ...prev,
-            stage: ev.stage,
-            progress: ev.progress,
-            sttProgress: ev.stt_progress ?? prev.sttProgress,
-            transcribedSeconds: ev.transcribed_seconds ?? prev.transcribedSeconds,
-            durationSeconds: ev.duration_seconds ?? prev.durationSeconds,
-            sttElapsedSeconds: ev.stt_elapsed_seconds ?? prev.sttElapsedSeconds,
-            sttStatus: ev.stt_status ?? prev.sttStatus,
-            sttProvider: ev.stt_provider ?? prev.sttProvider,
-            cloudAudioSizeMb: ev.elevenlabs_audio_size_mb ?? prev.cloudAudioSizeMb,
-        } : null);
-        if (ev.stage === 'transcript_ready' && ev.result) {
-            setLastResult(ev.result);
-            setProcessingResult(ev.result);
-        }
-    };
-
     const settleResult = (result, {taskId, fileName, source = 'media'} = {}) => {
         const displayName = result?.title || result?.filename || fileName;
         setLastResult(result);
@@ -181,28 +150,6 @@ const MediaText = ({hosted = null}) => {
         // Sent only when the user actually chose an engine; null lets the
         // server apply its own default.
         const sttProvider = submittedSttProvider(settings, runtimeConfig);
-        // Checked against the engine that will really run.
-        if (!(await ensureSttReady({sttProvider: effectiveSttProvider(settings, runtimeConfig), setUploadError, lang}))) return;
-
-        if (await hosted?.submitMediaFiles?.({
-            selectedFiles,
-            settings,
-            sttProvider,
-            sttModel,
-            runtimeConfig,
-            buildAiOptions,
-            applyProgressEvent,
-            settleResult,
-            addToHistory,
-            setCurrentJob,
-            setLastSourceFile,
-            setUploadError,
-            setSubmitting,
-            abortRef,
-            navigate,
-            lang,
-            isAudioFile: (file) => audioExts.test(file.name),
-        })) return;
 
         // Every local media upload (single or multiple) goes through the
         // background queue so the single worker processes them one at a time.
@@ -241,7 +188,6 @@ const MediaText = ({hosted = null}) => {
                 sttModel,
                 sttSpeed: settings.sttSpeed || 'balanced',
                 sttLanguage: 'auto',
-                ...(hosted?.queueUploadOptions?.({runtimeConfig}) || {}),
             }, {
                 onProgress: (pct) => setCurrentJob((prev) => (
                     prev && prev.queueUpload && !prev.queueSubmitted
@@ -333,12 +279,6 @@ const MediaText = ({hosted = null}) => {
     // the copy never happens; not found means the upload, which is what a drop
     // did before this existed.
     const handleDroppedMedia = async (files) => {
-        // Only this machine can be asked where a file lives. A server has no
-        // business being asked, and no route to answer with.
-        if (!canReadThisMachine) {
-            startMediaFiles(files);
-            return;
-        }
         const located = await Promise.all(files.map((file) => locateDroppedFile?.(file)));
         if (!located.every((hit) => hit?.path)) {
             setDroppedWithoutPath(files.length);
@@ -460,7 +400,6 @@ const MediaText = ({hosted = null}) => {
     };
 
     const handleVideoLinkSubmit = async () => {
-        if (hosted?.blockVideoLink?.({setUploadError, lang})) return;
         const input = videoLinkInput.trim();
         if (!input) {
             setUploadError(t('dash.linkEmpty'));
@@ -475,8 +414,6 @@ const MediaText = ({hosted = null}) => {
         // Sent only when the user actually chose an engine; null lets the
         // server apply its own default.
         const sttProvider = submittedSttProvider(settings, runtimeConfig);
-        // Checked against the engine that will really run.
-        if (!(await ensureSttReady({sttProvider: effectiveSttProvider(settings, runtimeConfig), setUploadError, lang}))) return;
         const ac = new AbortController();
         abortRef.current = ac;
         setSubmitting(true);
@@ -525,7 +462,6 @@ const MediaText = ({hosted = null}) => {
             : eventOrFiles?.target?.files?.[0];
         if (subtitleInputRef.current) subtitleInputRef.current.value = '';
         if (!file) return;
-        if (hosted?.blockSubtitleImport?.({setUploadError, lang})) return;
         if (!transcriptExts.test(file.name)) {
             setUploadError(t('dash.subtitleFileError'));
             return;
@@ -569,14 +505,6 @@ const MediaText = ({hosted = null}) => {
         }
     };
 
-    const handleMediaInput = async (eventOrFiles) => {
-        const files = Array.isArray(eventOrFiles)
-            ? eventOrFiles
-            : Array.from(eventOrFiles?.target?.files || []);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-        await startMediaFiles(files);
-    };
-
     const handleDrop = (e) => {
         e.preventDefault();
         const files = Array.from(e.dataTransfer.files || []);
@@ -595,11 +523,6 @@ const MediaText = ({hosted = null}) => {
         if (!window.confirm(confirmText)) return;
         abortPendingUpload();
         abortRef.current = null;
-        if (await hosted?.cancelCurrentJob?.({currentJob, setUploadError, lang})) {
-            setCurrentJob(null);
-            setSubmitting(false);
-            return;
-        }
         if (currentJob?.taskId) {
             try { await cancelJob(currentJob.taskId, {sttProvider: currentJob.sttProvider}); } catch (err) { setUploadError(friendlyTaskError(err.message || String(err), lang)); }
         }
@@ -625,7 +548,6 @@ const MediaText = ({hosted = null}) => {
     return (
         <main className="ml-[var(--sidebar-offset)] min-h-screen bg-[#f8f7fb] text-[#111111] transition-[margin] duration-200 ease-out dark:bg-[#101010] dark:text-white/[0.92]">
             <section className="mx-auto h-dvh max-w-[1280px] overflow-y-auto px-8 py-9 hide-scrollbar">
-                <input ref={fileInputRef} type="file" multiple accept="video/*,audio/*,.mp4,.mov,.avi,.mkv,.webm,.mp3,.wav,.flac,.aac,.ogg,.m4a,.wma,.opus" onChange={handleMediaInput} className="hidden"/>
                 <input ref={subtitleInputRef} type="file" accept=".srt,.vtt,.txt,.md,text/plain,text/markdown" onChange={handleSubtitleSelect} className="hidden"/>
 
                 {noNoteKey && (
@@ -702,13 +624,11 @@ const MediaText = ({hosted = null}) => {
                                     </div>
                                 ) : (
                                     // Clicking opens the system dialog rather than
-                                    // the browser's, on the edition that has one. A
-                                    // server does not: its file dialog would open on
-                                    // the server's own desktop, so the hosted product
-                                    // keeps the browser picker this used to open.
+                                    // the browser's, so the service gets the file's
+                                    // real path instead of an uploaded copy.
                                     <button
                                         type="button"
-                                        onClick={canReadThisMachine ? handleChooseFromComputer : () => fileInputRef.current?.click()}
+                                        onClick={handleChooseFromComputer}
                                         disabled={submitting || choosing}
                                         className="flex min-h-[180px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
                                     >
@@ -736,9 +656,8 @@ const MediaText = ({hosted = null}) => {
                                     than inside it: choosing one recording and
                                     choosing a morning's worth are different
                                     decisions, and only the second one needs the
-                                    count confirmed. Local edition only — a server
-                                    asked for a folder would read its own disk. */}
-                                {sourceMode !== 'link' && canReadThisMachine && (
+                                    count confirmed. */}
+                                {sourceMode !== 'link' && (
                                     <button
                                         type="button"
                                         onClick={handleChooseFolder}
