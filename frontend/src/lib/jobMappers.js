@@ -177,6 +177,9 @@ export const reconcileTaskList = ({
     return sortJobsForHistoryView(pinned);
 };
 
+// Live tasks first; everything finished — failed or not — by time. Ranking
+// failures above completions buried today's results under month-old failures
+// once the list stopped being cut at thirty.
 export const sortJobsForHistoryView = (jobs=[]) => {
     const priority = {
         [TASK_STATE_UPLOADING]: 0,
@@ -184,8 +187,8 @@ export const sortJobsForHistoryView = (jobs=[]) => {
         [TASK_STATE_QUEUED]: 2,
         [TASK_STATE_FAILED]: 3,
         [TASK_STATE_CANCELLED]: 3,
-        [TASK_STATE_COMPLETED]: 4,
-        [TASK_STATE_CACHED_ONLY]: 4,
+        [TASK_STATE_COMPLETED]: 3,
+        [TASK_STATE_CACHED_ONLY]: 3,
     };
     return (Array.isArray(jobs) ? jobs : [])
         .slice()

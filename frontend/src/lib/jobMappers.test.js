@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reconcileTaskList, entryToJob, jobToHistoryEntry } from './jobMappers.js';
+import { reconcileTaskList, entryToJob, jobToHistoryEntry, sortJobsForHistoryView } from './jobMappers.js';
 import { normalizeTaskState } from './taskState.js';
 
 // Each test locks one historically-recurring list-reconciliation regression so
@@ -201,5 +201,16 @@ describe('entryToJob round trip', () => {
     it('returns null for a missing entry or one without a task id', () => {
         expect(entryToJob(null)).toBeNull();
         expect(entryToJob({ name: 'no id' })).toBeNull();
+    });
+});
+
+describe('history order', () => {
+    it('keeps live tasks on top and orders every finished task by time', () => {
+        const jobs = [
+            {task_id: 'old-failed', status: 'failed', updated_at: '2026-08-23T12:00:00+08:00'},
+            {task_id: 'today-done', status: 'completed', updated_at: '2026-09-23T09:00:00+08:00', result: {transcript_text: 'x'}},
+            {task_id: 'running', status: 'running', updated_at: '2026-09-01T09:00:00+08:00'},
+        ];
+        expect(sortJobsForHistoryView(jobs).map((job) => job.task_id)).toEqual(['running', 'today-done', 'old-failed']);
     });
 });
