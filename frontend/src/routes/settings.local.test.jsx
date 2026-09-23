@@ -64,7 +64,14 @@ describe('local settings page', () => {
         expect(screen.getByText('开始处理')).toBeTruthy();
         expect(screen.getByText('导出')).toBeTruthy();
         expect(screen.getByText('数据')).toBeTruthy();
-        expect(screen.getByText('高级 · 模型密钥')).toBeTruthy();
+        expect(screen.getByText('高级 · 其他凭证')).toBeTruthy();
+    });
+
+    it('puts the note key first, where a first-time user looks', () => {
+        render(<Settings/>);
+        const headings = screen.getAllByRole('heading', {level: 2}).map((node) => node.textContent);
+        expect(headings[0]).toBe('笔记');
+        expect(screen.getByText('set.deepseekKey')).toBeTruthy();
     });
 
     it('offers no transcription-route choice, because there is only one route', () => {

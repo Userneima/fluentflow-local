@@ -507,8 +507,8 @@ def test_with_no_key_it_refuses_and_asks_for_the_key(job_store, monkeypatch, tmp
     assert "subscription" not in described["reason"]
 
 
-def test_a_machine_with_claude_code_is_told_about_the_subscription_too(job_store, monkeypatch, tmp_path):
-    """The channel is still there for whoever is running this from source."""
+def test_a_machine_with_claude_code_is_not_offered_the_subscription(job_store, monkeypatch, tmp_path):
+    """The channel stays reachable by name, but a public build only asks for a key."""
     monkeypatch.delenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", raising=False)
     fake_cli = tmp_path / "claude"
     fake_cli.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -518,7 +518,8 @@ def test_a_machine_with_claude_code_is_told_about_the_subscription_too(job_store
 
     assert described["eligible"] is False
     assert "Anthropic API Key" in described["reason"]
-    assert "FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription" in described["reason"]
+    assert "subscription" not in described["reason"]
+    assert "Claude Code" not in described["reason"]
 
 
 def test_forcing_the_key_channel_still_names_the_key(job_store, monkeypatch):

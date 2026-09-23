@@ -373,19 +373,15 @@ def test_the_subscription_runs_when_it_is_asked_for_by_name(monkeypatch):
     assert channel.write is ccn.write_visual_note
 
 
-def test_a_missing_key_points_at_the_subscription_only_where_it_exists(monkeypatch):
-    """Telling someone to switch to a channel they cannot run is worse than silence."""
+def test_a_missing_key_never_points_at_the_subscription(monkeypatch):
+    """Publicly the product asks for the user's own key; the subscription is opt-in by name only."""
     monkeypatch.delenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     signed_in = vnc.resolve_channel(None)
     assert signed_in.available is False
-    assert "subscription" in (signed_in.unavailable_reason or "")
-
-    monkeypatch.setenv("FLUENTFLOW_CLAUDE_CLI", "/nonexistent/claude")
-    without_cli = vnc.resolve_channel(None)
-    assert without_cli.available is False
-    assert "subscription" not in (without_cli.unavailable_reason or "")
+    assert "subscription" not in (signed_in.unavailable_reason or "")
+    assert "Claude Code" not in (signed_in.unavailable_reason or "")
 
 
 def test_the_key_can_be_forced_even_on_a_signed_in_machine(monkeypatch):

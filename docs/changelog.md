@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 设置页最上面新增「笔记」一栏，可以直接填 Anthropic API Key，并附创建 Key 的链接。此前这个 Key 只能写进 `.env`。
+- 设置页最上面新增「笔记」一栏：先填文本模型的 API Key（默认 DeepSeek），可选再填 Anthropic API Key 让笔记结合画面来写，每个 Key 旁边都有创建入口。此前文本模型 Key 收在折叠区里，Anthropic Key 只能写进 `.env`。
 - 首页在没有任何可用的模型 Key 时显示提示条，说明这次只会得到转录稿和字幕，并给出去设置的入口。
 - Windows 安装脚本缺 Python 或 Node.js 时用 winget 直接装上，并检查 Python 不低于 3.10。
 - README 补上机器要求、不用 git 的安装方式、第一次使用、飞书导出、AI 工具接入、更新和排错。
@@ -11,7 +11,7 @@
 
 - 转录默认用 large-v3。此前前端每次提交都发 medium，把后端的默认盖掉了，于是为 large-v3 调过的那些判断从来没有生效过。只能用 CPU 的机器仍会自动降到 medium。
 - 转录模型在安装时就下好，不再留给用户的第一个任务。连不上 huggingface.co 时自动改用镜像源，也可以用 `HF_ENDPOINT` 或 `--mirror` 自己指定。
-- 「结合画面的笔记」默认用你自己的 Anthropic API Key。本机已登录的 Claude Code 这条路仍在，需要在 `.env` 里设 `FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription` 显式打开。
+- 「结合画面的笔记」用你自己的 Anthropic API Key。
 - 没有任何 Claude 凭据时，笔记退回 `AI_PROVIDER` 指定的服务写纯文字版，而不是什么都不产出。
 - macOS 和 Windows 都新增卸载脚本 `uninstall-local.sh` / `uninstall-local.ps1`：默认只卸程序，转录模型和任务数据各自需要显式开口，可先用 `--dry-run` 看清单。
 - 安装过程不再中途提问。缺 FFmpeg 或 Node.js 直接装上，每步开始前说明在做什么。

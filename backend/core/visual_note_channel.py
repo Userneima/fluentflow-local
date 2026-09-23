@@ -102,32 +102,14 @@ def resolve_channel(api_key: str | None = None) -> Channel:
     spend a claude.ai login on its own initiative; a source checkout on the
     maintainer's machine still can, by setting the preference.
 
-    When the key is missing, the refusal is the key's, plus the way out this
-    particular machine actually has: the subscription hint appears only where
-    Claude Code is installed, because telling someone to switch to a channel
-    they cannot run is worse than saying nothing.
+    The subscription is never mentioned to a user who has not opted in: what
+    the product offers publicly is the user's own API key, and the refusal says
+    only that.
     """
     forced = preferred_channel()
     if forced == CHANNEL_SUBSCRIPTION:
         return _subscription_channel()
-    if forced == CHANNEL_ANTHROPIC_KEY:
-        return _api_key_channel(api_key)
-
-    api = _api_key_channel(api_key)
-    if api.available:
-        return api
-
-    subscription = _subscription_channel()
-    if subscription.available:
-        return replace(
-            api,
-            unavailable_reason=(
-                f"{api.unavailable_reason}\n"
-                "这台机器上装了已登录的 Claude Code：在 .env 里设 "
-                f"{_PREFERENCE_ENV}=subscription 就可以改用它，不必填 Key。"
-            ),
-        )
-    return api
+    return _api_key_channel(api_key)
 
 
 __all__ = [

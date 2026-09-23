@@ -316,7 +316,7 @@ export const AdvancedKeysFold = ({description, children}) => {
         <details id="advanced" className="group scroll-mt-7 rounded-[18px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4">
                 <div>
-                    <h2 className="font-headline text-base font-extrabold">{lang === 'zh' ? '高级 · 模型密钥' : 'Advanced · Model keys'}</h2>
+                    <h2 className="font-headline text-base font-extrabold">{lang === 'zh' ? '高级 · 其他凭证' : 'Advanced · Other credentials'}</h2>
                     <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">{description}</p>
                 </div>
                 <SvgIcon name="expand_less" className="shrink-0 text-lg text-on-surface-variant transition group-open:rotate-180"/>
@@ -326,6 +326,13 @@ export const AdvancedKeysFold = ({description, children}) => {
             </div>
         </details>
     );
+};
+
+// Where each provider hands out keys, so a first-time user is not left searching.
+const KEY_CONSOLE_URLS = {
+    deepseek: 'https://platform.deepseek.com/api_keys',
+    openai: 'https://platform.openai.com/api-keys',
+    qwen: 'https://bailian.console.aliyun.com/',
 };
 
 // Text-model provider, model, and the key that provider needs. `extraKey` is a
@@ -366,7 +373,13 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
             </div>
             <div className="space-y-2 md:col-span-2">
                 <label className={fieldLabelClass}>{aiProvider === 'openai' ? t('set.openaiKey') : (aiProvider === 'qwen' ? t('set.dashscopeKey') : t('set.deepseekKey'))}</label>
-                <p className="text-xs leading-relaxed text-on-surface-variant">{secretRetentionText(activeAiConfigured)}</p>
+                <p className="text-xs leading-relaxed text-on-surface-variant">
+                    {secretRetentionText(activeAiConfigured)}
+                    {' '}
+                    <a className="font-semibold text-primary underline" href={KEY_CONSOLE_URLS[aiProvider] || KEY_CONSOLE_URLS.deepseek} target="_blank" rel="noreferrer">
+                        {lang === 'zh' ? '去创建 Key' : 'Create a key'}
+                    </a>
+                </p>
                 <div className="flex gap-2">
                     <input className={inputClass} placeholder={secretInputPlaceholder(activeAiConfigured)} type="password" value={secretDraft[activeAiSecretKey] || ''} onChange={e=>setSecretDraft(d=>({...d, [activeAiSecretKey]: e.target.value}))}/>
                     <button type="button" disabled={secretSaving || !secretDraft[activeAiSecretKey]} onClick={()=>saveSecret(activeAiSecretKey)} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
@@ -401,9 +414,8 @@ export const DashscopeKeyField = ({state, description}) => {
     );
 };
 
-// The key the note written after an upload uses by default. Not in the advanced
-// fold: without it (or a text-model key) the person gets a transcript and no
-// note, so it is the one key a first-time user has to find.
+// Optional: with it the note is written while looking at the frames. The text
+// model key above is the one a first-time user needs; this one upgrades the note.
 export const AnthropicKeyField = ({state}) => {
     const {lang} = useI18n();
     const {
@@ -413,11 +425,11 @@ export const AnthropicKeyField = ({state}) => {
     const configured = credentialConfigured(credentialStatus, 'anthropic_api_key');
     return (
         <div className="space-y-2">
-            <label className={fieldLabelClass}>Anthropic API Key</label>
+            <label className={fieldLabelClass}>{lang === 'zh' ? 'Anthropic API Key（可选）' : 'Anthropic API Key (optional)'}</label>
             <p className="text-xs leading-relaxed text-on-surface-variant">
                 {lang === 'zh'
-                    ? '填了它，Claude 会结合画面写笔记，能引用幻灯片和白板上的内容。没填时改用「高级 · 模型密钥」里的文本模型写纯文字版；两处都没填，只会得到转录稿和字幕。'
-                    : 'With this key, Claude writes the note while looking at the video frames, so it can quote slides and whiteboards. Without it the text model under “Advanced · Model keys” writes a text-only note; with neither, you get the transcript and subtitles only.'}
+                    ? '另外填上它，笔记改由 Claude 结合画面来写，能引用幻灯片和白板上的内容。不填也能出笔记，由上面的文本模型根据转录稿写。'
+                    : 'Add this as well and Claude writes the note while looking at the video frames, so it can quote slides and whiteboards. Without it the text model above still writes a note from the transcript.'}
                 {' '}
                 <a className="font-semibold text-primary underline" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
                     {lang === 'zh' ? '在 Anthropic 控制台创建 Key' : 'Create a key in the Anthropic Console'}

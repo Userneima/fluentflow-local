@@ -45,12 +45,25 @@ const Settings = () => {
                 id="notes"
                 title={lang === 'zh' ? '笔记' : 'Notes'}
                 description={lang === 'zh'
-                    ? '写笔记要调用模型，用的是你自己的模型账号。转录不需要。'
-                    : 'Writing a note calls a model on your own account. Transcription does not.'}
+                    ? '填一个你自己的模型 API Key，处理完就会自动写笔记。转录不需要 Key。'
+                    : 'Add an API key from your own model account and every job ends with a note. Transcription needs no key.'}
             >
-                <div className="grid gap-3 p-5">
-                    <AnthropicKeyField state={state}/>
-                    {!uploadWritesItsOwnNote && <AutoIllustrateRow state={state}/>}
+                <div className="divide-y divide-[#ece8e8] dark:divide-white/[0.1]">
+                    <TextModelKeyRows
+                        state={state}
+                        extraKey={aiProvider !== 'qwen' && !uploadWritesItsOwnNote && (
+                            <DashscopeKeyField
+                                state={state}
+                                description={lang === 'zh'
+                                    ? '用于 Qwen 视觉模型给笔记挑选截图（「给笔记自动配图」需要它）；摘要仍可使用 DeepSeek 或 OpenAI。'
+                                    : 'Used by the Qwen vision model to pick screenshots for a note (needed by auto-illustrate). Summaries can still use DeepSeek or OpenAI.'}
+                            />
+                        )}
+                    />
+                    <div className="grid gap-3 px-5 py-4">
+                        <AnthropicKeyField state={state}/>
+                        {!uploadWritesItsOwnNote && <AutoIllustrateRow state={state}/>}
+                    </div>
                 </div>
             </Section>
 
@@ -91,23 +104,8 @@ const Settings = () => {
             </Section>
 
             <AdvancedKeysFold
-                description={uploadWritesItsOwnNote
-                    ? (lang === 'zh'
-                        ? '文本模型和它的密钥。没填 Anthropic API Key 时，上传后的笔记由这里的模型写成纯文字版；编辑器里手动「重生笔记」和英文素材的翻译也用它。'
-                        : 'The text model and its key. Without an Anthropic API Key, the note an upload writes comes from this model as text only; the editor’s manual rewrite and the translation of English material use it too.')
-                    : (lang === 'zh' ? '写笔记用的文本模型和它的密钥。默认 DeepSeek，Key 在 platform.deepseek.com 创建。' : 'The text model that writes notes, and its key. DeepSeek by default; create a key at platform.deepseek.com.')}
+                description={lang === 'zh' ? '飞书应用凭证和讲话人区分模型的令牌，用到时再展开。' : 'Feishu app credentials and the speaker-diarization token. Open when you need them.'}
             >
-                <TextModelKeyRows
-                    state={state}
-                    extraKey={aiProvider !== 'qwen' && !uploadWritesItsOwnNote && (
-                        <DashscopeKeyField
-                            state={state}
-                            description={lang === 'zh'
-                                ? '用于 Qwen 视觉模型给笔记挑选截图（「给笔记自动配图」需要它）；摘要仍可使用 DeepSeek 或 OpenAI。'
-                                : 'Used by the Qwen vision model to pick screenshots for a note (needed by auto-illustrate). Summaries can still use DeepSeek or OpenAI.'}
-                        />
-                    )}
-                />
                 {larkExportRoute === LARK_EXPORT_ROUTE_OPENAPI && <FeishuAppCredentialRows state={state}/>}
                 <PyannoteTokenRow state={state}/>
             </AdvancedKeysFold>
