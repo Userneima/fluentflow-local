@@ -457,3 +457,51 @@ def test_every_frame_is_offered_not_one_requests_worth(tmp_path):
     assert many[0].filename in body and many[-1].filename in body
 
 
+
+
+# ── a dropped connection gets one more attempt ─────────────────────────────
+
+_DROPPED = json.dumps({
+    "type": "result",
+    "is_error": True,
+    "result": "API Error: Connection closed mid-response. The response above may be incomplete.",
+})
+
+
+def _sequence(*stdouts):
+    calls: list[dict] = []
+
+    def run(command, **kwargs):
+        calls.append({"command": list(command), **kwargs})
+        return subprocess.CompletedProcess(command, 0, stdouts[len(calls) - 1], "")
+
+    return run, calls
+
+
+def test_a_dropped_connection_is_tried_once_more(frames, monkeypatch):
+    monkeypatch.setattr(ccn, "TRANSIENT_RETRY_DELAY_SECONDS", 0)
+    run, calls = _sequence(_DROPPED, _reply())
+
+    draft = ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+
+    assert len(calls) == 2
+    assert "最小二乘法" in draft.markdown
+
+
+def test_a_connection_that_drops_twice_says_it_was_retried(frames, monkeypatch):
+    monkeypatch.setattr(ccn, "TRANSIENT_RETRY_DELAY_SECONDS", 0)
+    run, calls = _sequence(_DROPPED, _DROPPED)
+
+    with pytest.raises(ccn.ClaudeVisionError, match="已自动重试一次"):
+        ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+    assert len(calls) == 2
+
+
+def test_a_spent_allowance_is_not_retried(frames, monkeypatch):
+    monkeypatch.setattr(ccn, "TRANSIENT_RETRY_DELAY_SECONDS", 0)
+    limit = json.dumps({"type": "result", "is_error": True, "result": "Claude AI usage limit reached"})
+    run, calls = _sequence(limit, _reply())
+
+    with pytest.raises(ccn.ClaudeVisionError, match="上限"):
+        ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+    assert len(calls) == 1

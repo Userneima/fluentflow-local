@@ -39,6 +39,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -84,6 +85,25 @@ _CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAU
 
 _LOGIN_MARKERS = ("not logged in", "login expired", "please run /login", "oauth token has expired")
 _LIMIT_MARKERS = ("usage limit", "rate limit", "too many requests", "quota")
+# Failures that say nothing about the request and usually do not happen twice:
+# the connection dropped, or the service was briefly overloaded. Seen for real on
+# 2026-09-23 as "API Error: Connection closed mid-response", which cost a
+# finished transcript its note. Worth one more attempt; a login or a spent
+# allowance is not, because the second attempt meets the same wall.
+_TRANSIENT_MARKERS = (
+    "connection closed",
+    "connection error",
+    "connection reset",
+    "econnreset",
+    "socket hang up",
+    "fetch failed",
+    "overloaded",
+    "api error: 5",
+    "internal server error",
+    "service unavailable",
+    "bad gateway",
+)
+TRANSIENT_RETRY_DELAY_SECONDS = 10.0
 
 _LOGIN_MESSAGE = (
     "这台机器上的 Claude 还没有登录，或者登录已经过期。"
@@ -276,6 +296,10 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
+class _TransientFailure(ClaudeVisionError):
+    """A failure one more attempt is likely to get past."""
+
+
 def _friendly_failure(text: str) -> ClaudeVisionError:
     lowered = (text or "").lower()
     if any(marker in lowered for marker in _LOGIN_MARKERS):
@@ -287,7 +311,10 @@ def _friendly_failure(text: str) -> ClaudeVisionError:
         )
     detail = (text or "").strip().splitlines()
     first = detail[0][:200] if detail else ""
-    return ClaudeVisionError(f"调用本机 Claude 失败{('：' + first) if first else ''}")
+    message = f"调用本机 Claude 失败{('：' + first) if first else ''}"
+    if any(marker in lowered for marker in _TRANSIENT_MARKERS):
+        return _TransientFailure(message)
+    return ClaudeVisionError(message)
 
 
 def _payload_text(payload: dict[str, Any]) -> str:
@@ -361,6 +388,21 @@ def build_inline_message(transcript: str, frames: list[FrameInput]) -> str:
 
 
 def _run_cli(
+    command: list[str], prompt: str, execute: Callable[..., subprocess.CompletedProcess[str]]
+) -> tuple[dict[str, Any], list[str]]:
+    """One pass through the CLI, tried a second time if the first only lost its connection."""
+    try:
+        return _run_cli_once(command, prompt, execute)
+    except _TransientFailure as exc:
+        logger.warning("local Claude failed transiently, trying once more: %s", exc)
+        time.sleep(TRANSIENT_RETRY_DELAY_SECONDS)
+    try:
+        return _run_cli_once(command, prompt, execute)
+    except _TransientFailure as exc:
+        raise ClaudeVisionError(f"{exc}（已自动重试一次，仍然失败）") from exc
+
+
+def _run_cli_once(
     command: list[str], prompt: str, execute: Callable[..., subprocess.CompletedProcess[str]]
 ) -> tuple[dict[str, Any], list[str]]:
     """One pass through the CLI: the result event, and the frames it opened."""

@@ -11,6 +11,7 @@ catch the disconnect.
 """
 
 from backend.core.job_event_hub import JobEventHub
+from backend.core.local_keep_awake import KEEP_AWAKE
 
 
-JOB_EVENTS = JobEventHub()
+JOB_EVENTS = JobEventHub(keep_awake=KEEP_AWAKE)

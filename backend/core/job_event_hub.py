@@ -35,8 +35,12 @@ class JobEventHub:
     cancelling the underlying processing task.
     """
 
-    def __init__(self, max_events_per_job: int = 500) -> None:
+    def __init__(self, max_events_per_job: int = 500, keep_awake: Any = None) -> None:
         self.max_events_per_job = max_events_per_job
+        # Anything with acquire()/release(), held for as long as each runner is
+        # alive — queued and waiting included, since a queue that sleeps is a
+        # queue that does not move.
+        self._keep_awake = keep_awake
         self._events: dict[str, list[dict[str, Any]]] = {}
         self._subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -73,8 +77,18 @@ class JobEventHub:
             existing = self._tasks.get(task_id)
             if existing and not existing.done():
                 return False
-            self._tasks[task_id] = asyncio.create_task(runner())
+            self._tasks[task_id] = asyncio.create_task(self._held(runner))
             return True
+
+    async def _held(self, runner: Any) -> None:
+        if self._keep_awake is None:
+            await runner()
+            return
+        self._keep_awake.acquire()
+        try:
+            await runner()
+        finally:
+            self._keep_awake.release()
 
     async def subscribe(self, task_id: str, since: int = 0) -> AsyncGenerator[str, None]:
         from backend.core.job_store import get_job
