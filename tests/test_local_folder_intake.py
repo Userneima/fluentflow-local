@@ -496,6 +496,134 @@ def test_retrying_says_where_the_file_was_when_it_has_moved(local_client, in_pla
     assert "Source file not found" not in detail
 
 
+def test_retrying_from_the_stored_copy_queues_and_writes_the_note(local_client, tmp_path, monkeypatch):
+    """The copy FluentFlow kept goes through the same chain as everything else.
+
+    It used to start its pipeline at once, beside whatever was already running,
+    and end at the transcript with no note.
+    """
+    import backend.routers.local_processing as lp
+    from backend.core import job_store
+    from backend.core.media_intake import copy_source_file
+
+    ran: list = []
+
+    async def no_pipeline(previous, done, ctx):
+        ran.append(ctx.task_id_value)
+        done.set()
+
+    class _Passed:
+        duration_seconds = 12.0
+
+        def as_metadata(self):
+            return {"duration_seconds": 12.0}
+
+    monkeypatch.setattr(lp, "preflight_media_file", lambda _path: _Passed())
+    monkeypatch.setattr(lp, "_run_serially", no_pipeline)
+    upload = tmp_path / "upload.mp4"
+    upload.write_bytes(b"uploaded bytes")
+    copy_source_file("stored-task", ".mp4", upload)
+    job_store.upsert_job(
+        task_id="stored-task", status="failed", client_id=LOCAL_OWNER_ID, source_filename="upload.mp4"
+    )
+
+    response = local_client.post("/jobs/stored-task/retry")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["job"]["status"] == "queued"
+    assert ran == [body["task_id"]]
+
+
+# ── a restart cut it off: startup queues it again by itself ────────────────
+#
+# Every "服务重启中断" failure on record (eight on 2026-09-17) was an agent
+# restarting the service under its own queued batch. None of those needed a
+# decision from the user, so startup re-runs them through the retry above.
+
+
+def _interrupt(task_id, *, started=True, count=None):
+    import backend.local_main as local_main
+    from backend.core import job_store
+
+    metadata = {} if count is None else {local_main.RESTART_RESUME_COUNT_KEY: count}
+    job_store.upsert_job(
+        task_id=task_id,
+        status="running" if started else "queued",
+        client_id=LOCAL_OWNER_ID,
+        stage="stt" if started else "queued",
+        metadata=metadata,
+    )
+    local_main.recover_stale_jobs()
+
+
+def _resume(task_ids):
+    import asyncio
+    import backend.local_main as local_main
+
+    return asyncio.run(local_main.resume_interrupted_jobs(task_ids))
+
+
+def test_startup_queues_an_interrupted_task_again_and_does_not_ask(local_client, in_place_task):
+    from backend.core import job_store
+
+    task_id = in_place_task["task_id"]
+    _interrupt(task_id)
+
+    assert _resume([task_id]) == 1
+
+    old = job_store.get_job(task_id)
+    stamp = old["metadata"]["restart_interruption"]
+    assert stamp["acknowledged_at"], "the notice must not ask about work already running again"
+    new_id = stamp["resumed_as"]
+    assert new_id and new_id != task_id
+    assert "已自动重新排队" in old["error_reason"]
+    assert in_place_task["ran"] == [in_place_task["recording"]]
+    assert local_client.get("/jobs/interrupted").json()["tasks"] == []
+
+
+def test_startup_leaves_a_task_whose_recording_moved_for_the_user(local_client, in_place_task):
+    from backend.core import job_store
+
+    task_id = in_place_task["task_id"]
+    _interrupt(task_id)
+    in_place_task["recording"].unlink()
+
+    assert _resume([task_id]) == 0
+
+    stamp = job_store.get_job(task_id)["metadata"]["restart_interruption"]
+    assert "acknowledged_at" not in stamp
+    listed = [task["task_id"] for task in local_client.get("/jobs/interrupted").json()["tasks"]]
+    assert listed == [task_id]
+
+
+def test_startup_stops_re_running_a_task_restarts_keep_cutting_off(local_client, in_place_task):
+    """A task that is itself what brings the service down must not do it on every start."""
+    import backend.local_main as local_main
+    from backend.core import job_store
+
+    task_id = in_place_task["task_id"]
+    _interrupt(task_id, count=local_main.RESTART_RESUME_LIMIT)
+
+    assert _resume([task_id]) == 0
+    assert in_place_task["ran"] == []
+    assert "acknowledged_at" not in job_store.get_job(task_id)["metadata"]["restart_interruption"]
+
+
+def test_a_task_that_was_only_waiting_does_not_use_up_its_retries(local_client, in_place_task):
+    import backend.local_main as local_main
+    from backend.core import job_store
+
+    task_id = in_place_task["task_id"]
+    _interrupt(task_id, started=False, count=local_main.RESTART_RESUME_LIMIT)
+
+    assert _resume([task_id]) == 1
+    new_id = job_store.get_job(task_id)["metadata"]["restart_interruption"]["resumed_as"]
+    carried = job_store.get_job(new_id)["metadata"]["folder_intake"]
+    assert carried[local_main.RESTART_RESUME_COUNT_KEY] == local_main.RESTART_RESUME_LIMIT
+    assert carried["restart_resumed_from"] == task_id
+
+
 # ── choosing the folder, which is the entry this edition is for ─────────────
 #
 # The browser's own picker cannot hand over a folder — that is a deliberate

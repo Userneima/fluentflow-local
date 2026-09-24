@@ -1243,8 +1243,8 @@ def _stored_queue_options(job: dict) -> dict:
 
 
 async def _retry_in_place(
-    request: Request,
     *,
+    local_caller: bool,
     task_id: str,
     client_id: Optional[str],
     job: dict,
@@ -1257,7 +1257,7 @@ async def _retry_in_place(
     that reimplemented them would be a second entry for anyone adding a guard to
     remember, and the last one to be remembered.
     """
-    if not request_is_localhost(request):
+    if not local_caller:
         raise HTTPException(status_code=403, detail="只有本机能按路径处理文件。")
     original = Path(str(origin.get("original_path")))
     if not original.is_file():
@@ -1301,7 +1301,28 @@ async def _retry_in_place(
 @router.post("/jobs/{task_id}/retry")
 async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
     """Re-run a task from its stored source file, on the local hub."""
-    client_id = _local_client_scope(request)
+    return await retry_task(
+        task_id,
+        client_id=_local_client_scope(request),
+        local_caller=request_is_localhost(request),
+    )
+
+
+async def retry_task(
+    task_id: str,
+    *,
+    client_id: Optional[str],
+    local_caller: bool,
+    carry: Optional[dict] = None,
+) -> dict:
+    """Queue a fresh task from this one's recording; the old row stays as it was.
+
+    The route and startup recovery both come here, so a restart-interrupted task
+    re-runs through exactly the path the user's own retry button takes.
+    ``local_caller`` says the request came from this machine, which is what
+    allows reading a file by its path. ``carry`` is written onto the new task
+    when it is created, before anything can run it.
+    """
     job = get_job(task_id, client_id=client_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1310,7 +1331,11 @@ async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
     in_place = _in_place_origin(job)
     if in_place is not None:
         return await _retry_in_place(
-            request, task_id=task_id, client_id=client_id, job=job, origin=in_place
+            local_caller=local_caller,
+            task_id=task_id,
+            client_id=client_id,
+            job=job,
+            origin={**in_place, **(carry or {})},
         )
     source = find_source_file(task_id)
     if not source:
@@ -1372,6 +1397,7 @@ async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
     job_metadata = event_metadata(
         route="/jobs/{task_id}/retry",
         retry_source_task_id=task_id,
+        **(carry or {}),
         raw_title=raw_title_value,
         display_title=display_title_value,
         queue_options=options,
@@ -1389,9 +1415,9 @@ async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
     )
     upsert_job(
         task_id=retry_task_id,
-        status="running",
+        status="queued",
         client_id=client_id,
-        stage="import",
+        stage="queued",
         progress=0,
         source_type=source_type,
         source_filename=filename,
@@ -1415,7 +1441,14 @@ async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
         options=options,
         duration_limit_seconds=effective_duration_limit,
     )
-    await JOB_EVENTS.start(
+    # Behind the same chain as every other upload, and with the note after it:
+    # a retry that started at once ran beside whatever was already transcribing,
+    # which is the memory collapse QUEUE_CONCURRENCY exists to prevent, and it
+    # ended at the transcript without ever writing the note.
+    previous = _queue_tail_barrier()
+    done = asyncio.Event()
+    _queue_tail_record(retry_task_id, done)
+    started = await JOB_EVENTS.start(
         retry_task_id,
         functools.partial(
             run_worker_with_terminal_state,
@@ -1424,14 +1457,16 @@ async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
             hub=JOB_EVENTS,
             route="/jobs/{task_id}/retry",
             stage="processing",
-            worker=functools.partial(execute_media_job, ctx),
+            worker=functools.partial(_run_serially, previous, done, ctx),
         ),
     )
+    if not started:
+        done.set()
 
     started_job = get_job(retry_task_id, client_id=client_id) or {
         "task_id": retry_task_id,
-        "status": "running",
-        "stage": "import",
+        "status": "queued",
+        "stage": "queued",
         "progress": 0,
         "source_type": source_type,
         "source_filename": filename,

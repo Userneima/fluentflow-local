@@ -13,12 +13,13 @@ the forbidden ones.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from backend.core.local_config import load_project_env
 
@@ -31,6 +32,7 @@ from backend.core.frontend_paths import FRONTEND_LOCAL_DIST_DIR
 from backend.core.job_store import (
     RESTART_INTERRUPTION_KEY,
     adopt_jobs_for_owner,
+    get_job,
     list_jobs_by_statuses,
     sync_summary_status_column,
     upsert_job,
@@ -53,6 +55,7 @@ from backend.routers.local_job_read import router as job_read_router
 from backend.routers.local_job_visual_note import router as job_visual_note_router
 from backend.routers.local_jobs import router as jobs_router
 from backend.routers.local_note_regen import router as note_regen_router
+from backend.routers.local_processing import retry_task
 from backend.routers.local_processing import router as processing_router
 from backend.routers.local_spa import create_local_spa_router
 from backend.routers.local_system import router as system_router
@@ -75,6 +78,15 @@ LOCAL_API_ROUTERS = (
     feishu_export_router,
     agent_router,
 )
+
+
+# How many restarts in a row may cut a task off mid-run before startup stops
+# re-queueing it on its own. A task that was only waiting lost nothing and does
+# not count. The limit is for the one that is itself what brings the service
+# down — re-running it on every start would take the service down on every start.
+RESTART_RESUME_LIMIT = 2
+RESTART_RESUME_COUNT_KEY = "restart_resume_count"
+RESUMED_ERROR_REASON = "服务重启中断了这个任务，已自动重新排队处理，结果在新的那条记录里。"
 
 
 def recover_stale_jobs() -> int:
@@ -119,6 +131,73 @@ def recover_stale_jobs() -> int:
     return recovered
 
 
+def _interrupted_on_this_start(task_ids: list[str]) -> list[dict]:
+    jobs = [job for job in (get_job(task_id) for task_id in task_ids) if job]
+    # Oldest first, so the queue comes back in the order it was submitted.
+    return sorted(jobs, key=lambda job: str(job.get("created_at") or ""))
+
+
+async def resume_interrupted_jobs(task_ids: list[str]) -> int:
+    """Queue again, through the user's own retry path, what the restart cut off.
+
+    Nearly every restart on record was an agent reloading code while its own
+    batch was queued, and the user found out only by seeing a column of failed
+    cards. Nothing about those tasks needed a decision, so none is asked for.
+
+    What cannot be re-run here is left exactly as ``recover_stale_jobs`` wrote
+    it, and the interruption notice still offers it to the user: the recording
+    is gone, the task was a link that never finished downloading, or restarts
+    have cut it off mid-run too many times in a row to try again unasked.
+
+    A re-queued task is marked as told, so the notice does not ask about work
+    that is already running again, and its row says where the result went.
+    """
+    resumed = 0
+    for job in _interrupted_on_this_start(task_ids):
+        task_id = str(job.get("task_id") or "")
+        metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+        interruption = metadata.get(RESTART_INTERRUPTION_KEY)
+        if not isinstance(interruption, dict):
+            continue
+        folder_intake = metadata.get("folder_intake") if isinstance(metadata.get("folder_intake"), dict) else {}
+        count = int(metadata.get(RESTART_RESUME_COUNT_KEY) or folder_intake.get(RESTART_RESUME_COUNT_KEY) or 0)
+        if interruption.get("started"):
+            count += 1
+        if count > RESTART_RESUME_LIMIT:
+            logger.info("Startup left %s for the user: restarts cut it off %s times", task_id, count)
+            continue
+        try:
+            retried = await retry_task(
+                task_id,
+                client_id=job.get("client_id"),
+                local_caller=True,
+                carry={RESTART_RESUME_COUNT_KEY: count, "restart_resumed_from": task_id},
+            )
+        except HTTPException as exc:
+            logger.info("Startup could not re-queue %s: %s", task_id, exc.detail)
+            continue
+        except Exception:
+            logger.exception("Startup could not re-queue %s", task_id)
+            continue
+        new_task_id = str(retried.get("task_id") or "")
+        now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+        upsert_job(
+            task_id=task_id,
+            status="failed",
+            client_id=job.get("client_id"),
+            error_reason=RESUMED_ERROR_REASON,
+            metadata={
+                RESTART_INTERRUPTION_KEY: {
+                    **interruption,
+                    "acknowledged_at": now,
+                    "resumed_as": new_task_id,
+                },
+            },
+        )
+        resumed += 1
+    return resumed
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Readiness is advisory at startup: the server still boots (the SPA
@@ -136,9 +215,20 @@ async def lifespan(app: FastAPI):
     synced = sync_summary_status_column()
     if synced:
         logger.info("Startup corrected the note status of %s tasks", synced)
+    interrupted = [str(job.get("task_id")) for job in list_jobs_by_statuses(("queued", "running"))]
     recovered = recover_stale_jobs()
     if recovered:
         logger.info("Startup recovery marked %s stranded local jobs as failed", recovered)
+    resume = None
+    if interrupted:
+        # Off the startup path: each re-queue probes its file, and the page
+        # should not wait on that to load.
+        async def _resume() -> None:
+            resumed = await resume_interrupted_jobs(interrupted)
+            if resumed:
+                logger.info("Startup re-queued %s tasks the restart cut off", resumed)
+
+        resume = asyncio.create_task(_resume())
     # The de-breath render slot lives in process memory, so a service killed
     # mid-encode leaves a completed task saying its de-breath is still running —
     # and the route refuses that state, which would make the entry dead for good.
@@ -151,6 +241,8 @@ async def lifespan(app: FastAPI):
     if stranded_notes:
         logger.info("Startup recovery cleared %s stranded visual notes", stranded_notes)
     yield
+    if resume is not None and not resume.done():
+        resume.cancel()
 
 
 def create_local_app() -> FastAPI:
