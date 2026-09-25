@@ -4,13 +4,11 @@ import {
     AnthropicKeyField,
     AutoExportRow,
     AutoIllustrateRow,
-    ClearHistoryDialog,
     DashscopeKeyField,
     DefaultSourceRow,
     FeishuAppCredentialRows,
     LarkExportHistory,
     LarkExportRouteRow,
-    LocalHistoryRow,
     LocalSttSpeedRow,
     PyannoteTokenRow,
     SettingsPageShell,
@@ -40,7 +38,7 @@ const Settings = () => {
     const uploadWritesItsOwnNote = !!runtimeConfig.writesItsOwnNote;
 
     return (
-        <SettingsPageShell overlays={<ClearHistoryDialog state={state}/>}>
+        <SettingsPageShell>
             <Section
                 id="notes"
                 title={lang === 'zh' ? '笔记' : 'Notes'}
@@ -97,10 +95,6 @@ const Settings = () => {
                     <LarkExportRouteRow state={state}/>
                     <LarkExportHistory state={state}/>
                 </div>
-            </Section>
-
-            <Section id="data" title={lang === 'zh' ? '数据' : 'Data'} description={lang === 'zh' ? '本机保存的记录。' : 'Records stored on this device.'}>
-                <LocalHistoryRow state={state}/>
             </Section>
 
             <AdvancedKeysFold

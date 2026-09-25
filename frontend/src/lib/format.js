@@ -1,4 +1,9 @@
-export const fileNameStem = (name) => (name || "").replace(/\.[^/.]+$/, "") || "";
+// Only real media/subtitle/document extensions are removed. Recordings are often
+// named "5.投资人视角下的AI浪潮", and treating whatever follows the last dot as an
+// extension cut such titles down to "5". Keep in step with KNOWN_SUFFIXES in
+// backend/core/title_display.py.
+const KNOWN_SUFFIX_RE = /\.(?:mp4|mov|m4v|mkv|webm|avi|flv|wmv|mpg|mpeg|ts|mp3|wav|flac|aac|ogg|m4a|wma|opus|aiff|aif|srt|vtt|ass|txt|md|docx|pdf)$/i;
+export const fileNameStem = (name) => String(name || "").replace(KNOWN_SUFFIX_RE, "") || "";
 export const stripGeneratedFilenamePrefix = (name) => String(name || '').replace(/^(?:[0-9]{10,24}|BV[a-zA-Z0-9]{8,})[-_]+/, '');
 export const displayTitleForUser = (value, fallback='') => {
     const clean = stripGeneratedFilenamePrefix(fileNameStem(value)).trim();

@@ -142,7 +142,7 @@ def submit_local_media(
     note_mode: str | None = None,
     prompt_preset: str | None = None,
     stt_model: str | None = None,
-    speaker_diarization: bool = True,
+    speaker_diarization: bool | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -170,7 +170,10 @@ def submit_local_media(
                 note_mode=note_mode,
                 prompt_preset=prompt_preset,
                 stt_model=stt_model,
-                speaker_diarization="true" if speaker_diarization else "false",
+                # Left out unless the caller asks: this machine may not have the
+                # diarization packages, and a default "yes" asked for it on
+                # every task.
+                speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
             ),
         },
     )

@@ -101,7 +101,19 @@ async def label_speakers(
         "source_file_size_mb": ctx.source_file_size_mb,
         "stage": "speaker_diarization",
     }
-    if ctx.diarization_requested:
+    if ctx.diarization_requested and not speaker_payload["available"]:
+        # Asked for on a machine that cannot do it. Agents ask by default, so
+        # this was 62 "failed" steps in two weeks on the one machine using this,
+        # each read back to the user as an error. It is a missing option, not a
+        # failure, and the settings page already says so.
+        speaker_payload["skipped_reason"] = "这台电脑没有装讲话人区分需要的组件，已跳过。"
+        log_event(
+            event_name="speaker_diarization_skipped",
+            success=True,
+            metadata=event_metadata(route="/process", reason="unavailable"),
+            **common,
+        )
+    elif ctx.diarization_requested:
         started_at = time.perf_counter()
         budget = _diarization_timeout_seconds(duration_sec)
         try:

@@ -61,7 +61,9 @@ describe('local settings page', () => {
         expect(screen.getByText('转录')).toBeTruthy();
         expect(screen.getByText('开始处理')).toBeTruthy();
         expect(screen.getByText('导出')).toBeTruthy();
-        expect(screen.getByText('数据')).toBeTruthy();
+        // The browser-cache "clear history" row was removed: the list reloads
+        // from the service, so clearing it looked destructive and changed nothing.
+        expect(screen.queryByText('数据')).toBeNull();
         expect(screen.getByText('高级 · 其他凭证')).toBeTruthy();
     });
 

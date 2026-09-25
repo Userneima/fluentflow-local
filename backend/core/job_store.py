@@ -975,6 +975,49 @@ def _finish_job_step(
     return _step_row_to_dict(row) if row else None
 
 
+def repair_truncated_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> int:
+    """Put back titles an earlier suffix rule cut at their first dot.
+
+    Only rows whose stored display title is exactly the raw title's text before
+    a dot are touched, so a title the user chose is left as it is.
+    """
+    ensure_job_db(db_path)
+    changed = 0
+    with sqlite3.connect(Path(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT task_id, result_json, metadata_json FROM jobs"
+            " WHERE json_extract(metadata_json, '$.display_title') IS NOT NULL"
+            " AND json_extract(metadata_json, '$.raw_title')"
+            " LIKE json_extract(metadata_json, '$.display_title') || '.%'"
+        ).fetchall()
+        for row in rows:
+            metadata = _json_loads(row["metadata_json"])
+            if not isinstance(metadata, dict):
+                continue
+            old = str(metadata.get("display_title") or "")
+            fixed = display_title_for_user(metadata.get("raw_title")).strip()
+            if not fixed or fixed == old:
+                continue
+            metadata["display_title"] = fixed
+            video_source = metadata.get("video_source")
+            if isinstance(video_source, dict) and video_source.get("display_title") == old:
+                metadata["video_source"] = {**video_source, "display_title": fixed}
+            result = _json_loads(row["result_json"])
+            if isinstance(result, dict) and result.get("display_title") == old:
+                result["display_title"] = fixed
+            conn.execute(
+                "UPDATE jobs SET result_json = ?, metadata_json = ? WHERE task_id = ?",
+                (
+                    _json_dumps(result) if isinstance(result, dict) else row["result_json"],
+                    _json_dumps(metadata),
+                    row["task_id"],
+                ),
+            )
+            changed += 1
+    return changed
+
+
 def migrate_job_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> int:
     """Backfill raw/display title semantics for existing job rows."""
     ensure_job_db(db_path)
@@ -1184,6 +1227,8 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         "summary_error": result.get("summary_error"),
         "summary_skipped": result.get("summary_skipped"),
         "summary_markdown": str(summary_markdown)[:240] if summary_markdown else "",
+        # The preview above is cut; the list card shows the note's real length.
+        "summary_chars": len(str(summary_markdown).strip()) if summary_markdown else 0,
         "summary_preview": str(summary_markdown)[:240] if summary_markdown else "",
         "transcript_text": str(transcript_text)[:240] if transcript_text else "",
         "transcript_text_preview": str(transcript_text)[:240] if transcript_text else "",

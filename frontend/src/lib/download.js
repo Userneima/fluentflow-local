@@ -1,8 +1,9 @@
 import {isPipeTableRow, looksLikeLoosePipeTable, looksLikeMdTable, simpleMd, splitMdTableRow} from './markdown.js';
 import {API_BASE, apiFetch} from '../app/apiConfig.js';
+import {fileNameStem} from './format.js';
 
 export const _dl = (blob, name) => { const u=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=u; a.download=name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u); };
-export const _baseName = (fn) => (fn||'FluentFlow').replace(/\.[^/.]+$/,'');
+export const _baseName = (fn) => fileNameStem(fn || 'FluentFlow') || 'FluentFlow';
 
 const DOCX_FONT = 'PingFang SC';
 const DOCX_TEXT = '1A1A1A';

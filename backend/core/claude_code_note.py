@@ -39,6 +39,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -83,7 +84,17 @@ _DISALLOWED_TOOLS = "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,Task"
 # would move the bill without telling anyone. Dropped for this subprocess only.
 _CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN")
 
-_LOGIN_MARKERS = ("not logged in", "login expired", "please run /login", "oauth token has expired")
+_LOGIN_MARKERS = (
+    "not logged in",
+    "login expired",
+    "please run /login",
+    "oauth token has expired",
+    # Seen in this archive as "Failed to authenticate: OAuth session expired and
+    # could not be refreshed" (twice) and "Failed to authenticate. API Error: 403
+    # Request not allowed" (once). Both were shown to the user as raw English.
+    "failed to authenticate",
+    "oauth session expired",
+)
 _LIMIT_MARKERS = ("usage limit", "rate limit", "too many requests", "quota")
 # Failures that say nothing about the request and usually do not happen twice:
 # the connection dropped, or the service was briefly overloaded. Seen for real on
@@ -289,6 +300,59 @@ def _command(
     return command
 
 
+# Every note-writing CLI this process has running. A service stopped mid-note
+# used to leave its CLI behind: it kept writing, on the user's allowance, a note
+# nobody was left to receive — and the restart then offered to write it again.
+_RUNNING: set[subprocess.Popen] = set()
+_RUNNING_LOCK = threading.Lock()
+
+
+def _run_tracked(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    """``subprocess.run`` for the CLI, registered so shutdown can stop it."""
+    stdin_text = kwargs.pop("input", None)
+    timeout = kwargs.pop("timeout", None)
+    kwargs.pop("capture_output", None)
+    check = kwargs.pop("check", False)
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **kwargs,
+    )
+    with _RUNNING_LOCK:
+        _RUNNING.add(process)
+    try:
+        try:
+            stdout, stderr = process.communicate(stdin_text, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise
+        completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        if check:
+            completed.check_returncode()
+        return completed
+    finally:
+        with _RUNNING_LOCK:
+            _RUNNING.discard(process)
+
+
+def stop_running_notes(grace_seconds: float = 3.0) -> int:
+    """Stop every note CLI still running. Called when the service shuts down."""
+    with _RUNNING_LOCK:
+        processes = list(_RUNNING)
+    for process in processes:
+        if process.poll() is None:
+            process.terminate()
+    for process in processes:
+        try:
+            process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    return len(processes)
+
+
 def _subprocess_env() -> dict[str, str]:
     env = dict(os.environ)
     for name in _CREDENTIAL_ENV:
@@ -487,7 +551,7 @@ def write_visual_note(
         text = part.text
         dropped, covered = 0, ""
     chosen_model = (model or "").strip() or configured_model()
-    execute = runner if runner is not None else subprocess.run
+    execute = runner if runner is not None else _run_tracked
 
     # Every frame, attached, in one request. There used to be a pass in front of
     # this one that read a text index of the frames and picked a subset, and it

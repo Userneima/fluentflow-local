@@ -15,15 +15,13 @@ import {
 import {useApp} from '../app/AppContext.jsx';
 
 // Everything the settings page needs to read and write, with no page layout:
-// stored settings, credentials, and the clear-history flow.
+// stored settings and credentials.
 export const useSettingsPageState = () => {
     const {t, lang} = useI18n();
     const {loadSettings, saveSettings} = useSettings();
-    const {clearHistory, history, larkExports, runtimeConfig} = useApp();
+    const {larkExports, runtimeConfig} = useApp();
     const {getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkVideoCookies} = useApi();
     const [settings, setSettings] = useState(() => loadSettings());
-    const [cleared, setCleared] = useState(false);
-    const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const [credentialStatus, setCredentialStatus] = useState(null);
     const [diarizationStatus, setDiarizationStatus] = useState(null);
     const [cookieCheck, setCookieCheck] = useState(null);
@@ -112,18 +110,6 @@ export const useSettingsPageState = () => {
             : (lang === 'zh' ? '粘贴 API Key' : 'Paste API key')
     );
 
-    const requestClearHistory = () => {
-        if (history.length === 0) return;
-        setClearConfirmOpen(true);
-    };
-
-    const confirmClearHistory = () => {
-        setClearConfirmOpen(false);
-        clearHistory();
-        setCleared(true);
-        setTimeout(() => setCleared(false), 2000);
-    };
-
     const runCookieCheck = async () => {
         setCookieChecking(true);
         setCookieCheck(null);
@@ -158,14 +144,7 @@ export const useSettingsPageState = () => {
         runtimeConfig,
         settings,
         updateSettingNow,
-        history,
         larkExports,
-        // Clear-history flow.
-        cleared,
-        clearConfirmOpen,
-        setClearConfirmOpen,
-        requestClearHistory,
-        confirmClearHistory,
         // Credentials.
         credentialStatus,
         credentialConfigured,

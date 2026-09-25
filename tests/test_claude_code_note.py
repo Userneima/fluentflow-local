@@ -505,3 +505,47 @@ def test_a_spent_allowance_is_not_retried(frames, monkeypatch):
     with pytest.raises(ccn.ClaudeVisionError, match="上限"):
         ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
     assert len(calls) == 1
+
+
+def test_an_expired_oauth_session_is_told_to_log_in(frames):
+    expired = json.dumps({
+        "type": "result",
+        "is_error": True,
+        "result": "Failed to authenticate: OAuth session expired and could not be refreshed",
+    })
+    run, calls = _recorder(expired)
+
+    with pytest.raises(ClaudeVisionError) as caught:
+        ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+
+    assert caught.value.actionable is True
+    assert "登录" in str(caught.value)
+    assert len(calls) == 1, "logging in again is the fix; retrying is not"
+
+
+def test_shutdown_stops_a_note_writer_that_is_still_running():
+    import sys
+    import threading
+    import time as _time
+
+    finished: list = []
+
+    def run():
+        finished.append(ccn._run_tracked(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            input="", capture_output=True, text=True, timeout=120, check=False,
+        ))
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    for _ in range(50):
+        if ccn._RUNNING:
+            break
+        _time.sleep(0.05)
+
+    assert ccn.stop_running_notes(grace_seconds=2) == 1
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert finished and finished[0].returncode != 0
+    assert not ccn._RUNNING

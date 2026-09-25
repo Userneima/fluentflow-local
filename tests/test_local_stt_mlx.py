@@ -175,5 +175,53 @@ class TestFallbackOnFailure(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestRecordingLanguage(unittest.TestCase):
+    """Each run detects its own language; the recording's is the one most speech had."""
+
+    def _run(self, detections, language=None):
+        import sys
+        import tempfile
+        import types
+
+        calls = iter(detections)
+
+        def fake_transcribe(clip, **kwargs):
+            run_language, text = next(calls)
+            return {"language": run_language, "segments": [{"start": 0.0, "end": 1.0, "text": text}]}
+
+        fake_mlx = types.SimpleNamespace(transcribe=fake_transcribe)
+        runs = [(0.0, 20.0), (20.0, 600.0), (600.0, 1200.0)][: len(detections)]
+        with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file, \
+                mock.patch.dict(sys.modules, {"mlx_whisper": fake_mlx}), \
+                mock.patch("faster_whisper.audio.decode_audio", return_value=np.zeros(16000 * 1200, dtype=np.float32)), \
+                mock.patch.object(local_stt_mlx, "_speech_runs", return_value=runs):
+            segments, info, _ = local_stt_mlx.transcribe(audio_file.name, language=language)
+        return [segment.text for segment in segments], info.language
+
+    def test_an_intro_jingle_does_not_decide_the_language(self) -> None:
+        texts, detected = self._run([("en", "Thank you."), ("zh", "同学你好"), ("zh", "欢迎选修")])
+
+        self.assertEqual(detected, "zh")
+        self.assertEqual(texts, ["同学你好", "欢迎选修"], "the jingle's stock line goes too")
+
+    def test_real_words_in_another_language_are_kept(self) -> None:
+        texts, detected = self._run([("en", "Agent harness"), ("zh", "我们来讲"), ("zh", "自我学习")])
+
+        self.assertEqual(detected, "zh")
+        self.assertIn("Agent harness", texts)
+
+    def test_a_thank_you_in_the_recordings_own_language_is_kept(self) -> None:
+        texts, detected = self._run([("en", "Hello everyone"), ("en", "Thank you.")])
+
+        self.assertEqual(detected, "en")
+        self.assertEqual(texts, ["Hello everyone", "Thank you."])
+
+    def test_a_language_the_caller_chose_is_not_second_guessed(self) -> None:
+        texts, detected = self._run([("en", "Thank you."), ("zh", "同学你好")], language="zh")
+
+        self.assertEqual(detected, "zh")
+        self.assertIn("Thank you.", texts)
+
+
 if __name__ == "__main__":
     unittest.main()

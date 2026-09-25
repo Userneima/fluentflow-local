@@ -135,3 +135,20 @@ def test_the_budget_scales_with_the_audio_and_stays_bounded():
     assert stages._diarization_timeout_seconds(None) == 600.0
     assert stages._diarization_timeout_seconds(1229) == 2458.0
     assert stages._diarization_timeout_seconds(9000) == 2700.0
+
+
+def test_asking_on_a_machine_without_diarization_is_a_skip_not_a_failure(events, monkeypatch):
+    monkeypatch.setattr(stages, "diarization_status", lambda: {"available": False})
+
+    def must_not_run(path):
+        raise AssertionError("nothing to run on a machine without the packages")
+
+    monkeypatch.setattr(stages, "diarize_audio", must_not_run)
+    segments, payload = _run(_ctx(), segments=[{"text": "hi"}])
+
+    assert payload["applied"] is False
+    assert "已跳过" in payload["skipped_reason"]
+    assert "error_reason" not in payload
+    assert [event["event_name"] for event in events] == ["speaker_diarization_skipped"]
+    assert events[0]["success"] is True
+    assert segments == [{"text": "hi"}]

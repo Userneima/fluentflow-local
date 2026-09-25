@@ -77,6 +77,35 @@ class RawSegment:
     words: tuple[dict[str, Any], ...] | None = None
 
 
+# Whisper's stock lines for audio with no words in it: a jingle, applause, room
+# noise. Dropped only from a run whose detected language is not the recording's,
+# so a speaker who really says "thank you" in their own language keeps it. Seen
+# as a "Thank you." opening a Chinese lecture over its intro music.
+_STOCK_OUTROS = frozenset({
+    "thank you", "thank you.", "thanks for watching", "thanks for watching!",
+    "thank you for watching", "thank you for watching.", "you",
+    "谢谢观看", "字幕由amara.org社区提供", "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目",
+})
+
+
+def _without_stray_outros(
+    segments: list[RawSegment],
+    segment_runs: list[int],
+    run_languages: list[str | None],
+    recording_language: str | None,
+) -> list[RawSegment]:
+    if not recording_language:
+        return segments
+    kept: list[RawSegment] = []
+    for segment, run in zip(segments, segment_runs):
+        run_language = run_languages[run] if run < len(run_languages) else None
+        stray = run_language and run_language != recording_language
+        if stray and segment.text.strip().lower() in _STOCK_OUTROS:
+            continue
+        kept.append(segment)
+    return kept
+
+
 @dataclass(frozen=True)
 class MlxInfo:
     duration: float | None
@@ -202,7 +231,13 @@ def transcribe(
     )
 
     segments: list[RawSegment] = []
-    detected_language = language
+    # Seconds of speech each language was detected on. With no language given,
+    # every run detects its own, and taking the first run's answer let an intro
+    # jingle label a Chinese lecture English — which then sent the whole
+    # transcript to be "translated" (seen on two recordings, 2026-09-24/25).
+    language_seconds: dict[str, float] = {}
+    run_languages: list[str | None] = []
+    segment_runs: list[int] = []
     started_at = time.perf_counter()
     load_seconds = 0.0
     done = 0.0
@@ -222,7 +257,10 @@ def transcribe(
         )
         if index == 0:
             load_seconds = round(time.perf_counter() - started_at, 3)
-        detected_language = detected_language or result.get("language")
+        run_language = language or result.get("language")
+        run_languages.append(run_language)
+        if run_language:
+            language_seconds[run_language] = language_seconds.get(run_language, 0.0) + (end - start)
 
         for raw in result.get("segments") or []:
             text = (raw.get("text") or "").strip()
@@ -242,6 +280,7 @@ def transcribe(
                 for w in (raw.get("words") or [])
                 if w.get("start") is not None and w.get("end") is not None
             )
+            segment_runs.append(index)
             segments.append(
                 RawSegment(
                     start=round(float(raw["start"]) + start, 3),
@@ -258,6 +297,10 @@ def transcribe(
         if on_progress and voiced > 0:
             on_progress(min(done / voiced, 1.0))
 
+    detected_language = language or (
+        max(language_seconds, key=language_seconds.get) if language_seconds else None
+    )
+    segments = _without_stray_outros(segments, segment_runs, run_languages, detected_language)
     segments.sort(key=lambda s: s.start)
     info = MlxInfo(
         duration=total_duration,

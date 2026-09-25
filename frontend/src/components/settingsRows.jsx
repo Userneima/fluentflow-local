@@ -34,8 +34,8 @@ export const SettingsPageShell = ({banner = null, overlays = null, children}) =>
                     <h1 className="font-headline text-2xl font-extrabold tracking-tight text-[#111111] dark:text-white">{t('set.title')}</h1>
                     <p className="mt-2 max-w-[62ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/58">
                         {lang === 'zh'
-                            ? '这里只维护长期偏好、凭证和本机数据。单次任务判断放在处理记录里解释。'
-                            : 'Long-term preferences, credentials, and local data live here. Per-task decisions are explained in processing records.'}
+                            ? '这里放长期偏好和凭证。每个任务是怎么处理的，写在它自己的处理记录里。'
+                            : 'Long-term preferences and credentials live here. How each task was handled is written in its own processing record.'}
                     </p>
                 </header>
                 {banner}
@@ -285,25 +285,6 @@ export const LarkExportHistory = ({state}) => {
     );
 };
 
-export const LocalHistoryRow = ({state}) => {
-    const {t, lang} = useI18n();
-    const {history, cleared, requestClearHistory} = state;
-    return (
-        <div className={`m-5 grid gap-4 ${cellBase} md:grid-cols-[minmax(0,1fr)_auto] md:items-center`}>
-            <div>
-                <h3 className="text-sm font-bold">{lang === 'zh' ? '本地历史记录' : 'Local browser history'}</h3>
-                <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">
-                    {lang === 'zh' ? '清除当前浏览器保存的本地历史记录，不会删除服务器任务。' : 'Clear history stored in this browser. Server jobs are not deleted.'}
-                </p>
-            </div>
-            <button onClick={requestClearHistory} disabled={history.length === 0} className="inline-flex h-[40px] items-center gap-1.5 rounded-[12px] bg-red-50 px-4 text-xs font-bold text-red-600 transition hover:bg-red-100 disabled:opacity-30 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20">
-                <SvgIcon name="delete_sweep" className="text-sm"/>
-                {cleared ? t('edit.clearConfirm') : `${t('edit.clearHistory')} (${history.length})`}
-            </button>
-        </div>
-    );
-};
-
 // The advanced fold's shell. The page passes in its description.
 export const AdvancedKeysFold = ({description, children}) => {
     const {lang} = useI18n();
@@ -501,41 +482,6 @@ export const PyannoteTokenRow = ({state}) => {
                 </div>
             )}
             <SecretFeedback feedback={secretFeedback} keyName="pyannote_auth_token" lang={lang}/>
-        </div>
-    );
-};
-
-export const ClearHistoryDialog = ({state}) => {
-    const {t, lang} = useI18n();
-    const {clearConfirmOpen, setClearConfirmOpen, confirmClearHistory} = state;
-    if (!clearConfirmOpen) return null;
-    return (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="clearHistoryTitle">
-            <div className="w-full max-w-[420px] rounded-[22px] border border-[#dedada] bg-white p-5 shadow-[0_28px_90px_-52px_rgba(17,17,17,.72)] dark:border-white/[0.12] dark:bg-[#151515]">
-                <div className="flex items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-300">
-                        <SvgIcon name="warning" className="text-xl"/>
-                    </span>
-                    <div>
-                        <h2 id="clearHistoryTitle" className="text-base font-extrabold">
-                            {lang === 'zh' ? '确认清除本地历史？' : 'Clear local history?'}
-                        </h2>
-                        <p className="mt-2 text-sm leading-relaxed text-on-surface-variant">
-                            {lang === 'zh'
-                                ? '这只会删除当前浏览器保存的历史记录，不会删除服务器任务。删除后无法从本机历史列表恢复。'
-                                : 'This only deletes history stored in this browser. Server jobs are not deleted, and this browser list cannot restore the removed items.'}
-                        </p>
-                    </div>
-                </div>
-                <div className="mt-5 flex justify-end gap-2">
-                    <button type="button" onClick={()=>setClearConfirmOpen(false)} className="inline-flex h-10 items-center rounded-[12px] border border-[#dedada] px-4 text-xs font-bold hover:bg-[#efeeee] dark:border-white/[0.12] dark:hover:bg-white/[0.12]">
-                        {t('edit.cancel')}
-                    </button>
-                    <button type="button" onClick={confirmClearHistory} className="inline-flex h-10 items-center rounded-[12px] bg-red-600 px-4 text-xs font-bold text-white hover:bg-red-700">
-                        {lang === 'zh' ? '确认清除' : 'Clear history'}
-                    </button>
-                </div>
-            </div>
         </div>
     );
 };

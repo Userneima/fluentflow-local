@@ -27,6 +27,7 @@ from backend.core.local_config import load_project_env
 load_project_env()
 
 from backend.core.app_factory import create_app
+from backend.core.claude_code_note import stop_running_notes
 from backend.core.debreath_job import recover_stranded_renders
 from backend.core.frontend_paths import FRONTEND_LOCAL_DIST_DIR
 from backend.core.job_store import (
@@ -34,6 +35,7 @@ from backend.core.job_store import (
     adopt_jobs_for_owner,
     get_job,
     list_jobs_by_statuses,
+    repair_truncated_display_titles,
     sync_summary_status_column,
     upsert_job,
 )
@@ -212,6 +214,9 @@ async def lifespan(app: FastAPI):
     adopted = adopt_jobs_for_owner(LOCAL_OWNER_ID)
     if adopted:
         logger.info("Startup moved %s tasks filed under other client ids to the local owner", adopted)
+    repaired = repair_truncated_display_titles()
+    if repaired:
+        logger.info("Startup restored %s task titles cut at their first dot", repaired)
     synced = sync_summary_status_column()
     if synced:
         logger.info("Startup corrected the note status of %s tasks", synced)
@@ -243,6 +248,9 @@ async def lifespan(app: FastAPI):
     yield
     if resume is not None and not resume.done():
         resume.cancel()
+    stopped = stop_running_notes()
+    if stopped:
+        logger.info("Shutdown stopped %s note writers that were still running", stopped)
 
 
 def create_local_app() -> FastAPI:

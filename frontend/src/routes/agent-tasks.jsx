@@ -473,7 +473,11 @@ export const debreathTile = (job, lang) => {
 export const noteTileValue = (job, lang) => {
     const isZh = lang === 'zh';
     const result = job?.result || {};
-    const chars = String(result.summary_markdown || '').trim().length;
+    // The job list carries only the first 240 characters of the note, so its
+    // length is sent separately; the full result has no such field and is counted.
+    const chars = Number.isFinite(result.summary_chars)
+        ? result.summary_chars
+        : String(result.summary_markdown || '').trim().length;
     if (chars) {
         const fromCut = result.summary_written_from === 'debreath_media_note';
         const base = isZh ? `${chars} 字` : `${chars} chars`;

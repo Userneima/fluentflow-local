@@ -124,18 +124,11 @@ export const LocalAppProvider = ({children}) => {
         cancelledRef.current.delete(String(taskId));
         setTasks((current) => reconcileInto(current));
     };
-    const clearHistory = () => {
-        tombstonesRef.current = new Set();
-        setTasks([]);
-        persistLarkExports([]);
-        localStorage.removeItem('fluentflow_history');
-        localStorage.removeItem(accountJobsCacheKey(LOCAL_SCOPE));
-    };
     const addLarkExport = (entry) => persistLarkExports([entry, ...larkExports].slice(0, 50));
     const stats = {
         totalMinutes: Math.round(history.reduce((total, item) => total + (item.durationMin || 0), 0)),
         notesGenerated: history.filter((item) => item.status === 'completed').length,
     };
 
-    return <AppCtx.Provider value={{tasks, history, ingestJobs, markCancelled, revertCancelled, restoreTask, addToHistory, removeFromHistory, clearHistory, currentJob, setCurrentJob, lastResult, setLastResult, lastSourceFile, setLastSourceFile, stats, larkExports, addLarkExport, runtimeConfig, setPendingUploadAbort, abortPendingUpload}}>{children}</AppCtx.Provider>;
+    return <AppCtx.Provider value={{tasks, history, ingestJobs, markCancelled, revertCancelled, restoreTask, addToHistory, removeFromHistory, currentJob, setCurrentJob, lastResult, setLastResult, lastSourceFile, setLastSourceFile, stats, larkExports, addLarkExport, runtimeConfig, setPendingUploadAbort, abortPendingUpload}}>{children}</AppCtx.Provider>;
 };
