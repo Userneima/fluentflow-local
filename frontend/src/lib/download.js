@@ -3,7 +3,10 @@ import {API_BASE, apiFetch} from '../app/apiConfig.js';
 import {fileNameStem} from './format.js';
 
 export const _dl = (blob, name) => { const u=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=u; a.download=name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u); };
-export const _baseName = (fn) => fileNameStem(fn || 'FluentFlow') || 'FluentFlow';
+// Characters no file system accepts in a name become a space; the browser
+// would do this on its own, but the app should not depend on it.
+const _safeFileName = (name) => String(name || '').replace(/[/\\:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+export const _baseName = (fn) => _safeFileName(fileNameStem(fn || 'FluentFlow')) || 'FluentFlow';
 
 const DOCX_FONT = 'PingFang SC';
 const DOCX_TEXT = '1A1A1A';
@@ -354,24 +357,31 @@ export const buildSummaryDocxDocument = async (md) => {
     });
 };
 
-export const _fmtSrtTime = (sec) => {
-    const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=Math.floor(sec%60), ms=Math.round((sec%1)*1000);
-    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
+// Round to whole milliseconds first so 1.9995 s becomes 2.000 s instead of
+// "1 s and 1000 ms", which no subtitle player accepts.
+const _splitTime = (sec) => {
+    const total = Math.max(0, Math.round((Number(sec) || 0) * 1000));
+    const ms = total % 1000;
+    const whole = (total - ms) / 1000;
+    return {h: Math.floor(whole / 3600), m: Math.floor((whole % 3600) / 60), s: whole % 60, ms};
 };
-export const _fmtVttTime = (sec) => {
-    const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=Math.floor(sec%60), ms=Math.round((sec%1)*1000);
-    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
+const _fmtClock = (sec, sep) => {
+    const {h, m, s, ms} = _splitTime(sec);
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}${sep}${String(ms).padStart(3,'0')}`;
 };
+export const _fmtSrtTime = (sec) => _fmtClock(sec, ',');
+export const _fmtVttTime = (sec) => _fmtClock(sec, '.');
+const _spokenSegments = (segments) => (segments || []).filter((s) => String(s?.text || '').trim());
 
 export const dlTranscriptTxt = (text, filename) => {
     _dl(new Blob([text],{type:'text/plain;charset=utf-8'}), _baseName(filename)+'.txt');
 };
 export const dlTranscriptSrt = (segments, filename) => {
-    const lines = segments.map((s,i) => `${i+1}\n${_fmtSrtTime(s.start)} --> ${_fmtSrtTime(s.end)}\n${s.text.trim()}\n`);
+    const lines = _spokenSegments(segments).map((s,i) => `${i+1}\n${_fmtSrtTime(s.start)} --> ${_fmtSrtTime(s.end)}\n${s.text.trim()}\n`);
     _dl(new Blob([lines.join('\n')],{type:'text/plain;charset=utf-8'}), _baseName(filename)+'.srt');
 };
 export const dlTranscriptVtt = (segments, filename) => {
-    const lines = ['WEBVTT\n', ...segments.map(s => `${_fmtVttTime(s.start)} --> ${_fmtVttTime(s.end)}\n${s.text.trim()}\n`)];
+    const lines = ['WEBVTT\n', ..._spokenSegments(segments).map(s => `${_fmtVttTime(s.start)} --> ${_fmtVttTime(s.end)}\n${s.text.trim()}\n`)];
     _dl(new Blob([lines.join('\n')],{type:'text/vtt;charset=utf-8'}), _baseName(filename)+'.vtt');
 };
 const bilingualSegments = (segments, translatedSegments) => (

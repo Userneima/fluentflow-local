@@ -78,13 +78,9 @@ export const pickTranscriptSegments = (source={}) => {
     }
     return [];
 };
-export const pickTranscriptBaselineSegments = (source={}) => {
-    for (const key of ['raw_segments', 'segments', 'cleaned_segments']) {
-        const segments = normalizeTranscriptSegments(source?.[key]);
-        if (segments.length > 0) return segments;
-    }
-    return [];
-};
+// The baseline for edit records is the same pick: the raw segments when the
+// result still has them, else whatever segments it carries.
+export const pickTranscriptBaselineSegments = pickTranscriptSegments;
 export const pickDisplayTranscriptSegments = (source={}, rawSegments=[]) => {
     for (const key of ['display_segments', 'bilingual_segments']) {
         const segments = normalizeDisplaySegments(source?.[key]);
@@ -181,9 +177,51 @@ const taskErrorDiagnosis = ({code, titleZh, titleEn, detailZh, detailEn, nextZh,
     retryable,
 });
 
-export const diagnoseTaskError = (message, lang='zh') => {
+const PROVIDER_NAMES = {
+    deepseek: {zh: 'DeepSeek', en: 'DeepSeek'},
+    openai: {zh: 'OpenAI', en: 'OpenAI'},
+    qwen: {zh: '百炼 / DashScope', en: 'Bailian / DashScope'},
+    dashscope: {zh: '百炼 / DashScope', en: 'Bailian / DashScope'},
+    anthropic: {zh: 'Anthropic', en: 'Anthropic'},
+    claude: {zh: 'Anthropic', en: 'Anthropic'},
+};
+const normalizeProviderKey = (value) => {
+    const key = String(value || '').trim().toLowerCase();
+    return PROVIDER_NAMES[key] ? key : '';
+};
+// Which AI service a failure is about: the caller's context first (the job
+// records which provider it asked), then whatever the message itself names.
+const providerFromError = (raw, context={}) => {
+    const explicit = normalizeProviderKey(context?.provider);
+    if (explicit) return explicit;
+    const lower = String(raw || '').toLowerCase();
+    for (const key of ['deepseek', 'openai', 'dashscope', 'qwen', 'anthropic', 'claude']) {
+        if (lower.includes(key)) return key;
+    }
+    if (lower.includes('百炼') || lower.includes('通义')) return 'qwen';
+    return '';
+};
+export const providerDisplayName = (provider, lang='zh') => {
+    const key = normalizeProviderKey(provider);
+    if (!key) return lang === 'zh' ? 'AI 服务' : 'the AI service';
+    return lang === 'zh' ? PROVIDER_NAMES[key].zh : PROVIDER_NAMES[key].en;
+};
+// Whether the failing job fetched its material from a video platform. Only then
+// is "the download timed out, upload the file instead" advice that fits; for a
+// local recording there was no download, so the same words send the user after
+// the wrong subsystem.
+const isVideoLinkContext = (context={}) => (
+    String(context?.sourceType || context?.source_type || '').trim().toLowerCase() === 'video_link'
+);
+// Context the caller knows about the failed task and the message cannot carry:
+// `provider` (deepseek / openai / qwen / dashscope / anthropic) and `sourceType`
+// (video_link / video_file / audio_file / transcript_file / queue_upload).
+export const diagnoseTaskError = (message, lang='zh', context={}) => {
     const raw = String(message || '').trim();
     const zh = lang === 'zh';
+    const provider = providerFromError(raw, context);
+    const providerName = providerDisplayName(provider, lang);
+    const videoLink = isVideoLinkContext(context);
     const pick = (diag) => ({
         code: diag.code,
         severity: diag.severity || 'error',
@@ -205,6 +243,18 @@ export const diagnoseTaskError = (message, lang='zh') => {
     const lower = raw.toLowerCase();
 
     const patterns = [
+        [
+            lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('network error') || lower.includes('load failed') || lower.includes('err_connection_refused') || lower.includes('econnrefused'),
+            taskErrorDiagnosis({
+                code: 'backend_unreachable',
+                titleZh: '本机服务没有响应',
+                titleEn: 'The local service is not responding',
+                detailZh: '本机服务没有响应，请重新打开 FluentFlow Local；任务和记录都还在。',
+                detailEn: 'The local service is not responding. Reopen FluentFlow Local; your tasks and records are still there.',
+                nextZh: '重新打开 FluentFlow Local 后再试一次。',
+                nextEn: 'Reopen FluentFlow Local and try again.',
+            }),
+        ],
         [
             raw.includes('抖音的登录信息过期了'),
             taskErrorDiagnosis({
@@ -231,63 +281,68 @@ export const diagnoseTaskError = (message, lang='zh') => {
             }),
         ],
         [
-            lower.includes('queued transcript summary request failed') && (lower.includes('401') || lower.includes('login') || lower.includes('auth') || lower.includes('account')),
-            taskErrorDiagnosis({
-                code: 'auth_required',
-                titleZh: '需要重新登录',
-                titleEn: 'Sign in required',
-                detailZh: '账号未登录或登录态已失效，AI 笔记没有生成。请重新登录后重试；已完成的转录不会因此损坏。',
-                detailEn: 'Account login is missing or expired, so the AI note was not generated. Sign in again and retry; the completed transcript is not damaged.',
-                nextZh: '重新登录后重试；如果转录已保存，打开结果后重生笔记。',
-                nextEn: 'Sign in again and retry; if the transcript is saved, reopen the result and regenerate the note.',
-            }),
-        ],
-        [
-            (raw.includes('AI 笔记') || raw.includes('转录不会因此损坏')) && (raw.includes('账号未登录') || raw.includes('登录态') || raw.includes('重新登录')),
-            taskErrorDiagnosis({
-                code: 'auth_required',
-                titleZh: '需要重新登录',
-                titleEn: 'Sign in required',
-                detailZh: '账号未登录或登录态已失效，AI 笔记没有生成。请重新登录后重试；已完成的转录不会因此损坏。',
-                detailEn: 'Account login is missing or expired, so the AI note was not generated. Sign in again and retry; the completed transcript is not damaged.',
-                nextZh: '重新登录后重试；如果转录已保存，打开结果后重生笔记。',
-                nextEn: 'Sign in again and retry; if the transcript is saved, reopen the result and regenerate the note.',
-            }),
-        ],
-        [
-            lower.includes('incorrect api key') || lower.includes('invalid_api_key') || lower.includes('apikey-error') || lower.includes('api-key-error'),
+            !lower.includes('lark') && !lower.includes('feishu') && !raw.includes('飞书') && (lower.includes('incorrect api key') || lower.includes('invalid_api_key') || lower.includes('invalid api key') || lower.includes('apikey-error') || lower.includes('api-key-error')
+            || lower.includes('api key 不被接受') || lower.includes('authentication_error') || lower.includes('authenticationerror')
+            || lower.includes('http 401') || /\b401\b/.test(lower) || lower.includes('unauthorized') || lower.includes('invalid_request_error: incorrect')
+            || lower.includes('login is required') || (lower.includes('login') && lower.includes('summary'))
+            || raw.includes('账号未登录') || raw.includes('登录态') || raw.includes('重新登录')),
             taskErrorDiagnosis({
                 code: 'invalid_api_key',
-                titleZh: '百炼 / DashScope API Key 无效',
-                titleEn: 'AI service API key is invalid',
-                detailZh: 'AI 笔记没有生成：当前百炼 / DashScope API Key 无效或已失效。转录和字幕已保存。',
-                detailEn: 'The AI note was not generated because the summary provider API key is invalid or expired. Transcript and subtitles are saved.',
-                nextZh: '到设置页更新百炼 / DashScope API Key 后，回到编辑器点击“重生笔记”。',
-                nextEn: 'Update the summary provider API key in Settings, then return to the editor and click Regenerate note.',
+                titleZh: `${providerName} API Key 无效`,
+                titleEn: `${providerName} API key is invalid`,
+                detailZh: `AI 笔记没有生成：${providerName} 不接受当前的 API Key（无效、已失效或没有权限）。转录和字幕已保存。`,
+                detailEn: `The AI note was not generated: ${providerName} rejected the current API key (invalid, expired, or without permission). Transcript and subtitles are saved.`,
+                nextZh: `到设置页替换 ${providerName} 的 API Key，再回到编辑器点击“重生笔记”。`,
+                nextEn: `Replace the ${providerName} API key in Settings, then return to the editor and click Regenerate note.`,
             }),
         ],
         [
-            lower.includes('fluentflow account login is required') || lower.includes('http 401') || lower.includes('unauthorized') || raw.includes('账号未登录') || raw.includes('登录态') || raw.includes('重新登录'),
+            lower.includes('error code: 429') || lower.includes('rate limit reached') || lower.includes('rate_limit_error') || lower.includes('rate limit exceeded') || lower.includes('限流'),
             taskErrorDiagnosis({
-                code: 'auth_required',
-                titleZh: '需要重新登录',
-                titleEn: 'Sign in required',
-                detailZh: '账号未登录或登录态已失效，请重新登录后重试。',
-                detailEn: 'Account login is missing or expired. Sign in again and retry.',
-                nextZh: '重新登录后从同一条记录继续；如果仍失败，重新提交任务。',
-                nextEn: 'Sign in again and continue from the same record; submit again if it still fails.',
+                code: 'ai_rate_limited',
+                titleZh: `${providerName} 暂时限流`,
+                titleEn: `${providerName} is rate limiting requests`,
+                detailZh: `AI 笔记没有生成：${providerName} 这段时间收到的请求太多，暂时拒绝了。转录和字幕已保存。`,
+                detailEn: `The AI note was not generated: ${providerName} is refusing requests for now. Transcript and subtitles are saved.`,
+                nextZh: '过几分钟回到编辑器点击“重生笔记”；反复出现就到服务商后台看额度。',
+                nextEn: 'Return to the editor in a few minutes and click Regenerate note; if it keeps happening, check your plan at the provider.',
             }),
         ],
         [
-            lower.includes('quota') || lower.includes('balance') || lower.includes('额度') || lower.includes('余额'),
+            lower.includes('一次最多提交') || lower.includes('too many files'),
             taskErrorDiagnosis({
-                code: 'quota_insufficient',
-                titleZh: '额度不足',
-                titleEn: 'Insufficient balance',
-                detailZh: '当前账号处理额度不足，请充值或联系维护者增加额度。',
-                detailEn: 'This account does not have enough processing balance.',
-                nextZh: '补足额度后重试，或降低本次处理成本。',
-                nextEn: 'Add balance and retry, or lower this task cost.',
+                code: 'too_many_files',
+                titleZh: '一次选的文件太多',
+                titleEn: 'Too many files at once',
+                detailZh: raw,
+                detailEn: 'More files were selected than one batch allows.',
+                nextZh: '分成几批提交。',
+                nextEn: 'Submit them in smaller batches.',
+                retryable: false,
+            }),
+        ],
+        [
+            (lower.includes('飞书') || lower.includes('lark') || lower.includes('feishu')) && (lower.includes('folder not found') || lower.includes('文件夹不存在') || lower.includes('notexist')),
+            taskErrorDiagnosis({
+                code: 'feishu_folder_not_found',
+                titleZh: '飞书目标文件夹不存在',
+                titleEn: 'Feishu folder not found',
+                detailZh: '笔记已生成，但导出时飞书找不到设置里填的目标文件夹。',
+                detailEn: 'The note was written, but Feishu could not find the target folder from Settings.',
+                nextZh: '到设置页重新选择飞书文件夹，再回到编辑器重新导出。',
+                nextEn: 'Pick the Feishu folder again in Settings, then export again from the editor.',
+            }),
+        ],
+        [
+            lower.includes('quota') || lower.includes('balance') || lower.includes('insufficient_funds') || lower.includes('额度') || lower.includes('余额') || lower.includes('欠费'),
+            taskErrorDiagnosis({
+                code: 'provider_balance_exhausted',
+                titleZh: `${providerName} 余额用完了`,
+                titleEn: `${providerName} balance is exhausted`,
+                detailZh: `AI 笔记没有生成：${providerName} 账号的余额或额度已用完。转录和字幕已保存。`,
+                detailEn: `The AI note was not generated: the ${providerName} account has no balance or quota left. Transcript and subtitles are saved.`,
+                nextZh: `到 ${providerName} 的控制台充值，或在设置页换一个服务商，再回到编辑器点击“重生笔记”。`,
+                nextEn: `Top up at ${providerName}, or switch provider in Settings, then return to the editor and click Regenerate note.`,
             }),
         ],
         [
@@ -355,7 +410,7 @@ export const diagnoseTaskError = (message, lang='zh') => {
             }),
         ],
         [
-            raw.includes('视频下载超时') || lower.includes('timed out') || lower.includes('timeout'),
+            raw.includes('视频下载超时') || (videoLink && (lower.includes('timed out') || lower.includes('timeout'))),
             taskErrorDiagnosis({
                 code: 'video_download_timeout',
                 titleZh: '视频下载超时',
@@ -364,6 +419,18 @@ export const diagnoseTaskError = (message, lang='zh') => {
                 detailEn: 'The video download took too long, likely due to a large video or slow network. FluentFlow will prefer captions when possible; retry later or upload the local video.',
                 nextZh: '稍后重试，或上传本地视频。',
                 nextEn: 'Retry later, or upload the local video.',
+            }),
+        ],
+        [
+            lower.includes('timed out') || lower.includes('timeout') || raw.includes('超时'),
+            taskErrorDiagnosis({
+                code: 'processing_timeout',
+                titleZh: '处理超时',
+                titleEn: 'Processing timed out',
+                detailZh: '这一步超过时间上限被中止。通常是素材太长，或这台机器当时很忙。',
+                detailEn: 'This step was stopped at its time limit, usually because the material is long or the machine was busy.',
+                nextZh: '重试一次；素材很长的话先拆成几段再处理。',
+                nextEn: 'Retry once; split long material into parts first.',
             }),
         ],
         [
@@ -492,8 +559,17 @@ export const diagnoseTaskError = (message, lang='zh') => {
     }));
 };
 
-export const friendlyTaskError = (message, lang='zh') => {
-    return diagnoseTaskError(message, lang).detail;
+export const friendlyTaskError = (message, lang='zh', context={}) => {
+    return diagnoseTaskError(message, lang, context).detail;
+};
+// The context a job record can lend to its own failure message.
+export const taskErrorContextForJob = (job={}) => {
+    const metadata = job?.metadata || {};
+    const queueOptions = metadata.queue_options && typeof metadata.queue_options === 'object' ? metadata.queue_options : {};
+    return {
+        provider: queueOptions.ai_provider || metadata.ai_provider || job?.result?.ai_provider || job?.ai_provider || '',
+        sourceType: job?.source_type || job?.result?.source || job?.sourceType || '',
+    };
 };
 
 export const noteGenerationDiagnosis = (result={}, lang='zh') => {
@@ -551,7 +627,7 @@ export const noteGenerationDiagnosis = (result={}, lang='zh') => {
         };
     }
     if(status === 'failed' || rawError) {
-        const diag = diagnoseTaskError(rawError, lang);
+        const diag = diagnoseTaskError(rawError, lang, {provider: result?.ai_provider, sourceType: result?.source});
         const code = diag.code === 'unknown_error' ? 'ai_note_failed' : diag.code;
         const title = diag.code === 'unknown_error' ? (zh ? 'AI 笔记生成失败' : 'AI note generation failed') : diag.title;
         const nextAction = diag.code === 'unknown_error'

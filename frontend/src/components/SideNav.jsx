@@ -17,6 +17,7 @@ import {
     Video,
 } from 'lucide-react';
 import {useI18n, useSettings} from '../app/shared.jsx';
+import {useDismissable} from '../lib/useDismissable.js';
 
 const FluentFlowLogo = ({compact = false}) => (
     <div className={`relative flex shrink-0 items-center justify-center bg-[#111111] text-white shadow-[0_18px_42px_-26px_rgba(17,17,17,.75)] [--ff-logo-line:#111111] dark:bg-white dark:text-[#111111] dark:[--ff-logo-line:#ffffff] ${compact ? 'size-6 rounded-[9px]' : 'size-10 rounded-[14px]'}`}>
@@ -64,27 +65,16 @@ const SideNav = ({
         document.documentElement.classList.toggle('dark', next);
     }, [isDark, loadSettings, saveSettings]);
 
-    useEffect(() => {
-        if (!menuOpen) return;
-        const handler = (e) => {
-            if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
-        };
-        document.addEventListener('mousedown', handler);
-        return () => document.removeEventListener('mousedown', handler);
-    }, [menuOpen]);
+    // Escape and a click outside close the menu; focus goes into it on open and
+    // back to the button on close. The legal submenu nests inside it, so its
+    // own Escape closes just the submenu first.
+    const menuPanelRef = useDismissable(menuOpen, () => setMenuOpen(false), {outsideOf: menuRef});
+    const legalPanelRef = useDismissable(legalMenuOpen, () => setLegalMenuOpen(false), {closeOnOutsideClick: false});
+    const agentAccessRef = useDismissable(agentAccessOpen, () => setAgentAccessOpen(false), {closeOnOutsideClick: false, trapFocus: true});
 
     useEffect(() => {
         if (!menuOpen) setLegalMenuOpen(false);
     }, [menuOpen]);
-
-    useEffect(() => {
-        if (!agentAccessOpen) return;
-        const handler = (e) => {
-            if (e.key === 'Escape') setAgentAccessOpen(false);
-        };
-        document.addEventListener('keydown', handler);
-        return () => document.removeEventListener('keydown', handler);
-    }, [agentAccessOpen]);
 
     const items = [
         {path:'/media-text', icon:Video, label: lang === 'zh' ? '视频转写与总结' : 'Media notes'},
@@ -160,6 +150,8 @@ const SideNav = ({
                     <button
                         type="button"
                         onClick={() => setMenuOpen((v) => !v)}
+                        aria-haspopup="menu"
+                        aria-expanded={menuOpen}
                         className={`w-full rounded-[14px] border border-[#e5e5e5] bg-white text-left shadow-[0_1px_2px_rgba(17,17,17,0.03)] transition hover:border-[#d9d9d9] hover:bg-[#f7f7f7] dark:border-white/[0.12] dark:bg-white/[0.06] dark:hover:border-white/[0.18] dark:hover:bg-white/[0.09] ${collapsed ? 'mx-auto flex size-12 justify-center px-0 py-2' : 'flex items-center gap-2.5 px-2.5 py-2'}`}
                         title={collapsed ? entryTitle : undefined}
                     >
@@ -175,7 +167,7 @@ const SideNav = ({
                     </button>
 
                     {menuOpen && (
-                        <div className="absolute bottom-0 left-full z-50 ml-2 w-52 rounded-[14px] border border-[#e5e5e5] bg-white p-2 shadow-[0_12px_40px_-18px_rgba(17,17,17,.35)] dark:border-white/[0.12] dark:bg-[#101010]">
+                        <div ref={menuPanelRef} role="menu" className="absolute bottom-0 left-full z-50 ml-2 w-52 rounded-[14px] border border-[#e5e5e5] bg-white p-2 shadow-[0_12px_40px_-18px_rgba(17,17,17,.35)] dark:border-white/[0.12] dark:bg-[#101010]">
                             <div className="flex flex-col gap-0.5">
                                 <button
                                     type="button"
@@ -210,6 +202,7 @@ const SideNav = ({
                                 <button
                                     type="button"
                                     onClick={() => setLegalMenuOpen((value) => !value)}
+                                    aria-haspopup="menu"
                                     aria-expanded={legalMenuOpen}
                                     className={`flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] font-semibold text-[#111111] transition hover:bg-[#efeeee] dark:text-white dark:hover:bg-white/[0.08] ${legalMenuOpen ? 'bg-[#efeeee] dark:bg-white/[0.08]' : ''}`}
                                 >
@@ -218,7 +211,7 @@ const SideNav = ({
                                     <ChevronRight className="size-4 shrink-0 text-[#6b6c72] dark:text-white/70" strokeWidth={2.15}/>
                                 </button>
                                 {legalMenuOpen && (
-                                    <div className="absolute left-full top-0 z-[60] ml-3 w-52 rounded-[14px] border border-[#e5e5e5] bg-white p-2 shadow-[0_12px_40px_-18px_rgba(17,17,17,.35)] dark:border-white/[0.12] dark:bg-[#101010]">
+                                    <div ref={legalPanelRef} role="menu" className="absolute left-full top-0 z-[60] ml-3 w-52 rounded-[14px] border border-[#e5e5e5] bg-white p-2 shadow-[0_12px_40px_-18px_rgba(17,17,17,.35)] dark:border-white/[0.12] dark:bg-[#101010]">
                                         {legalLinks.map((item) => {
                                             const Icon = item.icon;
                                             return (
@@ -252,6 +245,7 @@ const SideNav = ({
             {agentAccessOpen && AgentAccessPanel && (
                 <div className="fixed inset-0 z-[80] flex items-center justify-center bg-[#111111]/35 px-4 py-6 backdrop-blur-[2px] dark:bg-[#050505]/65" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setAgentAccessOpen(false); }}>
                     <section
+                        ref={agentAccessRef}
                         role="dialog"
                         aria-modal="true"
                         aria-labelledby="agent-access-title"

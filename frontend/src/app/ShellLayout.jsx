@@ -1,6 +1,7 @@
 import {Suspense, useEffect, useState} from 'react';
 import SideNav from '../components/SideNav.jsx';
 import InterruptedTasksDialog from '../components/InterruptedTasksDialog.jsx';
+import BackendStatusBanner from '../components/BackendStatusBanner.jsx';
 
 // Shared workspace frame: sidebar (with persisted collapse state) plus the
 // routed content area, and the app-level notice for tasks a service restart
@@ -19,6 +20,7 @@ const ShellLayout = ({sideNavProps = {}, children}) => {
         >
             <SideNav collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((value) => !value)} {...sideNavProps}/>
             <div className="relative flex h-dvh min-h-0 w-full flex-1 flex-col overflow-hidden">
+                <BackendStatusBanner/>
                 <Suspense fallback={<div className="flex h-full items-center justify-center text-sm font-semibold text-on-surface-variant">Loading...</div>}>
                     {children}
                 </Suspense>

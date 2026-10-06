@@ -73,6 +73,22 @@ import {
     downloadBrowserFile,
 } from './editor-helpers.js';
 
+// The records worth showing: a changed sentence whose current text is still the
+// changed version. Shared by the records dialog and the save payload.
+const filterVisibleEditRecords = (records, segments) => records.filter((record) => {
+    const before = String(record?.before || '').trim();
+    const after = String(record?.after || '').trim();
+    if (!before && !after) return false;
+    if (before === after) return false;
+    const current = segments[record?.index];
+    if (!current) return false;
+    return String(current.text || '').trim() === after;
+});
+
+// Which result a pending edit belongs to. A result opened while an edit is
+// still waiting to sync must neither inherit the edit nor be overwritten by it.
+const resultIdentity = (result) => (result ? `${result.task_id || result.filename || 'current_result'}` : 'empty_result');
+
 const Editor = () => {
     const {t, lang} = useI18n();
     const {
@@ -106,17 +122,34 @@ const Editor = () => {
     const summaryDraftResultKeyRef = useRef('');
     const playbackSaveRef = useRef(0);
     const mediaObjectUrlRef = useRef('');
+    // Timers that must die with the page: a toast closing itself, the "done"
+    // card clearing itself. A toast shown twice in a row used to be closed by
+    // the first one's timer.
+    const toastTimerRef = useRef(null);
+    const doneJobTimerRef = useRef(null);
+    useEffect(() => () => {
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        if (doneJobTimerRef.current) clearTimeout(doneJobTimerRef.current);
+    }, []);
 
     const result = lastResult;
     const matchedLocalSourceFile = localSourceFileMatchesResult(lastSourceFile, result) ? lastSourceFile : null;
+    // Effects keyed on a derived string (resultKey, mediaSourceKey) read the
+    // latest result through this ref: listing `result` itself as a dependency
+    // would re-run them on every edit that syncs into the provider.
+    const resultRef = useRef(result);
+    resultRef.current = result;
+    const matchedLocalSourceFileRef = useRef(matchedLocalSourceFile);
+    matchedLocalSourceFileRef.current = matchedLocalSourceFile;
+    const langRef = useRef(lang);
+    langRef.current = lang;
     const resultSegmentCount = pickTranscriptSegments(result).length;
     const resultTextLength = (result?.transcript_text || '').length;
     const resultKey = result
         ? `${result.task_id || result.filename || 'current_result'}:${result.transcript_edited ? 'edited' : `${resultSegmentCount}:${resultTextLength}`}`
         : 'empty_result';
-    const summaryResultKey = result
-        ? `${result.task_id || result.filename || 'current_result'}`
-        : 'empty_result';
+    const summaryResultKey = resultIdentity(result);
+    const editTargetRef = useRef('');
     const mediaSourceKey = result
         ? [
             result.task_id || result.filename || 'current_result',
@@ -126,6 +159,9 @@ const Editor = () => {
         ].join(':')
         : 'empty_media_source';
     const [editedSegments, setEditedSegments] = useState([]);
+    // The segments the provider last received. Edit records are diffed from
+    // these, not from every keystroke.
+    const [syncedSegments, setSyncedSegments] = useState([]);
     const [editedTranscript, setEditedTranscript] = useState('');
     const [baselineSegments, setBaselineSegments] = useState([]);
     const [transcriptDirty, setTranscriptDirty] = useState(false);
@@ -154,13 +190,19 @@ const Editor = () => {
     const splitContainerRef = useRef(null);
     const transcriptScrollRef = useRef(null);
     const segmentRefs = useRef({});
-    const resultJobOptions = useMemo(() => jobOptionsForResult(result), [
-        result?.stt_provider,
-        result?.playback_audio_storage,
-        result?.source_file_storage,
-    ]);
+    // Only these three fields decide the options, so only they are watched; the
+    // result object itself changes on every synced edit.
+    const resultSttProvider = result?.stt_provider;
+    const resultPlaybackStorage = result?.playback_audio_storage;
+    const resultSourceStorage = result?.source_file_storage;
+    const resultJobOptions = useMemo(() => jobOptionsForResult({
+        stt_provider: resultSttProvider,
+        playback_audio_storage: resultPlaybackStorage,
+        source_file_storage: resultSourceStorage,
+    }), [resultSttProvider, resultPlaybackStorage, resultSourceStorage]);
 
     useEffect(() => {
+        const result = resultRef.current;
         if (!result?.task_id || transcriptUnsaved) {
             setHydratingResult(false);
             setHydrationFailed(false);
@@ -194,6 +236,7 @@ const Editor = () => {
                     const fullBaselineSegments = pickTranscriptBaselineSegments(full);
                     setLastResult(full);
                     setEditedSegments(fullSegments.map((seg) => ({...seg})));
+                    setSyncedSegments(fullSegments);
                     setEditedTranscript(composeTranscriptText(fullSegments, fullText));
                     setBaselineSegments((prev) => {
                         if (fullBaselineSegments.length > 0) return fullBaselineSegments.map((seg) => ({...seg}));
@@ -212,22 +255,28 @@ const Editor = () => {
                 if (!cancelled) setHydratingResult(false);
             });
         return () => { cancelled = true; };
-    }, [resultKey, transcriptUnsaved, resultJobOptions]);
+    }, [resultKey, transcriptUnsaved, resultJobOptions, getJob, setLastResult]);
 
     useEffect(() => {
+        const result = resultRef.current;
         if (!result) {
             setEditedSegments([]);
+            setSyncedSegments([]);
             setEditedTranscript('');
             setBaselineSegments([]);
             setTranscriptDirty(false);
             setTranscriptUnsaved(false);
             return;
         }
-        if (result.transcript_edited && transcriptUnsaved) return;
+        // Local edits waiting to sync for this very result must not be replaced
+        // by the result's older copy; a different result opened meanwhile is
+        // shown as it is.
+        if (transcriptUnsaved && editTargetRef.current === resultIdentity(result)) return;
         const sourceSegments = pickTranscriptSegments(result);
         const baselineSourceSegments = pickTranscriptBaselineSegments(result);
         const sourceText = result.transcript_text || '';
         setEditedSegments(sourceSegments.map((seg) => ({...seg})));
+        setSyncedSegments(sourceSegments);
         setEditedTranscript(composeTranscriptText(sourceSegments, sourceText));
         setBaselineSegments((prev) => {
             if (baselineSourceSegments.length > 0) return baselineSourceSegments.map((seg) => ({...seg}));
@@ -240,6 +289,7 @@ const Editor = () => {
     }, [resultKey, transcriptUnsaved]);
 
     useEffect(() => {
+        const result = resultRef.current;
         if (!result) {
             setSummaryDraft('');
             setSummaryUnsaved(false);
@@ -259,25 +309,20 @@ const Editor = () => {
         setSummarySaveStatus(result.summary_edited ? 'saved' : 'idle');
     }, [summaryResultKey, result?.summary_markdown, result?.summary_edited, summaryUnsaved]);
 
+    // A keystroke changes this page's own state and nothing else. Diffing every
+    // segment and pushing the whole result into the provider (which re-renders
+    // the entire app tree) happens once the typing pauses, in the sync effect
+    // below, together with the save.
     const applyTranscriptEdit = useCallback((nextSegments, nextText) => {
-        if (!result) return;
-        const nextEditRecords = buildTranscriptEditRecords(baselineSegments, nextSegments, result);
-        const updated = {
-            ...result,
-            segments: nextSegments,
-            transcript_text: nextText,
-            transcript_edit_records: nextEditRecords,
-            transcript_edit_record_count: nextEditRecords.length,
-            transcript_edited: true,
-            transcript_edited_at: new Date().toISOString(),
-        };
+        const current = resultRef.current;
+        if (!current) return;
+        editTargetRef.current = resultIdentity(current);
         setEditedSegments(nextSegments);
         setEditedTranscript(nextText);
         setTranscriptDirty(true);
         setTranscriptUnsaved(true);
-        setTranscriptSaveStatus(result.task_id ? 'saving' : 'failed');
-        setLastResult(updated);
-    }, [baselineSegments, result, setLastResult]);
+        setTranscriptSaveStatus(current.task_id ? 'saving' : 'failed');
+    }, []);
 
     const handleSegmentTextChange = (index, text) => {
         const nextSegments = editedSegments.map((seg, i) => i === index ? {...seg, text} : seg);
@@ -289,6 +334,7 @@ const Editor = () => {
     };
 
     const handleSummaryChange = useCallback((text) => {
+        const result = resultRef.current;
         setSummaryDraft(text);
         setSummaryUnsaved(true);
         setSummarySaveStatus(result?.task_id ? 'saving' : 'local');
@@ -302,7 +348,7 @@ const Editor = () => {
             summary_edited: true,
             summary_edited_at: new Date().toISOString(),
         });
-    }, [result, setLastResult]);
+    }, [setLastResult]);
 
     const summaryMarkdownForEditor = summaryUnsaved
         ? summaryDraft
@@ -326,6 +372,9 @@ const Editor = () => {
 
     useEffect(() => {
         let cancelled = false;
+        const result = resultRef.current;
+        const matchedLocalSourceFile = matchedLocalSourceFileRef.current;
+        const lang = langRef.current;
         replaceMediaUrl('');
         setMediaError('');
         setMediaLoading(false);
@@ -423,25 +472,18 @@ const Editor = () => {
             return () => { cancelled = true; };
         }
         return () => { cancelled = true; };
-    }, [mediaSourceKey, resultJobOptions, replaceMediaUrl]);
+    }, [mediaSourceKey, resultJobOptions, replaceMediaUrl, loadMediaFile, fetchJobArtifactFile, fetchJobSourceFile]);
 
     const segments = editedSegments;
     const transcript = editedTranscript || result?.transcript_text || '';
+    const resultEditRecords = result?.transcript_edit_records;
     const editRecords = useMemo(
-        () => buildTranscriptEditRecords(baselineSegments, segments, result),
-        [baselineSegments, segments, result?.transcript_edit_records]
+        () => buildTranscriptEditRecords(baselineSegments, syncedSegments, {transcript_edit_records: resultEditRecords}),
+        [baselineSegments, syncedSegments, resultEditRecords]
     );
     const visibleEditRecords = useMemo(
-        () => editRecords.filter((record) => {
-            const before = String(record?.before || '').trim();
-            const after = String(record?.after || '').trim();
-            if (!before && !after) return false;
-            if (before === after) return false;
-            const current = segments[record?.index];
-            if (!current) return false;
-            return String(current.text || '').trim() === after;
-        }),
-        [editRecords, segments],
+        () => filterVisibleEditRecords(editRecords, syncedSegments),
+        [editRecords, syncedSegments],
     );
     const summary = summaryMarkdownForEditor;
     const hasEditableSummary = !!result && (
@@ -603,11 +645,17 @@ const Editor = () => {
         if (node) node.scrollIntoView({block:'center', behavior:'smooth'});
     }, [activeSegmentIndex, followPlayback, mediaPlaying]);
 
+    // Each textarea sizes itself when it mounts (stable ref callback, so React
+    // does not re-run it on every render) and in its own onChange. Measuring
+    // every segment on every keystroke was the editor's per-key cost. A result
+    // swap can replace text under a mounted textarea without an onChange, so
+    // all of them are measured once more when the result or the view changes.
+    const mountSegmentTextarea = useCallback((node) => { if (node) autoSizeTextarea(node); }, []);
     useEffect(() => {
         const root = transcriptScrollRef.current;
         if (!root) return;
         root.querySelectorAll('textarea[data-transcript-segment="true"]').forEach(autoSizeTextarea);
-    }, [segments]);
+    }, [resultKey, visibleTranscriptView]);
 
     useEffect(() => {
         const persistBeforeBackground = () => {
@@ -628,15 +676,37 @@ const Editor = () => {
         mediaObjectUrlRef.current = '';
     }, []);
 
+    // After 800ms without a keystroke: diff the segments against the baseline,
+    // hand the edited result to the provider, and save it. One timer for both,
+    // so the app tree re-renders once per pause instead of once per key.
     useEffect(() => {
-        if (!result?.task_id || !transcriptUnsaved) return;
+        if (!transcriptUnsaved) return;
         const seq = ++transcriptSaveSeqRef.current;
-        setTranscriptSaveStatus('saving');
         const timer = setTimeout(() => {
-            saveTranscriptEdit(result.task_id, {
+            const current = resultRef.current;
+            // The page moved on to another result while this edit waited.
+            if (!current || resultIdentity(current) !== editTargetRef.current) return;
+            const nextEditRecords = buildTranscriptEditRecords(baselineSegments, segments, current);
+            const updated = {
+                ...current,
+                segments,
+                transcript_text: transcript,
+                transcript_edit_records: nextEditRecords,
+                transcript_edit_record_count: nextEditRecords.length,
+                transcript_edited: true,
+                transcript_edited_at: new Date().toISOString(),
+            };
+            setSyncedSegments(segments);
+            setLastResult(updated);
+            if (!current.task_id) {
+                setTranscriptSaveStatus('failed');
+                return;
+            }
+            setTranscriptSaveStatus('saving');
+            saveTranscriptEdit(current.task_id, {
                 transcript_text: transcript,
                 segments,
-                edit_records: visibleEditRecords,
+                edit_records: filterVisibleEditRecords(nextEditRecords, segments),
             }, resultJobOptions)
                 .then((data) => {
                     if (seq !== transcriptSaveSeqRef.current) return;
@@ -645,7 +715,7 @@ const Editor = () => {
                     setTranscriptSaveStatus('saved');
                     if (data?.result) {
                         setLastResult((prev) => (
-                            prev?.task_id === result.task_id
+                            prev?.task_id === current.task_id
                                 ? {...prev, ...data.result}
                                 : prev
                         ));
@@ -657,7 +727,7 @@ const Editor = () => {
                 });
         }, 800);
         return () => clearTimeout(timer);
-    }, [result?.task_id, transcriptUnsaved, transcript, segments, visibleEditRecords, resultJobOptions]);
+    }, [transcriptUnsaved, transcript, segments, baselineSegments, resultJobOptions, saveTranscriptEdit, setLastResult]);
 
     useEffect(() => {
         if (!summaryUnsaved) return;
@@ -689,7 +759,7 @@ const Editor = () => {
                 });
         }, 800);
         return () => clearTimeout(timer);
-    }, [result?.task_id, summaryUnsaved, summaryDraft, resultJobOptions]);
+    }, [result?.task_id, summaryUnsaved, summaryDraft, resultJobOptions, saveSummaryEdit, setLastResult]);
 
     const seekToSegment = (seg) => {
         if (seg?.start == null) return;
@@ -703,7 +773,14 @@ const Editor = () => {
         else media.pause();
     };
 
-    const showToast = (msg, ok=true) => { setToast({msg,ok}); setTimeout(()=>setToast(null), 3000); };
+    const showToast = useCallback((msg, ok=true) => {
+        setToast({msg, ok});
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => {
+            toastTimerRef.current = null;
+            setToast(null);
+        }, 3000);
+    }, []);
     const buildAiOptions = (settings) => ({
         aiProvider: settings.aiProvider||'deepseek',
         aiModel: settings.aiModel||null,
@@ -875,7 +952,11 @@ const Editor = () => {
             addToHistory(resultToHistoryEntry(resultData, {taskId, name:file.name, requestedNoteMode: settings.noteMode||'auto'}));
             if(larkUrl) addLarkExport({url:larkUrl, title: resultData.lark_doc_title || fileNameStem(file.name), timestamp:Date.now()});
             setCurrentJob({fileName:file.name, stage:'done', progress:100});
-            setTimeout(() => setCurrentJob(null), 3000);
+            if (doneJobTimerRef.current) clearTimeout(doneJobTimerRef.current);
+            doneJobTimerRef.current = setTimeout(() => {
+                doneJobTimerRef.current = null;
+                setCurrentJob(null);
+            }, 3000);
             showToast(t('edit.retranscribeDone'));
         } catch(err) {
             setCurrentJob(null);
@@ -1440,7 +1521,7 @@ const Editor = () => {
                                         <textarea
                                             data-transcript-segment="true"
                                             value={seg.text || ''}
-                                            ref={autoSizeTextarea}
+                                            ref={mountSegmentTextarea}
                                                         onChange={(e)=>{ autoSizeTextarea(e.target); handleSegmentTextChange(i, e.target.value); }}
                                                                                                     onFocus={()=>setFollowPlayback(false)}
                                             rows={1}
@@ -1687,7 +1768,5 @@ const Editor = () => {
             </div>
         );
 };
-
-/* ═══════════════ Admin ═══════════════ */
 
 export default Editor;

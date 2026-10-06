@@ -55,11 +55,37 @@ export const renderTableHtml = (headerCells, bodyRows, renderInline) => {
     </div>`;
 };
 
+// Every character that can close an attribute or a tag. The note is model
+// output rendered with dangerouslySetInnerHTML, so an alt text like
+// `a" onerror="alert(1)` must stay text.
+export const escapeHtml = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+// A URL the note may point an <img> or <a> at: http(s), a relative path, or an
+// inline image. Anything else (javascript:, data:text/html, vbscript:, …)
+// comes back empty and the caller drops the element.
+export const safeUrl = (value) => {
+    const url = String(value ?? '').trim();
+    if(!url) return '';
+    // Control characters and whitespace inside a scheme are how `java\nscript:`
+    // slips past a prefix check.
+    if(Array.from(url).some((ch) => { const code = ch.charCodeAt(0); return code <= 0x1f || code === 0x7f; })) return '';
+    if(/^https?:\/\//i.test(url)) return url;
+    if(/^data:image\/(?:png|jpe?g|gif|webp|svg\+xml|bmp|avif);/i.test(url)) return url;
+    if(/^[a-z][a-z0-9+.-]*:/i.test(url)) return '';
+    if(url.startsWith('//')) return '';
+    return url;
+};
+
 export const simpleMd = (md, options={}) => {
     if(!md) return '';
     const renderImages = options.renderImages !== false;
     const renderManualListMarkers = options.renderManualListMarkers !== false;
-    const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    const esc = escapeHtml;
     const renderInline = (s) => esc(s)
         .replace(/`([^`]+)`/g,'<code class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[0.92em]">$1</code>')
         .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
@@ -180,7 +206,11 @@ export const simpleMd = (md, options={}) => {
                 continue;
             }
             const alt = imageMatch[1] || '';
-            const src = imageMatch[2] || '';
+            const src = safeUrl(imageMatch[2]);
+            if(!src){
+                i += 1;
+                continue;
+            }
             html += `<figure class="my-3"><img src="${esc(src)}" alt="${esc(alt)}" class="rounded-lg max-w-full" loading="lazy"/><figcaption class="text-xs text-on-surface-variant mt-1">${esc(alt)}</figcaption></figure>`;
             i += 1;
             continue;

@@ -127,7 +127,7 @@ const NoteEvidenceStrip = ({result, lang = 'zh', onSeek}) => {
                                     key={frame?.filename || frame?.url}
                                     type="button"
                                     onClick={() => onSeek?.(Number(frame?.timestamp_seconds) || 0)}
-                                    title={`${clock(frame?.timestamp_seconds)}　${used ? (zh ? '正文引用了' : 'cited') : (zh ? '没有引用' : 'not cited')}`}
+                                    title={`${clock(frame?.timestamp_seconds)}\u3000${used ? (zh ? '正文引用了' : 'cited') : (zh ? '没有引用' : 'not cited')}`}
                                     className={`group relative overflow-hidden rounded-[10px] border transition ${
                                         used
                                             ? 'border-primary/60 opacity-100'

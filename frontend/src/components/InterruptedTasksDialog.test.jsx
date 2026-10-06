@@ -106,4 +106,41 @@ describe('InterruptedTasksDialog', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(screen.queryByRole('dialog')).toBeNull();
     });
+
+    it('offers only "got it" when nothing can be re-run, and records it as seen without retrying', async () => {
+        interrupted = [moved];
+        render(<InterruptedTasksDialog/>);
+
+        expect(await screen.findByText('FluentFlow 服务重启过，1 个任务被中断了')).toBeTruthy();
+        expect(screen.queryByRole('button', {name: /全部重新处理/})).toBeNull();
+        expect(screen.queryByRole('button', {name: '稍后再说'})).toBeNull();
+
+        fireEvent.click(screen.getByRole('button', {name: '知道了'}));
+
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+        expect(calls).toEqual([['ack', ['c']]]);
+    });
+
+    it('notices a restart that happened while the page was open, when the window comes back into focus', async () => {
+        interrupted = [];
+        render(<InterruptedTasksDialog/>);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(screen.queryByRole('dialog')).toBeNull();
+
+        interrupted = [halfway];
+        fireEvent(window, new Event('focus'));
+
+        expect(await screen.findByRole('dialog')).toBeTruthy();
+        expect(screen.getByText('第一讲')).toBeTruthy();
+    });
+
+    it('does not reopen for the same tasks after the person closed it', async () => {
+        render(<InterruptedTasksDialog/>);
+        fireEvent.click(await screen.findByRole('button', {name: '稍后再说'}));
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+        fireEvent(window, new Event('focus'));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
 });

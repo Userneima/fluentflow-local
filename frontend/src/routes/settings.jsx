@@ -19,6 +19,7 @@ import {
 } from '../components/settingsRows.jsx';
 import {LARK_EXPORT_ROUTE_OPENAPI} from '../app/shared.jsx';
 import {useSettingsPageState} from './settings-state.js';
+import {noteWriterSentence, resolveNoteWriter} from '../lib/noteWriter.js';
 
 // The settings page.
 //
@@ -31,7 +32,11 @@ import {useSettingsPageState} from './settings-state.js';
 // turn off, not a fixed fact about the app.
 const Settings = () => {
     const state = useSettingsPageState();
-    const {lang, runtimeConfig, diarizationStatus, aiProvider, larkExportRoute} = state;
+    const {lang, runtimeConfig, diarizationStatus, aiProvider, larkExportRoute, credentialStatus, settings} = state;
+    // The same sentence the start page shows, from the same rule, so the two
+    // pages never disagree about whose model writes the note.
+    const noteWriter = resolveNoteWriter({runtimeConfig, credentialStatus, settings});
+    const writerSentence = credentialStatus ? noteWriterSentence(noteWriter, lang) : '';
     // Off means the pipeline writes the note when asked, so its note settings
     // are real again. On means that stage never runs and the controls that only
     // steer it would be wired to nothing.
@@ -42,9 +47,9 @@ const Settings = () => {
             <Section
                 id="notes"
                 title={lang === 'zh' ? '笔记' : 'Notes'}
-                description={lang === 'zh'
+                description={`${lang === 'zh'
                     ? '填一个你自己的模型 API Key，处理完就会自动写笔记。转录不需要 Key。'
-                    : 'Add an API key from your own model account and every job ends with a note. Transcription needs no key.'}
+                    : 'Add an API key from your own model account and every job ends with a note. Transcription needs no key.'}${writerSentence ? ` ${writerSentence}` : ''}`}
             >
                 <div className="divide-y divide-[#ece8e8] dark:divide-white/[0.1]">
                     <TextModelKeyRows

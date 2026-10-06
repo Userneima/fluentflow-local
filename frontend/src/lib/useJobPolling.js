@@ -2,6 +2,8 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 import {useApi, useI18n} from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import {markBackendJob} from './taskState.js';
+import {friendlyTaskError} from './format.js';
+import {isBackendUnreachableError} from './backendHealth.js';
 
 // Shared job-list fetch + polling for the /tasks and /agent record pages.
 //
@@ -21,7 +23,7 @@ const FULL_REFRESH_MS = 120000;
 
 export function useJobPolling({hasLiveJobs, refreshFailedZh, refreshFailedEn}) {
     const {lang} = useI18n();
-    const {tasks: jobs, ingestJobs} = useApp();
+    const {tasks: jobs, ingestJobs, reportBackendError} = useApp();
     const {getJobs} = useApi();
 
     const [loading, setLoading] = useState(() => jobs.length === 0);
@@ -43,6 +45,7 @@ export function useJobPolling({hasLiveJobs, refreshFailedZh, refreshFailedEn}) {
             || Date.now() - lastFullRef.current > FULL_REFRESH_MS;
         let fetchedJobs = [];
         let failed = false;
+        let failure = null;
         try {
             const fetched = await getJobs({
                 sttProvider: 'local',
@@ -56,15 +59,25 @@ export function useJobPolling({hasLiveJobs, refreshFailedZh, refreshFailedEn}) {
                     cursorRef.current = stamp;
                 }
             });
-        } catch (_) {
+        } catch (err) {
             failed = true;
+            failure = err;
         }
         // Push the batch into AppProvider's single list; reconcile there applies
         // owner scoping, tombstones, cancelled pins, and freshness.
         if (fetchedJobs.length) ingestJobs(fetchedJobs);
-        setError(failed ? (lang === 'zh' ? refreshFailedZh : refreshFailedEn) : null);
+        if (failed) {
+            // The cause, not just the fact: a service that is gone reads as
+            // "reopen FluentFlow Local", anything else as the page's own wording.
+            reportBackendError?.(failure);
+            setError(isBackendUnreachableError(failure)
+                ? friendlyTaskError(failure?.message || 'Failed to fetch', lang)
+                : (lang === 'zh' ? refreshFailedZh : refreshFailedEn));
+        } else {
+            setError(null);
+        }
         setLoading(false);
-    }, [getJobs, lang, ingestJobs, refreshFailedZh, refreshFailedEn]);
+    }, [getJobs, lang, ingestJobs, reportBackendError, refreshFailedZh, refreshFailedEn]);
 
     const loadJobsRef = useRef(loadJobs);
     useEffect(() => { loadJobsRef.current = loadJobs; }, [loadJobs]);

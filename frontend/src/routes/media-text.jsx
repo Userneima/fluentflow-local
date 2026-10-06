@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import {Link, useNavigate, useSearchParams} from 'react-router-dom';
 import {XCircle} from 'lucide-react';
 import {
@@ -32,6 +32,7 @@ import {
     queueUploadItemsFromQueuedResponse,
 } from '../lib/queueUpload.js';
 import SvgIcon from '../components/SvgIcon.jsx';
+import {noteWriterBatchClause, noteWriterSentence, resolveNoteWriter} from '../lib/noteWriter.js';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
 const transcriptExts = /\.(srt|vtt|txt|md)$/i;
@@ -56,13 +57,14 @@ const MediaText = () => {
         runtimeConfig,
         setPendingUploadAbort,
         abortPendingUpload,
+        backendDown,
+        reportBackendError,
     } = useApp();
     const {
         enqueueProcessFiles,
         createVideoSourceJob,
         summarizeTranscriptFile,
         cancelJob,
-        checkHealth,
         chooseLocalMedia,
         chooseLocalFolder,
         processLocalFolder,
@@ -88,19 +90,33 @@ const MediaText = () => {
     const subtitleInputRef = useRef(null);
     const abortRef = useRef(null);
 
-    useEffect(() => { checkHealth(); }, []);
-    // A fresh install has no model key, and nothing else on this page says so:
-    // the first job would finish with a transcript and no note, and the person
-    // would only then learn there was a setting to fill in. Said once, here,
-    // before they spend a job finding out.
-    const [noNoteKey, setNoNoteKey] = useState(false);
+    // Who will write the note for the next job, from the same rule the backend
+    // uses (lib/noteWriter.js). A fresh install has no model key, and nothing
+    // else on this page says so: the first job would finish with a transcript
+    // and no note, and the person would only then learn there was a setting to
+    // fill in. Said once, here, before they spend a job finding out. The same
+    // answer goes into the batch confirmations below, so the three never
+    // disagree about whose model is doing the writing.
+    const [credentialStatus, setCredentialStatus] = useState(null);
     useEffect(() => {
-        getCredentialsStatus?.().then((status) => {
-            if (!status || status.visual_note_available) return;
-            const textKeys = ['deepseek', 'openai', 'dashscope', 'qwen'];
-            setNoNoteKey(!textKeys.some((key) => status[`${key}_api_key_configured`]));
-        }).catch(() => {});
-    }, []);
+        let active = true;
+        getCredentialsStatus?.()
+            .then((status) => { if (active && status) setCredentialStatus(status); })
+            .catch(() => {});
+        return () => { active = false; };
+    }, [getCredentialsStatus]);
+    const noteWriter = useMemo(
+        () => resolveNoteWriter({runtimeConfig, credentialStatus, settings: loadSettings()}),
+        // loadSettings reads localStorage; the stored settings only change on the
+        // settings page, which is a different route.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [runtimeConfig, credentialStatus],
+    );
+    const noNoteKey = credentialStatus !== null && noteWriter.kind === 'none';
+    // The "done" card clears itself after a moment; the timer must not outlive
+    // the page, and a second result must not be cleared by the first one's timer.
+    const settleTimerRef = useRef(null);
+    useEffect(() => () => { if (settleTimerRef.current) clearTimeout(settleTimerRef.current); }, []);
     useEffect(() => {
         if (mode === 'subtitle') setSourceMode('upload');
     }, [mode]);
@@ -132,7 +148,11 @@ const MediaText = () => {
         }));
         const larkUrl = result?.lark_response?.url || null;
         if (larkUrl) addLarkExport({url: larkUrl, title: result.lark_doc_title || fileNameStem(displayName || fileName), timestamp: Date.now()});
-        setTimeout(() => setCurrentJob((prev) => prev?.taskId === taskId ? null : prev), 3000);
+        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = setTimeout(() => {
+            settleTimerRef.current = null;
+            setCurrentJob((prev) => prev?.taskId === taskId ? null : prev);
+        }, 3000);
     };
 
     const startMediaFiles = async (files) => {
@@ -140,6 +160,15 @@ const MediaText = () => {
         if (selectedFiles.length === 0) return;
         if (!selectedFiles.every((file) => mediaExts.test(file.name))) {
             setUploadError(t('dash.fileError'));
+            return;
+        }
+        // Same limit and same sentence as the server's refusal, said before
+        // the bytes are sent.
+        const maxQueueFiles = Number(runtimeConfig?.limits?.max_queue_files) || 0;
+        if (maxQueueFiles > 0 && selectedFiles.length > maxQueueFiles) {
+            setUploadError(lang === 'zh'
+                ? `一次最多提交 ${maxQueueFiles} 个文件，这次选了 ${selectedFiles.length} 个。请分成几批提交。`
+                : `At most ${maxQueueFiles} files per batch; ${selectedFiles.length} were chosen. Split them into batches.`);
             return;
         }
         setUploadError(null);
@@ -217,6 +246,7 @@ const MediaText = () => {
                 navigate('/agent', {replace: true});
                 return;
             }
+            reportBackendError?.(err);
             const submitError = err?.status
                 ? friendlyTaskError(err.message || 'Queue failed.', lang)
                 : (lang === 'zh'
@@ -250,13 +280,15 @@ const MediaText = () => {
     // the picker and by a drop whose file was found on disk, because from here on
     // the two are the same thing — a path.
     const queueLocalPaths = async (paths) => {
-        // Every task queued here spends one call of the local Claude subscription
-        // automatically. One file is the ordinary flow; thirty at once is a
-        // different order of magnitude of someone's allowance, so it is confirmed.
+        // Every task queued here spends one call of whichever model writes the
+        // note. One file is the ordinary flow; thirty at once is a different
+        // order of magnitude of someone's allowance, so it is confirmed, and the
+        // confirmation names the writer.
         if (paths.length > 1) {
+            const clause = noteWriterBatchClause(noteWriter, lang);
             const confirmText = lang === 'zh'
-                ? `选了 ${paths.length} 个文件。每个都会自动去气口、转写，并用一次 Claude 额度写笔记。继续吗？`
-                : `${paths.length} files selected. Each one is cut, transcribed, and gets a note written with one call of your Claude allowance. Continue?`;
+                ? `选了 ${paths.length} 个文件。每个都会自动去气口、转写${clause}。继续吗？`
+                : `${paths.length} files selected. Each one is cut and transcribed${clause}. Continue?`;
             if (!window.confirm(confirmText)) return null;
         }
         const settings = loadSettings();
@@ -290,7 +322,8 @@ const MediaText = () => {
             const queued = await queueLocalPaths(located.map((hit) => hit.path));
             if (queued) navigate('/agent');
         } catch (error) {
-            setUploadError(error?.message || (lang === 'zh' ? '处理失败' : 'Could not start processing'));
+            reportBackendError?.(error);
+            setUploadError(friendlyTaskError(error?.message || (lang === 'zh' ? '处理失败' : 'Could not start processing'), lang));
         }
     };
 
@@ -309,8 +342,8 @@ const MediaText = () => {
                 return;
             }
             // The system dialog allows multiple selections, and every task queued here
-            // spends one call of the local Claude subscription automatically. One file
-            // is the flow the owner asked for; thirty at once is a different order of
+            // spends one call of whichever model writes the note. One file is the
+            // flow the owner asked for; thirty at once is a different order of
             // magnitude of someone's allowance, so the count is confirmed first.
             setDroppedWithoutPath(0);
             const queued = await queueLocalPaths(usable.map((item) => item.path));
@@ -326,7 +359,8 @@ const MediaText = () => {
             }
             navigate('/agent');
         } catch (error) {
-            setUploadError(error?.message || (lang === 'zh' ? '选择文件失败' : 'Could not choose a file'));
+            reportBackendError?.(error);
+            setUploadError(friendlyTaskError(error?.message || (lang === 'zh' ? '选择文件失败' : 'Could not choose a file'), lang));
         } finally {
             setChoosing(false);
         }
@@ -338,7 +372,7 @@ const MediaText = () => {
     // picker cannot hand over a folder at all.
     //
     // The folder is chosen and its contents reported in one call, because the
-    // count is what the decision is about — a folder is however many Claude calls
+    // count is what the decision is about — a folder is however many model calls
     // it has recordings in it, and that has to be on screen before the button,
     // not discovered afterwards.
     const handleChooseFolder = async () => {
@@ -378,9 +412,10 @@ const MediaText = () => {
                     : `at most ${chosen.limit} at a time, so only the first ${count} are taken`);
             }
             const tail = skipped.length ? `\n（${skipped.join('；')}）` : '';
+            const clause = noteWriterBatchClause(noteWriter, lang);
             const confirmText = lang === 'zh'
-                ? `要处理这个文件夹里的 ${count} 个录像吗？每个都会自动去气口、转写，并用一次 Claude 额度写笔记。${tail}`
-                : `Process ${count} recordings in this folder? Each is cut, transcribed, and gets a note written with one call of your Claude allowance.${tail}`;
+                ? `要处理这个文件夹里的 ${count} 个录像吗？每个都会自动去气口、转写${clause}。${tail}`
+                : `Process ${count} recordings in this folder? Each is cut and transcribed${clause}.${tail}`;
             if (!window.confirm(confirmText)) return;
             const settings = loadSettings();
             setDroppedWithoutPath(0);
@@ -393,7 +428,8 @@ const MediaText = () => {
             });
             navigate('/agent');
         } catch (error) {
-            setUploadError(error?.message || (lang === 'zh' ? '选择文件夹失败' : 'Could not choose a folder'));
+            reportBackendError?.(error);
+            setUploadError(friendlyTaskError(error?.message || (lang === 'zh' ? '选择文件夹失败' : 'Could not choose a folder'), lang));
         } finally {
             setChoosing(false);
         }
@@ -450,7 +486,8 @@ const MediaText = () => {
                 return;
             }
         } catch (err) {
-            setUploadError(err.message || 'Video link fetch failed.');
+            reportBackendError?.(err);
+            setUploadError(friendlyTaskError(err?.message || 'Video link fetch failed.', lang));
         }
         if (abortRef.current === ac) abortRef.current = null;
         setSubmitting(false);
@@ -495,7 +532,8 @@ const MediaText = () => {
             navigate('/editor');
         } catch (err) {
             if (err.name !== 'AbortError') {
-                setUploadError(err.message || 'Summary generation failed.');
+                reportBackendError?.(err);
+                setUploadError(friendlyTaskError(err?.message || 'Summary generation failed.', lang));
                 addToHistory({id: Date.now(), taskId, name: file.name, timestamp: Date.now(), durationMin: 0, status: 'failed'});
             }
             setCurrentJob(null);
@@ -552,9 +590,7 @@ const MediaText = () => {
 
                 {noNoteKey && (
                     <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-[#ecd9a8] bg-[#fff8e6] px-4 py-3 text-sm text-[#5c4a1a] dark:border-[#6b5a2a] dark:bg-[#2a2415] dark:text-[#f0dfb0]">
-                        <span>{lang === 'zh'
-                            ? '还没有填写模型 Key。现在处理只会得到转录稿和字幕，没有笔记。'
-                            : 'No model key yet. Jobs will produce a transcript and subtitles, but no note.'}</span>
+                        <span>{noteWriterSentence(noteWriter, lang)}</span>
                         <Link to="/settings" className="shrink-0 font-extrabold underline">{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>
                     </div>
                 )}
@@ -629,7 +665,7 @@ const MediaText = () => {
                                     <button
                                         type="button"
                                         onClick={handleChooseFromComputer}
-                                        disabled={submitting || choosing}
+                                        disabled={submitting || choosing || backendDown}
                                         className="flex min-h-[180px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
                                     >
                                         <SvgIcon name={choosing ? 'sync' : 'upload-file'} className={`mb-3 size-8 text-[#111111] dark:text-white ${choosing ? 'animate-spin' : ''}`}/>
@@ -661,7 +697,7 @@ const MediaText = () => {
                                     <button
                                         type="button"
                                         onClick={handleChooseFolder}
-                                        disabled={submitting || choosing}
+                                        disabled={submitting || choosing || backendDown}
                                         className="mt-3 inline-flex h-12 w-full items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] transition hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]"
                                     >
                                         <SvgIcon name="folder" className="size-4"/>
@@ -675,7 +711,8 @@ const MediaText = () => {
                             <button
                                 type="button"
                                 onClick={() => subtitleInputRef.current?.click()}
-                                className="flex min-h-[220px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
+                                disabled={backendDown}
+                                className="flex min-h-[220px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
                             >
                                 <SvgIcon name="subtitles" className="mb-3 size-8 text-[#111111] dark:text-white"/>
                                 <span className="text-lg font-extrabold">{lang === 'zh' ? '拖放或选择字幕 / 文本文件' : 'Drop or choose subtitle files'}</span>
@@ -685,13 +722,13 @@ const MediaText = () => {
 
                         <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-end">
                             {mode === 'subtitle' && (
-                                <button type="button" onClick={() => subtitleInputRef.current?.click()} disabled={submitting} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
+                                <button type="button" onClick={() => subtitleInputRef.current?.click()} disabled={submitting || backendDown} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
                                     <SvgIcon name="subtitles" className="size-4"/>
                                     {lang === 'zh' ? '选择字幕文件' : 'Choose subtitle file'}
                                 </button>
                             )}
                             {mode === 'media' && sourceMode === 'link' && (
-                                <button type="button" onClick={handleVideoLinkSubmit} disabled={submitting} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-7 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
+                                <button type="button" onClick={handleVideoLinkSubmit} disabled={submitting || backendDown} data-testid="submit-video-link" className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-7 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
                                     {submitting ? <SvgIcon name="sync" className="size-4 animate-spin"/> : <SvgIcon name="arrow-right" className="size-4"/>}
                                     {lang === 'zh' ? '开始生成笔记' : 'Start'}
                                 </button>

@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {API_BASE, apiFetch} from './apiConfig.js';
 import {AppCtx} from './AppContext.jsx';
 import {localExecutionHeaders} from '../lib/localExecution.js';
@@ -9,7 +9,6 @@ import {
 } from '../lib/settingsModel.js';
 import {defaultRuntimeConfig, normalizeRuntimeConfig} from '../lib/sttPolicy.js';
 import {
-    accountJobsCacheKey,
     entryToJob,
     jobToCurrentJob,
     jobToHistoryEntry,
@@ -19,9 +18,17 @@ import {
     writeCachedAccountJobs,
 } from '../lib/jobMappers.js';
 import {normalizeTaskState, TASK_STATE_QUEUED, TASK_STATE_RUNNING} from '../lib/taskState.js';
+import {isBackendUnreachableError} from '../lib/backendHealth.js';
 
 const LOCAL_SCOPE = 'local';
 const taskKey = (job) => String(job?.task_id || job?.result?.task_id || '').trim();
+// How often to knock on a service that has stopped answering. Nothing is
+// polled while it answers: the ordinary job polling notices the next outage.
+const HEALTH_RECHECK_MS = 10000;
+// The task list is written to localStorage as a recovery aid. A hundred jobs
+// serialised on every 5-second poll was a visible stutter; one write a second
+// after the list settles is plenty for a cache nobody reads until the next load.
+const CACHE_WRITE_DEBOUNCE_MS = 1000;
 
 // Local composition deliberately owns no account, guest, or user-switch
 // state. Its stable `local` cache is only a browser recovery aid for the
@@ -35,6 +42,9 @@ export const LocalAppProvider = ({children}) => {
     const [lastResult, setLastResult] = useState(null);
     const [lastSourceFile, setLastSourceFile] = useState(null);
     const [runtimeConfig, setRuntimeConfig] = useState(defaultRuntimeConfig);
+    // null until the first answer; false is the only value that shows the
+    // banner, so an unanswered first check does not flash it on every load.
+    const [backendHealthy, setBackendHealthy] = useState(null);
     const hydratedRef = useRef(false);
     const tombstonesRef = useRef(new Set());
     const cancelledRef = useRef(new Set());
@@ -49,12 +59,32 @@ export const LocalAppProvider = ({children}) => {
         return true;
     };
 
+    // One check, answered true or false. Every page used to call /health and
+    // drop the answer; now the answer lives here and the pages read it.
+    const checkBackendHealth = useCallback(async () => {
+        let healthy = false;
+        try {
+            const response = await apiFetch(`${API_BASE}/health`);
+            healthy = !!response?.ok;
+        } catch (_) {
+            healthy = false;
+        }
+        setBackendHealthy(healthy);
+        return healthy;
+    }, []);
+    // Any fetch that failed at the network layer is evidence the service is
+    // gone; a 4xx/5xx is not, it answered.
+    const reportBackendError = useCallback((error) => {
+        if (isBackendUnreachableError(error)) setBackendHealthy(false);
+    }, []);
+
     useEffect(() => {
         let active = true;
+        checkBackendHealth();
         apiFetch(`${API_BASE}/runtime-config`)
             .then((response) => response.ok ? response.json() : null)
             .then((data) => { if (data && active) setRuntimeConfig(normalizeRuntimeConfig(data)); })
-            .catch(() => {});
+            .catch((error) => { if (active) reportBackendError(error); });
         try {
             const rawSettings = JSON.parse(localStorage.getItem('fluentflow_settings') || '{}');
             if (SENSITIVE_SETTING_KEYS.some((key) => rawSettings[key])) {
@@ -62,7 +92,7 @@ export const LocalAppProvider = ({children}) => {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(sensitivePatchFromSettings(rawSettings)),
-                }).finally(() => localStorage.setItem('fluentflow_settings', JSON.stringify(sanitizeSettings(rawSettings))));
+                }).catch(() => {}).finally(() => localStorage.setItem('fluentflow_settings', JSON.stringify(sanitizeSettings(rawSettings))));
             }
         } catch (_) {}
 
@@ -81,12 +111,35 @@ export const LocalAppProvider = ({children}) => {
                 const running = next.find((job) => [TASK_STATE_RUNNING, TASK_STATE_QUEUED].includes(normalizeTaskState(job)));
                 if (running) setCurrentJob(jobToCurrentJob(running));
             })
-            .catch(() => {});
+            .catch((error) => { if (active) reportBackendError(error); });
         return () => { active = false; };
-    }, []);
+    }, [checkBackendHealth, reportBackendError]);
 
+    // While the service is down, knock every ten seconds so the banner clears
+    // on its own once FluentFlow Local is reopened.
     useEffect(() => {
-        if (hydratedRef.current) writeCachedAccountJobs(LOCAL_SCOPE, tasks);
+        if (backendHealthy !== false) return undefined;
+        const timer = setInterval(() => { checkBackendHealth(); }, HEALTH_RECHECK_MS);
+        return () => clearInterval(timer);
+    }, [backendHealthy, checkBackendHealth]);
+
+    const pendingCacheRef = useRef(null);
+    useEffect(() => {
+        if (!hydratedRef.current) return undefined;
+        pendingCacheRef.current = tasks;
+        const flush = () => {
+            if (pendingCacheRef.current === null) return;
+            writeCachedAccountJobs(LOCAL_SCOPE, pendingCacheRef.current);
+            pendingCacheRef.current = null;
+        };
+        const timer = setTimeout(flush, CACHE_WRITE_DEBOUNCE_MS);
+        // A tab closed inside the debounce window would otherwise lose its
+        // last change; pagehide is the last chance to write it.
+        window.addEventListener('pagehide', flush);
+        return () => {
+            clearTimeout(timer);
+            window.removeEventListener('pagehide', flush);
+        };
     }, [tasks]);
 
     const history = useMemo(() => tasks.filter(jobVisibleInHistory).map(jobToHistoryEntry), [tasks]);
@@ -105,9 +158,19 @@ export const LocalAppProvider = ({children}) => {
         const job = entryToJob(entry);
         if (job) setTasks((current) => reconcileInto(current, {optimistic: [job]}));
     };
-    const ingestJobs = (fetched) => {
-        if (Array.isArray(fetched) && fetched.length) setTasks((current) => reconcileInto(current, {fetched}));
-    };
+    // Stable: the records page lists it as an effect dependency, and a new
+    // identity per render would re-ingest the seeded job every time.
+    const ingestJobs = useCallback((fetched) => {
+        if (Array.isArray(fetched) && fetched.length) {
+            setTasks((current) => reconcileTaskList({
+                cached: current,
+                tombstones: tombstonesRef.current,
+                cancelled: cancelledRef.current,
+                accountId: LOCAL_SCOPE,
+                fetched,
+            }));
+        }
+    }, []);
     const removeFromHistory = (taskId) => {
         if (!taskId) return;
         tombstonesRef.current.add(String(taskId));
@@ -130,5 +193,5 @@ export const LocalAppProvider = ({children}) => {
         notesGenerated: history.filter((item) => item.status === 'completed').length,
     };
 
-    return <AppCtx.Provider value={{tasks, history, ingestJobs, markCancelled, revertCancelled, restoreTask, addToHistory, removeFromHistory, currentJob, setCurrentJob, lastResult, setLastResult, lastSourceFile, setLastSourceFile, stats, larkExports, addLarkExport, runtimeConfig, setPendingUploadAbort, abortPendingUpload}}>{children}</AppCtx.Provider>;
+    return <AppCtx.Provider value={{tasks, history, ingestJobs, markCancelled, revertCancelled, restoreTask, addToHistory, removeFromHistory, currentJob, setCurrentJob, lastResult, setLastResult, lastSourceFile, setLastSourceFile, stats, larkExports, addLarkExport, runtimeConfig, setPendingUploadAbort, abortPendingUpload, backendHealthy, backendDown: backendHealthy === false, checkBackendHealth, reportBackendError}}>{children}</AppCtx.Provider>;
 };

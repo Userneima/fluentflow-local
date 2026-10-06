@@ -55,6 +55,6 @@ export const markCachedOnlyJob = (job) => (
 
 export const markBackendJob = (job) => {
     if (!job || typeof job !== 'object') return job;
-    const {__cacheOnly, task_state, taskState, ...backendJob} = job;
+    const {__cacheOnly: _cacheOnly, task_state: _taskState, taskState: _taskStateCamel, ...backendJob} = job;
     return {...backendJob, task_state: normalizeTaskState(backendJob)};
 };

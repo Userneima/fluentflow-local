@@ -54,7 +54,7 @@ export const normalizeAiModel = (provider, model) => {
     if (p === 'qwen') {
         return value || DEFAULT_QWEN_MODEL;
     }
-    return value && value !== 'deepseek-chat' ? value : DEFAULT_DEEPSEEK_MODEL;
+    return value || DEFAULT_DEEPSEEK_MODEL;
 };
 
 export const sanitizeSettings = (settings={}) => {

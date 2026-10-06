@@ -1,5 +1,6 @@
 import {BUILTIN_EXTRA_PROMPT_KEYS, editorPresetKeyOrder} from '../lib/promptPresets.js';
 import SvgIcon from '../components/SvgIcon.jsx';
+import {useDismissable} from '../lib/useDismissable.js';
 
 const builtinPromptValue = ({
     promptKey,
@@ -40,6 +41,9 @@ export default function PromptTemplateDialog({
     quickBulletsEdit,
     handleBuiltinExtraChange,
 }) {
+    // Before the early return: hooks run on every render. The backdrop's own
+    // onClick already closes on an outside click.
+    const dialogRef = useDismissable(open, onClose, {closeOnOutsideClick: false, trapFocus: true});
     if (!open) return null;
 
     const presetRowClass = (active) => [
@@ -94,15 +98,15 @@ export default function PromptTemplateDialog({
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-5 py-8 backdrop-blur-sm animate-[fadeIn_0.16s_ease-out]" role="dialog" aria-modal="true" onClick={onClose}>
-            <div className="flex h-[min(760px,88vh)] w-full max-w-5xl flex-col overflow-hidden rounded-[24px] border border-[#dedada] bg-white shadow-[0_28px_90px_-52px_rgba(17,17,17,.72)] dark:border-white/[0.12] dark:bg-[#1d1f22]" onClick={(e)=>e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-5 py-8 backdrop-blur-sm animate-[fadeIn_0.16s_ease-out]" onClick={onClose}>
+            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="prompt-template-title" className="flex h-[min(760px,88vh)] w-full max-w-5xl flex-col overflow-hidden rounded-[24px] border border-[#dedada] bg-white shadow-[0_28px_90px_-52px_rgba(17,17,17,.72)] dark:border-white/[0.12] dark:bg-[#1d1f22]" onClick={(e)=>e.stopPropagation()}>
                 <div className="flex items-start justify-between gap-4 border-b border-[#ece8e8] px-5 py-4 dark:border-white/[0.10]">
                     <div className="min-w-0">
                         <div className="flex items-center gap-2">
                             <span className="flex size-9 items-center justify-center rounded-[13px] border border-[#dedada] bg-[#fbfbfb] text-[#111111] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white">
                                 <SvgIcon name="auto_fix_high" className="text-lg"/>
                             </span>
-                            <span className="font-headline text-[18px] font-extrabold text-[#111111] dark:text-white">{t('prompt.label')}</span>
+                            <span id="prompt-template-title" className="font-headline text-[18px] font-extrabold text-[#111111] dark:text-white">{t('prompt.label')}</span>
                         </div>
                         <p className="mt-2 text-[13px] font-semibold text-[#676970] dark:text-white/58">{t('prompt.editHint')}</p>
                     </div>

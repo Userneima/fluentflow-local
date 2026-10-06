@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from 'react';
+import {memo, useEffect, useMemo, useRef, useState} from 'react';
 import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {
     AlertCircle,
@@ -19,6 +19,7 @@ import {
     fmtBytes,
     fmtFileSize,
     friendlyTaskError,
+    taskErrorContextForJob,
     isSttProgressUnmeasured,
     jobDisplayTitle,
     jobToHistoryEntry,
@@ -541,7 +542,7 @@ const QueueUploadBanner = ({upload, lang, onCancel}) => {
     );
 };
 
-const AgentTaskCard = ({job, lang, aheadName = '', retryError = '', cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onRetry}) => {
+const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onRetry}) => {
     const taskId = taskIdForJob(job);
     const state = normalizeTaskState(job);
     const live = isLiveTask(job);
@@ -556,7 +557,7 @@ const AgentTaskCard = ({job, lang, aheadName = '', retryError = '', cancellingTa
     const progressUnknown = isSttProgressUnmeasured(current);
     const displayTitle = jobDisplayTitle(job, lang);
     const detail = failed
-        ? friendlyTaskError(job?.error_reason || job?.result?.summary_error || '', lang)
+        ? friendlyTaskError(job?.error_reason || job?.result?.summary_error || '', lang, taskErrorContextForJob(job))
         : completed
             ? (lang === 'zh' ? '处理完成，可以打开结果继续校对、下载或重生笔记。' : 'Done. Open the result to review, download, or regenerate notes.')
             : liveStageDetail(job, lang, aheadName);
@@ -703,6 +704,42 @@ const AgentTaskCard = ({job, lang, aheadName = '', retryError = '', cancellingTa
     );
 };
 
+// What the card shows, as one string. Every 5-second poll rebuilds the list
+// with fresh objects; a card whose row did not change must not render again.
+const cardRenderKey = (job) => {
+    const result = job?.result || {};
+    const debreath = result.debreath || {};
+    const meta = job?.metadata || {};
+    return [
+        taskIdForJob(job),
+        job?.updated_at, job?.created_at, job?.status, job?.task_state, job?.stage, job?.progress,
+        job?.error_reason, job?.source_filename, job?.source_file_size_mb, job?.source_duration_seconds,
+        !!job?.result, result.summary_chars, result.summary_status, result.summary_error, result.summary_skipped,
+        result.summary_written_from, String(result.summary_markdown || '').length,
+        !!result.artifacts?.debreath_media,
+        debreath.status, debreath.delivered, debreath.delivery_error, debreath.used_for_transcription,
+        debreath.already_cut, debreath.not_worth_rendering, debreath.render_verified, debreath.rendered,
+        debreath.plan?.cut_count, debreath.plan?.removed_seconds,
+        meta.display_title, meta.queue_position, meta.queue_total, meta.queue_provisional,
+        meta.queue_wait?.waiting_for, meta.queue_wait?.since,
+        meta.video_source_progress?.message, meta.video_source_progress?.loaded_bytes,
+        job?.task_snapshot?.current_step,
+        job?.sttStatus, job?.stt_status, meta.stt_status,
+    ].join('\u0001');
+};
+// The busy ids are page-wide; a card only cares whether they name it.
+const BUSY_KEYS = ['cancellingTaskId', 'deletingTaskId', 'openingTaskId', 'retryingTaskId', 'downloadingTaskId'];
+const areCardPropsEqual = (prev, next) => {
+    if (prev.lang !== next.lang || prev.aheadName !== next.aheadName || prev.retryError !== next.retryError) return false;
+    const taskId = taskIdForJob(next.job);
+    for (const key of BUSY_KEYS) {
+        if ((prev[key] === taskId) !== (next[key] === taskId)) return false;
+    }
+    // Handlers are stable (see the ref in AgentTasks), so they are not compared.
+    return cardRenderKey(prev.job) === cardRenderKey(next.job);
+};
+const AgentTaskCard = memo(AgentTaskCardView, areCardPropsEqual);
+
 const AgentTasks = () => {
     const {lang} = useI18n();
     // Read the shared task list + mutations from AppProvider; this page no
@@ -764,7 +801,7 @@ const AgentTasks = () => {
 
     useEffect(() => {
         setError(location.state?.queueSubmitError || null);
-    }, [location.state?.queueSubmitError]);
+    }, [location.state?.queueSubmitError, setError]);
 
     useEffect(() => {
         if (location.state?.queueSubmitError || location.state?.queueSubmittedAt) {
@@ -945,6 +982,19 @@ const AgentTasks = () => {
         }
     };
 
+    // The handlers close over the latest page state, so they are new every
+    // render; the cards receive stable wrappers that look them up through a ref,
+    // which is what lets a card skip rendering when its row did not change.
+    const handlersRef = useRef({});
+    handlersRef.current = {cancelLiveJob, deleteTerminalJob, downloadCutFile, openResult, retryTerminalJob};
+    const cardHandlers = useMemo(() => ({
+        onCancel: (job) => handlersRef.current.cancelLiveJob(job),
+        onDelete: (job) => handlersRef.current.deleteTerminalJob(job),
+        onDownloadCut: (job) => handlersRef.current.downloadCutFile(job),
+        onOpenResult: (job) => handlersRef.current.openResult(job),
+        onRetry: (job) => handlersRef.current.retryTerminalJob(job),
+    }), []);
+
     return (
         <main className="ml-[var(--sidebar-offset)] h-dvh flex-1 overflow-y-auto bg-[#f8f7fb] px-6 py-5 text-[#111111] transition-[margin] duration-200 ease-out hide-scrollbar dark:bg-[#101010] dark:text-white/[0.92] lg:px-10">
             <div className="mx-auto max-w-7xl space-y-5">
@@ -1028,12 +1078,8 @@ const AgentTasks = () => {
                             deletingTaskId={deletingTaskId}
                             openingTaskId={openingTaskId}
                             retryingTaskId={retryingTaskId}
-                            onCancel={cancelLiveJob}
-                            onDelete={deleteTerminalJob}
                             downloadingTaskId={downloadingTaskId}
-                            onDownloadCut={downloadCutFile}
-                            onOpenResult={openResult}
-                            onRetry={retryTerminalJob}
+                            {...cardHandlers}
                         />
                     ))}
                 </section>

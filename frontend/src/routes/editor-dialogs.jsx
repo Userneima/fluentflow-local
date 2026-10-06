@@ -3,18 +3,22 @@
 // toggle ({flag && <Dialog .../>}) so state stays in the Editor component.
 import SvgIcon from '../components/SvgIcon.jsx';
 import {fmtTime, useI18n} from '../app/shared.jsx';
+import {useDismissable} from '../lib/useDismissable.js';
+
+const modalOptions = {closeOnOutsideClick: false, trapFocus: true};
 
 export const RegenerateConfirmDialog = ({transcriptTitle, onCancel, onConfirm}) => {
     const {t, lang} = useI18n();
+    const dialogRef = useDismissable(true, onCancel, modalOptions);
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
-            <div className="w-full max-w-lg overflow-hidden rounded-[24px] border border-[#e4e0e0] bg-white shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
+            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="regenerate-confirm-title" className="w-full max-w-lg overflow-hidden rounded-[24px] border border-[#e4e0e0] bg-white shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
                 <div className="flex items-start gap-4 border-b border-[#e4e0e0] px-6 py-5 dark:border-white/[0.12]">
                     <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[14px] bg-[#eef2ff] text-primary dark:bg-white/[0.08] dark:text-white">
                         <SvgIcon name="refresh" className=""/>
                     </div>
                     <div className="min-w-0">
-                        <h2 className="font-headline text-xl font-extrabold text-[#111111] dark:text-white">
+                        <h2 id="regenerate-confirm-title" className="font-headline text-xl font-extrabold text-[#111111] dark:text-white">
                             {t('edit.regenerateConfirmTitle')}
                         </h2>
                         <p className="mt-2 text-sm font-medium leading-relaxed text-[#666] dark:text-white/60">
@@ -50,15 +54,16 @@ export const RegenerateConfirmDialog = ({transcriptTitle, onCancel, onConfirm}) 
 
 export const RetranscribeConfirmDialog = ({canRetranscribe, sourceLabel, sourceName, onCancel, onConfirm}) => {
     const {t} = useI18n();
+    const dialogRef = useDismissable(true, onCancel, modalOptions);
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
-            <div className="w-full max-w-lg overflow-hidden rounded-[24px] border border-[#e4e0e0] bg-white shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
+            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="retranscribe-confirm-title" className="w-full max-w-lg overflow-hidden rounded-[24px] border border-[#e4e0e0] bg-white shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
                 <div className="flex items-start gap-4 border-b border-[#e4e0e0] px-6 py-5 dark:border-white/[0.12]">
                     <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[14px] bg-[#eef2ff] text-primary dark:bg-white/[0.08] dark:text-white">
                         <SvgIcon name="record_voice_over" className=""/>
                     </div>
                     <div className="min-w-0">
-                        <h2 className="font-headline text-xl font-extrabold text-[#111111] dark:text-white">
+                        <h2 id="retranscribe-confirm-title" className="font-headline text-xl font-extrabold text-[#111111] dark:text-white">
                             {canRetranscribe ? t('edit.retranscribeConfirmTitle') : t('edit.retranscribeUnavailableTitle')}
                         </h2>
                         <p className="mt-2 text-sm font-medium leading-relaxed text-[#666] dark:text-white/60">
@@ -94,12 +99,13 @@ export const RetranscribeConfirmDialog = ({canRetranscribe, sourceLabel, sourceN
 
 export const EditRecordsDialog = ({records, onClose, onSeek}) => {
     const {t} = useI18n();
+    const dialogRef = useDismissable(true, onClose, modalOptions);
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
-            <div className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-[24px] border border-[#e4e0e0] bg-white shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
+            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="edit-records-title" className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-[24px] border border-[#e4e0e0] bg-white shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
                 <div className="flex items-start justify-between gap-4 border-b border-[#e4e0e0] px-6 py-5 dark:border-white/[0.12]">
                     <div className="min-w-0">
-                        <h2 className="flex items-center gap-2 font-headline text-xl font-extrabold text-[#111111] dark:text-white">
+                        <h2 id="edit-records-title" className="flex items-center gap-2 font-headline text-xl font-extrabold text-[#111111] dark:text-white">
                             <SvgIcon name="edit_note" className="text-primary"/>
                             {t('edit.editRecordsTitle')}
                             <span className="rounded-full bg-[#eef2ff] px-2 py-0.5 text-xs font-bold text-primary dark:bg-white/[0.08] dark:text-white">{records.length}</span>
