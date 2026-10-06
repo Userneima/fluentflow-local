@@ -36,6 +36,8 @@ hf_endpoint.apply_at_startup()
 
 from backend.core.app_factory import create_app
 from backend.core import claude_code_note, visual_note_channel  # noqa: E402
+from backend.core.event_context import event_metadata  # noqa: E402
+from backend.core.event_logger import log_event  # noqa: E402
 from backend.core.claude_code_note import stop_running_notes
 from backend.core.debreath_job import recover_stranded_renders
 from backend.core.frontend_paths import FRONTEND_LOCAL_DIST_DIR
@@ -176,6 +178,7 @@ async def resume_interrupted_jobs(task_ids: list[str]) -> int:
             count += 1
         if count > RESTART_RESUME_LIMIT:
             logger.info("Startup left %s for the user: restarts cut it off %s times", task_id, count)
+            _log_restart_interruption(job, interruption, outcome="left_for_user", reason="restart_limit", count=count)
             continue
         try:
             retried = await retry_task(
@@ -186,9 +189,11 @@ async def resume_interrupted_jobs(task_ids: list[str]) -> int:
             )
         except HTTPException as exc:
             logger.info("Startup could not re-queue %s: %s", task_id, exc.detail)
+            _log_restart_interruption(job, interruption, outcome="left_for_user", reason=str(exc.detail), count=count)
             continue
-        except Exception:
+        except Exception as exc:
             logger.exception("Startup could not re-queue %s", task_id)
+            _log_restart_interruption(job, interruption, outcome="left_for_user", reason=f"{type(exc).__name__}: {exc}", count=count)
             continue
         new_task_id = str(retried.get("task_id") or "")
         now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -205,8 +210,35 @@ async def resume_interrupted_jobs(task_ids: list[str]) -> int:
                 },
             },
         )
+        _log_restart_interruption(job, interruption, outcome="resumed", resumed_as=new_task_id, count=count)
         resumed += 1
     return resumed
+
+
+def _log_restart_interruption(
+    job: dict, interruption: dict, *, outcome: str, count: int,
+    reason: str | None = None, resumed_as: str | None = None,
+) -> None:
+    """One event per task a restart cut off, and what happened to it.
+
+    Restarts that cut off queued work were the most common failure on record,
+    and until this they showed up only as failed tasks, indistinguishable in the
+    event log from a task that failed on its own.
+    """
+    log_event(
+        task_id=str(job.get("task_id") or ""),
+        event_name="task_interrupted_by_restart",
+        source_type=str(job.get("source_type") or "") or None,
+        stage=str(interruption.get("stage") or job.get("stage") or "") or None,
+        success=outcome == "resumed",
+        error_reason=reason,
+        metadata=event_metadata(
+            outcome=outcome,
+            was_running=bool(interruption.get("started")),
+            restart_count=count,
+            resumed_as=resumed_as,
+        ),
+    )
 
 
 @asynccontextmanager

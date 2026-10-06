@@ -223,5 +223,63 @@ class TestRecordingLanguage(unittest.TestCase):
         self.assertIn("Thank you.", texts)
 
 
+
+class TestModelLoadTiming(unittest.TestCase):
+    """"Model load" is the load, not the load plus the first stretch of decoding.
+
+    It used to be timed around the first transcribe call, which on a recording
+    that is one long run of speech is nearly the whole transcription: recorded
+    as 187 seconds of "model load" on a 21-minute talk.
+    """
+
+    def _run(self, *, already_loaded: bool):
+        import sys
+        import tempfile
+        import time as _time
+        import types
+
+        class Holder:
+            model = "loaded" if already_loaded else None
+            model_path = "mlx-community/whisper-large-v3-mlx" if already_loaded else None
+
+            @classmethod
+            def get_model(cls, path, dtype):
+                if cls.model is None or cls.model_path != path:
+                    _time.sleep(0.2)
+                    cls.model, cls.model_path = "loaded", path
+                return cls.model
+
+        def fake_transcribe(clip, **kwargs):
+            Holder.get_model(kwargs["path_or_hf_repo"], None)
+            _time.sleep(0.3)
+            return {"language": "zh", "segments": [{"start": 0.0, "end": 1.0, "text": "你好"}]}
+
+        fake_mlx = types.SimpleNamespace(transcribe=fake_transcribe)
+        fake_transcribe_module = types.SimpleNamespace(
+            ModelHolder=Holder, mx=types.SimpleNamespace(float16="float16"),
+        )
+        with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file, \
+                mock.patch.dict(sys.modules, {
+                    "mlx_whisper": fake_mlx,
+                    "mlx_whisper.transcribe": fake_transcribe_module,
+                }), \
+                mock.patch.object(local_stt_mlx, "resolve_repo", return_value="mlx-community/whisper-large-v3-mlx"), \
+                mock.patch("faster_whisper.audio.decode_audio", return_value=np.zeros(16000 * 60, dtype=np.float32)), \
+                mock.patch.object(local_stt_mlx, "_speech_runs", return_value=[(0.0, 60.0)]):
+            _segments, _info, stats = local_stt_mlx.transcribe(audio_file.name, language="zh")
+        return stats
+
+    def test_the_load_is_timed_apart_from_decoding(self) -> None:
+        stats = self._run(already_loaded=False)
+
+        self.assertGreaterEqual(stats["model_load_seconds"], 0.15)
+        self.assertLess(stats["model_load_seconds"], 0.3, "decoding is not counted as load")
+        self.assertGreaterEqual(stats["first_run_seconds"], 0.3)
+
+    def test_a_model_already_in_the_process_reads_as_a_cache_hit(self) -> None:
+        stats = self._run(already_loaded=True)
+
+        self.assertEqual(stats["model_load_seconds"], 0.0)
+
 if __name__ == "__main__":
     unittest.main()

@@ -905,3 +905,40 @@ def test_the_local_work_is_reported_done_after_the_frames_and_before_claude(job_
     assert order[0] == "frames"
     assert order.index("hand-off") < order.index("claude")
     assert order.count("hand-off") == 1
+
+
+# ── events: every note leaves a record, written or not ──────────────────────
+
+@pytest.fixture()
+def recorded_events(monkeypatch):
+    events: list[dict] = []
+    monkeypatch.setattr(vn, "log_event", lambda **kw: events.append(kw))
+    return events
+
+
+def test_a_written_note_is_recorded_with_its_local_and_total_time(job_store, tmp_path, recorded_events):
+    _run(tmp_path, "# 笔记\n\n正文，引用 note_0001。", trigger="auto")
+
+    [event] = recorded_events
+    assert event["event_name"] == "visual_note_completed"
+    assert event["success"] is True
+    meta = event["metadata"]
+    assert meta["trigger"] == "auto"
+    assert meta["frames_sent"] >= 1
+    assert meta["frames_seconds"] is not None
+    assert meta["frames_seconds"] <= event["duration_seconds"]
+    assert event["summary_length"] > 0
+
+
+def test_a_note_that_failed_is_recorded_with_the_reason(job_store, tmp_path, recorded_events):
+    def explode(*_a, **_k):
+        raise vn.ClaudeVisionError("这台机器上的 Claude 还没有登录")
+
+    with pytest.raises(Exception):
+        _run(tmp_path, "", writer=explode)
+
+    [event] = recorded_events
+    assert event["event_name"] == "visual_note_failed"
+    assert event["success"] is False
+    assert "登录" in event["error_reason"]
+    assert event["metadata"]["trigger"] == "manual"

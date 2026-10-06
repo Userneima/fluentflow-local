@@ -26,6 +26,7 @@ regions reach the model, each decoded with a clean context.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import platform
 import time
@@ -238,8 +239,28 @@ def transcribe(
     language_seconds: dict[str, float] = {}
     run_languages: list[str | None] = []
     segment_runs: list[int] = []
+    # Load the model on its own clock. Left to the first transcribe call, the
+    # load and that call's decoding were timed together and recorded as "model
+    # load": 187 seconds on a recording that was one long run of speech, which
+    # was almost all decoding. ``transcribe`` asks the same holder for the same
+    # repo and precision, so this is the load it would have done anyway.
+    load_seconds: float | None = None
+    try:
+        # The module, not the package attribute of the same name (the package
+        # exports the ``transcribe`` function). Its own ``mx`` gives the
+        # precision without importing mlx here a second time.
+        transcribe_module = importlib.import_module("mlx_whisper.transcribe")
+        holder = transcribe_module.ModelHolder
+        if holder.model is not None and holder.model_path == repo:
+            load_seconds = 0.0  # already in this process: what "cache hit" reads
+        else:
+            load_started = time.perf_counter()
+            holder.get_model(repo, transcribe_module.mx.float16)
+            load_seconds = round(time.perf_counter() - load_started, 3)
+    except Exception as exc:  # noqa: BLE001 - only the measurement is lost
+        logger.info("MLX lane: could not preload %s separately: %s", repo, exc)
     started_at = time.perf_counter()
-    load_seconds = 0.0
+    first_run_seconds: float | None = None
     done = 0.0
     first_seen = False
 
@@ -256,7 +277,7 @@ def transcribe(
             condition_on_previous_text=False,
         )
         if index == 0:
-            load_seconds = round(time.perf_counter() - started_at, 3)
+            first_run_seconds = round(time.perf_counter() - started_at, 3)
         run_language = language or result.get("language")
         run_languages.append(run_language)
         if run_language:
@@ -313,5 +334,6 @@ def transcribe(
         "speech_seconds": round(voiced, 2),
         "speech_runs": len(runs),
         "model_load_seconds": load_seconds,
+        "first_run_seconds": first_run_seconds,
     }
     return tuple(segments), info, stats

@@ -104,3 +104,21 @@ For normal development, install `requirements-local.txt`, then run `npm run buil
 | `FLUENTFLOW_VERSION` | 覆盖 `VERSION` 文件里的版本号 | 读 `VERSION` |
 | `FLUENTFLOW_GIT_COMMIT` / `FLUENTFLOW_GIT_BRANCH` / `FLUENTFLOW_GIT_DIRTY` | 覆盖从 git 读到的提交、分支、是否有未提交改动 | 读 git |
 | `FLUENTFLOW_BUILD_TIME` | 构建时间 | 当前时间 |
+
+## 事件记录
+
+每个任务的关键步骤写进本机事件库 `fluentflow_events.sqlite` 的 `events` 表（路径见 `backend/core/runtime_paths.py`）。这里只记时间、数量和失败原因，不存转写稿或笔记的正文；任务被保留策略删除后，它的事件仍然留着，所以分析历史用事件库，不用任务库。
+
+下面这些事件回答「时间花在哪」和「为什么没有笔记」：
+
+| 事件 | 什么时候记 | 回答的问题 |
+| --- | --- | --- |
+| `queue_wait_completed` | 任务排在别的任务后面、轮到它时 | 排队等了多久、排在谁后面。`task_completed` 的总时长从提交算起，包含这段等待 |
+| `debreath_completed` / `debreath_failed` | 转写前自动去气口、或手动去气口结束时 | 用时、剪掉多少、阈值是否按素材调整、剪后文件有没有被用来转写；`outcome` 说明没用的原因 |
+| `summary_skipped` | 流水线不写自己的笔记时 | `reason` 区分「用户只要转写稿」和「笔记稍后结合画面来写」 |
+| `visual_note_unavailable` | 自动笔记开着、但结合画面的笔记写不了时 | 为什么写不了（例如 Claude 登录过期），这个任务改用文本模型写笔记 |
+| `visual_note_completed` / `visual_note_failed` | 结合画面的笔记写完或失败时 | 总用时、其中挑截图的本机用时、用了多少张截图、失败原因；`trigger` 区分自动和手动 |
+| `task_interrupted_by_restart` | 服务启动时处理被上一次重启打断的任务 | 哪些任务被打断、有没有自动重新排队 |
+
+`stt_completed` 里的 `model_load_seconds` 只算加载模型本身；Apple 芯片上转写第一段的时间另记在转写日志里。
+

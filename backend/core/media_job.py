@@ -308,6 +308,9 @@ class MediaJobContext:
     # file's timestamps from the start — nothing downstream has to remap anything.
     # No composition root that passes nothing behaves differently in any way.
     media_preprocessor: Any = None
+    # Why the pipeline's own note stage is off: the user asked for a transcript
+    # only, or the note will be written from the frames after the transcript.
+    note_deferred_to_visual_note: bool = False
 
 
 def _finalize_result_storage(ctx: MediaJobContext, result: dict[str, Any]) -> dict[str, Any]:
@@ -881,7 +884,14 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 transcript_length=_text_len(note_transcript_text),
                 stage="summary",
                 success=True,
-                metadata=event_metadata(route="/process", reason="transcript_only_mode"),
+                metadata=event_metadata(
+                    route="/process",
+                    reason=(
+                        "deferred_to_visual_note"
+                        if ctx.note_deferred_to_visual_note
+                        else "transcript_only_mode"
+                    ),
+                ),
             )
             result = result_for_transcript_only(base_result)
             result = _attach_result_artifacts(task_id_value, result)

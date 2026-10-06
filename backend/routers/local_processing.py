@@ -36,7 +36,7 @@ from backend.core.local_entry_guards import (
     local_ai_kwargs,
     run_worker_with_terminal_state,
 )
-from backend.core import local_file_chooser, local_folder_intake, local_intake_flow
+from backend.core import claude_code_note, local_file_chooser, local_folder_intake, local_intake_flow, visual_note_channel
 from backend.core.local_config import resolve_secret
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.core.local_limits_config import (
@@ -328,6 +328,31 @@ def queue_is_busy() -> bool:
     )
 
 
+def _log_visual_note_unavailable(task_id: str, *, source_type: str, source_filename: str) -> None:
+    """The automatic frame note is on but cannot run, so this task gets the text
+    note instead. Recorded because it is invisible otherwise: the task looks
+    like any other text-note task."""
+    channel = visual_note_channel.resolve_channel(resolve_secret(None, "anthropic_api_key"))
+    login_expired = (
+        channel.name == visual_note_channel.CHANNEL_SUBSCRIPTION
+        and claude_code_note.login_state() is False
+    )
+    log_event(
+        task_id=task_id,
+        event_name="visual_note_unavailable",
+        source_type=source_type,
+        source_filename=source_filename,
+        stage="summary",
+        success=False,
+        error_reason=channel.unavailable_reason,
+        metadata=event_metadata(
+            channel=channel.name,
+            reason="login_expired" if login_expired else "channel_unavailable",
+            fallback="text_note",
+        ),
+    )
+
+
 async def wait_for_queue_turn(
     previous: Optional[tuple[Optional[str], asyncio.Event]],
     task_id: str,
@@ -342,11 +367,22 @@ async def wait_for_queue_turn(
     """
     if previous is None:
         return
+    started = time.perf_counter()
     try:
         await _await_predecessor(previous, task_id, client_id)
     except asyncio.CancelledError:
         await _await_predecessor(previous, task_id, client_id)
         raise
+    # A task's total time starts when it is submitted, so without this a long
+    # wait behind other recordings reads as slow processing.
+    log_event(
+        task_id=task_id,
+        event_name="queue_wait_completed",
+        stage="queue",
+        duration_seconds=round(time.perf_counter() - started, 3),
+        success=True,
+        metadata=event_metadata(waited_behind=previous[0]),
+    )
 
 
 async def _write_note_after_transcript(
@@ -500,6 +536,10 @@ def _local_media_job_context(
     """Build the pipeline context with the local edition's invariants: local
     STT and the local event hub. ``options`` uses the persisted queue-options vocabulary so the
     upload and retry entries cannot drift apart."""
+    skip_summary = truthy(options.get("skip_summary"))
+    visual_note_will_run = local_intake_flow.auto_note_will_run()
+    if not skip_summary and local_intake_flow.auto_note_enabled() and not visual_note_will_run:
+        _log_visual_note_unavailable(task_id, source_type=source_type, source_filename=source_filename)
     return MediaJobContext(
         task_id_value=task_id,
         client_id=client_id,
@@ -533,7 +573,8 @@ def _local_media_job_context(
         # `will_run` rather than `enabled`: a machine that cannot reach Claude
         # never writes that note, and switching the text one off for it left a
         # fresh install with no note at all.
-        summary_disabled=truthy(options.get("skip_summary")) or local_intake_flow.auto_note_will_run(),
+        summary_disabled=skip_summary or visual_note_will_run,
+        note_deferred_to_visual_note=visual_note_will_run and not skip_summary,
         generate_visuals=truthy(options.get("generate_visuals")),
         source_last_modified_ms=None,
         export_to_lark=options.get("export_to_lark"),

@@ -219,6 +219,7 @@ def write_note(
             replace_note=True,
             keyframe_extractor=extract_keyframes,
             on_local_work_done=on_local_work_done,
+            trigger="auto",
         )
         upsert_job(task_id=task_id, status="completed", stage="done", summary_status="completed")
     except visual_note_job.VisualNoteError as exc:

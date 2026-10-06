@@ -52,6 +52,7 @@ import json
 import logging
 import re
 import tempfile
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,6 +61,8 @@ from typing import Any, Callable
 from backend.core import claude_vision, cut_timeline, debreath_job, visual_note_channel
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
+from backend.core.event_context import event_metadata
+from backend.core.event_logger import log_event
 from backend.core.job_store import get_job, list_jobs_by_statuses, update_job_result
 from backend.core.result_artifacts import (
     DEBREATH_MEDIA_KIND,
@@ -764,7 +767,7 @@ def _joined_draft(drafts, parts):
     )
 
 
-def run_visual_note(
+def _run_visual_note(
     task_id: str,
     *,
     keyframe_extractor: Callable[..., Any],
@@ -1072,3 +1075,85 @@ __all__ = [
     "use_generated_note",
     "visual_note_state",
 ]
+
+
+# ── events ────────────────────────────────────────────────────────────────────
+#
+# This is how most notes are written now, and before this it left no event: the
+# pipeline logged "summary skipped" and the note that followed a minute later
+# was visible only on the task, which is deleted with it.
+
+def run_visual_note(
+    task_id: str,
+    *,
+    client_id: str | None = None,
+    trigger: str = "manual",
+    on_local_work_done: Callable[[], None] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Write the note (see ``_run_visual_note``), recorded however it ends.
+
+    ``trigger`` is ``"auto"`` for the note the flow writes after transcription
+    and ``"manual"`` for the button on a finished task.
+    """
+    started = time.perf_counter()
+    local_done: dict[str, float] = {}
+
+    def hand_off() -> None:
+        local_done["at"] = time.perf_counter()
+        if on_local_work_done is not None:
+            on_local_work_done()
+
+    error: BaseException | None = None
+    try:
+        return _run_visual_note(
+            task_id, client_id=client_id, on_local_work_done=hand_off, **kwargs,
+        )
+    except BaseException as exc:
+        error = exc
+        raise
+    finally:
+        _log_visual_note(task_id, client_id, trigger=trigger, started=started,
+                         local_done=local_done.get("at"), error=error)
+
+
+def _log_visual_note(
+    task_id: str,
+    client_id: str | None,
+    *,
+    trigger: str,
+    started: float,
+    local_done: float | None,
+    error: BaseException | None,
+) -> None:
+    job = get_job(task_id, client_id=client_id) or {}
+    state = visual_note_state(job.get("result"))
+    if state.get("status") == STATUS_RUNNING and error is None:
+        return
+    # A refusal before anything started (no transcript, already running) leaves
+    # no state of its own; it is still a note that did not get written.
+    failed = error is not None or state.get("status") == STATUS_FAILED
+    usage = state.get("usage") if isinstance(state.get("usage"), dict) else {}
+    markdown = str(state.get("markdown") or "")
+    log_event(
+        task_id=task_id,
+        event_name="visual_note_failed" if failed else "visual_note_completed",
+        source_type=str(job.get("source_type") or "") or None,
+        summary_length=len(markdown) if markdown else None,
+        stage="visual_note",
+        duration_seconds=round(time.perf_counter() - started, 3),
+        success=not failed,
+        error_reason=(str(error) if error is not None else state.get("error")) or None,
+        metadata=event_metadata(
+            trigger=trigger,
+            channel=state.get("channel"),
+            model=state.get("model"),
+            # The local part (picking frames) apart from the wait on Claude.
+            frames_seconds=round(local_done - started, 3) if local_done else None,
+            frames_sent=len(state.get("frames_sent") or []) or None,
+            frames_cited=len(state.get("frames_cited") or []) or None,
+            transcript_chars=state.get("transcript_chars"),
+            input_tokens=usage.get("input_tokens"),
+            output_tokens=usage.get("output_tokens"),
+        ),
+    )

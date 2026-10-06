@@ -688,3 +688,39 @@ def test_a_folder_it_cannot_use_is_refused_with_a_sentence(local_client, tmp_pat
 
     assert response.status_code == 400
     assert response.json()["detail"]
+
+
+def test_a_restart_that_cut_a_task_off_leaves_an_event_saying_what_happened(local_client, in_place_task, monkeypatch):
+    """Restarts cutting off queued work were the most common failure on record,
+    and in the event log they looked like any other failed task."""
+    import backend.local_main as local_main
+
+    events: list[dict] = []
+    monkeypatch.setattr(local_main, "log_event", lambda **kw: events.append(kw))
+    task_id = in_place_task["task_id"]
+    _interrupt(task_id)
+
+    assert _resume([task_id]) == 1
+
+    [event] = [e for e in events if e["event_name"] == "task_interrupted_by_restart"]
+    assert event["task_id"] == task_id
+    assert event["success"] is True
+    assert event["metadata"]["outcome"] == "resumed"
+    assert event["metadata"]["resumed_as"]
+
+
+def test_a_restart_that_cut_off_a_task_whose_file_moved_records_it_was_left(local_client, in_place_task, monkeypatch):
+    import backend.local_main as local_main
+
+    events: list[dict] = []
+    monkeypatch.setattr(local_main, "log_event", lambda **kw: events.append(kw))
+    task_id = in_place_task["task_id"]
+    _interrupt(task_id)
+    in_place_task["recording"].unlink()
+
+    assert _resume([task_id]) == 0
+
+    [event] = [e for e in events if e["event_name"] == "task_interrupted_by_restart"]
+    assert event["success"] is False
+    assert event["metadata"]["outcome"] == "left_for_user"
+    assert event["error_reason"]

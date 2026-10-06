@@ -152,3 +152,56 @@ def test_the_cut_file_is_named_for_what_the_encoder_writes(source_name, expected
     after a full normalize pass, and wrote .mkv files that could never pass
     the frame-count self-check."""
     assert dj._media_filename(Path(source_name)) == expected
+
+
+# ── events: what the cut did is answerable after the task is gone ───────────
+
+@pytest.fixture()
+def recorded_events(monkeypatch):
+    events: list[dict] = []
+    monkeypatch.setattr(dj, "log_event", lambda **kw: events.append(kw))
+    return events
+
+
+def test_a_cut_that_could_not_run_is_recorded_as_failed_with_its_reason(tmp_path, monkeypatch, recorded_events):
+    monkeypatch.setattr(sc, "_ffmpeg_path", lambda: "/fake/ffmpeg")
+    monkeypatch.setattr(sc, "_ffprobe_path", lambda: "/fake/ffprobe")
+    source = tmp_path / "lecture.m4a"
+    source.write_bytes(b"x")
+
+    dj.prepare_cut_media("task-timeout-event", source, noise_db=-25.0, runner=_TimesOutOnDetection())
+
+    [event] = recorded_events
+    assert event["event_name"] == "debreath_failed"
+    assert event["success"] is False
+    assert event["error_reason"]
+    assert event["metadata"]["trigger"] == "before_transcription"
+    assert event["metadata"]["used_for_transcription"] is False
+    assert event["duration_seconds"] >= 0
+
+
+def test_an_unsupported_file_is_recorded_as_not_used_not_as_a_failure(tmp_path, recorded_events):
+    source = tmp_path / "notes.txt"
+    source.write_text("not media")
+
+    dj.prepare_cut_media("task-unsupported-event", source, noise_db=-25.0)
+
+    [event] = recorded_events
+    assert event["event_name"] == "debreath_completed"
+    assert event["metadata"]["outcome"] == "not_used"
+    assert "不支持" in event["error_reason"]
+
+
+@needs_ffmpeg
+def test_a_manual_cut_is_recorded_with_what_it_removed(lifted_task, recorded_events):
+    task_id, _source = lifted_task
+
+    dj.run_debreath(task_id, min_silence_seconds=0.5, render=False)
+
+    [event] = recorded_events
+    assert event["event_name"] == "debreath_completed"
+    meta = event["metadata"]
+    assert meta["trigger"] == "manual"
+    assert meta["outcome"] == "plan_only"
+    assert meta["cut_count"] >= 1 and meta["removed_seconds"] > 1.0
+    assert meta["threshold_adapted"] is True

@@ -25,12 +25,15 @@ import json
 import logging
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import cut_timeline, silence_cuts
+from backend.core.event_context import event_metadata
+from backend.core.event_logger import log_event
 from backend.core.job_store import get_job, list_jobs_by_statuses, update_job_result
 from backend.core.result_artifacts import (
     DEBREATH_ARTIFACT_DIRNAME,
@@ -320,7 +323,7 @@ class PreparedCut:
     artifacts: dict[str, dict[str, Any]]
 
 
-def prepare_cut_media(
+def _prepare_cut_media(
     task_id: str,
     source: Path,
     *,
@@ -552,7 +555,7 @@ def resolve_source(task_id: str) -> Path:
     return source
 
 
-def run_debreath(
+def _run_debreath(
     task_id: str,
     *,
     client_id: str | None = None,
@@ -739,3 +742,83 @@ def recover_stranded_renders() -> int:
         if update_job_result(task_id, result, client_id=job.get("client_id")):
             recovered += 1
     return recovered
+
+
+# ── events ────────────────────────────────────────────────────────────────────
+#
+# The cut is the slowest step for a video (measured at about the same time as
+# transcription) and decides what the transcript is made from, yet before this
+# it left no event: how long it took, how much it removed and whether the result
+# was used lived only on the task, which is deleted with it.
+
+def _debreath_outcome(state: dict[str, Any]) -> str:
+    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    separation = plan.get("level_separation") if isinstance(plan.get("level_separation"), dict) else {}
+    if state.get("status") == STATUS_FAILED:
+        return "failed"
+    if state.get("already_cut"):
+        return "already_cut"
+    if state.get("not_worth_rendering"):
+        return "not_worth_rendering"
+    if plan and plan.get("cut_count") == 0:
+        return "nothing_to_cut"
+    if state.get("rendered") and state.get("render_verified") is False:
+        return "render_unverified"
+    if separation.get("measured") and separation.get("separated") is False:
+        return "too_close_to_speech"
+    if state.get("used_for_transcription"):
+        return "used"
+    if not state.get("rendered") and plan:
+        return "plan_only"
+    return "not_used"
+
+
+def _log_debreath(task_id: str, state: dict[str, Any], *, trigger: str, started: float) -> None:
+    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    settings = state.get("settings") if isinstance(state.get("settings"), dict) else {}
+    render = state.get("render") if isinstance(state.get("render"), dict) else {}
+    choice = state.get("threshold_choice") if isinstance(state.get("threshold_choice"), dict) else {}
+    outcome = _debreath_outcome(state)
+    failed = outcome == "failed"
+    log_event(
+        task_id=task_id,
+        event_name="debreath_failed" if failed else "debreath_completed",
+        source_duration_seconds=plan.get("source_duration_seconds"),
+        stage="debreath",
+        duration_seconds=round(time.perf_counter() - started, 3),
+        success=not failed,
+        error_reason=(state.get("error") if failed else state.get("not_used_reason")) or None,
+        metadata=event_metadata(
+            trigger=trigger,
+            outcome=outcome,
+            used_for_transcription=state.get("used_for_transcription"),
+            rendered=state.get("rendered"),
+            render_verified=state.get("render_verified"),
+            audio_only=render.get("audio_only"),
+            cut_count=plan.get("cut_count"),
+            removed_seconds=plan.get("removed_seconds"),
+            removed_percent=plan.get("removed_percent"),
+            noise_db=settings.get("noise_db"),
+            threshold_adapted=choice.get("adapted"),
+        ),
+    )
+
+
+def prepare_cut_media(task_id: str, source: Path, **kwargs: Any) -> PreparedCut:
+    """Cut before transcription (see ``_prepare_cut_media``), and record it."""
+    started = time.perf_counter()
+    prepared = _prepare_cut_media(task_id, source, **kwargs)
+    _log_debreath(task_id, prepared.state, trigger="before_transcription", started=started)
+    return prepared
+
+
+def run_debreath(task_id: str, *, client_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
+    """The manual de-breath (see ``_run_debreath``), recorded however it ends."""
+    started = time.perf_counter()
+    try:
+        return _run_debreath(task_id, client_id=client_id, **kwargs)
+    finally:
+        job = get_job(task_id, client_id=client_id)
+        state = debreath_state((job or {}).get("result"))
+        if state and state.get("status") != STATUS_RUNNING:
+            _log_debreath(task_id, state, trigger="manual", started=started)
