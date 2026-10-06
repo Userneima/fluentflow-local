@@ -33,7 +33,6 @@ def test_runtime_path_helpers_default_inside_the_isolated_root(test_runtime_root
         runtime_paths.default_edited_transcript_dir,
         runtime_paths.default_transcript_edit_records_dir,
         runtime_paths.default_video_source_dir,
-        runtime_paths.default_codex_export_dir,
     )
 
     escaped = {

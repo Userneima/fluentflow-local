@@ -12,7 +12,6 @@ from pathlib import Path
 
 
 APP_NAME = "FluentFlow"
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def app_data_root() -> Path:
@@ -79,19 +78,3 @@ def default_transcript_edit_records_dir() -> Path:
 
 def default_video_source_dir() -> Path:
     return runtime_path("FLUENTFLOW_VIDEO_SOURCE_DIR", "video_sources")
-
-
-def default_codex_export_dir() -> Path:
-    return runtime_path("FLUENTFLOW_CODEX_EXPORT_DIR", "codex_exports")
-
-
-def legacy_repo_data_root() -> Path:
-    return PROJECT_ROOT / "data"
-
-
-def legacy_backend_data_root() -> Path:
-    return PROJECT_ROOT / "backend" / "data"
-
-
-def legacy_backend_video_source_dir() -> Path:
-    return PROJECT_ROOT / "backend" / "视频文件"

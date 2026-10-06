@@ -89,5 +89,51 @@ class TestSelectEndpoint(unittest.TestCase):
             self.assertEqual(os.environ[hf_endpoint.ENDPOINT_ENV], endpoint)
 
 
+class TestApplyAtStartup(unittest.TestCase):
+    """The service's own call: it must never raise and must honour an override."""
+
+    def test_a_configured_endpoint_is_kept_without_probing(self) -> None:
+        with mock.patch.dict("os.environ", {hf_endpoint.ENDPOINT_ENV: "https://example.test"}), \
+                mock.patch.object(hf_endpoint, "probe") as probe:
+            endpoint = hf_endpoint.apply_at_startup()
+            import os
+
+            self.assertEqual(os.environ[hf_endpoint.ENDPOINT_ENV], "https://example.test")
+        self.assertEqual(endpoint, "https://example.test")
+        probe.assert_not_called()
+
+    def test_the_mirror_is_chosen_when_the_main_host_is_down(self) -> None:
+        def only_the_mirror(endpoint: str, *_args: object, **_kwargs: object) -> bool:
+            return endpoint == hf_endpoint.MIRROR_ENDPOINT
+
+        with mock.patch.dict("os.environ", {}, clear=True), \
+                mock.patch.object(hf_endpoint, "probe", side_effect=only_the_mirror):
+            endpoint = hf_endpoint.apply_at_startup()
+            import os
+
+            self.assertEqual(os.environ[hf_endpoint.ENDPOINT_ENV], hf_endpoint.MIRROR_ENDPOINT)
+        self.assertEqual(endpoint, hf_endpoint.MIRROR_ENDPOINT)
+
+    def test_a_probe_that_blows_up_never_stops_startup(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True), \
+                mock.patch.object(hf_endpoint, "probe", side_effect=RuntimeError("no resolver")):
+            endpoint = hf_endpoint.apply_at_startup()
+        self.assertEqual(endpoint, hf_endpoint.DEFAULT_ENDPOINT)
+
+    def test_the_service_chooses_before_importing_anything_heavy(self) -> None:
+        """`huggingface_hub` freezes HF_ENDPOINT at import, so the composition
+        root has to choose right after loading .env and before the imports that
+        can pull the hub in. Checked on the source because the module has long
+        been imported by the time any test runs."""
+        from pathlib import Path
+
+        source = (Path(__file__).resolve().parents[1] / "backend" / "local_main.py").read_text(encoding="utf-8")
+        env_at = source.index("load_project_env()\n")
+        choice_at = source.index("hf_endpoint.apply_at_startup()")
+        first_heavy_import = source.index("from backend.core.app_factory import")
+        self.assertLess(env_at, choice_at)
+        self.assertLess(choice_at, first_heavy_import)
+
+
 if __name__ == "__main__":
     unittest.main()

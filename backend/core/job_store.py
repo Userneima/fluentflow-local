@@ -6,7 +6,6 @@ import json
 import logging
 import sqlite3
 import time
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -103,8 +102,23 @@ def _merged_metadata_for_upsert(
     return {**existing, **metadata}
 
 
+# Database files whose schema this process has already brought up to date.
+# Every store call starts with ``ensure_job_db``, and the transcription
+# progress loop makes one every couple of seconds, so without this the schema
+# script ran against the live database at that rate.
+_SCHEMA_READY: set[str] = set()
+
+
+def reset_job_db_cache() -> None:
+    """Forget which databases were set up — for tests that recreate files."""
+    _SCHEMA_READY.clear()
+
+
 def ensure_job_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
     path = Path(db_path)
+    key = str(path.expanduser().absolute())
+    if key in _SCHEMA_READY and path.is_file():
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA_SQL)
@@ -112,6 +126,7 @@ def ensure_job_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
         if "client_id" not in columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN client_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_client_updated_at ON jobs(client_id, updated_at)")
+    _SCHEMA_READY.add(key)
 
 
 def adopt_jobs_for_owner(owner: str, db_path: Path | str = DEFAULT_DB_PATH) -> int:
@@ -214,7 +229,12 @@ def upsert_job(
         try:
             ensure_job_db(db_path)
             now = _now_iso()
-            with sqlite3.connect(Path(db_path)) as conn:
+            with sqlite3.connect(Path(db_path), timeout=10) as conn:
+                # Read-merge-write under one write lock: two writers merging
+                # metadata from the same snapshot would each drop the other's
+                # keys, and the queue-wait bookkeeping and the progress loop
+                # do write the same row at the same time.
+                conn.execute("BEGIN IMMEDIATE")
                 merged_metadata = _merged_metadata_for_upsert(conn, task_id, metadata)
                 conn.execute(
                     """
@@ -475,17 +495,59 @@ def list_jobs_for_retention(
     db_path: Path | str = DEFAULT_DB_PATH,
     client_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Every job, with only what retention reads: status, times, metadata, and
+    the two source-retention fields of the result.
+
+    Retention runs after every job and used to parse every stored result in
+    full to answer it. The full result is fetched only for the rows whose
+    source file is still kept and has an expiry, which is the handful of recent
+    jobs — those are the only rows retention writes back, and the write merges
+    the whole result, so it needs the whole thing.
+    """
     ensure_job_db(db_path)
+    where = "WHERE client_id = ?" if client_id is not None else ""
+    params: tuple[Any, ...] = (client_id,) if client_id is not None else ()
     with sqlite3.connect(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
-        if client_id is not None:
-            rows = conn.execute(
-                "SELECT * FROM jobs WHERE client_id = ? ORDER BY updated_at DESC",
-                (client_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC").fetchall()
-    return [_row_to_dict(row) for row in rows]
+        rows = conn.execute(
+            f"""
+            SELECT task_id, created_at, updated_at, status, client_id, metadata_json,
+                   json_extract(result_json, '$.source_file_available') AS source_file_available,
+                   json_extract(result_json, '$.source_retention_expires_at') AS source_retention_expires_at
+            FROM jobs {where} ORDER BY updated_at DESC
+            """,
+            params,
+        ).fetchall()
+        expiring = [
+            str(row["task_id"]) for row in rows
+            if row["source_file_available"] and row["source_retention_expires_at"]
+        ]
+        full_results: dict[str, Any] = {}
+        if expiring:
+            placeholders = ",".join("?" for _ in expiring)
+            for task_id, result_json in conn.execute(
+                f"SELECT task_id, result_json FROM jobs WHERE task_id IN ({placeholders})", expiring
+            ).fetchall():
+                full_results[str(task_id)] = normalize_result_for_read(_json_loads(result_json))
+    jobs: list[dict[str, Any]] = []
+    for row in rows:
+        task_id = str(row["task_id"])
+        result = full_results.get(task_id)
+        if not isinstance(result, dict):
+            result = {
+                "source_file_available": row["source_file_available"],
+                "source_retention_expires_at": row["source_retention_expires_at"],
+            }
+        jobs.append({
+            "task_id": task_id,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "status": row["status"],
+            "client_id": row["client_id"],
+            "result": result,
+            "metadata": _json_loads(row["metadata_json"]),
+        })
+    return jobs
 
 
 def update_job_result(
@@ -642,242 +704,6 @@ def append_job_result_list_item(
     return _row_to_dict(updated) if updated else None
 
 
-def enqueue_job_step(
-    *,
-    task_id: str,
-    step_type: str,
-    input: dict[str, Any] | None = None,
-    step_key: str | None = None,
-    priority: int = 100,
-    max_attempts: int = 1,
-    run_after_at: str | None = None,
-    db_path: Path | str = DEFAULT_DB_PATH,
-) -> dict[str, Any] | None:
-    task_id = str(task_id or "").strip()
-    step_type = str(step_type or "").strip()
-    if not task_id or not step_type:
-        return None
-    key = str(step_key or f"{task_id}:{step_type}").strip()
-    ensure_job_db(db_path)
-    now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.execute(
-            """
-            INSERT INTO job_steps (
-                task_id, step_key, step_type, status, priority, run_after_at,
-                attempt_count, max_attempts, input_json, created_at, updated_at
-            ) VALUES (?, ?, ?, 'queued', ?, ?, 0, ?, ?, ?, ?)
-            ON CONFLICT(step_key) DO UPDATE SET
-                updated_at=excluded.updated_at,
-                input_json=CASE
-                    WHEN job_steps.status IN ('queued', 'failed', 'cancelled') THEN excluded.input_json
-                    ELSE job_steps.input_json
-                END,
-                status=CASE
-                    WHEN job_steps.status IN ('failed', 'cancelled') THEN 'queued'
-                    ELSE job_steps.status
-                END,
-                priority=CASE
-                    WHEN job_steps.status IN ('queued', 'failed', 'cancelled') THEN excluded.priority
-                    ELSE job_steps.priority
-                END,
-                run_after_at=CASE
-                    WHEN job_steps.status IN ('queued', 'failed', 'cancelled') THEN excluded.run_after_at
-                    ELSE job_steps.run_after_at
-                END,
-                lock_id=CASE
-                    WHEN job_steps.status IN ('failed', 'cancelled') THEN NULL
-                    ELSE job_steps.lock_id
-                END,
-                locked_at=CASE
-                    WHEN job_steps.status IN ('failed', 'cancelled') THEN NULL
-                    ELSE job_steps.locked_at
-                END,
-                attempt_count=CASE
-                    WHEN job_steps.status IN ('failed', 'cancelled') THEN 0
-                    ELSE job_steps.attempt_count
-                END,
-                started_at=CASE
-                    WHEN job_steps.status IN ('failed', 'cancelled') THEN NULL
-                    ELSE job_steps.started_at
-                END,
-                finished_at=CASE
-                    WHEN job_steps.status IN ('failed', 'cancelled') THEN NULL
-                    ELSE job_steps.finished_at
-                END,
-                error_reason=CASE
-                    WHEN job_steps.status IN ('failed', 'cancelled') THEN NULL
-                    ELSE job_steps.error_reason
-                END
-            """,
-            (
-                task_id,
-                key,
-                step_type,
-                int(priority),
-                run_after_at,
-                max(1, int(max_attempts or 1)),
-                _json_dumps(input or {}),
-                now,
-                now,
-            ),
-        )
-        row = conn.execute("SELECT * FROM job_steps WHERE step_key = ?", (key,)).fetchone()
-    return _step_row_to_dict(row) if row else None
-
-
-def acquire_next_job_step(
-    *,
-    step_types: tuple[str, ...] | list[str] | None = None,
-    lock_timeout_seconds: float = 3600,
-    db_path: Path | str = DEFAULT_DB_PATH,
-) -> dict[str, Any] | None:
-    ensure_job_db(db_path)
-    now = _now_iso()
-    lock_id = uuid.uuid4().hex
-    step_type_values = [str(value).strip() for value in (step_types or []) if str(value).strip()]
-    cutoff_ts = time.time() - max(float(lock_timeout_seconds or 3600), 60.0)
-    cutoff = datetime.fromtimestamp(cutoff_ts, timezone.utc).astimezone().isoformat(timespec="seconds")
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.execute("BEGIN IMMEDIATE")
-        type_clause = ""
-        if step_type_values:
-            placeholders = ",".join("?" for _ in step_type_values)
-            type_clause = f" AND step_type IN ({placeholders})"
-        row = conn.execute(
-            f"""
-            SELECT * FROM job_steps
-            WHERE (
-                status = 'queued'
-                OR (status = 'running' AND (locked_at IS NULL OR locked_at < ?))
-            )
-            AND (run_after_at IS NULL OR run_after_at <= ?)
-            {type_clause}
-            ORDER BY priority ASC, id ASC
-            LIMIT 1
-            """,
-            [cutoff, now, *step_type_values],
-        ).fetchone()
-        if row is None:
-            conn.commit()
-            return None
-        conn.execute(
-            """
-            UPDATE job_steps
-            SET status='running',
-                locked_at=?,
-                lock_id=?,
-                attempt_count=attempt_count + 1,
-                updated_at=?,
-                started_at=COALESCE(started_at, ?),
-                error_reason=NULL
-            WHERE id=?
-            """,
-            (now, lock_id, now, now, row["id"]),
-        )
-        updated = conn.execute("SELECT * FROM job_steps WHERE id = ?", (row["id"],)).fetchone()
-        conn.commit()
-    return _step_row_to_dict(updated) if updated else None
-
-
-def complete_job_step(
-    step_id: int,
-    *,
-    lock_id: str,
-    result: dict[str, Any] | None = None,
-    db_path: Path | str = DEFAULT_DB_PATH,
-) -> dict[str, Any] | None:
-    return _finish_job_step(
-        step_id,
-        lock_id=lock_id,
-        status="completed",
-        result=result,
-        error_reason=None,
-        db_path=db_path,
-    )
-
-
-def heartbeat_job_step(
-    step_id: int,
-    *,
-    lock_id: str,
-    db_path: Path | str = DEFAULT_DB_PATH,
-) -> bool:
-    """Extend a running step lease only while this worker still owns it."""
-    if not step_id or not str(lock_id or "").strip():
-        return False
-    ensure_job_db(db_path)
-    now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
-        cursor = conn.execute(
-            """
-            UPDATE job_steps
-            SET locked_at=?, updated_at=?
-            WHERE id=? AND status='running' AND lock_id=?
-            """,
-            (now, now, step_id, lock_id),
-        )
-        return bool(cursor.rowcount)
-
-
-def fail_job_step(
-    step_id: int,
-    *,
-    lock_id: str,
-    error_reason: str,
-    result: dict[str, Any] | None = None,
-    retry: bool = False,
-    db_path: Path | str = DEFAULT_DB_PATH,
-) -> dict[str, Any] | None:
-    if retry:
-        ensure_job_db(db_path)
-        now = _now_iso()
-        with sqlite3.connect(Path(db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM job_steps WHERE id = ? AND status = 'running' AND lock_id = ?",
-                (step_id, lock_id),
-            ).fetchone()
-            if row is None:
-                return None
-            can_retry = int(row["attempt_count"] or 0) < int(row["max_attempts"] or 1)
-            status = "queued" if can_retry else "failed"
-            cursor = conn.execute(
-                """
-                UPDATE job_steps
-                SET status=?, updated_at=?, finished_at=?,
-                    locked_at=NULL, lock_id=NULL, error_reason=?, result_json=?
-                WHERE id=? AND status='running' AND lock_id=?
-                """,
-                (
-                    status,
-                    now,
-                    None if can_retry else now,
-                    error_reason,
-                    _json_dumps(result),
-                    step_id,
-                    lock_id,
-                ),
-            )
-            if not cursor.rowcount:
-                return None
-            updated = conn.execute(
-                "SELECT * FROM job_steps WHERE id = ?",
-                (step_id,),
-            ).fetchone()
-        return _step_row_to_dict(updated) if updated else None
-    return _finish_job_step(
-        step_id,
-        lock_id=lock_id,
-        status="failed",
-        result=result,
-        error_reason=error_reason,
-        db_path=db_path,
-    )
-
-
 def cancel_job_steps(
     task_id: str,
     *,
@@ -929,52 +755,6 @@ def list_job_steps(
     return [_step_row_to_dict(row) for row in rows]
 
 
-def requeue_running_job_steps(
-    *,
-    db_path: Path | str = DEFAULT_DB_PATH,
-) -> int:
-    ensure_job_db(db_path)
-    now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
-        cursor = conn.execute(
-            """
-            UPDATE job_steps
-            SET status='queued', updated_at=?, locked_at=NULL, lock_id=NULL
-            WHERE status='running'
-            """,
-            (now,),
-        )
-        return int(cursor.rowcount or 0)
-
-
-def _finish_job_step(
-    step_id: int,
-    *,
-    lock_id: str,
-    status: str,
-    result: dict[str, Any] | None,
-    error_reason: str | None,
-    db_path: Path | str,
-) -> dict[str, Any] | None:
-    ensure_job_db(db_path)
-    now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            """
-            UPDATE job_steps
-            SET status=?, updated_at=?, finished_at=?, locked_at=NULL, lock_id=NULL,
-                result_json=?, error_reason=?
-            WHERE id=? AND status='running' AND lock_id=?
-            """,
-            (status, now, now, _json_dumps(result), error_reason, step_id, lock_id),
-        )
-        if not cursor.rowcount:
-            return None
-        row = conn.execute("SELECT * FROM job_steps WHERE id = ?", (step_id,)).fetchone()
-    return _step_row_to_dict(row) if row else None
-
-
 def repair_truncated_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> int:
     """Put back titles an earlier suffix rule cut at their first dot.
 
@@ -1011,79 +791,6 @@ def repair_truncated_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> in
                 (
                     _json_dumps(result) if isinstance(result, dict) else row["result_json"],
                     _json_dumps(metadata),
-                    row["task_id"],
-                ),
-            )
-            changed += 1
-    return changed
-
-
-def migrate_job_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> int:
-    """Backfill raw/display title semantics for existing job rows."""
-    ensure_job_db(db_path)
-    changed = 0
-    with sqlite3.connect(Path(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM jobs").fetchall()
-        for row in rows:
-            result = _json_loads(row["result_json"])
-            metadata = _json_loads(row["metadata_json"])
-            result_dict = result if isinstance(result, dict) else {}
-            metadata_dict = metadata if isinstance(metadata, dict) else {}
-            raw_video_source = metadata_dict.get("video_source")
-            video_source = raw_video_source if isinstance(raw_video_source, dict) else {}
-
-            raw_title = str(
-                metadata_dict.get("raw_title")
-                or video_source.get("raw_title")
-                or result_dict.get("raw_title")
-                or video_source.get("title")
-                or result_dict.get("filename")
-                or row["source_filename"]
-                or ""
-            ).strip()
-            display_candidate = str(
-                metadata_dict.get("display_title")
-                or video_source.get("display_title")
-                or result_dict.get("display_title")
-                or raw_title
-            ).strip()
-            display_title = display_title_for_user(display_candidate, row["source_filename"]).strip()
-            if not display_title:
-                continue
-
-            next_metadata = dict(metadata_dict)
-            next_result = dict(result_dict)
-            row_changed = False
-            if next_metadata.get("raw_title") != raw_title:
-                next_metadata["raw_title"] = raw_title
-                row_changed = True
-            if next_metadata.get("display_title") != display_title:
-                next_metadata["display_title"] = display_title
-                row_changed = True
-            if isinstance(raw_video_source, dict):
-                next_video_source = dict(video_source)
-                if next_video_source.get("raw_title") != raw_title:
-                    next_video_source["raw_title"] = raw_title
-                    row_changed = True
-                if next_video_source.get("display_title") != display_title:
-                    next_video_source["display_title"] = display_title
-                    row_changed = True
-                next_metadata["video_source"] = next_video_source
-            if next_result:
-                if next_result.get("raw_title") != raw_title:
-                    next_result["raw_title"] = raw_title
-                    row_changed = True
-                if next_result.get("display_title") != display_title:
-                    next_result["display_title"] = display_title
-                    row_changed = True
-            if not row_changed:
-                continue
-            conn.execute(
-                "UPDATE jobs SET result_json = ?, metadata_json = ? WHERE task_id = ?",
-                (
-                    _json_dumps(next_result) if result is not None else row["result_json"],
-                    _json_dumps(next_metadata),
                     row["task_id"],
                 ),
             )

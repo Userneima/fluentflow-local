@@ -25,7 +25,8 @@ The entry has four shapes and only one of them spends anything.
 Refusals happen in the response the caller is waiting on, not several minutes
 into a background task whose only trace is a status field: a task that is not
 finished, no cut file to read yet, a cut file or cut list no longer on the
-machine, a missing Anthropic credential, and a run already going.
+machine, a missing Anthropic credential, a run already going, and a
+transcription running or queued that the frame extraction must not run beside.
 
 The slot is claimed here rather than inside the worker. FastAPI runs background
 tasks after the response is sent, so two quick submissions could both pass an
@@ -44,15 +45,12 @@ from backend.core import visual_note_job
 from backend.core.job_store import get_job
 from backend.core.local_config import resolve_secret
 from backend.core.local_keyframe_provider import extract_keyframes
-from backend.core.local_request_scope import request_client_id
+from backend.core.request_scope import local_client_scope
+from backend.routers.local_processing import queue_is_busy
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _local_client_scope(request: Request) -> Optional[str]:
-    return request_client_id(request) or "anonymous"
 
 
 def start_local_visual_note(
@@ -66,7 +64,7 @@ def start_local_visual_note(
     The local Agent API calls this too, so an agent goes through the same guards
     the page does rather than a parallel implementation that can drift.
     """
-    client_id = _local_client_scope(request)
+    client_id = local_client_scope(request)
     job = get_job(task_id, client_id=client_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -105,6 +103,14 @@ def start_local_visual_note(
     described = visual_note_job.describe(task_id, job, api_key=api_key)
     if not described["eligible"]:
         raise HTTPException(status_code=409, detail=str(described["reason"]))
+    if queue_is_busy():
+        # Frame extraction is ffmpeg on this machine, and the serial queue
+        # exists so that nothing runs beside a transcription. This entry cannot
+        # join that queue, so it is refused while the queue is working.
+        raise HTTPException(
+            status_code=409,
+            detail="有任务正在处理中，等队列空下来再生成笔记，避免两件重活同时跑。",
+        )
     replace_note = bool(body.get("replace_note", True))
     try:
         visual_note_job.claim(task_id)

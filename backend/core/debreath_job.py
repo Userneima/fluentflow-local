@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -126,8 +127,46 @@ def _cut_list_filename(source: Path) -> str:
     return f"{ARTIFACT_DIRNAME}/{source.stem}_cut_list.json"
 
 
+# What the render writes is decided by the encoder, not by the recording: every
+# video render is H.264 + AAC and every audio render is AAC, so the container
+# follows the codec. Keeping the source's extension put AAC into .webm/.ogg/.opus
+# /.flac files, which failed at the first batch after a full normalize pass, and
+# wrote .mkv files that could never pass the frame-count self-check because
+# Matroska keeps no frame count.
+AUDIO_SOURCE_SUFFIXES = {".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".opus"}
+VIDEO_OUTPUT_SUFFIX = ".mp4"
+AUDIO_OUTPUT_SUFFIX = ".m4a"
+
+
+def output_suffix(source: Path) -> str:
+    return AUDIO_OUTPUT_SUFFIX if source.suffix.lower() in AUDIO_SOURCE_SUFFIXES else VIDEO_OUTPUT_SUFFIX
+
+
 def _media_filename(source: Path) -> str:
-    return f"{ARTIFACT_DIRNAME}/{source.stem}_debreath{source.suffix.lower()}"
+    return f"{ARTIFACT_DIRNAME}/{source.stem}_debreath{output_suffix(source)}"
+
+
+def adapt_threshold(
+    source: Path,
+    noise_db: float,
+    runner: Callable[..., Any] = silence_cuts.run_command,
+) -> tuple[float, dict[str, Any]]:
+    """A threshold that suits this material, unless the caller chose one.
+
+    Only when the caller left the default: an explicit setting is the caller's
+    judgement and is not second-guessed. The HTTP route fills a missing value
+    with the default, so "not given" and "the default" arrive here the same way,
+    and both mean "measure it". The manual route used to skip this and hand the
+    constant straight to the planner, so a recording the pipeline had already
+    measured as needing -9dB was re-cut by hand at -30dB and removed nothing.
+    """
+    if noise_db != silence_cuts.DEFAULT_NOISE_DB:
+        return noise_db, {}
+    try:
+        return silence_cuts.suggest_noise_db(source, runner=runner)
+    except (SilenceCutError, OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("could not measure the level of %s: %s", source, exc)
+        return noise_db, {}
 
 
 def _transcript_filename(source: Path) -> str:
@@ -258,7 +297,7 @@ def already_cut_reason(source: Path, runner: Callable[..., Any] = silence_cuts.r
     try:
         if silence_cuts.carries_cut_mark(source, runner=runner):
             return "这份文件是 FluentFlow 剪过的（文件里有标记），空白已经去掉了，不再花一次编码重剪。"
-    except (SilenceCutError, OSError):  # pragma: no cover - probing only
+    except (SilenceCutError, OSError, subprocess.TimeoutExpired):  # pragma: no cover - probing only
         pass
     if CUT_FILE_NAME_MARKER in source.stem:
         return f"文件名看起来已经是剪过的版本（{source.name}），没有再剪一遍，直接转写。"
@@ -318,15 +357,7 @@ def prepare_cut_media(
     Writes no job result: the caller owns the result at this point in the
     pipeline, and this returns the state and artifacts to merge into it.
     """
-    # A threshold that suits this material rather than an absolute number that suits
-    # a normal one. Only when the caller left the default: an explicit setting is the
-    # caller's judgement and is not second-guessed.
-    threshold_choice: dict[str, Any] = {}
-    if noise_db == silence_cuts.DEFAULT_NOISE_DB:
-        try:
-            noise_db, threshold_choice = silence_cuts.suggest_noise_db(source, runner=runner)
-        except (SilenceCutError, OSError) as exc:  # pragma: no cover - measurement only
-            logger.warning("could not measure the level of %s: %s", source, exc)
+    noise_db, threshold_choice = adapt_threshold(source, noise_db, runner=runner)
     settings = {
         "noise_db": noise_db,
         "min_silence_seconds": min_silence_seconds,
@@ -484,7 +515,10 @@ def prepare_cut_media(
             },
             artifacts=artifacts,
         )
-    except (SilenceCutError, OSError, ValueError) as exc:
+    except (SilenceCutError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        # TimeoutExpired is what ``run_command`` raises when ffmpeg overruns its
+        # four-hour limit; it is not an OSError, and uncaught it failed the whole
+        # transcription that this function promises never to cost.
         logger.warning("pre-transcription debreath failed for %s: %s", task_id, exc)
         return PreparedCut(
             path=source,
@@ -543,13 +577,14 @@ def run_debreath(
     source = resolve_source(task_id)
     if not claimed:
         claim(task_id, allow_concurrent=allow_concurrent_render)
-    settings = {
-        "noise_db": noise_db,
-        "min_silence_seconds": min_silence_seconds,
-        "padding_seconds": padding_seconds,
-        "render_requested": render,
-    }
     try:
+        noise_db, threshold_choice = adapt_threshold(source, noise_db, runner=runner)
+        settings = {
+            "noise_db": noise_db,
+            "min_silence_seconds": min_silence_seconds,
+            "padding_seconds": padding_seconds,
+            "render_requested": render,
+        }
         _store(
             task_id,
             client_id=client_id,
@@ -558,6 +593,7 @@ def run_debreath(
                 "stage": "detecting",
                 "started_at": _now(),
                 "settings": settings,
+                "threshold_choice": threshold_choice or None,
                 "error": None,
             },
         )

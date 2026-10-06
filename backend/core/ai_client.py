@@ -9,6 +9,7 @@ import base64
 from pathlib import Path
 from typing import Any
 
+import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -20,7 +21,6 @@ from backend.core.ai_config import (
     DEFAULT_DEEPSEEK_MODEL,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_QWEN_MODEL,
-    DEFAULT_MODEL,
     SUPPORTED_PROVIDERS,
 )
 
@@ -49,9 +49,13 @@ def _provider_default_model(provider: str) -> str:
 
 
 def _normalize_model(provider: str, model: str | None) -> str:
+    """The model to call: the caller's choice, or the provider's default.
+
+    A named model is used as given. This used to rewrite ``deepseek-chat`` to
+    the reasoner, so a user who picked the cheaper model in settings was billed
+    for the other one without being told.
+    """
     value = (model or "").strip()
-    if provider == "deepseek" and (not value or value == "deepseek-chat"):
-        return DEFAULT_DEEPSEEK_MODEL
     return value or _provider_default_model(provider)
 
 
@@ -76,9 +80,23 @@ def _provider_api_key(provider: str, api_key: str | None = None) -> str:
     return key
 
 
+# Per-request limits. The SDK's default is a ten-minute timeout with two
+# retries, so one stalled connection could hold a note stage for half an hour
+# before anything above it noticed. Reading is given five minutes because a
+# long reasoning answer legitimately streams nothing for a while; connecting
+# and writing never should.
+REQUEST_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)
+REQUEST_MAX_RETRIES = 1
+
+
 def _get_client(*, provider: str, api_key: str | None = None) -> OpenAI:
     key = _provider_api_key(provider, api_key)
-    return OpenAI(api_key=key, base_url=_provider_base_url(provider))
+    return OpenAI(
+        api_key=key,
+        base_url=_provider_base_url(provider),
+        timeout=REQUEST_TIMEOUT,
+        max_retries=REQUEST_MAX_RETRIES,
+    )
 
 
 def _provider_of(client: OpenAI) -> str:

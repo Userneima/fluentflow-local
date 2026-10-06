@@ -21,10 +21,18 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
 
+from backend.core import hf_endpoint
 from backend.core.local_config import load_project_env
 
 # Load repository-local configuration before modules freeze default DB/event paths.
 load_project_env()
+# Choose the model download host before anything imports `huggingface_hub`,
+# which reads HF_ENDPOINT into a constant at import time. An HF_ENDPOINT from
+# .env or the shell is honoured without a probe; a failed probe never blocks
+# startup. Without this the service had no mirror fallback: only the installer
+# did, and a first task on a machine whose install-time download failed waited
+# forever on a host it could not reach.
+hf_endpoint.apply_at_startup()
 
 from backend.core.app_factory import create_app
 from backend.core.claude_code_note import stop_running_notes

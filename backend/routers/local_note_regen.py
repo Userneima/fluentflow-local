@@ -41,8 +41,9 @@ from backend.core.local_limits_config import (
     max_media_duration_seconds,
     max_transcript_upload_mb,
 )
-from backend.core.local_request_scope import request_client_id
 from backend.core.media_intake import TRANSCRIPT_SUFFIXES, file_size_mb
+from backend.core.request_scope import local_client_scope
+from backend.core.runtime_env import truthy
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.transcript_cleaner import clean_repeated_transcript
 from backend.core.transcript_correction import (
@@ -55,16 +56,15 @@ from backend.core.transcript_parser import parse_transcript_file
 router = APIRouter()
 
 
-def _local_client_scope(request: Request) -> Optional[str]:
-    return request_client_id(request) or "anonymous"
-
-
-def _truthy(value: Optional[str]) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _friendly_error(error: Any) -> str:
     return str(diagnose_error(error).get("detail") or "").strip() or str(error)
+
+
+class _EmptyNote(Exception):
+    """The model answered with nothing to write."""
+
+    def __init__(self) -> None:
+        super().__init__("AI summarization returned empty result")
 
 
 def _summary_result_metadata(summary_result: Any) -> dict[str, Any]:
@@ -125,7 +125,7 @@ async def regenerate_summary(
 ) -> dict[str, Any]:
     """Re-run AI summarization on an existing transcript."""
     loop = asyncio.get_event_loop()
-    client_id = _local_client_scope(request)
+    client_id = local_client_scope(request)
     requested_task_id = (task_id or "").strip()
     existing_job = None
     regenerated_from_task_id = None
@@ -159,6 +159,11 @@ async def regenerate_summary(
             None, lambda: summarize_transcript_with_metadata(transcript, **kwargs)
         )
         md = summary_result.markdown
+        if not str(md or "").strip():
+            # The other write paths refuse an empty note here too. Writing it
+            # through would replace a note the user has with nothing and call
+            # that completed.
+            raise _EmptyNote()
         if existing_job:
             latest_job = get_job(task_id_value, client_id=client_id)
             latest_result = deepcopy(latest_job.get("result")) if latest_job else None
@@ -255,6 +260,38 @@ async def regenerate_summary(
         return payload
     except HTTPException:
         raise
+    except _EmptyNote as exc:
+        detail = (
+            "模型没有返回内容，已保留之前的笔记。"
+            if existing_job
+            else "模型没有返回内容，没有生成笔记。"
+        )
+        log_event(
+            task_id=task_id_value,
+            event_name="summary_regenerated",
+            source_type=source_type,
+            source_filename=source_filename,
+            source_duration_seconds=source_duration_seconds,
+            transcript_length=len(transcript or ""),
+            stage="summary_regenerate",
+            duration_seconds=round(time.perf_counter() - started_at, 3),
+            success=False,
+            error_reason=detail,
+            metadata=event_metadata(route="/regenerate-summary", raw_error=str(exc)),
+        )
+        # The old note stays, and so does the task's own status: only the
+        # regeneration failed. A task that has no note yet has nothing to keep.
+        upsert_job(
+            task_id=task_id_value,
+            status=str(existing_job.get("status") or "completed") if existing_job else "failed",
+            client_id=client_id,
+            stage="summary_regenerate",
+            source_type=source_type,
+            source_filename=source_filename,
+            summary_status="failed",
+            error_reason=detail,
+        )
+        raise HTTPException(status_code=502, detail=detail) from exc
     except Exception as exc:
         friendly_error = _friendly_error(exc)
         log_event(
@@ -394,7 +431,7 @@ async def summarize_transcript_source(
         client_id=client_id,
         allowed_statuses={"queued", "running"},
     )
-    summary_disabled = _truthy(skip_summary)
+    summary_disabled = truthy(skip_summary)
     source_filename = filename
     source_file_size_mb = file_size_mb(len(raw))
     limit_mb = max_transcript_upload_mb()
@@ -716,7 +753,7 @@ async def summarize_transcript_file(
             detail=f"Unsupported transcript file type: {suffix}",
         )
     raw = await read_upload_bounded(file, max_transcript_upload_mb())
-    client_id = _local_client_scope(request)
+    client_id = local_client_scope(request)
     task_id_value = claim_task_id(task_id, client_id=client_id)
     return await summarize_transcript_source(
         raw=raw,

@@ -17,8 +17,8 @@ hosted account, quota, cloud-STT, or desktop-sync modules.
 from __future__ import annotations
 
 import asyncio
-import functools
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -27,16 +27,11 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import list_jobs, upsert_job
-from backend.core.local_entry_guards import (
-    CancellationGate,
-    claim_task_id,
-    run_worker_with_terminal_state,
-)
+from backend.core.local_entry_guards import CancellationGate, claim_task_id
 from backend.core.local_config import get_preference
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.core.local_limits_config import max_upload_mb
-from backend.core.local_request_scope import request_client_id
 from backend.core.media_intake import (
     copy_source_file,
     file_size_mb,
@@ -45,6 +40,8 @@ from backend.core.media_intake import (
 from backend.core.media_job import execute_media_job
 from backend.core.media_preflight import MediaPreflightError, preflight_media_file
 from backend.core.queue_options import _queue_options_from_mapping
+from backend.core.request_scope import local_client_scope
+from backend.core.runtime_env import truthy
 from backend.core.storage_paths import _video_source_storage_dir
 from backend.core.title_display import display_title_for_user
 from backend.core.video_source import (
@@ -58,6 +55,8 @@ from backend.routers.local_note_regen import summarize_transcript_source
 from backend.routers.local_processing import (
     _effective_duration_limit,
     _local_media_job_context,
+    _start_behind_queue,
+    wait_for_queue_turn,
 )
 
 router = APIRouter()
@@ -68,12 +67,12 @@ _ALLOWED_COOKIE_BROWSERS = {
 }
 
 
-def _local_client_scope(request: Request) -> Optional[str]:
-    return request_client_id(request) or "anonymous"
-
-
-def _truthy(value: Any) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+# A download reports every megabyte. Writing each report to the database and
+# fanning it out to every subscriber is more work than the download itself on
+# a fast connection, so reports go out at most this often — unless the
+# percentage moved by this much, or the stage changed, or it is the last one.
+_PROGRESS_PUBLISH_INTERVAL_SECONDS = 2.0
+_PROGRESS_PUBLISH_PERCENT_STEP = 5.0
 
 
 def _friendly_error(error: Any) -> str:
@@ -124,7 +123,7 @@ async def video_source_cookie_check(payload: dict[str, Any] = Body(default={})) 
     browser = str(payload.get("browser") or "").strip().lower()
     if browser not in _ALLOWED_COOKIE_BROWSERS:
         raise HTTPException(status_code=400, detail="不支持的浏览器")
-    return check_browser_cookies(browser)
+    return await asyncio.to_thread(check_browser_cookies, browser)
 
 
 async def _run_local_video_source_job(
@@ -137,20 +136,87 @@ async def _run_local_video_source_job(
     client_id: Optional[str],
     gate: CancellationGate,
     route: str = _ROUTE,
+    previous: Any = None,
+    done: asyncio.Event | None = None,
 ) -> None:
     """Download the source, then run the local pipeline — all on the local hub.
 
     Runs under ``run_worker_with_terminal_state``: this body handles the
     failures it can describe well (resolution, size, preflight); anything that
     escapes — including cancellation — still ends in a terminal state.
+
+    ``previous`` and ``done`` are this job's link in the serial chain. The
+    download goes ahead at once — it is network, and competes with nothing the
+    chain protects — and the pipeline waits its turn behind whatever is already
+    transcribing. ``done`` is set however this ends, so the job behind it is
+    never left waiting.
     """
+    try:
+        await _download_then_process(
+            task_id=task_id,
+            input_text=input_text,
+            title=title,
+            options=options,
+            allow_miuistore=allow_miuistore,
+            client_id=client_id,
+            gate=gate,
+            route=route,
+            previous=previous,
+        )
+    finally:
+        if done is not None:
+            done.set()
+
+
+def _progress_throttle() -> Any:
+    """Decide which download reports are worth persisting and publishing."""
+    last = {"at": 0.0, "percent": None, "stage": None}
+
+    def should_publish(progress: VideoSourceProgress) -> bool:
+        percent = progress.percent
+        finished = (
+            (percent is not None and percent >= 100)
+            or (progress.total_bytes and progress.loaded_bytes == progress.total_bytes)
+        )
+        now = time.monotonic()
+        due = (
+            finished
+            or progress.stage != last["stage"]
+            or now - last["at"] >= _PROGRESS_PUBLISH_INTERVAL_SECONDS
+            or (
+                percent is not None
+                and (last["percent"] is None or percent - last["percent"] >= _PROGRESS_PUBLISH_PERCENT_STEP)
+            )
+        )
+        if due:
+            last.update(at=now, percent=percent, stage=progress.stage)
+        return due
+
+    return should_publish
+
+
+async def _download_then_process(
+    *,
+    task_id: str,
+    input_text: str,
+    title: str | None,
+    options: dict[str, str],
+    allow_miuistore: bool,
+    client_id: Optional[str],
+    gate: CancellationGate,
+    route: str,
+    previous: Any,
+) -> None:
     loop = asyncio.get_running_loop()
+    should_publish = _progress_throttle()
 
     def on_progress(progress: VideoSourceProgress) -> None:
         # Runs in the executor thread: persist, then publish thread-safely.
         # After cancellation the download thread cannot be killed and keeps
         # calling this; the gate keeps it from resurrecting the job state.
         if gate.closed:
+            return
+        if not should_publish(progress):
             return
         progress_value = _video_source_progress_value(progress)
         upsert_job(
@@ -248,7 +314,7 @@ async def _run_local_video_source_job(
 
     source_path = Path(saved.file_path)
     suffix = source_path.suffix or Path(saved.filename).suffix or ".mp4"
-    target_path = copy_source_file(task_id, suffix, source_path)
+    target_path = await asyncio.to_thread(copy_source_file, task_id, suffix, source_path)
     source_file_size_mb = path_size_mb(target_path)
     media_type = saved.media_type or "video"
     source_type = "transcript_file" if media_type == "transcript" else "video"
@@ -313,7 +379,7 @@ async def _run_local_video_source_job(
         return
 
     try:
-        media_preflight = preflight_media_file(target_path)
+        media_preflight = await asyncio.to_thread(preflight_media_file, target_path)
     except MediaPreflightError as exc:
         await fail(
             "import",
@@ -342,6 +408,8 @@ async def _run_local_video_source_job(
         options=options,
         duration_limit_seconds=effective_duration_limit,
     )
+    # The expensive part waits its turn; the download above did not have to.
+    await wait_for_queue_turn(previous, task_id, client_id)
     await execute_media_job(ctx)
 
 
@@ -367,7 +435,7 @@ async def submit_video_source_job(
     # without one, so with the fallback off a Douyin link had no working route
     # at all.
     if "allow_miuistore" in (raw_options or {}):
-        allow_miuistore = _truthy(raw_options.get("allow_miuistore"))
+        allow_miuistore = truthy(raw_options.get("allow_miuistore"))
     else:
         remembered = get_preference("allow_miuistore")
         allow_miuistore = True if remembered is None else bool(remembered)
@@ -403,27 +471,23 @@ async def submit_video_source_job(
         metadata=metadata,
     )
     gate = CancellationGate()
-    await JOB_EVENTS.start(
-        task_id_value,
-        functools.partial(
-            run_worker_with_terminal_state,
+    await _start_behind_queue(
+        task_id=task_id_value,
+        client_id=client_id,
+        route=route,
+        stage="video_source",
+        gate=gate,
+        chained_worker=lambda previous, done: _run_local_video_source_job(
             task_id=task_id_value,
+            input_text=input_text,
+            title=title or None,
+            options=options,
+            allow_miuistore=allow_miuistore,
             client_id=client_id,
-            hub=JOB_EVENTS,
-            route=route,
-            stage="video_source",
             gate=gate,
-            worker=functools.partial(
-                _run_local_video_source_job,
-                task_id=task_id_value,
-                input_text=input_text,
-                title=title or None,
-                options=options,
-                allow_miuistore=allow_miuistore,
-                client_id=client_id,
-                gate=gate,
-                route=route,
-            ),
+            route=route,
+            previous=previous,
+            done=done,
         ),
     )
     return {
@@ -445,7 +509,7 @@ async def create_video_source_job(
         input_text=str(payload.get("input") or "").strip(),
         title=str(payload.get("title") or "").strip(),
         raw_options=payload.get("options") if isinstance(payload.get("options"), dict) else {},
-        client_id=_local_client_scope(request),
+        client_id=local_client_scope(request),
     )
     return {"ok": True, "job": job}
 
@@ -455,7 +519,7 @@ def list_video_source_jobs(request: Request, limit: int = 50) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit or 50), 200))
     jobs = [
         job
-        for job in list_jobs(limit=200, client_id=_local_client_scope(request))
+        for job in list_jobs(limit=200, client_id=local_client_scope(request))
         if (job.get("metadata") or {}).get("route") == _ROUTE
     ][:safe_limit]
     return {"jobs": jobs}

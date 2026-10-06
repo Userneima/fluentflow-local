@@ -12,22 +12,15 @@ cleanup). Neither imports back into this module.
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Optional
-import functools
-import json
+from typing import Any, AsyncGenerator
 import os
-import uuid
-import urllib.parse
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 import asyncio
 import shutil
-import tempfile
 import time
 import logging
 
-from fastapi import Request
 
 from backend.core.audio_handler import (
     extract_compressed_mp3,
@@ -56,7 +49,6 @@ from backend.core.media_job_outcome import (
 )
 from backend.core.media_preflight import SILENCE_GUARD_ENV, media_guard_enabled
 from backend.core.media_intake import path_size_mb
-from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 from backend.core.event_context import (
     event_metadata,
     runtime_context_metadata,
@@ -332,48 +324,33 @@ def _enforce_history_retention(ctx: MediaJobContext) -> None:
 async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     """Run the full media pipeline for one job, yielding SSE chunks. No FastAPI Request."""
     task_id_value = ctx.task_id_value
-    client_id = ctx.client_id
     source_type = ctx.source_type
     source_filename = ctx.source_filename
     raw_title_value = ctx.raw_title_value
     display_title_value = ctx.display_title_value
-    suffix = ctx.suffix
     td = ctx.td
     in_path = ctx.in_path
-    content = ctx.content
     source_fingerprint = ctx.source_fingerprint
     source_file_size_mb = ctx.source_file_size_mb
-    max_upload_mb = ctx.max_upload_mb
-    duration_preflight_sec = ctx.duration_preflight_sec
     task_started_at = ctx.task_started_at
     loop = ctx.loop
     model_size = ctx.model_size
     speed_profile = ctx.speed_profile
     language = ctx.language
     stt_provider_value = ctx.stt_provider_value
-    diarization_requested = ctx.diarization_requested
     voice_enhance_requested = bool(ctx.voice_enhance_requested)
     do_lark = ctx.do_lark
     summary_disabled = ctx.summary_disabled
     generate_visuals = ctx.generate_visuals
-    source_last_modified_ms = ctx.source_last_modified_ms
-    export_to_lark = ctx.export_to_lark
-    lark_export_route = ctx.lark_export_route
-    lark_via_cli = ctx.lark_via_cli
-    folder_token = ctx.folder_token
     deepseek_api_key = ctx.deepseek_api_key
     openai_api_key = ctx.openai_api_key
     qwen_api_key = ctx.qwen_api_key
     ai_provider = ctx.ai_provider
     ai_model = ctx.ai_model
     note_mode = ctx.note_mode
-    skip_summary = ctx.skip_summary
     system_prompt = ctx.system_prompt
     prompt_preset = ctx.prompt_preset
     prompt_preset_label = ctx.prompt_preset_label
-    title = ctx.title
-    lark_app_id = ctx.lark_app_id
-    lark_app_secret = ctx.lark_app_secret
     duration_limit_seconds = ctx.duration_limit_seconds
     secret_resolver = ctx.secret_resolver
     ai_kwargs_builder = ctx.ai_kwargs_builder
@@ -515,6 +492,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         visual_requests: list[dict[str, Any]] = []
         visual_selections: list[dict[str, Any]] = []
         visual_evidence_error: str | None = None
+        visual_plan_covered_until: float | None = None
 
         # ── Stage 2: STT transcription ─────────────────────
         current_stage = "stt"
@@ -995,6 +973,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                         ),
                     )
                     visual_requests = visual_plan.requests
+                    if visual_plan.transcript_truncated:
+                        visual_plan_covered_until = visual_plan.covered_until_seconds
                     if visual_requests:
                         frames_output_dir = _artifact_storage_dir() / task_id_value / "frames"
                         frames_output_dir.mkdir(parents=True, exist_ok=True)
@@ -1058,6 +1038,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                     visual_request_count=len(visual_requests) if visual_requests else None,
                     visual_selection_count=len(visual_selections) if visual_selections else None,
                     visual_evidence_error=visual_evidence_error,
+                    visual_plan_covered_until_seconds=visual_plan_covered_until,
                     frame_count=len(frame_paths) if frame_paths else None,
                     note_generation_transcript_source=base_result.get("note_generation_transcript_source"),
                 ),
@@ -1226,6 +1207,15 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             result["visual_evidence_reason"] = (
                 visual_evidence_error
                 or "文本模型提出了截图需求，但当前任务没有生成可用候选帧。"
+            )
+
+        if visual_plan_covered_until is not None:
+            # The planner only read the transcript up to this point, so the
+            # note after it has no screenshots. Say so in the task record
+            # instead of leaving the second half silently bare.
+            result["visual_plan_covered_until_seconds"] = round(visual_plan_covered_until, 1)
+            result["visual_plan_coverage_note"] = (
+                f"转录稿太长，截图规划只读到第 {int(visual_plan_covered_until // 60)} 分钟，之后的内容没有配图。"
             )
 
         # ── Stage 4: Lark export (optional) ───────────────

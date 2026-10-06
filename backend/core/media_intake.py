@@ -48,14 +48,6 @@ def file_size_mb(byte_count: int | None) -> float | None:
     return round(byte_count / (1024 * 1024), 3)
 
 
-def persist_source_file(task_id: str, suffix: str, content: bytes) -> Path:
-    target_dir = _source_storage_dir() / task_id
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / f"source{suffix or '.bin'}"
-    target.write_bytes(content)
-    return target
-
-
 def persist_source_stream(
     task_id: str,
     suffix: str,

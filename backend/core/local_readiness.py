@@ -109,8 +109,9 @@ def _transcription_checks() -> list[ReadinessCheck]:
         detail = (
             f"转录模型 {plan.model_size} 尚未下载（{plan.repo_id}）。"
             "第一次转录会自动下载，需要几 GB 空间和一段等待；"
-            "也可以先运行 python scripts/stt_model.py fetch 下好"
-            "（网络到 huggingface.co 不通时它会自动改用镜像源）。"
+            "也可以先运行 python scripts/stt_model.py fetch 下好。"
+            "服务启动时和 fetch 时都会先探一下 huggingface.co，连不上就改用镜像源；"
+            "探测也失败时加 --mirror 直接走镜像。"
         )
     checks.append(ReadinessCheck(name="stt-model", ok=present, required=False, detail=detail))
     return checks
@@ -161,7 +162,7 @@ def run_readiness_checks() -> list[ReadinessCheck]:
         ok=bundle.exists(),
         required=False,
         detail=(f"本地前端已构建：{bundle}" if bundle.exists()
-                else "本地前端未构建：请运行 npm run build:frontend:local（API 仍可用）。"),
+                else "本地前端未构建：请运行 npm run build:frontend（API 仍可用）。"),
     ))
 
     writable, detail = _data_dir_writable()

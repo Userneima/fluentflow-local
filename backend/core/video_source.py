@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -126,46 +127,65 @@ def _run_process(
     timeout: float,
     cancellation_event: threading.Event | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a child process, terminating it promptly when locally cancelled.
+    """Run a child process, stopping it and its children on cancel or timeout.
 
-    Callers that do not provide a cancellation event retain the existing
-    ``subprocess.run`` path. The polling ``Popen`` path is local-only and keeps
-    yt-dlp/FFmpeg from continuing after a user cancels the owning task.
+    The child is started in its own session so that stopping it stops the whole
+    process group: yt-dlp runs ffmpeg as a child of its own to merge or remux,
+    and terminating yt-dlp alone left that ffmpeg writing into the download
+    after the user had cancelled the task.
     """
-    if cancellation_event is None:
-        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-
     _raise_if_cancelled(cancellation_event)
     process = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
     deadline = time.monotonic() + timeout
     while True:
-        if cancellation_event.is_set():
-            process.terminate()
-            try:
-                process.communicate(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.communicate()
+        if cancellation_event is not None and cancellation_event.is_set():
+            _stop_process_group(process)
             raise VideoSourceCancelled("Video source operation cancelled")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            process.terminate()
-            try:
-                stdout, stderr = process.communicate(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                stdout, stderr = process.communicate()
+            stdout, stderr = _stop_process_group(process)
             raise subprocess.TimeoutExpired(args, timeout, output=stdout, stderr=stderr)
         try:
             stdout, stderr = process.communicate(timeout=min(0.2, remaining))
         except subprocess.TimeoutExpired:
             continue
         return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
+def _signal_process_group(process: subprocess.Popen, sig: int) -> None:
+    """Send ``sig`` to the child's whole group, or to the child alone if the
+    group is already gone or this platform has no process groups."""
+    try:
+        os.killpg(process.pid, sig)
+    except (ProcessLookupError, PermissionError, AttributeError, OSError):
+        try:
+            if sig == signal.SIGKILL:
+                process.kill()
+            else:
+                process.terminate()
+        except OSError:
+            pass
+
+
+def _stop_process_group(process: subprocess.Popen) -> tuple[str, str]:
+    """Terminate, then kill, the child and everything it started. Returns what
+    the child had written so a timeout can still report it."""
+    _signal_process_group(process, signal.SIGTERM)
+    try:
+        return process.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        _signal_process_group(process, signal.SIGKILL)
+        return process.communicate()
+
+
+# The scratch name a yt-dlp download is written under until it has finished.
+PARTIAL_DOWNLOAD_SUFFIX = ".download"
 
 
 def max_video_bytes() -> int:
@@ -630,13 +650,26 @@ _RESOLVER_RETRIES = 3
 _RESOLVER_RETRY_SLEEP_SECONDS = 2.0
 
 
+def _failure_detail(error: Exception, limit: int = 400) -> str:
+    """The tail of what the tool said, for the trace and the log. The reason code
+    says which category a failure fell into; this says what actually happened."""
+    text = " ".join(str(error or "").split())
+    return text[-limit:] if len(text) > limit else text
+
+
 def _resolve_with_yt_dlp_attempt(
     url: str,
     cookies_from_browser: str | None = None,
     *,
     cancellation_event: threading.Event | None = None,
-) -> tuple[ResolvedVideo | None, str | None]:
-    resolved, reason = _resolve_with_yt_dlp_once(
+) -> tuple[ResolvedVideo | None, str | None, str | None]:
+    """Resolve through yt-dlp, retrying only the one transient refusal.
+
+    Returns the video, or the failure's reason code and the tail of yt-dlp's
+    own message. The reason is what the product branches on; the detail is
+    what makes a failed link diagnosable afterwards.
+    """
+    resolved, reason, detail = _resolve_with_yt_dlp_once(
         url, cookies_from_browser, cancellation_event=cancellation_event
     )
     attempts = 0
@@ -649,10 +682,10 @@ def _resolve_with_yt_dlp_attempt(
                 _raise_if_cancelled(cancellation_event)
         else:
             time.sleep(pause)
-        resolved, reason = _resolve_with_yt_dlp_once(
+        resolved, reason, detail = _resolve_with_yt_dlp_once(
             url, cookies_from_browser, cancellation_event=cancellation_event
         )
-    return resolved, reason
+    return resolved, reason, detail
 
 
 def _resolve_with_yt_dlp_once(
@@ -660,12 +693,12 @@ def _resolve_with_yt_dlp_once(
     cookies_from_browser: str | None = None,
     *,
     cancellation_event: threading.Event | None = None,
-) -> tuple[ResolvedVideo | None, str | None]:
+) -> tuple[ResolvedVideo | None, str | None, str | None]:
     try:
         info = run_yt_dlp(url, cookies_from_browser, **_cancellation_kwargs(cancellation_event))
         download_url, audio_url = choose_yt_dlp_media(info)
         if not download_url:
-            return None, "no_downloadable_media"
+            return None, "no_downloadable_media", None
         return ResolvedVideo(
             provider="yt-dlp",
             source_url=info.get("webpage_url") or info.get("original_url") or url,
@@ -677,11 +710,14 @@ def _resolve_with_yt_dlp_once(
             referer="https://www.bilibili.com/" if is_bilibili_url(info.get("webpage_url") or url) else None,
             duration_seconds=_number_or_none(info.get("duration")),
             estimated_size_bytes=estimate_yt_dlp_size_bytes(info),
-        ), None
+        ), None, None
     except VideoSourceCancelled:
         raise
     except Exception as exc:
-        return None, _resolver_failure_reason(exc)
+        reason = _resolver_failure_reason(exc)
+        detail = _failure_detail(exc)
+        logger.warning("yt-dlp could not resolve %s (%s): %s", url, reason, detail or "no output")
+        return None, reason, detail or None
 
 
 def resolve_with_yt_dlp(
@@ -690,7 +726,7 @@ def resolve_with_yt_dlp(
     *,
     cancellation_event: threading.Event | None = None,
 ) -> ResolvedVideo | None:
-    resolved, _ = _resolve_with_yt_dlp_attempt(
+    resolved, _, _ = _resolve_with_yt_dlp_attempt(
         url, cookies_from_browser, **_cancellation_kwargs(cancellation_event)
     )
     return resolved
@@ -736,12 +772,9 @@ def _resolve_with_miuistore_attempt(
     except VideoSourceCancelled:
         raise
     except Exception as exc:
-        return None, _resolver_failure_reason(exc)
-
-
-def resolve_with_miuistore(input_text: str) -> ResolvedVideo | None:
-    resolved, _ = _resolve_with_miuistore_attempt(input_text)
-    return resolved
+        reason = _resolver_failure_reason(exc)
+        logger.warning("miuistore could not resolve the link (%s): %s", reason, _failure_detail(exc))
+        return None, reason
 
 
 def resolve_video(
@@ -766,13 +799,16 @@ def resolve_video(
             [{"provider": "source-policy", "status": "failed", "reason": "unsupported_source"}],
         )
     trace: list[dict[str, str]] = []
-    resolved, failure_reason = _resolve_with_yt_dlp_attempt(
+    resolved, failure_reason, failure_detail = _resolve_with_yt_dlp_attempt(
         source_url, cookies_from_browser, **_cancellation_kwargs(cancellation_event)
     )
     if resolved:
         resolved.resolution_trace = [{"provider": "yt-dlp", "status": "selected"}]
         return resolved
-    trace.append({"provider": "yt-dlp", "status": "failed", "reason": failure_reason or "unavailable"})
+    failed: dict[str, str] = {"provider": "yt-dlp", "status": "failed", "reason": failure_reason or "unavailable"}
+    if failure_detail:
+        failed["detail"] = failure_detail
+    trace.append(failed)
     login_browser = (cookies_from_browser or os.environ.get("YT_DLP_COOKIES_FROM_BROWSER", "")).strip()
     if failure_reason == "fresh_cookies_required" and login_browser and is_douyin_url(source_url):
         # Cookies were sent and Douyin still wants fresh ones: the login in the
@@ -788,6 +824,15 @@ def resolve_video(
             trace,
         )
     if not is_douyin_url(source_url):
+        if failure_reason == "forbidden":
+            # A 403 is the platform saying no, not a link nobody can read:
+            # the fix (login cookies) differs, so the cause survives here and
+            # not only in the trace.
+            raise VideoSourceResolutionError(
+                "视频下载失败：403，平台拒绝了这个链接的下载请求。"
+                "请稍后重试、在设置里开启浏览器登录态（cookies），或上传视频文件",
+                trace,
+            )
         raise VideoSourceResolutionError("暂时无法自动解析这个视频链接，请上传视频文件", trace)
     if not allow_miuistore:
         # The fallback runs by default: yt-dlp needs a fresh Douyin login and
@@ -1006,10 +1051,6 @@ def caption_language_candidates(provider: str = "youtube") -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()] or ["en"]
 
 
-def youtube_caption_language_candidates() -> list[str]:
-    return caption_language_candidates("youtube")
-
-
 def caption_provider(url: str) -> str | None:
     """Which caption source, if any, can serve this URL without downloading media."""
 
@@ -1200,6 +1241,12 @@ def download_yt_dlp_media(
         total_bytes=None,
     ))
     max_bytes = max_video_bytes()
+    # Written under a scratch name and renamed only once yt-dlp has finished.
+    # ``--no-part`` writes the final path directly, so a timeout, a non-zero
+    # exit or a cancel left a truncated file at the final name — which the next
+    # attempt then read as "already downloaded" and transcribed as the video.
+    partial_path = file_path.with_name(file_path.name + PARTIAL_DOWNLOAD_SUFFIX)
+    partial_path.unlink(missing_ok=True)
     args = [
         sys.executable,
         "-m",
@@ -1213,7 +1260,7 @@ def download_yt_dlp_media(
         "-f",
         "best[ext=mp4]/best",
         "-o",
-        str(file_path),
+        str(partial_path),
         *_yt_dlp_cookies_args(cookies_from_browser, url),
     ]
     try:
@@ -1227,22 +1274,29 @@ def download_yt_dlp_media(
         estimated_size_bytes=estimated_size_bytes,
     )
     try:
-        result = _run_process(
-            args,
-            timeout=timeout,
-            cancellation_event=cancellation_event,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"视频下载超时：视频可能较大或当前网络较慢，已等待 {timeout} 秒。") from exc
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "").strip() or f"yt-dlp 下载失败，退出码 {result.returncode}")
-    size_bytes = file_path.stat().st_size
-    if size_bytes > max_bytes:
         try:
-            file_path.unlink()
-        except FileNotFoundError:
-            pass
-        raise RuntimeError(f"视频文件过大，当前限制为 {round(max_bytes / 1024 / 1024)}MB")
+            result = _run_process(
+                args,
+                timeout=timeout,
+                cancellation_event=cancellation_event,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"视频下载超时：视频可能较大或当前网络较慢，已等待 {timeout} 秒。") from exc
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            logger.warning("yt-dlp download of %s failed (exit %s): %s", url, result.returncode, detail[-400:])
+            raise RuntimeError(detail or f"yt-dlp 下载失败，退出码 {result.returncode}")
+        if not partial_path.is_file():
+            raise RuntimeError("yt-dlp 没有写出视频文件")
+        size_bytes = partial_path.stat().st_size
+        if size_bytes > max_bytes:
+            raise RuntimeError(f"视频文件过大，当前限制为 {round(max_bytes / 1024 / 1024)}MB")
+        partial_path.replace(file_path)
+    except BaseException:
+        # Every failure path, cancellation included: nothing may be left at a
+        # name the next attempt would trust.
+        partial_path.unlink(missing_ok=True)
+        raise
     on_progress and on_progress(VideoSourceProgress(
         stage="downloading",
         message="视频下载完成",

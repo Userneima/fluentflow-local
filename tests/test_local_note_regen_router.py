@@ -440,3 +440,50 @@ def test_transcript_correction_uses_local_key(monkeypatch):
     assert seen["api_key"] == "stored-deepseek_api_key"
     assert seen["provider"] == "deepseek"
     assert r.json()["note_generation_transcript_source"] == "transcript_text"
+
+
+def test_regenerate_keeps_the_old_note_when_the_model_returns_nothing(monkeypatch):
+    """An empty answer is a failed regeneration, not a new empty note: the note
+    the user had stays, the task stays finished, and the reason says so in
+    Chinese."""
+    jobs, events = _install_store(monkeypatch)
+    jobs["t-keep"] = {
+        "task_id": "t-keep", "status": "completed", "client_id": LOCAL_OWNER_ID,
+        "summary_status": "completed",
+        "result": {"task_id": "t-keep", "transcript_text": "文本", "summary_markdown": "# 原来的笔记"},
+    }
+    monkeypatch.setattr(
+        local_note_regen, "summarize_transcript_with_metadata",
+        lambda transcript, **kwargs: _summary_result(markdown="   \n"),
+    )
+
+    r = _client().post(
+        "/regenerate-summary",
+        headers=_HEADERS,
+        data={"transcript": "文本", "task_id": "t-keep"},
+    )
+
+    assert r.status_code >= 500
+    assert "没有返回" in r.json()["detail"] and "保留" in r.json()["detail"]
+    job = jobs["t-keep"]
+    assert job["result"]["summary_markdown"] == "# 原来的笔记"
+    assert job["status"] == "completed", "the task itself did not fail, only this regeneration"
+    assert job["summary_status"] == "failed"
+    assert "没有返回" in job["error_reason"]
+    assert any(e["event_name"] == "summary_regenerated" and e["success"] is False for e in events)
+
+
+def test_regenerate_without_a_previous_note_reports_nothing_was_written(monkeypatch):
+    jobs, events = _install_store(monkeypatch)
+    monkeypatch.setattr(
+        local_note_regen, "summarize_transcript_with_metadata",
+        lambda transcript, **kwargs: _summary_result(markdown=""),
+    )
+
+    r = _client().post("/regenerate-summary", headers=_HEADERS, data={"transcript": "文本"})
+
+    assert r.status_code >= 500
+    assert "没有返回" in r.json()["detail"]
+    failed = [job for job in jobs.values() if job.get("summary_status") == "failed"]
+    assert failed and failed[0]["status"] == "failed"
+    assert not any(job.get("result", {}).get("summary_markdown") == "" for job in jobs.values())

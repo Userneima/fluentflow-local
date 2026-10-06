@@ -16,8 +16,6 @@ from backend.routers import local_processing as lp
 @pytest.fixture(autouse=True)
 def _clean_queue():
     lp._QUEUE_RECENT.clear()
-    lp._QUEUE_TAIL["task_id"] = None
-    lp._QUEUE_TAIL["event"] = None
     yield
     lp._QUEUE_RECENT.clear()
 

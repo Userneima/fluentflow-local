@@ -18,15 +18,11 @@ from backend.core.job_store import (
     list_jobs,
     list_unacknowledged_restart_interruptions,
 )
-from backend.core.local_request_scope import request_client_id
 from backend.core.local_task_detail import POLICY, build_task_detail, build_task_snapshot
+from backend.core.request_scope import local_client_scope
 
 
 router = APIRouter()
-
-
-def _local_client_scope(request: Request) -> Optional[str]:
-    return request_client_id(request) or "anonymous"
 
 
 @router.get("/jobs")
@@ -38,7 +34,7 @@ def get_jobs(
 ) -> dict[str, Any]:
     """Every job by default; ``limit`` caps it, ``updated_since`` narrows a poll
     to the rows written since the newest ``updated_at`` the caller already has."""
-    client_id = _local_client_scope(request)
+    client_id = local_client_scope(request)
     limit_value = limit if limit and limit > 0 else None
     jobs = (
         list_jobs(limit=limit_value, client_id=client_id, updated_since=updated_since)
@@ -85,7 +81,7 @@ def _interrupted_task(job: dict[str, Any]) -> dict[str, Any]:
 @router.get("/jobs/interrupted")
 def get_interrupted_jobs(request: Request) -> dict[str, Any]:
     """Tasks the last service restart cut off that have not been acknowledged."""
-    jobs = list_unacknowledged_restart_interruptions(client_id=_local_client_scope(request))
+    jobs = list_unacknowledged_restart_interruptions(client_id=local_client_scope(request))
     return {"tasks": [_interrupted_task(job) for job in jobs]}
 
 
@@ -100,14 +96,14 @@ def acknowledge_interrupted_jobs(
         raise HTTPException(status_code=422, detail="task_ids must be a list")
     acknowledged = acknowledge_restart_interruptions(
         [str(task_id) for task_id in raw_ids],
-        client_id=_local_client_scope(request),
+        client_id=local_client_scope(request),
     )
     return {"ok": True, "acknowledged": acknowledged}
 
 
 @router.get("/jobs/{task_id}")
 def get_job_detail(request: Request, task_id: str) -> dict[str, Any]:
-    job = get_job(task_id, client_id=_local_client_scope(request))
+    job = get_job(task_id, client_id=local_client_scope(request))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return {**job, "task_snapshot": build_task_snapshot(job)}
@@ -115,7 +111,7 @@ def get_job_detail(request: Request, task_id: str) -> dict[str, Any]:
 
 @router.get("/jobs/{task_id}/detail")
 def get_job_processing_detail(request: Request, task_id: str) -> dict[str, Any]:
-    job = get_job(task_id, client_id=_local_client_scope(request))
+    job = get_job(task_id, client_id=local_client_scope(request))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     steps = list_job_steps(task_id=task_id, limit=100)

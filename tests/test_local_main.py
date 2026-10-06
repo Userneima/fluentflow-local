@@ -99,6 +99,80 @@ def test_non_loopback_override_env(monkeypatch):
     assert _get_as_peer("203.0.113.5").status_code == 200
 
 
+def _request_as_peer(peer: str, method: str, path: str, **kwargs) -> httpx.Response:
+    import asyncio
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=create_local_app(), client=(peer, 40000))
+        async with httpx.AsyncClient(transport=transport, base_url="http://local") as client:
+            return await client.request(method, path, **kwargs)
+
+    return asyncio.run(scenario())
+
+
+_LAN = "203.0.113.5"
+_ACK = "/jobs/interrupted/acknowledge"
+
+
+def test_lan_mode_still_refuses_a_page_served_from_elsewhere(monkeypatch):
+    """Opening the LAN opens it to API clients, not to any web page a LAN
+    machine happens to have open: a cross-site POST is still refused."""
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    r = _request_as_peer(_LAN, "GET", "/health", headers={"origin": "https://evil.example"})
+    assert r.status_code == 403
+    r = _request_as_peer(
+        _LAN, "POST", _ACK, json={"task_ids": []},
+        headers={"origin": "https://evil.example", "authorization": "Bearer lan-secret"},
+    )
+    assert r.status_code == 403, "a token does not excuse a foreign page"
+    r = _request_as_peer("127.0.0.1", "GET", "/health", headers={"origin": "null"})
+    assert r.status_code == 403
+
+
+def test_lan_mode_lets_a_lan_client_read_but_asks_the_access_token_to_write(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    assert _request_as_peer(_LAN, "GET", "/health").status_code == 200
+    refused = _request_as_peer(_LAN, "POST", _ACK, json={"task_ids": []})
+    assert refused.status_code == 401
+    assert "令牌" in refused.json()["detail"]
+    wrong = _request_as_peer(_LAN, "POST", _ACK, json={"task_ids": []}, headers={"authorization": "Bearer nope"})
+    assert wrong.status_code == 401
+    allowed = _request_as_peer(_LAN, "POST", _ACK, json={"task_ids": []}, headers={"authorization": "Bearer lan-secret"})
+    assert allowed.status_code == 200
+
+
+def test_lan_mode_without_a_configured_token_cannot_be_written_to_from_the_lan(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.delenv("FLUENTFLOW_ACCESS_TOKEN", raising=False)
+
+    r = _request_as_peer(_LAN, "POST", _ACK, json={"task_ids": []})
+
+    assert r.status_code == 403
+    assert "FLUENTFLOW_ACCESS_TOKEN" in r.json()["detail"]
+
+
+def test_lan_mode_does_not_make_the_owners_own_page_carry_a_token(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    r = _request_as_peer("127.0.0.1", "POST", _ACK, json={"task_ids": []}, headers={"origin": "http://localhost:5173"})
+
+    assert r.status_code == 200
+
+
+def test_strict_mode_is_unchanged_by_a_configured_token(monkeypatch):
+    monkeypatch.delenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", raising=False)
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    r = _request_as_peer(_LAN, "POST", _ACK, json={"task_ids": []}, headers={"authorization": "Bearer lan-secret"})
+
+    assert r.status_code == 403
+
+
 # ---- one owner through the assembled app ------------------------------------------
 
 @pytest.fixture()

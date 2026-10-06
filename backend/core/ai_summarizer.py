@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import json
-import base64
+import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -14,8 +14,6 @@ from typing import Any, Callable, Final
 
 from dotenv import load_dotenv
 from openai import OpenAI
-
-logger = logging.getLogger(__name__)
 
 from backend.core.ai_config import (
     DEEPSEEK_BASE_URL,
@@ -26,7 +24,6 @@ from backend.core.ai_config import (
     DEFAULT_QWEN_MODEL,
     DEFAULT_QWEN_VISION_MODEL,
     DEFAULT_MODEL,
-    SUPPORTED_PROVIDERS,
     SUPPORTED_NOTE_MODES,
     CHAPTER_COVERAGE_VERSION,
     DIRECT_MODE_MAX_CHARS,
@@ -42,12 +39,8 @@ from backend.core.ai_prompts import (
     _NOTE_CONTENT_POLICY,
     _NOTE_OUTPUT_LANGUAGE,
     _FEISHU_NOTE_FORMATTING_PREFERENCES,
-    _SOURCE_FAITHFULNESS_RULES,
-    _MULTIMODAL_NOTE_SYSTEM,
-    _MULTIMODAL_CONTENT_POLICY,
     _VISUAL_REQUEST_PLANNER_SYSTEM,
     _VISUAL_FRAME_SELECTOR_SYSTEM,
-    _INTERIM_SYSTEM,
     _BATCH_CONDENSE_SYSTEM,
     _EVIDENCE_SYSTEM,
     _EVIDENCE_CONDENSE_SYSTEM,
@@ -55,13 +48,21 @@ from backend.core.ai_prompts import (
     _CHAPTER_OUTLINE_SYSTEM,
     _CHAPTER_NOTE_SYSTEM,
     _CHAPTER_STYLE_SYSTEM,
-    _FINAL_WRAPPER,
     _HIGH_FIDELITY_FINAL_WRAPPER,
     _COVERAGE_SYSTEM,
-    _SEGMENT_TRANSLATION_SYSTEM,
     _BILINGUAL_SEGMENT_SYSTEM,
     _REVISION_WRAPPER,
 )
+from backend.core.ai_client import (
+    _normalize_provider,
+    _normalize_model,
+    _get_client,
+    _chat,
+    _vision_chat,
+    can_use_multimodal,
+)
+
+logger = logging.getLogger(__name__)
 
 _PROMPT_SECTION_HEADING_RE = re.compile(
     r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?(提示词|系统提示词|prompt|system prompt)(?:\*\*)?\s*[:：]?\s*$",
@@ -119,18 +120,16 @@ class SummaryResult:
 
 
 @dataclass(frozen=True)
-class MultimodalSummaryResult:
-    markdown: str
-    frame_count: int
-    transcript_length: int
-
-
-@dataclass(frozen=True)
 class VisualRequestPlanResult:
     requests: list[dict[str, Any]]
     raw_response: str
     provider: str
     model: str
+    # How far into the recording the planner was shown. ``None`` when the whole
+    # transcript fit; otherwise the end of the last segment it read, so the task
+    # record can say why the later part of a long video has no frames.
+    covered_until_seconds: float | None = None
+    transcript_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -141,31 +140,69 @@ class VisualFrameSelectionResult:
 
 
 @dataclass(frozen=True)
-class SegmentTranslationResult:
-    segments: list[dict[str, Any]]
-    translated_count: int
-    chunk_count: int
-
-
-@dataclass(frozen=True)
 class BilingualSegmentResult:
     segments: list[dict[str, Any]]
     translated_count: int
     chunk_count: int
 
 
-from backend.core.ai_client import (
-    _normalize_provider,
-    _provider_base_url,
-    _provider_default_model,
-    _normalize_model,
-    _provider_api_key,
-    _get_client,
-    _chat,
-    _image_to_base64_data_url,
-    _vision_chat,
-    can_use_multimodal,
-)
+
+
+class NoteDeadlineExceeded(RuntimeError):
+    """Note writing ran past the overall time limit. The message is for the user."""
+
+
+# The whole note, every stage included. Each request already has its own
+# timeout; this is the ceiling on their sum, so a note that keeps making slow
+# progress still ends instead of holding the queue for the rest of the day.
+DEFAULT_NOTE_DEADLINE_SECONDS = 3600.0
+
+
+def note_deadline_seconds() -> float:
+    raw = (os.environ.get("FLUENTFLOW_NOTE_DEADLINE_SECONDS") or "").strip()
+    try:
+        value = float(raw) if raw else DEFAULT_NOTE_DEADLINE_SECONDS
+    except ValueError:
+        return DEFAULT_NOTE_DEADLINE_SECONDS
+    return value if value >= 0 else DEFAULT_NOTE_DEADLINE_SECONDS
+
+
+class _NoteDeadline:
+    """Checked between stages, never inside one: a request in flight finishes or
+    times out on its own, and the next stage is what does not start."""
+
+    def __init__(self, limit_seconds: float | None = None) -> None:
+        self.limit = note_deadline_seconds() if limit_seconds is None else float(limit_seconds)
+        self.started = time.monotonic()
+
+    def check(self, stage: str) -> None:
+        elapsed = time.monotonic() - self.started
+        if elapsed > self.limit:
+            raise NoteDeadlineExceeded(
+                f"写笔记超过了时间上限（{int(self.limit)} 秒，已用 {int(elapsed)} 秒，"
+                f"停在「{stage}」这一步），这次没有生成笔记。可以重试，或换一个响应更快的模型。"
+            )
+
+
+# A revision shorter than this share of what it was revising is a lost note, not
+# a tighter one: a model that answers the revision prompt with nothing, a
+# refusal, or a fragment used to replace the whole draft with that.
+MIN_REVISION_RATIO = 0.4
+
+
+def _accept_revision(draft: str, revised: str, *, stage: str) -> str:
+    """The revision when it is a plausible rewrite of the draft, else the draft."""
+    candidate = (revised or "").strip()
+    if not candidate:
+        logger.warning("%s returned an empty note; keeping the draft (%d chars)", stage, len(draft))
+        return draft
+    if len(candidate) < len(draft) * MIN_REVISION_RATIO:
+        logger.warning(
+            "%s returned %d chars for a %d-char draft; keeping the draft",
+            stage, len(candidate), len(draft),
+        )
+        return draft
+    return candidate
 
 
 def _compose_note_system_prompt(
@@ -181,17 +218,6 @@ def _compose_note_system_prompt(
         f"{_FEISHU_NOTE_FORMATTING_PREFERENCES}"
         f"{_NOTE_OUTPUT_GUARDRAILS}"
         f"{_NOTE_SPEAKER_ATTRIBUTION if speaker_labeled else ''}"
-    )
-
-
-def _compose_multimodal_system_prompt(system_prompt: str | None) -> str:
-    base = (system_prompt or "").strip() or _MULTIMODAL_NOTE_SYSTEM
-    return (
-        f"{base.rstrip()}"
-        f"{_MULTIMODAL_CONTENT_POLICY}"
-        f"{_NOTE_OUTPUT_LANGUAGE}"
-        f"{_FEISHU_NOTE_FORMATTING_PREFERENCES}"
-        f"{_NOTE_OUTPUT_GUARDRAILS}"
     )
 
 
@@ -390,13 +416,32 @@ def _seconds(value: Any, fallback: float = 0.0) -> float:
         return fallback
 
 
+@dataclass(frozen=True)
+class CompactedSegments:
+    """The segments that fit the planner's input, and how far into the
+    recording they reach."""
+
+    items: list[dict[str, Any]]
+    covered_until_seconds: float | None
+    truncated: bool
+
+
 def _compact_timestamped_segments(
     segments: list[dict[str, Any]],
     *,
     max_chars: int = 45_000,
-) -> list[dict[str, Any]]:
+) -> CompactedSegments:
+    """Trim the transcript to what one planner request can carry.
+
+    The budget is a prompt-size limit, so a long recording is cut off rather
+    than sampled. That is a real loss: nothing past the cut can be asked for a
+    screenshot. It is reported, not hidden — the result says where the planner
+    stopped reading, so a note with no frames in its second half has a reason
+    on record instead of looking like the model found nothing there.
+    """
     compacted: list[dict[str, Any]] = []
     total_chars = 0
+    truncated = False
     for index, segment in enumerate(segments):
         if not isinstance(segment, dict):
             continue
@@ -413,10 +458,17 @@ def _compact_timestamped_segments(
         }
         item_len = len(item["text"]) + 48
         if compacted and total_chars + item_len > max_chars:
+            truncated = True
             break
         compacted.append(item)
         total_chars += item_len
-    return compacted
+    covered_until = compacted[-1]["end_seconds"] if compacted else None
+    if truncated:
+        logger.warning(
+            "visual plan reads the transcript only up to %.0fs (%d of %d segments fit the %d-char budget)",
+            covered_until or 0.0, len(compacted), len(segments), max_chars,
+        )
+    return CompactedSegments(items=compacted, covered_until_seconds=covered_until, truncated=truncated)
 
 
 def _segment_bounds(segments: list[dict[str, Any]]) -> tuple[float, float]:
@@ -507,6 +559,11 @@ def visual_requests_to_frame_segments(requests: list[dict[str, Any]]) -> list[di
     return segments
 
 
+# How much of the note the planner is shown beside the transcript. A prompt-size
+# limit, like the segment budget above, and reported the same way when it bites.
+VISUAL_PLAN_SUMMARY_CHARS = 35_000
+
+
 def plan_visual_evidence_requests(
     summary_markdown: str,
     transcript_segments: list[dict[str, Any]],
@@ -520,13 +577,18 @@ def plan_visual_evidence_requests(
     provider_name = _normalize_provider(provider)
     client = _get_client(provider=provider_name, api_key=api_key)
     m = _normalize_model(provider_name, model)
-    compact_segments = _compact_timestamped_segments(transcript_segments)
-    if not summary_markdown.strip() or not compact_segments:
+    compacted = _compact_timestamped_segments(transcript_segments)
+    if not summary_markdown.strip() or not compacted.items:
         return VisualRequestPlanResult(requests=[], raw_response="", provider=provider_name, model=m)
+    if len(summary_markdown) > VISUAL_PLAN_SUMMARY_CHARS:
+        logger.warning(
+            "visual plan reads only the first %d of %d note chars",
+            VISUAL_PLAN_SUMMARY_CHARS, len(summary_markdown),
+        )
     user = json.dumps(
         {
-            "summary_markdown": summary_markdown[:35_000],
-            "timestamped_segments": compact_segments,
+            "summary_markdown": summary_markdown[:VISUAL_PLAN_SUMMARY_CHARS],
+            "timestamped_segments": compacted.items,
         },
         ensure_ascii=False,
     )
@@ -537,6 +599,8 @@ def plan_visual_evidence_requests(
         raw_response=raw,
         provider=provider_name,
         model=m,
+        covered_until_seconds=compacted.covered_until_seconds if compacted.truncated else None,
+        transcript_truncated=compacted.truncated,
     )
 
 
@@ -1006,7 +1070,9 @@ def _run_chapter_coverage_mode(
     segment_chars: int,
     max_final_input_chars: int,
     speaker_labeled: bool = False,
+    deadline: _NoteDeadline | None = None,
 ) -> SummaryResult:
+    deadline = deadline or _NoteDeadline()
     segments = _chapter_segments(transcript_text, segment_chars)
     valid_segment_ids = {segment["segment_id"] for segment in segments}
     # Attribution has to survive every hop: evidence extraction reads the
@@ -1038,6 +1104,7 @@ def _run_chapter_coverage_mode(
 
     if not evidence:
         raise ValueError("Chapter coverage evidence extraction returned no usable evidence")
+    deadline.check("提取证据")
 
     outline_payload = json.dumps(_compact_evidence_view(evidence), ensure_ascii=False)
     raw_chapters = _chat_json_array(client, model, _CHAPTER_OUTLINE_SYSTEM, outline_payload, temperature=0.1)
@@ -1064,13 +1131,18 @@ def _run_chapter_coverage_mode(
         }, ensure_ascii=False)
         return _strip_prompt_leakage(_chat(client, model, chapter_note_system, user, temperature=0.2))
 
+    deadline.check("规划章节")
     # Each chapter is written independently from its own evidence; run concurrently, keep order.
     chapter_notes: list[str] = _parallel_map(_write_chapter, chapters)
 
     draft = "\n\n".join(note for note in chapter_notes if note.strip())
-    final_note = _strip_prompt_leakage(_chat(client, model, chapter_style_system, draft, temperature=0.2))
-    if not final_note:
-        final_note = draft
+    deadline.check("写各章")
+    final_note = _accept_revision(
+        draft,
+        _strip_prompt_leakage(_chat(client, model, chapter_style_system, draft, temperature=0.2)),
+        stage="style unification",
+    )
+    deadline.check("统一文风")
 
     important_ids = {item["evidence_id"] for item in evidence if int(item.get("importance") or 0) >= 4}
     uncovered_important = sorted(important_ids - covered_ids)
@@ -1091,14 +1163,19 @@ def _run_chapter_coverage_mode(
     if coverage_checked:
         coverage = _chat(client, model, _COVERAGE_SYSTEM, coverage_input, temperature=0.1).strip()
         if coverage and coverage != "COVERED":
-            final_note = _strip_prompt_leakage(
-                _chat(
-                    client,
-                    model,
-                    prompt,
-                    _REVISION_WRAPPER.format(draft=final_note, coverage=coverage),
-                    temperature=0.2,
-                )
+            deadline.check("覆盖率审查")
+            final_note = _accept_revision(
+                final_note,
+                _strip_prompt_leakage(
+                    _chat(
+                        client,
+                        model,
+                        prompt,
+                        _REVISION_WRAPPER.format(draft=final_note, coverage=coverage),
+                        temperature=0.2,
+                    )
+                ),
+                stage="coverage revision",
             )
             coverage_revision_used = True
             missing_count = max(missing_count, 1)
@@ -1205,8 +1282,6 @@ def summarize_transcript_with_metadata(
     provider: str | None = None,
     system_prompt: str | None = None,
     note_mode: str | None = None,
-    max_chunk_chars: int = 10_000,
-    chunk_overlap: int = 400,
     max_final_input_chars: int = 55_000,
     interim_batch_cap: int = 28_000,
     evidence_chunk_chars: int = 8_000,
@@ -1220,6 +1295,7 @@ def summarize_transcript_with_metadata(
     survive evidence extraction instead of being dropped mid-pipeline.
     """
     load_dotenv()
+    deadline = _NoteDeadline()
     provider_name = _normalize_provider(provider)
     client = _get_client(provider=provider_name, api_key=api_key)
     m = _normalize_model(provider_name, model)
@@ -1255,6 +1331,7 @@ def summarize_transcript_with_metadata(
             segment_chars=evidence_chunk_chars,
             max_final_input_chars=max_final_input_chars,
             speaker_labeled=speaker_labeled,
+            deadline=deadline,
         )
 
     chunks = _chunk_text(transcript_text, evidence_chunk_chars, evidence_overlap)
@@ -1269,6 +1346,7 @@ def summarize_transcript_with_metadata(
 
     # Each chunk's extraction is independent; run them concurrently but keep order.
     evidence_items: list[str] = _parallel_map(_extract_evidence, list(enumerate(chunks)))
+    deadline.check("提取证据")
 
     evidence = "\n\n---\n\n".join(
         f"## 片段 {idx + 1}/{total}\n{item}" for idx, item in enumerate(evidence_items)
@@ -1281,7 +1359,9 @@ def summarize_transcript_with_metadata(
             max_batch_chars=interim_batch_cap,
         )
 
+    deadline.check("整理证据")
     draft = _strip_prompt_leakage(_chat(client, m, prompt, _HIGH_FIDELITY_FINAL_WRAPPER + evidence))
+    deadline.check("写初稿")
     coverage_input = f"--- 证据清单 ---\n\n{evidence}\n\n--- 已生成笔记 ---\n\n{draft}"
     coverage_checked = len(coverage_input) <= max_final_input_chars
     coverage_revision_used = False
@@ -1289,14 +1369,19 @@ def summarize_transcript_with_metadata(
     if coverage_checked:
         coverage = _chat(client, m, _COVERAGE_SYSTEM, coverage_input, temperature=0.1).strip()
         if coverage and coverage != "COVERED":
-            final_note = _strip_prompt_leakage(
-                _chat(
-                    client,
-                    m,
-                    prompt,
-                    _REVISION_WRAPPER.format(draft=draft, coverage=coverage),
-                    temperature=0.2,
-                )
+            deadline.check("覆盖率审查")
+            final_note = _accept_revision(
+                draft,
+                _strip_prompt_leakage(
+                    _chat(
+                        client,
+                        m,
+                        prompt,
+                        _REVISION_WRAPPER.format(draft=draft, coverage=coverage),
+                        temperature=0.2,
+                    )
+                ),
+                stage="coverage revision",
             )
             coverage_revision_used = True
 
@@ -1308,101 +1393,6 @@ def summarize_transcript_with_metadata(
         chunk_count=total,
         coverage_checked=coverage_checked,
         coverage_revision_used=coverage_revision_used,
-    )
-
-
-def summarize_transcript_with_frames(
-    transcript: str,
-    frame_paths: list[str],
-    *,
-    api_key: str | None = None,
-    model: str | None = None,
-    provider: str | None = None,
-    system_prompt: str | None = None,
-) -> MultimodalSummaryResult:
-    """Generate a structured note from transcript text and video frame images."""
-    load_dotenv()
-    provider_name = _normalize_provider(provider)
-    if not can_use_multimodal(provider_name):
-        raise ValueError(f"Provider {provider_name} does not support multimodal")
-    client = _get_client(provider=provider_name, api_key=api_key)
-    # Default to a vision-capable model; the provider's plain default is text-only.
-    m = _normalize_model(provider_name, model or os.environ.get("QWEN_VISION_MODEL") or DEFAULT_QWEN_VISION_MODEL)
-    prompt = _compose_multimodal_system_prompt(system_prompt)
-    transcript_text = transcript.strip()
-    if not transcript_text:
-        return MultimodalSummaryResult(markdown="", frame_count=0, transcript_length=0)
-    if not frame_paths:
-        return MultimodalSummaryResult(markdown="", frame_count=0, transcript_length=len(transcript_text))
-
-    frame_lines = [f"- [{Path(p).name}] (候选截图)" for p in frame_paths]
-    user = (
-        f"请在以下 {len(frame_paths)} 张候选截图中挑选最有信息量的 0-8 张，生成结构化笔记。"
-        "图片必须服务具体知识点，不要插入封面、目录、纯标题页、纯人物讲话或重复画面：\n\n"
-        + "\n".join(frame_lines)
-        + f"\n\n--- 转录稿 ---\n\n{transcript_text}"
-    )
-    markdown = _strip_prompt_leakage(
-        _vision_chat(client, m, prompt, user, frame_paths, temperature=0.2)
-    )
-    return MultimodalSummaryResult(
-        markdown=markdown,
-        frame_count=len(frame_paths),
-        transcript_length=len(transcript_text),
-    )
-
-
-def translate_segments_to_zh(
-    segments: list[dict[str, Any]],
-    *,
-    api_key: str | None = None,
-    model: str | None = None,
-    provider: str | None = None,
-    max_chunk_chars: int = 8_000,
-) -> SegmentTranslationResult:
-    """Translate timestamped English transcript segments to Chinese while preserving indices."""
-    load_dotenv()
-    source_segments = [dict(segment) for segment in segments if isinstance(segment, dict)]
-    if not source_segments:
-        return SegmentTranslationResult(segments=[], translated_count=0, chunk_count=0)
-
-    provider_name = _normalize_provider(provider)
-    client = _get_client(provider=provider_name, api_key=api_key)
-    m = _normalize_model(provider_name, model)
-    translations: dict[int, str] = {}
-    chunks = _chunk_indexed_segments(source_segments, max_chunk_chars)
-    for chunk in chunks:
-        payload = json.dumps(chunk, ensure_ascii=False)
-        translated = _extract_json_array(_chat(client, m, _SEGMENT_TRANSLATION_SYSTEM, payload, temperature=0.1))
-        for item in translated:
-            if not isinstance(item, dict):
-                continue
-            try:
-                index = int(item.get("index"))
-            except (TypeError, ValueError):
-                continue
-            text_zh = str(item.get("text_zh") or "").strip()
-            if text_zh:
-                translations[index] = text_zh
-
-    translated_segments: list[dict[str, Any]] = []
-    for index, segment in enumerate(source_segments):
-        text_zh = translations.get(index, "")
-        if not text_zh:
-            continue
-        translated_segment = {
-            "start": segment.get("start"),
-            "end": segment.get("end"),
-            "text": text_zh,
-            "source_text": str(segment.get("text") or ""),
-        }
-        if segment.get("speaker"):
-            translated_segment["speaker"] = segment.get("speaker")
-        translated_segments.append(translated_segment)
-    return SegmentTranslationResult(
-        segments=translated_segments,
-        translated_count=len(translated_segments),
-        chunk_count=len(chunks),
     )
 
 
@@ -1493,34 +1483,6 @@ def generate_bilingual_segments_zh(
     )
 
 
-def summarize_transcript_to_markdown(
-    transcript: str,
-    *,
-    api_key: str | None = None,
-    model: str | None = None,
-    provider: str | None = None,
-    system_prompt: str | None = None,
-    note_mode: str | None = None,
-    max_chunk_chars: int = 10_000,
-    chunk_overlap: int = 400,
-    max_final_input_chars: int = 55_000,
-    interim_batch_cap: int = 28_000,
-) -> str:
-    """将整段转录稿总结为飞书友好的结构化 Markdown。"""
-    return summarize_transcript_with_metadata(
-        transcript,
-        api_key=api_key,
-        model=model,
-        provider=provider,
-        system_prompt=system_prompt,
-        note_mode=note_mode,
-        max_chunk_chars=max_chunk_chars,
-        chunk_overlap=chunk_overlap,
-        max_final_input_chars=max_final_input_chars,
-        interim_batch_cap=interim_batch_cap,
-    ).markdown
-
-
 __all__ = [
     "DEEPSEEK_BASE_URL",
     "OPENAI_BASE_URL",
@@ -1533,18 +1495,14 @@ __all__ = [
     "DIRECT_MODE_MAX_CHARS",
     "HIGH_FIDELITY_NOTICE_CHARS",
     "SummaryResult",
-    "MultimodalSummaryResult",
     "VisualRequestPlanResult",
     "VisualFrameSelectionResult",
-    "SegmentTranslationResult",
+    "NoteDeadlineExceeded",
     "BilingualSegmentResult",
     "can_use_multimodal",
     "generate_bilingual_segments_zh",
     "plan_visual_evidence_requests",
     "select_visual_evidence_frames",
-    "translate_segments_to_zh",
     "summarize_transcript_with_metadata",
-    "summarize_transcript_with_frames",
-    "summarize_transcript_to_markdown",
     "visual_requests_to_frame_segments",
 ]

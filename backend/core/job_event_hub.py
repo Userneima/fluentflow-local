@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 from typing import Any, AsyncGenerator
 
@@ -44,6 +45,9 @@ class JobEventHub:
         self._events: dict[str, list[dict[str, Any]]] = {}
         self._subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        # Event indexes keep counting past a trim, so ``since`` from a client
+        # that saw the earlier events still means the same event afterwards.
+        self._next_index: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
     async def publish(self, task_id: str, event: dict[str, Any]) -> None:
@@ -52,12 +56,19 @@ class JobEventHub:
         async with self._lock:
             history = self._events.setdefault(task_id, [])
             payload = dict(event)
-            payload["event_index"] = len(history)
+            payload["event_index"] = self._next_index.get(task_id, len(history))
+            self._next_index[task_id] = payload["event_index"] + 1
             history.append(payload)
-            if len(history) > self.max_events_per_job:
+            if self.is_terminal(payload):
+                # The job is over: its progress history is of no further use
+                # to anyone, but the terminal event is what a late subscriber
+                # (a page reopened after the fact) needs to find out how it
+                # ended. Keep that one, drop the rest. Without this an archive
+                # run keeps every progress event of every job for the life of
+                # the process.
+                history[:] = [payload]
+            elif len(history) > self.max_events_per_job:
                 del history[: len(history) - self.max_events_per_job]
-                for index, item in enumerate(history):
-                    item["event_index"] = index
             subscribers = list(self._subscribers.get(task_id, set()))
         for queue in subscribers:
             try:
@@ -77,8 +88,26 @@ class JobEventHub:
             existing = self._tasks.get(task_id)
             if existing and not existing.done():
                 return False
-            self._tasks[task_id] = asyncio.create_task(self._held(runner))
+            task = asyncio.create_task(self._held(runner))
+            self._tasks[task_id] = task
+            task.add_done_callback(functools.partial(self._forget_task, task_id))
             return True
+
+    def _forget_task(self, task_id: str, task: asyncio.Task[None]) -> None:
+        """Drop a finished runner so the table only ever holds live ones."""
+        if self._tasks.get(task_id) is task:
+            self._tasks.pop(task_id, None)
+
+    def is_running(self, task_id: str) -> bool:
+        """Whether a runner for this task is alive right now.
+
+        The synchronous twin of ``has_running_task`` for callers outside the
+        event loop (a plain ``def`` route run in the threadpool). A finished
+        runner has already been dropped from the table, so the table itself
+        answers.
+        """
+        task = self._tasks.get(task_id)
+        return bool(task and not task.done())
 
     async def _held(self, runner: Any) -> None:
         if self._keep_awake is None:
@@ -95,7 +124,9 @@ class JobEventHub:
 
         cached = await self.cached_events(task_id)
         start = max(0, int(since or 0))
-        for event in cached[start:]:
+        for event in cached:
+            if int(event.get("event_index") or 0) < start:
+                continue
             yield _sse(event)
             if self.is_terminal(event):
                 return

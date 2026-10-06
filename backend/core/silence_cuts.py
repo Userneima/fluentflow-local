@@ -51,8 +51,9 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import median
@@ -89,10 +90,18 @@ MAX_FOLLOWED_FRAME_RATE = 120
 # memory" while a 17-term one was fine. Batching removes the limit entirely —
 # 1300 cuts on a 3h19m video render fine — so this is not a cap on cut count.
 DEFAULT_RANGES_PER_BATCH = 25
-# Three rather than four since the queue began running two jobs at once: the
-# render is the memory peak of a job, and two of them on a 16GB machine is what
-# this trades a little single-job speed to stay clear of.
+# Three rather than four: the render is the memory peak of a job, and the
+# queue runs one job at a time (QUEUE_CONCURRENCY = 1) while a manual de-breath
+# can still start beside it. Two renders at once are prevented by
+# ``_RENDER_GATE`` below; three workers is what keeps the one that runs clear of
+# memory pressure on a 16GB machine.
 DEFAULT_RENDER_WORKERS = 3
+
+# One render at a time in this process, whoever asks. The job pipeline's
+# pre-transcription cut and the manual de-breath route are separate callers with
+# separate bookkeeping, and nothing above this module stopped them from encoding
+# the same minute. The gate serialises; it never refuses.
+_RENDER_GATE = threading.Semaphore(1)
 
 DEFAULT_ENCODE_ARGS = (
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
@@ -309,6 +318,8 @@ class RenderReport:
     checks: dict[str, bool]
     source_skew_seconds: float
     audio_only: bool = False
+    # Checks the container could not answer, as opposed to checks that failed.
+    unmeasured_checks: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -329,6 +340,7 @@ class RenderReport:
             "checks": dict(self.checks),
             "verified": self.ok,
             "failed_checks": self.failed_checks,
+            "unmeasured_checks": list(self.unmeasured_checks),
         }
         if not self.audio_only:
             # Reporting a skew against a video stream that does not exist reads
@@ -590,6 +602,11 @@ def detect_silences(
         "-af", f"silencedetect=noise={noise_db}dB:d={max(0.02, float(min_silence_seconds))}",
         "-vn", "-f", "null", "-",
     ])
+    if result.returncode != 0:
+        # A decode failure prints no silence lines, and an empty list reads as
+        # "nothing to cut" — a file ffmpeg could not open came back "completed"
+        # with 0% removed. The exit code is the only thing that tells them apart.
+        raise SilenceCutError(f"silence detection failed: {(result.stderr or '')[-300:]}")
     return parse_silencedetect(result.stderr or "")
 
 
@@ -1564,7 +1581,20 @@ def render_keeps(
             )
 
         with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-            parts = list(pool.map(one, enumerate(batches)))
+            futures = [pool.submit(one, job) for job in enumerate(batches)]
+            # Stop at the first failed batch. ``pool.map`` would keep encoding
+            # every remaining batch of a render that is already lost, for as
+            # long as the file is, before reporting the failure.
+            wait(futures, return_when=FIRST_EXCEPTION)
+            for future in futures:
+                future.cancel()
+            failed = next(
+                (f for f in futures if f.done() and not f.cancelled() and f.exception() is not None),
+                None,
+            )
+            if failed is not None:
+                failed.result()  # re-raises the batch's own error, not a CancelledError
+            parts = [future.result() for future in futures]
         listing = stage / "parts.txt"
         listing.write_text("".join(f"file '{part}'\n" for part in parts), encoding="utf-8")
         concat = [
@@ -1620,14 +1650,19 @@ def verify_render(
     checks = {
         "duration_matches_plan": abs(duration - expected_seconds) < max(3.0, expected_seconds * 0.01),
     }
+    unmeasured: list[str] = []
     # An audio-only render has no picture to fall out of step with and no frames
     # to count. Reporting those two as failures would be reporting the absence of
     # a problem that cannot occur.
     if not audio_only:
         checks["audio_video_in_sync"] = abs(audio - video) <= max(0.5, source_skew_seconds + 0.3)
-        checks["frame_count_matches_duration"] = (
-            abs(frames / fps / video - 1.0) < 0.05 if frames and video > 0 else False
-        )
+        if frames and video > 0:
+            checks["frame_count_matches_duration"] = abs(frames / fps / video - 1.0) < 0.05
+        else:
+            # Matroska carries no nb_frames, so every .mkv render used to fail
+            # this check whatever it held. A count the container does not keep
+            # is not evidence of slow motion; it is a question with no answer.
+            unmeasured.append("frame_count_matches_duration")
     return RenderReport(
         output_path=out,
         expected_seconds=expected_seconds,
@@ -1639,6 +1674,7 @@ def verify_render(
         checks=checks,
         source_skew_seconds=source_skew_seconds,
         audio_only=audio_only,
+        unmeasured_checks=unmeasured,
     )
 
 
@@ -1681,7 +1717,27 @@ def render_cut_plan(
         raise SilenceCutError(f"source media not found: {source}")
     if not plan.keeps:
         raise SilenceCutError("nothing to render: the plan keeps no ranges")
-    out = Path(output)
+    with _RENDER_GATE:
+        return _render_cut_plan_locked(
+            source, plan, Path(output), fps=fps, ranges_per_batch=ranges_per_batch,
+            workers=workers, encode_args=encode_args, scale_width=scale_width,
+            work_dir=work_dir, runner=runner,
+        )
+
+
+def _render_cut_plan_locked(
+    source: Path,
+    plan: CutPlan,
+    out: Path,
+    *,
+    fps: int | None,
+    ranges_per_batch: int,
+    workers: int,
+    encode_args: Sequence[str] | None,
+    scale_width: int | None,
+    work_dir: Path | str | None,
+    runner: CommandRunner,
+) -> RenderReport:
     audio_only = not has_video_stream(source, runner=runner)
     if fps is None:
         fps = (0 if audio_only else source_frame_rate(source, runner=runner)) or DEFAULT_RENDER_FPS

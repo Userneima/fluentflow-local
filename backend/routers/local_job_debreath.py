@@ -9,7 +9,8 @@ minutes into a background task where the only trace is a status field:
 
 - a task that is not ``completed``, which has no finished source to cut;
 - a source that is missing or in a container ffmpeg cannot cut here;
-- a render already in progress.
+- a render already in progress;
+- a transcription running or queued, which the render must not run beside.
 
 The render slot is claimed here rather than inside the worker. FastAPI runs
 background tasks after the response is sent, so two quick submissions could both
@@ -27,7 +28,8 @@ from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 
 from backend.core import debreath_job, silence_cuts
 from backend.core.job_store import get_job
-from backend.core.local_request_scope import request_client_id
+from backend.core.request_scope import local_client_scope
+from backend.routers.local_processing import queue_is_busy
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +69,6 @@ def parse_debreath_settings(body: Any) -> dict[str, float]:
 router = APIRouter()
 
 
-def _local_client_scope(request: Request) -> Optional[str]:
-    return request_client_id(request) or "anonymous"
-
-
 def start_local_debreath(
     request: Request,
     task_id: str,
@@ -86,7 +84,7 @@ def start_local_debreath(
     minutes, so progress is written into the job result and read back through the
     ordinary job/task endpoints rather than held open on this request.
     """
-    client_id = _local_client_scope(request)
+    client_id = local_client_scope(request)
     job = get_job(task_id, client_id=client_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -98,6 +96,16 @@ def start_local_debreath(
         )
     if debreath_job.is_running(job.get("result")):
         raise HTTPException(status_code=409, detail="这个任务的去气口正在进行中")
+    if queue_is_busy():
+        # The render is the memory peak of the whole product, and the serial
+        # queue exists so that nothing runs beside a transcription. This entry
+        # cannot join that queue (it is a background task on a finished job),
+        # so it is refused while the queue is working rather than started
+        # alongside it.
+        raise HTTPException(
+            status_code=409,
+            detail="有任务正在处理中，等队列空下来再去气口，避免两件重活同时跑。",
+        )
 
     settings = parse_debreath_settings(payload)
     render = bool((payload or {}).get("render", True))

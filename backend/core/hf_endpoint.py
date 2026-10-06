@@ -43,6 +43,12 @@ _PROBE_PATH = "/mlx-community/whisper-large-v3-mlx/resolve/main/config.json"
 
 _PROBE_TIMEOUT_SECONDS = 8.0
 
+# The service probes at startup, where every second is a second the launcher's
+# "waiting for the service" spinner stays up. Two probes at this budget are the
+# most it can cost; the installer keeps the longer one because it is about to
+# download gigabytes and can afford to be sure.
+_STARTUP_PROBE_TIMEOUT_SECONDS = 3.0
+
 
 def probe(endpoint: str, timeout: float = _PROBE_TIMEOUT_SECONDS) -> bool:
     """Whether this endpoint hands over actual file bytes within the timeout."""
@@ -97,7 +103,27 @@ def apply_to_environment(timeout: float = _PROBE_TIMEOUT_SECONDS) -> tuple[str, 
     return endpoint, explanation
 
 
+def apply_at_startup(timeout: float = _STARTUP_PROBE_TIMEOUT_SECONDS) -> str:
+    """The service's version of ``apply_to_environment``: never raises, always logs.
+
+    Until this existed only the installer's model fetch chose a mirror. The
+    service itself let ``faster_whisper`` / ``mlx_whisper`` download from the
+    default host, so a machine whose install-time download had failed sat on
+    its first task with no fallback at all. Startup must not fail over a probe,
+    so every error is swallowed into the explanation line and the default
+    endpoint is left in place.
+    """
+    try:
+        endpoint, explanation = apply_to_environment(timeout)
+    except Exception as exc:  # noqa: BLE001 - a probe must never block startup
+        endpoint = (os.environ.get(ENDPOINT_ENV) or "").strip() or DEFAULT_ENDPOINT
+        explanation = f"下载源探测出错，按 {endpoint} 继续：{exc}"
+    logger.info("转录模型下载源：%s", explanation)
+    return endpoint
+
+
 __all__ = [
+    "apply_at_startup",
     "DEFAULT_ENDPOINT",
     "ENDPOINT_ENV",
     "MIRROR_ENDPOINT",

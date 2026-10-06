@@ -146,3 +146,23 @@ def test_on_this_machine_the_dialog_is_actually_reachable():
     """No window opens: this only asserts the program the dialog needs is there."""
     assert fc.unavailable_reason() is None
     assert fc.osascript_path()
+
+
+def test_a_backslash_in_the_prompt_cannot_break_the_script():
+    """AppleScript reads a backslash as the start of an escape, so one left
+    alone would swallow the quote that closes the prompt."""
+    seen: dict = {}
+    fc.choose_media_files(prompt='选 \\ "这个" 文件', runner=_runner(stdout="/a/b.mov\n", record=seen))
+
+    script = seen["command"][2]
+    assert "\\\\" in script, "the backslash is doubled"
+    assert '"这个"' not in script
+
+
+def test_a_backslash_in_the_starting_folder_is_escaped_rather_than_dropped(tmp_path):
+    folder = tmp_path / "odd\\name"
+    folder.mkdir()
+
+    clause = fc._location_clause(folder)
+
+    assert "odd\\\\name" in clause, "the path must still match the disk after AppleScript unescapes it"

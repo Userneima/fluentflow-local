@@ -43,7 +43,7 @@ from backend.core.local_limits_config import (
     max_queue_files,
     max_upload_mb,
 )
-from backend.core.local_request_scope import request_client_id, request_is_localhost
+from backend.core.local_request_scope import request_is_localhost
 from backend.core.local_retention_config import source_retention_days
 from backend.core.local_stt_policy import DEFAULT_LOCAL_STT_MODEL, LOCAL_STT_PROVIDER
 from backend.core.local_keyframe_provider import extract_keyframes as extract_local_keyframes
@@ -63,6 +63,8 @@ from backend.core.media_job import MediaJobContext, execute_media_job
 from backend.core.media_preflight import MediaPreflightError, preflight_media_file
 from backend.core.result_retention import finalize_completed_result_storage
 from backend.core.queue_options import _queue_options_from_mapping
+from backend.core.request_scope import local_client_scope
+from backend.core.runtime_env import truthy
 from backend.core.storage_cleanup import remove_tree
 from backend.core.storage_paths import find_source_file
 from backend.core.title_display import display_title_for_user
@@ -84,7 +86,7 @@ def _auto_export_local_lark(**values: object) -> dict:
     route = str(values.get("lark_export_route") or "").lower()
     if route in {"user_oauth", "feishu_user", "feishu_user_oauth", "lark_user_oauth"}:
         raise RuntimeError("本地版不支持飞书账号 OAuth 导出。")
-    target = "lark_cli" if route in {"local_cli", "lark_cli"} or _truthy(values.get("lark_via_cli")) else "lark_openapi"
+    target = "lark_cli" if route in {"local_cli", "lark_cli"} or truthy(values.get("lark_via_cli")) else "lark_openapi"
     title = resolve_lark_doc_title(str(values["summary_markdown"]), filename_stem=str(values["filename_stem"]), form_title=str(values.get("form_title") or ""))
     if target == "lark_cli":
         response = export_markdown_via_lark_cli(title, str(values["summary_markdown"]))
@@ -98,14 +100,6 @@ def _auto_export_local_lark(**values: object) -> dict:
 
 def _enforce_local_history_retention(client_id: str | None) -> dict:
     return enforce_history_retention(client_id, keep_count=0, artifact_days=artifact_retention_days(), source_days=source_retention_days(), list_jobs=list_jobs_for_retention, update_result=update_job_result, delete_jobs=delete_jobs)
-
-
-def _local_client_scope(request: Request) -> Optional[str]:
-    return request_client_id(request) or "anonymous"
-
-
-def _truthy(value: Optional[str]) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _positive_float(value: object) -> float | None:
@@ -164,13 +158,17 @@ async def _persist_uploaded_source(
 # running the pipeline. Single-event-loop assumption (uvicorn / the local
 # composition root); the chain is process-local state like the hub itself.
 #
-# The tail carries the predecessor's task id as well as its event, because the
+# Each link carries the predecessor's task id as well as its event, because the
 # event alone cannot answer the question that matters: an unset event means
 # "still working" and "gone without releasing" equally well. Waiting on it
 # forever is what left every later upload sitting at "queued 0%" on an idle
 # machine, with restarting the service as the only exit. The id makes the
 # difference checkable — the hub knows whether that task is still running.
-_QUEUE_TAIL: dict[str, Any] = {"task_id": None, "event": None}
+#
+# Every entry that runs the pipeline goes through ``_start_behind_queue``: the
+# single upload, the batch, the folder, the retry, and the video link. One of
+# them starting its worker directly is how two transcriptions ended up running
+# side by side on a machine measured to collapse under exactly that.
 
 # How many jobs may be in flight at once. The chain above is what makes the
 # queue serial: each job waits on its predecessor's event. Waiting on the job
@@ -233,7 +231,7 @@ def _record_queue_wait(
 
 
 async def _await_predecessor(
-    previous: tuple[Optional[str], asyncio.Event], ctx: MediaJobContext
+    previous: tuple[Optional[str], asyncio.Event], task_id: str, client_id: Optional[str]
 ) -> None:
     """Wait for the job ahead — but only while it is still there.
 
@@ -246,12 +244,11 @@ async def _await_predecessor(
     can be read on screen instead of guessed at.
     """
     previous_id, previous_event = previous
-    task_id = ctx.task_id_value
     announced = False
     try:
         while not previous_event.is_set():
             if not announced:
-                _record_queue_wait(task_id, ctx.client_id, previous_id)
+                _record_queue_wait(task_id, client_id, previous_id)
                 await JOB_EVENTS.publish(
                     task_id,
                     {"stage": "queued", "progress": 0, "waiting_for": previous_id},
@@ -283,7 +280,7 @@ async def _await_predecessor(
         # The wait is over however it ended, so the row must stop saying it is
         # waiting — a stale "waiting for" on a running job is worse than none.
         if announced:
-            _record_queue_wait(task_id, ctx.client_id, None)
+            _record_queue_wait(task_id, client_id, None)
 
 
 def _queue_tail_barrier() -> Optional[tuple[Optional[str], asyncio.Event]]:
@@ -311,8 +308,44 @@ def _queue_tail_record(task_id: Optional[str], done: asyncio.Event) -> None:
     keep = max(QUEUE_CONCURRENCY, 1) + 1
     if len(_QUEUE_RECENT) > keep:
         del _QUEUE_RECENT[:-keep]
-    _QUEUE_TAIL["task_id"] = task_id
-    _QUEUE_TAIL["event"] = done
+
+
+def queue_is_busy() -> bool:
+    """Whether a pipeline job is running or waiting its turn right now.
+
+    For the entries that cannot join the chain — a manual de-breath or a note
+    run on a finished task — and so refuse instead of starting beside it. Reads
+    the same two facts the chain itself reads: a link whose event is unset and
+    whose runner the hub still has. A link whose runner is gone without
+    releasing is the stale-chain case the waiters heal, and it is not busy.
+    """
+    return any(
+        link["event"] is not None
+        and not link["event"].is_set()
+        and JOB_EVENTS.is_running(str(link["task_id"]))
+        for link in _QUEUE_RECENT
+    )
+
+
+async def wait_for_queue_turn(
+    previous: Optional[tuple[Optional[str], asyncio.Event]],
+    task_id: str,
+    client_id: Optional[str],
+) -> None:
+    """Hold this job's place in the chain until the job ahead is done.
+
+    A runner cancelled while it is only a queue placeholder keeps its successor
+    behind the same barrier: it waits the predecessor out before re-raising,
+    because releasing ``done`` at once would let the next worker overlap the
+    still-running previous one.
+    """
+    if previous is None:
+        return
+    try:
+        await _await_predecessor(previous, task_id, client_id)
+    except asyncio.CancelledError:
+        await _await_predecessor(previous, task_id, client_id)
+        raise
 
 
 async def _write_note_after_transcript(task_id: str, client_id: Optional[str]) -> None:
@@ -345,21 +378,62 @@ async def _run_serially(
     ctx: MediaJobContext,
 ) -> None:
     try:
-        if previous is not None:
-            try:
-                await _await_predecessor(previous, ctx)
-            except asyncio.CancelledError:
-                # This runner may be cancelled while it is only a queue
-                # placeholder. Keep its successor behind the same predecessor
-                # barrier; releasing ``done`` immediately would let the next
-                # worker overlap the still-running previous worker.
-                await _await_predecessor(previous, ctx)
-                raise
+        await wait_for_queue_turn(previous, ctx.task_id_value, ctx.client_id)
         await _run_job_then_note(ctx)
     finally:
         # Always release the chain — including when this job is cancelled while
         # still waiting (the cancel route persists the cancelled state).
         done.set()
+
+
+async def _start_behind_queue(
+    *,
+    task_id: str,
+    client_id: Optional[str],
+    route: str,
+    stage: str,
+    chained_worker: Any,
+    gate: Any = None,
+) -> bool:
+    """Put a job on the chain and start its runner; say whether one started.
+
+    ``chained_worker(previous, done)`` is the job: it must wait its turn with
+    ``wait_for_queue_turn(previous, ...)`` before the expensive part and set
+    ``done`` when it is over, however it ends.
+    """
+    previous = _queue_tail_barrier()
+    done = asyncio.Event()
+    _queue_tail_record(task_id, done)
+    started = await JOB_EVENTS.start(
+        task_id,
+        functools.partial(
+            run_worker_with_terminal_state,
+            task_id=task_id,
+            client_id=client_id,
+            hub=JOB_EVENTS,
+            route=route,
+            stage=stage,
+            gate=gate,
+            worker=functools.partial(chained_worker, previous, done),
+        ),
+    )
+    if not started:
+        # Nothing will run that worker, so nothing will run its ``finally``.
+        # Release the chain here rather than leaving the next upload behind a
+        # barrier that has no one left to lift it.
+        done.set()
+    return started
+
+
+async def start_media_job_behind_queue(ctx: MediaJobContext, *, route: str) -> bool:
+    """The pipeline and then its note, behind every job already queued."""
+    return await _start_behind_queue(
+        task_id=ctx.task_id_value,
+        client_id=ctx.client_id,
+        route=route,
+        stage="processing",
+        chained_worker=lambda previous, done: _run_serially(previous, done, ctx),
+    )
 
 
 def _local_media_job_context(
@@ -406,9 +480,9 @@ def _local_media_job_context(
         speed_profile=(options.get("stt_speed") or "").strip() or "balanced",
         language="auto",
         stt_provider_value=LOCAL_STT_PROVIDER,
-        diarization_requested=_truthy(options.get("speaker_diarization")),
-        voice_enhance_requested=_truthy(options.get("voice_enhance")),
-        do_lark=_truthy(options.get("export_to_lark")),
+        diarization_requested=truthy(options.get("speaker_diarization")),
+        voice_enhance_requested=truthy(options.get("voice_enhance")),
+        do_lark=truthy(options.get("export_to_lark")),
         # The pipeline's own note stage is switched off whenever this edition is
         # going to write the note itself from the cut media. That is the "remove
         # the old flow" half of the owner's decision: without this the user gets a
@@ -418,8 +492,8 @@ def _local_media_job_context(
         # `will_run` rather than `enabled`: a machine that cannot reach Claude
         # never writes that note, and switching the text one off for it left a
         # fresh install with no note at all.
-        summary_disabled=_truthy(options.get("skip_summary")) or local_intake_flow.auto_note_will_run(),
-        generate_visuals=_truthy(options.get("generate_visuals")),
+        summary_disabled=truthy(options.get("skip_summary")) or local_intake_flow.auto_note_will_run(),
+        generate_visuals=truthy(options.get("generate_visuals")),
         source_last_modified_ms=None,
         export_to_lark=options.get("export_to_lark"),
         lark_export_route=options.get("lark_export_route"),
@@ -529,7 +603,7 @@ async def process_media(
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix}")
 
-    client_id = _local_client_scope(request)
+    client_id = local_client_scope(request)
     task_id_value = claim_task_id(task_id, client_id=client_id)
     source_filename = file.filename
     raw_title_value = (raw_title or title or Path(source_filename).stem).strip()
@@ -547,7 +621,7 @@ async def process_media(
         delete_jobs([task_id_value], client_id=client_id)
         raise
     try:
-        media_preflight = preflight_media_file(in_path)
+        media_preflight = await asyncio.to_thread(preflight_media_file, in_path)
     except MediaPreflightError as exc:
         rejection = _preflight_rejection(
             task_id=task_id_value,
@@ -635,20 +709,10 @@ async def process_media(
         duration_limit_seconds=effective_duration_limit,
     )
 
-    await JOB_EVENTS.start(
-        task_id_value,
-        functools.partial(
-            run_worker_with_terminal_state,
-            task_id=task_id_value,
-            client_id=client_id,
-            hub=JOB_EVENTS,
-            route="/process",
-            stage="processing",
-            # Same tail as the queued entry, so the two upload paths cannot end in
-            # different products: one with a note, one without.
-            worker=functools.partial(_run_job_then_note, ctx),
-        ),
-    )
+    # Same chain and same tail as the queued entry, so the two upload paths
+    # cannot end in different products — one with a note, one without — and a
+    # single upload cannot run beside a batch that is already transcribing.
+    await start_media_job_behind_queue(ctx, route="/process")
 
     return StreamingResponse(
         JOB_EVENTS.subscribe(task_id_value),
@@ -684,12 +748,12 @@ async def queue_process(
 ) -> dict:
     """Queue several media files for serial local processing (one live worker
     at a time), all on the local event hub."""
-    client_id = _local_client_scope(request)
+    client_id = local_client_scope(request)
     limit_files = max_queue_files()
     if limit_files > 0 and len(files) > limit_files:
         raise HTTPException(
             status_code=413,
-            detail=f"Too many files uploaded: {len(files)}. Limit is {limit_files}.",
+            detail=f"一次最多提交 {limit_files} 个文件，这次选了 {len(files)} 个。请分成几批提交。",
         )
     for upload in files:
         if not upload.filename:
@@ -749,7 +813,7 @@ async def queue_process(
                 "index": index,
             }
             prepared_sources.append(prepared)
-            preflight = preflight_media_file(source_path)
+            preflight = await asyncio.to_thread(preflight_media_file, source_path)
             prepared["media_preflight"] = preflight.as_metadata()
     except Exception as exc:
         for prepared in prepared_sources:
@@ -839,26 +903,7 @@ async def queue_process(
             qwen_api_key=qwen_api_key,
             duration_limit_seconds=effective_duration_limit,
         )
-        previous = _queue_tail_barrier()
-        done = asyncio.Event()
-        _queue_tail_record(task_id_value, done)
-        started = await JOB_EVENTS.start(
-            task_id_value,
-            functools.partial(
-                run_worker_with_terminal_state,
-                task_id=task_id_value,
-                client_id=client_id,
-                hub=JOB_EVENTS,
-                route="/queue/process",
-                stage="processing",
-                worker=functools.partial(_run_serially, previous, done, ctx),
-            ),
-        )
-        if not started:
-            # Nothing will run that worker, so nothing will run its ``finally``.
-            # Release the chain here rather than leaving the next upload behind a
-            # barrier that has no one left to lift it.
-            done.set()
+        await start_media_job_behind_queue(ctx, route="/queue/process")
         queued.append({
             "task_id": task_id_value,
             "filename": filename,
@@ -890,7 +935,7 @@ async def queue_local_media_file(
     what makes the cut version's home ("beside this file") a real location.
     """
     try:
-        preflight = preflight_media_file(source_path)
+        preflight = await asyncio.to_thread(preflight_media_file, source_path)
     except MediaPreflightError as exc:
         # Refused before a task row exists, so an unreadable file does not leave a
         # queued task that can never run.
@@ -951,23 +996,7 @@ async def queue_local_media_file(
         options=options,
         duration_limit_seconds=duration_limit_seconds,
     )
-    previous = _queue_tail_barrier()
-    done = asyncio.Event()
-    _queue_tail_record(task_id_value, done)
-    started = await JOB_EVENTS.start(
-        task_id_value,
-        functools.partial(
-            run_worker_with_terminal_state,
-            task_id=task_id_value,
-            client_id=client_id,
-            hub=JOB_EVENTS,
-            route=route,
-            stage="processing",
-            worker=functools.partial(_run_serially, previous, done, ctx),
-        ),
-    )
-    if not started:
-        done.set()
+    await start_media_job_behind_queue(ctx, route=route)
     return {
         "task_id": task_id_value,
         "filename": source_path.name,
@@ -984,7 +1013,7 @@ def _option_default_on(payload: dict, key: str) -> str:
     raw = (payload or {}).get(key)
     if raw is None:
         return "true"
-    return "true" if _truthy(str(raw)) else ""
+    return "true" if truthy(str(raw)) else ""
 
 
 def local_path_options(payload: dict) -> tuple[dict, float | None]:
@@ -1151,7 +1180,7 @@ async def queue_process_local_files(request: Request, payload: dict = Body(...))
     """
     if not request_is_localhost(request):
         raise HTTPException(status_code=403, detail="只有本机能按路径处理文件。")
-    client_id = _local_client_scope(request)
+    client_id = local_client_scope(request)
     raw_paths = payload.get("paths")
     if isinstance(raw_paths, str):
         raw_paths = [raw_paths]
@@ -1194,7 +1223,7 @@ async def queue_process_folder(request: Request, payload: dict = Body(...)) -> d
     """
     if not request_is_localhost(request):
         raise HTTPException(status_code=403, detail="只有本机能按路径处理文件夹。")
-    client_id = _local_client_scope(request)
+    client_id = local_client_scope(request)
     try:
         folder = local_folder_intake.resolve_folder(payload.get("path"))
         listing = local_folder_intake.list_media(folder)
@@ -1303,7 +1332,7 @@ async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
     """Re-run a task from its stored source file, on the local hub."""
     return await retry_task(
         task_id,
-        client_id=_local_client_scope(request),
+        client_id=local_client_scope(request),
         local_caller=request_is_localhost(request),
     )
 
@@ -1339,13 +1368,16 @@ async def retry_task(
         )
     source = find_source_file(task_id)
     if not source:
-        raise HTTPException(status_code=404, detail="Source file not found")
+        raise HTTPException(
+            status_code=404,
+            detail="这个任务的原始录音已按保留策略清理，无法直接重新运行。请重新添加文件后再处理。",
+        )
 
     filename = Path(job.get("source_filename") or source.name).name
     suffix = source.suffix or Path(filename).suffix.lower() or ".mp4"
     retry_task_id = claim_task_id(None, client_id=client_id)
     try:
-        target_path = copy_source_file(retry_task_id, suffix, source)
+        target_path = await asyncio.to_thread(copy_source_file, retry_task_id, suffix, source)
     except Exception as exc:
         upsert_job(
             task_id=retry_task_id,
@@ -1364,7 +1396,7 @@ async def retry_task(
     source_file_size_mb = path_size_mb(target_path)
     source_type = source_type_for_suffix(suffix)
     try:
-        media_preflight = preflight_media_file(target_path)
+        media_preflight = await asyncio.to_thread(preflight_media_file, target_path)
     except MediaPreflightError as exc:
         raise _preflight_rejection(
             task_id=retry_task_id,
@@ -1445,23 +1477,7 @@ async def retry_task(
     # a retry that started at once ran beside whatever was already transcribing,
     # which is the memory collapse QUEUE_CONCURRENCY exists to prevent, and it
     # ended at the transcript without ever writing the note.
-    previous = _queue_tail_barrier()
-    done = asyncio.Event()
-    _queue_tail_record(retry_task_id, done)
-    started = await JOB_EVENTS.start(
-        retry_task_id,
-        functools.partial(
-            run_worker_with_terminal_state,
-            task_id=retry_task_id,
-            client_id=client_id,
-            hub=JOB_EVENTS,
-            route="/jobs/{task_id}/retry",
-            stage="processing",
-            worker=functools.partial(_run_serially, previous, done, ctx),
-        ),
-    )
-    if not started:
-        done.set()
+    await start_media_job_behind_queue(ctx, route="/jobs/{task_id}/retry")
 
     started_job = get_job(retry_task_id, client_id=client_id) or {
         "task_id": retry_task_id,

@@ -27,7 +27,7 @@ through ``FLUENTFLOW_VISUAL_NOTE_CHANNEL`` instead of being deleted. See
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from backend.core import claude_code_note, claude_vision

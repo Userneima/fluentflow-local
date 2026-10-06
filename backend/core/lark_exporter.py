@@ -49,16 +49,20 @@ _MAX_BLOCKS_PER_BATCH = 50
 # Markdown → Feishu block dicts
 # ---------------------------------------------------------------------------
 
+_INLINE_TOKEN = re.compile(r"(\*\*.+?\*\*|`[^`\n]+`)")
+
+
 def _parse_inline(text: str) -> List[dict]:
-    """Parse **bold** into a list of Feishu TextElement dicts."""
-    parts = text.split("**")
+    """Parse **bold** and `code` into a list of Feishu TextElement dicts."""
     elements: List[dict] = []
-    for idx, part in enumerate(parts):
+    for part in _INLINE_TOKEN.split(text):
         if not part:
             continue
         run: dict = {"content": part}
-        if idx % 2 == 1:
-            run["text_element_style"] = {"bold": True}
+        if part.startswith("**") and part.endswith("**") and len(part) > 4:
+            run = {"content": part[2:-2], "text_element_style": {"bold": True}}
+        elif part.startswith("`") and part.endswith("`") and len(part) > 2:
+            run = {"content": part[1:-1], "text_element_style": {"inline_code": True}}
         elements.append({"text_run": run})
     return elements or [{"text_run": {"content": text}}]
 

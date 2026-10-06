@@ -7,7 +7,6 @@ from typing import Any
 from backend.core.processing_plan_core import (
     build_processing_plan as build_processing_plan_core,
     ensure_processing_plan as ensure_processing_plan_core,
-    note_strategy_from_result,
 )
 
 

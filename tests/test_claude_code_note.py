@@ -549,3 +549,24 @@ def test_shutdown_stops_a_note_writer_that_is_still_running():
     assert not worker.is_alive()
     assert finished and finished[0].returncode != 0
     assert not ccn._RUNNING
+
+
+def test_other_providers_keys_never_reach_the_claude_program(monkeypatch):
+    """The service's own environment carries every provider's key. The ``claude``
+    program is an agent; it is given what it needs to run and log in, and not
+    the keys for DeepSeek, OpenAI, DashScope or Hugging Face."""
+    for name in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY",
+                 "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "FLUENTFLOW_ACCESS_TOKEN",
+                 "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        monkeypatch.setenv(name, f"secret-{name}")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+    monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/claude-config")
+
+    env = ccn._subprocess_env()
+
+    assert not any(value.startswith("secret-") for value in env.values()), env
+    assert env["PATH"] and env["HOME"], "it still has to find the binary and its login"
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:7890"
+    assert env["LC_ALL"] == "zh_CN.UTF-8"
+    assert env["CLAUDE_CONFIG_DIR"] == "/tmp/claude-config"

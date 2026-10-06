@@ -48,7 +48,6 @@ from backend.core.claude_vision import (
     FRAME_ATTACH_MAX,
     image_block,
     spread_across,
-    MAX_TRANSCRIPT_CHARS,
     transcript_for_request,
     TranscriptPart,
     part_instruction,
@@ -353,8 +352,30 @@ def stop_running_notes(grace_seconds: float = 3.0) -> int:
     return len(processes)
 
 
+# What the ``claude`` program is given of this process's environment. A
+# whitelist, because the service's own environment holds the keys for every
+# other provider (DeepSeek, OpenAI, DashScope, Hugging Face) and a blacklist
+# of three Anthropic names handed all of them to a subprocess that runs an
+# agent. Nothing here is a credential: locating the binary and its login
+# (PATH, HOME, the config directory), the locale, a scratch directory, and the
+# proxy settings a machine behind one needs to reach the service at all.
+_SUBPROCESS_ENV_NAMES = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "TMPDIR", "TZ", "LANG", "LANGUAGE",
+    "CLAUDE_CONFIG_DIR",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
+    "SYSTEMROOT", "SystemRoot", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "COMSPEC",
+})
+_SUBPROCESS_ENV_PREFIXES = ("LC_", "XDG_")
+
+
 def _subprocess_env() -> dict[str, str]:
-    env = dict(os.environ)
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name in _SUBPROCESS_ENV_NAMES or name.startswith(_SUBPROCESS_ENV_PREFIXES)
+    }
     for name in _CREDENTIAL_ENV:
         env.pop(name, None)
     return env

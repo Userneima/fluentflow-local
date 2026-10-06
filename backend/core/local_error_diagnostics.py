@@ -60,7 +60,15 @@ def diagnose_error(error: Any) -> dict[str, Any]:
         )
     if any(
         token in lowered
-        for token in ("incorrect api key", "invalid_api_key", "apikey-error", "api-key-error")
+        for token in (
+            "incorrect api key",
+            "invalid_api_key",
+            "apikey-error",
+            "api-key-error",
+            # DeepSeek: "Authentication Fails, Your api key: ****abcd is invalid"
+            "authentication fails",
+            "authentication_error",
+        )
     ):
         return _diag(
             "invalid_api_key",
@@ -93,12 +101,27 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "这个视频没有获取到可用字幕。",
             "上传本地视频、音频或字幕文件。",
         )
-    if "http error 403" in lowered or "视频下载失败：403" in raw or "forbidden" in lowered:
+    if (
+        "http error 403" in lowered
+        or "视频下载失败：403" in raw
+        or "forbidden" in lowered
+        or "平台拒绝了这个链接" in raw
+    ):
         return _diag(
             "platform_forbidden",
             "平台拒绝下载",
-            "平台拒绝了当前视频下载请求。",
-            "稍后重试、配置浏览器 cookies，或上传本地视频。",
+            "视频平台拒绝了这个链接的下载请求。",
+            "稍后重试、在设置里开启浏览器登录态（cookies），或上传本地视频。",
+        )
+    if any(
+        token in lowered
+        for token in ("error code: 429", "rate limit reached", "rate_limit_error", "rate limit exceeded")
+    ):
+        return _diag(
+            "ai_rate_limited",
+            "AI 服务限流",
+            "AI 笔记没有生成：AI 服务说请求过于频繁或额度用完，暂时被限流，转录和字幕仍会保留。",
+            "稍后重生笔记；如果反复出现，到服务商后台查看套餐额度和并发限制。",
         )
     if "http error 429" in lowered or "too many requests" in lowered:
         return _diag(
@@ -153,6 +176,14 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "文件超过当前处理限制。",
             "压缩或拆分文件后重试，或调整本机限制。",
         )
+    if "一次最多提交" in raw or "too many files uploaded" in lowered:
+        return _diag(
+            "too_many_files",
+            "一次提交的文件太多",
+            raw if "一次最多提交" in raw else "一次提交的文件数超过了本机限制。",
+            "分成几批提交，每批不超过限制数量。",
+            retryable=False,
+        )
     if "unsupported transcript file type" in lowered:
         return _diag(
             "unsupported_transcript_type",
@@ -199,11 +230,16 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "本机暂时无法安全检查媒体文件。",
             "检查 FFmpeg 环境后重试。",
         )
-    if "queued source file is missing" in lowered or "原始文件已不存在" in raw:
+    if (
+        "queued source file is missing" in lowered
+        or "原始文件已不存在" in raw
+        or "已按保留策略清理" in raw
+        or "source file not found" in lowered
+    ):
         return _diag(
             "source_file_missing",
             "原始文件已不存在",
-            "后台任务找不到原始文件，文件可能已被清理。",
+            raw if "已按保留策略清理" in raw else "后台任务找不到原始文件，文件可能已被清理。",
             "重新上传原始文件后再处理。",
             retryable=False,
         )
@@ -220,6 +256,38 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "后台笔记生成调用失败",
             "本机后台任务调用笔记生成接口失败。",
             "重试；如果转录已保存，打开结果后重生笔记。",
+        )
+    if "lark-cli" in lowered and any(
+        token in lowered for token in ("login", "not logged", "unauthorized", "auth")
+    ):
+        return _diag(
+            "lark_cli_login_required",
+            "本机飞书登录失效",
+            "当前 lark-cli 没有可用登录身份。",
+            "在本机重新登录 lark-cli 后重试导出。",
+        )
+    if "图片上传失败" in raw:
+        return _diag(
+            "feishu_image_upload_failed",
+            "飞书图片上传失败",
+            "飞书导出时图片上传失败，文本笔记可能仍可用。",
+            "检查飞书应用的图片上传权限后重试。",
+        )
+    is_feishu = "feishu" in lowered or "飞书" in raw or "lark" in lowered
+    if is_feishu and ("folder not found" in lowered or "http 404" in lowered or "notexist" in lowered):
+        return _diag(
+            "feishu_folder_not_found",
+            "飞书目标文件夹不存在",
+            "飞书没有找到导出的目标文件夹，可能已被删除或移动。",
+            "到设置里重新选择飞书导出的目标文件夹后重试。",
+            retryable=False,
+        )
+    if is_feishu:
+        return _diag(
+            "feishu_export_failed",
+            "飞书导出失败",
+            "飞书导出失败。",
+            "检查本机登录、应用凭据和目标文档权限后重试。",
         )
     if "job not found" in lowered or "404" in lowered or "归属" in raw:
         return _diag(
@@ -242,29 +310,6 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "AI 返回了空笔记",
             "AI 没有生成可用内容。",
             "重生笔记；如果重复出现，调整提示词或更换模型。",
-        )
-    if "lark-cli" in lowered and any(
-        token in lowered for token in ("login", "not logged", "unauthorized", "auth")
-    ):
-        return _diag(
-            "lark_cli_login_required",
-            "本机飞书登录失效",
-            "当前 lark-cli 没有可用登录身份。",
-            "在本机重新登录 lark-cli 后重试导出。",
-        )
-    if "图片上传失败" in raw:
-        return _diag(
-            "feishu_image_upload_failed",
-            "飞书图片上传失败",
-            "飞书导出时图片上传失败，文本笔记可能仍可用。",
-            "检查飞书应用的图片上传权限后重试。",
-        )
-    if "feishu" in lowered or "飞书" in raw or "lark" in lowered:
-        return _diag(
-            "feishu_export_failed",
-            "飞书导出失败",
-            "飞书导出失败。",
-            "检查本机登录、应用凭据和目标文档权限后重试。",
         )
     if "失去了访问自己程序文件夹的权限" in raw or (
         "operation not permitted" in lowered and "/" not in raw

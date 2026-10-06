@@ -37,7 +37,7 @@ def test_a_named_profile_or_an_unknown_site_is_left_as_given(chrome):
 def test_a_stale_douyin_login_is_reported_as_a_login_to_renew(monkeypatch):
     monkeypatch.setattr(vs, "resolve_direct_video", lambda _u: None)
     monkeypatch.setattr(
-        vs, "_resolve_with_yt_dlp_attempt", lambda *_a, **_k: (None, "fresh_cookies_required")
+        vs, "_resolve_with_yt_dlp_attempt", lambda *_a, **_k: (None, "fresh_cookies_required", None)
     )
 
     with pytest.raises(vs.VideoSourceResolutionError, match="登录信息过期了") as caught:

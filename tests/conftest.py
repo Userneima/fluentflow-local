@@ -36,6 +36,7 @@ RUNTIME_PATH_ENV_VARS = {
     "FLUENTFLOW_TRANSCRIPT_EDIT_RECORDS_DIR": "transcript_edit_records",
     "FLUENTFLOW_VIDEO_SOURCE_DIR": "video_sources",
     "FLUENTFLOW_CODEX_EXPORT_DIR": "codex_exports",
+    "FLUENTFLOW_DIARIZATION_MODEL_DIR": "models/pyannote",
 }
 
 
@@ -62,6 +63,12 @@ def _isolate_runtime_storage() -> Path:
 
 TEST_RUNTIME_ROOT = _isolate_runtime_storage()
 
+# Importing ``backend.local_main`` chooses the model download host, and that
+# choice probes the network unless HF_ENDPOINT is already set. A test run must
+# not depend on huggingface.co answering, so pin the default here; the tests
+# for the choice itself clear the environment and are unaffected.
+os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
+
 
 @pytest.fixture(scope="session")
 def test_runtime_root() -> Path:
@@ -86,6 +93,11 @@ def isolate_local_auth_env(monkeypatch):
     monkeypatch.delenv("FEISHU_OAUTH_REDIRECT_URI", raising=False)
     monkeypatch.delenv("GOOGLE_OAUTH_REDIRECT_URI", raising=False)
     monkeypatch.delenv("LARK_OPEN_BASE_URL", raising=False)
+    # Which channel writes the visual note is a per-machine preference that a
+    # developer .env may pin. Left in place it decides whether a finished task
+    # "wants" a note, so the same test passes on one machine and fails on the
+    # next; tests that need a channel set it themselves.
+    monkeypatch.delenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", raising=False)
 
 
 @pytest.fixture(autouse=True)

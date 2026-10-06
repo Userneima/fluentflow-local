@@ -342,13 +342,20 @@ def test_a_failed_check_never_removes_the_render(tmp_path, fake_tools):
     assert output.is_file(), "the render survives its own verdict"
 
 
-def test_missing_frame_metadata_does_not_pass_by_default(tmp_path, fake_tools):
-    output = tmp_path / "out.mp4"
+def test_a_container_without_a_frame_count_reports_the_check_as_unmeasured(tmp_path, fake_tools):
+    """Matroska keeps no nb_frames, so every .mkv render used to fail this check
+    whatever it held. A count the container does not carry is not evidence of
+    slow motion; the report says the check could not be made, and the other
+    checks still decide."""
+    output = tmp_path / "out.mkv"
     output.write_bytes(b"x")
     probe = _FakeProbe(**{"format=duration": 480.0, "stream=duration": 480.0})
     report = sc.verify_render(output, expected_seconds=480.0, runner=probe)
     assert report.frame_count == 0
-    assert "frame_count_matches_duration" in report.failed_checks
+    assert "frame_count_matches_duration" not in report.checks
+    assert report.unmeasured_checks == ["frame_count_matches_duration"]
+    assert report.as_dict()["unmeasured_checks"] == ["frame_count_matches_duration"]
+    assert report.ok, "duration and sync still pass, and that is the verdict"
 
 
 # ── rendering keeps the filter graph small ──────────────────────────────────
@@ -1532,3 +1539,146 @@ def test_peak_window_reads_the_busy_stretch_not_the_mean():
     seconds = [1_000] * 600 + [50_000] * 120
     assert sc.peak_window_bitrate_bps(seconds) > 300_000
     assert sc.peak_window_bitrate_bps(()) == 0.0
+
+
+# ── failures are reported, not read as "nothing to cut" ─────────────────────
+
+def test_a_decode_failure_during_detection_is_an_error_not_an_empty_result(tmp_path, fake_tools):
+    """ffmpeg that cannot open the file prints no silence lines. Read as an empty
+    list, that came back "completed, 0% removed" for a file that was broken."""
+
+    def broken(command):
+        command = [str(part) for part in command]
+        return subprocess.CompletedProcess(command, 1, "", "Invalid data found when processing input")
+
+    with pytest.raises(SilenceCutError, match="Invalid data found"):
+        sc.detect_silences(tmp_path / "broken.m4a", runner=broken)
+
+
+class _FailsOneBatch(_FakeRender):
+    """Renders every batch except the named one, and counts the batches it was asked for."""
+
+    def __init__(self, failing_index: int) -> None:
+        super().__init__()
+        self.failing_index = failing_index
+        self.batches_asked = 0
+
+    def __call__(self, command):
+        command = [str(part) for part in command]
+        if "-af" in command:
+            self.batches_asked += 1
+            if f"part{self.failing_index:04d}" in command[-1]:
+                return subprocess.CompletedProcess(command, 1, "", "encoder exploded")
+        return super().__call__(command)
+
+
+def test_a_failed_batch_stops_the_render_instead_of_encoding_the_rest(tmp_path, fake_tools):
+    """A render that has already lost one batch is lost; encoding the remaining
+    ones costs the rest of the file's runtime for nothing."""
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    keeps = [TimeRange(float(i * 10), float(i * 10 + 5)) for i in range(12)]
+    runner = _FailsOneBatch(failing_index=1)
+
+    with pytest.raises(SilenceCutError, match="encoder exploded"):
+        sc.render_keeps(source, keeps, tmp_path / "out.mp4", ranges_per_batch=1, workers=1, runner=runner)
+
+    assert runner.batches_asked < len(keeps), "the batches after the failure were never started"
+
+
+# ── one render at a time, whoever asks ──────────────────────────────────────
+
+def test_two_renders_cannot_overlap_whatever_called_them(tmp_path, fake_tools):
+    """The pipeline's pre-transcription cut and the manual route keep separate
+    books, so nothing above this module stopped both from encoding at once."""
+    import threading
+
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    plan = sc.CutPlan(
+        source_duration_seconds=20.0,
+        cuts=[TimeRange(9.0, 10.0)],
+        keeps=[TimeRange(0.0, 9.0), TimeRange(10.0, 19.0)],
+        silences_found=1,
+        noise_db=-30.0,
+        min_silence_seconds=0.25,
+        padding_seconds=0.1,
+    )
+    out = tmp_path / "out.mp4"
+    finished = threading.Event()
+
+    def render():
+        sc.render_cut_plan(source, plan, out, workers=1, runner=_SourceProbe())
+        finished.set()
+
+    assert sc._RENDER_GATE.acquire(timeout=1), "another test left the gate held"
+    try:
+        worker = threading.Thread(target=render, daemon=True)
+        worker.start()
+        assert not finished.wait(0.3), "the second render started while the first held the gate"
+        assert not out.exists()
+    finally:
+        sc._RENDER_GATE.release()
+    assert finished.wait(5), "the render did not proceed once the gate was free"
+    worker.join(timeout=5)
+    assert out.is_file()
+
+
+# ── every supported container renders into the one the encoder writes ───────
+
+def _build_short_clip(target: Path, *, video: bool) -> None:
+    """Two seconds: tone, 0.6s of silence, tone — in whatever container ``target`` names."""
+    ffmpeg = shutil.which("ffmpeg")
+    audio = (
+        "sine=frequency=440:duration=2:sample_rate=48000,"
+        "volume=enable='between(t,0.7,1.3)':volume=0"
+    )
+    command = [ffmpeg, "-hide_banner", "-loglevel", "error"]
+    if video:
+        command += ["-f", "lavfi", "-i", "color=c=black:s=160x120:r=30:d=2"]
+    command += ["-f", "lavfi", "-i", audio]
+    suffix = target.suffix.lower()
+    if suffix == ".webm":
+        command += ["-c:v", "libvpx", "-b:v", "200k", "-c:a", "libopus"]
+    elif suffix == ".mkv":
+        command += ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac"]
+    elif suffix == ".ogg":
+        # Opus in an Ogg container: libvorbis is not always compiled in, and
+        # what the render path has to cope with is the container, not the codec.
+        command += ["-c:a", "libopus"]
+    elif suffix == ".flac":
+        command += ["-c:a", "flac"]
+    if video:
+        command += ["-shortest"]
+    command += ["-y", str(target)]
+    built = subprocess.run(command, capture_output=True, text=True, timeout=180)
+    assert built.returncode == 0, built.stderr[-400:]
+
+
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="ffmpeg/ffprobe not installed",
+)
+@pytest.mark.parametrize("suffix", [".webm", ".mkv", ".flac", ".ogg"])
+def test_a_real_render_from_each_supported_container_lands_and_verifies(tmp_path, suffix):
+    """Output used to keep the source's extension. AAC into .webm/.ogg/.flac failed
+    at the first batch after a full normalize pass; .mkv could never pass the
+    frame-count check because Matroska keeps no frame count. The output name is
+    now chosen by what the encoder writes, and the render must both land and
+    pass its own verification."""
+    import backend.core.debreath_job as dj
+
+    source = tmp_path / f"clip{suffix}"
+    _build_short_clip(source, video=suffix in {".webm", ".mkv"})
+
+    plan = sc.plan_silence_cuts(source, min_silence_seconds=0.3)
+    assert plan.cuts, f"no silence found: {plan.warnings}"
+
+    out = tmp_path / Path(dj._media_filename(source)).name
+    report = sc.render_cut_plan(source, plan, out, workers=1)
+
+    assert out.suffix == dj.output_suffix(source)
+    assert report.output_path.is_file()
+    assert report.ok, report.as_dict()
+    assert report.unmeasured_checks == [], "mp4/m4a carry a frame count, so every check is measured"
+    assert abs(report.actual_seconds - plan.kept_seconds) < 0.5, report.as_dict()

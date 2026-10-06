@@ -140,6 +140,16 @@ def unavailable_reason() -> str | None:
     return None
 
 
+def _applescript_text(value: str) -> str:
+    """Make a piece of text safe inside an AppleScript string literal.
+
+    The backslash goes first: it is AppleScript's escape character, so a prompt
+    or a folder name carrying one would otherwise turn the quote that follows
+    into part of the text and leave the script unterminated.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _location_clause(start_in: Path | str | None) -> str:
     """Where the dialog opens, when there is a sensible answer.
 
@@ -152,7 +162,7 @@ def _location_clause(start_in: Path | str | None) -> str:
     folder = Path(start_in).expanduser()
     if not folder.is_dir():
         return ""
-    return f' default location (POSIX file "{str(folder).replace(chr(34), "")}")'
+    return f' default location (POSIX file "{_applescript_text(str(folder))}")'
 
 
 def choose_media_files(
@@ -178,7 +188,9 @@ def choose_media_files(
         raise FileChooserError(reason)
     binary = osascript_path()
     fields = {
-        "prompt": prompt.replace('"', "'"),
+        # A quote in the prompt reads fine as an apostrophe; a path has to match
+        # the disk exactly, so the location clause escapes instead.
+        "prompt": _applescript_text(prompt.replace('"', "'")),
         "types": _MEDIA_TYPES,
         "location": _location_clause(start_in),
         "multiple": "with multiple selections allowed" if allow_multiple else "",
@@ -205,7 +217,9 @@ def choose_media_folder(
         raise FileChooserError(reason)
     binary = osascript_path()
     fields = {
-        "prompt": prompt.replace('"', "'"),
+        # A quote in the prompt reads fine as an apostrophe; a path has to match
+        # the disk exactly, so the location clause escapes instead.
+        "prompt": _applescript_text(prompt.replace('"', "'")),
         "location": _location_clause(start_in),
     }
     return _run_dialog(binary, (_FOLDER_VIA_FINDER, _FOLDER_PLAIN), fields, runner)
