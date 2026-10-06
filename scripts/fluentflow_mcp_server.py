@@ -13,7 +13,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.local_agent_client import (
-    DEFAULT_API_BASE,
     DEFAULT_CLIENT_ID,
     FluentFlowApiError,
     api_request,
@@ -48,6 +47,14 @@ def _client_id(value: str | None = None) -> str:
 # need one ask, so pointing this client at either backend still works for the
 # ten tools both editions serve.
 _START_HINT = "请双击桌面上的「FluentFlow Local」启动它，等它把浏览器打开之后重试。"
+# A 401 is almost always two copies of one token that drifted: the backend reads
+# FLUENTFLOW_ACCESS_TOKEN from the repository .env, the MCP client sends whatever
+# its own config says, and nobody can see both at once from inside a chat.
+_UNAUTHORIZED_HINT = (
+    "（后端拒绝了访问令牌。请核对仓库根目录 .env 里的 FLUENTFLOW_ACCESS_TOKEN "
+    "和 MCP 客户端配置（例如 ~/.claude.json 或 Codex 的 config.toml）里的 "
+    "FLUENTFLOW_ACCESS_TOKEN 是否完全一致；改过 .env 之后要重启 FluentFlow Local 才生效。）"
+)
 
 
 def _unreachable(api_base: str, reason: str) -> dict[str, Any]:
@@ -123,9 +130,12 @@ def _agent_request(
             # No HTTP status means nothing answered. Say how to start it instead of
             # handing the caller a bare "Connection refused" to interpret.
             return _unreachable(base, str(exc))
+        message = str(exc)
+        if exc.status == 401:
+            message += _UNAUTHORIZED_HINT
         return {
             "ok": False,
-            "error": str(exc),
+            "error": message,
             "status": exc.status,
             "payload": exc.payload if isinstance(exc.payload, dict) else None,
         }

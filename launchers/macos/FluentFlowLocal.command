@@ -11,10 +11,37 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${FLUENTFLOW_REPO:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
-PORT="${FLUENTFLOW_LOCAL_PORT:-8000}"
+
+# 端口：shell 环境里的 FLUENTFLOW_LOCAL_PORT 优先，其次是仓库 .env 里的同名行，
+# 都没有就是 8000。只取这一行，不 source 整个 .env（它是 dotenv 格式，可含中文
+# 注释和空格，backend.local_main 启动时会用 python-dotenv 自己正确加载）。
+# 这里要和后端读到的一致：后端也是 .env 的这一行，不一致就会探错端口、
+# 把活着的服务判成没起来。
+env_port() {
+	local env_file="${REPO}/.env" line
+	[[ -f "$env_file" ]] || return 0
+	line="$(grep -E '^[[:space:]]*(export[[:space:]]+)?FLUENTFLOW_LOCAL_PORT[[:space:]]*=' "$env_file" 2>/dev/null | tail -n 1 || true)"
+	[[ -n "$line" ]] || return 0
+	line="${line#*=}"
+	line="$(printf '%s' "$line" | sed -E "s/^[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//")"
+	[[ "$line" =~ ^[0-9]+$ ]] && printf '%s' "$line"
+}
+PORT="${FLUENTFLOW_LOCAL_PORT:-$(env_port)}"
+PORT="${PORT:-8000}"
 APP_URL="http://127.0.0.1:${PORT}/"
 LOG_DIR="${HOME}/Library/Logs/FluentFlow"
 LOG_FILE="${LOG_DIR}/local.log"
+
+# 日志超过 5 MB 就换一份，只留上一代。tee -a 本身永远不会换文件，一台天天开着的
+# 机器上这个文件曾经只增不减。
+rotate_log() {
+	local file="$1" size
+	[[ -f "$file" ]] || return 0
+	size="$(stat -f %z "$file" 2>/dev/null || echo 0)"
+	if ((size > 5 * 1024 * 1024)); then
+		mv -f "$file" "${file}.1"
+	fi
+}
 
 fail() {
 	echo ""
@@ -98,6 +125,7 @@ if ! "$VENV_PY" "${REPO}/scripts/check_local_readiness.py"; then
 fi
 
 mkdir -p "$LOG_DIR"
+rotate_log "$LOG_FILE"
 echo "---- $(date '+%Y-%m-%d %H:%M:%S') starting backend.local_main:app on :${PORT} ----" >>"$LOG_FILE"
 
 # 不在 shell 里 source .env：.env 是 dotenv 格式（可含中文注释、空格），

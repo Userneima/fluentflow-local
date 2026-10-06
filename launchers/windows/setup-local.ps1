@@ -9,6 +9,16 @@
 # only chops the wait into pieces the user has to sit through. Missing pieces
 # are installed, each step says what it is doing, and only a failure stops it.
 #
+# Slow pip / npm downloads (for example on networks in China): set a mirror in
+# this PowerShell session before running the script; it never switches on its own.
+#   $env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+#   npm config set registry https://registry.npmmirror.com
+#
+# Python dependencies are installed from requirements-local.txt (lower bounds,
+# newest matching versions). There is no tested lock file for Windows yet; the
+# only lock in the repository, requirements-local.lock.macos-arm64.txt, is for
+# Apple Silicon and must not be used here.
+#
 #   ... -SkipModel   do not download the transcription model
 param([switch]$SkipModel)
 
@@ -76,7 +86,15 @@ if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
             "install", "--id", "Gyan.FFmpeg", "-e", "--source", "winget",
             "--accept-source-agreements", "--accept-package-agreements"
         )
-        Write-Host "FFmpeg installed. If the next step cannot find it, open a new PowerShell window so PATH is refreshed."
+        # Re-read PATH now and prove ffmpeg is reachable before the long pip
+        # install. Without this the script ran for twenty minutes and then
+        # failed at the readiness check over the thing it had itself installed.
+        Update-SessionPath
+        if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
+            -not (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
+            throw "FFmpeg was installed by winget but ffmpeg.exe / ffprobe.exe are still not on PATH. Close this PowerShell window, open a new one, and run this script again. If they are still missing, add FFmpeg's bin folder to PATH yourself."
+        }
+        Write-Host "FFmpeg installed: $((Get-Command ffmpeg.exe).Source)"
     } else {
         throw "FFmpeg was not found. Install it (winget install Gyan.FFmpeg) and make sure ffmpeg.exe and ffprobe.exe are on PATH, then run this script again."
     }
@@ -158,7 +176,7 @@ if ($SkipModel) {
     Write-Host "Preparing the transcription model..."
     & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch"
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "The model was not downloaded. The first transcription will retry it, or run scripts\stt_model.py fetch later."
+        Write-Host "The model was not downloaded. The first transcription will download it (switching to the hf-mirror.com mirror if huggingface.co is unreachable), or run .\.venv\Scripts\python.exe scripts\stt_model.py fetch --mirror now."
     }
 }
 

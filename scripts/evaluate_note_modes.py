@@ -46,11 +46,11 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.core.ai_client import _provider_default_model  # noqa: E402
 from backend.core.ai_summarizer import (  # noqa: E402
     _chat,
     _get_client,
     _normalize_provider,
-    _provider_default_model,
 )
 
 # Importance >= this counts as an "important" point for coverage-of-important.

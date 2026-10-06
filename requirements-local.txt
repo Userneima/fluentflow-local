@@ -7,6 +7,10 @@
 #
 # This file is the local runtime dependency contract. Cloud-only packages
 # (such as Alibaba OSS) intentionally do not appear here.
+#
+# It lists lower bounds. The exact versions a release was tested with are in
+# requirements-local.lock.<platform>-<arch>.txt; setup-local.sh prefers the
+# lock for the current platform when one exists.
 
 faster-whisper>=1.0.0
 # Apple-Silicon fast lane for local transcription. faster-whisper cannot reach
@@ -31,14 +35,16 @@ openai>=1.0.0
 # refuses with an install command instead of crashing at import.
 anthropic>=0.69.0
 lark-oapi>=1.0.0
-# Same upper bound as requirements.txt: FastAPI 0.130+ pulls Starlette 1.x,
-# which the route contract has not been tested against.
+# FastAPI 0.130+ pulls Starlette 1.x, which the route contract has not been
+# tested against.
 fastapi>=0.115.0,<0.130
 httpx>=0.27.0
 python-multipart>=0.0.9
 uvicorn[standard]>=0.32.0
 python-dotenv>=1.0.0
-# Deliberately unpinned; see requirements.txt.
+# Deliberately a lower bound only: sites change their pages and yt-dlp ships a
+# fix within days, so a pinned version would stop downloading before anyone
+# touched this file.
 yt-dlp>=2025.10.14
 
 # Optional speaker diarization:

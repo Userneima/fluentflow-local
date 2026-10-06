@@ -140,6 +140,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+# Tee-Object -Append never rotates; past 5 MB the file is moved aside and one
+# previous generation is kept.
+if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 5MB)) {
+    Move-Item -Force -Path $LogFile -Destination "$LogFile.1"
+}
 Add-Content -Path $LogFile -Value "---- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') starting backend.local_main:app on :$Port ----"
 
 Set-Location $Repo

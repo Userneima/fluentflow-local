@@ -22,6 +22,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # VERSION is the single source of the version number; package.json must
+      # not drift from it (scripts/write_frontend_config.js reads VERSION).
+      - run: test "$(node -p "require('./package.json').version")" = "$(cat VERSION)"
       - run: npm run lint:frontend
       - run: npm run build:frontend
       - run: npm run test:frontend
@@ -39,7 +42,14 @@ jobs:
           # one, and the job ends before pip, pylint or pytest ever run — which
           # is how this workflow reported red while checking nothing.
           cache-dependency-path: requirements-local.txt
+      # The media tests that run the real ffmpeg skip themselves without it, and
+      # a skip in CI reads as a pass. tests/test_ci_env.py fails if this is gone.
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: pip install -r requirements-local.txt
-      - run: pip install pytest pylint
+      - run: pip install pytest pytest-timeout pylint ruff
+      # Rule selection (E and F) and the per-file exceptions live in pyproject.toml.
+      - run: python3 -m ruff check backend/ scripts/
       - run: python3 -m pylint backend/ --errors-only --disable=import-error,no-member
-      - run: python3 -m pytest tests/ -q
+      # -rs prints every skip with its reason, so a suite that silently skipped
+      # half its media tests is visible in the log.
+      - run: python3 -m pytest tests/ -q -rs

@@ -33,6 +33,15 @@ cd fluentflow-local
 最新版本的 Source code (zip)，解压后在终端里进入解压出来的文件夹。在一台全新的 Mac 上第一次
 运行 `git`，系统会弹窗要求安装命令行开发者工具，点「安装」等它装完再重跑即可。
 
+在国内网络下 pip 和 npm 下载慢时，先在同一个终端里设置镜像再运行安装脚本，脚本不会自己切换：
+
+```bash
+export PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+npm config set registry https://registry.npmmirror.com
+```
+
+Windows 的 PowerShell 里第一行写成 `$env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"`。
+
 ### macOS
 
 ```bash
@@ -46,6 +55,11 @@ bash launchers/macos/setup-local.sh
 Homebrew 本身需要你自己先装（https://brew.sh），那一步要输密码。`--skip-desktop`
 不生成桌面图标，`--skip-model` 不下转录模型（留到第一次转录时再下）。
 
+Apple 芯片的 Mac 上，Python 依赖按 `requirements-local.lock.macos-arm64.txt` 安装，那是一份
+实际测过的版本组合；其他平台按 `requirements-local.txt` 的版本下限装最新的。转录模型下载失败时
+脚本会停下来说明：环境已装好，按它给的命令 `scripts/stt_model.py fetch --mirror` 从镜像补下模型，
+再运行一次脚本把剩下的步骤做完。
+
 ### Windows
 
 ```powershell
@@ -58,6 +72,7 @@ CUDA Toolkit，但显卡驱动要在。`-SkipModel` 不下转录模型。装完�
 「FluentFlow Local」启动。
 
 如果脚本装完 Python 或 Node.js 后提示找不到它们，关掉这个 PowerShell 窗口，开一个新的再运行一次。
+Windows 和 Linux 还没有经过测试的依赖锁定文件，Python 依赖按 `requirements-local.txt` 的版本下限装最新的。
 
 已经装好、只想补 GPU 运行库：
 
@@ -93,7 +108,34 @@ npm run build:frontend
 4. 处理完的任务在「处理记录」里，点进去可以改转录稿、改笔记、导出 Markdown，或者发到飞书。
 
 抖音、Bilibili 高清、YouTube 受限视频要登录才能下载。在「设置 → 转录 → 视频链接下载登录态」
-里选你平时登录这些网站的浏览器，它会在本机读取那个浏览器的登录状态，不上传。
+里选你平时登录这些网站的浏览器，它会在本机读取那个浏览器的登录状态，不上传。macOS 上读取
+Chrome、Edge、Brave 的登录态要解开浏览器的 Cookie 密钥，系统会弹出钥匙串访问的授权框，点「始终允许」
+即可；较新版本的 Chrome 加了额外的保护，读取可能失败，这时换 Safari 或 Firefox，或者在浏览器里把
+Cookie 导出成文件后用 `YT_DLP_COOKIES_FILE` 指定。
+
+## 什么会离开这台电脑
+
+转录、剪气口、抽帧都在本机完成。只有用到下面这些功能时才会连外部服务，而且只发那项功能需要的内容：
+写笔记发转录文本和标题给你选的模型服务商；图文笔记发截取的画面给 Claude；导出飞书发笔记内容到你的
+飞书；下载视频链接访问对应的视频平台。
+
+抖音链接有一个例外：没有选浏览器登录态、或登录态过期时，yt-dlp 解析不了，这时会把这条分享链接
+（只有链接本身，不含任何其他信息）交给第三方解析服务 `sph.miuistore.com` 换取下载地址。这个回退默认
+开启。不想用它，把偏好项 `allow_miuistore` 关掉，之后抖音链接解析失败就直接报错：
+
+```bash
+curl -X POST http://127.0.0.1:8000/preferences -H 'Content-Type: application/json' -d '{"allow_miuistore": false}'
+```
+
+## 停止
+
+关掉浏览器标签不会停掉服务，它还在后台跑着，下次双击图标会直接回到页面。要真正停掉它：
+
+- macOS：再双击一次桌面上的「FluentFlow Local」，在弹出的对话框里点「停止服务」。有任务正在处理时它会
+  先问你，停掉会让那些任务从头再来。用终端启动的，在那个终端窗口按 Ctrl+C。
+- Windows：启动器那个黑色窗口就是服务，按 Ctrl+C 或关掉窗口。
+
+重启电脑也会停掉它；它不会开机自启。
 
 ## 笔记要接你自己的模型账号
 
@@ -140,7 +182,9 @@ bash launchers/macos/setup-local.sh
 
 Windows 同样是 `git pull` 后重新运行 `setup-local.ps1`。安装脚本可以重复运行，会按新版本
 重装依赖、重建界面；任务记录和填过的 Key 不在代码目录里，不受影响。用 zip 安装的，下载新版本解压后
-在新文件夹里运行安装脚本即可。
+在新文件夹里运行安装脚本，它会把桌面图标指向新文件夹；确认新版本能正常处理一个任务之后，再删掉旧
+文件夹（里面的 `.venv` 和 `node_modules` 占着几 GB，而你的任务记录不在那里）。旧文件夹里有 `.env` 的，
+先把它复制到新文件夹。
 
 ## 出问题时
 
@@ -173,8 +217,8 @@ Windows 上是 `.venv\Scripts\python.exe scripts\check_local_readiness.py`。
 
 只用 CPU 转录的机器会自动改用 medium（约 1.5 GB），不会下载跑不动的那个模型。
 
-模型从 Hugging Face 下载。那里连不上时安装脚本会自动改用镜像 `hf-mirror.com`，也可以
-用 `HF_ENDPOINT` 指定自己的源，或者给 `scripts/stt_model.py fetch` 加 `--mirror`。
+模型从 Hugging Face 下载。那里连不上时安装脚本和服务启动时都会自动改用镜像 `hf-mirror.com`，
+也可以用 `HF_ENDPOINT` 指定自己的源，或者给 `scripts/stt_model.py fetch` 加 `--mirror`。
 
 ## 卸载
 
@@ -205,9 +249,12 @@ npm run lint:frontend
 npm run build:frontend
 npm run test:frontend
 .venv/bin/python -m pytest tests/ -q
+.venv/bin/python -m ruff check backend/ scripts/
 ```
 
 `npm run build:frontend` 生成本地版由 `backend.local_main` 提供的 `frontend/dist-local`。
+版本号只写在 `VERSION` 文件里，`package.json` 的 `version` 必须和它一致，CI 会比对。
+每个 `FLUENTFLOW_*` 环境变量的含义和默认值列在 `docs/maintenance.md`。
 不要提交该构建目录、`.env`、媒体、任务数据库或导出内容。
 
 启动前的环境检查可以单独跑，它会说明转录会走哪条路、模型在不在本机：

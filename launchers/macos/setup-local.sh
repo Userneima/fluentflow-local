@@ -14,6 +14,10 @@
 # 器，以及用 Homebrew 补上缺失的 FFmpeg 和 Node.js。Homebrew 自己不会被装——那
 # 一步要密码，得你自己来。
 #
+# 国内网络 pip / npm 下载慢时，先在同一个终端里设置镜像再运行本脚本，脚本不会自己切换：
+#   export PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+#   npm config set registry https://registry.npmmirror.com
+#
 # 用法：
 #   bash launchers/macos/setup-local.sh
 #   bash launchers/macos/setup-local.sh --skip-desktop   # 不生成桌面 App
@@ -159,7 +163,20 @@ echo "虚拟环境：${VENV}（$("$VENV_PY" -V 2>&1)）"
 step "安装 Python 依赖（体积较大，首次约需十几分钟）"
 # 先升 pip：老 pip 拿不到 pyobjc 的预编译包，会转去编译源码然后失败。
 "$VENV_PY" -m pip install --quiet --upgrade pip || fail "升级 pip 失败。"
-"$VENV_PY" -m pip install -r "${REPO}/requirements-local.txt" ||
+# 有本平台的锁定文件时按它装：那是一份实际测过的版本组合，requirements-local.txt
+# 只写下限，隔几周装出来的就是另一套版本。目前只冻结了 macOS arm64 的；别的平台
+# 落回 requirements-local.txt。
+REQUIREMENTS="${REPO}/requirements-local.txt"
+case "$(uname -s)" in
+Darwin) LOCK_PLATFORM="macos" ;;
+*) LOCK_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')" ;;
+esac
+LOCK_FILE="${REPO}/requirements-local.lock.${LOCK_PLATFORM}-$(uname -m).txt"
+if [[ -f "$LOCK_FILE" ]]; then
+	echo "按锁定文件安装：$(basename "$LOCK_FILE")"
+	REQUIREMENTS="$LOCK_FILE"
+fi
+"$VENV_PY" -m pip install -r "$REQUIREMENTS" ||
 	fail "安装 Python 依赖失败，请看上面的报错。"
 
 # Apple Silicon 上的加速转录引擎由 requirements-local.txt 里的平台标记自动决定，
@@ -207,16 +224,18 @@ echo "构建：npm run ${BUILD_SCRIPT}"
 npm run "$BUILD_SCRIPT" || fail "前端构建失败。"
 
 # --- 5. 转录模型 -----------------------------------------------------------
-# 不下这一步也能装完，但「安装完成」四个字会变成谎话：用户双击图标、丢进第一个
-# 视频，才开始等几 GB 的模型，而那个等待没有任何进度可看。下载失败不让整个安装
-# 失败——模型随时可以补，环境不必重装。
+# 「安装完成」要名副其实：用户双击图标、丢进第一个视频，才开始等几 GB 的模型，
+# 而那个等待没有任何进度可看。所以下载失败就算安装没完成，脚本以非零退出；
+# 已经装好的环境不必重装，补一次模型就行。
 step "准备转录模型"
 if [[ "$SKIP_MODEL" -eq 1 ]]; then
 	echo "按要求跳过。第一次转录时会自动下载。"
 else
 	"$VENV_PY" "${REPO}/scripts/stt_model.py" fetch ||
-		echo "（模型没有下成。第一次转录时会自动重试，也可以稍后手动运行
-  ${VENV_PY} ${REPO}/scripts/stt_model.py fetch）"
+		fail "转录模型没有下载成功，安装还没有完成。
+环境和界面都已经装好，只差模型。请检查网络或代理后，在这个目录里运行：
+  ${VENV_PY} scripts/stt_model.py fetch --mirror
+它会直接从镜像源下载。下载成功后再运行一次本脚本，把剩下的步骤（就绪检查、桌面启动器）做完。"
 fi
 
 # --- 6. 就绪检查 -----------------------------------------------------------

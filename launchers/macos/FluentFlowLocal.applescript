@@ -10,15 +10,13 @@
   位置、中文失败原因全在那里。这里只做三件它做不到的事：包成可双击的应用、
   已在运行时给出打开/重启/取消、启动失败时把日志尾部读出来放进对话框。
 
-  ── 为什么第二个按钮是"重启"而不是"停止" ──
+  ── 已在运行时的四个按钮 ──
 
-  原来是「打开 / 停止服务 / 取消」，三个选项里没有一个能"换成最新代码"。后端加了
-  路由而服务没重启时，页面上按钮在、接口不在，浏览器只报 Method Not Allowed——
-  实测撞到过，而且当场没人猜得出原因。停止之后还得再双击一次才起得来，中间那次
-  双击又会因为 applet 单实例而看起来没反应。
-  所以「停止服务」换成「重启服务」：停掉、确认端口真的空了、再用当前代码起一个并
-  打开页面。要单纯停掉服务，用终端：
-    pkill -f 'uvicorn backend.local_main:app'
+  「打开」只是跳到页面。「重启服务」是停掉、确认端口真的空了、再用当前代码起一个
+  并打开页面：后端加了路由而服务没重启时，页面上按钮在、接口不在，浏览器只报
+  Method Not Allowed，当场没人猜得出原因，所以这个入口必须有。「停止服务」是用户
+  能看见的唯一停法：关掉浏览器标签不会停掉服务，而用 nohup 拉起的进程没有终端
+  窗口可关。停止和重启走同一个任务保护：有任务在处理就先问。
 
   入口是本地版 backend.local_main，绝不是 hosted 的 backend.main。这由
   FluentFlowLocal.command 保证；同目录的 FluentFlow.app 是旧的 hosted 启动器，
@@ -42,11 +40,14 @@
 property bundleDisplayName : "FluentFlow Local"
 -- 安装时由 install-local-to-desktop.sh 替换成真实路径
 property repoPath : "@@REPO@@"
--- 与 FluentFlowLocal.command 的默认端口一致。用户用 FLUENTFLOW_LOCAL_PORT 改过
--- 端口时，下面的快速通道探测不到，会落到正常启动路径由 .command 自己处理 ——
--- 退化是安全的，不会误判成"没起来"。
+-- 默认端口，与 FluentFlowLocal.command 一致。on run 开头会按同样的规则读仓库 .env
+-- 里的 FLUENTFLOW_LOCAL_PORT 覆盖它：不读的话，改过端口的用户双击图标，这里探
+-- 8000 探不到，起第二个服务时 .command 又按 .env 的端口发现已在运行，于是每次
+-- 双击都「正在启动」却什么都没发生。
 property appPort : "8000"
 property readySeconds : 90
+-- 日志超过这个大小就换一份，只留上一代。
+property logRotateBytes : 5242880
 
 on q(p)
 	return quoted form of p
@@ -56,6 +57,24 @@ on sh(cmd)
 	-- -lic 加载登录环境，ffmpeg 等 Homebrew 装的工具才在 PATH 里
 	return do shell script "/bin/zsh -lic " & quoted form of cmd
 end sh
+
+on configuredPort()
+	-- 只取 .env 里 FLUENTFLOW_LOCAL_PORT 这一行，和 .command 的 env_port 同一套规则；
+	-- 不 source 整个文件。读不到或不是数字就用默认端口。
+	try
+		set envFile to repoPath & "/.env"
+		set found to do shell script "grep -E '^[[:space:]]*(export[[:space:]]+)?FLUENTFLOW_LOCAL_PORT[[:space:]]*=' " & q(envFile) & " 2>/dev/null | tail -n 1 | sed -E 's/^[^=]*=//; s/^[[:space:]]*[\"'\\'']?//; s/[\"'\\'']?[[:space:]]*(#.*)?$//' | grep -E '^[0-9]+$' || true"
+		if found is not "" then return found
+	end try
+	return appPort
+end configuredPort
+
+on rotateLog(logFile)
+	-- 启动日志由这里的 nohup 追加，没有别人会换文件。
+	try
+		do shell script "f=" & q(logFile) & "; if [ -f \"$f\" ] && [ \"$(stat -f %z \"$f\")\" -gt " & logRotateBytes & " ]; then mv -f \"$f\" \"$f.1\"; fi"
+	end try
+end rotateLog
 
 on pageServes(theURL)
 	-- 只认真正发出了正文的响应。健康检查返回 200 不等于页面出得来：一个跑了
@@ -145,6 +164,7 @@ on reopen
 end reopen
 
 on run
+	set appPort to configuredPort()
 	set appURL to "http://127.0.0.1:" & appPort & "/"
 	set launcher to repoPath & "/launchers/macos/FluentFlowLocal.command"
 	set logDir to (POSIX path of (path to home folder)) & "Library/Logs/FluentFlow"
@@ -173,8 +193,10 @@ on run
 		-- 两个动作，差别说清楚：打开只是跳到页面，重启是把后台换成当前代码。
 		-- 后端改了路由而服务没重启时，页面上按钮在、接口不在，报的是
 		-- "Method Not Allowed"——没有这个入口的时候，那个错没人猜得出原因。
+		-- display dialog 最多三个按钮，所以先问「打开 / 其他操作 / 取消」，停止和重启
+		-- 收在第二层。打开是绝大多数双击的目的，必须留在第一层的默认按钮上。
 		try
-			set existingChoice to button returned of (display dialog "FluentFlow Local 已在运行。" & return & return & "「打开」直接跳到页面，不动后台。" & return & "「重启服务」会停掉当前后台再用最新代码起一个（页面会自动打开）。" buttons {"打开 FluentFlow", "重启服务", "取消"} default button "打开 FluentFlow" cancel button "取消" with title bundleDisplayName)
+			set existingChoice to button returned of (display dialog "FluentFlow Local 已在运行。" & return & return & "「打开」直接跳到页面，不动后台。" & return & "「停止或重启」里可以停掉后台，或用最新代码重新起一个。" buttons {"打开 FluentFlow", "停止或重启", "取消"} default button "打开 FluentFlow" cancel button "取消" with title bundleDisplayName)
 		on error number -128
 			return
 		end try
@@ -184,23 +206,37 @@ on run
 			end try
 			return
 		end if
-		if existingChoice is not "重启服务" then return
+		if existingChoice is not "停止或重启" then return
+
+		try
+			set serviceAction to button returned of (display dialog "「停止服务」把后台停掉，关掉浏览器标签是停不掉它的。" & return & "「重启服务」停掉后再用最新代码起一个，页面会自动打开。" buttons {"停止服务", "重启服务", "取消"} default button "取消" cancel button "取消" with title bundleDisplayName)
+		on error number -128
+			return
+		end try
+		if serviceAction is not "停止服务" and serviceAction is not "重启服务" then return
+		set isRestart to (serviceAction is "重启服务")
 
 		set runningJobs to activeJobCount(appURL)
 		set warnText to ""
+		set verb to "停止"
+		if isRestart then set verb to "重启"
 		if runningJobs > 0 then
-			set warnText to "当前有 " & runningJobs & " 个任务正在进行中。重启会中断它们，之后需要重新提交。"
+			set warnText to "当前有 " & runningJobs & " 个任务正在进行中。" & verb & "会中断它们，之后需要重新提交。"
 		else if runningJobs < 0 then
 			-- 读不到任务列表，不代表没有任务。宁可多问一句，也不静默中断。
-			set warnText to "读不到任务列表，没法确认现在有没有任务在跑。重启会中断正在进行的任务。"
+			set warnText to "读不到任务列表，没法确认现在有没有任务在跑。" & verb & "会中断正在进行的任务。"
 		end if
 		if warnText is not "" then
 			try
-				set stopChoice to button returned of (display dialog warnText buttons {"继续运行", "仍要重启"} default button "继续运行" cancel button "继续运行" with title bundleDisplayName with icon caution)
+				set stopChoice to button returned of (display dialog warnText buttons {"继续运行", "仍要" & verb} default button "继续运行" cancel button "继续运行" with title bundleDisplayName with icon caution)
 			on error number -128
 				return
 			end try
-			if stopChoice is not "仍要重启" then return
+			if stopChoice is not ("仍要" & verb) then return
+		end if
+		if not isRestart then
+			stopService(appURL)
+			return
 		end if
 		-- 没停干净就不要起新的：端口还被占着，新服务只会失败得很难看。
 		if stopService(appURL) is false then return
@@ -209,6 +245,7 @@ on run
 
 	display notification "正在启动本地服务…" with title bundleDisplayName
 
+	rotateLog(launchLog)
 	-- nohup + </dev/null + disown：applet 退出后服务要继续活着。
 	-- stdin 给 /dev/null 是有意的：.command 失败时会 read 等回车，没有终端时
 	-- 读到 EOF 直接退出，不会永远挂着；它打印的中文原因进 launchLog，下面读出来。

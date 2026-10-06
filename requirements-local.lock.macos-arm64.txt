@@ -1,0 +1,90 @@
+# Frozen on 2026-10-06 with `.venv/bin/python -m pip freeze` from a tested FluentFlow Local
+# install on macOS arm64 (Apple Silicon, Python 3.14.6).
+# These are the exact versions the test suite and the desktop launcher were run against.
+# setup-local.sh installs this file on macOS arm64 and falls back to requirements-local.txt
+# on every other platform (no lock exists for Windows or Linux yet).
+# Development-only tools (pytest, pylint and what only they pull in) are left out.
+# Platform-specific wheels (mlx, pyobjc) are listed: never install this file on another OS.
+# Re-freeze after a deliberate dependency upgrade; do not edit by hand.
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anthropic==1.4.0
+anyio==4.15.1
+av==18.1.0
+certifi==2026.7.22
+charset-normalizer==3.5.1
+click==8.5.0
+ctranslate2==4.8.2
+decorator==5.3.1
+docstring_parser==0.18.0
+fastapi==0.129.2
+faster-whisper==1.2.1
+filelock==3.32.6
+flatbuffers==25.12.19
+fsspec==2026.7.0
+h11==0.16.0
+hf-xet==1.6.0
+httpcore==1.0.9
+httpcore2==2.12.0
+httptools==0.8.0
+httpx==0.28.1
+httpx2==2.12.0
+huggingface_hub==1.30.0
+idna==3.19
+ImageIO==2.37.4
+imageio-ffmpeg==0.6.0
+Jinja2==3.1.6
+jiter==0.16.0
+lark-oapi==1.7.3
+llvmlite==0.49.0
+MarkupSafe==3.0.3
+mlx==0.32.2
+mlx-metal==0.32.2
+mlx-whisper==0.4.3
+more-itertools==11.1.0
+moviepy==2.2.1
+mpmath==1.3.0
+mypy_extensions==1.1.0
+networkx==3.6.1
+numba==0.67.0
+numpy==2.5.3
+onnxruntime==1.29.0
+openai==3.11.0
+opencc-python-reimplemented==0.1.7
+packaging==26.3
+pillow==11.3.0
+proglog==0.1.12
+protobuf==7.36.1
+pycryptodome==3.23.0
+pydantic==2.13.5
+pydantic_core==2.46.5
+Pygments==2.21.0
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-CoreML==12.2.2
+pyobjc-framework-Quartz==12.2.2
+pyobjc-framework-Vision==12.2.2
+python-dotenv==1.2.3
+python-multipart==0.0.32
+PyYAML==6.0.3
+regex==2026.9.10
+requests==2.34.2
+requests-toolbelt==1.0.0
+scipy==1.18.1
+setuptools==84.0.0
+sniffio==1.3.1
+starlette==0.52.1
+sympy==1.14.0
+tiktoken==0.14.0
+tokenizers==0.23.2
+torch==2.14.0
+tqdm==4.70.0
+truststore==0.10.4
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.7.0
+uvicorn==0.52.4
+uvloop==0.22.1
+watchfiles==1.2.0
+websockets==15.0.1
+yt-dlp==2026.8.19

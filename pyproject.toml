@@ -1,0 +1,30 @@
+# Tool configuration only; the project is not packaged. There is no other
+# pytest configuration file (pytest.ini, setup.cfg, tox.ini), so this is the
+# single place pytest reads.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A test that hangs (a subprocess waiting on stdin, a network probe nobody
+# mocked) would otherwise hold CI until the runner's own limit. Needs the
+# pytest-timeout plugin, which CI installs; without it the key is ignored.
+timeout = 120
+
+[tool.ruff]
+# The tooling width, not a style decree: the code base runs past 88 and the
+# lint gate is about errors and dead names, so E501 is not selected anyway.
+line-length = 120
+
+[tool.ruff.lint]
+# CI runs `ruff check backend/ scripts/`, which takes this selection: errors
+# and dead names. Line length is a style question pylint does not ask either,
+# so E501 is left out; a `--select` on the command line would put it back.
+select = ["E", "F"]
+# E701/E702/E731 are one-line-statement style questions, not errors.
+ignore = ["E501", "E701", "E702", "E731"]
+
+[tool.ruff.lint.per-file-ignores]
+# Structural: .env must be loaded before the modules that freeze paths at
+# import, and the scripts put the repository on sys.path first. These stay.
+"backend/local_main.py" = ["E402"]
+"scripts/fluentflow_mcp_server.py" = ["E402"]
+"scripts/evaluate_agent_mcp.py" = ["E402"]
