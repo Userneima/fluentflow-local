@@ -513,7 +513,8 @@ def list_jobs_for_retention(
             f"""
             SELECT task_id, created_at, updated_at, status, client_id, metadata_json,
                    json_extract(result_json, '$.source_file_available') AS source_file_available,
-                   json_extract(result_json, '$.source_retention_expires_at') AS source_retention_expires_at
+                   json_extract(result_json, '$.source_retention_expires_at') AS source_retention_expires_at,
+                   json_extract(result_json, '$.media_retention_status') AS media_retention_status
             FROM jobs {where} ORDER BY updated_at DESC
             """,
             params,
@@ -537,7 +538,11 @@ def list_jobs_for_retention(
             result = {
                 "source_file_available": row["source_file_available"],
                 "source_retention_expires_at": row["source_retention_expires_at"],
+                "media_retention_status": row["media_retention_status"],
             }
+            # Marks a summary rather than the stored result, so nothing writes
+            # it back in place of the real one.
+            result["_retention_summary"] = True
         jobs.append({
             "task_id": task_id,
             "created_at": row["created_at"],

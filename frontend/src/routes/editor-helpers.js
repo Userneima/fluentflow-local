@@ -129,3 +129,15 @@ export const downloadBrowserFile = (file, fallbackName = 'download') => {
     a.remove();
     URL.revokeObjectURL(url);
 };
+
+// The audio and video were cleared by the retention window; the transcript and
+// note are kept. Said plainly, so a missing player does not read as a fault.
+export const mediaRetentionNotice = (result, lang = 'zh') => {
+    if (result?.media_retention_status !== 'expired') return '';
+    const day = String(result?.media_retention_cleaned_at || '').slice(0, 10);
+    const zh = lang === 'zh';
+    if (zh) {
+        return `这条记录的音视频${day ? `已在 ${day} ` : '已'}按保留期清理，转写稿、笔记和笔记里的截图都还在。要边听边校对，选择原始文件即可。`;
+    }
+    return `The audio and video for this record were cleared by the retention window${day ? ` on ${day}` : ''}. The transcript, the note and its pictures are kept. Choose the original file to listen while editing.`;
+};

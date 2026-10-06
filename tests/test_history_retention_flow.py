@@ -62,7 +62,8 @@ def _finished_task(task_id: str, *, expires_in_days: float, status: str = "compl
 
 @pytest.fixture(autouse=True)
 def retention_window(monkeypatch):
-    """Whole-task pruning is far away; only source expiry is in play here."""
+    """The artifact window is far away by default, so the source tests above see
+    only source expiry; the tests below set the shipped window themselves."""
     monkeypatch.setenv("FLUENTFLOW_ARTIFACT_RETENTION_DAYS", "3650")
     monkeypatch.setenv("FLUENTFLOW_SOURCE_RETENTION_DAYS", "7")
     yield
@@ -131,6 +132,111 @@ def test_the_pass_only_looks_at_its_own_client():
     """Local has one owner, but the pass is scoped so nothing else's rows are read."""
     other = _finished_task("ret-other", expires_in_days=-1)
 
-    assert lp._enforce_local_history_retention("someone-else") == {"pruned_count": 0, "task_ids": [], "expired_source_count": 0}
+    outcome = lp._enforce_local_history_retention("someone-else")
+    assert outcome["expired_source_count"] == 0 and outcome["expired_media_count"] == 0
     assert (other["source_dir"] / "source.mp4").is_file()
-    assert lp._enforce_local_history_retention(None) == {"pruned_count": 0, "task_ids": []}
+    assert lp._enforce_local_history_retention(None)["pruned_count"] == 0
+
+
+# ── after the artifact window: media goes, the work stays ───────────────────
+
+def _age(task_id: str, days: float) -> None:
+    """Move a task's last change back in time, as if it had sat untouched."""
+    import sqlite3
+
+    stamp = (datetime.now(timezone.utc) - timedelta(days=days)).astimezone().isoformat(timespec="seconds")
+    with sqlite3.connect(job_store.DEFAULT_DB_PATH) as conn:
+        conn.execute("UPDATE jobs SET updated_at = ?, created_at = ? WHERE task_id = ?", (stamp, stamp, task_id))
+
+
+def _with_media(task: dict, task_id: str) -> dict:
+    artifact_dir = task["artifact_dir"]
+    (artifact_dir / "debreath").mkdir(exist_ok=True)
+    (artifact_dir / "debreath" / "lecture_debreath.mp4").write_bytes(b"v" * 1000)
+    (artifact_dir / "debreath" / "lecture.cutlist.json").write_text("{}", encoding="utf-8")
+    (artifact_dir / "lecture_audio.mp3").write_bytes(b"a" * 500)
+    frames = artifact_dir / "frames"
+    frames.mkdir(exist_ok=True)
+    (frames / "note_0001.jpg").write_bytes(b"shown")
+    (frames / "note_0002.jpg").write_bytes(b"only a candidate")
+    result = {
+        **task["result"],
+        "source_retention_expires_at": _iso(-20),
+        "visual_note": {
+            "markdown": f"# 笔记\n\n![幻灯片](/jobs/{task_id}/artifacts/frame?file=note_0001.jpg)",
+            "frames_sent": [{"file": "note_0001.jpg"}, {"file": "note_0002.jpg"}],
+        },
+    }
+    job_store.update_job_result(task_id, result, client_id=CLIENT)
+    return result
+
+
+def test_an_old_task_keeps_its_transcript_note_and_the_pictures_the_note_shows(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ARTIFACT_RETENTION_DAYS", "30")
+    task = _finished_task("ret-old-work", expires_in_days=-20)
+    _with_media(task, "ret-old-work")
+    _age("ret-old-work", 45)
+
+    outcome = lp._enforce_local_history_retention(CLIENT)
+
+    job = job_store.get_job("ret-old-work")
+    assert job is not None, "the task is not deleted"
+    result = job["result"]
+    assert result["transcript_text"] == "你好"
+    assert result["summary_markdown"] == "# 笔记\n\n正文"
+    assert "note_0001.jpg" in result["visual_note"]["markdown"]
+    artifact_dir = task["artifact_dir"]
+    assert (artifact_dir / "note.md").is_file()
+    assert (artifact_dir / "transcript.srt").is_file()
+    assert (artifact_dir / "debreath" / "lecture.cutlist.json").is_file()
+    assert (artifact_dir / "frames" / "note_0001.jpg").is_file(), "the note would show a broken image"
+    assert "ret-old-work" in outcome["expired_media_task_ids"]
+
+
+def test_an_old_task_loses_its_audio_video_and_unused_frames_and_says_so(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ARTIFACT_RETENTION_DAYS", "30")
+    task = _finished_task("ret-old-media", expires_in_days=-20)
+    _with_media(task, "ret-old-media")
+    _age("ret-old-media", 45)
+
+    lp._enforce_local_history_retention(CLIENT)
+
+    artifact_dir = task["artifact_dir"]
+    assert not (artifact_dir / "debreath" / "lecture_debreath.mp4").exists()
+    assert not (artifact_dir / "lecture_audio.mp3").exists()
+    assert not (artifact_dir / "frames" / "note_0002.jpg").exists()
+    assert not (task["source_dir"] / "source.mp4").exists()
+    result = job_store.get_job("ret-old-media")["result"]
+    assert result["media_retention_status"] == "expired"
+    assert result["media_retention_cleaned_at"]
+    assert result["media_retention_freed_bytes"] >= 1500
+    assert result["source_file_available"] is False
+
+
+def test_clearing_media_does_not_make_the_task_look_recently_changed(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ARTIFACT_RETENTION_DAYS", "30")
+    task = _finished_task("ret-old-stamp", expires_in_days=-20)
+    _with_media(task, "ret-old-stamp")
+    _age("ret-old-stamp", 45)
+    before = job_store.get_job("ret-old-stamp")["updated_at"]
+
+    lp._enforce_local_history_retention(CLIENT)
+
+    assert job_store.get_job("ret-old-stamp")["updated_at"] == before
+
+
+def test_a_task_inside_the_artifact_window_keeps_its_media(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ARTIFACT_RETENTION_DAYS", "30")
+    task = _finished_task("ret-recent-media", expires_in_days=3)
+    _with_media(task, "ret-recent-media")
+    job_store.update_job_result(
+        "ret-recent-media",
+        {**job_store.get_job("ret-recent-media")["result"], "source_retention_expires_at": _iso(3)},
+        client_id=CLIENT,
+    )
+    _age("ret-recent-media", 5)
+
+    lp._enforce_local_history_retention(CLIENT)
+
+    assert (task["artifact_dir"] / "debreath" / "lecture_debreath.mp4").is_file()
+    assert "media_retention_status" not in job_store.get_job("ret-recent-media")["result"]

@@ -81,7 +81,7 @@ def test_retention_reads_only_what_it_needs_and_still_expires_a_due_source(tmp_p
     assert listed["old"]["metadata"] == {"route": "/process"}
 
     monkeypatch.setattr(history_retention, "cleanup_task_source_files", lambda task_id, metadata: {"source_retention_cleaned_at": "now"})
-    monkeypatch.setattr(history_retention, "cleanup_task_all_files", lambda task_id, metadata: None)
+    monkeypatch.setattr(history_retention, "cleanup_task_media_files", lambda task_id, metadata, **kw: {})
     outcome = history_retention.enforce_history_retention(
         "me", keep_count=0, artifact_days=0, source_days=1,
         list_jobs=lambda client_id: job_store.list_jobs_for_retention(db_path=db, client_id=client_id),

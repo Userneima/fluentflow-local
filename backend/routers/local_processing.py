@@ -100,7 +100,7 @@ def _auto_export_local_lark(**values: object) -> dict:
     return {"doc_title": title, "export_target": target, "response": response}
 
 def _enforce_local_history_retention(client_id: str | None) -> dict:
-    return enforce_history_retention(client_id, keep_count=0, artifact_days=artifact_retention_days(), source_days=source_retention_days(), list_jobs=list_jobs_for_retention, update_result=update_job_result, delete_jobs=delete_jobs)
+    return enforce_history_retention(client_id, artifact_days=artifact_retention_days(), source_days=source_retention_days(), list_jobs=list_jobs_for_retention, update_result=update_job_result, load_job=get_job)
 
 
 def _positive_float(value: object) -> float | None:

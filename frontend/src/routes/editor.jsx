@@ -71,6 +71,7 @@ import {
     formatElapsedMinuteSecond,
     formatSttOriginalRatio,
     downloadBrowserFile,
+    mediaRetentionNotice,
 } from './editor-helpers.js';
 
 // The records worth showing: a changed sentence whose current text is still the
@@ -1237,6 +1238,7 @@ const Editor = () => {
                             summary={cutFlow}
                             lang={lang}
                             unavailable={cutFileUnavailable}
+                            retentionNotice={mediaRetentionNotice(result, lang)}
                             onDownload={handleDownloadCutFile}
                         />
                     </div>
@@ -1626,7 +1628,7 @@ const Editor = () => {
                                         </div>
                                     ) : (
                                         <div className="flex items-center justify-between gap-3">
-                                            <p className="text-xs font-semibold text-[#666] dark:text-white/60">{mediaLoading ? t('edit.sourceLoading') : (mediaError || t('edit.audioUnavailable'))}</p>
+                                            <p className="text-xs font-semibold text-[#666] dark:text-white/60">{mediaLoading ? t('edit.sourceLoading') : (mediaRetentionNotice(result, lang) || mediaError || t('edit.audioUnavailable'))}</p>
                                             <button type="button" onClick={()=>mediaInputRef.current?.click()} className="inline-flex items-center gap-1.5 rounded-[13px] bg-[#efeeee] px-3 py-2 text-xs font-bold text-[#111111] transition hover:bg-[#e4e0e0] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]">
                                                 <SvgIcon name="audio_file" className="text-sm"/>{t('edit.chooseAudio')}
                                             </button>
