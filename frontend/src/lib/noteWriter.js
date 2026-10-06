@@ -15,6 +15,14 @@ import {providerDisplayName} from './format.js';
 //                      *_api_key_configured)
 //   settings         — stored settings (aiProvider, aiModel, skipAiSummary)
 export const resolveNoteWriter = ({runtimeConfig = {}, credentialStatus = null, settings = {}} = {}) => {
+    const writer = resolveWriterKind({runtimeConfig, credentialStatus, settings});
+    // The frame note runs on this machine's Claude login and that login has
+    // expired: the backend has already fallen back to the writer above, and the
+    // user is the only one who can log in again.
+    return {...writer, claudeLoginExpired: !!(credentialStatus || {}).visual_note_login_expired};
+};
+
+const resolveWriterKind = ({runtimeConfig = {}, credentialStatus = null, settings = {}} = {}) => {
     const status = credentialStatus || {};
     const provider = String(settings?.aiProvider || 'deepseek');
     const textKeyConfigured = provider === 'openai'
@@ -53,8 +61,18 @@ export const noteWriterLabel = (writer, lang = 'zh') => {
     return writer.model ? `${name}（${writer.model}）` : name;
 };
 
+// Said before everything else when the Claude login has expired.
+export const claudeLoginSentence = (lang = 'zh') => (lang === 'zh'
+    ? '本机 Claude 的登录已过期，结合画面的笔记暂时写不了：打开终端运行 claude 重新登录即可恢复。'
+    : 'Claude on this machine is logged out, so notes that read the frames cannot be written: run claude in a terminal to log in again.');
+
 // The one sentence every screen shows: 当前写笔记的是 X.
 export const noteWriterSentence = (writer, lang = 'zh') => {
+    const base = baseWriterSentence(writer, lang);
+    return writer?.claudeLoginExpired ? `${claudeLoginSentence(lang)}${lang === 'zh' ? '' : ' '}${base}` : base;
+};
+
+const baseWriterSentence = (writer, lang = 'zh') => {
     const zh = lang === 'zh';
     if (!writer || writer.kind === 'none') {
         return zh

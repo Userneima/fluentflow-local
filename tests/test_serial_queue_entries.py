@@ -85,7 +85,7 @@ def test_a_single_upload_a_video_link_and_an_in_place_file_run_one_after_another
 
     monkeypatch.setattr(lp, "preflight_media_file", lambda _p: _Passed())
     monkeypatch.setattr(lvs, "preflight_media_file", lambda _p: _Passed())
-    monkeypatch.setattr(lp, "_run_job_then_note", fake_pipeline)
+    monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
     monkeypatch.setattr(lvs, "execute_media_job", fake_pipeline)
     monkeypatch.setattr(lvs, "download_video_source", lambda *a, **k: _saved_video(downloaded))
     monkeypatch.setattr(lvs, "get_preference", lambda name: None)
@@ -156,7 +156,7 @@ def test_a_video_link_downloads_while_the_queue_works_and_waits_only_to_transcri
 
     monkeypatch.setattr(lp, "preflight_media_file", lambda _p: _Passed())
     monkeypatch.setattr(lvs, "preflight_media_file", lambda _p: _Passed())
-    monkeypatch.setattr(lp, "_run_job_then_note", fake_pipeline)
+    monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
     monkeypatch.setattr(lvs, "execute_media_job", fake_pipeline)
     monkeypatch.setattr(lvs, "download_video_source", fake_download)
     monkeypatch.setattr(lvs, "get_preference", lambda name: None)

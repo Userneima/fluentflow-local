@@ -114,3 +114,19 @@ def reset_auth_rate_limits():
     auth_rate_limit.reset_rate_limits()
     yield
     auth_rate_limit.reset_rate_limits()
+
+
+@pytest.fixture(autouse=True)
+def no_real_claude_login_check(monkeypatch, request):
+    """Tests never ask the real ``claude`` program whether it is logged in.
+
+    The answer depends on the developer's machine, and asking takes seconds.
+    Unknown (``None``) is the behaviour from before the check existed. Tests of
+    the check itself mark themselves ``real_login_check`` and fake the program.
+    """
+    if request.node.get_closest_marker("real_login_check"):
+        return
+    from backend.core import claude_code_note
+
+    claude_code_note.reset_login_cache()
+    monkeypatch.setattr(claude_code_note, "login_state", lambda **_kw: None)

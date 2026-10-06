@@ -33,6 +33,7 @@ Two properties are enforced here rather than trusted to the caller:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -141,6 +142,100 @@ def cli_available() -> bool:
     return cli_path() is not None
 
 
+# How long one login check is trusted. It runs whenever the start page or a
+# submission asks whether the note will run, and costs a few seconds; a login
+# does not come and go faster than this.
+LOGIN_CHECK_TTL_SECONDS = 60.0
+LOGIN_CHECK_TIMEOUT_SECONDS = 15.0
+_login_cache: tuple[float, bool | None] | None = None
+
+
+def login_state(*, now: float | None = None) -> bool | None:
+    """Whether the ``claude`` program says it is logged in.
+
+    ``True``/``False`` from ``claude auth status``; ``None`` when that could not be
+    read (an old CLI without the command, a timeout, output that is not JSON).
+    Unknown is not a refusal: the note is still attempted and reports its own
+    failure, as before this check existed.
+
+    Why it is asked at all: every note failure recorded between 2026-09 and
+    2026-10 on the maintainer's machine was an expired login, and each one was
+    discovered only after the recording had been transcribed. Worse, the start of
+    the task had already decided the visual note would run and skipped the text
+    note it falls back to, so those tasks ended with no note of any kind.
+    """
+    clock = time.monotonic() if now is None else now
+    if _login_cache is not None and clock - _login_cache[0] < LOGIN_CHECK_TTL_SECONDS:
+        return _login_cache[1]
+    if _on_event_loop():
+        # The submission routes ask this on the server's event loop, where a
+        # few seconds of subprocess would freeze every page. Refresh in the
+        # background and answer with what was last known.
+        _refresh_login_in_background()
+        return _login_cache[1] if _login_cache is not None else None
+    return _check_login(clock)
+
+
+def _on_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+_login_refresh_lock = threading.Lock()
+_login_refreshing = False
+
+
+def _refresh_login_in_background() -> None:
+    global _login_refreshing
+    with _login_refresh_lock:
+        if _login_refreshing:
+            return
+        _login_refreshing = True
+
+    def run() -> None:
+        global _login_refreshing
+        try:
+            _check_login(time.monotonic())
+        finally:
+            with _login_refresh_lock:
+                _login_refreshing = False
+
+    threading.Thread(target=run, name="claude-login-check", daemon=True).start()
+
+
+def _check_login(clock: float) -> bool | None:
+    global _login_cache
+    state: bool | None = None
+    path = cli_path()
+    if path:
+        try:
+            done = subprocess.run(
+                [path, "auth", "status", "--json"],
+                capture_output=True, text=True, timeout=LOGIN_CHECK_TIMEOUT_SECONDS,
+                env=_subprocess_env(), stdin=subprocess.DEVNULL,
+            )
+            raw = done.stdout or ""
+            start = raw.find("{")
+            payload = json.loads(raw[start:]) if start >= 0 else None
+            if isinstance(payload, dict) and isinstance(payload.get("loggedIn"), bool):
+                state = payload["loggedIn"]
+            else:
+                logger.info("claude auth status gave no login field (exit %s): %s",
+                            done.returncode, (raw or done.stderr or "")[:200])
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            logger.info("claude auth status could not be read: %s", exc)
+    _login_cache = (clock, state)
+    return state
+
+
+def reset_login_cache() -> None:
+    global _login_cache
+    _login_cache = None
+
+
 def unavailable_reason() -> str | None:
     """Why this channel cannot run, phrased as something to go and do."""
     if not cli_available():
@@ -148,6 +243,8 @@ def unavailable_reason() -> str | None:
             "这台机器上找不到 Claude Code 命令行程序，没法用本机的 Claude 订阅写笔记。"
             "装好 Claude Code 并在终端运行一次 `claude` 登录后重启本地服务即可。"
         )
+    if login_state() is False:
+        return _LOGIN_MESSAGE
     return None
 
 

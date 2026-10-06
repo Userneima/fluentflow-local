@@ -14,6 +14,7 @@ desktop-sync side effect.
 from __future__ import annotations
 
 import asyncio
+import threading
 import functools
 import tempfile
 import time
@@ -348,7 +349,12 @@ async def wait_for_queue_turn(
         raise
 
 
-async def _write_note_after_transcript(task_id: str, client_id: Optional[str]) -> None:
+async def _write_note_after_transcript(
+    task_id: str,
+    client_id: Optional[str],
+    *,
+    on_local_work_done: Any = None,
+) -> None:
     """The last step of the flow: the note, from the file the transcript came from.
 
     Runs here rather than inside the pipeline because the note job persists its own
@@ -363,13 +369,22 @@ async def _write_note_after_transcript(task_id: str, client_id: Optional[str]) -
     if not local_intake_flow.note_is_wanted(task_id, client_id):
         return
     local_intake_flow.mark_note_running(task_id, client_id)
-    await asyncio.to_thread(local_intake_flow.write_note, task_id, client_id)
+    await asyncio.to_thread(
+        local_intake_flow.write_note, task_id, client_id, on_local_work_done=on_local_work_done,
+    )
 
 
-async def _run_job_then_note(ctx: MediaJobContext) -> None:
-    """The whole flow for one task: the pipeline, then its note."""
+# How many notes may wait on the remote model at once. That wait does not hold
+# the queue (see `_run_serially`); this only stops a long batch from opening a
+# Claude session per finished task. A thread semaphore because the wait happens
+# in the note's worker thread, not on the event loop.
+NOTE_CONCURRENCY = 2
+_NOTE_REMOTE_SLOTS = threading.BoundedSemaphore(NOTE_CONCURRENCY)
+
+
+async def _run_pipeline(ctx: MediaJobContext) -> None:
+    """The part of a task that uses this machine: cut, transcribe, store."""
     await execute_media_job(ctx)
-    await _write_note_after_transcript(ctx.task_id_value, ctx.client_id)
 
 
 async def _run_serially(
@@ -377,13 +392,39 @@ async def _run_serially(
     done: asyncio.Event,
     ctx: MediaJobContext,
 ) -> None:
+    """Wait for the task ahead, run the pipeline and the note's local part, then
+    hand the queue on while the note waits on the remote model.
+
+    Holding the queue through the whole note left this machine idle for minutes
+    per task (note median about three minutes, a quarter over six). Releasing it
+    as soon as the transcript was stored would have been wrong the other way: the
+    note first picks its pictures by decoding the whole video, measured at about
+    two and a half cores for half a minute per twelve minutes of video, and that
+    belongs in the queue with every other local job. Running local jobs side by
+    side on this machine was measured slower than running them in turn.
+    """
+    loop = asyncio.get_running_loop()
+    holding = {"slot": False}
+
+    def hand_off() -> None:
+        # Called from the note's worker thread, once its frames are on disk.
+        loop.call_soon_threadsafe(done.set)
+        _NOTE_REMOTE_SLOTS.acquire()
+        holding["slot"] = True
+
     try:
         await wait_for_queue_turn(previous, ctx.task_id_value, ctx.client_id)
-        await _run_job_then_note(ctx)
+        await _run_pipeline(ctx)
+        await _write_note_after_transcript(
+            ctx.task_id_value, ctx.client_id, on_local_work_done=hand_off,
+        )
     finally:
         # Always release the chain — including when this job is cancelled while
-        # still waiting (the cancel route persists the cancelled state).
+        # still waiting (the cancel route persists the cancelled state), and when
+        # the note ended before reaching its hand-off.
         done.set()
+        if holding["slot"]:
+            _NOTE_REMOTE_SLOTS.release()
 
 
 async def _start_behind_queue(

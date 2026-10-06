@@ -15,7 +15,7 @@ from backend.core.local_config import (
     save_preferences,
     save_sensitive_settings,
 )
-from backend.core import local_intake_flow, visual_note_channel
+from backend.core import claude_code_note, local_intake_flow, visual_note_channel
 from backend.core.local_limits_config import (
     max_media_duration_seconds,
     max_queue_files,
@@ -72,11 +72,18 @@ def get_credentials_status() -> dict[str, Any]:
     # filled in: a source checkout can route it through the local Claude Code
     # login instead. The start page warns "no note" from this, so it has to be
     # the channel the note would actually use, not a guess from key fields.
+    channel = visual_note_channel.resolve_channel(resolve_secret(None, "anthropic_api_key"))
     return {
         **credential_status(),
-        "visual_note_available": visual_note_channel.resolve_channel(
-            resolve_secret(None, "anthropic_api_key")
-        ).available,
+        "visual_note_available": channel.available,
+        # Only for the channel that runs on this machine's Claude login: an
+        # expired login is the one reason worth interrupting the start page for,
+        # because the user can fix it in a minute and every note fails until then.
+        "visual_note_login_expired": (
+            channel.name == visual_note_channel.CHANNEL_SUBSCRIPTION
+            and claude_code_note.cli_available()
+            and claude_code_note.login_state() is False
+        ),
     }
 
 

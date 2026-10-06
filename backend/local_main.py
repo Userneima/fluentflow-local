@@ -35,6 +35,7 @@ load_project_env()
 hf_endpoint.apply_at_startup()
 
 from backend.core.app_factory import create_app
+from backend.core import claude_code_note, visual_note_channel  # noqa: E402
 from backend.core.claude_code_note import stop_running_notes
 from backend.core.debreath_job import recover_stranded_renders
 from backend.core.frontend_paths import FRONTEND_LOCAL_DIST_DIR
@@ -228,6 +229,13 @@ async def lifespan(app: FastAPI):
     synced = sync_summary_status_column()
     if synced:
         logger.info("Startup corrected the note status of %s tasks", synced)
+    if visual_note_channel.preferred_channel() == visual_note_channel.CHANNEL_SUBSCRIPTION:
+        # Read the Claude login before anything is queued, so the first task
+        # already knows whether its note can be written from the frames or has
+        # to fall back to the text note. Off the event loop; a few seconds once.
+        logged_in = await asyncio.to_thread(claude_code_note.login_state)
+        if logged_in is False:
+            logger.warning("Claude on this machine is not logged in; notes fall back to the text model")
     interrupted = [str(job.get("task_id")) for job in list_jobs_by_statuses(("queued", "running"))]
     recovered = recover_stale_jobs()
     if recovered:

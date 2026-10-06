@@ -113,6 +113,7 @@ const MediaText = () => {
         [runtimeConfig, credentialStatus],
     );
     const noNoteKey = credentialStatus !== null && noteWriter.kind === 'none';
+    const showWriterBanner = noNoteKey || (credentialStatus !== null && noteWriter.claudeLoginExpired);
     // The "done" card clears itself after a moment; the timer must not outlive
     // the page, and a second result must not be cleared by the first one's timer.
     const settleTimerRef = useRef(null);
@@ -588,10 +589,10 @@ const MediaText = () => {
             <section className="mx-auto h-dvh max-w-[1280px] overflow-y-auto px-8 py-9 hide-scrollbar">
                 <input ref={subtitleInputRef} type="file" accept=".srt,.vtt,.txt,.md,text/plain,text/markdown" onChange={handleSubtitleSelect} className="hidden"/>
 
-                {noNoteKey && (
+                {showWriterBanner && (
                     <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-[#ecd9a8] bg-[#fff8e6] px-4 py-3 text-sm text-[#5c4a1a] dark:border-[#6b5a2a] dark:bg-[#2a2415] dark:text-[#f0dfb0]">
                         <span>{noteWriterSentence(noteWriter, lang)}</span>
-                        <Link to="/settings" className="shrink-0 font-extrabold underline">{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>
+                        {noNoteKey && <Link to="/settings" className="shrink-0 font-extrabold underline">{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>}
                     </div>
                 )}
 

@@ -40,7 +40,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from backend.core import debreath_job, local_folder_intake, visual_note_channel, visual_note_job
 from backend.core.job_store import get_job, update_job_result, upsert_job
@@ -193,7 +193,12 @@ def mark_note_running(task_id: str, client_id: str | None) -> None:
     upsert_job(task_id=task_id, status="completed", stage="note", summary_status="pending")
 
 
-def write_note(task_id: str, client_id: str | None) -> None:
+def write_note(
+    task_id: str,
+    client_id: str | None,
+    *,
+    on_local_work_done: Callable[[], None] | None = None,
+) -> None:
     """Write the task's note from the file the transcript came from.
 
     Blocking: run it in a thread. Failures are recorded on the result in the
@@ -213,6 +218,7 @@ def write_note(task_id: str, client_id: str | None) -> None:
             claimed=True,
             replace_note=True,
             keyframe_extractor=extract_keyframes,
+            on_local_work_done=on_local_work_done,
         )
         upsert_job(task_id=task_id, status="completed", stage="done", summary_status="completed")
     except visual_note_job.VisualNoteError as exc:

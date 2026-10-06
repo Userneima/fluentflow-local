@@ -878,3 +878,30 @@ def test_a_note_left_pending_by_a_killed_process_stops_saying_it_is_coming(monke
     assert saved["no-note"]["summary_status"] == "failed"
     assert "重新写" in saved["no-note"]["summary_error"]
     assert saved["old-note"]["summary_status"] == "completed"
+
+
+# ── the hand-off point the automatic flow releases the queue at ─────────────
+
+def test_the_local_work_is_reported_done_after_the_frames_and_before_claude(job_store, tmp_path):
+    """The automatic flow hands this machine to the next recording at this call,
+    so it must come after the frames are on disk and before any request."""
+    order: list[str] = []
+    extract = _fake_extractor(tmp_path, 3)
+
+    def tracking_extract(*args, **kwargs):
+        result = extract(*args, **kwargs)
+        order.append("frames")
+        return result
+
+    writer = _writer("# 笔记\n\n正文。")
+
+    def tracking_writer(transcript, frames, **kwargs):
+        order.append("claude")
+        return writer(transcript, frames, **kwargs)
+
+    _run(tmp_path, "", extractor=tracking_extract, writer=tracking_writer,
+         on_local_work_done=lambda: order.append("hand-off"))
+
+    assert order[0] == "frames"
+    assert order.index("hand-off") < order.index("claude")
+    assert order.count("hand-off") == 1

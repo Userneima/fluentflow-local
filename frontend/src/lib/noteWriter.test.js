@@ -56,3 +56,26 @@ describe('who writes the note', () => {
         expect(noteWriterBatchClause(writer, 'zh')).toContain('仅转录');
     });
 });
+
+describe('an expired Claude login is said before anything is submitted', () => {
+    const runtimeConfig = {writesItsOwnNote: true};
+    it('names the login and how to restore it, then who writes the note instead', () => {
+        const writer = resolveNoteWriter({
+            runtimeConfig,
+            credentialStatus: {visual_note_available: false, visual_note_login_expired: true, deepseek_api_key_configured: true},
+            settings: {aiProvider: 'deepseek', aiModel: 'deepseek-chat'},
+        });
+        const sentence = noteWriterSentence(writer, 'zh');
+        expect(sentence).toContain('登录已过期');
+        expect(sentence).toContain('claude');
+        expect(sentence).toContain('DeepSeek');
+    });
+    it('says nothing about the login when it is fine', () => {
+        const writer = resolveNoteWriter({
+            runtimeConfig,
+            credentialStatus: {visual_note_available: true, visual_note_login_expired: false},
+            settings: {},
+        });
+        expect(noteWriterSentence(writer, 'zh')).not.toContain('过期');
+    });
+});

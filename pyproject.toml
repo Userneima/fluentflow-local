@@ -3,6 +3,9 @@
 # single place pytest reads.
 
 [tool.pytest.ini_options]
+markers = [
+    "real_login_check: runs the Claude login check against a faked claude program",
+]
 testpaths = ["tests"]
 # A test that hangs (a subprocess waiting on stdin, a network probe nobody
 # mocked) would otherwise hold CI until the runner's own limit. Needs the

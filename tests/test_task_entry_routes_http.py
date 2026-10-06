@@ -62,7 +62,7 @@ def pipeline(monkeypatch):
     log: list[str] = []
     contexts: list = []
 
-    async def fake_run_job_then_note(ctx):
+    async def fake_run_pipeline(ctx):
         log.append(f"start:{ctx.task_id_value}")
         contexts.append(ctx)
         await asyncio.sleep(0.05)
@@ -79,7 +79,7 @@ def pipeline(monkeypatch):
         await lp.JOB_EVENTS.publish(ctx.task_id_value, {"stage": "done", "progress": 100, "result": result})
         log.append(f"finish:{ctx.task_id_value}")
 
-    monkeypatch.setattr(lp, "_run_job_then_note", fake_run_job_then_note)
+    monkeypatch.setattr(lp, "_run_pipeline", fake_run_pipeline)
     return {"log": log, "contexts": contexts}
 
 
@@ -401,7 +401,7 @@ def test_a_retry_of_a_task_still_running_is_refused(client, pipeline, monkeypatc
     async def never_finishes(ctx):
         await asyncio.sleep(3600)
 
-    monkeypatch.setattr(lp, "_run_job_then_note", never_finishes)
+    monkeypatch.setattr(lp, "_run_pipeline", never_finishes)
     client.post("/queue/process", files=[("files", _upload("slow.mp4"))])
     task_id = job_store.list_jobs(client_id=LOCAL_OWNER_ID, limit=1)[0]["task_id"]
 

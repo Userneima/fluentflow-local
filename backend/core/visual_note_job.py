@@ -775,8 +775,13 @@ def run_visual_note(
     frame_collector: Callable[..., list[FrameInput]] = collect_frames,
     writer: Callable[..., Any] | None = None,
     channel: Channel | None = None,
+    on_local_work_done: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Read the cut file, ask Claude to write from it, record what it read.
+
+    ``on_local_work_done`` is called once the frames are on disk and before the
+    first request to Claude: everything after it is waiting on a remote model,
+    and the automatic flow uses it to hand this machine to the next recording.
 
     Runs to completion in the calling thread; an HTTP caller should hand it to a
     background task. Every transition is persisted, so an ordinary job poll
@@ -841,6 +846,8 @@ def run_visual_note(
                 "frames_sent": [_frame_record(task_id, frame) for frame in frames],
             },
         )
+        if on_local_work_done is not None:
+            on_local_work_done()
         # A recording is never too long to write about, only too long for one
         # request. Truncating was the old answer and it produced the worst kind
         # of wrong result: a note that stops two thirds of the way through and
