@@ -174,3 +174,47 @@ def test_a_year_old_task_keeps_everything_but_fluentflows_copy_of_the_upload():
                  artifact_dir / "note.md", artifact_dir / "transcript.srt"):
         assert kept.is_file(), f"{kept.name} must never be removed by retention"
     assert not (task["source_dir"] / "source.mp4").exists(), "FluentFlow's own copy expires"
+
+
+# ── a video downloaded from a link is the only copy there is ────────────────
+
+def _link_task(task_id: str, *, with_cut: bool) -> dict:
+    from backend.core.storage_paths import _video_source_storage_dir
+
+    task = _finished_task(task_id, expires_in_days=-20)
+    download = _video_source_storage_dir() / f"{task_id}.mp4"
+    download.parent.mkdir(parents=True, exist_ok=True)
+    download.write_bytes(b"the only copy of the video")
+    result = dict(task["result"])
+    if with_cut:
+        cut_dir = task["artifact_dir"] / "debreath"
+        cut_dir.mkdir(exist_ok=True)
+        (cut_dir / "lecture_debreath.mp4").write_bytes(b"cut")
+        result["debreath"] = {"status": "completed", "rendered": True, "render_verified": True,
+                              "media_filename": "debreath/lecture_debreath.mp4"}
+        result["artifacts"] = {**result["artifacts"], "debreath_media": {"filename": "debreath/lecture_debreath.mp4"}}
+    job_store.upsert_job(
+        task_id=task_id, status="completed", client_id=CLIENT, result=result,
+        metadata={"route": "/video-sources", "video_source": {"file_path": str(download)}},
+    )
+    return {**task, "download": download}
+
+
+def test_a_link_download_with_no_de_breathed_version_is_kept_past_its_window():
+    task = _link_task("ret-link-uncut", with_cut=False)
+
+    lp._enforce_local_history_retention(CLIENT)
+
+    assert task["download"].is_file(), "nothing else holds this recording"
+    assert (task["source_dir"] / "source.mp4").is_file()
+    assert job_store.get_job("ret-link-uncut")["result"]["source_file_available"] is True
+
+
+def test_a_link_download_whose_de_breathed_version_exists_expires_as_usual():
+    task = _link_task("ret-link-cut", with_cut=True)
+
+    lp._enforce_local_history_retention(CLIENT)
+
+    assert not task["download"].exists()
+    assert (task["artifact_dir"] / "debreath" / "lecture_debreath.mp4").is_file(), "the cut version stays"
+    assert job_store.get_job("ret-link-cut")["result"]["source_retention_status"] == "expired"

@@ -10,6 +10,10 @@ What remains is FluentFlow's private copy of an uploaded file, kept in its data
 directory so a task can be re-run. Deleting the original elsewhere does not
 remove that copy, so it still expires after the source window.
 
+A video downloaded from a link is different: there is no original anywhere
+else, so it is the only copy of the recording. It expires only once a verified
+de-breathed version of it exists; without one it is kept.
+
 Before this, a thirty-day window deleted whole tasks, notes included, without
 notice: a hundred and forty-three tasks on the maintainer's machine.
 """
@@ -19,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from backend.core.retention_time import parse_job_time
+from backend.core.debreath_job import cut_file_on_disk
 from backend.core.storage_cleanup import cleanup_task_source_files
 
 _FINISHED = {"completed", "failed", "cancelled"}
@@ -55,6 +60,8 @@ def enforce_history_retention(
         full = _full_result(task_id, owner, result, load_job)
         if full is None:
             continue
+        if _downloaded_from_link(job.get("metadata")) and cut_file_on_disk(task_id, full) is None:
+            continue
         cleanup = cleanup_task_source_files(task_id, job.get("metadata"))
         update_result(task_id, {
             **full,
@@ -83,3 +90,8 @@ def _full_result(
     job = load_job(task_id, client_id=client_id) or {}
     full = job.get("result")
     return full if isinstance(full, dict) else None
+
+
+def _downloaded_from_link(metadata: Any) -> bool:
+    video_source = metadata.get("video_source") if isinstance(metadata, dict) else None
+    return isinstance(video_source, dict) and bool(video_source.get("file_path"))

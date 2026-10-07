@@ -45,10 +45,11 @@ from backend.core.result_artifacts import (
     TRANSCRIPT_MEDIA_CUT,
     artifact_target_path,
     describe_existing_artifact,
+    resolve_artifact_file,
     write_text_artifact,
 )
 from backend.core.silence_cuts import CutPlan, SilenceCutError
-from backend.core.storage_paths import find_source_file, in_place_source_path
+from backend.core.storage_paths import _artifact_storage_dir, find_source_file, in_place_source_path
 from backend.core.subtitle_format import _format_srt
 
 logger = logging.getLogger(__name__)
@@ -537,6 +538,20 @@ def _prepare_cut_media(
             },
             artifacts=artifacts,
         )
+
+
+def cut_file_on_disk(task_id: str, result: Any) -> Path | None:
+    """The de-breathed file of this task, if one was rendered, passed its own
+    check, and is still on disk. ``None`` otherwise."""
+    state = debreath_state(result)
+    if not state.get("rendered") or state.get("render_verified") is False:
+        return None
+    artifacts = result.get("artifacts") if isinstance(result, dict) and isinstance(result.get("artifacts"), dict) else {}
+    record = artifacts.get(MEDIA_KIND) if isinstance(artifacts.get(MEDIA_KIND), dict) else {}
+    filename = record.get("filename") or state.get("media_filename")
+    if not filename:
+        return None
+    return resolve_artifact_file(_artifact_storage_dir() / task_id, filename)
 
 
 def resolve_source(task_id: str) -> Path:
