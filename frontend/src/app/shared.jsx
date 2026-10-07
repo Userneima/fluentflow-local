@@ -515,7 +515,14 @@ const createApi = () => {
             body: JSON.stringify(payload || {}),
         });
         const data = await r.json().catch(()=>({}));
-        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        if(!r.ok) {
+            // The status travels with the error: a 409 is a refusal with a reason
+            // (busy queue, no cut file), which the page words differently.
+            const err = new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+            err.status = r.status;
+            err.payload = data;
+            throw err;
+        }
         return data;
     };
     // Ask the machine to open its own file dialog, and process what comes back

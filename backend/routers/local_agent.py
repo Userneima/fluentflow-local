@@ -18,6 +18,7 @@ import asyncio
 import math
 import time
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
@@ -37,7 +38,7 @@ from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
 from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import local_folder_intake
+from backend.core import local_folder_intake, visual_note_job
 from backend.core.local_request_scope import (
     request_client_id,
     request_is_localhost,
@@ -72,8 +73,76 @@ def _local_client_scope(request: Request) -> Optional[str]:
     return request_client_id(request) or "anonymous"
 
 
+_TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "cancelled"})
+_TERMINAL_NOTE_STATUSES = frozenset({"completed", "failed", "skipped"})
+# How long a just-completed task whose note was deferred to the frame note may
+# still show the pipeline's "skipped" before the note step marks it pending.
+# That hand-over takes well under a second; the bound only stops a task whose
+# note step never started (the service stopped in between) from holding an
+# agent forever.
+_DEFERRED_NOTE_HANDOVER_SECONDS = 120
+
+
+def _seconds_since(stamp: Any) -> float | None:
+    try:
+        moment = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - moment).total_seconds()
+
+
+def _deferred_note_about_to_start(job: dict[str, Any], result: dict[str, Any]) -> bool:
+    """The pipeline stored the transcript as "skipped" and the note step has not
+    marked it pending yet: the note is owed, not skipped."""
+    if not result.get("note_deferred_to_visual_note"):
+        return False
+    if str(result.get("summary_markdown") or "").strip():
+        return False
+    if not (result.get("transcript_text") or result.get("raw_segments")):
+        return False
+    age = _seconds_since(job.get("updated_at"))
+    return age is not None and age < _DEFERRED_NOTE_HANDOVER_SECONDS
+
+
+def _note_pending(job: dict[str, Any]) -> bool:
+    """Whether a completed task's note is still being written.
+
+    A task turns ``completed`` as soon as its transcript is stored; the note
+    is written after that, from the cut media. An agent that stopped waiting
+    at ``completed`` would read an empty note, so every "is it done" answer on
+    this surface goes through here.
+
+    A running note rewrite wins over everything (a redo keeps the old note's
+    ``completed`` while the new one is written). Otherwise the note's own
+    terminal status wins over the job's stage, because the startup recovery
+    fails a stranded note in the result without moving the job's ``note``
+    stage, and that task must not read as pending forever.
+    """
+    if str(job.get("status") or "") != "completed":
+        return False
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if visual_note_job.is_running(result):
+        return True
+    summary_status = str(result.get("summary_status") or job.get("summary_status") or "").lower()
+    if summary_status == "skipped" and _deferred_note_about_to_start(job, result):
+        return True
+    if summary_status in _TERMINAL_NOTE_STATUSES:
+        return False
+    if summary_status == "pending":
+        return True
+    return str(job.get("stage") or "").lower() == "note"
+
+
+def _task_done(job: dict[str, Any]) -> bool:
+    return job.get("status") in _TERMINAL_TASK_STATUSES and not _note_pending(job)
+
+
 def _task_package_response(job: dict[str, Any]) -> dict[str, Any]:
-    return build_agent_task_package(job, artifact_root=_artifact_storage_dir())
+    package = build_agent_task_package(job, artifact_root=_artifact_storage_dir())
+    package["note_pending"] = _note_pending(job)
+    return package
 
 
 def _job_for_request(request: Request, task_id: str) -> dict[str, Any]:
@@ -287,6 +356,8 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             "stage": job.get("stage"),
             "progress": job.get("progress"),
             "summary_status": (job.get("result") or {}).get("summary_status") or job.get("summary_status"),
+            "note_pending": _note_pending(job),
+            "done": _task_done(job),
         },
         "package_url": f"/agent/v1/tasks/{task_id}/package",
     }
@@ -319,12 +390,19 @@ async def wait_agent_task(
     deadline = time.monotonic() + timeout_seconds
     while True:
         job = _job_for_request(request, task_id)
-        if job.get("status") in {"completed", "failed", "cancelled"}:
-            return {"ok": True, "done": True, "package": _task_package_response(job)}
+        if _task_done(job):
+            package = _task_package_response(job)
+            return {
+                "ok": True,
+                "done": True,
+                "note_status": (package.get("note") or {}).get("status"),
+                "package": package,
+            }
         if time.monotonic() >= deadline:
             return {
                 "ok": True,
                 "done": False,
+                "note_pending": _note_pending(job),
                 "task": {
                     "task_id": job.get("task_id"),
                     "status": job.get("status"),

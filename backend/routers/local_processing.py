@@ -427,8 +427,21 @@ async def _run_serially(
     done: asyncio.Event,
     ctx: MediaJobContext,
 ) -> None:
-    """Wait for the task ahead, run the pipeline and the note's local part, then
-    hand the queue on while the note waits on the remote model.
+    """Wait for the task ahead, then the pipeline and its note."""
+    try:
+        await wait_for_queue_turn(previous, ctx.task_id_value, ctx.client_id)
+    except BaseException:
+        done.set()
+        raise
+    await run_pipeline_then_note(done, ctx)
+
+
+async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> None:
+    """Run the pipeline and the note's local part, then hand the queue on while
+    the note waits on the remote model. Every entry that transcribes goes
+    through here once its turn has come, so none of them can end without a note
+    step: the link entry used to stop after the pipeline, and since the
+    pipeline leaves the note to this step, link tasks got no note at all.
 
     Holding the queue through the whole note left this machine idle for minutes
     per task (note median about three minutes, a quarter over six). Releasing it
@@ -448,18 +461,86 @@ async def _run_serially(
         holding["slot"] = True
 
     try:
-        await wait_for_queue_turn(previous, ctx.task_id_value, ctx.client_id)
         await _run_pipeline(ctx)
         await _write_note_after_transcript(
             ctx.task_id_value, ctx.client_id, on_local_work_done=hand_off,
         )
+        await _export_note_written_after_pipeline(ctx)
     finally:
-        # Always release the chain — including when this job is cancelled while
-        # still waiting (the cancel route persists the cancelled state), and when
-        # the note ended before reaching its hand-off.
+        # Always release the chain — including when this job is cancelled, and
+        # when the note ended before reaching its hand-off.
         done.set()
         if holding["slot"]:
             _NOTE_REMOTE_SLOTS.release()
+
+
+async def _export_note_written_after_pipeline(ctx: MediaJobContext) -> None:
+    """Send the note written after the pipeline to Feishu, when asked to.
+
+    The pipeline exports the note it writes itself. When that note was left to
+    the frame note that follows, the pipeline's export never ran, and a user
+    with "export to Feishu automatically" on got no document for any task.
+    Never raises: the note is already the user's.
+    """
+    if not getattr(ctx, "do_lark", False) or not getattr(ctx, "note_deferred_to_visual_note", False):
+        return
+    job = get_job(ctx.task_id_value, client_id=ctx.client_id) or {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    markdown = str(result.get("summary_markdown") or "").strip()
+    if not markdown or result.get("lark_response"):
+        return
+    started = time.perf_counter()
+    common = {
+        "task_id": ctx.task_id_value,
+        "source_type": ctx.source_type,
+        "source_filename": ctx.source_filename,
+        "summary_length": len(markdown),
+        "stage": "export",
+    }
+    log_event(event_name="lark_export_started", metadata=event_metadata(trigger="auto_after_note"), **common)
+    try:
+        export = await asyncio.to_thread(
+            _auto_export_local_lark,
+            task_id=ctx.task_id_value,
+            summary_markdown=markdown,
+            filename_stem=ctx.display_title_value or Path(ctx.source_filename or "media").stem,
+            form_title=ctx.title or ctx.display_title_value,
+            lark_export_route=ctx.lark_export_route,
+            lark_via_cli=ctx.lark_via_cli,
+            lark_app_id=ctx.lark_app_id,
+            lark_app_secret=ctx.lark_app_secret,
+            folder_token=ctx.folder_token,
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed export keeps the note
+        message = friendly_error(exc)
+        latest = (get_job(ctx.task_id_value, client_id=ctx.client_id) or {}).get("result") or {}
+        update_job_result(ctx.task_id_value, {**latest, "lark_error": message}, client_id=ctx.client_id)
+        log_event(
+            event_name="lark_export_completed",
+            duration_seconds=round(time.perf_counter() - started, 3),
+            success=False,
+            error_reason=message,
+            metadata=event_metadata(trigger="auto_after_note", raw_error=str(exc)),
+            **common,
+        )
+        return
+    response = export["response"]
+    latest = (get_job(ctx.task_id_value, client_id=ctx.client_id) or {}).get("result") or {}
+    update_job_result(ctx.task_id_value, {
+        **latest,
+        "lark_doc_title": export["doc_title"],
+        "lark_response": response,
+        "lark_error": None,
+    }, client_id=ctx.client_id)
+    log_event(
+        event_name="lark_export_completed",
+        duration_seconds=round(time.perf_counter() - started, 3),
+        success=True,
+        export_target=export["export_target"],
+        feishu_doc_url=response.get("url") if isinstance(response, dict) else None,
+        metadata=event_metadata(trigger="auto_after_note", doc_title=export["doc_title"]),
+        **common,
+    )
 
 
 async def _start_behind_queue(

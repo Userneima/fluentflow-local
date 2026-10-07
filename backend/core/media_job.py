@@ -894,6 +894,9 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 ),
             )
             result = result_for_transcript_only(base_result)
+            # The note step after the pipeline reads this: a deferred note is
+            # still owed even if Claude has become unreachable since submission.
+            result["note_deferred_to_visual_note"] = bool(ctx.note_deferred_to_visual_note)
             result = _attach_result_artifacts(task_id_value, result)
             result = _finalize_result_storage(ctx, result)
             upsert_job(

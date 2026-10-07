@@ -167,15 +167,21 @@ def note_is_wanted(task_id: str, client_id: str | None) -> bool:
     A task the caller asked to leave without a note is left without one: the
     automation replaces the old note step, it does not override an instruction.
     """
-    if not auto_note_will_run():
-        return False
     job = get_job(task_id, client_id=client_id)
     if not job or str(job.get("status") or "") != "completed":
         return False
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     if str(result.get("summary_markdown") or "").strip():
         return False
-    return bool(result.get("transcript_text") or result.get("raw_segments"))
+    if not (result.get("transcript_text") or result.get("raw_segments")):
+        return False
+    # A task whose own text note was switched off at submission because the
+    # frame note would follow is owed a note, whatever is reachable now. Asking
+    # "can Claude run?" again here turned an expired login into a task with no
+    # note, no error and no record; `write_note` falls back instead.
+    if result.get("note_deferred_to_visual_note"):
+        return True
+    return auto_note_will_run()
 
 
 def mark_note_running(task_id: str, client_id: str | None) -> None:
@@ -206,6 +212,10 @@ def write_note(
     are already theirs, and losing those to a note failure would be the worst
     possible trade.
     """
+    channel = visual_note_channel.resolve_channel(resolve_secret(None, "anthropic_api_key"))
+    if not channel.available:
+        _write_text_note_instead(task_id, client_id, channel, on_local_work_done=on_local_work_done)
+        return
     try:
         visual_note_job.claim(task_id)
     except visual_note_job.VisualNoteError:
@@ -244,6 +254,79 @@ def write_note(
     finally:
         visual_note_job.release(task_id)
 
+
+
+def _write_text_note_instead(
+    task_id: str,
+    client_id: str | None,
+    channel: Any,
+    *,
+    on_local_work_done: Callable[[], None] | None = None,
+) -> None:
+    """The frame note cannot run now (an expired Claude login, a removed key):
+    write the text note with the configured model, or say why there is none.
+
+    Never raises, for the same reason ``write_note`` does not.
+    """
+    from backend.core.ai_summarizer import summarize_transcript_with_metadata
+    from backend.core.event_context import event_metadata
+    from backend.core.event_logger import log_event
+    from backend.core.local_entry_guards import local_ai_kwargs
+
+    job = get_job(task_id, client_id=client_id) or {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    options = metadata.get("queue_options") if isinstance(metadata.get("queue_options"), dict) else {}
+    kwargs = local_ai_kwargs(ai_provider=options.get("ai_provider"), ai_model=options.get("ai_model"))
+    reason = channel.unavailable_reason or "结合画面的笔记现在写不了。"
+    log_event(
+        task_id=task_id,
+        event_name="visual_note_unavailable",
+        source_type=str(job.get("source_type") or "") or None,
+        stage="summary",
+        success=False,
+        error_reason=reason,
+        metadata=event_metadata(
+            channel=channel.name,
+            at="note_step",
+            fallback="text_note" if kwargs.get("api_key") else "none",
+        ),
+    )
+    if on_local_work_done is not None:
+        on_local_work_done()  # nothing below uses this machine
+    if not kwargs.get("api_key"):
+        _patch_result(task_id, client_id, {
+            "summary_status": "failed",
+            "summary_error": f"{reason}另外也没有可用的文本模型 Key，所以这次没有笔记。",
+            "summary_skipped": False,
+        })
+        upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed")
+        return
+    transcript = str(result.get("transcript_text") or "")
+    try:
+        summary = summarize_transcript_with_metadata(transcript, **kwargs)
+        markdown = str(summary.markdown or "").strip()
+        if not markdown:
+            raise RuntimeError("模型没有返回内容")
+    except Exception as exc:  # noqa: BLE001 - a note must not take the task with it
+        _patch_result(task_id, client_id, {
+            "summary_status": "failed",
+            "summary_error": f"{reason}改用文本模型写笔记也没成功：{exc}",
+            "summary_skipped": False,
+        })
+        upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed")
+        logger.warning("text-note fallback failed for %s: %s", task_id, exc)
+        return
+    _patch_result(task_id, client_id, {
+        "summary_markdown": markdown,
+        "summary_status": "completed",
+        "summary_error": None,
+        "summary_skipped": False,
+        "note_written_by": "text_fallback",
+        "summary_written_from": "text_fallback",
+        "note_fallback_reason": reason,
+    })
+    upsert_job(task_id=task_id, status="completed", stage="done", summary_status="completed")
 
 __all__ = [
     "AUTO_NOTE_ENV",

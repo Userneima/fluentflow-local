@@ -7,7 +7,7 @@ import {useDismissable} from '../lib/useDismissable.js';
 
 const modalOptions = {closeOnOutsideClick: false, trapFocus: true};
 
-export const RegenerateConfirmDialog = ({transcriptTitle, onCancel, onConfirm}) => {
+export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, onCancel, onConfirm}) => {
     const {t, lang} = useI18n();
     const dialogRef = useDismissable(true, onCancel, modalOptions);
     return (
@@ -22,8 +22,13 @@ export const RegenerateConfirmDialog = ({transcriptTitle, onCancel, onConfirm}) 
                             {t('edit.regenerateConfirmTitle')}
                         </h2>
                         <p className="mt-2 text-sm font-medium leading-relaxed text-[#666] dark:text-white/60">
-                            {t('edit.regenerateConfirmDesc')}
+                            {description || t('edit.regenerateConfirmDesc')}
                         </p>
+                        {warning && (
+                            <p data-testid="regenerate-warning" className="mt-3 rounded-[14px] border border-error/20 bg-error-container px-3 py-2 text-xs font-semibold leading-relaxed text-on-error-container">
+                                {warning}
+                            </p>
+                        )}
                         <div className="mt-4 rounded-[16px] border border-[#e4e0e0] bg-[#f8f7fb] p-3 dark:border-white/[0.12] dark:bg-white/[0.06]">
                             <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#777] dark:text-white/45">{lang === 'zh' ? '当前转录' : 'Current transcript'}</p>
                             <p className="truncate text-sm font-bold text-[#111111] dark:text-white">{transcriptTitle}</p>

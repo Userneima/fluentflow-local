@@ -37,7 +37,6 @@ from backend.core.media_intake import (
     file_size_mb,
     path_size_mb,
 )
-from backend.core.media_job import execute_media_job
 from backend.core.media_preflight import MediaPreflightError, preflight_media_file
 from backend.core.queue_options import _queue_options_from_mapping
 from backend.core.request_scope import local_client_scope
@@ -56,6 +55,7 @@ from backend.routers.local_processing import (
     _effective_duration_limit,
     _local_media_job_context,
     _start_behind_queue,
+    run_pipeline_then_note,
     wait_for_queue_turn,
 )
 
@@ -151,6 +151,7 @@ async def _run_local_video_source_job(
     transcribing. ``done`` is set however this ends, so the job behind it is
     never left waiting.
     """
+    link_done = done if done is not None else asyncio.Event()
     try:
         await _download_then_process(
             task_id=task_id,
@@ -162,10 +163,10 @@ async def _run_local_video_source_job(
             gate=gate,
             route=route,
             previous=previous,
+            done=link_done,
         )
     finally:
-        if done is not None:
-            done.set()
+        link_done.set()
 
 
 def _progress_throttle() -> Any:
@@ -206,6 +207,7 @@ async def _download_then_process(
     gate: CancellationGate,
     route: str,
     previous: Any,
+    done: asyncio.Event,
 ) -> None:
     loop = asyncio.get_running_loop()
     should_publish = _progress_throttle()
@@ -410,7 +412,7 @@ async def _download_then_process(
     )
     # The expensive part waits its turn; the download above did not have to.
     await wait_for_queue_turn(previous, task_id, client_id)
-    await execute_media_job(ctx)
+    await run_pipeline_then_note(done, ctx)
 
 
 async def submit_video_source_job(

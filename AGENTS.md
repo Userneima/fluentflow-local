@@ -18,6 +18,10 @@ current workflow. If the task is for Hosted, switch to the independent
 - Shared capabilities are deliberately ported, reviewed, tested, and committed
   in each repository; never assume a change here reaches Hosted automatically.
 
+## Open problems
+
+Known problems found in review and not yet fixed are listed in `docs/known_issues.md`. Read it before working in an area it covers; remove an entry when you fix it.
+
 ## Validation
 
 Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests. Do not push, deploy, tag, or change a release version unless explicitly requested.

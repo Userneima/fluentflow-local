@@ -188,6 +188,10 @@ async def regenerate_summary(
             "prompt_preset": (prompt_preset or "").strip() or None,
             "prompt_preset_label": (prompt_preset_label or "").strip() or None,
             "regenerated_from_task_id": regenerated_from_task_id,
+            # The note is now the text model's. Without this the stamp of an
+            # earlier frame note stayed, and the page kept describing a text
+            # rewrite as Claude reading the frames.
+            "summary_written_from": "text_regeneration",
         }
         existing = (
             existing_job

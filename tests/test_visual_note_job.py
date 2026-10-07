@@ -880,6 +880,30 @@ def test_a_note_left_pending_by_a_killed_process_stops_saying_it_is_coming(monke
     assert saved["old-note"]["summary_status"] == "completed"
 
 
+def test_a_note_marked_pending_but_never_started_stops_saying_it_is_coming(monkeypatch):
+    """A restart between "the note is on its way" and the note job starting left
+    no running note to find; the task said a note was coming forever, and an
+    agent waiting on it never returned."""
+    rows = [
+        {"task_id": "never-started", "client_id": LOCAL_OWNER_ID, "stage": "note",
+         "result": {"summary_status": "pending", "summary_markdown": ""}},
+        {"task_id": "finished-fine", "client_id": LOCAL_OWNER_ID, "stage": "done",
+         "result": {"summary_status": "completed", "summary_markdown": "# 笔记"}},
+    ]
+    saved: dict[str, dict] = {}
+    stages: dict[str, str] = {}
+    monkeypatch.setattr(vn, "list_jobs_by_statuses", lambda *_a, **_k: rows)
+    monkeypatch.setattr(vn, "update_job_result",
+                        lambda task_id, result, **_k: saved.__setitem__(task_id, result) or True)
+    monkeypatch.setattr(vn, "upsert_job", lambda task_id, **kw: stages.__setitem__(task_id, kw.get("stage")))
+
+    assert vn.recover_stranded_notes() == 1
+    assert saved["never-started"]["summary_status"] == "failed"
+    assert "重新写" in saved["never-started"]["summary_error"]
+    assert stages == {"never-started": "done"}
+    assert "finished-fine" not in saved
+
+
 # ── the hand-off point the automatic flow releases the queue at ─────────────
 
 def test_the_local_work_is_reported_done_after_the_frames_and_before_claude(job_store, tmp_path):

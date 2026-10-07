@@ -265,7 +265,11 @@ def wait_task(
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Wait for a task to finish or return the current running state."""
+    """Wait for a task, note included, or return the current state.
+
+    ``done`` stays false while a completed task's note is still being written
+    (``note_pending``); the server decides, this only relays.
+    """
     return _agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/wait",
@@ -336,8 +340,10 @@ def debreath_task(
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Remove silent gaps from a completed task's source media, mechanically.
+    """Redo the breath-gap cut on an existing task's source media, mechanically.
 
+    Submitting already cuts, so this is for a redo. A task whose transcript was
+    made from a cut file gets a timeline mismatch if cut again; resubmit instead.
     A distinct action rather than a package field: it starts work, and it takes
     parameters the caller has to choose. Returns as soon as the work is accepted —
     rendering takes minutes, so poll ``get_task_package`` and read its
@@ -372,13 +378,11 @@ def write_note_from_cut_media(
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Write a task's note from its de-breathed media, after ``debreath_task``.
+    """Rewrite an existing task's note from its de-breathed media.
 
-    The second half of one flow: ``debreath_task`` produces the shortened file
-    and the cut list, and this writes the note from that file — frames taken from
-    it, subtitles moved onto its clock. It refuses if no cut file exists yet
-    rather than reading the original recording, so call ``debreath_task`` with
-    ``render=True`` first.
+    Submitting already writes this note; this is for a redo. It reads the cut
+    file (frames taken from it, subtitles moved onto its clock) and refuses if no
+    cut file exists rather than reading the original recording.
 
     ``preview`` defaults to **true** and costs nothing: it answers which file
     would be read, how much transcript after remapping, how many frames, and
@@ -451,7 +455,13 @@ TOOL_FUNCTIONS = {
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "submit_video_link",
-        "description": "Submit a video URL or copied share text to FluentFlow.",
+        "description": (
+            "Submit a video URL or copied share text to FluentFlow. "
+            "By default the task cuts breath gaps out of the media, transcribes the cut file, "
+            "then has Claude write the note from its frames (the configured text model "
+            "writes it from the transcript when Claude is unreachable). skip_summary=true "
+            "stops at the transcript. Follow with wait_task."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -490,7 +500,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "Submit one audio or video file that stays where it is, by absolute path "
             "on this machine. Local edition only; the backend accepts it from localhost "
             "only, and this tool says so plainly when the other edition is the one "
-            "answering. One file per call — loop for a folder."
+            "answering. One file per call — loop for a folder. "
+            "By default the task cuts breath gaps out of the media, transcribes the cut file, "
+            "then has Claude write the note from its frames (the configured text model "
+            "writes it from the transcript when Claude is unreachable). skip_summary=true "
+            "stops at the transcript. Follow with wait_task."
         ),
         "inputSchema": {
             "type": "object",
@@ -509,7 +523,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "get_task",
-        "description": "Read lightweight task status from FluentFlow.",
+        "description": (
+            "Read lightweight task status from FluentFlow. done is true only once the "
+            "note is finished too; note_pending says it is still being written."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
@@ -518,7 +535,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "wait_task",
-        "description": "Wait for a task to finish or return the current running state.",
+        "description": (
+            "Wait for a task, note included: a task reads completed once its transcript "
+            "is stored, but done stays false (note_pending=true) until the note is "
+            "written, failed or skipped. Returns the package when done, otherwise the "
+            "current state; call again until done."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -576,9 +598,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "debreath_task",
         "description": (
-            "Mechanically remove silent gaps from a completed task's source media. "
-            "Acoustic detection only — no model decides which pause matters. Writes a cut "
-            "list artifact always and a rendered file when render is true; poll "
+            "Redo the breath-gap cut on an existing task; submitting already cuts, so this "
+            "is not the normal path. If the task's transcript was made from a cut file, "
+            "cutting again puts the media and transcript on different timelines: prefer "
+            "resubmitting the original with different settings. Acoustic detection only. "
+            "Writes a cut list always and a rendered file when render is true; poll "
             "get_task_package and read its debreath block for progress, counts, and warnings."
         ),
         "inputSchema": {
@@ -615,10 +639,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "write_note_from_cut_media",
         "description": (
-            "Write a task's note from its de-breathed media — the second half of the flow "
-            "that starts with debreath_task(render=True). Frames come from the shortened "
-            "file and the subtitles are moved onto its clock; with no cut file it refuses "
-            "instead of reading the original recording. preview defaults to true and is "
+            "Rewrite an existing task's note from its de-breathed media; submitting already "
+            "writes this note, so use it only to redo one (e.g. after a failed note). Needs "
+            "a cut file (from submitting or debreath_task(render=True)) and refuses without "
+            "one. Frames come from the cut file and the subtitles are moved onto its clock. "
+            "preview defaults to true and is "
             "free (which file, how much transcript, how many frames, whose Claude "
             "allowance pays); preview=false spends that allowance, so ask first. The note "
             "becomes the task's note by default, keeping the previous one restorable."

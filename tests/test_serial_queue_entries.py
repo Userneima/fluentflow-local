@@ -86,7 +86,6 @@ def test_a_single_upload_a_video_link_and_an_in_place_file_run_one_after_another
     monkeypatch.setattr(lp, "preflight_media_file", lambda _p: _Passed())
     monkeypatch.setattr(lvs, "preflight_media_file", lambda _p: _Passed())
     monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
-    monkeypatch.setattr(lvs, "execute_media_job", fake_pipeline)
     monkeypatch.setattr(lvs, "download_video_source", lambda *a, **k: _saved_video(downloaded))
     monkeypatch.setattr(lvs, "get_preference", lambda name: None)
 
@@ -157,7 +156,6 @@ def test_a_video_link_downloads_while_the_queue_works_and_waits_only_to_transcri
     monkeypatch.setattr(lp, "preflight_media_file", lambda _p: _Passed())
     monkeypatch.setattr(lvs, "preflight_media_file", lambda _p: _Passed())
     monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
-    monkeypatch.setattr(lvs, "execute_media_job", fake_pipeline)
     monkeypatch.setattr(lvs, "download_video_source", fake_download)
     monkeypatch.setattr(lvs, "get_preference", lambda name: None)
     recording = tmp_path / "r.mp4"
@@ -333,3 +331,35 @@ def test_the_cookie_check_reads_the_browser_store_off_the_event_loop(monkeypatch
 
     assert r.status_code == 200
     assert seen["on_loop"] is False
+
+
+def test_a_task_submitted_as_a_link_gets_its_note_written_too(tmp_path, monkeypatch):
+    """Requirement: a link gets the same note an upload gets. The pipeline
+    leaves the note to the step after it, and the link entry used to stop at
+    the pipeline, so link tasks ended with no note at all."""
+    noted: list[str] = []
+    downloaded = tmp_path / "d.mp4"
+    downloaded.write_bytes(b"x")
+
+    async def fake_pipeline(ctx):
+        upsert_job(task_id=ctx.task_id_value, status="completed", client_id=ctx.client_id, stage="done", progress=100)
+
+    async def record_note(task_id, client_id, *, on_local_work_done=None):
+        noted.append(task_id)
+
+    monkeypatch.setattr(lvs, "preflight_media_file", lambda _p: _Passed())
+    monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
+    monkeypatch.setattr(lp, "_write_note_after_transcript", record_note)
+    monkeypatch.setattr(lvs, "download_video_source", lambda *a, **k: _saved_video(downloaded))
+    monkeypatch.setattr(lvs, "get_preference", lambda name: None)
+
+    async def scenario():
+        task_id = (await lvs.submit_video_source_job(
+            input_text="https://example.com/v/3", title="", raw_options={}, client_id="local-single-user"
+        ))["task_id"]
+        await _settle()
+        await _settle()
+        return task_id
+
+    task_id = asyncio.run(scenario())
+    assert noted == [task_id]

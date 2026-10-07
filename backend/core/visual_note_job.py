@@ -63,7 +63,7 @@ from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
-from backend.core.job_store import get_job, list_jobs_by_statuses, update_job_result
+from backend.core.job_store import get_job, list_jobs_by_statuses, update_job_result, upsert_job
 from backend.core.result_artifacts import (
     DEBREATH_MEDIA_KIND,
     TRANSCRIPT_MEDIA_CUT,
@@ -1028,16 +1028,22 @@ def recover_stranded_notes() -> int:
     recovered = 0
     for job in list_jobs_by_statuses(("completed",), include_result=True):
         task_id = str(job.get("task_id") or "")
-        if not task_id or not is_running(job.get("result")):
+        result = dict(job.get("result") or {}) if isinstance(job.get("result"), dict) else {}
+        running = is_running(result)
+        # Also the gap before the note job starts: the flow marks the note
+        # "pending" first, and a restart there left no running note to find, so
+        # the task said a note was on its way forever and agents waited on it.
+        pending_unstarted = result.get("summary_status") == "pending" and not running
+        if not task_id or not (running or pending_unstarted):
             continue
-        result = dict(job.get("result") or {})
-        result["visual_note"] = {
-            **visual_note_state(result),
-            "status": STATUS_FAILED,
-            "stage": "done",
-            "error": "服务重启中断了这次笔记重写，剪后的文件还在，重新发起即可。",
-            "finished_at": _now(),
-        }
+        if running:
+            result["visual_note"] = {
+                **visual_note_state(result),
+                "status": STATUS_FAILED,
+                "stage": "done",
+                "error": "服务重启中断了这次笔记重写，剪后的文件还在，重新发起即可。",
+                "finished_at": _now(),
+            }
         # The automatic flow marks the note "pending" before it starts; left
         # alone, the task would say a note is on its way forever.
         if result.get("summary_status") == "pending":
@@ -1047,6 +1053,9 @@ def recover_stranded_notes() -> int:
                 result["summary_status"] = "failed"
                 result["summary_error"] = "服务重启中断了笔记生成，重新写一次笔记即可。"
         if update_job_result(task_id, result, client_id=job.get("client_id")):
+            if str(job.get("stage") or "") == "note":
+                upsert_job(task_id=task_id, status="completed", stage="done",
+                           summary_status=result.get("summary_status"), client_id=job.get("client_id"))
             recovered += 1
     return recovered
 

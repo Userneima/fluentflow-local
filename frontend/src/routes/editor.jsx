@@ -54,6 +54,7 @@ import {
 import {useApp} from '../app/AppContext.jsx';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import {usePromptEditing} from '../lib/usePromptEditing.js';
+import {noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
@@ -71,6 +72,14 @@ import {
     formatElapsedMinuteSecond,
     formatSttOriginalRatio,
     downloadBrowserFile,
+    NOTE_POLL_INTERVAL_MS,
+    noteIsBeingWritten,
+    noteWritingSettled,
+    claudeRewriteSettled,
+    noteCameFromClaude,
+    mergeNoteFields,
+    regenerateDialogCopy,
+    visualNoteStartErrorMessage,
 } from './editor-helpers.js';
 
 // The records worth showing: a changed sentence whose current text is still the
@@ -102,7 +111,7 @@ const Editor = () => {
         addLarkExport,
         runtimeConfig,
     } = useApp();
-    const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit} = useApi();
+    const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getCredentialsStatus} = useApi();
     const {loadSettings, saveSettings} = useSettings();
     const [exporting, setExporting] = useState(false);
     const [regenerating, setRegenerating] = useState(false);
@@ -143,6 +152,8 @@ const Editor = () => {
     matchedLocalSourceFileRef.current = matchedLocalSourceFile;
     const langRef = useRef(lang);
     langRef.current = lang;
+    const tRef = useRef(t);
+    tRef.current = t;
     const resultSegmentCount = pickTranscriptSegments(result).length;
     const resultTextLength = (result?.transcript_text || '').length;
     const resultKey = result
@@ -793,6 +804,96 @@ const Editor = () => {
 
     const promptEditing = usePromptEditing({loadSettings, saveSettings, t, lang, showToast});
 
+    // Who writes a regenerated note: the same answer the start page gives
+    // (lib/noteWriter.js), so "重生笔记" uses the writer that wrote the note.
+    const [credentialStatus, setCredentialStatus] = useState(null);
+    useEffect(() => {
+        let active = true;
+        getCredentialsStatus?.()
+            .then((status) => { if (active && status) setCredentialStatus(status); })
+            .catch(() => {});
+        return () => { active = false; };
+    }, [getCredentialsStatus]);
+    const noteWriter = useMemo(
+        () => resolveNoteWriter({runtimeConfig, credentialStatus, settings: loadSettings()}),
+        // loadSettings reads localStorage; stored settings only change on the
+        // settings page, which is a different route.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [runtimeConfig, credentialStatus],
+    );
+
+    // A note still being written — the automatic one after transcription, or a
+    // Claude rewrite started from this page — is fetched again every few
+    // seconds until it settles, then shown. `noteWatch` is the rewrite this page
+    // started: {taskId, requestedAtMs, sawRunning}.
+    const [noteWatch, setNoteWatch] = useState(null);
+    const noteWatchRef = useRef(noteWatch);
+    noteWatchRef.current = noteWatch;
+    const summaryUnsavedRef = useRef(summaryUnsaved);
+    summaryUnsavedRef.current = summaryUnsaved;
+    const resultJobOptionsRef = useRef(resultJobOptions);
+    resultJobOptionsRef.current = resultJobOptions;
+    const pollTaskId = result?.task_id || '';
+    const notePolling = !!pollTaskId && (
+        noteIsBeingWritten(result) || noteWatch?.taskId === pollTaskId
+    );
+    useEffect(() => {
+        // A rewrite started for a task that is no longer open is no longer this
+        // page's to report.
+        if (noteWatchRef.current && noteWatchRef.current.taskId !== pollTaskId) {
+            setNoteWatch(null);
+            setRegenerating(false);
+        }
+    }, [pollTaskId]);
+    useEffect(() => {
+        if (!notePolling) return undefined;
+        const taskId = pollTaskId;
+        let stopped = false;
+        let inFlight = false;
+        const tick = async () => {
+            if (stopped || inFlight) return;
+            inFlight = true;
+            let job = null;
+            try {
+                job = await getJob(taskId, resultJobOptionsRef.current);
+            } catch (_) {
+                // A missed poll is retried on the next tick.
+            } finally {
+                inFlight = false;
+            }
+            const fresh = job?.result;
+            if (stopped || !fresh) return;
+            const watch = noteWatchRef.current?.taskId === taskId ? noteWatchRef.current : null;
+            if (watch && fresh.visual_note?.status === 'running') watch.sawRunning = true;
+            const settled = watch ? claudeRewriteSettled(fresh, watch) : noteWritingSettled(fresh);
+            if (!settled) return;
+            // A note typed here and not yet saved is the user's; wait for the save
+            // and take the server's copy on a later tick.
+            if (summaryUnsavedRef.current) return;
+            stopped = true;
+            clearInterval(timer);
+            setLastResult((prev) => (prev?.task_id === taskId ? mergeNoteFields(prev, fresh) : prev));
+            if (watch) {
+                setNoteWatch(null);
+                setRegenerating(false);
+                const zh = langRef.current === 'zh';
+                if (fresh.visual_note?.status === 'failed') {
+                    const reason = String(fresh.visual_note?.error || '').trim();
+                    showToast(zh
+                        ? `Claude 重写笔记失败${reason ? `：${reason}` : ''}，原来的笔记没有动。`
+                        : `Claude could not rewrite the note${reason ? `: ${reason}` : ''}. The previous note is unchanged.`, false);
+                } else {
+                    showToast(tRef.current('edit.regenDone'));
+                }
+            }
+        };
+        const timer = setInterval(tick, NOTE_POLL_INTERVAL_MS);
+        return () => {
+            stopped = true;
+            clearInterval(timer);
+        };
+    }, [notePolling, pollTaskId, getJob, setLastResult, showToast]);
+
     const handleExportLark = async () => {
         if(!result || exporting) return;
         setExporting(true);
@@ -834,9 +935,41 @@ const Editor = () => {
         finally { setExporting(false); }
     };
 
+    const currentNoteFromClaude = noteCameFromClaude(result);
+    const regenerateCopy = regenerateDialogCopy({
+        writerKind: noteWriter.kind,
+        writerLabel: noteWriter.kind === 'claude' || noteWriter.kind === 'text_model'
+            ? noteWriterLabel(noteWriter, lang)
+            : (lang === 'zh' ? '设置里选择的模型' : 'the model chosen in settings'),
+        currentNoteFromClaude,
+    }, lang);
+
+    // Claude rewrites from the cut file's frames and the transcript, in the
+    // background; the poll above shows the new note when it is written.
+    const handleRegenerateWithClaude = async () => {
+        const taskId = result?.task_id;
+        if (!taskId) return;
+        setRegenerating(true);
+        const requestedAtMs = Date.now();
+        try {
+            await startJobVisualNote(taskId, {replace_note: true}, resultJobOptions);
+            setNoteWatch({taskId, requestedAtMs, sawRunning: false});
+            showToast(lang === 'zh'
+                ? 'Claude 正在结合画面重写笔记，写好后会自动替换右侧笔记。'
+                : 'Claude is rewriting the note from the frames; it replaces the note on the right when done.');
+        } catch (err) {
+            setRegenerating(false);
+            showToast(visualNoteStartErrorMessage(err, lang), false);
+        }
+    };
+
     const handleRegenerate = async () => {
         setRegenerateConfirmOpen(false);
         if(!transcript || regenerating) return;
+        if (noteWriter.kind === 'claude') {
+            await handleRegenerateWithClaude();
+            return;
+        }
         setRegenerating(true);
         try {
             const settings = loadSettings();
@@ -863,6 +996,8 @@ const Editor = () => {
                         segments,
                         transcript_edited: transcriptDirty || !!result.transcript_edited,
                         summary_markdown: data.summary_markdown,
+                        // Written from the text now, not from the frames.
+                        summary_written_from: null,
                         summary_skipped: false,
                         summary_status: data.summary_status || 'completed',
                         summary_error: null,
@@ -1156,6 +1291,8 @@ const Editor = () => {
         {regenerateConfirmOpen && (
             <RegenerateConfirmDialog
                 transcriptTitle={rawEditorTitle}
+                description={regenerateCopy.desc}
+                warning={regenerateCopy.warning}
                 onCancel={()=>setRegenerateConfirmOpen(false)}
                 onConfirm={handleRegenerate}
             />
