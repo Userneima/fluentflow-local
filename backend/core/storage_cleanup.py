@@ -123,63 +123,6 @@ def cleanup_task_source_files(task_id: str, metadata: dict[str, Any] | None = No
     }
 
 
-MEDIA_SUFFIXES = frozenset({
-    ".mp4", ".m4a", ".mov", ".mkv", ".webm", ".avi", ".flv",
-    ".mp3", ".wav", ".aac", ".flac", ".ogg", ".opus",
-})
-FRAME_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
-
-
-def cleanup_task_media_files(
-    task_id: str,
-    metadata: dict[str, Any] | None = None,
-    *,
-    keep_frames: set[str] | frozenset[str] = frozenset(),
-) -> dict[str, Any]:
-    """Remove what is large and can be made again; keep what took work.
-
-    Removed: the source copy, every audio or video file among the task's
-    results (the cut file, the playback audio), and candidate frames no note
-    shows. Kept: the transcript and subtitles, the notes, the cut list, and the
-    frames named in ``keep_frames`` — the pictures a note embeds, without which
-    the note would show broken images.
-
-    Measured on the maintainer's machine across a hundred tasks: media
-    13.5 GB, frames 0.8 GB, all text together under 0.1 GB. Deleting the text
-    with the media saved nothing worth having and took the notes with it.
-    """
-    cleanup = cleanup_task_source_files(task_id, metadata)
-    removed = list(cleanup.get("source_retention_removed_paths") or [])
-    freed = 0
-    root = _artifact_storage_dir() / task_id
-    if root.is_dir():
-        for path in sorted(root.rglob("*")):
-            if not path.is_file():
-                continue
-            suffix = path.suffix.lower()
-            is_media = suffix in MEDIA_SUFFIXES
-            is_unused_frame = (
-                suffix in FRAME_SUFFIXES
-                and path.parent.name == "frames"
-                and path.name not in keep_frames
-            )
-            if not (is_media or is_unused_frame):
-                continue
-            try:
-                size = path.stat().st_size
-                path.unlink()
-            except OSError as exc:
-                logger.warning("could not remove %s: %s", path, exc)
-                continue
-            freed += size
-            removed.append(str(path))
-    return {
-        "media_retention_removed_paths": removed,
-        "media_retention_freed_bytes": freed,
-        "media_retention_cleaned_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-    }
-
-
 def cleanup_task_all_files(task_id: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     cleanup = cleanup_task_source_files(task_id, metadata)
     removed = list(cleanup.get("source_retention_removed_paths") or [])

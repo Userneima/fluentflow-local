@@ -33,8 +33,7 @@ For normal development, install `requirements-local.txt`, then run `npm run buil
 | `FLUENTFLOW_TRANSCRIPT_EDIT_RECORDS_DIR` | 转录稿修改记录 | `<数据目录>/transcript_edit_records` |
 | `FLUENTFLOW_VIDEO_SOURCE_DIR` | 从链接下载的视频 | `<数据目录>/video_sources` |
 | `FLUENTFLOW_DIARIZATION_MODEL_DIR` | 讲话人分离模型目录，由 `scripts/fetch_diarization_models.py` 填充 | `<数据目录>/models/pyannote` |
-| `FLUENTFLOW_ARTIFACT_RETENTION_DAYS` | 任务最后一次改动后多少天清理它的音视频和笔记没用到的截图，`0` 为不清理。转写稿、笔记、字幕和笔记里的截图不受影响，任务本身也不会被删 | `30` |
-| `FLUENTFLOW_SOURCE_RETENTION_DAYS` | 源文件保留天数，`0` 为不清理 | `7` |
+| `FLUENTFLOW_SOURCE_RETENTION_DAYS` | FluentFlow 为上传文件另存的副本保留多少天，`0` 为不清理。任务产出的其他东西都不会被自动删除 | `7` |
 
 ### 限额与超时
 

@@ -29,7 +29,6 @@ from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import delete_jobs, get_job, list_jobs_for_retention, recent_local_folders, update_job_result, upsert_job
 from backend.core.history_retention import enforce_history_retention
-from backend.core.local_retention_config import artifact_retention_days
 from backend.core.local_entry_guards import (
     claim_task_id,
     friendly_error,
@@ -100,7 +99,7 @@ def _auto_export_local_lark(**values: object) -> dict:
     return {"doc_title": title, "export_target": target, "response": response}
 
 def _enforce_local_history_retention(client_id: str | None) -> dict:
-    return enforce_history_retention(client_id, artifact_days=artifact_retention_days(), source_days=source_retention_days(), list_jobs=list_jobs_for_retention, update_result=update_job_result, load_job=get_job)
+    return enforce_history_retention(client_id, source_days=source_retention_days(), list_jobs=list_jobs_for_retention, update_result=update_job_result, load_job=get_job)
 
 
 def _positive_float(value: object) -> float | None:

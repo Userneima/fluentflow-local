@@ -27,7 +27,6 @@ const CutFlowBar = ({
     summary,
     lang = 'zh',
     unavailable = false,
-    retentionNotice = '',
     onDownload,
 }) => {
     const [downloading, setDownloading] = useState(false);
@@ -43,18 +42,6 @@ const CutFlowBar = ({
             setDownloading(false);
         }
     };
-
-    if (retentionNotice) {
-        return (
-            <div
-                data-testid="cut-flow-bar"
-                className="mt-2 flex max-w-3xl items-start gap-2 rounded-[12px] border border-[#d6dcff] bg-[#eef2ff] px-3 py-2 text-xs font-semibold leading-relaxed text-[#46536f] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white/80"
-            >
-                <SvgIcon name="info" className="mt-0.5 shrink-0 text-[15px]"/>
-                <p>{retentionNotice}</p>
-            </div>
-        );
-    }
 
     if (unavailable) {
         return (

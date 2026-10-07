@@ -80,7 +80,7 @@ const privacySections = [
     {
         title: '保留与删除',
         body: [
-            '转写稿、笔记和笔记里的截图会一直保留，直到你在任务列表里删掉这条任务。占空间的文件会按期清理：上传文件的副本保留 7 天，剪后的音视频和笔记没用到的截图保留 30 天。',
+            '任务产出的东西不会自动删除：转写稿、笔记、截图和去掉气口的音视频都会一直保留，直到你在任务列表里删掉这条任务。唯一会自动清理的，是你上传文件时 FluentFlow 另存的那份副本，7 天后清理；你自己文件夹里的原文件不受影响。',
             '浏览器里的最近记录只存在当前浏览器，清掉它不会删除电脑上的任务。',
         ],
     },
@@ -112,7 +112,7 @@ const enPrivacySections = [
     {title: 'Where your data lives', body: ['Task records, source files, transcripts, notes, and exports are stored in the app data folder on this computer. FluentFlow Local has no server of its own and no accounts.']},
     {title: 'When anything leaves this computer', body: ['Only when you use one of these features, and only what that feature needs: notes and translations send the transcript and title to the AI provider you chose; illustrated notes send extracted frames to Claude; Feishu export sends the note to your Feishu; downloading a video link contacts that video platform, and without a browser login selected, Douyin links are sent to the third-party resolver miuistore.']},
     {title: 'Activity records', body: ['The app records each task\'s processing steps and errors on this computer to help diagnose failures. These records are not sent anywhere.']},
-    {title: 'Retention and deletion', body: ['Transcripts, notes and the pictures in notes are kept until you delete the task from the task list. Large files are cleared on a schedule: copies of uploaded files after 7 days, cut audio and video and unused frames after 30 days.', 'Recent items in the browser live only in that browser. Clearing them does not delete tasks on this computer.']},
+    {title: 'Retention and deletion', body: ['Nothing a task produces is deleted automatically: transcripts, notes, frames and the de-breathed audio or video are kept until you delete the task from the task list. The only thing cleared on its own is the copy FluentFlow keeps of a file you upload, after 7 days; the original in your own folder is never touched.', 'Recent items in the browser live only in that browser. Clearing them does not delete tasks on this computer.']},
     {title: 'Keys', body: ['The AI provider keys and Feishu app credentials you enter are stored in local configuration and used only when calling that service.', 'Settings only shows whether a key is set, never the full key. To change one, enter it again.']},
     {title: 'Your choices', body: ['To keep material entirely on this computer, use transcription only and leave AI notes, translation, Feishu export, and video link downloads off.']},
 ];

@@ -136,19 +136,3 @@ describe('cutFlowSummary', () => {
         expect(summary.cutCount).toBe(4);
     });
 });
-
-describe('a task whose media the retention window cleared', () => {
-    it('says what was cleared and that the transcript and note are kept, not that something broke', async () => {
-        const {mediaRetentionNotice} = await import('../routes/editor-helpers.js');
-        const notice = mediaRetentionNotice({media_retention_status: 'expired', media_retention_cleaned_at: '2026-11-06T03:00:00+08:00'}, 'zh');
-        render(<CutFlowBar summary={cutFlowSummary(autoResult())} lang="zh" unavailable retentionNotice={notice}/>);
-        const bar = screen.getByTestId('cut-flow-bar');
-        expect(bar.textContent).toContain('2026-11-06');
-        expect(bar.textContent).toContain('转写稿、笔记');
-        expect(bar.textContent).not.toContain('读不到');
-    });
-    it('says nothing for a task whose media is still there', async () => {
-        const {mediaRetentionNotice} = await import('../routes/editor-helpers.js');
-        expect(mediaRetentionNotice({source_file_available: true}, 'zh')).toBe('');
-    });
-});
