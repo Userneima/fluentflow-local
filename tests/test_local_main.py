@@ -164,6 +164,70 @@ def test_lan_mode_does_not_make_the_owners_own_page_carry_a_token(monkeypatch):
     assert r.status_code == 200
 
 
+def _lan_page_request(method: str, *, host: str = "192.168.1.5:8000", origin: str = "http://192.168.1.5:8000", **kwargs):
+    import asyncio
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=create_local_app(), client=("192.168.1.20", 40000))
+        async with httpx.AsyncClient(transport=transport, base_url=f"http://{host}") as client:
+            return await client.request(method, _ACK, json={"task_ids": []}, headers={"origin": origin, **kwargs})
+
+    return asyncio.run(scenario())
+
+
+def test_lan_mode_lets_the_page_opened_on_another_device_write_with_the_token(monkeypatch):
+    """Requirement: with LAN mode and an access token configured, the page
+    opened from another device at this machine's LAN address can change
+    things once that device has the token, instead of being refused as a
+    foreign site."""
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    r = _lan_page_request("POST", **{"x-fluentflow-access-token": "lan-secret"})
+
+    assert r.status_code == 200
+
+
+def test_lan_mode_page_without_the_token_is_told_it_can_only_read(monkeypatch):
+    """Requirement: without the token the LAN page is told, in Chinese, that
+    other devices can only read, and how to enable writing."""
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    r = _lan_page_request("POST")
+
+    assert r.status_code == 401
+    assert "只能查看" in r.json()["detail"] and "Agent 接入" in r.json()["detail"]
+
+
+def test_lan_mode_still_refuses_a_rebound_domain_posing_as_this_machine(monkeypatch):
+    """Requirement: cross-site protection stays. A site whose own domain name
+    is pointed at this machine sends matching Origin and Host; it is still
+    refused, because only an IP address or a .local name counts as this page."""
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    r = _lan_page_request(
+        "POST", host="evil.example:8000", origin="http://evil.example:8000",
+        **{"x-fluentflow-access-token": "lan-secret"},
+    )
+    assert r.status_code == 403
+    r = _lan_page_request(
+        "POST", origin="http://192.168.1.5:9999", **{"x-fluentflow-access-token": "lan-secret"},
+    )
+    assert r.status_code == 403, "another port on the same address is another site"
+
+
+def test_without_lan_mode_a_lan_origin_is_still_foreign(monkeypatch):
+    monkeypatch.delenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", raising=False)
+
+    r = TestClient(create_local_app()).get(
+        "/health", headers={"origin": "http://testserver", "host": "testserver"}
+    )
+
+    assert r.status_code == 403
+
+
 def test_strict_mode_is_unchanged_by_a_configured_token(monkeypatch):
     monkeypatch.delenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", raising=False)
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")

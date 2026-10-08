@@ -154,3 +154,107 @@ def test_every_request_has_a_timeout_and_one_retry(monkeypatch):
 
     assert seen["max_retries"] == 1
     assert seen["timeout"].connect == 10.0 and seen["timeout"].read == 300.0
+
+
+# ── past the limit with a draft in hand, the draft is the note ──────────────
+
+class _Clock:
+    """A clock the fake model moves: the draft stage is what takes the time."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+def test_a_note_that_runs_out_of_time_after_its_draft_keeps_the_draft(no_network, monkeypatch):
+    """Requirement: when the time limit passes after the draft is written, the
+    user gets that draft as the note, the optional polishing stages are
+    skipped, and the record says the limit was hit."""
+    import types
+
+    clock = _Clock()
+    monkeypatch.setattr(summ, "time", types.SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setenv("FLUENTFLOW_NOTE_DEADLINE_SECONDS", "60")
+    chat = _FakeChat(revision_reply=DRAFT + "\n补上了总结。")
+
+    def slow_draft(client, model, system, user, *, temperature=0.3):
+        reply = chat(client, model, system, user, temperature=temperature)
+        if chat.stages[-1] == "draft":
+            clock.now += 120
+        return reply
+
+    monkeypatch.setattr(summ, "_chat", slow_draft)
+
+    result = summ.summarize_transcript_with_metadata(TRANSCRIPT, note_mode="high_fidelity", provider="deepseek")
+
+    assert result.markdown.strip() == DRAFT.strip()
+    assert result.deadline_hit is True
+    assert "coverage" not in chat.stages and "revision" not in chat.stages
+    assert result.coverage_revision_used is False
+
+
+def test_a_chapter_note_that_runs_out_of_time_keeps_its_chapters(no_network, monkeypatch):
+    """Requirement: same promise for the long-recording mode: the chapters
+    already written are the note; style and coverage passes are skipped."""
+    import json
+    import types
+
+    from backend.core.ai_prompts import (
+        _CHAPTER_EVIDENCE_SYSTEM,
+        _CHAPTER_NOTE_SYSTEM,
+        _CHAPTER_OUTLINE_SYSTEM,
+    )
+
+    clock = _Clock()
+    monkeypatch.setattr(summ, "time", types.SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setenv("FLUENTFLOW_NOTE_DEADLINE_SECONDS", "60")
+    stages: list[str] = []
+    chapter = "## 一、开场\n\n这一章讲了课程要解决的问题。"
+
+    def chat(client, model, system, user, *, temperature=0.3):
+        if system.startswith(_CHAPTER_EVIDENCE_SYSTEM[:40]):
+            stages.append("evidence")
+            seg = json.loads(user)[0]["segment_id"]
+            return json.dumps([{"text": "问题", "source_segment_ids": [seg], "importance": 5}])
+        if system == _CHAPTER_OUTLINE_SYSTEM:
+            stages.append("outline")
+            return json.dumps([{"title": "开场", "used_evidence_ids": ["E001"]}])
+        if system.startswith(_CHAPTER_NOTE_SYSTEM[:40]):
+            stages.append("chapter")
+            clock.now += 120
+            return chapter
+        stages.append("other")
+        return "COVERED"
+
+    monkeypatch.setattr(summ, "_chat", chat)
+
+    result = summ.summarize_transcript_with_metadata(TRANSCRIPT, note_mode="chapter_coverage", provider="deepseek")
+
+    assert "问题" in result.markdown
+    assert result.deadline_hit is True
+    assert "other" not in stages, "style and coverage passes did not run"
+
+
+def test_a_note_that_runs_out_of_time_before_any_draft_still_fails(no_network, monkeypatch):
+    """Requirement: with nothing written yet there is nothing to keep, so the
+    user is told the limit was hit."""
+    import types
+
+    clock = _Clock()
+    monkeypatch.setattr(summ, "time", types.SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setenv("FLUENTFLOW_NOTE_DEADLINE_SECONDS", "60")
+    chat = _FakeChat(revision_reply=DRAFT)
+
+    def empty_draft(client, model, system, user, *, temperature=0.3):
+        reply = chat(client, model, system, user, temperature=temperature)
+        if chat.stages[-1] == "draft":
+            clock.now += 120
+            return ""
+        return reply
+
+    monkeypatch.setattr(summ, "_chat", empty_draft)
+
+    with pytest.raises(summ.NoteDeadlineExceeded):
+        summ.summarize_transcript_with_metadata(TRANSCRIPT, note_mode="high_fidelity", provider="deepseek")

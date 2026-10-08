@@ -21,6 +21,7 @@ export default function PromptTemplateDialog({
     t,
     lang,
     settings,
+    scopeNote = '',
     promptKey,
     presetLabel,
     handlePromptKeyChange,
@@ -109,6 +110,12 @@ export default function PromptTemplateDialog({
                             <span id="prompt-template-title" className="font-headline text-[18px] font-extrabold text-[#111111] dark:text-white">{t('prompt.label')}</span>
                         </div>
                         <p className="mt-2 text-[13px] font-semibold text-[#676970] dark:text-white/58">{t('prompt.editHint')}</p>
+                        {scopeNote ? (
+                            <p data-testid="prompt-scope-note" className="mt-1.5 flex items-start gap-1.5 text-[12px] font-semibold leading-5 text-amber-800 dark:text-amber-200/85">
+                                <SvgIcon name="info" className="mt-0.5 text-[14px]"/>
+                                <span>{scopeNote}</span>
+                            </p>
+                        ) : null}
                     </div>
                     <button
                         type="button"

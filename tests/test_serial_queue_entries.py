@@ -44,8 +44,10 @@ def _fresh_chain(monkeypatch):
     monkeypatch.setattr(lp, "JOB_EVENTS", hub)
     monkeypatch.setattr(lvs, "JOB_EVENTS", hub)
     lp._QUEUE_RECENT.clear()
+    lp._QUEUE_LINE.clear()
     yield hub
     lp._QUEUE_RECENT.clear()
+    lp._QUEUE_LINE.clear()
 
 
 def _saved_video(path: Path) -> SavedVideoSource:
@@ -363,3 +365,77 @@ def test_a_task_submitted_as_a_link_gets_its_note_written_too(tmp_path, monkeypa
 
     task_id = asyncio.run(scenario())
     assert noted == [task_id]
+
+
+def _gated_pipeline(log: list[str], gates: dict[str, asyncio.Event]):
+    async def fake_pipeline(ctx):
+        task_id = ctx.task_id_value
+        log.append(f"start:{task_id}")
+        gates.setdefault(task_id, asyncio.Event())
+        await gates[task_id].wait()
+        upsert_job(task_id=task_id, status="completed", client_id=ctx.client_id, stage="done", progress=100)
+        log.append(f"finish:{task_id}")
+    return fake_pipeline
+
+
+def test_the_submit_answer_says_where_each_recording_really_is_in_line(monkeypatch, tmp_path):
+    """Requirement: a recording submitted while others are already queued is
+    told its real place in line, not "1 of 1"."""
+    log: list[str] = []
+    gates: dict[str, asyncio.Event] = {}
+    monkeypatch.setattr(lp, "preflight_media_file", lambda _p: _Passed())
+    monkeypatch.setattr(lp, "_run_pipeline", _gated_pipeline(log, gates))
+    files = []
+    for name in ("a", "b", "c"):
+        path = tmp_path / f"{name}.mp4"
+        path.write_bytes(b"x")
+        files.append(path)
+
+    async def scenario():
+        answers = []
+        for path in files:
+            # Submitted one at a time, each as its own "batch of one".
+            answers.append(await lp.queue_local_media_file(
+                path, client_id="local-single-user", options={}, duration_limit_seconds=None,
+                route="/queue/process-local-files", origin={"chosen_with": "test"},
+            ))
+        await _settle()
+        for answer in answers:
+            gates.setdefault(answer["task_id"], asyncio.Event()).set()
+            await _settle()
+        return answers
+
+    answers = asyncio.run(scenario())
+    assert [(a["queue_position"], a["queue_total"]) for a in answers] == [(1, 1), (2, 2), (3, 3)]
+
+
+def test_resubmitting_a_running_task_id_does_not_let_the_next_job_jump_the_queue(monkeypatch):
+    """Requirement: submitting a task id that is already running changes
+    nothing, and the next recording still waits for the job that is working."""
+    log: list[str] = []
+    gates: dict[str, asyncio.Event] = {}
+    monkeypatch.setattr(lp, "_run_pipeline", _gated_pipeline(log, gates))
+
+    def ctx(task_id):
+        return SimpleNamespace(task_id_value=task_id, client_id=None, event_route=None)
+
+    async def start(task_id):
+        return await lp._start_behind_queue(
+            task_id=task_id, client_id=None, route="/test", stage="processing",
+            chained_worker=lambda previous, done: lp._run_serially(previous, done, ctx(task_id)),
+        )
+
+    async def scenario():
+        assert await start("running-a") is True
+        await _settle()
+        assert await start("running-a") is False, "the same id is not started twice"
+        assert await start("waiting-b") is True
+        await _settle()
+        assert log == ["start:running-a"], "b started beside a"
+        gates["running-a"].set()
+        await _settle()
+        assert log[-1] == "start:waiting-b"
+        gates["waiting-b"].set()
+        await _settle()
+
+    asyncio.run(scenario())

@@ -75,6 +75,8 @@ def runtime_context_metadata() -> dict[str, Any]:
 def pipeline_mode(source_type: str | None) -> str | None:
     if source_type == "transcript_file":
         return "transcript_file"
-    if source_type in {"audio", "video"}:
+    if source_type == "audio":
+        return "audio"
+    if source_type == "video":
         return "audio_video"
     return None

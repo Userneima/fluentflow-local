@@ -81,28 +81,52 @@ def auto_note_enabled() -> bool:
 
 
 def _deliver_beside_original(source: Path, cut: Path) -> dict[str, Any]:
-    """Put a copy of the cut file next to the recording it came from.
+    """Put the cut file next to the recording it came from.
 
     Only for a recording the user pointed at in their own folder — for an upload
     the "original" is FluentFlow's own copy, and delivering beside it would mean
     delivering into the store, which is where it already is.
 
-    Copies rather than moves: the task keeps its own artifact, so the file stays
-    downloadable from the page and a later cleanup of the store cannot take the
-    user's copy with it. Never overwrites; ``cut_file_target`` picks the next free
-    name and this records which one it used, because a silently renamed output the
-    user cannot find is the same problem as no output at all.
+    The task keeps its own artifact as well, so the file stays downloadable from
+    the page and a later cleanup of the store cannot take the user's copy with
+    it. On the same disk the two are one file under two names (a hard link): a
+    long lecture's cut is gigabytes, and storing it twice doubled the disk it
+    took. Deleting either name leaves the other intact, so the task keeps
+    working when the user deletes their copy. Across disks a hard link is not
+    possible and this copies. Never overwrites; ``cut_file_target`` picks the
+    next free name and this records which one it used, because a silently
+    renamed output the user cannot find is the same problem as no output at all.
     """
     try:
         target = local_folder_intake.cut_file_target(source)
-        shutil.copyfile(cut, target)
+        linked = _link_or_copy(cut, target)
     except (OSError, local_folder_intake.FolderIntakeError) as exc:
         logger.warning("could not deliver the cut file next to %s: %s", source, exc)
         return {
             "delivered": False,
             "delivery_error": f"剪后文件没能存到原文件旁边（{exc}）。任务里那份还在，可以从页面下载。",
         }
-    return {"delivered": True, "delivered_path": str(target), "delivered_name": target.name}
+    return {
+        "delivered": True,
+        "delivered_path": str(target),
+        "delivered_name": target.name,
+        "delivered_as": "hard_link" if linked else "copy",
+    }
+
+
+def _link_or_copy(cut: Path, target: Path) -> bool:
+    """Hard-link ``cut`` at ``target``; copy when that is not possible. True if linked."""
+    try:
+        os.link(cut, target)
+        return True
+    except OSError as exc:
+        # Different filesystems (EXDEV), or one that has no hard links (some
+        # network and FAT/exFAT volumes): the copy is the only way to deliver.
+        if target.exists():
+            raise
+        logger.info("hard link not possible for %s (%s); copying", target, exc)
+    shutil.copyfile(cut, target)
+    return False
 
 
 def preprocess_media(task_id: str, source: Path) -> debreath_job.PreparedCut | None:
@@ -325,6 +349,7 @@ def _write_text_note_instead(
         "note_written_by": "text_fallback",
         "summary_written_from": "text_fallback",
         "note_fallback_reason": reason,
+        "deadline_hit": bool(getattr(summary, "deadline_hit", False)),
     })
     upsert_job(task_id=task_id, status="completed", stage="done", summary_status="completed")
 

@@ -117,6 +117,10 @@ class SummaryResult:
     covered_important_evidence_count: int | None = None
     coverage_missing_count: int | None = None
     chapter_coverage: dict[str, Any] | None = None
+    # The overall time limit passed after a draft existed: the note is that
+    # draft, and the stages after it (style, coverage revision) did not run.
+    deadline_hit: bool = False
+    deadline_stage: str | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +186,21 @@ class _NoteDeadline:
                 f"写笔记超过了时间上限（{int(self.limit)} 秒，已用 {int(elapsed)} 秒，"
                 f"停在「{stage}」这一步），这次没有生成笔记。可以重试，或换一个响应更快的模型。"
             )
+
+    def out_of_time(self, stage: str, draft: str) -> bool:
+        """Whether to stop polishing and keep ``draft`` as the note.
+
+        Past the limit with a draft in hand, the draft is the note: the stages
+        after it only polish, and throwing away a finished draft because the
+        polish ran late left the user with no note at all. Past the limit with
+        no draft yet there is nothing to keep, so that still raises.
+        """
+        if time.monotonic() - self.started <= self.limit:
+            return False
+        if not (draft or "").strip():
+            self.check(stage)
+        logger.warning("note deadline passed at %s; keeping the draft (%d chars)", stage, len(draft))
+        return True
 
 
 # A revision shorter than this share of what it was revising is a lost note, not
@@ -1136,13 +1155,18 @@ def _run_chapter_coverage_mode(
     chapter_notes: list[str] = _parallel_map(_write_chapter, chapters)
 
     draft = "\n\n".join(note for note in chapter_notes if note.strip())
-    deadline.check("写各章")
-    final_note = _accept_revision(
-        draft,
-        _strip_prompt_leakage(_chat(client, model, chapter_style_system, draft, temperature=0.2)),
-        stage="style unification",
-    )
-    deadline.check("统一文风")
+    deadline_stage: str | None = None
+    if deadline.out_of_time("写各章", draft):
+        deadline_stage = "写各章"
+        final_note = draft
+    else:
+        final_note = _accept_revision(
+            draft,
+            _strip_prompt_leakage(_chat(client, model, chapter_style_system, draft, temperature=0.2)),
+            stage="style unification",
+        )
+        if deadline.out_of_time("统一文风", final_note):
+            deadline_stage = "统一文风"
 
     important_ids = {item["evidence_id"] for item in evidence if int(item.get("importance") or 0) >= 4}
     uncovered_important = sorted(important_ids - covered_ids)
@@ -1157,13 +1181,14 @@ def _run_chapter_coverage_mode(
         f"\n\n--- 证据清单 ---\n\n{_evidence_markdown(evidence)}"
         f"\n\n--- 已生成笔记 ---\n\n{final_note}"
     )
-    coverage_checked = len(coverage_input) <= max_final_input_chars
+    coverage_checked = deadline_stage is None and len(coverage_input) <= max_final_input_chars
     coverage_revision_used = False
     missing_count = len(uncovered_important)
     if coverage_checked:
         coverage = _chat(client, model, _COVERAGE_SYSTEM, coverage_input, temperature=0.1).strip()
-        if coverage and coverage != "COVERED":
-            deadline.check("覆盖率审查")
+        if coverage and coverage != "COVERED" and deadline.out_of_time("覆盖率审查", final_note):
+            deadline_stage = "覆盖率审查"
+        elif coverage and coverage != "COVERED":
             final_note = _accept_revision(
                 final_note,
                 _strip_prompt_leakage(
@@ -1211,6 +1236,8 @@ def _run_chapter_coverage_mode(
         covered_important_evidence_count=len(important_ids) - len(uncovered_important),
         coverage_missing_count=missing_count,
         chapter_coverage=chapter_coverage,
+        deadline_hit=deadline_stage is not None,
+        deadline_stage=deadline_stage,
     )
 
 
@@ -1361,15 +1388,16 @@ def summarize_transcript_with_metadata(
 
     deadline.check("整理证据")
     draft = _strip_prompt_leakage(_chat(client, m, prompt, _HIGH_FIDELITY_FINAL_WRAPPER + evidence))
-    deadline.check("写初稿")
+    deadline_stage: str | None = "写初稿" if deadline.out_of_time("写初稿", draft) else None
     coverage_input = f"--- 证据清单 ---\n\n{evidence}\n\n--- 已生成笔记 ---\n\n{draft}"
-    coverage_checked = len(coverage_input) <= max_final_input_chars
+    coverage_checked = deadline_stage is None and len(coverage_input) <= max_final_input_chars
     coverage_revision_used = False
     final_note = draft
     if coverage_checked:
         coverage = _chat(client, m, _COVERAGE_SYSTEM, coverage_input, temperature=0.1).strip()
-        if coverage and coverage != "COVERED":
-            deadline.check("覆盖率审查")
+        if coverage and coverage != "COVERED" and deadline.out_of_time("覆盖率审查", draft):
+            deadline_stage = "覆盖率审查"
+        elif coverage and coverage != "COVERED":
             final_note = _accept_revision(
                 draft,
                 _strip_prompt_leakage(
@@ -1393,6 +1421,8 @@ def summarize_transcript_with_metadata(
         chunk_count=total,
         coverage_checked=coverage_checked,
         coverage_revision_used=coverage_revision_used,
+        deadline_hit=deadline_stage is not None,
+        deadline_stage=deadline_stage,
     )
 
 

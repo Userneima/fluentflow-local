@@ -232,6 +232,7 @@ def test_a_delivery_that_cannot_be_written_is_reported_not_raised(folder, monkey
     def refuse(*_a, **_k):
         raise OSError("Read-only file system")
 
+    monkeypatch.setattr(flow.os, "link", refuse)
     monkeypatch.setattr(flow.shutil, "copyfile", refuse)
 
     prepared = flow.preprocess_media(TASK, folder / "0811-morning.mov")

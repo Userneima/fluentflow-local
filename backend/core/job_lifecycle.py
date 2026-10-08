@@ -71,6 +71,7 @@ def result_for_summary_success(
     note_mode_plan_selected_mode: str | None = None,
     prompt_preset: str | None = None,
     prompt_preset_label: str | None = None,
+    deadline_hit: bool = False,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         **base_result,
@@ -119,4 +120,6 @@ def result_for_summary_success(
         result["prompt_preset"] = prompt_preset
     if prompt_preset_label is not None:
         result["prompt_preset_label"] = prompt_preset_label
+    # Always written, so a note regenerated in time clears an earlier ``True``.
+    result["deadline_hit"] = bool(deadline_hit)
     return bind_chapter_coverage_time_ranges(result)

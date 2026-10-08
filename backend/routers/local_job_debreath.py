@@ -10,7 +10,12 @@ minutes into a background task where the only trace is a status field:
 - a task that is not ``completed``, which has no finished source to cut;
 - a source that is missing or in a container ffmpeg cannot cut here;
 - a render already in progress;
-- a transcription running or queued, which the render must not run beside.
+- a transcription running or queued, which the render must not run beside;
+- a note being written for the same task, which writes the whole result back
+  when it finishes and would overwrite the cut (or be overwritten by it);
+- a task whose transcript was made from the automatically cut file: cutting
+  that file again would leave the transcript and the note on a clock that no
+  longer matches any file.
 
 The render slot is claimed here rather than inside the worker. FastAPI runs
 background tasks after the response is sent, so two quick submissions could both
@@ -26,7 +31,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 
-from backend.core import debreath_job, silence_cuts
+from backend.core import debreath_job, silence_cuts, visual_note_job
 from backend.core.job_store import get_job
 from backend.core.request_scope import local_client_scope
 from backend.routers.local_processing import queue_is_busy
@@ -69,6 +74,27 @@ def parse_debreath_settings(body: Any) -> dict[str, float]:
 router = APIRouter()
 
 
+def note_or_transcript_conflict(job: dict[str, Any]) -> str | None:
+    """Why this finished task must not be cut now, or None.
+
+    The note and the de-breath each write the whole task result back when they
+    finish; run side by side, whichever lands second erases the other. And a
+    task transcribed from its own cut file has subtitles and a note timed to
+    that file: cutting it again moves every gap without moving them.
+    """
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    summary_status = str(result.get("summary_status") or job.get("summary_status") or "")
+    if visual_note_job.is_running(result) or summary_status == "pending":
+        return "这个任务的笔记正在写，等笔记写完再去气口，免得两边的结果互相覆盖。"
+    state = result.get("debreath") if isinstance(result.get("debreath"), dict) else {}
+    if state.get("used_for_transcription") is True and state.get("ran_before_transcription") is True:
+        return (
+            "这个任务转写时已经去过气口，再剪一次会和转写稿、笔记的时间点对不上；"
+            "请重新提交原文件。"
+        )
+    return None
+
+
 def start_local_debreath(
     request: Request,
     task_id: str,
@@ -96,6 +122,9 @@ def start_local_debreath(
         )
     if debreath_job.is_running(job.get("result")):
         raise HTTPException(status_code=409, detail="这个任务的去气口正在进行中")
+    refusal = note_or_transcript_conflict(job)
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
     if queue_is_busy():
         # The render is the memory peak of the whole product, and the serial
         # queue exists so that nothing runs beside a transcription. This entry

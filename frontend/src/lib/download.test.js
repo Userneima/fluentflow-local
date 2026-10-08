@@ -181,3 +181,145 @@ describe('a Word export', () => {
         expect(doc).toBeInstanceOf(docx.Document);
     });
 });
+
+// Bytes of an image file as far as its header goes. Exporting never decodes the
+// picture, it only copies it and reads the size the header declares.
+const pngHeader = (width, height) => {
+    const bytes = new Uint8Array(33);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(16, width);
+    view.setUint32(20, height);
+    bytes.set([8, 2, 0, 0, 0], 24);
+    return bytes;
+};
+const jpegHeader = (width, height) => new Uint8Array([
+    0xff, 0xd8,
+    0xff, 0xe0, 0x00, 0x04, 0x00, 0x00,
+    0xff, 0xc0, 0x00, 0x11, 0x08, height >> 8, height & 0xff, width >> 8, width & 0xff, 0x03,
+    0, 0, 0, 0, 0, 0, 0, 0, 0,
+]);
+
+const blobBytes = (blob) => (typeof blob.arrayBuffer === 'function'
+    ? blob.arrayBuffer()
+    : new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsArrayBuffer(blob);
+    }));
+
+// The app's screenshot endpoint, served from memory. Any other address fails.
+const serveScreenshots = (files) => {
+    const asked = [];
+    vi.stubGlobal('fetch', vi.fn(async (input) => {
+        const url = String(input);
+        asked.push(url);
+        const name = new URL(url, 'http://app.test').searchParams.get('file');
+        if (!files[name]) return new Response('missing', {status: 404});
+        return new Response(files[name], {headers: {'content-type': 'image/png'}});
+    }));
+    return asked;
+};
+
+describe('a Markdown note with screenshots', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('downloads a folder whose Markdown points at its own copies of the screenshots', async () => {
+        const shot = pngHeader(1280, 720);
+        serveScreenshots({'f_0012.png': shot, 'f_0040.png': pngHeader(720, 1280)});
+        const md = '# 讲座\n\n要点一\n\n![白板上的公式](/jobs/t1/artifacts/frame?file=f_0012.png)\n\n'
+            + '要点二 ![竖屏](/jobs/t1/artifacts/frame?file=f_0040.png)\n';
+        const out = await dlSummaryMd(md, '讲座.mp4');
+        expect(out).toMatchObject({format: 'zip', images: 2, missing: 0});
+
+        const file = await lastExport();
+        expect(file.name).toBe('讲座_summary.zip');
+        const {default: JSZip} = await import('jszip');
+        const zip = await JSZip.loadAsync(await blobBytes(saved.blob));
+        expect(Object.keys(zip.files).sort()).toEqual(['images/', 'images/f_0012.png', 'images/f_0040.png', '讲座.md']);
+
+        const note = await zip.file('讲座.md').async('string');
+        expect(note).toContain('![白板上的公式](images/f_0012.png)');
+        expect(note).toContain('要点二 ![竖屏](images/f_0040.png)');
+        expect(note).not.toContain('/jobs/');
+        // Everything other than the links is the note as written.
+        expect(note.replace(/images\/f_00(12|40)\.png/g, 'X')).toBe(
+            md.replace(/\/jobs\/t1\/artifacts\/frame\?file=f_00(12|40)\.png/g, 'X'),
+        );
+        expect(new Uint8Array(await zip.file('images/f_0012.png').async('uint8array'))).toEqual(shot);
+    });
+
+    it('keeps a full address for a screenshot it could not fetch and says how many', async () => {
+        serveScreenshots({'ok.png': pngHeader(10, 10)});
+        const md = '![有](/jobs/t1/artifacts/frame?file=ok.png)\n![没有](/jobs/t1/artifacts/frame?file=gone.png)\n';
+        const out = await dlSummaryMd(md, '讲座');
+        expect(out).toMatchObject({format: 'zip', images: 1, missing: 1});
+
+        const {default: JSZip} = await import('jszip');
+        const zip = await JSZip.loadAsync(await blobBytes(saved.blob));
+        const note = await zip.file('讲座.md').async('string');
+        expect(note).toContain('![有](images/ok.png)');
+        // Not the bare app path, which resolves nowhere outside the app.
+        expect(note).toMatch(/!\[没有\]\(https?:\/\/[^)]+\/jobs\/t1\/artifacts\/frame\?file=gone\.png\)/);
+    });
+
+    it('stays a single .md file when the only images are on the web', async () => {
+        const asked = serveScreenshots({});
+        const md = '# 笔记\n\n![图](https://example.com/a.png)\n';
+        const out = await dlSummaryMd(md, '讲座');
+        expect(out.format).toBe('md');
+        const file = await lastExport();
+        expect(file.name).toBe('讲座_summary.md');
+        expect(file.text).toBe(md);
+        expect(asked).toEqual([]);
+    });
+});
+
+describe('screenshots in a Word export', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    // The drawn size of every picture in the document, in pixels (EMU / 9525).
+    const drawnSizes = async (md) => {
+        const docx = await import('docx');
+        const doc = await buildSummaryDocxDocument(md);
+        const buffer = await docx.Packer.toBuffer(doc);
+        const {default: JSZip} = await import('jszip');
+        const xml = await (await JSZip.loadAsync(buffer)).file('word/document.xml').async('string');
+        return [...xml.matchAll(/<wp:extent cx="(\d+)" cy="(\d+)"/g)]
+            .map(([, cx, cy]) => ({width: Math.round(cx / 9525), height: Math.round(cy / 9525)}));
+    };
+
+    it('keeps each screenshot at its own proportions instead of squashing it into 16:9', async () => {
+        serveScreenshots({
+            'wide.png': pngHeader(1920, 1080),
+            'tall.png': pngHeader(720, 1280),
+            'square.png': pngHeader(800, 800),
+        });
+        const sizes = await drawnSizes([
+            '![横屏](/jobs/t1/artifacts/frame?file=wide.png)',
+            '![竖屏](/jobs/t1/artifacts/frame?file=tall.png)',
+            '![方形](/jobs/t1/artifacts/frame?file=square.png)',
+        ].join('\n\n'));
+        expect(sizes).toHaveLength(3);
+        const [wide, tall, square] = sizes;
+        expect(wide).toEqual({width: 480, height: 270});
+        expect(square).toEqual({width: 480, height: 480});
+        // A portrait frame keeps its shape and is held to a page-friendly height.
+        expect(tall.height / tall.width).toBeCloseTo(1280 / 720, 2);
+        expect(tall.height).toBeLessThanOrEqual(640);
+    });
+
+    it('reads the size from JPEG and PNG headers', () => {
+        expect(download.imagePixelSize(jpegHeader(1080, 1920))).toEqual({width: 1080, height: 1920});
+        expect(download.imagePixelSize(pngHeader(1280, 720))).toEqual({width: 1280, height: 720});
+        expect(download.imagePixelSize(new Uint8Array([1, 2, 3]))).toBeNull();
+    });
+
+    it('falls back to the 16:9 box when the size cannot be read', () => {
+        expect(download.docxImageSize(null)).toEqual({width: 480, height: 270});
+    });
+});

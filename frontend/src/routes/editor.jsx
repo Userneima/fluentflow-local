@@ -55,7 +55,7 @@ import {useApp} from '../app/AppContext.jsx';
 import {larkExportToastText} from '../lib/format.js';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import {usePromptEditing} from '../lib/usePromptEditing.js';
-import {noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
+import {notePromptScopeSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
@@ -81,6 +81,10 @@ import {
     mergeNoteFields,
     regenerateDialogCopy,
     visualNoteStartErrorMessage,
+    transcriptFromCutFile,
+    subtitleDownloadName,
+    transcriptDownloadLabels,
+    markdownDownloadMessage,
 } from './editor-helpers.js';
 
 // The records worth showing: a changed sentence whose current text is still the
@@ -563,6 +567,11 @@ const Editor = () => {
     const summaryFailureHint = summaryFailureNextStep(result, lang);
     const resultTitle = resultDisplayTitle(result, {name: t('edit.title')});
     const resultDownloadName = resultTitle || result?.filename;
+    // Subtitles follow the transcript's clock; when that is the cut file's, the
+    // file names and the menu say so (editor-helpers.js transcriptFromCutFile).
+    const subtitleName = subtitleDownloadName(resultDownloadName, result);
+    const downloadLabels = transcriptDownloadLabels(result, t, lang);
+    const cutMediaArtifact = transcriptFromCutFile(result) ? (result?.artifacts?.debreath_media || null) : null;
     const rawEditorTitle = resultTitle || result?.filename || t('edit.title');
     const agentWorkflowHref = result?.task_id ? `/tasks/${encodeURIComponent(result.task_id)}/agent` : '/agent';
     const playbackDuration = mediaDuration || durSec || 0;
@@ -1237,7 +1246,7 @@ const Editor = () => {
     // directory — the owner of a finished task could not find the file precisely
     // because the old copy described a filesystem instead of giving it to them.
     const handleDownloadCutFile = async () => {
-        const artifact = cutFlow?.mediaArtifact;
+        const artifact = cutFlow?.mediaArtifact || cutMediaArtifact;
         if (!artifact || !result?.task_id) return;
         const name = String(artifact.filename || '').split('/').pop()
             || `${resultDownloadName || result.filename || 'media'}_debreath.mp4`;
@@ -1398,6 +1407,7 @@ const Editor = () => {
                         <button
                             type="button"
                             onClick={()=>promptEditing.setPromptOpen(true)}
+                            title={notePromptScopeSentence(noteWriter, lang) || undefined}
                             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
                         >
                             <SvgIcon name="tune" className="text-[17px]"/>
@@ -1461,6 +1471,7 @@ const Editor = () => {
                     t={t}
                     lang={lang}
                     settings={loadSettings()}
+                    scopeNote={notePromptScopeSentence(noteWriter, lang)}
                     {...promptEditing.dialogProps}
                 />
 
@@ -1574,11 +1585,12 @@ const Editor = () => {
                                                 }
                                                 items={[
                                                     {icon:'description', label:t('dl.txt'), badge:'TXT', onClick:()=>{dlTranscriptTxt(transcript,resultDownloadName); recordDownload('transcript_downloaded','txt'); showToast(t('dl.success'));}},
-                                                    {icon:'subtitles', label:t('dl.srt'), badge:'SRT', disabled:segments.length===0, onClick:()=>{dlTranscriptSrt(segments,resultDownloadName); recordDownload('transcript_downloaded','srt'); showToast(t('dl.success'));}},
-                                                    {icon:'closed_caption', label:t('dl.vtt'), badge:'VTT', disabled:segments.length===0, onClick:()=>{dlTranscriptVtt(segments,resultDownloadName); recordDownload('transcript_downloaded','vtt'); showToast(t('dl.success'));}},
-                                                    {icon:'translate', label:t('dl.bilingualSrt'), badge:'双语 SRT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptSrt(bilingualTranscriptSegments,null,resultDownloadName); recordDownload('transcript_downloaded','bilingual_srt'); showToast(t('dl.success'));}},
-                                                    {icon:'translate', label:t('dl.bilingualVtt'), badge:'双语 VTT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptVtt(bilingualTranscriptSegments,null,resultDownloadName); recordDownload('transcript_downloaded','bilingual_vtt'); showToast(t('dl.success'));}},
-                                                    {icon:'video', label:t('dl.sourceVideo'), badge:'MP4', disabled:!canDownloadSourceVideo || downloading === 'source_video', onClick:handleDownloadSourceVideo},
+                                                    {icon:'subtitles', label:downloadLabels.srt, badge:'SRT', disabled:segments.length===0, onClick:()=>{dlTranscriptSrt(segments,subtitleName); recordDownload('transcript_downloaded','srt'); showToast(t('dl.success'));}},
+                                                    {icon:'closed_caption', label:downloadLabels.vtt, badge:'VTT', disabled:segments.length===0, onClick:()=>{dlTranscriptVtt(segments,subtitleName); recordDownload('transcript_downloaded','vtt'); showToast(t('dl.success'));}},
+                                                    {icon:'translate', label:downloadLabels.bilingualSrt, badge:'双语 SRT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptSrt(bilingualTranscriptSegments,null,subtitleName); recordDownload('transcript_downloaded','bilingual_srt'); showToast(t('dl.success'));}},
+                                                    {icon:'translate', label:downloadLabels.bilingualVtt, badge:'双语 VTT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptVtt(bilingualTranscriptSegments,null,subtitleName); recordDownload('transcript_downloaded','bilingual_vtt'); showToast(t('dl.success'));}},
+                                                    ...(downloadLabels.cutVideo ? [{icon:'video', label:downloadLabels.cutVideo, badge:'MP4', disabled:!cutMediaArtifact, onClick:handleDownloadCutFile}] : []),
+                                                    {icon:'video', label:downloadLabels.sourceVideo, badge:'MP4', disabled:!canDownloadSourceVideo || downloading === 'source_video', onClick:handleDownloadSourceVideo},
                                                 ]}
                                             />
                                         </div>
@@ -1866,7 +1878,13 @@ const Editor = () => {
                                             }
                                             items={[
                                                 {icon:'description', label:t('dl.txt'), badge:'TXT', disabled:!summary, onClick:()=>{dlSummaryTxt(summary,resultDownloadName); recordDownload('summary_downloaded','txt'); showToast(t('dl.success'));}},
-                                                {icon:'markdown', label:t('dl.md'), badge:'MD', disabled:!summary, onClick:()=>{dlSummaryMd(summary,resultDownloadName); recordDownload('summary_downloaded','md'); showToast(t('dl.success'));}},
+                                                {icon:'markdown', label:t('dl.md'), badge:'MD', disabled:!summary, onClick:async()=>{
+                                                    try{
+                                                        const out = await dlSummaryMd(summary,resultDownloadName);
+                                                        recordDownload('summary_downloaded', out?.format === 'zip' ? 'md_zip' : 'md');
+                                                        showToast(markdownDownloadMessage(out, lang) || t('dl.success'), !out?.missing);
+                                                    }catch(e){showToast(e.message,false);}
+                                                }},
                                                 {divider:true},
                                                 {icon:'picture_as_pdf', label:t('dl.pdf'), badge:'PDF', disabled:!summary, onClick:async()=>{
                                                     setDownloading('pdf');

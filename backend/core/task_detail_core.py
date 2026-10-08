@@ -471,6 +471,15 @@ def _apply_result_overrides(
         statuses["note_generation"] = "completed"
     elif result.get("summary_error") or result.get("summary_status") == "failed":
         statuses["note_generation"] = "failed"
+    elif (
+        "note_generation" in statuses
+        and _text(job.get("status")) == "completed"
+        and _text(result.get("summary_status") or job.get("summary_status")) in {"pending", "running"}
+    ):
+        # The transcript is done and stored (the task reads as completed), but
+        # the note is written after it, on its own: until it lands this step is
+        # still in progress, not finished with nothing in it.
+        statuses["note_generation"] = "running"
     if result.get("artifacts"):
         statuses["result_save"] = "completed"
     if result.get("lark_response"):

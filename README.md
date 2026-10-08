@@ -184,6 +184,19 @@ FluentFlow Local 自带一个 MCP 服务（让 AI 工具直接调用本应用的
 2. 在应用左下角「菜单 → Agent 接入」里填入同一串字符，页面会生成可以直接复制的 Claude Code
    和 Codex 配置。
 
+## 在同一局域网的其他设备上打开
+
+默认只有这台电脑能打开 FluentFlow Local，桌面图标启动时也只监听本机。要让同一网络的其他设备打开，
+在 `.env` 里加一行 `FLUENTFLOW_ALLOW_NON_LOOPBACK=1`，然后在仓库目录手动启动：
+
+```bash
+.venv/bin/python -m uvicorn backend.local_main:app --host 0.0.0.0 --port 8000
+```
+
+其他设备用这台电脑的 IP 地址（例如 `http://192.168.1.5:8000`）打开页面，只能查看。要在其他设备上
+提交和修改，再按上一节设置 `FLUENTFLOW_ACCESS_TOKEN`，并在那台设备的「菜单 → Agent 接入」里填入
+同一串字符。
+
 ## 更新到新版本
 
 ```bash

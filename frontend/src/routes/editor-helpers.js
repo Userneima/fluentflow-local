@@ -58,6 +58,60 @@ export const cutFlowSummary = (result) => {
     };
 };
 
+// Whether the transcript, and so every subtitle file made from it, runs on the
+// cut file's clock. Then the subtitles line up with the cut video and drift
+// further and further ahead of the original recording, so the download menu has
+// to say which video they belong to.
+export const transcriptFromCutFile = (result) => result?.transcript_media === 'debreath_media';
+
+// The subtitle file name for such a transcript carries the version it fits.
+export const CUT_SUBTITLE_SUFFIX = '_剪后版';
+export const subtitleDownloadName = (name, result) => (
+    transcriptFromCutFile(result) ? `${String(name || 'FluentFlow')}${CUT_SUBTITLE_SUFFIX}` : name
+);
+
+// The menu labels for subtitle and video downloads. For a transcript taken from
+// the cut file, subtitles are named as the cut version's, the cut video is offered
+// beside them, and the original is marked as not matching.
+export const transcriptDownloadLabels = (result, t, lang = 'zh') => {
+    const zh = lang === 'zh';
+    if (!transcriptFromCutFile(result)) {
+        return {
+            srt: t('dl.srt'),
+            vtt: t('dl.vtt'),
+            bilingualSrt: t('dl.bilingualSrt'),
+            bilingualVtt: t('dl.bilingualVtt'),
+            sourceVideo: t('dl.sourceVideo'),
+            cutVideo: null,
+        };
+    }
+    const tag = zh ? '（对应剪后视频）' : ' (matches the cut video)';
+    return {
+        srt: `${t('dl.srt')}${tag}`,
+        vtt: `${t('dl.vtt')}${tag}`,
+        bilingualSrt: `${t('dl.bilingualSrt')}${tag}`,
+        bilingualVtt: `${t('dl.bilingualVtt')}${tag}`,
+        sourceVideo: zh ? '原视频（未剪，与字幕时间对不上）' : 'Original video (uncut, subtitles do not match)',
+        cutVideo: zh ? '剪后视频（与字幕对齐）' : 'Cut video (matches the subtitles)',
+    };
+};
+
+// The toast after a Markdown download, when there is something to say beyond
+// "started": the note went out as a folder with its screenshots, or some
+// screenshots could not be fetched. Null leaves the ordinary message.
+export const markdownDownloadMessage = (out, lang = 'zh') => {
+    const zh = lang === 'zh';
+    if (!out || out.format !== 'zip') return null;
+    if (out.missing > 0) {
+        return zh
+            ? `已下载压缩包，其中 ${out.missing} 张截图没取到，这几处仍指向本应用的地址`
+            : `Downloaded as a .zip; ${out.missing} screenshot(s) could not be fetched and still point at this app`;
+    }
+    return zh
+        ? '已下载压缩包：解压后 Markdown 和 images 文件夹放在一起即可显示截图'
+        : 'Downloaded as a .zip: keep the Markdown file next to its images folder and the screenshots show';
+};
+
 // Which stored file the player should load: the one this transcript belongs to.
 //
 // Not a preference. The transcript's timestamps drive every seek, every

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import functools
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -35,7 +36,14 @@ from backend.core.local_entry_guards import (
     local_ai_kwargs,
     run_worker_with_terminal_state,
 )
-from backend.core import claude_code_note, local_file_chooser, local_folder_intake, local_intake_flow, visual_note_channel
+from backend.core import (
+    claude_code_note,
+    local_file_chooser,
+    local_folder_intake,
+    local_intake_flow,
+    visual_note_channel,
+    visual_note_job,
+)
 from backend.core.local_config import resolve_secret
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.core.local_limits_config import (
@@ -310,10 +318,53 @@ def _queue_tail_record(task_id: Optional[str], done: asyncio.Event) -> None:
     Trimming matters: the list is process-local and an archive run puts hundreds
     of jobs through it.
     """
-    _QUEUE_RECENT.append({"task_id": task_id, "event": done})
+    link = {"task_id": task_id, "event": done}
+    _QUEUE_RECENT.append(link)
     keep = max(QUEUE_CONCURRENCY, 1) + 1
     if len(_QUEUE_RECENT) > keep:
         del _QUEUE_RECENT[:-keep]
+    _QUEUE_LINE[:] = [item for item in _QUEUE_LINE if not item["event"].is_set()]
+    _QUEUE_LINE.append(link)
+
+
+def _queue_tail_forget(done: asyncio.Event) -> None:
+    """Take back a link whose runner never started."""
+    _QUEUE_RECENT[:] = [link for link in _QUEUE_RECENT if link["event"] is not done]
+    _QUEUE_LINE[:] = [link for link in _QUEUE_LINE if link["event"] is not done]
+
+
+# Every job still holding a place in line, oldest first: the one working and
+# the ones waiting behind it. ``_QUEUE_RECENT`` is trimmed to what a waiter needs
+# and cannot say how long the line is; this can, and is pruned as jobs release.
+_QUEUE_LINE: list[dict[str, Any]] = []
+
+
+def queue_place(task_id: str) -> tuple[int, int]:
+    """Where this job stands in the live line: (its place, how many are in line).
+
+    Place 1 is the job working now. A job not in line (already finished, or
+    never queued) answers (0, line length).
+    """
+    _QUEUE_LINE[:] = [
+        link for link in _QUEUE_LINE
+        if not link["event"].is_set() and JOB_EVENTS.is_running(str(link["task_id"]))
+    ]
+    for place, link in enumerate(_QUEUE_LINE, start=1):
+        if link["task_id"] == task_id:
+            return place, len(_QUEUE_LINE)
+    return 0, len(_QUEUE_LINE)
+
+
+def _with_queue_place(item: dict[str, Any]) -> dict[str, Any]:
+    """The submit answer's position, read from the live line, not the batch."""
+    task_id = item.get("task_id")
+    if not task_id:
+        return item
+    place, line = queue_place(str(task_id))
+    if place:
+        item["queue_position"] = place
+        item["queue_total"] = line
+    return item
 
 
 def queue_is_busy() -> bool:
@@ -390,6 +441,76 @@ async def wait_for_queue_turn(
     )
 
 
+# How many notes may wait on the remote model at once. That wait does not hold
+# the queue (see `_run_serially`); this only stops a long batch from opening a
+# Claude session per finished task. A thread semaphore because the wait happens
+# in the note's worker thread, not on the event loop.
+NOTE_CONCURRENCY = 2
+_NOTE_REMOTE_SLOTS = threading.BoundedSemaphore(NOTE_CONCURRENCY)
+
+# Notes run on their own threads, never in the event loop's default executor.
+# A note thread spends minutes blocked (on a slot above, then on Claude), and
+# the default executor is the one every upload, preflight and store write goes
+# through: a batch of short recordings used to park a note thread there per
+# finished task until uploads and the pipeline itself waited for a free thread.
+# The few spare threads past NOTE_CONCURRENCY let that many finished recordings
+# pick their frames and wait for a slot while the queue moves on; past that the
+# next note waits for a thread, which holds the queue (its frame work is queue
+# work) rather than piling up more blocked threads.
+NOTE_WAITING_AHEAD = 4
+_NOTE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=NOTE_CONCURRENCY + NOTE_WAITING_AHEAD, thread_name_prefix="fluentflow-note",
+)
+# How often a thread waiting for a slot checks whether its task was cancelled.
+_NOTE_SLOT_POLL_SECONDS = 0.25
+
+
+class NoteAbandoned(visual_note_job.VisualNoteError):
+    """The task was cancelled before its note got to Claude."""
+
+
+def _write_note_holding_slot(
+    task_id: str,
+    client_id: Optional[str],
+    release_queue: Any,
+    abandoned: threading.Event,
+) -> None:
+    """Write the note on this thread, holding a remote slot from the hand-off on.
+
+    The thread owns the slot from acquire to release. The coroutine that
+    started it can be cancelled at any point, but the thread runs on: releasing
+    from the coroutine freed a slot that a running Claude request still used,
+    and a coroutine cancelled while the thread was still waiting never saw the
+    slot it would later take, so it was never given back.
+    """
+    slots = _NOTE_REMOTE_SLOTS
+    holding = False
+
+    def hand_off() -> None:
+        nonlocal holding
+        if release_queue is not None:
+            release_queue()
+        while not slots.acquire(timeout=_NOTE_SLOT_POLL_SECONDS):
+            if abandoned.is_set():
+                raise NoteAbandoned("任务已取消，笔记没有写。")
+        holding = True
+        if abandoned.is_set():
+            raise NoteAbandoned("任务已取消，笔记没有写。")
+
+    try:
+        local_intake_flow.write_note(task_id, client_id, on_local_work_done=hand_off)
+    except NoteAbandoned as exc:
+        # The frame note records this itself; the text-note path lets it through.
+        local_intake_flow._patch_result(task_id, client_id, {
+            "summary_status": "failed",
+            "summary_error": f"{exc}",
+            "summary_skipped": False,
+        })
+    finally:
+        if holding:
+            slots.release()
+
+
 async def _write_note_after_transcript(
     task_id: str,
     client_id: Optional[str],
@@ -403,6 +524,9 @@ async def _write_note_after_transcript(
     visible to the user as a task that is finished and readable while its note is
     still being written, which is why the result is marked accordingly first.
 
+    ``on_local_work_done`` is called from the note thread once the note no longer
+    uses this machine; the note then waits for one of NOTE_CONCURRENCY slots.
+
     Never raises: the transcript and the cut file are already the user's, and a
     note failure must not take them away. `write_note` records the reason where the
     note belongs.
@@ -410,17 +534,19 @@ async def _write_note_after_transcript(
     if not local_intake_flow.note_is_wanted(task_id, client_id):
         return
     local_intake_flow.mark_note_running(task_id, client_id)
-    await asyncio.to_thread(
-        local_intake_flow.write_note, task_id, client_id, on_local_work_done=on_local_work_done,
+    abandoned = threading.Event()
+    future = asyncio.get_running_loop().run_in_executor(
+        _NOTE_EXECUTOR,
+        functools.partial(_write_note_holding_slot, task_id, client_id, on_local_work_done, abandoned),
     )
-
-
-# How many notes may wait on the remote model at once. That wait does not hold
-# the queue (see `_run_serially`); this only stops a long batch from opening a
-# Claude session per finished task. A thread semaphore because the wait happens
-# in the note's worker thread, not on the event loop.
-NOTE_CONCURRENCY = 2
-_NOTE_REMOTE_SLOTS = threading.BoundedSemaphore(NOTE_CONCURRENCY)
+    try:
+        await future
+    except asyncio.CancelledError:
+        # A note not yet started is dropped with the future; one that has
+        # started gives up at the slot instead of calling Claude for a task
+        # nobody wants any more, and releases what it holds itself.
+        abandoned.set()
+        raise
 
 
 async def _run_pipeline(ctx: MediaJobContext) -> None:
@@ -458,13 +584,10 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
     side on this machine was measured slower than running them in turn.
     """
     loop = asyncio.get_running_loop()
-    holding = {"slot": False}
 
     def hand_off() -> None:
         # Called from the note's worker thread, once its frames are on disk.
         loop.call_soon_threadsafe(done.set)
-        _NOTE_REMOTE_SLOTS.acquire()
-        holding["slot"] = True
 
     try:
         await _run_pipeline(ctx)
@@ -474,10 +597,9 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
         await _export_note_written_after_pipeline(ctx)
     finally:
         # Always release the chain — including when this job is cancelled, and
-        # when the note ended before reaching its hand-off.
+        # when the note ended before reaching its hand-off. The remote slot is
+        # not released here: the note thread owns it (`_write_note_holding_slot`).
         done.set()
-        if holding["slot"]:
-            _NOTE_REMOTE_SLOTS.release()
 
 
 async def _export_note_written_after_pipeline(ctx: MediaJobContext) -> None:
@@ -564,6 +686,9 @@ async def _start_behind_queue(
     ``wait_for_queue_turn(previous, ...)`` before the expensive part and set
     ``done`` when it is over, however it ends.
     """
+    # Barrier and record happen together, before the first await, so two
+    # submissions arriving at once cannot both take the same job as the one
+    # they wait for.
     previous = _queue_tail_barrier()
     done = asyncio.Event()
     _queue_tail_record(task_id, done)
@@ -581,15 +706,51 @@ async def _start_behind_queue(
         ),
     )
     if not started:
-        # Nothing will run that worker, so nothing will run its ``finally``.
-        # Release the chain here rather than leaving the next upload behind a
-        # barrier that has no one left to lift it.
-        done.set()
+        # Nothing will run that worker (this task id is already running), so
+        # nothing will run its ``finally``. The link comes off the chain, so the
+        # next submission waits behind the job that really is working. A
+        # submission that already took this link as its barrier while the start
+        # was pending is released only when the job ahead of this one is: setting
+        # ``done`` now told it the line was empty while that job still ran.
+        _queue_tail_forget(done)
+        if previous is None:
+            done.set()
+        else:
+            _hold_link_until_released(previous, done)
     return started
+
+
+_LINK_RELAYS: set[asyncio.Task[None]] = set()
+
+
+def _hold_link_until_released(
+    previous: tuple[Optional[str], asyncio.Event], done: asyncio.Event
+) -> None:
+    """Set ``done`` once the job ahead releases the chain or is gone."""
+
+    async def relay() -> None:
+        previous_id, previous_event = previous
+        try:
+            while not previous_event.is_set():
+                try:
+                    await asyncio.wait_for(previous_event.wait(), _QUEUE_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    if previous_event.is_set():
+                        break
+                    if previous_id and await JOB_EVENTS.has_running_task(previous_id):
+                        continue
+                    break
+        finally:
+            done.set()
+
+    task = asyncio.get_running_loop().create_task(relay())
+    _LINK_RELAYS.add(task)
+    task.add_done_callback(_LINK_RELAYS.discard)
 
 
 async def start_media_job_behind_queue(ctx: MediaJobContext, *, route: str) -> bool:
     """The pipeline and then its note, behind every job already queued."""
+    ctx.event_route = route
     return await _start_behind_queue(
         task_id=ctx.task_id_value,
         client_id=ctx.client_id,
@@ -1081,7 +1242,7 @@ async def queue_process(
             "queue_position": index,
             "queue_total": total,
         })
-    return {"ok": True, "queued": queued, "count": len(queued)}
+    return {"ok": True, "queued": [_with_queue_place(item) for item in queued], "count": len(queued)}
 
 
 async def queue_local_media_file(
@@ -1165,13 +1326,13 @@ async def queue_local_media_file(
         duration_limit_seconds=duration_limit_seconds,
     )
     await start_media_job_behind_queue(ctx, route=route)
-    return {
+    return _with_queue_place({
         "task_id": task_id_value,
         "filename": source_path.name,
         "status": "queued",
         "queue_position": index,
         "queue_total": total,
-    }
+    })
 
 
 def _option_default_on(payload: dict, key: str) -> str:
@@ -1375,7 +1536,7 @@ async def queue_process_local_files(request: Request, payload: dict = Body(...))
             index=index,
             total=len(resolved),
         ))
-    return {"ok": True, "queued": queued, "count": len(queued)}
+    return {"ok": True, "queued": [_with_queue_place(item) for item in queued], "count": len(queued)}
 
 
 @router.post("/queue/process-folder")
@@ -1415,7 +1576,7 @@ async def queue_process_folder(request: Request, payload: dict = Body(...)) -> d
             index=index,
             total=len(listing.files),
         ))
-    return {"ok": True, **described, "queued": queued, "count": len(queued)}
+    return {"ok": True, **described, "queued": [_with_queue_place(item) for item in queued], "count": len(queued)}
 
 
 def _in_place_origin(job: dict) -> Optional[dict]:

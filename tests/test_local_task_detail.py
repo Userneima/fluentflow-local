@@ -97,3 +97,37 @@ def test_a_by_path_task_is_retryable_while_its_file_is_where_it_was(tmp_path, mo
     assert policy.is_source_retryable(job) is False
     original.write_bytes(b"video")
     assert policy.is_source_retryable(job) is True
+
+
+def test_a_finished_transcript_whose_note_is_still_being_written_shows_the_note_step_in_progress():
+    """Requirement: while the note is still being written after the transcript,
+    the task's steps say the note is in progress, not done."""
+    snapshot = build_task_snapshot(
+        {
+            "task_id": "local-note-pending",
+            "status": "completed",
+            "stage": "note",
+            "summary_status": "pending",
+            "source_type": "video",
+            "result": {"transcript_text": "Transcript", "summary_status": "pending", "summary_skipped": False},
+        }
+    )
+
+    assert snapshot["step_statuses"]["note_generation"] == "running"
+    assert snapshot["step_statuses"]["transcription"] == "completed"
+    assert snapshot["current_step"] == "note_generation"
+
+
+def test_the_note_step_is_done_once_the_note_is_there():
+    """Requirement: once the note lands, the step reads as completed."""
+    snapshot = build_task_snapshot(
+        {
+            "task_id": "local-note-done",
+            "status": "completed",
+            "summary_status": "completed",
+            "source_type": "video",
+            "result": {"transcript_text": "Transcript", "summary_markdown": "# Note", "summary_status": "completed"},
+        }
+    )
+
+    assert snapshot["step_statuses"]["note_generation"] == "completed"

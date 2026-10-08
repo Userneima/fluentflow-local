@@ -99,6 +99,15 @@ def _stt_realtime_factor(
     return max(round(stt_elapsed_seconds / duration_seconds, 4), 0.0001)
 
 
+def _transcribed_total(duration_estimate_sec: float | None, transcription: Any) -> float | None:
+    """How much of the recording a finished transcription covered: all of it."""
+    total = duration_estimate_sec or getattr(transcription, "duration", None)
+    try:
+        return round(float(total), 1) if total else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _summary_result_metadata(summary_result: Any) -> dict[str, Any]:
     return {
         "resolved_note_mode": getattr(summary_result, "resolved_mode", None),
@@ -112,6 +121,7 @@ def _summary_result_metadata(summary_result: Any) -> dict[str, Any]:
         "note_mode_important_evidence_count": getattr(summary_result, "important_evidence_count", None),
         "note_mode_covered_important_evidence_count": getattr(summary_result, "covered_important_evidence_count", None),
         "note_mode_coverage_missing_count": getattr(summary_result, "coverage_missing_count", None),
+        "deadline_hit": bool(getattr(summary_result, "deadline_hit", False)),
     }
 
 
@@ -311,6 +321,9 @@ class MediaJobContext:
     # Why the pipeline's own note stage is off: the user asked for a transcript
     # only, or the note will be written from the frames after the transcript.
     note_deferred_to_visual_note: bool = False
+    # The entry that started this job, written on every event it logs. Without
+    # it every upload, batch, folder, retry and link read as "/process".
+    event_route: str = "/process"
 
 
 def _finalize_result_storage(ctx: MediaJobContext, result: dict[str, Any]) -> dict[str, Any]:
@@ -327,6 +340,7 @@ def _enforce_history_retention(ctx: MediaJobContext) -> None:
 async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     """Run the full media pipeline for one job, yielding SSE chunks. No FastAPI Request."""
     task_id_value = ctx.task_id_value
+    event_route = ctx.event_route or "/process"
     source_type = ctx.source_type
     source_filename = ctx.source_filename
     raw_title_value = ctx.raw_title_value
@@ -475,7 +489,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             duration_seconds=round(audio_elapsed_sec, 3),
             success=True,
             metadata=event_metadata(
-                route="/process",
+                route=event_route,
                 stt_provider=stt_provider_value,
                 stt_provider_label=stt_provider_label(stt_provider_value),
                 audio_output_format=audio_output_format,
@@ -625,6 +639,12 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 "stt_provider": stt_provider_value,
                 "stt_provider_label": stt_provider_label(stt_provider_value),
                 "stt_progress": 1,
+                # Written here as well as in the progress loop: the loop only
+                # writes every few seconds, so a short file finished with the
+                # row still saying "preparing_audio" and 0 seconds transcribed.
+                "stt_status": "done",
+                "transcribed_seconds": _transcribed_total(duration_estimate_sec, stt_result),
+                "stt_elapsed_seconds": round(stt_elapsed_sec, 1),
                 "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
             },
         )
@@ -654,7 +674,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             success=True,
             metadata=event_metadata(
                 **runtime_context_metadata(),
-                route="/process",
+                route=event_route,
                 source_fingerprint=source_fingerprint,
                 stt_provider=stt_provider_value,
                 stt_provider_label=stt_provider_label(stt_provider_value),
@@ -745,7 +765,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                     success=bool(bilingual_segments),
                     error_reason=translation_error,
                     metadata=event_metadata(
-                        route="/process",
+                        route=event_route,
                         source_language=source_language,
                         bilingual_segment_count=len(bilingual_segments),
                         translated_segment_count=len([segment for segment in bilingual_segments if segment.get("text_zh")]),
@@ -768,7 +788,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                     duration_seconds=round(time.perf_counter() - translation_started_at, 3),
                     success=False,
                     error_reason=translation_error,
-                    metadata=event_metadata(route="/process", source_language=source_language, raw_error=str(exc)),
+                    metadata=event_metadata(route=event_route, source_language=source_language, raw_error=str(exc)),
                 )
         base_result.update({
             "task_id": task_id_value,
@@ -812,7 +832,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             correction_fields, note_transcript_text, note_segments_payload = await _run_transcript_correction_stage(
                 loop=loop,
                 task_id=task_id_value,
-                route="/process",
+                route=event_route,
                 source_type=source_type,
                 source_filename=source_filename,
                 source_duration_seconds=round(duration_sec, 1),
@@ -856,7 +876,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             transcript_length=_text_len(transcript_text),
             stage="transcript_ready",
             success=True,
-            metadata=event_metadata(route="/process", source_fingerprint=source_fingerprint),
+            metadata=event_metadata(route=event_route, source_fingerprint=source_fingerprint),
         )
         upsert_job(
             task_id=task_id_value,
@@ -885,7 +905,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 stage="summary",
                 success=True,
                 metadata=event_metadata(
-                    route="/process",
+                    route=event_route,
                     reason=(
                         "deferred_to_visual_note"
                         if ctx.note_deferred_to_visual_note
@@ -1042,7 +1062,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 duration_seconds=round(time.perf_counter() - summary_started_at, 3),
                 success=True,
                 metadata=event_metadata(
-                    route="/process",
+                    route=event_route,
                     ai_provider=(ai_provider or "").strip() or None,
                     ai_model=(ai_model or "").strip() or None,
                     requested_note_mode=note_mode_plan.get("requested_note_mode") or (summary_result.requested_mode if summary_result is not None else None),
@@ -1075,7 +1095,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 success=False,
                 error_reason=summary_error,
                 metadata=event_metadata(
-                    route="/process",
+                    route=event_route,
                     ai_provider=(ai_provider or "").strip() or None,
                     ai_model=(ai_model or "").strip() or None,
                     requested_note_mode=note_mode_plan.get("requested_note_mode") or (note_mode or "").strip() or None,
@@ -1145,6 +1165,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             note_mode_plan_selected_mode=note_mode_plan.get("note_mode_plan_selected_mode"),
             prompt_preset=(prompt_preset or "").strip() or None,
             prompt_preset_label=(prompt_preset_label or "").strip() or None,
+            deadline_hit=bool(getattr(summary_result, "deadline_hit", False)),
         )
         if visual_requests:
             result["visual_requests"] = visual_requests

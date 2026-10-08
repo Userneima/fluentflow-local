@@ -1610,6 +1610,10 @@ def render_keeps(
         # reject it.
         if out.suffix.lower() in {".mp4", ".m4a", ".mov", ".m4v"}:
             concat += ["-movflags", "+faststart"]
+        # Unlinked rather than overwritten: the cut file may be hard-linked to
+        # the copy delivered beside the user's recording, and ffmpeg's ``-y``
+        # truncates in place, which would rewrite the user's copy too.
+        out.unlink(missing_ok=True)
         result = runner([*concat, "-y", str(out)])
         if result.returncode != 0 or not out.is_file():
             raise SilenceCutError(f"concat failed: {(result.stderr or '')[-300:]}")

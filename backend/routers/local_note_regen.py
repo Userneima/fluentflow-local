@@ -80,6 +80,7 @@ def _summary_result_metadata(summary_result: Any) -> dict[str, Any]:
         "note_mode_important_evidence_count": getattr(summary_result, "important_evidence_count", None),
         "note_mode_covered_important_evidence_count": getattr(summary_result, "covered_important_evidence_count", None),
         "note_mode_coverage_missing_count": getattr(summary_result, "coverage_missing_count", None),
+        "deadline_hit": bool(getattr(summary_result, "deadline_hit", False)),
     }
 
 
@@ -185,6 +186,7 @@ async def regenerate_summary(
             "note_mode_covered_important_evidence_count": getattr(summary_result, "covered_important_evidence_count", None),
             "note_mode_coverage_missing_count": getattr(summary_result, "coverage_missing_count", None),
             "chapter_coverage": getattr(summary_result, "chapter_coverage", None),
+            "deadline_hit": bool(getattr(summary_result, "deadline_hit", False)),
             "prompt_preset": (prompt_preset or "").strip() or None,
             "prompt_preset_label": (prompt_preset_label or "").strip() or None,
             "regenerated_from_task_id": regenerated_from_task_id,
@@ -717,6 +719,7 @@ async def summarize_transcript_source(
         chapter_coverage=getattr(summary_result, "chapter_coverage", None),
         prompt_preset=(prompt_preset or "").strip() or None,
         prompt_preset_label=(prompt_preset_label or "").strip() or None,
+        deadline_hit=bool(getattr(summary_result, "deadline_hit", False)),
     )
     result = _attach_result_artifacts(task_id_value, result)
     upsert_job(

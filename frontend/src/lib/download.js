@@ -159,6 +159,72 @@ const fetchDocxImage = async (src) => {
     }
 };
 
+// The pixel size written in the image file's own header. Read from the bytes
+// rather than by decoding, so it works for every export path (and in tests)
+// without a canvas. Null when the header is not one of these formats.
+export const imagePixelSize = (data) => {
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data || new ArrayBuffer(0));
+    const at = (i) => bytes[i] ?? 0;
+    const be16 = (i) => (at(i) << 8) | at(i + 1);
+    const be32 = (i) => ((at(i) << 24) >>> 0) + (at(i + 1) << 16) + (at(i + 2) << 8) + at(i + 3);
+    const valid = (width, height) => (width > 0 && height > 0 ? {width, height} : null);
+    // PNG: signature, then the IHDR chunk with width and height.
+    if (bytes.length >= 24 && at(0) === 0x89 && at(1) === 0x50 && at(2) === 0x4e && at(3) === 0x47) {
+        return valid(be32(16), be32(20));
+    }
+    // GIF: logical screen size, little-endian.
+    if (bytes.length >= 10 && at(0) === 0x47 && at(1) === 0x49 && at(2) === 0x46) {
+        return valid(at(6) | (at(7) << 8), at(8) | (at(9) << 8));
+    }
+    // BMP: width and height in the info header (height may be negative).
+    if (bytes.length >= 26 && at(0) === 0x42 && at(1) === 0x4d) {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        return valid(Math.abs(view.getInt32(18, true)), Math.abs(view.getInt32(22, true)));
+    }
+    // JPEG: walk the segments to the first start-of-frame marker.
+    if (bytes.length >= 4 && at(0) === 0xff && at(1) === 0xd8) {
+        let offset = 2;
+        while (offset + 9 < bytes.length) {
+            if (at(offset) !== 0xff) { offset += 1; continue; }
+            const marker = at(offset + 1);
+            if (marker === 0xff) { offset += 1; continue; }
+            if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+            const isFrame = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
+            if (isFrame) return valid(be16(offset + 7), be16(offset + 5));
+            offset += 2 + be16(offset + 2);
+        }
+    }
+    return null;
+};
+
+const decodedImageSize = async (data, type) => {
+    if (typeof createImageBitmap !== 'function' || typeof Blob !== 'function') return null;
+    try {
+        const bitmap = await createImageBitmap(new Blob([data], {type: `image/${type === 'jpg' ? 'jpeg' : type}`}));
+        const size = {width: bitmap.width, height: bitmap.height};
+        bitmap.close?.();
+        return size.width > 0 && size.height > 0 ? size : null;
+    } catch {
+        return null;
+    }
+};
+
+const DOCX_IMAGE_WIDTH = 480;
+const DOCX_IMAGE_MAX_HEIGHT = 640;
+
+// How large a screenshot is drawn in the Word file: the page width it always
+// had, at the picture's own proportions. A portrait frame is limited by height
+// instead, so one phone-recording screenshot does not run over a whole page.
+// Without a known size it keeps the 16:9 box every landscape video frame fits.
+export const docxImageSize = (natural) => {
+    const width = Number(natural?.width) || 0;
+    const height = Number(natural?.height) || 0;
+    if (!(width > 0 && height > 0)) return {width: DOCX_IMAGE_WIDTH, height: 270};
+    const scaledHeight = Math.round(DOCX_IMAGE_WIDTH * height / width);
+    if (scaledHeight <= DOCX_IMAGE_MAX_HEIGHT) return {width: DOCX_IMAGE_WIDTH, height: scaledHeight};
+    return {width: Math.max(1, Math.round(DOCX_IMAGE_MAX_HEIGHT * width / height)), height: DOCX_IMAGE_MAX_HEIGHT};
+};
+
 const docxImageBlocks = async (docx, alt, src) => {
     const image = await fetchDocxImage(src);
     const caption = sanitizeDocxText(alt || 'Screenshot');
@@ -169,12 +235,13 @@ const docxImageBlocks = async (docx, alt, src) => {
             spacing: {after: 100, line: 260},
         })];
     }
+    const natural = imagePixelSize(image.data) || await decodedImageSize(image.data, image.type);
     return [
         new docx.Paragraph({
             children: [new docx.ImageRun({
                 type: image.type,
                 data: image.data,
-                transformation: {width: 480, height: 270},
+                transformation: docxImageSize(natural),
                 altText: {name: caption || 'FluentFlow screenshot', description: caption || 'Video screenshot evidence'},
             })],
             spacing: {before: 120, after: caption ? 60 : 140},
@@ -411,8 +478,80 @@ export const dlSummaryTxt = (md, filename) => {
     _dl(new Blob([md],{type:'text/plain;charset=utf-8'}), _baseName(filename)+'_summary.txt');
 };
 
-export const dlSummaryMd = (md, filename) => {
-    _dl(new Blob([md],{type:'text/markdown;charset=utf-8'}), _baseName(filename)+'_summary.md');
+// A screenshot the app itself serves (`/jobs/<id>/artifacts/frame?file=..`).
+// Such a link only resolves inside FluentFlow, so a Markdown file carrying it
+// shows a broken image in Obsidian, Typora or anywhere else.
+const isAppImageSource = (src) => {
+    const raw = String(src || '').trim();
+    if (!raw) return false;
+    if (isApiRelativePath(raw)) return true;
+    if (/^\/[^/]/.test(raw)) return true;
+    return !!API_BASE && raw.startsWith(API_BASE);
+};
+
+const MD_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
+
+// The name a screenshot gets inside the downloaded folder: the stored file name
+// when the link carries one, made unique among the others.
+const imageFileName = (src, index, type, taken) => {
+    const raw = String(src || '').trim();
+    let name = '';
+    try {
+        const url = new URL(raw, 'http://fluentflow.local');
+        name = url.searchParams.get('file') || url.pathname.split('/').pop() || '';
+    } catch {
+        name = '';
+    }
+    name = _safeFileName(String(name).split(/[\\/]/).pop()).replace(/\s+/g, '_');
+    if (!name || name === 'frame') name = `image_${index + 1}`;
+    if (!/\.[a-z0-9]{2,5}$/i.test(name)) name = `${name}.${type || 'jpg'}`;
+    let unique = name;
+    let n = 2;
+    while (taken.has(unique.toLowerCase())) {
+        unique = name.replace(/(\.[^.]+)$/, `_${n}$1`);
+        n += 1;
+    }
+    taken.add(unique.toLowerCase());
+    return unique;
+};
+
+// Download the note as Markdown that opens correctly outside the app.
+//
+// A note without app-served screenshots is a single .md file, exactly as shown.
+// A note with them becomes a .zip: `<title>.md` beside an `images/` folder, every
+// screenshot link pointing at its copy there, so the folder works as it is in any
+// Markdown editor. A screenshot that cannot be fetched keeps a full address to
+// this app instead of a path that resolves nowhere, and is counted in `missing`.
+export const dlSummaryMd = async (md, filename) => {
+    const text = String(md || '');
+    const base = _baseName(filename);
+    const sources = [...new Set([...text.matchAll(MD_IMAGE_PATTERN)].map((m) => m[2]).filter(isAppImageSource))];
+    if (!sources.length) {
+        _dl(new Blob([text],{type:'text/markdown;charset=utf-8'}), base+'_summary.md');
+        return {format: 'md', images: 0, missing: 0};
+    }
+    const fetched = await Promise.all(sources.map((src) => fetchDocxImage(src)));
+    const {default: JSZip} = await import('jszip');
+    const zip = new JSZip();
+    const taken = new Set();
+    const localPath = new Map();
+    let missing = 0;
+    sources.forEach((src, index) => {
+        const image = fetched[index];
+        if (!image) { missing += 1; return; }
+        const name = imageFileName(src, index, image.type, taken);
+        zip.file(`images/${name}`, image.data);
+        localPath.set(src, `images/${name}`);
+    });
+    const rewritten = text.replace(MD_IMAGE_PATTERN, (match, alt, src) => {
+        if (localPath.has(src)) return `![${alt}](${localPath.get(src)})`;
+        if (isAppImageSource(src)) return `![${alt}](${docxImageTarget(src)})`;
+        return match;
+    });
+    zip.file(`${base}.md`, rewritten);
+    const data = await zip.generateAsync({type: 'uint8array'});
+    _dl(new Blob([data], {type: 'application/zip'}), base+'_summary.zip');
+    return {format: 'zip', images: sources.length - missing, missing};
 };
 
 export const dlSummaryWord = async (md, filename) => {

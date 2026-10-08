@@ -342,8 +342,9 @@ def debreath_task(
 ) -> dict[str, Any]:
     """Redo the breath-gap cut on an existing task's source media, mechanically.
 
-    Submitting already cuts, so this is for a redo. A task whose transcript was
-    made from a cut file gets a timeline mismatch if cut again; resubmit instead.
+    Submitting already cuts, so this is for a redo. The server refuses (HTTP 409)
+    to cut a task whose transcript was made from a cut file, because the media and
+    the transcript would land on different timelines; resubmit the original instead.
     A distinct action rather than a package field: it starts work, and it takes
     parameters the caller has to choose. Returns as soon as the work is accepted —
     rendering takes minutes, so poll ``get_task_package`` and read its
@@ -599,9 +600,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "name": "debreath_task",
         "description": (
             "Redo the breath-gap cut on an existing task; submitting already cuts, so this "
-            "is not the normal path. If the task's transcript was made from a cut file, "
-            "cutting again puts the media and transcript on different timelines: prefer "
-            "resubmitting the original with different settings. Acoustic detection only. "
+            "is not the normal path. The server refuses (HTTP 409) a task whose transcript "
+            "was made from a cut file, since cutting again would put the media and the "
+            "transcript on different timelines; to cut differently, resubmit the original "
+            "with different settings. Acoustic detection only. "
             "Writes a cut list always and a rendered file when render is true; poll "
             "get_task_package and read its debreath block for progress, counts, and warnings."
         ),

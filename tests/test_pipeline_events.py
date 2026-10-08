@@ -119,3 +119,59 @@ def test_a_transcript_only_task_records_no_fallback(monkeypatch, events, ids):
     _ctx(task, monkeypatch, skip_summary=True)
 
     assert not [e for e in events if e["event_name"] == "visual_note_unavailable"]
+
+
+def test_events_name_the_entry_a_task_came_in_through(monkeypatch, ids):
+    """Requirement: the event log says which entry a task came in through (a
+    batch, a folder, a retry), not "/process" for all of them."""
+    import inspect
+
+    from backend.core import media_job
+
+    monkeypatch.setattr(lp, "JOB_EVENTS", JobEventHub())
+    lp._QUEUE_RECENT.clear()
+    [task] = ids("route")
+    seen: list[str] = []
+
+    async def fake_pipeline(ctx):
+        seen.append(ctx.event_route)
+
+    monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
+    monkeypatch.setattr(lp.local_intake_flow, "note_is_wanted", lambda *_a: False)
+
+    async def scenario():
+        ctx = lp._local_media_job_context(
+            task_id=task, client_id=None, source_type="audio", source_filename="talk.m4a",
+            raw_title="talk", display_title="talk", suffix=".m4a", td="/tmp", in_path=Path("/tmp/talk.m4a"),
+            content=b"", source_file_size_mb=1.0, duration_preflight_sec=60.0, options={},
+        )
+        await lp.start_media_job_behind_queue(ctx, route="/queue/process-folder")
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+
+    asyncio.run(scenario())
+    lp._QUEUE_RECENT.clear()
+    assert seen == ["/queue/process-folder"]
+    # Guard: the pipeline writes the context's route, never a fixed one.
+    assert 'route="/process"' not in inspect.getsource(media_job)
+
+
+def test_audio_only_tasks_are_recorded_as_audio():
+    """Requirement: an audio-only task is not recorded as an audio-and-video one."""
+    from backend.core.event_context import pipeline_mode
+
+    assert pipeline_mode("audio") == "audio"
+    assert pipeline_mode("video") == "audio_video"
+    assert pipeline_mode("transcript_file") == "transcript_file"
+
+
+def test_a_finished_transcription_reports_the_whole_recording_transcribed():
+    """Requirement: once transcription is done the task says so, with the
+    recording's full length transcribed, not "preparing audio, 0 seconds"."""
+    from types import SimpleNamespace
+
+    from backend.core.media_job import _transcribed_total
+
+    assert _transcribed_total(61.04, SimpleNamespace(duration=59.0)) == 61.0
+    assert _transcribed_total(None, SimpleNamespace(duration=59.0)) == 59.0
+    assert _transcribed_total(None, SimpleNamespace(duration=None)) is None

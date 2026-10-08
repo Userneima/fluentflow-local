@@ -453,6 +453,7 @@ async def _download_then_process(
         options=options,
         duration_limit_seconds=effective_duration_limit,
     )
+    ctx.event_route = route
     # The expensive part waits its turn; the download above did not have to.
     await wait_for_queue_turn(previous, task_id, client_id)
     await run_pipeline_then_note(done, ctx)

@@ -99,3 +99,14 @@ export const noteWriterBatchClause = (writer, lang = 'zh') => {
     }
     return zh ? `，并由 ${noteWriterLabel(writer, lang)} 各写一份笔记` : `, and ${noteWriterLabel(writer, lang)} writes a note for each`;
 };
+
+// Said beside "更换提示词" when Claude writes the note from the frames. The
+// prompt templates and the note mode feed the text-model note only; the frame
+// note has its own instructions, so changing them does nothing to it until the
+// note is rewritten with a text model. Empty for every other writer.
+export const notePromptScopeSentence = (writer, lang = 'zh') => {
+    if (writer?.kind !== 'claude') return '';
+    return lang === 'zh'
+        ? '当前由 Claude 结合画面写笔记，提示词和笔记模式只在改用文本模型重生时生效。'
+        : 'Claude is writing notes from the video frames, so the prompt and note mode only take effect when a text model rewrites the note.';
+};

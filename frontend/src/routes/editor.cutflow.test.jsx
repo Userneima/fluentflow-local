@@ -8,13 +8,14 @@
 // reader ever sees it. So this one asserts against the real page.
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {cleanup, render, screen, waitFor} from '@testing-library/react';
+import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 
 const runtimeConfig = {allowedSttProviders: ['local'], defaultSttProvider: 'local', limits: {}};
 
 let lastResult = null;
 let artifactFetch = null;
+let credentialStatus = null;
 
 vi.mock('../app/AppContext.jsx', () => ({
     useApp: () => ({
@@ -45,6 +46,7 @@ vi.mock('../app/shared.jsx', async () => {
             getJob: async () => ({}),
             saveTranscriptEdit: async () => ({}),
             saveSummaryEdit: async () => ({}),
+            getCredentialsStatus: async () => credentialStatus,
         }),
     };
 });
@@ -136,5 +138,112 @@ describe('the editor shows the cut-flow record', () => {
 
         await screen.findByText('edit.regenerate');
         expect(screen.queryByTestId('cut-flow-bar')).toBeNull();
+    });
+});
+
+// Requirement: subtitles made from the cut file line up with the cut video only.
+// Whoever downloads them must be able to tell, from the menu and from the file
+// name, which video they belong to, and must be offered that video.
+describe('the transcript download menu for a task transcribed from the cut file', () => {
+    let saved;
+    beforeEach(() => {
+        lastResult = null;
+        credentialStatus = null;
+        saved = [];
+        artifactFetch = async (taskId, kind, filename) => new File(['x'], filename || kind, {type: 'video/mp4'});
+        URL.createObjectURL = () => 'blob:menu';
+        URL.revokeObjectURL = () => {};
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click() {
+            saved.push(this.download);
+        });
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        cleanup();
+    });
+
+    const openTranscriptMenu = async () => {
+        const trigger = await screen.findByRole('button', {name: '导出'});
+        fireEvent.click(trigger);
+        return screen.findByRole('menu');
+    };
+
+    it('labels the subtitles as the cut version and offers the cut video next to them', async () => {
+        lastResult = cutResult();
+        mount();
+        const menu = await openTranscriptMenu();
+        const labels = within(menu).getAllByRole('menuitem').map((item) => item.textContent);
+        expect(labels.some((text) => text.includes('dl.srt') && text.includes('对应剪后视频'))).toBe(true);
+        expect(labels.some((text) => text.includes('dl.vtt') && text.includes('对应剪后视频'))).toBe(true);
+        expect(labels.some((text) => text.includes('剪后视频（与字幕对齐）'))).toBe(true);
+        expect(labels.some((text) => text.includes('原视频') && text.includes('对不上'))).toBe(true);
+    });
+
+    it('names the subtitle file after the cut version', async () => {
+        lastResult = cutResult();
+        mount();
+        const menu = await openTranscriptMenu();
+        const srt = within(menu).getAllByRole('menuitem').find((item) => item.textContent.includes('dl.srt'));
+        fireEvent.click(srt);
+        await waitFor(() => expect(saved.length).toBe(1));
+        expect(saved[0]).toBe('lecture_剪后版.srt');
+    });
+
+    it('hands over the cut video from the menu', async () => {
+        lastResult = cutResult();
+        mount();
+        const menu = await openTranscriptMenu();
+        fireEvent.click(within(menu).getAllByRole('menuitem').find((item) => item.textContent.startsWith('剪后视频')));
+        // The player fetches the same file for itself; what matters is the file
+        // handed to the browser as a download.
+        await waitFor(() => expect(saved).toEqual(['lecture_debreath.mp4']));
+    });
+
+    it('leaves the menu as it was for a transcript of the original recording', async () => {
+        lastResult = cutResult({transcript_media: 'source', debreath: undefined, artifacts: {}});
+        mount();
+        const menu = await openTranscriptMenu();
+        const labels = within(menu).getAllByRole('menuitem').map((item) => item.textContent);
+        expect(labels.join('|')).not.toMatch(/剪后/);
+        expect(labels.some((text) => text.startsWith('dl.sourceVideo'))).toBe(true);
+        fireEvent.click(within(menu).getAllByRole('menuitem').find((item) => item.textContent.includes('dl.srt')));
+        await waitFor(() => expect(saved.length).toBe(1));
+        expect(saved[0]).toBe('lecture.srt');
+    });
+});
+
+// Requirement: changing the prompt does nothing to a note Claude writes from the
+// frames, so the prompt dialog says so while Claude is the writer.
+describe('the prompt dialog while Claude writes the note', () => {
+    beforeEach(() => {
+        lastResult = cutResult({transcript_media: 'source', debreath: undefined, artifacts: {}});
+        artifactFetch = async (taskId, kind, filename) => new File(['x'], filename || kind, {type: 'video/mp4'});
+    });
+
+    afterEach(() => {
+        runtimeConfig.writesItsOwnNote = undefined;
+        credentialStatus = null;
+        vi.restoreAllMocks();
+        cleanup();
+    });
+
+    it('says the prompt only applies when a text model rewrites the note', async () => {
+        runtimeConfig.writesItsOwnNote = true;
+        credentialStatus = {visual_note_available: true};
+        mount();
+        const button = await screen.findByRole('button', {name: /prompt\.collapsed/});
+        await waitFor(() => expect(button.getAttribute('title')).toMatch(/Claude 结合画面写笔记/));
+        fireEvent.click(button);
+        const note = await screen.findByTestId('prompt-scope-note');
+        expect(note.textContent).toBe('当前由 Claude 结合画面写笔记，提示词和笔记模式只在改用文本模型重生时生效。');
+    });
+
+    it('adds nothing when a text model writes the note', async () => {
+        credentialStatus = {deepseek_api_key_configured: true};
+        mount();
+        fireEvent.click(await screen.findByRole('button', {name: /prompt\.collapsed/}));
+        await screen.findByRole('dialog');
+        expect(screen.queryByTestId('prompt-scope-note')).toBeNull();
     });
 });

@@ -1682,3 +1682,21 @@ def test_a_real_render_from_each_supported_container_lands_and_verifies(tmp_path
     assert report.ok, report.as_dict()
     assert report.unmeasured_checks == [], "mp4/m4a carry a frame count, so every check is measured"
     assert abs(report.actual_seconds - plan.kept_seconds) < 0.5, report.as_dict()
+
+
+def test_re_rendering_a_cut_never_rewrites_a_hard_linked_copy(tmp_path, fake_tools):
+    """Requirement: the cut file delivered beside the user's recording may be
+    the same file as the task's (a hard link). Rendering the task's cut again
+    must leave the user's copy as it was."""
+    import os
+
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    out = tmp_path / "out.mp4"
+    out.write_bytes(b"users-copy")
+    beside = tmp_path / "week-8_debreath.mp4"
+    os.link(out, beside)
+
+    sc.render_keeps(source, [TimeRange(0.0, 5.0)], out, runner=_FakeRender())
+
+    assert beside.read_bytes() == b"users-copy"
