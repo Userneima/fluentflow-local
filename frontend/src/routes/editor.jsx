@@ -52,6 +52,7 @@ import {
     useSettings,
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
+import {larkExportToastText} from '../lib/format.js';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import {usePromptEditing} from '../lib/usePromptEditing.js';
 import {noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
@@ -119,6 +120,7 @@ const Editor = () => {
     const [downloading, setDownloading] = useState(null);
     const [toast, setToast] = useState(null);
     const [larkUrl, setLarkUrl] = useState(null);
+    const larkImagesMissing = Math.max(0, Number(lastResult?.lark_response?.image_count || 0) - Number(lastResult?.lark_response?.image_upload_count || 0));
     const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
     const [retranscribeConfirmOpen, setRetranscribeConfirmOpen] = useState(false);
     const [visualEvidenceVisible, setVisualEvidenceVisible] = useState(true);
@@ -894,8 +896,13 @@ const Editor = () => {
         };
     }, [notePolling, pollTaskId, getJob, setLastResult, showToast]);
 
+    const savedLarkUrl = result?.lark_response?.url || null;
+    const autoExportError = !savedLarkUrl && result?.lark_error ? String(result.lark_error) : '';
+
     const handleExportLark = async () => {
         if(!result || exporting) return;
+        // Every export makes a new Feishu document, so say so before a second one.
+        if(savedLarkUrl && !window.confirm(t('edit.exportAgainConfirm'))) return;
         setExporting(true);
         let larkExportRoute = larkExportRouteFromSettings(loadSettings());
         try {
@@ -910,6 +917,7 @@ const Editor = () => {
             if(durSec > 0) fd.append('source_duration_seconds', String(durSec));
             fd.append('lark_export_route', larkExportRoute);
             fd.append('lark_via_cli', isLocalLarkExportRoute(larkExportRoute) ? 'true' : 'false');
+            if(settings.larkFolder) fd.append('folder_token', settings.larkFolder);
             const headers = shouldUseLocalSingleUserClientId()
                 ? localExecutionHeaders({localExecution: true, larkExportRoute})
                 : localExecutionHeaders({larkExportRoute});
@@ -927,8 +935,15 @@ const Editor = () => {
             if(!exportUrl && !data.dry_run) throw new Error(data.msg || 'No document URL returned');
             setLarkUrl(exportUrl);
             const dispTitle = data.doc_title || fileNameStem(resultDownloadName) || "Export";
-            if(exportUrl) addLarkExport({url:exportUrl, title: dispTitle, timestamp:Date.now()});
-            showToast(t('edit.exportDone'));
+            if(exportUrl) {
+                addLarkExport({url:exportUrl, title: dispTitle, timestamp:Date.now()});
+                // The backend kept the link on the task; mirror it so the
+                // "exported · open" link shows without reloading.
+                setLastResult((prev) => (prev && (prev.task_id || '') === (result.task_id || '')
+                    ? {...prev, lark_response: data, lark_doc_title: dispTitle, lark_error: null}
+                    : prev));
+            }
+            showToast(larkExportToastText(data, t));
         } catch(err) {
             showToast(t('edit.exportFail')+': '+err.message, false);
         }
@@ -1060,6 +1075,7 @@ const Editor = () => {
                 exportToLark: settings.exportToLark||false,
                 larkExportRoute: larkExportRouteFromSettings(settings),
                 larkViaCli: !!settings.larkViaCli,
+                folderToken: settings.larkFolder || undefined,
                 title: file.name.replace(/\.[^/.]+$/,""),
                 ...buildAiOptions(settings),
                 skipSummary: !!settings.skipAiSummary,
@@ -1281,6 +1297,7 @@ const Editor = () => {
                 <SvgIcon name="check_circle" className="text-2xl text-emerald-600 dark:text-emerald-300"/>
                 <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-[#111111] dark:text-white">{t('edit.exportDone')}</p>
+                    {larkImagesMissing > 0 && <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">{t('edit.exportImagesMissing').replace('{n}', String(larkImagesMissing))}</p>}
                     <a href={larkUrl} target="_blank" rel="noopener noreferrer" className="text-primary text-sm hover:underline truncate block">{larkUrl}</a>
                                                 </div>
                 <button onClick={()=>setLarkUrl(null)} className="flex-shrink-0 text-[#777] hover:text-[#111111] dark:text-white/50 dark:hover:text-white">
@@ -1404,6 +1421,25 @@ const Editor = () => {
                             <SvgIcon name={retranscribing ? 'sync' : 'record_voice_over'} className={`text-[17px] ${retranscribing?'animate-spin':''}`}/>
                             <span>{retranscribing ? t('edit.retranscribing') : t('edit.retranscribe')}</span>
                         </button>
+                        {savedLarkUrl && (
+                            <a
+                                href={savedLarkUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                data-testid="lark-export-link"
+                                className="inline-flex h-10 items-center px-1 text-xs font-bold text-emerald-700 hover:underline dark:text-emerald-300"
+                            >
+                                {t('edit.exportedOnce')} · {t('edit.exportOpen')}
+                            </a>
+                        )}
+                        {autoExportError && (
+                            <span
+                                className="inline-flex h-10 max-w-[220px] items-center truncate text-xs font-semibold text-red-600 dark:text-red-300"
+                                title={autoExportError}
+                            >
+                                {t('edit.autoExportFailed')}：{autoExportError}
+                            </span>
+                        )}
                         <button
                             type="button"
                             onClick={handleExportLark}

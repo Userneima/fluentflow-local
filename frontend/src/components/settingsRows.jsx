@@ -10,6 +10,7 @@ import {
 } from './settingsPrimitives.jsx';
 import {
     DEFAULT_QWEN_MODEL,
+    LARK_EXPORT_ROUTE_AUTO,
     LARK_EXPORT_ROUTE_LOCAL_CLI,
     LARK_EXPORT_ROUTE_OPENAPI,
     DEFAULT_DEEPSEEK_MODEL,
@@ -288,9 +289,30 @@ export const LarkExportRouteRow = ({state}) => {
                     });
                 }}
             >
-                <option value={LARK_EXPORT_ROUTE_OPENAPI}>{t('set.larkRouteOpenapi')}</option>
+                <option value={LARK_EXPORT_ROUTE_AUTO}>{t('set.larkRouteAuto')}</option>
                 <option value={LARK_EXPORT_ROUTE_LOCAL_CLI}>{t('set.larkRouteLocalCli')}</option>
+                <option value={LARK_EXPORT_ROUTE_OPENAPI}>{t('set.larkRouteOpenapi')}</option>
             </select>
+        </div>
+    );
+};
+
+// Where the app route puts the document. Without a folder it lands in the
+// app's own space, which the user may not be able to open.
+export const LarkFolderRow = ({state}) => {
+    const {t} = useI18n();
+    const {settings, updateSettingNow} = state;
+    return (
+        <div className={`md:col-span-2 space-y-2 ${cellBase}`}>
+            <label htmlFor="settingsLarkFolder" className="block text-sm font-bold">{t('set.larkFolder')}</label>
+            <span className="block text-xs leading-relaxed text-on-surface-variant">{t('set.larkFolderHint')}</span>
+            <input
+                id="settingsLarkFolder"
+                className={inputClass}
+                placeholder={t('set.larkFolderPh')}
+                value={settings.larkFolder || ''}
+                onChange={e=>updateSettingNow({larkFolder: e.target.value.trim()})}
+            />
         </div>
     );
 };

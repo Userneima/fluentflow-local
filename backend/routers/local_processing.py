@@ -57,7 +57,7 @@ from backend.core.media_intake import (
     persist_source_stream,
     source_type_for_suffix,
 )
-from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
+from backend.core.lark_cli_exporter import export_markdown_via_lark_cli, lark_cli_ready
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.media_job import MediaJobContext, execute_media_job
 from backend.core.media_preflight import MediaPreflightError, preflight_media_file
@@ -86,10 +86,16 @@ def _auto_export_local_lark(**values: object) -> dict:
     route = str(values.get("lark_export_route") or "").lower()
     if route in {"user_oauth", "feishu_user", "feishu_user_oauth", "lark_user_oauth"}:
         raise RuntimeError("本地版不支持飞书账号 OAuth 导出。")
-    target = "lark_cli" if route in {"local_cli", "lark_cli"} or truthy(values.get("lark_via_cli")) else "lark_openapi"
+    if route in {"local_cli", "lark_cli"} or truthy(values.get("lark_via_cli")):
+        target = "lark_cli"
+    elif route == "auto":
+        # New users' default: their own identity when lark-cli is signed in.
+        target = "lark_cli" if lark_cli_ready() else "lark_openapi"
+    else:
+        target = "lark_openapi"
     title = resolve_lark_doc_title(str(values["summary_markdown"]), filename_stem=str(values["filename_stem"]), form_title=str(values.get("form_title") or ""))
     if target == "lark_cli":
-        response = export_markdown_via_lark_cli(title, str(values["summary_markdown"]))
+        response = export_markdown_via_lark_cli(title, str(values["summary_markdown"]), task_id=str(values["task_id"]), artifact_root=_artifact_storage_dir())
     else:
         kwargs = {}
         if app_id := resolve_secret(values.get("lark_app_id"), "lark_app_id"): kwargs["app_id"] = app_id

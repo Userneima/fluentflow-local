@@ -44,6 +44,9 @@ _HEADING_FIELD = {3: "heading1", 4: "heading2", 5: "heading3",
 
 _MAX_BLOCKS_PER_BATCH = 50
 
+# Diagnostics read the half-written document's link after this marker.
+PARTIAL_DOC_MARKER = "已建好的半截文档："
+
 
 # ---------------------------------------------------------------------------
 # Markdown → Feishu block dicts
@@ -798,7 +801,7 @@ class LarkExporter:
         errors: list[str] = []
         t = max(self.timeout, 90)
         for ref in image_refs:
-            block_index = int(ref.get("block_index") or -1)
+            block_index = int(ref.get("block_index", -1))
             block_id = created_block_ids[block_index] if 0 <= block_index < len(created_block_ids) else None
             image_path = ref.get("path")
             if not block_id or not isinstance(image_path, Path) or not image_path.is_file():
@@ -853,19 +856,30 @@ class LarkExporter:
             auth_mode = "tenant_token"
             export_destination = "drive_folder" if folder_token else "drive_root"
             wiki_location = {}
+        doc_url = (
+            _public_wiki_url(wiki_location["node_token"], self.base_url)
+            if wiki_location else _public_docx_url(doc_id, self.base_url)
+        )
         conv_timeout = max(self.timeout, 90)
         disable_convert = (
             os.environ.get("FLUENTFLOW_LARK_DISABLE_OPENAPI_CONVERT", "").strip().lower()
             in ("1", "true", "yes", "on")
         )
-        wants_convert = not disable_convert
+        image_resolver = (
+            lambda src: _resolve_markdown_artifact_image(src, task_id=task_id, artifact_root=artifact_root)
+        )
+        flat, image_refs = _markdown_to_feishu_blocks_with_image_refs(
+            export_markdown,
+            image_resolver=image_resolver,
+        )
+        # The official convert path writes image blocks with nothing in them, so
+        # a note with screenshots on this machine goes through the block writer
+        # that uploads each one (tables are already lists after normalization).
+        wants_convert = not disable_convert and not image_refs
         used_convert = False
         block_count = 0
         converted_children_id: List[str] = []
         converted_descendants: List[dict] = []
-        image_resolver = (
-            lambda src: _resolve_markdown_artifact_image(src, task_id=task_id, artifact_root=artifact_root)
-        )
         image_upload_count = 0
         image_upload_errors: list[str] = []
         if wants_convert:
@@ -898,11 +912,12 @@ class LarkExporter:
                 used_convert = False
 
         if not used_convert:
-            flat, image_refs = _markdown_to_feishu_blocks_with_image_refs(
-                export_markdown,
-                image_resolver=image_resolver,
-            )
-            created_ids = self._write_flat_blocks_batched(doc_id, token, flat)
+            try:
+                created_ids = self._write_flat_blocks_batched(doc_id, token, flat)
+            except Exception as exc:
+                # The document already exists; say where, so the user can open
+                # or delete the half-written copy instead of hunting for it.
+                raise RuntimeError(f"{exc}；{PARTIAL_DOC_MARKER}{doc_url}") from exc
             image_upload_count, image_upload_errors = self._upload_flat_image_refs(
                 doc_id,
                 token,
@@ -921,14 +936,14 @@ class LarkExporter:
             "ok": True,
             "doc_token": doc_id,
             "block_count": block_count,
+            "image_count": len(image_refs),
             "image_upload_count": image_upload_count,
             "image_upload_errors": image_upload_errors,
             "via": "openapi_convert" if used_convert else "legacy_markdown",
             "markdown_format": "feishu_normalized",
             "auth_mode": auth_mode,
             "export_destination": export_destination,
-            "url": _public_wiki_url(wiki_location["node_token"], self.base_url)
-            if wiki_location else _public_docx_url(doc_id, self.base_url),
+            "url": doc_url,
         }
         if wiki_location:
             response.update({
@@ -936,6 +951,24 @@ class LarkExporter:
                 "wiki_node_token": wiki_location["node_token"],
             })
         return response
+
+
+def parse_folder_token(value: Optional[str]) -> Optional[str]:
+    """A Drive folder token from what the user pasted: the token or the folder link.
+
+    ``https://xxx.feishu.cn/drive/folder/fldcnABC?from=...`` → ``fldcnABC``.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    if "://" not in text:
+        return text.strip("/") or None
+    parts = [part for part in urlparse(text).path.split("/") if part]
+    if "folder" in parts:
+        index = parts.index("folder")
+        if index + 1 < len(parts):
+            return parts[index + 1]
+    return parts[-1] if parts else None
 
 
 def export_markdown_to_lark(
@@ -964,10 +997,10 @@ def export_markdown_to_lark(
     return exporter.create_doc_markdown(
         title,
         markdown,
-        folder_token=folder_token,
+        folder_token=parse_folder_token(folder_token),
         task_id=task_id,
         artifact_root=artifact_root,
     )
 
 
-__all__ = ["LarkExporter", "export_markdown_to_lark", "markdown_to_feishu_blocks"]
+__all__ = ["LarkExporter", "export_markdown_to_lark", "markdown_to_feishu_blocks", "parse_folder_token"]

@@ -404,9 +404,13 @@ def test_export_records_export_and_rejects_hosted_oauth(monkeypatch, agent_stack
         result={"task_id": "t-e1", "summary_markdown": "# 笔记"},
         db_path=agent_stack["jobs_db"],
     )
+    # The screenshots in the note travel only if the exporter knows the task.
+    seen_export_kwargs: dict = {}
     monkeypatch.setattr(
         local_agent, "export_markdown_via_lark_cli",
-        lambda title, markdown: {"ok": True, "url": "https://example.feishu.cn/wiki/w1", "via": "lark_cli"},
+        lambda title, markdown, **kw: (
+            seen_export_kwargs.update(kw) or {"ok": True, "url": "https://example.feishu.cn/wiki/w1", "via": "lark_cli"}
+        ),
     )
     client = TestClient(_app())
 
@@ -419,6 +423,8 @@ def test_export_records_export_and_rejects_hosted_oauth(monkeypatch, agent_stack
     body = r.json()
     assert body["export"]["route"] == "lark_cli"
     assert body["export"]["url"] == "https://example.feishu.cn/wiki/w1"
+    assert seen_export_kwargs.get("task_id") == "t-e1", "the note's screenshots are found by task"
+    assert seen_export_kwargs.get("artifact_root") is not None
     stored = job_store.get_job("t-e1", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID)
     assert stored["result"]["exports"][0]["url"] == "https://example.feishu.cn/wiki/w1"
 
@@ -437,7 +443,7 @@ def test_export_preserves_edit_saved_during_remote_call(monkeypatch, agent_stack
         db_path=agent_stack["jobs_db"],
     )
 
-    def export(title, markdown):
+    def export(title, markdown, **_kw):
         job = job_store.get_job(
             "t-e2", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID
         )

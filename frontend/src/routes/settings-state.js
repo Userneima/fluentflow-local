@@ -4,6 +4,7 @@ import {
     DEFAULT_OPENAI_MODEL,
     DEFAULT_QWEN_MODEL,
     effectiveSttProvider,
+    LARK_EXPORT_ROUTE_AUTO,
     isLocalLarkExportRoute,
     larkExportRouteFromSettings,
     normalizeAiModel,
@@ -198,7 +199,9 @@ export const useSettingsPageState = () => {
         : (aiProvider === 'qwen' ? credentialConfigured(credentialStatus, 'dashscope_api_key') : credentialStatus?.deepseek_api_key_configured);
     const sttProvider = effectiveSttProvider(settings, runtimeConfig);
     const larkExportRoute = larkExportRouteFromSettings(settings);
-    const larkRouteHint = isLocalLarkExportRoute(larkExportRoute) ? t('set.larkRouteLocalCliHint') : t('set.larkRouteOpenapiHint');
+    const larkRouteHint = isLocalLarkExportRoute(larkExportRoute)
+        ? t('set.larkRouteLocalCliHint')
+        : (larkExportRoute === LARK_EXPORT_ROUTE_AUTO ? t('set.larkRouteAutoHint') : t('set.larkRouteOpenapiHint'));
     const pyannoteTokenConfigured = !!(credentialStatus?.pyannote_auth_token_configured || diarizationStatus?.auth_configured);
 
     return {

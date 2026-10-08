@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {diagnoseTaskError, friendlyTaskError, taskErrorContextForJob} from './format.js';
+import {diagnoseTaskError, friendlyTaskError, larkExportToastText, taskErrorContextForJob} from './format.js';
 
 // Written from what a person using FluentFlow Local should read, not from the
 // rule table. This edition has no accounts and no hosted quota: every failure
@@ -111,5 +111,53 @@ describe('failures the backend now reports in Chinese keep their category on the
     it('blames the Feishu folder, not a missing task', () => {
         const d = diagnoseTaskError('飞书导出失败：folder not found (404)', 'zh');
         expect(d.code).toBe('feishu_folder_not_found');
+    });
+});
+
+// The editor and the task page show the same Feishu reasons the backend gives:
+// each kind of failure reads differently and names the next step, using the
+// settings that exist (「飞书导出路线」, 「本机身份导出」, 「飞书应用导出」).
+describe('a Feishu export failure', () => {
+    const cases = [
+        ['lark-cli not found. Install @larksuite/cli', 'lark_cli_not_installed', 'npm install -g @larksuite/cli'],
+        ['「本机身份导出」要用飞书命令行工具 lark-cli，这台电脑上没有找到它。', 'lark_cli_not_installed', 'lark-cli auth login'],
+        ['lark-cli 失败 [type=authentication]：not logged in', 'lark_cli_login_required', 'lark-cli auth login'],
+        ['这台电脑上的 lark-cli 没有可用的登录身份（没登录或登录已过期）。', 'lark_cli_login_required', 'lark-cli auth login'],
+        ['lark-cli 失败 [subtype=missing_scope missing_scopes=wiki:node:create]：x', 'feishu_missing_scope', 'lark-cli auth login --scope "wiki:node:create"'],
+        ['Lark create-doc error: code=99991672 msg=scopes is required: [docx:document:create]', 'feishu_missing_scope', 'docx:document:create'],
+        ['Lark credentials not set: provide app_id/app_secret', 'feishu_app_credentials_missing', '高级 · 其他凭证'],
+        ["Feishu tenant token error: {'code': 10014, 'msg': 'app secret invalid'}", 'feishu_app_credentials_invalid', '凭证与基础信息'],
+        ['Feishu create-doc HTTP 404: folder not found', 'feishu_folder_not_found', '飞书文件夹链接'],
+        ['Feishu 写入块失败: code=99991400 msg=request trigger frequency limit', 'feishu_rate_limited', '过一两分钟'],
+    ];
+
+    it.each(cases)('%s → %s', (message, code, nextStep) => {
+        const d = diagnoseTaskError(message, 'zh');
+        expect(d.code).toBe(code);
+        expect(`${d.detail} ${d.nextAction}`).toContain(nextStep);
+        expect(`${d.detail} ${d.nextAction}`).not.toContain('用本机 lark-cli 导出到「我的文档库」');
+    });
+
+    it('names a half-written document so it can be opened or deleted', () => {
+        const d = diagnoseTaskError('Feishu 写入块失败: code=99991400；已建好的半截文档：https://x.feishu.cn/docx/abc', 'zh');
+        expect(d.detail).toContain('https://x.feishu.cn/docx/abc');
+    });
+
+    it('keeps an unknown Feishu failure in its own words', () => {
+        const d = diagnoseTaskError('Feishu create-doc error: document locked by admin', 'zh');
+        expect(d.code).toBe('feishu_export_failed');
+        expect(d.detail).toContain('document locked by admin');
+    });
+});
+
+describe('the export toast', () => {
+    const t = (key) => ({'edit.exportDone': '已导出到飞书', 'edit.exportImagesMissing': '{n} 张截图没传上去'}[key] || key);
+
+    it('says the export landed', () => {
+        expect(larkExportToastText({url: 'u', image_count: 2, image_upload_count: 2}, t)).toBe('已导出到飞书');
+    });
+
+    it('counts the screenshots that did not upload', () => {
+        expect(larkExportToastText({url: 'u', image_count: 5, image_upload_count: 2}, t)).toBe('已导出到飞书 · 3 张截图没传上去');
     });
 });

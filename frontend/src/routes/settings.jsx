@@ -9,6 +9,7 @@ import {
     FeishuAppCredentialRows,
     LarkExportHistory,
     LarkExportRouteRow,
+    LarkFolderRow,
     LocalSttSpeedRow,
     PyannoteTokenRow,
     SettingsPageShell,
@@ -17,7 +18,7 @@ import {
     TextModelKeyRows,
     VideoCookiesRow,
 } from '../components/settingsRows.jsx';
-import {LARK_EXPORT_ROUTE_OPENAPI} from '../app/shared.jsx';
+import {LARK_EXPORT_ROUTE_LOCAL_CLI} from '../app/shared.jsx';
 import {useSettingsPageState} from './settings-state.js';
 import {noteWriterSentence, resolveNoteWriter} from '../lib/noteWriter.js';
 
@@ -98,6 +99,7 @@ const Settings = () => {
                 <div className="grid gap-3 p-5 md:grid-cols-2">
                     <AutoExportRow state={state}/>
                     <LarkExportRouteRow state={state}/>
+                    {larkExportRoute !== LARK_EXPORT_ROUTE_LOCAL_CLI && <LarkFolderRow state={state}/>}
                     <LarkExportHistory state={state}/>
                 </div>
             </Section>
@@ -105,7 +107,7 @@ const Settings = () => {
             <AdvancedKeysFold
                 description={lang === 'zh' ? '飞书应用凭证和讲话人区分模型的令牌，用到时再展开。' : 'Feishu app credentials and the speaker-diarization token. Open when you need them.'}
             >
-                {larkExportRoute === LARK_EXPORT_ROUTE_OPENAPI && <FeishuAppCredentialRows state={state}/>}
+                {larkExportRoute !== LARK_EXPORT_ROUTE_LOCAL_CLI && <FeishuAppCredentialRows state={state}/>}
                 <PyannoteTokenRow state={state}/>
             </AdvancedKeysFold>
         </SettingsPageShell>

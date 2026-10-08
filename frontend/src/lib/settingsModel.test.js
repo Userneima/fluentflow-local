@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {
+    LARK_EXPORT_ROUTE_AUTO,
     LARK_EXPORT_ROUTE_LOCAL_CLI,
     LARK_EXPORT_ROUTE_OPENAPI,
     normalizeLarkExportRoute,
@@ -8,9 +9,9 @@ import {
 } from './settingsModel.js';
 
 describe('Lark export route', () => {
-    it('falls back to app credentials and remaps stored OAuth values', () => {
-        // Fresh install: fallback default is app credentials, not OAuth.
-        expect(normalizeLarkExportRoute('')).toBe(LARK_EXPORT_ROUTE_OPENAPI);
+    it('defaults to automatic choice (own identity when lark-cli is signed in) and remaps stored OAuth values', () => {
+        // Fresh install: the backend picks lark-cli when signed in, else the app.
+        expect(normalizeLarkExportRoute('')).toBe(LARK_EXPORT_ROUTE_AUTO);
         // Previously STORED hosted-OAuth values remap instead of dead-ending.
         expect(normalizeLarkExportRoute('user_oauth')).toBe(LARK_EXPORT_ROUTE_OPENAPI);
         expect(normalizeLarkExportRoute('feishu_user_oauth')).toBe(LARK_EXPORT_ROUTE_OPENAPI);
@@ -18,6 +19,10 @@ describe('Lark export route', () => {
         expect(normalizeLarkExportRoute('local_cli')).toBe(LARK_EXPORT_ROUTE_LOCAL_CLI);
         expect(normalizeLarkExportRoute('openapi')).toBe(LARK_EXPORT_ROUTE_OPENAPI);
         expect(normalizeLarkExportRoute('', true)).toBe(LARK_EXPORT_ROUTE_LOCAL_CLI);
+        expect(normalizeLarkExportRoute('auto')).toBe(LARK_EXPORT_ROUTE_AUTO);
+        // A user who picked the app route keeps it.
+        expect(sanitizeSettings({larkExportRoute: 'openapi'}).larkExportRoute).toBe(LARK_EXPORT_ROUTE_OPENAPI);
+        expect(sanitizeSettings({}).larkExportRoute).toBe(LARK_EXPORT_ROUTE_AUTO);
     });
 });
 

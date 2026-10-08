@@ -239,6 +239,139 @@ const linkSizeLimit = (raw, lower, videoLink) => (
 // Context the caller knows about the failed task and the message cannot carry:
 // `provider` (deepseek / openai / qwen / dashscope / anthropic) and `sourceType`
 // (video_link / video_file / audio_file / transcript_file / queue_upload).
+
+// Feishu export failures, mirroring backend/core/local_error_diagnostics.py.
+// The text may be the raw error or the backend's own Chinese sentence, so each
+// rule matches both. Setting names are the ones Settings → 导出 shows.
+const FEISHU_TEXT_RE = /lark-cli|feishu|飞书|\blark\b/i;
+const feishuScopes = (raw) => {
+    const tagged = raw.match(/missing_scopes=([^\s\]]+)/);
+    if (tagged) return tagged[1].split(',').filter(Boolean);
+    const listed = raw.match(/scopes?\s+(?:is\s+|are\s+)?required[^[]*\[([^\]]+)\]/i);
+    if (listed) return listed[1].split(',').map((x) => x.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+    return [];
+};
+const feishuTaskDiagnosis = (raw, lower) => {
+    if (!FEISHU_TEXT_RE.test(raw)) return null;
+    const viaCli = lower.includes('lark-cli');
+    const partial = raw.match(/(?:已建好的半截文档：|只写了一部分：)(\S+?)(?:，|$|\s)/);
+    const withPartial = (diag) => (partial && !diag.detailZh.includes(partial[1]) ? {
+        ...diag,
+        detailZh: `${diag.detailZh} 文档已经建好但只写了一部分：${partial[1]}，可以打开看看或删掉。`,
+        detailEn: `${diag.detailEn} A partly written document was left at ${partial[1]}; open or delete it.`,
+    } : diag);
+    const build = (diag) => taskErrorDiagnosis(withPartial(diag));
+    if (lower.includes('lark-cli not found') || raw.includes('没有找到 lark-cli') || raw.includes('这台电脑上没有找到它')) {
+        return build({
+            code: 'lark_cli_not_installed',
+            titleZh: '没有找到 lark-cli', titleEn: 'lark-cli not found',
+            detailZh: '「本机身份导出」要用飞书命令行工具 lark-cli，这台电脑上没有找到它。',
+            detailEn: 'Local identity export needs the Feishu command-line tool lark-cli, which is not installed on this computer.',
+            nextZh: '在终端运行 npm install -g @larksuite/cli 安装，再运行 lark-cli auth login 登录；或在设置的「飞书导出路线」里改选「飞书应用导出」。',
+            nextEn: 'Run npm install -g @larksuite/cli, then lark-cli auth login; or switch Lark export route to Feishu app export in Settings.',
+            retryable: false,
+        });
+    }
+    if (lower.includes('missing_scope') || lower.includes('99991679') || lower.includes('99991672') || /scopes?\s+(?:is\s+|are\s+)?required/i.test(raw) || raw.includes('缺少导出需要的权限') || raw.includes('没有开通导出需要的权限')) {
+        const scopes = feishuScopes(raw);
+        const named = scopes.join('、');
+        const cliSide = viaCli;
+        return build({
+            code: 'feishu_missing_scope',
+            titleZh: cliSide ? '飞书登录缺少权限' : '飞书应用缺少权限',
+            titleEn: 'Missing Feishu permission',
+            detailZh: cliSide ? `当前 lark-cli 登录身份缺少导出需要的权限${named ? `（${named}）` : ''}。` : `你的飞书应用没有开通导出需要的权限${named ? `（${named}）` : ''}。`,
+            detailEn: `The ${cliSide ? 'lark-cli login' : 'Feishu app'} lacks a permission the export needs${named ? ` (${scopes.join(', ')})` : ''}.`,
+            nextZh: cliSide
+                ? (scopes.length ? `在终端运行 lark-cli auth login --scope "${scopes.join(' ')}" 补授权后重试。` : '在终端运行 lark-cli auth login --domain docs --domain drive 补授权后重试。')
+                : `到飞书开放平台 → 你的应用 → 权限管理，开通${named ? ` ${named} ` : '云文档相关权限'}，发布新版本后重试；或在设置的「飞书导出路线」里改选「本机身份导出」。`,
+            nextEn: cliSide ? 'Grant the scope with lark-cli auth login --scope, then retry.' : 'Enable the scope for your app on the Feishu open platform, publish a new version, then retry.',
+            retryable: false,
+        });
+    }
+    if (viaCli && (['not logged in', 'not login', 'auth login', 'token expired', 'token_expired', 'need_user_authorization', 'type=authentication', 'unauthorized', 'refresh token', 'auth failed'].some((x) => lower.includes(x)) || raw.includes('没有可用的登录身份') || raw.includes('未登录'))) {
+        return build({
+            code: 'lark_cli_login_required',
+            titleZh: '本机飞书登录失效', titleEn: 'Local Lark login expired',
+            detailZh: '这台电脑上的 lark-cli 没有可用的登录身份（没登录或登录已过期）。',
+            detailEn: 'lark-cli on this computer has no usable login (never signed in, or the login expired).',
+            nextZh: '在终端运行 lark-cli auth login 重新登录，再回来导出。',
+            nextEn: 'Run lark-cli auth login in a terminal, then export again.',
+        });
+    }
+    if (lower.includes('lark credentials not set') || raw.includes('需要 App ID 和 App Secret')) {
+        return build({
+            code: 'feishu_app_credentials_missing',
+            titleZh: '没有填飞书应用凭证', titleEn: 'Feishu app credentials missing',
+            detailZh: '「飞书应用导出」需要 App ID 和 App Secret，现在还没有填。',
+            detailEn: 'Feishu app export needs an App ID and App Secret, and none are set.',
+            nextZh: '到设置「高级 · 其他凭证」里填写 FEISHU APP ID 和 FEISHU APP SECRET；或在「飞书导出路线」里改选「本机身份导出」。',
+            nextEn: 'Enter FEISHU APP ID and FEISHU APP SECRET in Settings, or switch the route to Local identity export.',
+            retryable: false,
+        });
+    }
+    if (lower.includes('tenant token error') || lower.includes('app secret invalid') || /code['"]?\s*[=:]\s*(10003|10014|99991663|99991664)\b/.test(lower) || raw.includes('不接受当前的 App ID')) {
+        return build({
+            code: 'feishu_app_credentials_invalid',
+            titleZh: '飞书应用凭证不对', titleEn: 'Feishu app credentials rejected',
+            detailZh: '飞书不接受当前的 App ID / App Secret（填错了，或 Secret 已经重置）。',
+            detailEn: 'Feishu rejected the App ID / App Secret (wrong, or the secret was reset).',
+            nextZh: '到飞书开放平台 → 你的应用 → 凭证与基础信息，复制最新的 App ID 和 App Secret，填回设置「高级 · 其他凭证」后重试。',
+            nextEn: 'Copy the current App ID and App Secret from the Feishu open platform into Settings, then retry.',
+            retryable: false,
+        });
+    }
+    if (lower.includes('folder not found') || lower.includes('http 404') || lower.includes('notexist') || raw.includes('文件夹不存在') || raw.includes('没有找到设置里填的目标文件夹')) {
+        return build({
+            code: 'feishu_folder_not_found',
+            titleZh: '飞书目标文件夹不存在', titleEn: 'Feishu folder not found',
+            detailZh: '飞书没有找到设置里填的目标文件夹，可能已被删除或移动。',
+            detailEn: 'Feishu could not find the folder set in Settings; it may have been deleted or moved.',
+            nextZh: '到设置「导出」里重新填写飞书文件夹链接，或清空它后重试。',
+            nextEn: 'Enter the Feishu folder link again in Settings → Export, or clear it, then retry.',
+            retryable: false,
+        });
+    }
+    if (['99991400', 'frequency limit', 'too many requests', 'http 429', 'rate limit', 'ratelimit'].some((x) => lower.includes(x)) || raw.includes('请求过于频繁') || raw.includes('限流') || raw.includes('飞书这段时间收到的请求太多')) {
+        return build({
+            code: 'feishu_rate_limited',
+            titleZh: '飞书暂时限制了请求', titleEn: 'Feishu is rate limiting',
+            detailZh: '飞书这段时间收到的请求太多，暂时拒绝了这次导出。',
+            detailEn: 'Feishu is refusing requests for now.',
+            nextZh: '过一两分钟再导出一次。', nextEn: 'Export again in a minute or two.',
+        });
+    }
+    if (raw.includes('图片上传失败')) {
+        return build({
+            code: 'feishu_image_upload_failed',
+            titleZh: '飞书图片上传失败', titleEn: 'Feishu image upload failed',
+            detailZh: '飞书导出时图片上传失败，文本笔记可能仍可用。',
+            detailEn: 'Images failed to upload during the Feishu export; the text may still be there.',
+            nextZh: '检查飞书应用的图片上传权限后重试。', nextEn: 'Check the app\'s image upload permission, then retry.',
+        });
+    }
+    if (['permission denied', 'forbidden', 'http 403', 'no permission'].some((x) => lower.includes(x)) || raw.includes('飞书拒绝了这次写入')) {
+        return build({
+            code: 'feishu_permission_denied',
+            titleZh: '飞书拒绝了写入', titleEn: 'Feishu refused the write',
+            detailZh: '飞书拒绝了这次写入：当前身份对目标位置没有编辑权限。',
+            detailEn: 'Feishu refused the write: the current identity cannot edit the target location.',
+            nextZh: '如果设置里填了飞书文件夹，先把它共享给你的应用（可编辑）或清空它；也可以在「飞书导出路线」里改选「本机身份导出」。',
+            nextEn: 'Share the Settings folder with your app (can edit) or clear it; or switch to Local identity export.',
+            retryable: false,
+        });
+    }
+    return build({
+        code: viaCli ? 'lark_cli_export_failed' : 'feishu_export_failed',
+        titleZh: viaCli ? 'lark-cli 导出失败' : '飞书导出失败',
+        titleEn: viaCli ? 'lark-cli export failed' : 'Feishu export failed',
+        detailZh: raw,
+        detailEn: raw,
+        nextZh: viaCli ? '在终端运行 lark-cli auth status 看登录状态，处理后重试。' : '检查设置里的「飞书导出路线」和对应的登录或应用凭证后重试。',
+        nextEn: viaCli ? 'Run lark-cli auth status in a terminal, fix what it shows, then retry.' : 'Check the Lark export route and its login or app credentials in Settings, then retry.',
+    });
+};
+
 export const diagnoseTaskError = (message, lang='zh', context={}) => {
     const raw = String(message || '').trim();
     const zh = lang === 'zh';
@@ -268,6 +401,8 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
         nextEn: 'Submit again; if it keeps failing, send the task detail to the maintainer.',
     }));
     const lower = raw.toLowerCase();
+    const feishu = feishuTaskDiagnosis(raw, lower);
+    if(feishu) return pick(feishu);
 
     const patterns = [
         [
@@ -518,18 +653,6 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
             }),
         ],
         [
-            (lower.includes('飞书') || lower.includes('lark') || lower.includes('feishu')) && (lower.includes('folder not found') || lower.includes('文件夹不存在') || lower.includes('notexist')),
-            taskErrorDiagnosis({
-                code: 'feishu_folder_not_found',
-                titleZh: '飞书目标文件夹不存在',
-                titleEn: 'Feishu folder not found',
-                detailZh: '笔记已生成，但导出时飞书找不到设置里填的目标文件夹。',
-                detailEn: 'The note was written, but Feishu could not find the target folder from Settings.',
-                nextZh: '到设置页重新选择飞书文件夹，再回到编辑器重新导出。',
-                nextEn: 'Pick the Feishu folder again in Settings, then export again from the editor.',
-            }),
-        ],
-        [
             lower.includes('quota') || lower.includes('balance') || lower.includes('insufficient_funds') || lower.includes('额度') || lower.includes('余额') || lower.includes('欠费'),
             taskErrorDiagnosis({
                 code: 'provider_balance_exhausted',
@@ -729,18 +852,6 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 nextEn: 'Regenerate the note; if it repeats, use direct mode or adjust the prompt.',
             }),
         ],
-        [
-            lower.includes('feishu') || raw.includes('飞书') || lower.includes('lark'),
-            taskErrorDiagnosis({
-                code: lower.includes('lark-cli') && (lower.includes('login') || lower.includes('auth')) ? 'lark_cli_login_required' : 'feishu_export_failed',
-                titleZh: lower.includes('lark-cli') && (lower.includes('login') || lower.includes('auth')) ? '本机飞书登录失效' : '飞书导出失败',
-                titleEn: lower.includes('lark-cli') && (lower.includes('login') || lower.includes('auth')) ? 'Local Lark login expired' : 'Feishu export failed',
-                detailZh: lower.includes('lark-cli') && (lower.includes('login') || lower.includes('auth')) ? '飞书导出失败：当前 lark-cli 没有可用登录身份。' : '飞书导出失败。请检查授权、导出路线和目标文档权限。',
-                detailEn: lower.includes('lark-cli') && (lower.includes('login') || lower.includes('auth')) ? 'Lark export failed: lark-cli has no usable login.' : 'Feishu export failed. Check authorization, export route, and target document permissions.',
-                nextZh: lower.includes('lark-cli') && (lower.includes('login') || lower.includes('auth')) ? '在本机重新登录 lark-cli 后重试导出。' : '检查飞书授权和导出路线后重试导出。',
-                nextEn: lower.includes('lark-cli') && (lower.includes('login') || lower.includes('auth')) ? 'Sign in to lark-cli locally, then retry export.' : 'Check Feishu authorization and export route, then retry.',
-            }),
-        ],
     ];
     const match = patterns.find(([condition]) => condition);
     if(match) return pick(match[1]);
@@ -912,4 +1023,14 @@ export const timeAgo = (ts, t) => {
     if(m<60) return `${m} ${t('dash.mAgo')}`;
     if(h<24) return `${h} ${t('dash.hAgo')}`;
     return `${dy} ${t('dash.dAgo')}`;
+};
+
+// What the editor says after a manual Feishu export: that it landed, and how
+// many screenshots did not make it into the document.
+export const larkExportToastText = (response={}, t=(key)=>key) => {
+    const total = Number(response?.image_count || 0);
+    const uploaded = Number(response?.image_upload_count || 0);
+    const missing = Math.max(0, total - uploaded);
+    const done = t('edit.exportDone');
+    return missing > 0 ? `${done} · ${t('edit.exportImagesMissing').replace('{n}', String(missing))}` : done;
 };

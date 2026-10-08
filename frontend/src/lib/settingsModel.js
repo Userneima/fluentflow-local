@@ -25,6 +25,9 @@ export const normalizeSourceMode = (value) => (
 
 export const LARK_EXPORT_ROUTE_OPENAPI = 'openapi';
 export const LARK_EXPORT_ROUTE_LOCAL_CLI = 'local_cli';
+// Default for anyone who has not picked a route: the backend uses the user's
+// own identity when lark-cli is installed and signed in, otherwise the app.
+export const LARK_EXPORT_ROUTE_AUTO = 'auto';
 
 // Route values an older build could store for a Feishu account-OAuth export.
 // This build has no such route, so a stored value remaps to the app-credential
@@ -36,7 +39,8 @@ export const normalizeLarkExportRoute = (value, legacyViaCli=false) => {
     if (route === LARK_EXPORT_ROUTE_LOCAL_CLI || route === 'lark_cli') return LARK_EXPORT_ROUTE_LOCAL_CLI;
     if (LEGACY_HOSTED_OAUTH_ROUTE_ALIASES.includes(route)) return LARK_EXPORT_ROUTE_OPENAPI;
     if (route === LARK_EXPORT_ROUTE_OPENAPI || route === 'lark_openapi') return LARK_EXPORT_ROUTE_OPENAPI;
-    return legacyViaCli ? LARK_EXPORT_ROUTE_LOCAL_CLI : LARK_EXPORT_ROUTE_OPENAPI;
+    if (route === LARK_EXPORT_ROUTE_AUTO) return LARK_EXPORT_ROUTE_AUTO;
+    return legacyViaCli ? LARK_EXPORT_ROUTE_LOCAL_CLI : LARK_EXPORT_ROUTE_AUTO;
 };
 
 export const larkExportRouteFromSettings = (settings={}) => (

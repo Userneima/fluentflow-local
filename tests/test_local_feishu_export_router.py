@@ -189,7 +189,7 @@ def test_cli_export_route(monkeypatch):
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
         local_feishu_export, "export_markdown_via_lark_cli",
-        lambda title, markdown: calls.append((title, markdown))
+        lambda title, markdown, **kwargs: calls.append((title, markdown))
         or {"ok": True, "url": "https://example.feishu.cn/wiki/w1", "via": "lark_cli"},
     )
 
@@ -220,7 +220,7 @@ def test_hosted_oauth_request_returns_400(monkeypatch):
 def test_export_failure_returns_friendly_500(monkeypatch):
     events = _silence_telemetry(monkeypatch)
 
-    def boom(title, markdown):
+    def boom(title, markdown, **kwargs):
         raise RuntimeError("lark-cli not found. Install @larksuite/cli globally.")
 
     monkeypatch.setattr(local_feishu_export, "export_markdown_via_lark_cli", boom)

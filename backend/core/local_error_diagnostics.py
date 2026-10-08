@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -40,6 +41,176 @@ _LINK_SOURCE_FAILURES = (
 )
 
 
+# ---- Feishu export ----------------------------------------------------------
+#
+# Route names match Settings → 导出: 「飞书导出路线」 with 「本机身份导出」
+# (lark-cli) and 「飞书应用导出」 (App ID / App Secret).
+
+_FEISHU_TEXT = re.compile(r"lark-cli|feishu|飞书|\blark\b", re.IGNORECASE)
+_PARTIAL_DOC = re.compile(r"已建好的半截文档：(\S+)")
+_CLI_MESSAGE = re.compile(r"lark-cli 失败 \[[^\]]*\]：(.*?)(?:（hint:|$)", re.DOTALL)
+_SCOPE_LIST = re.compile(r"scopes?\s+(?:is\s+|are\s+)?required[^\[]*\[([^\]]+)\]", re.IGNORECASE)
+_SCOPE_NAME = re.compile(r"\b[a-z_]+(?::[a-z_.]+)+\b")
+_APP_CREDENTIAL_CODE = re.compile(r"code['\"]?\s*[=:]\s*(10003|10014|99991663|99991664)\b")
+_CJK = re.compile(r"[一-鿿]")
+
+
+def _missing_scopes(raw: str) -> list[str]:
+    tagged = re.search(r"missing_scopes=([^\s\]]+)", raw)
+    if tagged:
+        return [s for s in tagged.group(1).split(",") if s]
+    listed = _SCOPE_LIST.search(raw)
+    if listed:
+        return [s.strip(" '\"") for s in listed.group(1).split(",") if s.strip(" '\"")]
+    return [s for s in _SCOPE_NAME.findall(raw) if s.split(":")[0] in {"wiki", "docx", "docs", "drive", "space"}]
+
+
+def _feishu_diagnosis(raw: str, lowered: str) -> dict[str, Any] | None:
+    if not _FEISHU_TEXT.search(raw):
+        return None
+    via_cli = "lark-cli" in lowered
+    cli_message = _CLI_MESSAGE.search(raw)
+    cli_words = cli_message.group(1).strip() if cli_message else ""
+    diagnosis = _feishu_rule(raw, lowered, via_cli)
+    # lark-cli's own Chinese sentence is closer to the cause than ours; where
+    # ours names something it may not (a scope, the login), keep both.
+    if cli_words and _CJK.search(cli_words) and cli_words not in diagnosis["detail"]:
+        if diagnosis["code"] in {"feishu_missing_scope", "lark_cli_login_required"}:
+            diagnosis["detail"] = f"{diagnosis['detail']} lark-cli 的原话：{cli_words}"
+        elif diagnosis["code"] != "lark_cli_not_installed":
+            diagnosis["detail"] = cli_words
+    partial = _PARTIAL_DOC.search(raw)
+    if partial:
+        diagnosis["detail"] = (
+            f"{diagnosis['detail']} 文档已经建好但只写了一部分：{partial.group(1)}，可以打开看看或删掉。"
+        )
+    return diagnosis
+
+
+def _feishu_rule(raw: str, lowered: str, via_cli: bool) -> dict[str, Any]:
+    if "lark-cli not found" in lowered:
+        return _diag(
+            "lark_cli_not_installed",
+            "没有找到 lark-cli",
+            "「本机身份导出」要用飞书命令行工具 lark-cli，这台电脑上没有找到它。",
+            "在终端运行 npm install -g @larksuite/cli 安装，再运行 lark-cli auth login 登录；"
+            "或在设置的「飞书导出路线」里改选「飞书应用导出」。",
+            retryable=False,
+        )
+    if (
+        "missing_scope" in lowered
+        or "99991679" in lowered
+        or "99991672" in lowered
+        or _SCOPE_LIST.search(raw)
+        or "createwikinodeinspace" in lowered
+    ):
+        scopes = _missing_scopes(raw)
+        named = "、".join(scopes)
+        if via_cli:
+            return _diag(
+                "feishu_missing_scope",
+                "飞书登录缺少权限",
+                f"当前 lark-cli 登录身份缺少导出需要的权限{f'（{named}）' if named else ''}。",
+                f'在终端运行 lark-cli auth login --scope "{" ".join(scopes)}" 补授权后重试。'
+                if scopes else "在终端运行 lark-cli auth login --domain docs --domain drive 补授权后重试。",
+                retryable=False,
+            )
+        return _diag(
+            "feishu_missing_scope",
+            "飞书应用缺少权限",
+            f"你的飞书应用没有开通导出需要的权限{f'（{named}）' if named else ''}。",
+            f"到飞书开放平台 → 你的应用 → 权限管理，开通{f' {named} ' if named else '云文档相关权限'}，"
+            "发布新版本后重试；或在设置的「飞书导出路线」里改选「本机身份导出」。",
+            retryable=False,
+        )
+    if via_cli and any(
+        token in lowered
+        for token in (
+            "not logged in", "not login", "auth login", "token expired", "token_expired",
+            "need_user_authorization", "type=authentication", "unauthorized", "refresh token",
+            "99991668", "99991677", "未登录", "登录已过期",
+        )
+    ):
+        return _diag(
+            "lark_cli_login_required",
+            "本机飞书登录失效",
+            "这台电脑上的 lark-cli 没有可用的登录身份（没登录或登录已过期）。",
+            "在终端运行 lark-cli auth login 重新登录，再回来导出。",
+        )
+    if "lark credentials not set" in lowered:
+        return _diag(
+            "feishu_app_credentials_missing",
+            "没有填飞书应用凭证",
+            "「飞书应用导出」需要 App ID 和 App Secret，现在还没有填。",
+            "到设置「高级 · 其他凭证」里填写 FEISHU APP ID 和 FEISHU APP SECRET；"
+            "或在「飞书导出路线」里改选「本机身份导出」。",
+            retryable=False,
+        )
+    if (
+        "tenant token error" in lowered
+        or "app secret invalid" in lowered
+        or "invalid app_secret" in lowered
+        or "app_secret invalid" in lowered
+        or _APP_CREDENTIAL_CODE.search(lowered)
+    ):
+        return _diag(
+            "feishu_app_credentials_invalid",
+            "飞书应用凭证不对",
+            "飞书不接受当前的 App ID / App Secret（填错了，或 Secret 已经重置）。",
+            "到飞书开放平台 → 你的应用 → 凭证与基础信息，复制最新的 App ID 和 App Secret，"
+            "填回设置「高级 · 其他凭证」后重试。",
+            retryable=False,
+        )
+    if "folder not found" in lowered or "http 404" in lowered or "notexist" in lowered or "文件夹不存在" in raw:
+        return _diag(
+            "feishu_folder_not_found",
+            "飞书目标文件夹不存在",
+            "飞书没有找到设置里填的目标文件夹，可能已被删除或移动。",
+            "到设置「导出」里重新填写飞书文件夹链接，或清空它后重试。",
+            retryable=False,
+        )
+    if any(
+        token in lowered
+        for token in ("99991400", "frequency limit", "too many requests", "http 429", "rate limit", "ratelimit")
+    ) or "请求过于频繁" in raw or "限流" in raw:
+        return _diag(
+            "feishu_rate_limited",
+            "飞书暂时限制了请求",
+            "飞书这段时间收到的请求太多，暂时拒绝了这次导出。",
+            "过一两分钟再导出一次。",
+        )
+    if "图片上传失败" in raw:
+        return _diag(
+            "feishu_image_upload_failed",
+            "飞书图片上传失败",
+            "飞书导出时图片上传失败，文本笔记可能仍可用。",
+            "检查飞书应用的图片上传权限后重试。",
+        )
+    if "permission denied" in lowered or "forbidden" in lowered or "http 403" in lowered or "no permission" in lowered:
+        return _diag(
+            "feishu_permission_denied",
+            "飞书拒绝了写入",
+            "飞书拒绝了这次写入：当前身份对目标位置没有编辑权限。",
+            "如果设置里填了飞书文件夹，先把它共享给你的应用（可编辑）或清空它；"
+            "也可以在「飞书导出路线」里改选「本机身份导出」。",
+            retryable=False,
+        )
+    short = raw if len(raw) <= 240 else raw[:240] + "…"
+    if via_cli:
+        return _diag(
+            "lark_cli_export_failed",
+            "lark-cli 导出失败",
+            f"lark-cli 导出失败：{short}",
+            "在终端运行 lark-cli auth status 看登录状态，处理后重试。",
+        )
+    return _diag(
+        "feishu_export_failed",
+        "飞书导出失败",
+        f"飞书导出失败：{short}",
+        "检查设置里的「飞书导出路线」和对应的登录或应用凭证后重试。",
+    )
+
+
 def diagnose_error(error: Any) -> dict[str, Any]:
     raw = str(error or "").strip()
     if not raw:
@@ -50,6 +221,10 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "重新提交任务；如果连续失败，请查看本机日志。",
         )
     lowered = raw.lower()
+
+    feishu = _feishu_diagnosis(raw, lowered)
+    if feishu is not None:
+        return feishu
 
     if "no module named yt_dlp" in lowered or "no module named 'yt_dlp'" in lowered:
         return _diag(
@@ -300,38 +475,6 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "后台笔记生成调用失败",
             "本机后台任务调用笔记生成接口失败。",
             "重试；如果转录已保存，打开结果后重生笔记。",
-        )
-    if "lark-cli" in lowered and any(
-        token in lowered for token in ("login", "not logged", "unauthorized", "auth")
-    ):
-        return _diag(
-            "lark_cli_login_required",
-            "本机飞书登录失效",
-            "当前 lark-cli 没有可用登录身份。",
-            "在本机重新登录 lark-cli 后重试导出。",
-        )
-    if "图片上传失败" in raw:
-        return _diag(
-            "feishu_image_upload_failed",
-            "飞书图片上传失败",
-            "飞书导出时图片上传失败，文本笔记可能仍可用。",
-            "检查飞书应用的图片上传权限后重试。",
-        )
-    is_feishu = "feishu" in lowered or "飞书" in raw or "lark" in lowered
-    if is_feishu and ("folder not found" in lowered or "http 404" in lowered or "notexist" in lowered):
-        return _diag(
-            "feishu_folder_not_found",
-            "飞书目标文件夹不存在",
-            "飞书没有找到导出的目标文件夹，可能已被删除或移动。",
-            "到设置里重新选择飞书导出的目标文件夹后重试。",
-            retryable=False,
-        )
-    if is_feishu:
-        return _diag(
-            "feishu_export_failed",
-            "飞书导出失败",
-            "飞书导出失败。",
-            "检查本机登录、应用凭据和目标文档权限后重试。",
         )
     if "job not found" in lowered or "404" in lowered or "归属" in raw:
         return _diag(

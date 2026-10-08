@@ -683,7 +683,10 @@ async def export_agent_task(
         loop = asyncio.get_running_loop()
         if export_target == "lark_cli":
             export_response = await loop.run_in_executor(
-                None, lambda: export_markdown_via_lark_cli(resolved_title, markdown)
+                None,
+                lambda: export_markdown_via_lark_cli(
+                    resolved_title, markdown, task_id=task_id, artifact_root=_artifact_storage_dir(),
+                ),
             )
         else:
             export_response = await loop.run_in_executor(

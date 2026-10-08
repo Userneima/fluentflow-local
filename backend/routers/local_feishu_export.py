@@ -10,6 +10,7 @@ the local credential store (form value first).
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any, Optional
 
@@ -17,9 +18,9 @@ from fastapi import APIRouter, Form, HTTPException, Request
 
 from backend.core.event_context import event_metadata, new_task_id
 from backend.core.event_logger import log_event
-from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
+from backend.core.lark_cli_exporter import export_markdown_via_lark_cli, lark_cli_ready
 from backend.core.lark_exporter import export_markdown_to_lark
-from backend.core.job_store import get_job
+from backend.core.job_store import get_job, update_job_result
 from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import TASK_ID_PATTERN
 from backend.core.local_error_diagnostics import diagnose_error
@@ -28,10 +29,14 @@ from backend.core.note_title import resolve_lark_doc_title
 from backend.core.storage_paths import _artifact_storage_dir
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _CLI_ROUTES = {"local_cli", "lark_cli"}
 _OPENAPI_ROUTES = {"openapi", "lark_openapi"}
 _HOSTED_OAUTH_ROUTES = {"user_oauth", "feishu_user", "feishu_user_oauth", "lark_user_oauth"}
+# The default for new users: their own identity when lark-cli is installed and
+# signed in, otherwise their Feishu app.
+_AUTO_ROUTES = {"auto"}
 
 
 def _truthy(value: Optional[str]) -> bool:
@@ -57,11 +62,33 @@ def _local_lark_export_target(
         return "lark_openapi"
     if _truthy(lark_via_cli):
         return "lark_cli"
+    if route in _AUTO_ROUTES:
+        return "lark_cli" if lark_cli_ready() else "lark_openapi"
     return "lark_openapi"
 
 
 def _friendly_error(error: Any) -> str:
-    return str(diagnose_error(error).get("detail") or "").strip() or str(error)
+    """What went wrong and what to do next, in one line for the export toast."""
+    diagnosis = diagnose_error(error)
+    detail = str(diagnosis.get("detail") or "").strip() or str(error)
+    next_action = str(diagnosis.get("next_action") or "").strip()
+    return f"{detail} {next_action}".strip()
+
+
+def _record_export_on_task(task_id: str, client_id: Optional[str], **fields: Any) -> None:
+    """Keep the export's outcome on the task so reopening it shows the link.
+
+    Only for a task this caller owns; the latest result is re-read so an edit
+    saved while Feishu was being called is not overwritten.
+    """
+    try:
+        job = get_job(task_id, client_id=client_id)
+        if not job:
+            return
+        latest = job.get("result") if isinstance(job.get("result"), dict) else {}
+        update_job_result(task_id, {**latest, **fields}, client_id=client_id)
+    except Exception:  # noqa: BLE001 - the Feishu document exists either way
+        logger.warning("Could not record the Feishu export on task %s", task_id, exc_info=True)
 
 
 def _export_task_id(requested: Optional[str], client_id: Optional[str]) -> str:
@@ -104,8 +131,12 @@ async def export_lark(
 ) -> dict[str, Any]:
     """Standalone endpoint: export existing markdown to a Feishu document."""
     loop = asyncio.get_event_loop()
-    task_id_value = _export_task_id(task_id, request_client_id(request) or "anonymous")
-    export_target = _local_lark_export_target(lark_export_route, lark_via_cli)
+    client_id = request_client_id(request) or "anonymous"
+    task_id_value = _export_task_id(task_id, client_id)
+    # "auto" asks lark-cli whether it is signed in; keep that off the event loop.
+    export_target = await loop.run_in_executor(
+        None, _local_lark_export_target, lark_export_route, lark_via_cli
+    )
     resolved = resolve_lark_doc_title(markdown, filename_stem="", form_title=title)
     kwargs: dict[str, Any] = {}
     if (app_id := resolve_secret(lark_app_id, "lark_app_id")):
@@ -130,7 +161,13 @@ async def export_lark(
     try:
         if export_target == "lark_cli":
             resp = await loop.run_in_executor(
-                None, lambda: export_markdown_via_lark_cli(resolved, markdown)
+                None,
+                lambda: export_markdown_via_lark_cli(
+                    resolved,
+                    markdown,
+                    task_id=task_id_value,
+                    artifact_root=_artifact_storage_dir(),
+                ),
             )
         else:
             resp = await loop.run_in_executor(
@@ -146,7 +183,16 @@ async def export_lark(
         if isinstance(resp, dict):
             resp["doc_title"] = resolved
             resp["task_id"] = task_id_value
+            resp["export_target"] = export_target
         feishu_doc_url = resp.get("url") if isinstance(resp, dict) else None
+        if feishu_doc_url:
+            _record_export_on_task(
+                task_id_value,
+                client_id,
+                lark_doc_title=resolved,
+                lark_response=resp,
+                lark_error=None,
+            )
         log_event(
             task_id=task_id_value,
             event_name="lark_export_completed",
@@ -166,6 +212,7 @@ async def export_lark(
         raise
     except Exception as exc:
         friendly_error = _friendly_error(exc)
+        _record_export_on_task(task_id_value, client_id, lark_error=friendly_error)
         log_event(
             task_id=task_id_value,
             event_name="lark_export_completed",
