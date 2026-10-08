@@ -87,6 +87,17 @@ def diarization_status() -> dict[str, Any]:
     }
 
 
+def default_on_for_agents() -> bool:
+    """Whether a caller with no page (Agent API, MCP, curl) gets speaker
+    separation without asking for it.
+
+    Only when the dependency is installed: without pyannote every such request
+    is skipped at run time, so defaulting it on only plants a step that never
+    runs. Every Agent entry (path and link) asks this same question.
+    """
+    return bool(diarization_status().get("dependency_installed"))
+
+
 def diarize_audio(audio_path: str | Path) -> list[SpeakerTurn]:
     status = diarization_status()
     if not status["available"]:

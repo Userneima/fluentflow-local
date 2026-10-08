@@ -12,7 +12,8 @@ import {
     Trash2,
     XCircle,
 } from 'lucide-react';
-import {fmtDurationCompact} from '../lib/format.js';
+import {fmtDurationCompact, progressMessageOf} from '../lib/format.js';
+import {noteFallbackSentence} from '../lib/noteWriter.js';
 import {downloadBrowserFile} from './editor-helpers.js';
 import {
     fmtElapsed,
@@ -43,6 +44,7 @@ import {
     TASK_STATE_FAILED,
     TASK_STATE_CANCELLED,
     TASK_STATE_CACHED_ONLY,
+    taskStatusLabel,
 } from '../lib/taskState.js';
 import {useJobPolling} from '../lib/useJobPolling.js';
 import {extraUrlsIgnoredNotice, retryInputForJob, retryOptionsForJob} from '../lib/linkRetry.js';
@@ -183,15 +185,7 @@ const mergeJobs = (...groups) => {
     return sortJobsForHistoryView(Array.from(byId.values()));
 };
 
-const statusLabel = (job, lang) => {
-    const state = normalizeTaskState(job);
-    if (state === TASK_STATE_UPLOADING) return lang === 'zh' ? '上传中' : 'Uploading';
-    if (state === TASK_STATE_QUEUED) return lang === 'zh' ? '排队中' : 'Queued';
-    if (state === TASK_STATE_COMPLETED || state === TASK_STATE_CACHED_ONLY) return lang === 'zh' ? '已完成' : 'Completed';
-    if (state === TASK_STATE_FAILED) return lang === 'zh' ? '失败' : 'Failed';
-    if (state === TASK_STATE_CANCELLED) return lang === 'zh' ? '已取消' : 'Cancelled';
-    return lang === 'zh' ? '处理中' : 'Running';
-};
+const statusLabel = taskStatusLabel;
 
 // Whether this task's material has no picture. Copy that says "提取音频" or "录像"
 // about an uploaded .m4a is not a translation slip — it tells the user the product
@@ -264,14 +258,18 @@ const liveStageDetail = (job, lang, aheadName = '') => {
     // thing on the card.
     const waiting = queueWaitDetail(job, lang, aheadName);
     if (waiting) return waiting;
-    const snapshotStep = Array.isArray(job?.task_snapshot?.steps)
-        ? job.task_snapshot.steps.find((step) => step?.id === job.task_snapshot?.current_step)
-        : null;
-    if (snapshotStep?.detail) return snapshotStep.detail;
     const progressMeta = job?.metadata?.video_source_progress || {};
     const loaded = progressMeta.loaded_bytes ? fmtBytes(progressMeta.loaded_bytes) : '';
     const total = progressMeta.total_bytes ? fmtBytes(progressMeta.total_bytes) : '';
     const byteText = loaded && total ? ` · ${loaded} / ${total}` : (loaded ? ` · ${loaded}` : '');
+    // A link task's own line while it downloads or waits ("正在下载视频…"). The
+    // service only sends it while the stage that wrote it lasts.
+    const progressMessage = progressMessageOf(job);
+    if (progressMessage) return `${progressMessage}${byteText}`;
+    const snapshotStep = Array.isArray(job?.task_snapshot?.steps)
+        ? job.task_snapshot.steps.find((step) => step?.id === job.task_snapshot?.current_step)
+        : null;
+    if (snapshotStep?.detail) return snapshotStep.detail;
     if (progressMeta.message) return `${progressMeta.message}${byteText}`;
     if (normalizeTaskState(job) === TASK_STATE_QUEUED) {
         // Say why the wait can be long. One task runs at a time, and the task
@@ -564,7 +562,9 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
         // "剪掉 639 处，省 2m …" — the one number that differs per recording was the
         // one being cut off to make room for words that never changed.
         {label: lang === 'zh' ? '去气口' : 'Breath gaps', ...debreathTile(job, lang)},
-        {label: lang === 'zh' ? '笔记' : 'Note', value: noteTileValue(job, lang)},
+        // A note the text model wrote because the frame note could not run is
+        // a different note from the one asked for; the reason is the point.
+        {label: lang === 'zh' ? '笔记' : 'Note', value: noteTileValue(job, lang), hint: noteFallbackSentence(job?.result, lang), wrapHint: true},
     ];
     const delivery = cutFileDelivery(job, lang);
     return (
@@ -684,7 +684,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                         <p className="text-[11px] font-extrabold text-[#85868c] dark:text-white/55">{item.label}</p>
                         <p className="mt-1 truncate text-[13px] font-extrabold text-[#111111] dark:text-white" title={item.value}>{item.value}</p>
                         {item.hint ? (
-                            <p className="mt-0.5 truncate text-[11px] font-semibold text-[#85868c] dark:text-white/45" title={item.hint}>{item.hint}</p>
+                            <p className={`mt-0.5 text-[11px] font-semibold text-[#85868c] dark:text-white/45 ${item.wrapHint ? 'break-words leading-4' : 'truncate'}`} title={item.hint}>{item.hint}</p>
                         ) : null}
                     </div>
                 ))}
@@ -705,6 +705,7 @@ const cardRenderKey = (job) => {
         job?.error_reason, job?.source_filename, job?.source_file_size_mb, job?.source_duration_seconds,
         !!job?.result, result.summary_chars, result.summary_status, result.summary_error, result.summary_skipped,
         result.summary_written_from, String(result.summary_markdown || '').length,
+        result.note_written_by, result.note_fallback_reason,
         !!result.artifacts?.debreath_media,
         debreath.status, debreath.delivered, debreath.delivery_error, debreath.used_for_transcription,
         debreath.already_cut, debreath.not_worth_rendering, debreath.render_verified, debreath.rendered,
@@ -713,6 +714,7 @@ const cardRenderKey = (job) => {
         meta.queue_wait?.waiting_for, meta.queue_wait?.since,
         meta.video_source_progress?.message, meta.video_source_progress?.loaded_bytes,
         meta.video_source_progress?.total_bytes, meta.video_source_progress?.percent,
+        progressMessageOf(job),
         job?.task_snapshot?.current_step,
         job?.sttStatus, job?.stt_status, meta.stt_status,
     ].join('\u0001');

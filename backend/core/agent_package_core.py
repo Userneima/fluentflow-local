@@ -19,7 +19,12 @@ from backend.core.result_artifacts import (
     DEBREATH_TRANSCRIPT_KIND,
     VISUAL_NOTE_KIND,
 )
-from backend.core.result_schema import canonical_display_segments, canonical_raw_segments, sanitize_raw_segments
+from backend.core.result_schema import (
+    FRAME_NOTE_WRITTEN_FROM,
+    canonical_display_segments,
+    canonical_raw_segments,
+    sanitize_raw_segments,
+)
 from backend.core.title_display import display_title_for_user
 from backend.core.note_diagnosis import build_note_generation_diagnosis
 
@@ -312,6 +317,7 @@ def _agent_cut_media_note(result: dict[str, Any], artifacts: dict[str, dict[str,
         # displaced can still be put back.
         "promoted": bool(state.get("promoted")),
         "summary_written_from": _text(result.get("summary_written_from")) or None,
+        "note_from_frames": _text(result.get("summary_written_from")) in FRAME_NOTE_WRITTEN_FROM,
         "previous_note_restorable": bool(_text(replaced.get("previous_markdown"))),
         "note_artifact": VISUAL_NOTE_KIND if VISUAL_NOTE_KIND in artifacts else None,
     }

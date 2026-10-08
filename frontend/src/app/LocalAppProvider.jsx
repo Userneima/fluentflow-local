@@ -13,6 +13,7 @@ import {
     jobToCurrentJob,
     jobToHistoryEntry,
     jobVisibleInHistory,
+    larkExportsFromJobs,
     readCachedAccountJobs,
     reconcileTaskList,
     writeCachedAccountJobs,
@@ -36,13 +37,16 @@ const CACHE_WRITE_DEBOUNCE_MS = 1000;
 // single loopback workspace.
 export const LocalAppProvider = ({children}) => {
     const [tasks, setTasks] = useState([]);
-    const [larkExports, setLarkExports] = useState(() => {
+    const [manualLarkExports, setLarkExports] = useState(() => {
         try { return JSON.parse(localStorage.getItem('fluentflow_lark_exports') || '[]'); } catch (_) { return []; }
     });
     const [currentJob, setCurrentJob] = useState(null);
     const [lastResult, setLastResult] = useState(null);
     const [lastSourceFile, setLastSourceFile] = useState(null);
     const [runtimeConfig, setRuntimeConfig] = useState(defaultRuntimeConfig);
+    // Whether this build can separate speakers at all. Pages that submit work
+    // read it so a task does not ask for something that is always skipped.
+    const [diarizationStatus, setDiarizationStatus] = useState(null);
     // null until the first answer; false is the only value that shows the
     // banner, so an unanswered first check does not flash it on every load.
     const [backendHealthy, setBackendHealthy] = useState(null);
@@ -86,6 +90,10 @@ export const LocalAppProvider = ({children}) => {
             .then((response) => response.ok ? response.json() : null)
             .then((data) => { if (data && active) setRuntimeConfig(normalizeRuntimeConfig(data)); })
             .catch((error) => { if (active) reportBackendError(error); });
+        apiFetch(`${API_BASE}/speaker-diarization/status`)
+            .then((response) => response.ok ? response.json() : null)
+            .then((data) => { if (data && active) setDiarizationStatus(data); })
+            .catch(() => {});
         try {
             const rawSettings = JSON.parse(localStorage.getItem('fluentflow_settings') || '{}');
             if (SENSITIVE_SETTING_KEYS.some((key) => rawSettings[key])) {
@@ -216,11 +224,14 @@ export const LocalAppProvider = ({children}) => {
         cancelledRef.current.delete(String(taskId));
         setTasks((current) => reconcileInto(current));
     };
-    const addLarkExport = (entry) => persistLarkExports([entry, ...larkExports].slice(0, 50));
+    const addLarkExport = (entry) => persistLarkExports([entry, ...manualLarkExports].slice(0, 50));
+    // Every document this app has made, not only the ones exported by hand:
+    // automatic exports are recorded on the task, not in this browser.
+    const larkExports = useMemo(() => larkExportsFromJobs(tasks, manualLarkExports), [tasks, manualLarkExports]);
     const stats = {
         totalMinutes: Math.round(history.reduce((total, item) => total + (item.durationMin || 0), 0)),
         notesGenerated: history.filter((item) => item.status === 'completed').length,
     };
 
-    return <AppCtx.Provider value={{tasks, history, ingestJobs, markCancelled, revertCancelled, restoreTask, addToHistory, removeFromHistory, currentJob, setCurrentJob, lastResult, setLastResult, lastSourceFile, setLastSourceFile, stats, larkExports, addLarkExport, runtimeConfig, setPendingUploadAbort, abortPendingUpload, backendHealthy, backendDown: backendHealthy === false, checkBackendHealth, reportBackendError}}>{children}</AppCtx.Provider>;
+    return <AppCtx.Provider value={{tasks, history, ingestJobs, markCancelled, revertCancelled, restoreTask, addToHistory, removeFromHistory, currentJob, setCurrentJob, lastResult, setLastResult, lastSourceFile, setLastSourceFile, stats, larkExports, addLarkExport, runtimeConfig, diarizationStatus, setPendingUploadAbort, abortPendingUpload, backendHealthy, backendDown: backendHealthy === false, checkBackendHealth, reportBackendError}}>{children}</AppCtx.Provider>;
 };

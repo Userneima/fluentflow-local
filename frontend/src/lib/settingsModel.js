@@ -105,3 +105,11 @@ export const DEFAULT_STT_MODEL = 'large-v3';
 export const normalizeSttModel = (_model) => (
     DEFAULT_STT_MODEL
 );
+
+// Whether a new task should ask for speaker separation. The installed build
+// usually has no pyannote; asking there only produces a request that is always
+// skipped. An unknown status (not fetched yet, or the service did not answer)
+// leaves the decision to the service.
+export const speakerDiarizationRequested = (settings = {}, diarizationStatus = null) => (
+    !!settings?.speakerDiarization && diarizationStatus?.dependency_installed !== false
+);

@@ -14,9 +14,14 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {MemoryRouter, Route, Routes} from 'react-router-dom';
 
+// GET /speaker-diarization/status as the app provider holds it.
+let diarizationStatus = null;
+let history = [];
+
 vi.mock('../app/AppContext.jsx', () => ({
     useApp: () => ({
-        history: [],
+        history,
+        diarizationStatus,
         addToHistory: () => {},
         currentJob: null,
         setCurrentJob: () => {},
@@ -169,6 +174,41 @@ describe('every entry sends the same settings', () => {
         expect(sent.paths.speaker_diarization).toBe('false');
         expect(sent.folder.speaker_diarization).toBe('false');
         expect(sent.upload.speaker_diarization).toBeUndefined();
+    });
+
+    // Requirement: a build without the speaker separation component does not
+    // ask for it, so no task carries a request that is always skipped.
+    it('does not ask for speaker separation when this build cannot do it', async () => {
+        diarizationStatus = {available: false, dependency_installed: false};
+        try {
+            await submitThroughEveryEntry();
+        } finally {
+            diarizationStatus = null;
+        }
+        expect(sent.upload.speaker_diarization).toBeUndefined();
+        expect(sent.paths.speaker_diarization).toBe('false');
+        expect(sent.folder.speaker_diarization).toBe('false');
+        expect(sent.link.speaker_diarization).toBeUndefined();
+    });
+});
+
+// Requirement: 「最近任务」 names a cancelled task 已取消, as the task list does.
+describe('recent tasks on the start page', () => {
+    afterEach(() => { cleanup(); history = []; });
+
+    it('labels each state the way the task list does', () => {
+        history = [
+            {id: 'a', name: '取消的', status: 'cancelled', timestamp: Date.now()},
+            {id: 'b', name: '失败的', status: 'failed', timestamp: Date.now()},
+            {id: 'c', name: '完成的', status: 'completed', timestamp: Date.now()},
+            {id: 'd', name: '进行中的', status: 'processing', timestamp: Date.now()},
+        ];
+        mount();
+        const badge = (name) => screen.getByText(name).parentElement.querySelector('span').textContent;
+        expect(badge('取消的')).toBe('已取消');
+        expect(badge('失败的')).toBe('失败');
+        expect(badge('完成的')).toBe('已完成');
+        expect(badge('进行中的')).toBe('处理中');
     });
 });
 

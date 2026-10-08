@@ -49,23 +49,44 @@ export const SettingsPageShell = ({banner = null, overlays = null, children}) =>
     );
 };
 
-export const SpeakerDiarizationRow = ({state, available}) => {
+// What the speaker-separation switch can honestly say, from
+// GET /speaker-diarization/status. The launcher installs without pyannote, so
+// on most machines the answer is "not in this build", and that is what the row
+// says instead of showing a grey switch with no reason.
+export const diarizationAvailability = (status) => {
+    if (!status || typeof status !== 'object') return 'unknown';
+    if (status.dependency_installed === false) return 'not_installed';
+    if (status.available) return 'available';
+    return 'needs_model';
+};
+
+export const SpeakerDiarizationRow = ({state, status}) => {
     const {lang} = useI18n();
     const {settings, updateSettingNow} = state;
+    const availability = diarizationAvailability(status);
+    const available = availability === 'available';
+    const zh = lang === 'zh';
+    const description = availability === 'not_installed'
+        ? (zh ? '这个版本没有带讲话人区分组件，暂时用不了。' : 'This build does not include the speaker separation component, so it cannot be used for now.')
+        : availability === 'needs_model'
+            ? (zh ? '要先在下方「高级」里填讲话人区分令牌（Hugging Face），下载模型后才能用。' : 'Fill in the speaker separation token (Hugging Face) under Advanced below first, so the model can be downloaded.')
+            : (zh ? '适合多人访谈或讲座。' : 'Useful for interviews or lectures.');
     return (
-        <label htmlFor="settingsSpeakerDiarization" className={`flex items-start justify-between gap-3 ${cellBase} ${available ? 'cursor-pointer hover:bg-[#f4f3f3] dark:hover:bg-white/[0.04]' : 'cursor-not-allowed opacity-60'}`}>
+        <label htmlFor="settingsSpeakerDiarization" className={`flex items-start justify-between gap-3 ${cellBase} ${available ? 'cursor-pointer hover:bg-[#f4f3f3] dark:hover:bg-white/[0.04]' : 'cursor-not-allowed'}`}>
             <span>
-                <span className="block text-sm font-bold">{lang === 'zh' ? '区分不同讲话人' : 'Speaker diarization'}</span>
-                <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">
-                    {lang === 'zh' ? '适合多人访谈或讲座。不可用时会保持关闭。' : 'Useful for interviews or lectures. It stays off when unavailable.'}
+                <span className={`block text-sm font-bold ${available ? '' : 'opacity-60'}`}>{zh ? '区分不同讲话人' : 'Speaker separation'}</span>
+                <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant" data-testid="diarization-availability">
+                    {description}
                 </span>
             </span>
-            <SettingCheckbox
-                id="settingsSpeakerDiarization"
-                checked={!!settings.speakerDiarization && available}
-                disabled={!available}
-                onChange={e=>updateSettingNow({speakerDiarization:e.target.checked})}
-            />
+            {availability !== 'not_installed' && (
+                <SettingCheckbox
+                    id="settingsSpeakerDiarization"
+                    checked={!!settings.speakerDiarization && available}
+                    disabled={!available}
+                    onChange={e=>updateSettingNow({speakerDiarization:e.target.checked})}
+                />
+            )}
         </label>
     );
 };
@@ -109,7 +130,7 @@ export const LocalSttSpeedRow = ({state}) => {
 
 export const VideoCookiesRow = ({state}) => {
     const {lang} = useI18n();
-    const {settings, updateSettingNow, cookieCheck, setCookieCheck, cookieChecking, runCookieCheck, updateVideoCookiesBrowser, allowMiuistore = true, updateAllowMiuistore, videoPrefError = ''} = state;
+    const {settings, updateSettingNow, cookieCheck, setCookieCheck, cookieChecking, runCookieCheck, updateVideoCookiesBrowser, videoPrefError = ''} = state;
     const changeBrowser = (value) => {
         if (updateVideoCookiesBrowser) updateVideoCookiesBrowser(value);
         else { updateSettingNow({videoCookiesBrowser: value}); setCookieCheck(null); }
@@ -166,28 +187,37 @@ export const VideoCookiesRow = ({state}) => {
                         : 'Could not save it to the local service: links submitted here use it, links from AI tools do not yet.'}
                 </p>
             )}
-            <label htmlFor="settingsAllowMiuistore" className="mt-4 flex cursor-pointer items-start justify-between gap-3 border-t border-[#efeeee] pt-4 dark:border-white/[0.08]">
-                <span>
-                    <span className="block text-sm font-bold">{lang === 'zh' ? '抖音备用解析' : 'Douyin fallback resolver'}</span>
-                    <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">
-                        {lang === 'zh'
-                            ? '读不到抖音登录时，把分享链接（只发链接本身）交给第三方解析服务 miuistore.com 换取视频地址。关掉后，抖音链接只靠浏览器登录态。'
-                            : 'When no Douyin login can be read, sends the share link (only the link itself) to the third-party resolver miuistore.com to get the video address. Off: Douyin links rely on the browser login only.'}
-                    </span>
-                    {videoPrefError === 'allow_miuistore' && (
-                        <span className="mt-1 block text-xs font-semibold text-red-600 dark:text-red-300">
-                            {lang === 'zh' ? '没能保存，开关已恢复原样。' : 'Could not save; the switch was put back.'}
-                        </span>
-                    )}
-                </span>
-                <SettingCheckbox
-                    id="settingsAllowMiuistore"
-                    checked={!!allowMiuistore}
-                    disabled={!updateAllowMiuistore}
-                    onChange={e=>updateAllowMiuistore?.(e.target.checked)}
-                />
-            </label>
         </div>
+    );
+};
+
+// Its own row, not a sub-item of the browser login: it is the one setting
+// here that sends something to a third party, and it is on by default.
+export const DouyinFallbackRow = ({state}) => {
+    const {lang} = useI18n();
+    const {allowMiuistore = true, updateAllowMiuistore, videoPrefError = ''} = state;
+    return (
+        <label htmlFor="settingsAllowMiuistore" className={`md:col-span-2 flex cursor-pointer items-start justify-between gap-3 ${cellBase} hover:bg-[#f4f3f3] dark:hover:bg-white/[0.04]`}>
+            <span>
+                <span className="block text-sm font-bold">{lang === 'zh' ? '抖音备用解析' : 'Douyin fallback resolver'}</span>
+                <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">
+                    {lang === 'zh'
+                        ? '读不到抖音登录时，把抖音分享链接（只发链接本身）发给第三方解析服务 miuistore.com 换取视频地址。关掉后，抖音链接只靠浏览器登录态。'
+                        : 'When no Douyin login can be read, sends the Douyin share link (only the link itself) to the third-party resolver miuistore.com to get the video address. Off: Douyin links rely on the browser login only.'}
+                </span>
+                {videoPrefError === 'allow_miuistore' && (
+                    <span className="mt-1 block text-xs font-semibold text-red-600 dark:text-red-300">
+                        {lang === 'zh' ? '没能保存，开关已恢复原样。' : 'Could not save; the switch was put back.'}
+                    </span>
+                )}
+            </span>
+            <SettingCheckbox
+                id="settingsAllowMiuistore"
+                checked={!!allowMiuistore}
+                disabled={!updateAllowMiuistore}
+                onChange={e=>updateAllowMiuistore?.(e.target.checked)}
+            />
+        </label>
     );
 };
 
@@ -236,8 +266,8 @@ export const AutoIllustrateRow = ({state}) => {
                 <span className="block text-sm font-bold">{lang === 'zh' ? '给笔记自动配图' : 'Auto-illustrate notes'}</span>
                 <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">
                     {lang === 'zh'
-                        ? '视频笔记自动截取关键画面配图；需配置通义千问（DashScope）视觉密钥，会产生额外费用。纯口播视频通常无可配图。'
-                        : 'Capture key frames into video notes. Needs a Qwen (DashScope) vision key and adds cost. Talking-head videos usually have nothing to illustrate.'}
+                        ? '视频笔记自动截取关键画面配图；需要通义千问（阿里云百炼）的 Key，会产生额外费用。纯口播视频通常无可配图。'
+                        : 'Capture key frames into video notes. Needs a Qwen (Alibaba Cloud Bailian) key and adds cost. Talking-head videos usually have nothing to illustrate.'}
                 </span>
             </span>
             <SettingCheckbox
@@ -384,7 +414,7 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
                 <select className={inputClass} value={aiProvider} onChange={e=>updateSettingNow({aiProvider:e.target.value, aiModel: aiProviderDefaults[e.target.value] || DEFAULT_DEEPSEEK_MODEL})}>
                     <option value="deepseek">DeepSeek</option>
                     <option value="openai">OpenAI</option>
-                    <option value="qwen">Qwen</option>
+                    <option value="qwen">{lang === 'zh' ? '通义千问（阿里云百炼）' : 'Qwen (Alibaba Cloud Bailian)'}</option>
                 </select>
             </div>
             <div className="space-y-2">
@@ -455,15 +485,23 @@ export const AnthropicKeyField = ({state}) => {
     const {
         credentialStatus, credentialConfigured, secretDraft, setSecretDraft, saveSecret,
         secretSaving, secretFeedback, secretRetentionText, secretInputPlaceholder,
+        activeAiConfigured,
     } = state;
     const configured = credentialConfigured(credentialStatus, 'anthropic_api_key');
+    // What happens without it depends on whether a text-model key is there;
+    // promising "the text model above" when none is filled in was untrue.
+    const withoutIt = activeAiConfigured
+        ? (lang === 'zh' ? '不填也能出笔记，由上面的文本模型根据转录稿写。' : 'Without it the text model above still writes a note from the transcript.')
+        : (lang === 'zh' ? '上面的文本模型 Key 也还没填，两个都不填就只有转录稿，没有笔记。' : 'No text-model key is filled in above either; with neither, jobs produce a transcript but no note.');
     return (
         <div className="space-y-2">
             <label className={fieldLabelClass}>{lang === 'zh' ? 'Anthropic API Key（可选）' : 'Anthropic API Key (optional)'}</label>
             <p className="text-xs leading-relaxed text-on-surface-variant">
                 {lang === 'zh'
-                    ? '另外填上它，笔记改由 Claude 结合画面来写，能引用幻灯片和白板上的内容。不填也能出笔记，由上面的文本模型根据转录稿写。'
-                    : 'Add this as well and Claude writes the note while looking at the video frames, so it can quote slides and whiteboards. Without it the text model above still writes a note from the transcript.'}
+                    ? '另外填上它，笔记改由 Claude 结合画面来写，能引用幻灯片和白板上的内容。'
+                    : 'Add this as well and Claude writes the note while looking at the video frames, so it can quote slides and whiteboards.'}
+                {lang === 'zh' ? '' : ' '}
+                {withoutIt}
                 {' '}
                 <a className="font-semibold text-primary underline" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
                     {lang === 'zh' ? '在 Anthropic 控制台创建 Key' : 'Create a key in the Anthropic Console'}
@@ -485,7 +523,7 @@ export const FeishuAppCredentialRows = ({state}) => {
     return (
         <div className="grid gap-4 px-5 py-4 md:grid-cols-2">
             <div className="space-y-2">
-                <label className={fieldLabelClass}>FEISHU APP ID</label>
+                <label className={fieldLabelClass}>{lang === 'zh' ? '飞书应用 ID' : 'Feishu app ID'}</label>
                 <div className="flex gap-2">
                     <input className={inputClass} placeholder={secretStatusText(credentialStatus?.lark_app_id_configured)} value={secretDraft.lark_app_id || ''} onChange={e=>setSecretDraft(d=>({...d, lark_app_id: e.target.value}))}/>
                     <button type="button" disabled={secretSaving || !secretDraft.lark_app_id} onClick={()=>saveSecret('lark_app_id')} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
@@ -493,7 +531,7 @@ export const FeishuAppCredentialRows = ({state}) => {
                 <SecretFeedback feedback={secretFeedback} keyName="lark_app_id" lang={lang}/>
             </div>
             <div className="space-y-2">
-                <label className={fieldLabelClass}>FEISHU APP SECRET</label>
+                <label className={fieldLabelClass}>{lang === 'zh' ? '飞书应用密钥' : 'Feishu app secret'}</label>
                 <div className="flex gap-2">
                     <input className={inputClass} placeholder={secretStatusText(credentialStatus?.lark_app_secret_configured)} type="password" value={secretDraft.lark_app_secret || ''} onChange={e=>setSecretDraft(d=>({...d, lark_app_secret: e.target.value}))}/>
                     <button type="button" disabled={secretSaving || !secretDraft.lark_app_secret} onClick={()=>saveSecret('lark_app_secret')} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
@@ -515,11 +553,11 @@ export const PyannoteTokenRow = ({state}) => {
         <div className="px-5 py-4">
             <div className="mb-3 flex items-start justify-between gap-3">
                 <div>
-                    <label className={fieldLabelClass}>PYANNOTE AUTH TOKEN</label>
+                    <label className={fieldLabelClass}>{lang === 'zh' ? '讲话人区分令牌（Hugging Face）' : 'Speaker separation token (Hugging Face)'}</label>
                     <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">
                         {pyannoteTokenConfigured
                             ? (lang === 'zh' ? '已配置。token 不会显示，需要更换时重新输入。' : 'Configured. The token is hidden. Re-enter it only when replacing it.')
-                            : (lang === 'zh' ? '用于本机后端获取 pyannote 讲话人区分模型。' : 'Used by the local backend to fetch the pyannote diarization model.')}
+                            : (lang === 'zh' ? '用来下载讲话人区分模型，下载一次后在本机运行。' : 'Used to download the speaker separation model once; it then runs on this machine.')}
                     </p>
                 </div>
                 {pyannoteTokenConfigured && !pyannoteTokenEditing && (

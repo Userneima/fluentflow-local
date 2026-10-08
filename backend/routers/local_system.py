@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
@@ -9,6 +10,7 @@ from fastapi import APIRouter, Body, HTTPException
 from backend.core.local_config import (
     LOCAL_PREFERENCE_FIELDS,
     LOCAL_SENSITIVE_FIELDS,
+    PROJECT_ROOT,
     credential_status,
     load_preferences,
     resolve_secret,
@@ -120,6 +122,11 @@ def runtime_config() -> dict[str, Any]:
         "default_stt_provider": default_stt_provider(),
         "show_maintainer_settings": True,
         "limits": _limits(),
+        # The Agent page prints MCP config and check commands from these, so
+        # they name this checkout and the interpreter actually running it
+        # instead of placeholders the user has to fill in.
+        "repo_root": str(PROJECT_ROOT),
+        "python_executable": sys.executable,
         # Wired by the local processing router: POST /jobs/{id}/retry re-runs
         # from the stored source file on the local hub.
         "features": {

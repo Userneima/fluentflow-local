@@ -102,7 +102,7 @@ def _clean_list(items: list[Any], limit: int = 5) -> list[str]:
     result = []
     for item in items:
         text = _text(item)
-        if text:
+        if text and text[:240] not in result:
             result.append(text[:240])
         if len(result) >= limit:
             break
@@ -167,9 +167,11 @@ def build_decision_log(
     job = job if isinstance(job, dict) else {}
     metadata = metadata if isinstance(metadata, dict) else _metadata(job)
     queue_options = _queue_options(metadata)
-    plan = result.get("processing_plan") if isinstance(result.get("processing_plan"), dict) else None
-    if not plan:
-        plan = build_processing_plan(result, job=job, metadata=metadata)
+    # Rebuilt on every read rather than trusted from the stored copy: the plan
+    # is deterministic from the result, and stored plans keep whatever wording
+    # (and thresholds) the version that wrote them had.
+    stored_plan = result.get("processing_plan") if isinstance(result.get("processing_plan"), dict) else {}
+    plan = {**stored_plan, **build_processing_plan(result, job=job, metadata=metadata)}
 
     material = plan.get("material") if isinstance(plan.get("material"), dict) else {}
     execution = plan.get("execution") if isinstance(plan.get("execution"), dict) else {}
@@ -192,7 +194,9 @@ def build_decision_log(
             *list(material.get("evidence") if isinstance(material.get("evidence"), list) else []),
         ],
         impact=_text(goal.get("reason")) or "后续按学习材料生成转录、字幕和笔记。",
-        source="inferred" if plan.get("generated_by") == "deterministic_runtime_plan" else "recorded",
+        # Recorded when the note planner (a model) named the material; the rest
+        # is this file's own rules reading source, length and transcript words.
+        source="recorded" if _text(result.get("note_mode_plan_material_type") or result.get("material_type")) else "inferred",
         stage="planning",
         confidence=_text(material.get("confidence")) or None,
     ))

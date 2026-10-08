@@ -544,3 +544,56 @@ def test_empty_submission_names_this_edition(agent_stack) -> None:
 
     assert response.status_code == 400
     assert "FluentFlow Local" in response.json()["detail"]
+
+
+def test_transcript_task_can_be_submitted_without_holding_the_request(monkeypatch, agent_stack):
+    """Requirement: an MCP caller gets a task id at once and waits with
+    wait_task, like every other submission; the note settings it passed reach
+    the model and are recorded on the note."""
+    seen: dict = {}
+    monkeypatch.setattr(
+        local_agent, "summarize_transcript_with_metadata",
+        lambda transcript, **kwargs: seen.update(kwargs) or _summary_result(),
+    )
+    client = TestClient(_app())
+
+    r = client.post(
+        "/agent/v1/tasks",
+        headers=_HEADERS,
+        json={
+            "transcript_text": "大家好。", "title": "演讲", "wait": False,
+            "options": {
+                "note_mode": "high_fidelity", "system_prompt": "只列行动项",
+                "prompt_preset": "meeting", "prompt_preset_label": "会议",
+            },
+        },
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "running" and body["task_id"] and "package" not in body
+    assert seen["note_mode"] == "high_fidelity"
+    assert seen["system_prompt"] == "只列行动项"
+    waited = client.post(f"/agent/v1/tasks/{body['task_id']}/wait", headers=_HEADERS, json={})
+    assert waited.json()["done"] is True
+    note = waited.json()["package"]["note"]
+    assert note["status"] == "completed"
+    stored = job_store.get_job(body["task_id"], db_path=agent_stack["jobs_db"])["result"]
+    assert stored["prompt_preset"] == "meeting" and stored["prompt_preset_label"] == "会议"
+
+
+def test_a_failed_background_transcript_note_is_reported_by_wait(monkeypatch, agent_stack):
+    def fail(transcript, **kwargs):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(local_agent, "summarize_transcript_with_metadata", fail)
+    client = TestClient(_app())
+
+    r = client.post(
+        "/agent/v1/tasks", headers=_HEADERS, json={"transcript_text": "文本", "wait": False},
+    )
+
+    task_id = r.json()["task_id"]
+    waited = client.post(f"/agent/v1/tasks/{task_id}/wait", headers=_HEADERS, json={}).json()
+    assert waited["done"] is True
+    assert job_store.get_job(task_id, db_path=agent_stack["jobs_db"])["status"] == "failed"

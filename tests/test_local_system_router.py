@@ -66,3 +66,19 @@ def test_credential_status_says_whether_the_visual_note_can_run(monkeypatch, tmp
     client.post("/credentials", json={"anthropic_api_key": "sk-ant-test"})
 
     assert client.get("/credentials/status").json()["visual_note_available"] is True
+
+
+def test_runtime_config_names_this_checkout_and_its_interpreter(monkeypatch, tmp_path):
+    # Requirement: the Agent page shows MCP config and a check command the user
+    # can paste as-is, so it needs the real repo path and the Python running the
+    # service, not placeholders.
+    import sys
+    from pathlib import Path
+
+    monkeypatch.setenv("FLUENTFLOW_CONFIG_PATH", str(tmp_path / "config.json"))
+    runtime = _client().get("/runtime-config").json()
+
+    repo_root = Path(runtime["repo_root"])
+    assert repo_root.is_absolute()
+    assert (repo_root / "scripts" / "fluentflow_mcp_server.py").is_file()
+    assert runtime["python_executable"] == sys.executable

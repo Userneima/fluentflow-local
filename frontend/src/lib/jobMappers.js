@@ -2,6 +2,7 @@ import { displayTitleForUser } from './format.js';
 import {
     normalizeJobPayload,
     normalizeResultPayload,
+    noteStatusOf,
 } from './resultSchema.js';
 import {
     normalizeTaskState,
@@ -272,7 +273,7 @@ export const resultToHistoryEntry = (sourceResult, fallback={}) => {
         displaySegments: result.display_segments || [],
         summary: result.summary_markdown||'',
         summarySkipped: !!result.summary_skipped,
-        summaryStatus: result.summary_status||null,
+        summaryStatus: noteStatusOf(result.summary_status),
         summaryError: result.summary_error||null,
         errorReason: result.error_reason||fallback.errorReason||null,
         larkUrl: result.lark_response?.url || null,
@@ -354,7 +355,7 @@ export const jobToHistoryEntry = (sourceJob) => {
         status: historyStatusFromJob(job),
         taskState: job.task_state,
         taskSnapshot: Object.keys(snapshot).length ? snapshot : null,
-        summaryStatus: result.summary_status || job.summary_status || entry.summaryStatus,
+        summaryStatus: noteStatusOf(result.summary_status) || noteStatusOf(job.summary_status) || entry.summaryStatus,
         summaryError: result.summary_error || snapshot.failure_reason || job.error_reason || entry.summaryError,
         errorReason: snapshot.failure_reason || job.error_reason || result.error_reason || entry.errorReason,
         nextAction: snapshot.next_action || entry.nextAction || null,
@@ -494,3 +495,38 @@ export const historyEntryToResult = (h) => h ? normalizeResultPayload({
     source_file_available: !!h.sourceFileAvailable,
     imported_from_local_history: h.source === 'imported_local_history' || h.source === 'browser_local_history' || String(h.taskId || '').startsWith('imported_'),
 }) : null;
+
+// The Feishu documents this app has made: every task whose result carries an
+// exported document (automatic exports included), plus the exports made by
+// hand from this browser. One entry per document, newest first.
+export const larkExportsFromJobs = (jobs = [], manual = []) => {
+    const byUrl = new Map();
+    const add = (entry) => {
+        const url = String(entry?.url || '').trim();
+        if (!url) return;
+        const existing = byUrl.get(url);
+        // A title typed at export time (manual entries come first) beats the
+        // task's display title; the later of the two times is kept.
+        byUrl.set(url, {
+            ...entry,
+            ...existing,
+            url,
+            title: existing?.title || entry.title || url,
+            timestamp: Math.max(Number(existing?.timestamp) || 0, Number(entry.timestamp) || 0),
+        });
+    };
+    (Array.isArray(manual) ? manual : []).forEach(add);
+    (Array.isArray(jobs) ? jobs : []).forEach((sourceJob) => {
+        const job = normalizeJobPayload(sourceJob);
+        const result = job.result || {};
+        const url = result.lark_response?.url || result.feishu_doc_url;
+        if (!url) return;
+        add({
+            url,
+            title: result.lark_doc_title || jobDisplayTitle(job),
+            timestamp: Date.parse(job.updated_at || job.created_at || '') || 0,
+            taskId: job.task_id || null,
+        });
+    });
+    return [...byUrl.values()].sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+};

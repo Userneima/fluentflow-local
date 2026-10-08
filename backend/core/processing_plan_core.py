@@ -23,6 +23,40 @@ PLANNER_MATERIAL_TYPE_MAP = {
 }
 
 
+# A recording counts as long from here on, the same line the classification
+# above uses to call something a lecture rather than a class.
+LONG_RECORDING_SECONDS = 1800
+_LONG_EVIDENCE = "时长超过 30 分钟"
+
+_PLANNER_MATERIAL_LABELS = {
+    "course": "课程",
+    "interview": "访谈",
+    "career_talk": "分享会",
+    "meeting": "会议",
+    "research": "研究资料",
+    "competition_brief": "资料解读",
+    "product_training": "培训",
+    "other": "其他材料",
+}
+
+_SOURCE_LABELS = {
+    "video_link": "视频链接",
+    "douyin": "抖音链接",
+    "youtube": "YouTube 链接",
+    "video": "视频文件",
+    "audio": "音频文件",
+}
+
+_MATERIAL_GOAL_NAMES = {
+    "interview_material": "访谈",
+    "sharing_session_material": "分享讨论",
+    "meeting_material": "会议",
+    "research_material": "研究资料",
+    "briefing_material": "资料解读",
+    "training_material": "培训",
+}
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -65,9 +99,9 @@ def _content_learning_signals(transcript: str) -> list[str]:
     if not transcript:
         return []
     checks = [
-        ("content mentions course/class", ("课程", "这节课", "本节课", "课堂", "course", "lecture")),
-        ("content mentions explanation", ("讲解", "解释", "概念", "原理", "案例", "example", "concept")),
-        ("content has structured learning markers", ("第一", "第二", "第三", "首先", "然后", "最后", "part one", "first", "second")),
+        ("内容提到课程", ("课程", "这节课", "本节课", "课堂", "course", "lecture")),
+        ("内容有讲解或概念说明", ("讲解", "解释", "概念", "原理", "案例", "example", "concept")),
+        ("内容有结构化学习标记", ("第一", "第二", "第三", "首先", "然后", "最后", "part one", "first", "second")),
     ]
     signals = []
     for label, tokens in checks:
@@ -80,8 +114,8 @@ def _course_or_lecture_signals(text: str) -> list[str]:
     if not text:
         return []
     checks = [
-        ("content explicitly mentions course/class", ("课程", "这节课", "本节课", "课堂", "course", "lesson")),
-        ("content explicitly mentions lecture", ("讲座", "lecture")),
+        ("内容明确提到课程", ("课程", "这节课", "本节课", "课堂", "course", "lesson")),
+        ("内容明确提到讲座", ("讲座", "lecture")),
     ]
     signals = []
     for label, tokens in checks:
@@ -94,13 +128,13 @@ def _sharing_or_discussion_signals(text: str, *, filename_only: bool = False) ->
     if not text:
         return []
     checks = [
-        ("content mentions sharing/discussion", ("分享会", "经验分享", "交流会", "集会", "圆桌", "答疑", "q&a", "discussion", "roundtable")),
-        ("content mentions meeting/session", ("会议", "例会", "session", "meeting")),
+        ("内容提到分享或答疑", ("分享会", "经验分享", "交流会", "集会", "圆桌", "答疑", "q&a", "discussion", "roundtable")),
+        ("内容提到会议", ("会议", "例会", "session", "meeting")),
     ]
     if not filename_only:
         checks.extend([
-            ("content mentions discussion/review", ("交流", "讨论", "复盘")),
-            ("content mentions interview", ("访谈", "interview")),
+            ("内容提到讨论或复盘", ("交流", "讨论", "复盘")),
+            ("内容提到访谈", ("访谈", "interview")),
         ])
     signals = []
     for label, tokens in checks:
@@ -132,10 +166,10 @@ def _material_type(
     planned = _planned_material_type(result)
     if planned:
         material, confidence = planned
-        evidence.append(f"note planner material_type={_text(result.get('note_mode_plan_material_type') or result.get('material_type')).lower()}")
+        evidence.append(f"笔记规划判断为{_PLANNER_MATERIAL_LABELS.get(_text(result.get('note_mode_plan_material_type') or result.get('material_type')).lower(), '其他材料')}")
         return material, confidence, evidence
     if source_type == "transcript_file":
-        evidence.append("source_type=transcript_file")
+        evidence.append("来源：字幕文件")
         return "course_transcript_file", "medium", evidence
     sharing_signals = [
         *_sharing_or_discussion_signals(name, filename_only=True),
@@ -147,39 +181,48 @@ def _material_type(
     explicit_course_signals = _course_or_lecture_signals(transcript)
     if explicit_course_signals:
         evidence.extend(explicit_course_signals)
-        if duration_seconds and duration_seconds >= 1800:
-            evidence.append("duration>=30min")
+        if duration_seconds and duration_seconds >= LONG_RECORDING_SECONDS:
+            evidence.append(_LONG_EVIDENCE)
             return "lecture_material", "high", evidence
         return "course_material", "high", evidence
     content_signals = _content_learning_signals(transcript)
     if content_signals:
         evidence.extend(content_signals)
-        if duration_seconds and duration_seconds >= 1800:
-            evidence.append("duration>=30min")
+        if duration_seconds and duration_seconds >= LONG_RECORDING_SECONDS:
+            evidence.append(_LONG_EVIDENCE)
         return "learning_material", "medium", evidence
     if source_type in {"video_link", "douyin", "youtube"}:
-        evidence.append(f"source_type={source_type}")
-        if duration_seconds and duration_seconds >= 1800:
-            evidence.append("duration>=30min")
+        evidence.append(f"来源：{_SOURCE_LABELS.get(source_type, source_type)}")
+        if duration_seconds and duration_seconds >= LONG_RECORDING_SECONDS:
+            evidence.append(_LONG_EVIDENCE)
             return "lecture_video_pending_content", "medium", evidence
         return "course_video_pending_content", "medium", evidence
     if any(token in name for token in ("course", "lecture", "lesson", "课程", "讲座", "课堂", "课")):
-        evidence.append("weak filename hint: course_or_lecture")
+        evidence.append("文件名像课程或讲座（弱线索）")
         return "course_or_lecture_pending_content", "low", evidence
     if source_type in {"video", "audio"}:
-        evidence.append(f"source_type={source_type}")
+        evidence.append(f"来源：{_SOURCE_LABELS.get(source_type, source_type)}")
         return "learning_material_pending_content", "medium", evidence
-    return "course_or_lecture_pending_content", "low", evidence or ["fallback route"]
+    return "course_or_lecture_pending_content", "low", evidence or ["线索不足，按通用学习材料处理"]
 
 
-def _learning_goal(material_type: str, source_type: str) -> tuple[str, str]:
+def _learning_goal(
+    material_type: str, source_type: str, duration_seconds: float | None = None
+) -> tuple[str, str]:
     if material_type in {"lecture_material", "lecture_video_pending_content"}:
         return "lecture_notes", "按讲座材料处理，优先保留主题结构、论证线索和可复用观点。"
     if source_type == "transcript_file":
         return "course_notes", "已有字幕/转录，整理为可复用课程笔记。"
     if material_type in {"course_material", "course_transcript_file", "course_video_pending_content"}:
         return "course_notes", "按课程材料处理，整理成可复习、可回看的一份笔记。"
-    return "learning_notes", "按长视频学习材料处理，整理成可复习、可回看的一份笔记。"
+    named = _MATERIAL_GOAL_NAMES.get(material_type)
+    if named:
+        return "learning_notes", f"按{named}材料处理，整理成可回看的一份笔记。"
+    # "Long" only when it is: a three-minute clip called a long video reads as a
+    # misjudgement of the whole task.
+    if duration_seconds is not None and duration_seconds >= LONG_RECORDING_SECONDS:
+        return "learning_notes", "按长视频学习材料处理，整理成可复习、可回看的一份笔记。"
+    return "learning_notes", "按学习材料处理，整理成可复习、可回看的一份笔记。"
 
 
 def note_strategy_from_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -218,7 +261,7 @@ def build_processing_plan(
     has_transcript = _has_transcript(result)
     planning_stage = "completed" if has_transcript else "initial"
     material_type, material_confidence, evidence = _material_type(source_type, filename, duration, result)
-    goal, goal_reason = _learning_goal(material_type, source_type)
+    goal, goal_reason = _learning_goal(material_type, source_type, duration)
     scope, tool = resolve_execution(result, job, metadata)
     summary_skipped = bool(result.get("summary_skipped") or result.get("summary_status") == "skipped")
     translation_status = _text(result.get("translation_status"))

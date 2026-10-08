@@ -76,6 +76,7 @@ from backend.core.result_artifacts import (
     resolve_artifact_file,
     write_text_artifact,
 )
+from backend.core.result_schema import NOTE_FROM_CUT_MEDIA, frame_note_written_from
 from backend.core.storage_paths import _artifact_storage_dir, find_source_file, in_place_source_path
 
 logger = logging.getLogger(__name__)
@@ -93,8 +94,10 @@ BASIS_TRANSCRIPT_ONLY = "transcript_only"
 MEDIA_CUT = "debreath_media"
 MEDIA_SOURCE_UNCHANGED = "source_no_cuts"
 
-# The provenance stamp left on the task's own note when this flow wrote it.
-SUMMARY_WRITTEN_FROM = "debreath_media_note"
+# The provenance stamp left on the task's own note when this flow wrote it:
+# NOTE_FROM_CUT_MEDIA when the note read the shortened file, NOTE_FROM_SOURCE_MEDIA
+# when it read the original recording (cut declined, or nothing to cut).
+SUMMARY_WRITTEN_FROM = NOTE_FROM_CUT_MEDIA
 
 # Only a finished task has a transcript that is done being written and a source
 # that was fully fetched.
@@ -543,7 +546,9 @@ def _store(task_id: str, *, client_id: str | None, state: dict[str, Any],
     return updated
 
 
-def _promotion(result: dict[str, Any], markdown: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _promotion(
+    result: dict[str, Any], markdown: str, *, media_kind: str | None = MEDIA_CUT
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Make this note the task's note, keeping the one it displaces.
 
     The previous note is copied onto the record that replaced it rather than
@@ -563,9 +568,9 @@ def _promotion(result: dict[str, Any], markdown: str) -> tuple[dict[str, Any], d
         "summary_skipped": False,
         "summary_status": STATUS_COMPLETED,
         "summary_error": None,
-        # Not an edit: nobody typed this. The stamp says which flow wrote it, so
-        # the page can say what the note describes.
-        "summary_written_from": SUMMARY_WRITTEN_FROM,
+        # Not an edit: nobody typed this. The stamp says which flow wrote it and
+        # from which file, so the page can say what the note describes.
+        "summary_written_from": frame_note_written_from(media_kind),
     }
     return fields, replaced
 
@@ -943,7 +948,7 @@ def _run_visual_note(
         if replace_note:
             current = get_job(task_id, client_id=client_id) or {}
             current_result = current.get("result") if isinstance(current.get("result"), dict) else {}
-            result_fields, state["replaced_note"] = _promotion(current_result, markdown)
+            result_fields, state["replaced_note"] = _promotion(current_result, markdown, media_kind=media.kind)
         return _store(
             task_id,
             client_id=client_id,
@@ -1028,7 +1033,8 @@ def use_generated_note(task_id: str, *, client_id: str | None = None) -> dict[st
     markdown = str(state.get("markdown") or "")
     if not markdown.strip():
         raise VisualNoteError("这个任务还没有根据剪后版本写好的笔记")
-    fields, replaced = _promotion(result, markdown)
+    media_source = state.get("media_source") if isinstance(state.get("media_source"), dict) else {}
+    fields, replaced = _promotion(result, markdown, media_kind=media_source.get("kind"))
     previous_record = state.get("replaced_note") if isinstance(state.get("replaced_note"), dict) else {}
     if not str(replaced.get("previous_markdown") or "").strip():
         # Nothing to keep this time round, so the earlier record is the one worth

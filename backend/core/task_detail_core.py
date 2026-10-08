@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from backend.core.result_schema import canonical_display_segments, canonical_raw_segments
+from backend.core.result_schema import (
+    FRAME_NOTE_WRITTEN_FROM,
+    NOTE_FROM_CUT_MEDIA,
+    canonical_display_segments,
+    canonical_raw_segments,
+)
 from backend.core.title_display import display_title_for_user
 
 TASK_DETAIL_VERSION = "1"
@@ -148,6 +153,9 @@ def _artifact_items(task_id: str, result: dict[str, Any]) -> list[dict[str, Any]
         "transcript_bilingual_vtt": "双语字幕 VTT",
         "summary_md": "Markdown 笔记",
         "playback_audio": "播放音频",
+        "debreath_cut_list": "去气口剪辑表",
+        "debreath_media": "去气口成品",
+        "visual_note": "图文笔记",
     }
     items: list[dict[str, Any]] = []
     for kind, artifact in artifacts.items():
@@ -252,6 +260,7 @@ STAGE_TO_STEP = {
     "summary_regenerate": "note_generation",
     "export": "feishu_export",
     "done": "result_save",
+    "video_source": "source_fetch",
     "failed": "source_fetch",
     "recovery": "source_fetch",
 }
@@ -317,6 +326,39 @@ def _note_mode_label(result: dict[str, Any], metadata: dict[str, Any]) -> str:
         "chapter_coverage": "章节覆盖笔记",
     }
     return labels.get(value, value)
+
+
+def _chosen_note_mode_label(result: dict[str, Any], metadata: dict[str, Any]) -> str:
+    """The note mode, when one was actually chosen; "auto" is not a way of
+    writing a note, so it names nothing."""
+    label = _note_mode_label(result, metadata)
+    return "" if label == "自动选择" else label
+
+
+def _note_written_sentence(result: dict[str, Any], metadata: dict[str, Any]) -> str:
+    """Who wrote the task's current note, and from what."""
+    stamp = _text(result.get("summary_written_from"))
+    edited = "之后手动改过。" if result.get("summary_edited") else ""
+    if stamp in FRAME_NOTE_WRITTEN_FROM:
+        state = result.get("visual_note") if isinstance(result.get("visual_note"), dict) else {}
+        media = "去气口后的版本" if stamp == NOTE_FROM_CUT_MEDIA else "原录音"
+        basis = "转录稿" if state.get("basis") == "transcript_only" else "画面和转录稿"
+        return f"Claude 读了{media}的{basis}，写了这份笔记。{edited}"
+    material = "字幕文本" if _text(result.get("source")) == "transcript_file" else "转录稿"
+    if stamp == "text_fallback":
+        return f"Claude 这次写不了，改由文本模型根据{material}写了这份笔记。{edited}"
+    if stamp == "text_regeneration":
+        return f"文本模型根据{material}重新写了这份笔记。{edited}"
+    mode = _chosen_note_mode_label(result, metadata)
+    how = f"，方式：{mode}" if mode else ""
+    return f"文本模型根据{material}写了这份笔记{how}。{edited}"
+
+
+def _link_not_downloaded(job: dict[str, Any], metadata: dict[str, Any]) -> bool:
+    """A link task whose video has not been fetched yet (including a retry that
+    has to fetch it again): it still reads as ``video_link`` and carries no
+    record of a downloaded video."""
+    return _text(job.get("source_type")) == "video_link" and not _video_source(metadata)
 
 
 def _status_for_snapshot(job: dict[str, Any]) -> str:
@@ -405,6 +447,8 @@ def _detail_for(
     if status == "cancelled":
         return "任务已取消。"
     if step_id == "source_fetch":
+        if status == "running" and not progress_meta.get("message"):
+            return "正在下载链接视频。" if _link_not_downloaded(job, metadata) else "正在获取素材。"
         if progress_meta.get("message") and status == "running":
             loaded = _num(progress_meta.get("loaded_bytes"))
             total = _num(progress_meta.get("total_bytes"))
@@ -438,8 +482,9 @@ def _detail_for(
         if status == "failed":
             return _text(result.get("summary_error") or job.get("error_reason")) or "AI 笔记生成失败。"
         if _has_note(result):
-            return f"已生成{_note_mode_label(result, metadata)}。"
-        return f"正在生成{_note_mode_label(result, metadata)}。"
+            return _note_written_sentence(result, metadata)
+        mode = _chosen_note_mode_label(result, metadata)
+        return f"正在写笔记（{mode}）。" if mode else "正在写笔记。"
     if step_id == "result_save":
         count = len(_artifact_items(_text(job.get("task_id")), result))
         if count:
@@ -525,7 +570,10 @@ def _timeline(
             order = STEP_ORDER.get(step_id, 0)
             statuses[step_id] = "cancelled" if step_id == active_step else ("completed" if order < active_order else "pending")
         elif job_status == "queued":
-            statuses[step_id] = "completed" if step_id in {"source_fetch", "subtitle_parse"} else "pending"
+            fetched = step_id == "subtitle_parse" or (
+                step_id == "source_fetch" and not _link_not_downloaded(job, metadata)
+            )
+            statuses[step_id] = "completed" if fetched else "pending"
         elif job_status == "running":
             order = STEP_ORDER.get(step_id, 0)
             statuses[step_id] = "running" if step_id == active_step else ("completed" if order < active_order else "pending")
@@ -775,6 +823,7 @@ def _media_preparation(result: dict[str, Any]) -> dict[str, Any] | None:
         "threshold_choice": state.get("threshold_choice") if isinstance(state.get("threshold_choice"), dict) else None,
         "transcript_media": _text(result.get("transcript_media")),
         "note_written_from": _text(result.get("summary_written_from")),
+        "note_from_frames": _text(result.get("summary_written_from")) in FRAME_NOTE_WRITTEN_FROM,
     }
 
 

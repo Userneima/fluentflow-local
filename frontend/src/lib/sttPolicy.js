@@ -16,6 +16,11 @@ const localRuntimeConfig = (config = {}) => ({
     // nothing, and a page offering them is offering controls with no wire behind
     // them. Env-switchable server-side, so it is asked for rather than assumed.
     writesItsOwnNote: config.features?.writes_its_own_note === true,
+    // Where this checkout lives and the interpreter running it, so the Agent
+    // page can print configs that work as copied. Empty when an older service
+    // does not say.
+    repoRoot: typeof config.repo_root === 'string' ? config.repo_root : '',
+    pythonExecutable: typeof config.python_executable === 'string' ? config.python_executable : '',
 });
 
 // Every stored or submitted value, including a cloud engine name left in an

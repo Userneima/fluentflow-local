@@ -59,7 +59,7 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | 变量 | 含义 | 默认 |
 | --- | --- | --- |
 | `FLUENTFLOW_LOCAL_CUT_FIRST` | 上传后先剪气口再转录 | 开 |
-| `FLUENTFLOW_LOCAL_AUTO_NOTE` | 转录完自动写笔记 | 开 |
+| `FLUENTFLOW_LOCAL_AUTO_NOTE` | 转录完由 Claude 结合画面自动写笔记。关掉不等于不要笔记：这时流水线自己的笔记步骤照常运行，有文本模型 Key 就用它根据转录稿写纯文字笔记，没有 Key 才没有笔记；结合画面的笔记留在结果页手动生成。完全不要笔记，提交时选「仅转录」 | 开 |
 | `FLUENTFLOW_LOCAL_STT_ENGINE` | 转录引擎：`auto` / `mlx` / `faster_whisper`（`cpu`、`gpu` 也认） | `auto` |
 | `FLUENTFLOW_NOTE_MODE` | 笔记模式：`auto` / `direct` / `fast` / `high_fidelity` / `chapter_coverage` | `auto` |
 | `FLUENTFLOW_TRANSCRIPT_CORRECTION_ENABLED` | 转录后用模型做高置信纠错（`FLUENTFLOW_TRANSCRIPT_CORRECTION` 是旧名，同义） | 关 |
@@ -80,13 +80,16 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 
 | 变量 | 含义 | 默认 |
 | --- | --- | --- |
-| `FLUENTFLOW_VISUAL_NOTE_CHANNEL` | 图文笔记走哪条 Claude 通道：`subscription`（本机登录的 Claude Code）或 `api_key` | 按本机有什么自动选 |
+| `FLUENTFLOW_VISUAL_NOTE_CHANNEL` | 图文笔记走哪条 Claude 通道。默认用你自己的 Anthropic API Key（设置页填写或 `.env` 里的 `ANTHROPIC_API_KEY`）；设为 `subscription` 才改用本机登录的 Claude Code 订阅，只适合在自己电脑上从源码运行 | `api_key` |
 | `FLUENTFLOW_VISUAL_NOTE_MODEL` | 图文笔记用的 Claude 模型 | `claude-opus-5` |
-| `FLUENTFLOW_VISUAL_NOTE_TIMEOUT` | 图文笔记单次超时秒数 | `2400` |
-| `FLUENTFLOW_CLAUDE_CLI` | `claude` 命令的路径，不设则在 PATH 上找 | 自动 |
+| `FLUENTFLOW_VISUAL_NOTE_TIMEOUT` | 图文笔记单次超时秒数，只作用于 `subscription` 通道（本机 `claude` 进程）；API Key 通道的请求超时由 SDK 决定 | `2400` |
+| `FLUENTFLOW_CLAUDE_CLI` | `claude` 命令的路径，不设则在 PATH 上找；只在 `subscription` 通道用到 | 自动 |
+| `FLUENTFLOW_NOTE_DEADLINE_SECONDS` | 文本模型写一份笔记的总时限（秒），到点后已有初稿就保留初稿、跳过后续修订，还没有初稿就报超时 | `3600` |
 | `FLUENTFLOW_LARK_CLI_BIN` | `lark-cli` 的路径，不设则在 PATH 上找 | 自动 |
 | `FLUENTFLOW_LARK_CLI_WIKI_SPACE` | 本机身份导出写入的知识空间 | `my_library` |
 | `FLUENTFLOW_LARK_DISABLE_OPENAPI_CONVERT` | 为真时飞书应用导出不走 OpenAPI 的 Markdown 转换 | 关 |
+
+文本笔记的默认提示词是 `backend/core/ai_prompts.py` 里的常量 `FLUENTFLOW_SYSTEM_PROMPT`，不从环境变量读；要换提示词，在设置页或提交时传 `system_prompt`。
 
 ### Agent 接口与脚本
 
@@ -117,7 +120,7 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | `queue_wait_completed` | 任务排在别的任务后面、轮到它时 | 排队等了多久、排在谁后面。`task_completed` 的总时长从提交算起，包含这段等待 |
 | `debreath_completed` / `debreath_failed` | 转写前自动去气口、或手动去气口结束时 | 用时、剪掉多少、阈值是否按素材调整、剪后文件有没有被用来转写；`outcome` 说明没用的原因 |
 | `summary_skipped` | 流水线不写自己的笔记时 | `reason` 区分「用户只要转写稿」和「笔记稍后结合画面来写」 |
-| `visual_note_unavailable` | 自动笔记开着、但结合画面的笔记写不了时 | 为什么写不了（例如 Claude 登录过期），这个任务改用文本模型写笔记 |
+| `visual_note_unavailable` | 自动笔记开着、但结合画面的笔记写不了时 | 为什么写不了（例如没有或填错 Anthropic API Key；选用订阅通道时还可能是 Claude 登录过期），这个任务改用文本模型写笔记 |
 | `visual_note_completed` / `visual_note_failed` | 结合画面的笔记写完或失败时 | 总用时、其中挑截图的本机用时、用了多少张截图、失败原因；`trigger` 区分自动和手动 |
 | `task_interrupted_by_restart` | 服务启动时处理被上一次重启打断的任务 | 哪些任务被打断、有没有自动重新排队 |
 

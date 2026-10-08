@@ -35,6 +35,8 @@ import {
 import SvgIcon from '../components/SvgIcon.jsx';
 import {finishedDuplicateLink, submitIgnoredExtraUrls, submitWasDuplicateOfActive} from '../lib/linkRetry.js';
 import {noteWriterBatchClause, noteWriterSentence, resolveNoteWriter} from '../lib/noteWriter.js';
+import {taskStatusLabel} from '../lib/taskState.js';
+import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
 const transcriptExts = /\.(srt|vtt|txt|md)$/i;
@@ -57,6 +59,7 @@ const MediaText = () => {
         setLastSourceFile,
         addLarkExport,
         runtimeConfig,
+        diarizationStatus,
         setPendingUploadAbort,
         abortPendingUpload,
         backendDown,
@@ -132,7 +135,7 @@ const MediaText = () => {
         noteMode: settings.noteMode || 'auto',
         promptPreset: settings.promptPreset || DEFAULT_PROMPT_PRESET,
         promptPresetLabel: presetDisplayLabel(settings.promptPreset || DEFAULT_PROMPT_PRESET, settings, lang),
-        speakerDiarization: !!settings.speakerDiarization,
+        speakerDiarization: speakerDiarizationRequested(settings, diarizationStatus),
         generateVisuals: !!settings.autoIllustrate,
         sttProvider: effectiveSttProvider(settings, runtimeConfig),
         cookiesFromBrowser: settings.videoCookiesBrowser || '',
@@ -809,18 +812,10 @@ const MediaText = () => {
                             </div>
                             <span className="shrink-0 text-sm font-extrabold tabular-nums">{Math.round(Math.max(0, Math.min(100, Number(currentJob?.progress) || 0)))}%</span>
                         </div>
-                        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                        <div className="mt-4 grid grid-cols-2 gap-3">
                             <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
                                 <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{t('dash.fileSize')}</p>
                                 <p className="mt-1 text-sm font-extrabold">{fmtFileSize(currentJob.fileSizeMb)}</p>
-                            </div>
-                            <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
-                                <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{lang === 'zh' ? '转录路线' : 'Transcription'}</p>
-                                <p className="mt-1 truncate text-sm font-extrabold">{currentJob.sttProvider ? (lang === 'zh' ? '本地' : 'Local') : '-'}</p>
-                            </div>
-                            <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
-                                <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{lang === 'zh' ? 'STT 模型' : 'STT model'}</p>
-                                <p className="mt-1 truncate text-sm font-extrabold">{currentJob.sttModel || '-'}</p>
                             </div>
                             <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
                                 <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{lang === 'zh' ? '来源' : 'Source'}</p>
@@ -848,7 +843,7 @@ const MediaText = () => {
                                 <button key={item.id} type="button" onClick={() => openRecentTask(item)} className="min-w-0 rounded-[18px] bg-[#f4f3f3] p-4 text-left transition hover:bg-[#efeeee] dark:bg-white/[0.08] dark:hover:bg-white/[0.12]">
                                     <div className="mb-2 flex items-center justify-between gap-2">
                                         <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold">{item.name}</h3>
-                                        <span className="inline-flex shrink-0 whitespace-nowrap rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-[#666] dark:bg-white/[0.16] dark:text-white/70">{t(item.status === 'completed' ? 'dash.statusCompleted' : item.status === 'processing' ? 'dash.statusProcessing' : 'dash.statusFailed')}</span>
+                                        <span className="inline-flex shrink-0 whitespace-nowrap rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-[#666] dark:bg-white/[0.16] dark:text-white/70">{taskStatusLabel({status: item.status}, lang)}</span>
                                     </div>
                                     <p className="text-xs font-semibold text-[#777] dark:text-white/55">{timeAgo(item.timestamp, t)}{item.durationMin > 0 && ` · ${item.durationMin} ${t('dash.minUnit')}`}</p>
                                 </button>

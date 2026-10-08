@@ -15,6 +15,7 @@ local video-source router and therefore remains inside the local/shared graph.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import time
 from copy import deepcopy
@@ -37,8 +38,10 @@ from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
 from backend.core.local_config import resolve_secret
+from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
 from backend.core import local_folder_intake, visual_note_job
+from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_request_scope import (
     request_client_id,
     request_is_localhost,
@@ -57,6 +60,8 @@ from backend.routers.local_processing import (
     retry_job_from_stored_source,
 )
 from backend.routers.local_video_sources import allow_duplicate_requested, submit_video_source_job
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent/v1", dependencies=[Depends(require_local_agent_access)])
 
@@ -175,8 +180,140 @@ def _bounded_finite_float(
     return min(max(parsed, minimum), maximum)
 
 
+async def _write_transcript_task(
+    task_id_value: str,
+    client_id: Optional[str],
+    title: str,
+    transcript: str,
+    options: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Write the note for a submitted transcript and store the finished task.
+
+    Raises HTTPException after recording the failure on the task.
+    """
+    skip_summary = _truthy_json(options.get("skip_summary"))
+    result: dict[str, Any] = {
+        "task_id": task_id_value,
+        "filename": title,
+        "display_title": title,
+        "transcript_text": transcript,
+        "transcript_text_preview": transcript[:200],
+        "source": "agent_transcript",
+    }
+    for key in ("prompt_preset", "prompt_preset_label"):
+        value = str(options.get(key) or "").strip()
+        if value:
+            result[key] = value
+    summary_status = "skipped"
+    if skip_summary:
+        result.update({"summary_skipped": True, "summary_status": "skipped"})
+    else:
+        kwargs = local_ai_kwargs(
+            deepseek_api_key=payload.get("deepseek_api_key"),
+            openai_api_key=payload.get("openai_api_key"),
+            qwen_api_key=payload.get("qwen_api_key"),
+            ai_provider=options.get("ai_provider") or payload.get("ai_provider"),
+            ai_model=options.get("ai_model") or payload.get("ai_model"),
+            # The note instructions may come as an option (MCP, the page's
+            # vocabulary) or top level (older Agent API callers).
+            system_prompt=options.get("system_prompt") or payload.get("system_prompt"),
+            note_mode=options.get("note_mode"),
+        )
+        loop = asyncio.get_running_loop()
+        try:
+            summary_result = await loop.run_in_executor(
+                None,
+                lambda: summarize_transcript_with_metadata(transcript, **kwargs),
+            )
+        except Exception as exc:
+            detail = friendly_error(exc)
+            upsert_job(
+                task_id=task_id_value,
+                status="failed",
+                client_id=client_id,
+                stage="summary",
+                source_type="agent_transcript",
+                source_filename=title,
+                summary_status="failed",
+                error_reason=detail,
+                metadata=event_metadata(route=_ROUTE, agent_input_type="transcript"),
+            )
+            raise HTTPException(status_code=500, detail=detail) from exc
+        result.update({
+            "summary_markdown": summary_result.markdown,
+            "summary_status": "completed",
+            "summary_skipped": False,
+            "requested_note_mode": summary_result.requested_mode,
+            "resolved_note_mode": summary_result.resolved_mode,
+            "note_mode_chunk_count": summary_result.chunk_count,
+            "note_mode_segment_count": getattr(summary_result, "segment_count", None),
+            "note_mode_evidence_count": getattr(summary_result, "evidence_count", None),
+            "note_mode_chapter_count": getattr(summary_result, "chapter_count", None),
+            "note_mode_important_evidence_count": getattr(summary_result, "important_evidence_count", None),
+            "note_mode_covered_important_evidence_count": getattr(summary_result, "covered_important_evidence_count", None),
+            "note_mode_coverage_missing_count": getattr(summary_result, "coverage_missing_count", None),
+            "chapter_coverage": getattr(summary_result, "chapter_coverage", None),
+        })
+        result = bind_chapter_coverage_time_ranges(result)
+        summary_status = "completed"
+    try:
+        result = _attach_result_artifacts(task_id_value, result)
+        upsert_job(
+            task_id=task_id_value,
+            status="completed",
+            client_id=client_id,
+            stage="done",
+            progress=100,
+            source_type="agent_transcript",
+            source_filename=title,
+            summary_status=summary_status,
+            result=result,
+            metadata=event_metadata(route=_ROUTE, agent_input_type="transcript"),
+        )
+    except Exception as exc:
+        detail = friendly_error(exc)
+        upsert_job(
+            task_id=task_id_value,
+            status="failed",
+            client_id=client_id,
+            stage="finalize",
+            progress=100,
+            source_type="agent_transcript",
+            source_filename=title,
+            summary_status="failed",
+            error_reason=detail,
+            metadata=event_metadata(route=_ROUTE, agent_input_type="transcript"),
+        )
+        raise HTTPException(status_code=500, detail=detail) from exc
+    return get_job(task_id_value, client_id=client_id) or {"task_id": task_id_value, "result": result}
+
+
+async def _write_transcript_task_in_background(
+    task_id_value: str,
+    client_id: Optional[str],
+    title: str,
+    transcript: str,
+    options: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    try:
+        await _write_transcript_task(task_id_value, client_id, title, transcript, options, payload)
+    except HTTPException:
+        # Already recorded on the task as failed; wait_task reports it.
+        return
+    except Exception:  # noqa: BLE001 - the task must not be left running
+        logger.exception("transcript note failed for %s", task_id_value)
+        upsert_job(task_id=task_id_value, status="failed", client_id=client_id, stage="summary",
+                   summary_status="failed", error_reason="写笔记时出错，详见本机日志。")
+
+
 @router.post("/tasks")
-async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+async def create_agent_task(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: dict[str, Any] = Body(...),
+) -> dict[str, Any]:
     input_text = str(payload.get("input") or payload.get("url") or "").strip()
     transcript = str(payload.get("transcript_text") or "").strip()
     input_type = str(payload.get("input_type") or "").strip().lower()
@@ -221,10 +358,15 @@ async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...
         }
 
     if input_text and input_type in {"", "video_link", "url", "share_text"}:
+        # Same speaker-separation default as a submission by path: an agent
+        # should not get speakers for a recording on disk and none for a link.
+        link_options = dict(options)
+        if link_options.get("speaker_diarization") is None and speaker_diarization_core.default_on_for_agents():
+            link_options["speaker_diarization"] = "true"
         job = await submit_video_source_job(
             input_text=input_text,
             title=str(payload.get("title") or "").strip(),
-            raw_options=options,
+            raw_options=link_options,
             client_id=client_id,
             route=_ROUTE,
             extra_metadata={"agent_input_type": "video_link"},
@@ -245,101 +387,38 @@ async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...
             str(payload.get("task_id") or "").strip() or None, client_id=client_id
         )
         title = str(payload.get("title") or "Transcript").strip()
-        skip_summary = _truthy_json(options.get("skip_summary"))
-        result: dict[str, Any] = {
-            "task_id": task_id_value,
-            "filename": title,
-            "display_title": title,
-            "transcript_text": transcript,
-            "transcript_text_preview": transcript[:200],
-            "source": "agent_transcript",
-        }
-        summary_status = "skipped"
-        if skip_summary:
-            result.update({"summary_skipped": True, "summary_status": "skipped"})
-        else:
-            kwargs = local_ai_kwargs(
-                deepseek_api_key=payload.get("deepseek_api_key"),
-                openai_api_key=payload.get("openai_api_key"),
-                qwen_api_key=payload.get("qwen_api_key"),
-                ai_provider=payload.get("ai_provider"),
-                ai_model=payload.get("ai_model"),
-                system_prompt=payload.get("system_prompt"),
-                note_mode=options.get("note_mode"),
-            )
-            loop = asyncio.get_running_loop()
-            try:
-                summary_result = await loop.run_in_executor(
-                    None,
-                    lambda: summarize_transcript_with_metadata(transcript, **kwargs),
-                )
-            except Exception as exc:
-                detail = friendly_error(exc)
-                upsert_job(
-                    task_id=task_id_value,
-                    status="failed",
-                    client_id=client_id,
-                    stage="summary",
-                    source_type="agent_transcript",
-                    source_filename=title,
-                    summary_status="failed",
-                    error_reason=detail,
-                    metadata=event_metadata(route=_ROUTE, agent_input_type="transcript"),
-                )
-                raise HTTPException(status_code=500, detail=detail) from exc
-            result.update({
-                "summary_markdown": summary_result.markdown,
-                "summary_status": "completed",
-                "summary_skipped": False,
-                "requested_note_mode": summary_result.requested_mode,
-                "resolved_note_mode": summary_result.resolved_mode,
-                "note_mode_chunk_count": summary_result.chunk_count,
-                "note_mode_segment_count": getattr(summary_result, "segment_count", None),
-                "note_mode_evidence_count": getattr(summary_result, "evidence_count", None),
-                "note_mode_chapter_count": getattr(summary_result, "chapter_count", None),
-                "note_mode_important_evidence_count": getattr(summary_result, "important_evidence_count", None),
-                "note_mode_covered_important_evidence_count": getattr(summary_result, "covered_important_evidence_count", None),
-                "note_mode_coverage_missing_count": getattr(summary_result, "coverage_missing_count", None),
-                "chapter_coverage": getattr(summary_result, "chapter_coverage", None),
-            })
-            result = bind_chapter_coverage_time_ranges(result)
-            summary_status = "completed"
-        try:
-            result = _attach_result_artifacts(task_id_value, result)
+        if not _truthy_json(payload.get("wait", True)):
+            # The caller waits with wait_task, like every other submission. Writing
+            # a long note takes minutes, and a request held open that long timed
+            # out in MCP clients, which then submitted the same transcript again.
             upsert_job(
                 task_id=task_id_value,
-                status="completed",
+                status="running",
                 client_id=client_id,
-                stage="done",
-                progress=100,
+                stage="summary",
+                progress=50,
                 source_type="agent_transcript",
                 source_filename=title,
-                summary_status=summary_status,
-                result=result,
+                summary_status="pending",
                 metadata=event_metadata(route=_ROUTE, agent_input_type="transcript"),
             )
-        except Exception as exc:
-            detail = friendly_error(exc)
-            upsert_job(
-                task_id=task_id_value,
-                status="failed",
-                client_id=client_id,
-                stage="finalize",
-                progress=100,
-                source_type="agent_transcript",
-                source_filename=title,
-                summary_status="failed",
-                error_reason=detail,
-                metadata=event_metadata(route=_ROUTE, agent_input_type="transcript"),
+            background_tasks.add_task(
+                _write_transcript_task_in_background,
+                task_id_value, client_id, title, transcript, options, payload,
             )
-            raise HTTPException(status_code=500, detail=detail) from exc
-        job = get_job(task_id_value, client_id=client_id)
+            return {
+                "ok": True,
+                "task_id": task_id_value,
+                "status": "running",
+                "package_url": f"/agent/v1/tasks/{task_id_value}/package",
+            }
+        job = await _write_transcript_task(task_id_value, client_id, title, transcript, options, payload)
         return {
             "ok": True,
             "task_id": task_id_value,
             "status": "completed",
             "package_url": f"/agent/v1/tasks/{task_id_value}/package",
-            "package": _task_package_response(job or {"task_id": task_id_value, "result": result}),
+            "package": _task_package_response(job),
         }
 
     # Name this edition in the refusal. An input list alone leaves the caller unable
@@ -494,7 +573,7 @@ def visual_note_agent_task(
 
 def _note_written_from_frames(result: dict[str, Any]) -> bool:
     """Whether the task's current note is the one Claude wrote from the frames."""
-    if result.get("summary_written_from") == visual_note_job.SUMMARY_WRITTEN_FROM:
+    if result.get("summary_written_from") in FRAME_NOTE_WRITTEN_FROM:
         return True
     state = visual_note_job.visual_note_state(result)
     return state.get("status") == visual_note_job.STATUS_COMPLETED and bool(state.get("promoted"))

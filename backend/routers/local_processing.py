@@ -44,6 +44,7 @@ from backend.core import (
     visual_note_channel,
     visual_note_job,
 )
+from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_config import resolve_secret
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.core.local_limits_config import (
@@ -1384,7 +1385,8 @@ def local_path_options(
     sharing one typed title would make every task the same name.
 
     Speaker separation defaults ON for callers with no page — the Agent API, the
-    MCP tool, a curl. The settings page's default never reaches them, and a
+    MCP tool, a curl — when pyannote is installed (otherwise the request would
+    always be skipped, so it is not made). The settings page's default never reaches them, and a
     2026-09-03 report of an 8-person meeting transcribed with no speakers was
     exactly that gap. The page's own routes pass
     ``speaker_diarization_default_on=False``: the page always says what the user
@@ -1393,7 +1395,12 @@ def local_path_options(
     """
     limit = _effective_duration_limit(payload.get("duration_limit_seconds"))
     if speaker_diarization_default_on:
-        diarization = _option_default_on(payload, "speaker_diarization")
+        asked = (payload or {}).get("speaker_diarization") is not None
+        diarization = (
+            _option_default_on(payload, "speaker_diarization")
+            if asked or speaker_diarization_core.default_on_for_agents()
+            else None
+        )
     else:
         diarization = _payload_text(payload, "speaker_diarization")
     return _collect_options(

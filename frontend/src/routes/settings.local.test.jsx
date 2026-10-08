@@ -18,6 +18,9 @@ const runtimeConfig = {
 
 let stored = {};
 let servicePreferences = {};
+// GET /speaker-diarization/status. The installed build has no pyannote.
+let diarization = {available: false, dependency_installed: true, models_local: false};
+let credentials = {};
 const savePreferences = vi.fn(async (patch) => ({...servicePreferences, ...patch}));
 
 vi.mock('../app/AppContext.jsx', () => ({
@@ -39,9 +42,9 @@ vi.mock('../app/shared.jsx', async () => {
             saveSettings: (next) => { stored = next; },
         }),
         useApi: () => ({
-            getCredentialsStatus: async () => ({}),
+            getCredentialsStatus: async () => credentials,
             saveCredentials: async () => ({}),
-            getSpeakerDiarizationStatus: async () => ({available: false}),
+            getSpeakerDiarizationStatus: async () => diarization,
             checkVideoCookies: async () => ({ok: true}),
             getPreferences: async () => servicePreferences,
             savePreferences,
@@ -55,6 +58,8 @@ describe('local settings page', () => {
     beforeEach(() => {
         stored = {};
         servicePreferences = {};
+        diarization = {available: false, dependency_installed: true, models_local: false};
+        credentials = {};
         savePreferences.mockClear();
         localStorage.clear();
         runtimeConfig.writesItsOwnNote = true;
@@ -87,11 +92,62 @@ describe('local settings page', () => {
         expect(screen.getByText('把音视频变成文字的方式。转录在本机完成。')).toBeTruthy();
     });
 
-    it('shows the device-side controls without asking whether local transcription is allowed', () => {
+    it('shows the device-side controls without asking whether local transcription is allowed', async () => {
         render(<Settings/>);
         expect(screen.getByText('set.sttSpeed')).toBeTruthy();
         expect(screen.getByText('视频链接下载登录态')).toBeTruthy();
-        expect(screen.getByText('PYANNOTE AUTH TOKEN')).toBeTruthy();
+        expect(await screen.findByText('讲话人区分令牌（Hugging Face）')).toBeTruthy();
+    });
+
+    // Requirement: a build without the speaker separation component says so in
+    // one line, offers no switch, and asks for no token it could never use.
+    it('says speaker separation is not in this build when the component is missing', async () => {
+        diarization = {available: false, dependency_installed: false, models_local: false};
+        stored = {speakerDiarization: true};
+        render(<Settings/>);
+        expect(await screen.findByText('这个版本没有带讲话人区分组件，暂时用不了。')).toBeTruthy();
+        expect(document.getElementById('settingsSpeakerDiarization')).toBeNull();
+        expect(screen.queryByText('讲话人区分令牌（Hugging Face）')).toBeNull();
+    });
+
+    it('asks for the token only while the component is there and the model is not', async () => {
+        render(<Settings/>);
+        expect(await screen.findByText(/要先在下方「高级」里填讲话人区分令牌/)).toBeTruthy();
+        expect(document.getElementById('settingsSpeakerDiarization').disabled).toBe(true);
+        cleanup();
+        diarization = {available: true, dependency_installed: true, models_local: true};
+        render(<Settings/>);
+        await waitFor(() => expect(document.getElementById('settingsSpeakerDiarization').disabled).toBe(false));
+        expect(screen.queryByText('讲话人区分令牌（Hugging Face）')).toBeNull();
+    });
+
+    it('names the Feishu app credentials in Chinese', () => {
+        render(<Settings/>);
+        expect(screen.getByText('飞书应用 ID')).toBeTruthy();
+        expect(screen.getByText('飞书应用密钥')).toBeTruthy();
+        expect(screen.queryByText('FEISHU APP ID')).toBeNull();
+        expect(screen.queryByText('FEISHU APP SECRET')).toBeNull();
+    });
+
+    // Requirement: the notes section opens with what is always true, and the
+    // writer sentence alone says who writes the note, so the two cannot clash.
+    it('opens the notes section with the transcription fact only', () => {
+        render(<Settings/>);
+        const intro = screen.getByText(/^转录在本机完成，不需要 Key。/);
+        expect(intro.textContent).not.toMatch(/处理完就会自动写笔记/);
+    });
+
+    it('does not promise a text-model note when no text-model key is filled in', () => {
+        render(<Settings/>);
+        expect(screen.queryByText(/由上面的文本模型根据转录稿写/)).toBeNull();
+        expect(screen.getByText(/两个都不填就只有转录稿，没有笔记/)).toBeTruthy();
+    });
+
+    it('calls Qwen by one name', () => {
+        stored = {aiProvider: 'qwen'};
+        render(<Settings/>);
+        expect(screen.getByRole('option', {name: '通义千问（阿里云百炼）'})).toBeTruthy();
+        expect(screen.queryByRole('option', {name: 'Qwen'})).toBeNull();
     });
 
     it('drops the note settings only while an upload writes the note itself', () => {
@@ -137,5 +193,15 @@ describe('local settings page', () => {
         fireEvent.click(toggle);
         await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({allow_miuistore: false}));
         expect(toggle.checked).toBe(false);
+    });
+
+    // Requirement: the one switch that sends something to a third party is a
+    // row of its own, not a sub-item of the browser-login row.
+    it('gives the Douyin fallback its own row', () => {
+        render(<Settings/>);
+        const row = screen.getByLabelText(/抖音备用解析/).closest('label');
+        expect(row.textContent).not.toMatch(/视频链接下载登录态/);
+        const cookiesRow = screen.getByText('视频链接下载登录态').parentElement;
+        expect(cookiesRow.contains(row)).toBe(false);
     });
 });

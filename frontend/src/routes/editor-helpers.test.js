@@ -116,3 +116,14 @@ describe('regenerating while a rewrite is already running', () => {
         }
     });
 });
+
+describe('a Claude note written from the original recording still counts as Claude\'s', () => {
+    it('reads the service answer first, then either stamp', async () => {
+        const {noteCameFromClaude} = await import('./editor-helpers.js');
+        expect(noteCameFromClaude({note_from_frames: true, summary_written_from: 'source_media_note'})).toBe(true);
+        expect(noteCameFromClaude({summary_written_from: 'source_media_note'})).toBe(true);
+        expect(noteCameFromClaude({summary_written_from: 'debreath_media_note'})).toBe(true);
+        expect(noteCameFromClaude({summary_written_from: 'text_regeneration'})).toBe(false);
+        expect(noteCameFromClaude({note_from_frames: false, summary_written_from: 'debreath_media_note'})).toBe(false);
+    });
+});

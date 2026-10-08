@@ -11,18 +11,28 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 SERVER_SCRIPT = PROJECT_ROOT / "scripts" / "fluentflow_mcp_server.py"
-EXPECTED_TOOLS = {
-    "submit_video_link",
-    "submit_transcript",
-    "get_task",
-    "wait_task",
-    "get_task_package",
-    "diagnose_task",
-    "regenerate_note",
-    "debreath_task",
-    "export_result",
-}
+
+from scripts.fluentflow_mcp_server import TOOL_FUNCTIONS  # noqa: E402
+
+# Every tool the server implements must be listed to clients: read from the
+# server itself so a new tool cannot be forgotten here.
+EXPECTED_TOOLS = set(TOOL_FUNCTIONS)
+
+
+def _repo_access_token() -> str | None:
+    """The token the backend reads from the repository .env, so the check works
+    from a plain shell without exporting it first."""
+    env_file = PROJECT_ROOT / ".env"
+    if not env_file.is_file():
+        return None
+    try:
+        from dotenv import dotenv_values
+    except ImportError:
+        return None
+    return (dotenv_values(env_file).get("FLUENTFLOW_ACCESS_TOKEN") or "").strip() or None
 
 
 class McpCheckError(RuntimeError):
@@ -114,7 +124,17 @@ def run_check(*, api_base: str, client_id: str, access_token: str | None, backen
             task_id = str(submitted.get("task_id") or "")
             if not task_id:
                 raise McpCheckError(f"submit_transcript returned no task_id: {submitted}")
-            waited = client.call_tool("wait_task", {"task_id": task_id, "timeout_seconds": 0, "api_base": api_base, "client_id": client_id})
+            # submit_transcript returns at once; the task finishes in the background.
+            waited: dict[str, Any] = {}
+            for _ in range(4):
+                waited = client.call_tool(
+                    "wait_task",
+                    {"task_id": task_id, "timeout_seconds": 15, "api_base": api_base, "client_id": client_id},
+                )
+                if waited.get("done"):
+                    break
+            if not waited.get("done"):
+                raise McpCheckError(f"Task {task_id} did not finish within a minute: {waited}")
             package = client.call_tool("get_task_package", {"task_id": task_id, "api_base": api_base, "client_id": client_id})
             diagnosis = client.call_tool("diagnose_task", {"task_id": task_id, "api_base": api_base, "client_id": client_id})
             transcript = package.get("transcript") if isinstance(package.get("transcript"), dict) else {}
@@ -135,8 +155,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check FluentFlow MCP stdio server and optional backend task flow.")
     parser.add_argument("--api-base", default=os.environ.get("FLUENTFLOW_API_BASE", "http://127.0.0.1:8000"))
     parser.add_argument("--client-id", default=os.environ.get("FLUENTFLOW_CLIENT_ID", "local-client"))
-    parser.add_argument("--access-token", default=os.environ.get("FLUENTFLOW_ACCESS_TOKEN"))
-    parser.add_argument("--backend-e2e", action="store_true", help="Submit a transcript through MCP and read the task package from the backend.")
+    parser.add_argument(
+        "--access-token",
+        default=os.environ.get("FLUENTFLOW_ACCESS_TOKEN") or _repo_access_token(),
+        help="Agent access token. Default: FLUENTFLOW_ACCESS_TOKEN from the environment, else from the repository .env.",
+    )
+    parser.add_argument(
+        "--backend-e2e",
+        action="store_true",
+        help=(
+            "Also submit a short transcript (no note, so no model is called) through MCP, wait for it, "
+            "and read its task package from the running backend. Leaves one small task in the task list."
+        ),
+    )
     return parser.parse_args(argv)
 
 

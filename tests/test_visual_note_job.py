@@ -987,3 +987,49 @@ def test_a_task_that_simply_cannot_is_not_marked_running(job_store):
 
     assert described["eligible"] is False
     assert not described.get("running")
+
+
+# ── the note says which file it was written from ───────────────────────────
+
+def test_a_note_written_from_the_original_recording_does_not_claim_the_cut(
+    job_store, monkeypatch, tmp_path
+):
+    """Requirement: when the cut was declined and the note read the original
+    recording, the task must not say its note came from the shortened file;
+    it is still the note Claude wrote from the pictures."""
+    from backend.core.result_schema import normalize_result_for_read
+
+    original = tmp_path / "meeting.mp4"
+    original.write_bytes(b"pretend video")
+    monkeypatch.setattr(vn, "find_source_file", lambda _t: original)
+    job_store["result"]["debreath"] = {
+        "status": "completed", "rendered": True, "used_for_transcription": False
+    }
+
+    result = normalize_result_for_read(_run(tmp_path, "![图](note_0001.jpg)\n\n笔记。")["result"])
+
+    assert result["summary_written_from"] == "source_media_note"
+    assert result["note_from_frames"] is True
+
+
+def test_a_note_written_from_the_cut_file_says_so(job_store, tmp_path):
+    from backend.core.result_schema import normalize_result_for_read
+
+    result = normalize_result_for_read(_run(tmp_path, "![图](note_0001.jpg)\n\n笔记。")["result"])
+
+    assert result["summary_written_from"] == "debreath_media_note"
+    assert result["note_from_frames"] is True
+
+
+def test_older_records_that_read_the_original_are_corrected_on_read():
+    from backend.core.result_schema import normalize_result_for_read
+
+    stored = {
+        "summary_markdown": "笔记",
+        "summary_written_from": "debreath_media_note",
+        "visual_note": {"media_source": {"kind": "source_no_cuts"}},
+    }
+
+    assert normalize_result_for_read(stored)["summary_written_from"] == "source_media_note"
+    text_note = normalize_result_for_read({"summary_markdown": "x", "summary_written_from": "text_fallback"})
+    assert text_note["note_from_frames"] is False

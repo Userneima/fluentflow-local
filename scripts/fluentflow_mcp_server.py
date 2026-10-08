@@ -153,6 +153,7 @@ def submit_local_media(
     prompt_preset: str | None = None,
     stt_model: str | None = None,
     speaker_diarization: bool | None = None,
+    system_prompt: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -179,10 +180,10 @@ def submit_local_media(
                 skip_summary="true" if skip_summary else "false",
                 note_mode=note_mode,
                 prompt_preset=prompt_preset,
+                system_prompt=system_prompt,
                 stt_model=stt_model,
-                # Left out unless the caller asks: this machine may not have the
-                # diarization packages, and a default "yes" asked for it on
-                # every task.
+                # Left out unless the caller asks: the backend then applies its
+                # own default (on only when pyannote is installed).
                 speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
             ),
         },
@@ -197,6 +198,8 @@ def submit_video_link(
     note_mode: str | None = None,
     prompt_preset: str | None = None,
     allow_duplicate: bool = False,
+    speaker_diarization: bool | None = None,
+    system_prompt: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -221,6 +224,8 @@ def submit_video_link(
                 skip_summary="true" if skip_summary else "false",
                 note_mode=note_mode,
                 prompt_preset=prompt_preset,
+                system_prompt=system_prompt,
+                speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
             ),
         },
         timeout=30,
@@ -233,10 +238,16 @@ def submit_transcript(
     skip_summary: bool = False,
     note_mode: str | None = None,
     prompt_preset: str | None = None,
+    system_prompt: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Submit transcript text directly and optionally generate a note."""
+    """Submit transcript text; the note is written in the background.
+
+    Returns the task id at once (``wait: false``), like the other submit tools:
+    a long note takes minutes, and holding the call open that long timed out in
+    MCP clients, which then submitted the same transcript again.
+    """
     return _agent_request(
         "POST",
         "/agent/v1/tasks",
@@ -246,13 +257,15 @@ def submit_transcript(
             "input_type": "transcript",
             "transcript_text": transcript_text,
             "title": title,
+            "wait": False,
             "options": _options(
                 skip_summary="true" if skip_summary else "false",
                 note_mode=note_mode,
                 prompt_preset=prompt_preset,
+                system_prompt=system_prompt,
             ),
         },
-        timeout=120,
+        timeout=30,
     )
 
 
@@ -310,7 +323,12 @@ def retry_task(
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Retry a failed task when FluentFlow still retains its source media."""
+    """Run a finished (failed, cancelled or completed) task again as a new task.
+
+    Returns the new task's ``task_id``; the old task stays as it was. Re-reads the
+    recording FluentFlow kept, or the user's file for a task submitted by path; a
+    link task whose video is gone downloads the link again.
+    """
     return _agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/retry",
@@ -387,11 +405,14 @@ def write_note_from_cut_media(
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Rewrite an existing task's note from its de-breathed media.
+    """Rewrite an existing task's note with Claude, from the frames and transcript.
 
-    Submitting already writes this note; this is for a redo. It reads the cut
-    file (frames taken from it, subtitles moved onto its clock) and refuses if no
-    cut file exists rather than reading the original recording.
+    Submitting already writes this note; this is for a redo. It reads the file
+    the transcript describes: the cut file (frames taken from it, subtitles moved
+    onto its clock), or the original recording when the cut was declined or found
+    nothing to remove. It refuses only when there is no usable media — the cut
+    still running or failed, a plan-only cut with no rendered file, the file no
+    longer on this machine — and the refusal names the step to take.
 
     ``preview`` defaults to **true** and costs nothing: it answers which file
     would be read, how much transcript after remapping, how many frames, and
@@ -445,6 +466,24 @@ def export_result(
     )
 
 
+# Who writes the note on a media submission, said once for both submit tools.
+_MEDIA_NOTE_FLOW = (
+    "By default the task cuts breath gaps out of the media, transcribes the cut file "
+    "(the original when the cut is declined), then Claude writes the note from the frames "
+    "and the transcript, paid by the user's own Anthropic API key (the local Claude "
+    "subscription only when FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription is set). Without a "
+    "usable Claude, the configured text model writes it from the transcript. note_mode, "
+    "prompt_preset and system_prompt only apply when a text model writes the note; Claude's "
+    "frame note ignores them. skip_summary=true stops at the transcript. Speaker separation "
+    "defaults on when pyannote is installed on this machine, off otherwise; "
+    "speaker_diarization overrides it. Returns at once; follow with wait_task."
+)
+_SPEAKER_DIARIZATION_SCHEMA = {
+    "type": "boolean",
+    "description": "Label who spoke. Default: on when pyannote is installed on this machine.",
+}
+_TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's frame note)."
+
 TOOL_FUNCTIONS = {
     "submit_video_link": submit_video_link,
     "submit_transcript": submit_transcript,
@@ -466,11 +505,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "name": "submit_video_link",
         "description": (
             "Submit a video URL or copied share text to FluentFlow. "
-            "By default the task cuts breath gaps out of the media, transcribes the cut file, "
-            "then has Claude write the note from its frames (the configured text model "
-            "writes it from the transcript when Claude is unreachable). skip_summary=true "
-            "stops at the transcript. Follow with wait_task. "
-            "The same link is never processed twice by accident (tracking parameters "
+            + _MEDIA_NOTE_FLOW
+            + " The same link is never processed twice by accident (tracking parameters "
             "such as utm_*, share_source, spm_id_from, vd_source are ignored when "
             "comparing; Bilibili ?p= still counts): if that link is already queued or "
             "running, no new task is made and the existing one comes back with "
@@ -486,8 +522,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "title": {"type": "string"},
                 "stt_provider": {"type": "string", "default": "auto"},
                 "skip_summary": {"type": "boolean", "default": False},
-                "note_mode": {"type": "string"},
-                "prompt_preset": {"type": "string"},
+                "note_mode": {"type": "string", "description": _TEXT_MODEL_ONLY},
+                "prompt_preset": {"type": "string", "description": "A label recorded with the note. " + _TEXT_MODEL_ONLY},
+                "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
+                "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
                 "allow_duplicate": {
                     "type": "boolean",
                     "default": False,
@@ -504,7 +542,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "submit_transcript",
-        "description": "Submit transcript text directly and optionally generate a note.",
+        "description": (
+            "Submit transcript text and have the configured text model write a note from it "
+            "(Claude's frame note needs media, so it does not apply here). Returns the task_id "
+            "at once; the note is written in the background, typically within a minute or two "
+            "and capped at FLUENTFLOW_NOTE_DEADLINE_SECONDS (default an hour) — follow with "
+            "wait_task. note_mode, system_prompt and prompt_preset reach the model. "
+            "skip_summary=true stores the transcript without a note."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -512,7 +557,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "title": {"type": "string", "default": "Transcript"},
                 "skip_summary": {"type": "boolean", "default": False},
                 "note_mode": {"type": "string"},
-                "prompt_preset": {"type": "string"},
+                "prompt_preset": {"type": "string", "description": "A label recorded with the note; the instructions are system_prompt."},
+                "system_prompt": {"type": "string", "description": "Instructions for the note."},
                 "api_base": {"type": "string"},
                 "client_id": {"type": "string"},
             },
@@ -526,10 +572,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "on this machine. Local edition only; the backend accepts it from localhost "
             "only, and this tool says so plainly when the other edition is the one "
             "answering. One file per call — loop for a folder. "
-            "By default the task cuts breath gaps out of the media, transcribes the cut file, "
-            "then has Claude write the note from its frames (the configured text model "
-            "writes it from the transcript when Claude is unreachable). skip_summary=true "
-            "stops at the transcript. Follow with wait_task."
+            + _MEDIA_NOTE_FLOW
         ),
         "inputSchema": {
             "type": "object",
@@ -537,9 +580,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "path": {"type": "string", "description": "Absolute path to the recording."},
                 "title": {"type": "string"},
                 "skip_summary": {"type": "boolean", "default": False},
-                "note_mode": {"type": "string"},
-                "prompt_preset": {"type": "string"},
+                "note_mode": {"type": "string", "description": _TEXT_MODEL_ONLY},
+                "prompt_preset": {"type": "string", "description": "A label recorded with the note. " + _TEXT_MODEL_ONLY},
+                "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
                 "stt_model": {"type": "string"},
+                "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
                 "api_base": {"type": "string"},
                 "client_id": {"type": "string"},
             },
@@ -598,7 +643,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "retry_task",
-        "description": "Retry a failed task from its retained source media when available.",
+        "description": (
+            "Run a task again as a NEW task: the answer's task_id is the new one (source_task_id "
+            "is the old), and the old task stays as it was. Works for failed, cancelled and "
+            "completed tasks; a queued or running task must be cancelled first. Re-reads the "
+            "recording FluentFlow kept, or the user's file for a task submitted by path; a link "
+            "task whose video is gone downloads the link again, with the current browser-login "
+            "and Douyin-fallback settings. Follow with wait_task on the new task_id."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},
@@ -665,7 +717,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "noise_db": {
                     "type": "number",
-                    "description": "Silence threshold in dBFS, -90 to 0. Default -30.",
+                    "description": (
+                        "Silence threshold in dBFS, -90 to 0. Leave it out to have it measured "
+                        "from the material (recommended; passing -30 also means measure). Any "
+                        "other value is used as given."
+                    ),
                 },
                 "padding_seconds": {
                     "type": "number",
@@ -685,10 +741,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "write_note_from_cut_media",
         "description": (
-            "Rewrite an existing task's note from its de-breathed media; submitting already "
-            "writes this note, so use it only to redo one (e.g. after a failed note). Needs "
-            "a cut file (from submitting or debreath_task(render=True)) and refuses without "
-            "one. Frames come from the cut file and the subtitles are moved onto its clock. "
+            "Rewrite an existing task's note with Claude from the frames and transcript; "
+            "submitting already writes this note, so use it only to redo one (e.g. after a "
+            "failed note). It reads the file the transcript describes: the cut file from "
+            "submitting or debreath_task(render=True) (frames from it, subtitles moved onto "
+            "its clock), or the original recording when the cut "
+            "was declined or found nothing to remove. It refuses only when there is no usable "
+            "media (cut still running or failed, a cut list with no rendered file, the file "
+            "gone from this machine), and says which step to take. "
             "preview defaults to true and is "
             "free (which file, how much transcript, how many frames, whose Claude "
             "allowance pays); preview=false spends that allowance, so ask first. The note "

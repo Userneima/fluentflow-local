@@ -162,3 +162,25 @@ def delete_events_for_tasks(task_ids: list[str] | tuple[str, ...], db_path: Path
     with sqlite3.connect(Path(db_path)) as conn:
         cursor = conn.execute(f"DELETE FROM events WHERE task_id IN ({placeholders})", ids)
     return int(cursor.rowcount or 0)
+
+
+def list_task_events(task_id: str, db_path: Path | str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+    """One task's events, oldest first. Empty on any read failure: callers use
+    them to say what happened, and an unreadable log must not break a page."""
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return []
+    try:
+        if not Path(db_path).is_file():
+            return []
+        with sqlite3.connect(Path(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT event_name, created_at, stage, duration_seconds, success, error_reason "
+                "FROM events WHERE task_id = ? ORDER BY created_at, rowid",
+                (task_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+    except Exception as exc:  # pragma: no cover - defensive isolation
+        logger.warning("Event read failed for %s: %s", task_id, exc)
+        return []

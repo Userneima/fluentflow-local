@@ -82,7 +82,7 @@ describe('context lent by a job record', () => {
     it('takes the provider from the queued options and the source type from the job', () => {
         const job = {source_type: 'video_link', metadata: {queue_options: {ai_provider: 'qwen'}}};
         expect(taskErrorContextForJob(job)).toEqual({provider: 'qwen', sourceType: 'video_link'});
-        expect(friendlyTaskError('HTTP 401', 'zh', taskErrorContextForJob(job))).toContain('百炼 / DashScope');
+        expect(friendlyTaskError('HTTP 401', 'zh', taskErrorContextForJob(job))).toContain('通义千问（阿里云百炼）');
     });
 });
 

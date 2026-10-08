@@ -826,7 +826,39 @@ def delete_jobs(
         return int(cursor.rowcount or 0)
 
 
+# The values the summary_status column may carry: the note's own state. Link
+# downloads once wrote their progress text here ("正在保存视频信息"), and rows
+# from that time still hold it, so reads drop anything else.
+NOTE_STATUSES = frozenset({"pending", "running", "completed", "failed", "skipped"})
+
+
+def _note_status(value: Any) -> str | None:
+    return value if isinstance(value, str) and value in NOTE_STATUSES else None
+
+
+def progress_message_metadata(message: str | None, stage: str | None) -> dict[str, Any]:
+    """Metadata keys for a transient progress line (e.g. link download text).
+
+    The line is tied to the stage that wrote it: once the job moves to another
+    stage the line is stale, and reads stop surfacing it without anyone having
+    to remember to clear it.
+    """
+    return {"progress_message": message or None, "progress_message_stage": stage or None}
+
+
+def _progress_message(status: Any, stage: Any, metadata: Any) -> str | None:
+    if status not in {"queued", "running"} or not isinstance(metadata, dict):
+        return None
+    message = metadata.get("progress_message")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    if metadata.get("progress_message_stage") != stage:
+        return None
+    return message
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    metadata = _json_loads(row["metadata_json"])
     return {
         "task_id": row["task_id"],
         "created_at": row["created_at"],
@@ -838,10 +870,11 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "source_type": row["source_type"],
         "source_filename": row["source_filename"],
         "source_file_size_mb": row["source_file_size_mb"],
-        "summary_status": row["summary_status"],
+        "summary_status": _note_status(row["summary_status"]),
         "error_reason": row["error_reason"],
         "result": normalize_result_for_read(_json_loads(row["result_json"])),
-        "metadata": _json_loads(row["metadata_json"]),
+        "metadata": metadata,
+        "progress_message": _progress_message(row["status"], row["stage"], metadata),
     }
 
 
@@ -953,6 +986,11 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         # only way a list row can say the note describes the shortened version.
         "transcript_media": result.get("transcript_media"),
         "summary_written_from": result.get("summary_written_from"),
+        "note_from_frames": bool(result.get("note_from_frames")),
+        # Who wrote the note when it was not the planned writer, and why: the
+        # card says "the text model wrote this one (no screenshots)" from these.
+        "note_written_by": result.get("note_written_by"),
+        "note_fallback_reason": result.get("note_fallback_reason"),
         "lark_response": {"url": lark_response.get("url")} if lark_response and lark_response.get("url") else None,
         "feishu_doc_url": result.get("feishu_doc_url"),
         "lark_error": result.get("lark_error"),
@@ -984,6 +1022,7 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
 
 def _row_to_summary_dict(row: sqlite3.Row) -> dict[str, Any]:
     result = _result_summary(_json_loads(row["result_json"]))
+    metadata = _json_loads(row["metadata_json"])
     return {
         "task_id": row["task_id"],
         "created_at": row["created_at"],
@@ -995,8 +1034,9 @@ def _row_to_summary_dict(row: sqlite3.Row) -> dict[str, Any]:
         "source_type": row["source_type"],
         "source_filename": row["source_filename"],
         "source_file_size_mb": row["source_file_size_mb"],
-        "summary_status": row["summary_status"],
+        "summary_status": _note_status(row["summary_status"]),
         "error_reason": row["error_reason"],
         "result": result,
-        "metadata": _json_loads(row["metadata_json"]),
+        "metadata": metadata,
+        "progress_message": _progress_message(row["status"], row["stage"], metadata),
     }

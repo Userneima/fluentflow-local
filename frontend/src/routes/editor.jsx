@@ -55,7 +55,8 @@ import {useApp} from '../app/AppContext.jsx';
 import {larkExportToastText} from '../lib/format.js';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import {usePromptEditing} from '../lib/usePromptEditing.js';
-import {notePromptScopeSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
+import {noteFallbackSentence, notePendingSentence, notePromptScopeSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
+import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
@@ -79,6 +80,10 @@ import {
     claudeRewriteSettled,
     noteCameFromClaude,
     mergeNoteFields,
+    mergeLarkFields,
+    AUTO_EXPORT_WAIT_MS,
+    autoExportPending,
+    larkExportSettled,
     regenerateDialogCopy,
     visualNoteStartErrorMessage,
     transcriptFromCutFile,
@@ -115,6 +120,7 @@ const Editor = () => {
         setCurrentJob,
         addLarkExport,
         runtimeConfig,
+        diarizationStatus,
     } = useApp();
     const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
     const {loadSettings, saveSettings} = useSettings();
@@ -808,7 +814,7 @@ const Editor = () => {
         aiModel: settings.aiModel||null,
         systemPrompt: resolveSystemPromptFromSettings(settings)||null,
         noteMode: settings.noteMode||'auto',
-        speakerDiarization: !!settings.speakerDiarization,
+        speakerDiarization: speakerDiarizationRequested(settings, diarizationStatus),
         generateVisuals: !!settings.autoIllustrate,
         sttProvider: effectiveSttProvider(settings, runtimeConfig),
     });
@@ -844,9 +850,14 @@ const Editor = () => {
     summaryUnsavedRef.current = summaryUnsaved;
     const resultJobOptionsRef = useRef(resultJobOptions);
     resultJobOptionsRef.current = resultJobOptions;
+    // After the note, an automatic Feishu export may still be on its way:
+    // {taskId, since} while the page waits for its link or its failure.
+    const [exportWatch, setExportWatch] = useState(null);
+    const exportWatchRef = useRef(exportWatch);
+    exportWatchRef.current = exportWatch;
     const pollTaskId = result?.task_id || '';
     const notePolling = !!pollTaskId && (
-        noteIsBeingWritten(result) || noteWatch?.taskId === pollTaskId
+        noteIsBeingWritten(result) || noteWatch?.taskId === pollTaskId || exportWatch?.taskId === pollTaskId
     );
     useEffect(() => {
         // A rewrite started for a task that is no longer open is no longer this
@@ -854,6 +865,9 @@ const Editor = () => {
         if (noteWatchRef.current && noteWatchRef.current.taskId !== pollTaskId) {
             setNoteWatch(null);
             setRegenerating(false);
+        }
+        if (exportWatchRef.current && exportWatchRef.current.taskId !== pollTaskId) {
+            setExportWatch(null);
         }
     }, [pollTaskId]);
     useEffect(() => {
@@ -874,6 +888,21 @@ const Editor = () => {
             }
             const fresh = job?.result;
             if (stopped || !fresh) return;
+            const stop = () => {
+                stopped = true;
+                clearInterval(timer);
+            };
+            // The note is already in; only the export's outcome is awaited, and
+            // only that is taken, so a note edited meanwhile is left alone.
+            const exportWait = exportWatchRef.current?.taskId === taskId ? exportWatchRef.current : null;
+            if (exportWait) {
+                const timedOut = Date.now() - exportWait.since > AUTO_EXPORT_WAIT_MS;
+                if (!larkExportSettled(fresh) && !timedOut) return;
+                stop();
+                setLastResult((prev) => (prev?.task_id === taskId ? mergeLarkFields(prev, fresh) : prev));
+                setExportWatch(null);
+                return;
+            }
             const watch = noteWatchRef.current?.taskId === taskId ? noteWatchRef.current : null;
             if (watch && fresh.visual_note?.status === 'running') watch.sawRunning = true;
             const settled = watch ? claudeRewriteSettled(fresh, watch) : noteWritingSettled(fresh);
@@ -881,9 +910,13 @@ const Editor = () => {
             // A note typed here and not yet saved is the user's; wait for the save
             // and take the server's copy on a later tick.
             if (summaryUnsavedRef.current) return;
-            stopped = true;
-            clearInterval(timer);
             setLastResult((prev) => (prev?.task_id === taskId ? mergeNoteFields(prev, fresh) : prev));
+            if (!watch && autoExportPending(job)) {
+                // Keep this timer: the page now waits for the export instead.
+                setExportWatch({taskId, since: Date.now()});
+            } else {
+                stop();
+            }
             if (watch) {
                 setNoteWatch(null);
                 setRegenerating(false);
@@ -905,6 +938,8 @@ const Editor = () => {
         };
     }, [notePolling, pollTaskId, getJob, setLastResult, showToast]);
 
+    // Said above the note when the text model wrote it in place of Claude.
+    const noteFallbackText = noteFallbackSentence(result, lang);
     const savedLarkUrl = result?.lark_response?.url || null;
     const autoExportError = !savedLarkUrl && result?.lark_error ? String(result.lark_error) : '';
 
@@ -1940,6 +1975,11 @@ const Editor = () => {
                                         />
                                     </div>
                                 </div>
+                                {noteFallbackText && (
+                                    <p data-testid="note-fallback" className="mx-5 mt-3 shrink-0 rounded-[12px] border border-[#f5c86b] bg-[#fffaf0] px-3 py-2 text-xs font-semibold leading-relaxed text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]">
+                                        {noteFallbackText}
+                                    </p>
+                                )}
                                 {hasEditableSummary ? (
                                     <>
                                         <RichNoteEditor
@@ -1968,7 +2008,7 @@ const Editor = () => {
                                             )}
                                         </div>
                                     ) : (
-                                        <p className="text-sm italic text-[#666] dark:text-white/60">{t('edit.summaryPending')}</p>
+                                        <p className="text-sm italic text-[#666] dark:text-white/60">{notePendingSentence(noteWriter, result, lang)}</p>
                                     )}
                                     </div>
                                 )}

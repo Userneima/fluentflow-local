@@ -30,7 +30,9 @@ note stage around it — both larger than this, and neither changes what the use
 gets.
 
 Both steps are switchable, because both spend something the user might not want
-spent on a given machine: minutes of CPU, and the Claude allowance.
+spent on a given machine: minutes of CPU, and Claude usage (the user's Anthropic
+API key by default, the local Claude subscription only when
+``FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription`` opts into it).
 """
 
 from __future__ import annotations
@@ -71,11 +73,13 @@ def cut_first_enabled() -> bool:
 
 
 def auto_note_enabled() -> bool:
-    """Whether the note is written without being asked.
+    """Whether Claude writes the note from the frames without being asked.
 
-    On by default, and it spends the Claude allowance of whoever's login this
-    machine holds. Off leaves the transcript and the cut file, with the note one
-    click away on the result page — the same entry, unchanged.
+    On by default. It spends the user's own Anthropic API key, or the local
+    Claude subscription when ``FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription``
+    opts into it. Off does not stop notes: the pipeline's own note stage then
+    writes the text note from the transcript when a text-model key exists (no
+    key, no note), and the frame note stays a button on the result page.
     """
     return _enabled(AUTO_NOTE_ENV)
 

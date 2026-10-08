@@ -43,6 +43,18 @@ export const normalizeTaskState = (job={}) => {
     return TASK_STATE_IDLE;
 };
 
+// The task's state as one word, the same on every page that lists tasks.
+export const taskStatusLabel = (job, lang = 'zh') => {
+    const state = normalizeTaskState(job);
+    const zh = lang === 'zh';
+    if (state === TASK_STATE_UPLOADING) return zh ? '上传中' : 'Uploading';
+    if (state === TASK_STATE_QUEUED) return zh ? '排队中' : 'Queued';
+    if (state === TASK_STATE_COMPLETED || state === TASK_STATE_CACHED_ONLY) return zh ? '已完成' : 'Completed';
+    if (state === TASK_STATE_FAILED) return zh ? '失败' : 'Failed';
+    if (state === TASK_STATE_CANCELLED) return zh ? '已取消' : 'Cancelled';
+    return zh ? '处理中' : 'Running';
+};
+
 export const isCachedOnlyTask = (job={}) => normalizeTaskState(job) === TASK_STATE_CACHED_ONLY;
 export const isLiveTask = (job={}) => [TASK_STATE_UPLOADING, TASK_STATE_QUEUED, TASK_STATE_RUNNING].includes(normalizeTaskState(job));
 export const isTerminalTask = (job={}) => [TASK_STATE_COMPLETED, TASK_STATE_FAILED, TASK_STATE_CANCELLED, TASK_STATE_CACHED_ONLY].includes(normalizeTaskState(job));

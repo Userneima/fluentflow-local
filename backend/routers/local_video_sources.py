@@ -30,7 +30,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
-from backend.core.job_store import list_jobs, upsert_job
+from backend.core.job_store import list_jobs, progress_message_metadata, upsert_job
 from backend.core.local_entry_guards import CancellationGate, claim_task_id
 from backend.core.local_config import ALLOWED_COOKIE_BROWSERS, get_preference, normalize_cookie_browser
 from backend.core.local_error_diagnostics import diagnose_error
@@ -260,10 +260,13 @@ async def _download_then_process(
             client_id=client_id,
             stage=progress.stage,
             progress=progress_value,
-            summary_status=progress.message,
+            # Download text is progress, not the note's state: summary_status
+            # carries only note statuses, and readers get this line as the
+            # job's top-level progress_message while this stage lasts.
             metadata=event_metadata(
                 route=route,
                 queue_options=options,
+                **progress_message_metadata(progress.message, progress.stage),
                 video_source_progress={
                     "message": progress.message,
                     "percent": progress.percent,

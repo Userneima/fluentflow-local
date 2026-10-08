@@ -1,12 +1,16 @@
 """Local route for the second half of the flow: the note from the cut file.
 
 Which Claude pays is decided by ``visual_note_channel``, not here: by default the
-Claude Code login already on this machine, so ordinary use configures no
-credential at all. The key resolved below is the fallback for a machine without
-Claude Code: the user's own, read from the backend-owned local config or from
-``ANTHROPIC_API_KEY`` in the project's .env, passed to the SDK, and never written
-into a job result, an event, or a log line. Frames come from ffmpeg on this
-machine through ``local_keyframe_provider``, or are disabled.
+user's own Anthropic API key, resolved below from the backend-owned local config
+or from ``ANTHROPIC_API_KEY`` in the project's .env, passed to the SDK, and never
+written into a job result, an event, or a log line. The Claude Code login on this
+machine is used only when ``FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription`` opts
+into it. Frames come from ffmpeg on this machine through
+``local_keyframe_provider``, or are disabled.
+
+The note reads whatever file the transcript describes: the cut file when the
+transcript was made from it, the original recording when the cut was declined or
+found nothing to remove (``visual_note_job.cut_media``).
 
 The entry has four shapes and only one of them spends anything.
 
@@ -24,8 +28,9 @@ The entry has four shapes and only one of them spends anything.
 
 Refusals happen in the response the caller is waiting on, not several minutes
 into a background task whose only trace is a status field: a task that is not
-finished, no cut file to read yet, a cut file or cut list no longer on the
-machine, a missing Anthropic credential, a run already going, and a
+finished, no usable media (the cut still running or failed, a plan-only cut
+with no rendered file, the cut file or the original recording no longer on the
+machine, a cut list gone), a missing Anthropic credential, a run already going, and a
 transcription running or queued that the frame extraction must not run beside.
 
 The slot is claimed here rather than inside the worker. FastAPI runs background

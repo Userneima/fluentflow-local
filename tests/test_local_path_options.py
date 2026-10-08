@@ -46,12 +46,16 @@ def test_voice_enhance_stays_off_unless_asked() -> None:
     assert "voice_enhance" not in options
 
 
-def test_speaker_separation_is_on_when_the_caller_says_nothing() -> None:
+def test_speaker_separation_is_on_when_the_caller_says_nothing(monkeypatch) -> None:
     """The settings-page default never reaches a caller that has no page.
 
     Reported 2026-09-03: an 8-person meeting submitted through the Agent API
     came back with no speakers, because "default on" lived only in the frontend.
+    Applies when pyannote is installed (see test_agent_speaker_default.py).
     """
+    from backend.core import speaker_diarization
+
+    monkeypatch.setattr(speaker_diarization, "diarization_status", lambda: {"dependency_installed": True})
     options, _ = local_path_options({})
 
     assert options["speaker_diarization"] == "true"

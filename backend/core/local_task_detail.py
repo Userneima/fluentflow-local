@@ -2,16 +2,81 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
+from backend.core.event_logger import list_task_events
 from backend.core.local_decision_log import build_decision_log as build_local_decision_log
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.note_diagnosis import build_note_generation_diagnosis
 from backend.core.storage_paths import find_source_file, in_place_source_path
 from backend.core.task_detail_core import (
+    STAGE_TO_STEP,
+    STEP_ORDER,
     build_task_detail as build_task_detail_core,
     build_task_snapshot as build_task_snapshot_core,
 )
+
+# Which timeline step each pipeline event closes. The local edition runs its
+# pipeline in process and never writes job_steps rows; the event log is its
+# record of what actually happened, so the detail page reads it instead of
+# inferring every step from the job's final state.
+EVENT_TO_STEP = {
+    "video_source_downloaded": "source_fetch",
+    "source_imported": "source_fetch",
+    "audio_extracted": "audio_prepare",
+    "stt_completed": "transcription",
+    "transcript_ready": "subtitle_prepare",
+    "summary_completed": "note_generation",
+    "summary_regenerated": "note_generation",
+    "agent_note_regenerated": "note_generation",
+    "summary_failed": "note_generation",
+    "task_completed": "result_save",
+    "lark_export_completed": "feishu_export",
+    "agent_export_completed": "feishu_export",
+}
+_RECORDED_STEP_PREFIX = "event:"
+
+
+def _started_at(created_at: Any, duration: Any) -> str | None:
+    try:
+        seconds = float(duration)
+        finished = datetime.fromisoformat(str(created_at))
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    return (finished - timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+
+def recorded_steps_from_events(task_id: str, events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Timeline steps the event log records for this task, latest event per step.
+
+    Shaped like job_steps rows so the shared timeline builder marks them
+    ``source: "recorded"``. A ``task_failed`` event fails the step its stage
+    belongs to; steps with no event stay inferred.
+    """
+    events = list_task_events(task_id) if events is None else events
+    steps: dict[str, dict[str, Any]] = {}
+    for event in events:
+        name = _text(event.get("event_name"))
+        step_id = EVENT_TO_STEP.get(name)
+        failed = event.get("success") == 0 or name.endswith("_failed")
+        if name == "task_failed":
+            step_id = STAGE_TO_STEP.get(_text(event.get("stage")))
+        if not step_id:
+            continue
+        steps[step_id] = {
+            "task_id": task_id,
+            "step_type": _RECORDED_STEP_PREFIX + step_id,
+            "status": "failed" if failed else "completed",
+            "started_at": _started_at(event.get("created_at"), event.get("duration_seconds")),
+            "finished_at": event.get("created_at"),
+            "error_reason": _text(event.get("error_reason")) or None if failed else None,
+            "recorded_by": "event_log",
+            "event_name": name,
+        }
+    return sorted(steps.values(), key=lambda step: STEP_ORDER.get(step["step_type"][len(_RECORDED_STEP_PREFIX):], 0))
 
 
 def _text(value: Any) -> str:
@@ -143,7 +208,10 @@ class LocalTaskDetailPolicy:
         return None
 
     @staticmethod
-    def additional_recorded_step(_step_type: str) -> str | None:
+    def additional_recorded_step(step_type: str) -> str | None:
+        if step_type.startswith(_RECORDED_STEP_PREFIX):
+            step_id = step_type[len(_RECORDED_STEP_PREFIX):]
+            return step_id if step_id in STEP_ORDER else None
         return None
 
 
@@ -163,4 +231,6 @@ def build_task_detail(
     *,
     job_steps: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if not job_steps:
+        job_steps = recorded_steps_from_events(_text(job.get("task_id")))
     return build_task_detail_core(job, policy=POLICY, job_steps=job_steps)

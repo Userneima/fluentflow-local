@@ -124,12 +124,15 @@ B 站和 YouTube 视频最高下载 720p，够转写和截图用。链接下载�
 ## 什么会离开这台电脑
 
 转录、剪气口、抽帧都在本机完成。只有用到下面这些功能时才会连外部服务，而且只发那项功能需要的内容：
-写笔记发转录文本和标题给你选的模型服务商；图文笔记发截取的画面给 Claude；导出飞书发笔记内容到你的
-飞书；下载视频链接访问对应的视频平台。
+写笔记发转录文本和标题给你选的模型服务商；图文笔记把转录稿和截取的画面一起发给 Claude（用你自己的
+Anthropic API Key）；导出飞书发笔记内容和截图到你的飞书，默认通过 `lark-cli` 以你本人的身份写入，没装
+`lark-cli` 时才用你在设置里填的飞书应用；下载视频链接访问对应的视频平台。
 
 抖音链接有一个例外：用浏览器登录态解析或下载不了时（没有选、读不到、或者过期了），会把这条分享链接
 （只有链接本身，不含任何其他信息）交给第三方解析服务 `sph.miuistore.com` 换取下载地址；这个服务再从
-它自己的接口 `apikr.convry.com` 取结果，那一步发过去的是它加密过的视频编号。这个回退默认开启。不想用它，把偏好项 `allow_miuistore` 关掉，之后抖音链接解析失败就直接报错：
+它自己的接口 `apikr.convry.com` 取结果，那一步发过去的是它加密过的视频编号。这个回退默认开启。不想用它，
+在「设置 → 转录」里关掉「抖音备用解析」，之后抖音链接解析失败就直接报错，AI 工具提交的链接和重试也照这个设置。
+脚本或 AI 工具也可以直接改这项偏好：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/preferences -H 'Content-Type: application/json' -d '{"allow_miuistore": false}'
@@ -186,6 +189,11 @@ FluentFlow Local 自带一个 MCP 服务（让 AI 工具直接调用本应用的
    然后重启 FluentFlow Local。
 2. 在应用左下角「菜单 → Agent 接入」里填入同一串字符，页面会生成可以直接复制的 Claude Code
    和 Codex 配置。
+3. 想确认接通了，在仓库目录运行
+   `.venv/bin/python scripts/check_mcp_server.py --backend-e2e`（Windows 为
+   `.venv\Scripts\python.exe scripts\check_mcp_server.py --backend-e2e`）：它启动 MCP 服务、核对工具清单，
+   再提交一段不写笔记的短文字稿走一遍提交、等待、读取，任务列表里会多出一条「MCP smoke transcript」。
+   令牌默认从 `.env` 读。
 
 ## 在同一局域网的其他设备上打开
 
@@ -196,9 +204,10 @@ FluentFlow Local 自带一个 MCP 服务（让 AI 工具直接调用本应用的
 .venv/bin/python -m uvicorn backend.local_main:app --host 0.0.0.0 --port 8000
 ```
 
-其他设备用这台电脑的 IP 地址（例如 `http://192.168.1.5:8000`）打开页面，只能查看。要在其他设备上
-提交和修改，再按上一节设置 `FLUENTFLOW_ACCESS_TOKEN`，并在那台设备的「菜单 → Agent 接入」里填入
-同一串字符。
+其他设备用这台电脑的 IP 地址（例如 `http://192.168.1.5:8000`）打开页面。**打开之后，同一网络里的任何人
+不需要令牌就能读到全部转录稿和笔记**，令牌只拦提交和修改。只在家里、自己的办公室这类可信网络上打开，
+在咖啡馆、学校、公司公共 Wi-Fi 上不要开，用完把这一行删掉再重启。要在其他设备上提交和修改，再按上一节
+设置 `FLUENTFLOW_ACCESS_TOKEN`，并在那台设备的「菜单 → Agent 接入」里填入同一串字符。
 
 ## 更新到新版本
 

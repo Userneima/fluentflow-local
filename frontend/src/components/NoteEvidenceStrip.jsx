@@ -49,7 +49,10 @@ const NoteEvidenceStrip = ({result, lang = 'zh', onSeek}) => {
 
     // Only for a note this flow wrote. A note typed by hand, or one from the older
     // transcript pipeline, has no frames to account for and gets no line.
-    if (!state || result?.summary_written_from !== 'debreath_media_note') return null;
+    const fromFrames = typeof result?.note_from_frames === 'boolean'
+        ? result.note_from_frames
+        : ['debreath_media_note', 'source_media_note'].includes(result?.summary_written_from);
+    if (!state || !fromFrames) return null;
 
     const sent = Array.isArray(state.frames_sent) ? state.frames_sent : [];
     const cited = Array.isArray(state.frames_cited) ? state.frames_cited : [];

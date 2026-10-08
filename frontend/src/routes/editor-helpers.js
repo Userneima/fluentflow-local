@@ -194,7 +194,10 @@ export const downloadBrowserFile = (file, fallbackName = 'download') => {
 
 export const NOTE_POLL_INTERVAL_MS = 5000;
 
-const VISUAL_NOTE_WRITTEN_FROM = 'debreath_media_note';
+// Notes Claude wrote from the frames: from the cut file, or from the original
+// recording when the cut was declined. The service also sends a ready answer,
+// `note_from_frames`, which wins when present.
+const VISUAL_NOTE_WRITTEN_FROM = new Set(['debreath_media_note', 'source_media_note']);
 
 // `job` is optional: the editor only holds the result, a poll also has the job
 // row, whose stage is 'note' for exactly this window.
@@ -227,11 +230,12 @@ export const claudeRewriteSettled = (result, {requestedAtMs = 0, sawRunning = fa
 // rewrite replaces it with prose only, and its screenshots go with it.
 export const noteCameFromClaude = (result) => {
     if (!result) return false;
+    if (typeof result.note_from_frames === 'boolean') return result.note_from_frames;
     // The stamp is set when a Claude note becomes the task's note and cleared
     // when an older note is put back, so once present it is the answer. Older
     // results without it fall back to the run record.
     if (result.summary_written_from !== undefined) {
-        return result.summary_written_from === VISUAL_NOTE_WRITTEN_FROM;
+        return VISUAL_NOTE_WRITTEN_FROM.has(result.summary_written_from);
     }
     const state = result.visual_note || {};
     return state.status === 'completed' && state.promoted !== false;
@@ -240,10 +244,15 @@ export const noteCameFromClaude = (result) => {
 // The note's part of a fresh result. The transcript side of the page has its
 // own sync and its own unsaved edits, so a finished note must not carry an
 // older copy of the transcript in with it.
+// The Feishu fields ride along: an automatic export runs right after the note,
+// and its link or its failure is what the person looks for next.
+const LARK_FIELDS = ['lark_response', 'lark_error', 'lark_doc_title', 'feishu_doc_url'];
 const NOTE_FIELD_PREFIXES = ['summary_', 'note_mode_', 'visual_note'];
 const NOTE_FIELDS = new Set([
     'artifacts', 'requested_note_mode', 'resolved_note_mode', 'chapter_coverage',
     'prompt_preset', 'prompt_preset_label',
+    'note_written_by', 'note_fallback_reason', 'deadline_hit',
+    ...LARK_FIELDS,
 ]);
 export const mergeNoteFields = (current, fresh) => {
     if (!fresh) return current;
@@ -255,6 +264,36 @@ export const mergeNoteFields = (current, fresh) => {
     });
     return {...current, ...picked};
 };
+
+// Only the export's outcome, for a note that is already on the page and may
+// have been edited since.
+export const mergeLarkFields = (current, fresh) => {
+    if (!fresh) return current;
+    const picked = {};
+    LARK_FIELDS.forEach((key) => {
+        if (key in fresh) picked[key] = fresh[key];
+    });
+    return {...current, ...picked};
+};
+
+// ---- The automatic Feishu export --------------------------------------------
+//
+// With "处理完成后自动导出到飞书" on, the export runs after the note is written,
+// so it lands after the note poll would have stopped. The page keeps asking
+// until the result names the document or the failure, for at most this long.
+export const AUTO_EXPORT_WAIT_MS = 10 * 60 * 1000;
+
+const truthyOption = (value) => value === true || ['true', '1', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+
+export const autoExportRequested = (job) => {
+    const options = job?.metadata?.queue_options;
+    return !!options && typeof options === 'object' && truthyOption(options.export_to_lark);
+};
+
+export const larkExportSettled = (result) => !!(result?.lark_response || result?.lark_error);
+
+// Whether a poll answer means the export is still to come.
+export const autoExportPending = (job) => autoExportRequested(job) && !larkExportSettled(job?.result);
 
 // What the regenerate dialog says about who will write the new note, and what
 // the user loses by it.

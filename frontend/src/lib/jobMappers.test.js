@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reconcileTaskList, entryToJob, jobToHistoryEntry, sortJobsForHistoryView } from './jobMappers.js';
+import { reconcileTaskList, entryToJob, jobToHistoryEntry, larkExportsFromJobs, sortJobsForHistoryView } from './jobMappers.js';
 import { normalizeTaskState } from './taskState.js';
 
 // Each test locks one historically-recurring list-reconciliation regression so
@@ -212,5 +212,42 @@ describe('history order', () => {
             {task_id: 'running', status: 'running', updated_at: '2026-09-01T09:00:00+08:00'},
         ];
         expect(sortJobsForHistoryView(jobs).map((job) => job.task_id)).toEqual(['running', 'today-done', 'old-failed']);
+    });
+});
+
+// Requirement: summary_status only ever means the note's state. A link
+// download once wrote its progress text there; that text is not a note state.
+describe('the note state of a task', () => {
+    it('ignores download text left in summary_status', () => {
+        const entry = jobToHistoryEntry({
+            task_id: 'l1', status: 'running', stage: 'downloading', source_type: 'video_link',
+            summary_status: '正在保存视频信息', result: {},
+        });
+        expect(entry.summaryStatus ?? null).toBeNull();
+    });
+
+    it('keeps a real note state', () => {
+        const entry = jobToHistoryEntry({task_id: 't1', status: 'completed', summary_status: 'failed', result: {}});
+        expect(entry.summaryStatus).toBe('failed');
+    });
+});
+
+// Requirement: the settings page's list of Feishu documents includes the ones
+// exported automatically (recorded on the task), not only manual exports.
+describe('larkExportsFromJobs', () => {
+    it('merges automatic exports from tasks with manual records, one per document, newest first', () => {
+        const jobs = [
+            {task_id: 'a', updated_at: '2026-10-08T10:00:00Z', metadata: {display_title: '自动导出的讲座'}, result: {lark_response: {url: 'https://f/doc-a'}}},
+            {task_id: 'b', updated_at: '2026-10-09T10:00:00Z', metadata: {display_title: '手动也导出过'}, result: {lark_response: {url: 'https://f/doc-b'}}},
+            {task_id: 'c', updated_at: '2026-10-09T11:00:00Z', result: {}},
+        ];
+        const manual = [
+            {url: 'https://f/doc-b', title: '我起的标题', timestamp: Date.parse('2026-10-07T00:00:00Z')},
+            {url: 'https://f/doc-old', title: '这个浏览器里导出的', timestamp: Date.parse('2026-10-01T00:00:00Z')},
+        ];
+        const list = larkExportsFromJobs(jobs, manual);
+        expect(list.map((item) => item.url)).toEqual(['https://f/doc-b', 'https://f/doc-a', 'https://f/doc-old']);
+        expect(list[0].title).toBe('我起的标题');
+        expect(list[1].title).toBe('自动导出的讲座');
     });
 });

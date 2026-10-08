@@ -180,8 +180,8 @@ const taskErrorDiagnosis = ({code, titleZh, titleEn, detailZh, detailEn, nextZh,
 const PROVIDER_NAMES = {
     deepseek: {zh: 'DeepSeek', en: 'DeepSeek'},
     openai: {zh: 'OpenAI', en: 'OpenAI'},
-    qwen: {zh: '百炼 / DashScope', en: 'Bailian / DashScope'},
-    dashscope: {zh: '百炼 / DashScope', en: 'Bailian / DashScope'},
+    qwen: {zh: '通义千问（阿里云百炼）', en: 'Qwen (Alibaba Cloud Bailian)'},
+    dashscope: {zh: '通义千问（阿里云百炼）', en: 'Qwen (Alibaba Cloud Bailian)'},
     anthropic: {zh: 'Anthropic', en: 'Anthropic'},
     claude: {zh: 'Anthropic', en: 'Anthropic'},
 };
@@ -985,6 +985,15 @@ export const isSttProgressUnmeasured = (job) => (
 export const videoSourceProgressOf = (job) => (
     job?.metadata?.video_source_progress || job?.video_source_progress || job?.videoSourceProgress || null
 );
+// The live progress line of a link task ("正在下载视频…"). The service sends it
+// as the job's own progress_message while the stage that wrote it lasts; older
+// payloads may carry it inside metadata. It is never the note's status.
+export const progressMessageOf = (job) => {
+    const top = typeof job?.progress_message === 'string' ? job.progress_message.trim() : '';
+    if (top) return top;
+    const nested = typeof job?.metadata?.progress_message === 'string' ? job.metadata.progress_message.trim() : '';
+    return nested;
+};
 // A link download whose size the platform did not say (yt-dlp, a stream without
 // a length) has no percentage. The job's own number then stays at the stage's
 // starting value, 10%, until the download ends, which reads as a hung task. Only

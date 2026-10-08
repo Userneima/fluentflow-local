@@ -152,3 +152,72 @@ describe('arriving from a link that was already being processed', () => {
         expect(document.querySelectorAll('[data-highlighted="true"]').length).toBe(0);
     });
 });
+
+// Requirement: while a link downloads, its card shows the download's own line
+// (the service's progress_message), and the note cell never reads that line as
+// the note's state.
+describe('a link task while it downloads', () => {
+    afterEach(cleanup);
+
+    const downloading = (overrides = {}) => ({
+        task_id: 'dl-2',
+        client_id: 'local-single-user',
+        status: 'running',
+        stage: 'resolving',
+        progress: 5,
+        source_type: 'video_link',
+        created_at: '2026-10-08T10:00:00Z',
+        updated_at: '2026-10-08T10:00:00Z',
+        summary_status: null,
+        metadata: {display_title: '抖音分享'},
+        ...overrides,
+    });
+
+    it('shows the download line the service sends', async () => {
+        tasks = [downloading({progress_message: '等待前面的链接下载完成'})];
+        mount();
+        expect(await screen.findByText('等待前面的链接下载完成')).toBeTruthy();
+    });
+
+    it('also reads the line from metadata', async () => {
+        tasks = [downloading({metadata: {display_title: '抖音分享', progress_message: '正在解析链接'}})];
+        mount();
+        expect(await screen.findByText('正在解析链接')).toBeTruthy();
+    });
+
+    it('does not take a progress text left in summary_status for the note state', async () => {
+        tasks = [downloading({summary_status: '正在保存视频信息', result: {summary_status: '正在保存视频信息'}})];
+        mount();
+        await screen.findByText('抖音分享');
+        expect(screen.queryByText('正在保存视频信息')).toBeNull();
+    });
+});
+
+// Requirement: a note the text model wrote because the frame note could not
+// run says so on the card's note cell, with the reason when there is one.
+describe('a task whose note the text model wrote instead', () => {
+    afterEach(cleanup);
+
+    it('says so in the note cell', async () => {
+        tasks = [{
+            task_id: 'fb-1',
+            client_id: 'local-single-user',
+            status: 'completed',
+            stage: 'done',
+            source_type: 'video',
+            created_at: '2026-10-08T10:00:00Z',
+            updated_at: '2026-10-08T10:00:00Z',
+            metadata: {display_title: '讲座'},
+            result: {
+                task_id: 'fb-1',
+                summary_status: 'completed',
+                summary_chars: 1200,
+                summary_markdown: '# 笔记',
+                summary_written_from: 'text_fallback',
+                note_fallback_reason: '本机 Claude 的登录已过期。',
+            },
+        }];
+        mount();
+        expect(await screen.findByText('这次改由文本模型按文字写的笔记（没有截图）。原因：本机 Claude 的登录已过期。')).toBeTruthy();
+    });
+});

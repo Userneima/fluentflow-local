@@ -50,13 +50,22 @@ export const AGENT_TASK_PACKAGE_VERSION = '1';
 const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
 const text = (value) => String(value || '');
 
-export const normalizeSummaryStatus = (status, result={}) => {
+// The note's own states. Link downloads once stored their progress text
+// ("正在保存视频信息") in summary_status, and old rows still carry it; anything
+// outside this set is not a note status and is never shown as one.
+const NOTE_STATUSES = new Set(['completed', 'failed', 'skipped', 'pending']);
+export const noteStatusOf = (status) => {
     const value = text(status).trim().toLowerCase();
-    if (['completed', 'failed', 'skipped', 'pending'].includes(value)) return value;
+    return NOTE_STATUSES.has(value) ? value : null;
+};
+
+export const normalizeSummaryStatus = (status, result={}) => {
+    const value = noteStatusOf(status);
+    if (value) return value;
     if (text(result.summary_markdown).trim()) return 'completed';
     if (result.summary_skipped) return 'skipped';
     if (text(result.summary_error).trim()) return 'failed';
-    return value || null;
+    return null;
 };
 
 export const normalizeResultPayload = (value={}) => {

@@ -110,3 +110,38 @@ export const notePromptScopeSentence = (writer, lang = 'zh') => {
         ? '当前由 Claude 结合画面写笔记，不读提示词和笔记模式。要按提示词写，点「重生笔记」，选「改用文本模型按文字重写」。'
         : 'Claude is writing notes from the video frames and does not read the prompt or note mode. To use the prompt, click Regenerate note and choose to rewrite from the text with the text model.';
 };
+
+// Whether this task's note was written by the text model because the frame
+// note could not run (local_intake_flow._write_text_note_instead). The person
+// expected a note with screenshots and has to be told why there are none.
+export const noteWasTextFallback = (result) => (
+    result?.note_written_by === 'text_fallback' || result?.summary_written_from === 'text_fallback'
+);
+
+// Said above the note in the editor and on the task card. Empty for any other note.
+export const noteFallbackSentence = (result, lang = 'zh') => {
+    if (!noteWasTextFallback(result)) return '';
+    const reason = String(result?.note_fallback_reason || '').trim();
+    if (lang === 'zh') {
+        return `这次改由文本模型按文字写的笔记（没有截图）。${reason ? `原因：${reason}` : ''}`;
+    }
+    return `This note was written from the text by the text model instead (no screenshots).${reason ? ` Reason: ${reason}` : ''}`;
+};
+
+// What the editor says while the note is still being written. Only Claude,
+// reading the frames, takes minutes; a text model is not promised a duration.
+export const notePendingSentence = (writer, result = null, lang = 'zh') => {
+    const zh = lang === 'zh';
+    const claudeWriting = writer?.kind === 'claude' || result?.visual_note?.status === 'running';
+    if (claudeWriting) {
+        return zh
+            ? '正在写笔记。Claude 结合画面写一般要几分钟，写好会自动出现。'
+            : 'The note is being written. Claude reading the frames usually takes a few minutes; it appears here when done.';
+    }
+    if (writer?.kind === 'text_model') {
+        return zh
+            ? `正在写笔记，由 ${noteWriterLabel(writer, lang)} 按文字写，写好会自动出现。`
+            : `The note is being written from the text by ${noteWriterLabel(writer, lang)}; it appears here when done.`;
+    }
+    return zh ? '正在写笔记，写好会自动出现。' : 'The note is being written; it appears here when done.';
+};

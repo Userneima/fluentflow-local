@@ -1,7 +1,45 @@
 import {useMemo, useState} from 'react';
 import {ClipboardCopy, KeyRound, Rocket, Terminal} from 'lucide-react';
+import {useApp} from '../app/AppContext.jsx';
 
 const ACCESS_TOKEN_KEY = 'fluentflow_access_token';
+
+const PATH_PLACEHOLDER = '<path-to-fluentflow>';
+const TOKEN_PLACEHOLDER = '<your-local-access-token>';
+
+// Quote a shell word only when it needs it, so ordinary paths stay readable.
+const shellWord = (value) => (
+    /^[A-Za-z0-9_/.:=@+,-]+$/.test(value) ? value : `'${String(value).replace(/'/g, `'\\''`)}'`
+);
+
+// Everything the page prints, from what the running service says about
+// itself (GET /runtime-config: repo_root, python_executable). With both known
+// the commands work as copied; the placeholder is only for an older service
+// that does not say.
+export const agentAccessCommands = ({apiBase, token = '', repoRoot = '', pythonExecutable = ''}) => {
+    const root = String(repoRoot || '').replace(/\/+$/, '');
+    const python = String(pythonExecutable || '') || 'python3';
+    const scriptsDir = root || PATH_PLACEHOLDER;
+    const server = `${scriptsDir}/scripts/fluentflow_mcp_server.py`;
+    const check = `${scriptsDir}/scripts/check_mcp_server.py`;
+    const accessToken = token || TOKEN_PLACEHOLDER;
+    const env = {
+        FLUENTFLOW_API_BASE: apiBase,
+        FLUENTFLOW_CLIENT_ID: 'local-client',
+        FLUENTFLOW_ACCESS_TOKEN: accessToken,
+    };
+    const envFlags = Object.entries(env).map(([key, value]) => `--env ${shellWord(`${key}=${value}`)}`).join(' ');
+    const json = JSON.stringify({
+        mcpServers: {fluentflow: {command: python, args: [server], env}},
+    }, null, 2);
+    const claude = `claude mcp add fluentflow --scope user ${envFlags} -- ${shellWord(python)} ${shellWord(server)}`;
+    const codex = `codex mcp add fluentflow ${envFlags} -- ${shellWord(python)} ${shellWord(server)}`;
+    const verify = [
+        shellWord(python), shellWord(check), '--backend-e2e', '--api-base', shellWord(apiBase),
+        ...(token ? ['--access-token', shellWord(token)] : []),
+    ].join(' ');
+    return {json, claude, codex, verify, complete: !!root && !!pythonExecutable};
+};
 
 const copyText = async (text, onDone) => {
     try {
@@ -38,20 +76,13 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null}) => {
     const [token, setToken] = useState(() => localStorage.getItem(ACCESS_TOKEN_KEY) || '');
     const [copied, setCopied] = useState('');
     const apiBase = typeof window === 'undefined' ? 'http://127.0.0.1:8000' : window.location.origin;
-    const config = useMemo(() => JSON.stringify({
-        mcpServers: {
-            fluentflow: {
-                command: 'python3',
-                args: ['<path-to-fluentflow>/scripts/fluentflow_mcp_server.py'],
-                env: {
-                    FLUENTFLOW_API_BASE: apiBase,
-                    FLUENTFLOW_CLIENT_ID: 'local-client',
-                    FLUENTFLOW_ACCESS_TOKEN: token || '<your-local-access-token>',
-                },
-            },
-        },
-    }, null, 2), [apiBase, token]);
-    const codex = `codex mcp add fluentflow --env FLUENTFLOW_API_BASE=${apiBase} --env FLUENTFLOW_CLIENT_ID=local-client --env FLUENTFLOW_ACCESS_TOKEN=${token || '<your-local-access-token>'} -- python3 "$(pwd)/scripts/fluentflow_mcp_server.py"`;
+    const runtimeConfig = useApp()?.runtimeConfig || {};
+    const commands = useMemo(() => agentAccessCommands({
+        apiBase,
+        token,
+        repoRoot: runtimeConfig.repoRoot,
+        pythonExecutable: runtimeConfig.pythonExecutable,
+    }), [apiBase, token, runtimeConfig.repoRoot, runtimeConfig.pythonExecutable]);
     const saveToken = (value) => {
         setToken(value);
         if (value.trim()) localStorage.setItem(ACCESS_TOKEN_KEY, value.trim());
@@ -63,7 +94,7 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null}) => {
         <>
             <div className="grid gap-4 md:grid-cols-3">
                 <StepCard number="1" icon={KeyRound} title="填写本机访问令牌" body="令牌由启动 FluentFlow Local 时的 FLUENTFLOW_ACCESS_TOKEN 配置，不会上传到任何云端服务。"/>
-                <StepCard number="2" icon={ClipboardCopy} title="复制 MCP 配置" body="把下方配置加入你的 AI 工具；令牌只保存在当前浏览器，方便复制。"/>
+                <StepCard number="2" icon={ClipboardCopy} title="复制接入命令" body="按你用的 AI 工具复制下方对应的命令，到终端运行一次；令牌只保存在当前浏览器，方便复制。"/>
                 <StepCard number="3" icon={Rocket} title="直接交给 AI" body="例如：“用 FluentFlow 把这个视频做成笔记：&lt;链接&gt;”。"/>
             </div>
             <div className="mt-5 rounded-[14px] border border-[#e5e5e5] bg-white p-4 dark:border-white/[0.12] dark:bg-white/[0.05]">
@@ -72,12 +103,18 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null}) => {
                 <p className="mt-2 text-[12px] font-semibold leading-5 text-[#686a70] dark:text-white/60">此值只写入本机浏览器存储，用于生成配置；没有令牌时，先在启动器或环境变量中设置它。</p>
             </div>
             <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                <CodeBlock label="MCP 配置" value={config} copied={copied === 'config'} onCopy={onCopy('config')}/>
-                <CodeBlock label="Codex" value={codex} copied={copied === 'codex'} onCopy={onCopy('codex')}/>
+                <CodeBlock label="Claude Code" value={commands.claude} copied={copied === 'claude'} onCopy={onCopy('claude')}/>
+                <CodeBlock label="Codex" value={commands.codex} copied={copied === 'codex'} onCopy={onCopy('codex')}/>
+                <CodeBlock label="其他 MCP 工具（JSON 配置）" value={commands.json} copied={copied === 'config'} onCopy={onCopy('config')}/>
+                <CodeBlock label="验证（在终端运行）" value={commands.verify} copied={copied === 'verify'} onCopy={onCopy('verify')}/>
             </div>
-            <div className="mt-4 flex items-center gap-2 rounded-[14px] border border-[#e5e5e5] bg-white p-4 text-[13px] font-semibold text-[#686a70] dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-white/60">
-                <Terminal className="size-4 text-primary"/>
-                验证：运行 <code className="font-mono text-[12px]">npm run mcp:check:e2e</code>。
+            <div className="mt-4 flex items-start gap-2 rounded-[14px] border border-[#e5e5e5] bg-white p-4 text-[13px] font-semibold leading-5 text-[#686a70] dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-white/60">
+                <Terminal className="mt-0.5 size-4 shrink-0 text-primary"/>
+                <span>
+                    {commands.complete
+                        ? '上面的命令已经填好这台电脑上的程序位置，复制到终端运行即可。验证会提交一段测试文字，在任务列表里多出一条测试任务。'
+                        : `本机服务没有告诉页面程序装在哪里，命令里的 ${PATH_PLACEHOLDER} 要换成 FluentFlow 所在的文件夹。`}
+                </span>
             </div>
         </>
     );

@@ -142,18 +142,18 @@ describe('a task opened while its note is still being written', () => {
         );
         mount(task());
         await advance(0);
-        expect(screen.getByText('edit.summaryPending')).toBeTruthy();
+        expect(screen.getByText('正在写笔记，写好会自动出现。')).toBeTruthy();
 
         await advance(4900);
         expect(api.getJob).not.toHaveBeenCalled();
         await advance(100);
         expect(api.getJob).toHaveBeenCalledTimes(1);
-        expect(screen.getByText('edit.summaryPending')).toBeTruthy();
+        expect(screen.getByText('正在写笔记，写好会自动出现。')).toBeTruthy();
 
         await advance(5000);
         expect(api.getJob).toHaveBeenCalledTimes(2);
         expect(screen.getByLabelText('note').value).toBe('# Claude note');
-        expect(screen.queryByText('edit.summaryPending')).toBeNull();
+        expect(screen.queryByText('正在写笔记，写好会自动出现。')).toBeNull();
     });
 
     it('stops asking once the note is in', async () => {
@@ -429,5 +429,147 @@ describe('重生笔记 decided per task when Claude writes the notes', () => {
         const dialog = await openRegenerateDialog();
         expect(screen.getByTestId('regenerate-alternative').disabled).toBe(true);
         expect(dialog.textContent).toMatch(/还没有填文本模型的 Key/);
+    });
+});
+
+// What the person should get:
+//   - While the note is being written the page says so in plain words; it
+//     promises "几分钟" only when Claude is reading the frames, and names the
+//     text model when that is who writes.
+//   - A note the text model wrote because the frame note could not run says
+//     so above the note, with the reason.
+//   - With automatic Feishu export on, the link or the failure shows up on the
+//     page without reopening the task, even though the export lands after the
+//     note. The page stops asking once it has the answer, or after ten minutes.
+describe('what the note panel says', () => {
+    it('promises minutes only when Claude writes from the frames', async () => {
+        claudeWriter();
+        answerPolls(jobWith(task(), 'note'));
+        mount(task());
+        await advance(0);
+        expect(screen.getByText('正在写笔记。Claude 结合画面写一般要几分钟，写好会自动出现。')).toBeTruthy();
+    });
+
+    it('names the text model and makes no time promise when it writes', async () => {
+        textWriter();
+        storedSettings = {aiProvider: 'deepseek'};
+        answerPolls(jobWith(task(), 'note'));
+        mount(task());
+        await advance(0);
+        const line = screen.getByText(/^正在写笔记，由 DeepSeek/);
+        expect(line.textContent).not.toMatch(/几分钟/);
+    });
+
+    it('says a skipped note was skipped on request, and calls it 笔记', async () => {
+        answerPolls(jobWith(task({summary_status: 'skipped', summary_skipped: true})));
+        mount(task({summary_status: 'skipped', summary_skipped: true}));
+        await advance(0);
+        expect(screen.getByText('edit.summarySkipped')).toBeTruthy();
+    });
+
+    it('says when the text model wrote the note instead, and why', async () => {
+        const fallback = task({
+            summary_status: 'completed',
+            summary_markdown: '# text note',
+            note_written_by: 'text_fallback',
+            summary_written_from: 'text_fallback',
+            note_fallback_reason: '本机 Claude 的登录已过期。',
+        });
+        answerPolls(jobWith(fallback));
+        mount(fallback);
+        await advance(0);
+        expect(screen.getByTestId('note-fallback').textContent)
+            .toBe('这次改由文本模型按文字写的笔记（没有截图）。原因：本机 Claude 的登录已过期。');
+    });
+
+    it('says nothing of the kind for a note Claude wrote', async () => {
+        const claude = task({summary_status: 'completed', summary_markdown: '# note', summary_written_from: 'debreath_media_note'});
+        answerPolls(jobWith(claude));
+        mount(claude);
+        await advance(0);
+        expect(screen.queryByTestId('note-fallback')).toBeNull();
+    });
+
+    it('shows the fallback notice once a polled note turns out to be one', async () => {
+        answerPolls(jobWith(task({
+            summary_status: 'completed',
+            summary_markdown: '# text note',
+            note_written_by: 'text_fallback',
+            note_fallback_reason: '结合画面的笔记现在写不了。',
+        })));
+        mount(task());
+        await advance(5000);
+        expect(screen.getByTestId('note-fallback').textContent).toMatch(/原因：结合画面的笔记现在写不了。/);
+    });
+});
+
+const autoExportJob = (result) => ({
+    ...jobWith(result),
+    metadata: {queue_options: {export_to_lark: 'true'}},
+});
+
+describe('a task with automatic Feishu export', () => {
+    it('keeps asking after the note until the document link is in', async () => {
+        const noteDone = task({summary_status: 'completed', summary_markdown: '# note'});
+        answerPolls(
+            autoExportJob(noteDone),
+            autoExportJob(noteDone),
+            autoExportJob({...noteDone, lark_response: {url: 'https://feishu.example/doc'}, lark_doc_title: 'lecture'}),
+        );
+        mount(task());
+        await advance(5000);
+        expect(screen.getByLabelText('note').value).toBe('# note');
+        expect(screen.queryByTestId('lark-export-link')).toBeNull();
+        await advance(10000);
+        expect(screen.getByTestId('lark-export-link').getAttribute('href')).toBe('https://feishu.example/doc');
+        await advance(30000);
+        expect(api.getJob).toHaveBeenCalledTimes(3);
+    });
+
+    it('shows the export failure without reopening the task', async () => {
+        const noteDone = task({summary_status: 'completed', summary_markdown: '# note'});
+        answerPolls(
+            autoExportJob(noteDone),
+            autoExportJob({...noteDone, lark_error: '飞书没有登录'}),
+        );
+        mount(task());
+        await advance(10000);
+        expect(screen.getByText(/edit.autoExportFailed：飞书没有登录/)).toBeTruthy();
+        await advance(30000);
+        expect(api.getJob).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not replace a note typed while it waits for the export', async () => {
+        const noteDone = task({summary_status: 'completed', summary_markdown: '# note'});
+        api.saveSummaryEdit.mockImplementation(() => new Promise(() => {}));
+        answerPolls(
+            autoExportJob(noteDone),
+            autoExportJob({...noteDone, summary_markdown: '# server copy', lark_response: {url: 'https://feishu.example/doc'}}),
+        );
+        mount(task());
+        await advance(5000);
+        fireEvent.change(screen.getByLabelText('note'), {target: {value: 'my edit'}});
+        await advance(5000);
+        expect(screen.getByLabelText('note').value).toBe('my edit');
+        expect(screen.getByTestId('lark-export-link')).toBeTruthy();
+    });
+
+    it('gives up after ten minutes', async () => {
+        const noteDone = task({summary_status: 'completed', summary_markdown: '# note'});
+        answerPolls(autoExportJob(noteDone));
+        mount(task());
+        await advance(5000);
+        await advance(11 * 60 * 1000);
+        const calls = api.getJob.mock.calls.length;
+        await advance(60000);
+        expect(api.getJob.mock.calls.length).toBe(calls);
+    });
+
+    it('stops with the note when export was not asked for', async () => {
+        answerPolls(jobWith(task({summary_status: 'completed', summary_markdown: '# note'})));
+        mount(task());
+        await advance(5000);
+        await advance(30000);
+        expect(api.getJob).toHaveBeenCalledTimes(1);
     });
 });
