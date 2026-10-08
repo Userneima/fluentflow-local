@@ -1,5 +1,5 @@
 {
-  "version": "0.5.0",
+  "version": "0.6.0",
   "scripts": {
     "dev:frontend": "node scripts/write_frontend_config.js && vite --config vite.local.config.mjs --host 127.0.0.1",
     "build:frontend": "node scripts/write_frontend_config.js && vite build --config vite.local.config.mjs",
