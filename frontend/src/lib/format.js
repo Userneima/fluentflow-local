@@ -213,6 +213,29 @@ export const providerDisplayName = (provider, lang='zh') => {
 const isVideoLinkContext = (context={}) => (
     String(context?.sourceType || context?.source_type || '').trim().toLowerCase() === 'video_link'
 );
+const CJK_RE = /[\u4e00-\u9fff]/;
+const LINK_WORDS_RE = /视频|链接|作品|抖音|B ?站|bilibili|youtube|douyin|video|link|url/i;
+// The service's own Chinese sentence when it wrote one; otherwise ours.
+const zhOr = (raw, fallback) => (CJK_RE.test(raw) ? raw : fallback);
+// The chosen browser's cookie store could not be opened or decrypted. Needs a
+// word about the browser or cookies; "登录态已失效" alone is an AI-key failure.
+const linkCookieStoreUnreadable = (raw, lower) => (
+    lower.includes('could not find') && lower.includes('cookies database')
+    || lower.includes('failed to decrypt') && lower.includes('cookie')
+    || lower.includes('could not copy') && lower.includes('cookie')
+    || lower.includes('cookie store') && (lower.includes('unreadable') || lower.includes('cannot be read') || lower.includes('could not be read'))
+    || /cookie|浏览器|chrome|safari|edge|firefox|brave/i.test(raw)
+        && (raw.includes('读不到') || raw.includes('无法读取') || raw.includes('读取失败') || raw.includes('打不开') || raw.includes('解不开') || raw.includes('解密'))
+);
+// Over the size cap for link downloads. Phrased by the service as a limit (上限
+// / 超过 … MB); an over-size link download is worded the same as an upload one
+// in older messages, so those count when the task is a link.
+const linkSizeLimit = (raw, lower, videoLink) => (
+    (raw.includes('上限') && !raw.includes('时长') && (raw.includes('MB') || raw.includes('GB') || raw.includes('大小') || raw.includes('下载')))
+    || (lower.includes('exceeds') && (lower.includes('size limit') || lower.includes('download limit') || lower.includes('max')))
+    || lower.includes('max-filesize') || lower.includes('larger than max')
+    || (videoLink && (lower.includes('downloaded video is too large') || lower.includes('file is too large') || raw.includes('视频文件过大')))
+);
 // Context the caller knows about the failed task and the message cannot carry:
 // `provider` (deepseek / openai / qwen / dashscope / anthropic) and `sourceType`
 // (video_link / video_file / audio_file / transcript_file / queue_upload).
@@ -222,6 +245,10 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
     const provider = providerFromError(raw, context);
     const providerName = providerDisplayName(provider, lang);
     const videoLink = isVideoLinkContext(context);
+    // Whether a failure can be about a video link at all: the job says so, or
+    // the message names a link, a video, or a platform. Submission errors arrive
+    // without a job, so the message has to be enough.
+    const aboutLink = videoLink || LINK_WORDS_RE.test(raw);
     const pick = (diag) => ({
         code: diag.code,
         severity: diag.severity || 'error',
@@ -265,6 +292,175 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 detailEn: 'Douyin needs a fresh login in your browser before this link can be read.',
                 nextZh: '在浏览器里打开 douyin.com 登录一次，再重试这个链接。',
                 nextEn: 'Open douyin.com in your browser, sign in once, then retry this link.',
+            }),
+        ],
+        // Link failures the service now names precisely. Its Chinese sentence is
+        // already written for the reader and says which link and what to do, so
+        // it is shown as is; the English text is ours. These sit ahead of the
+        // API-key rule, which also matches words like 登录态.
+        [
+            linkCookieStoreUnreadable(raw, lower),
+            taskErrorDiagnosis({
+                code: 'video_cookies_unreadable',
+                titleZh: '读不到浏览器登录态',
+                titleEn: 'Browser login could not be read',
+                detailZh: zhOr(raw, '读不到所选浏览器的登录信息（cookie 库打不开或解不开），这次没法用它下载。'),
+                detailEn: 'The browser login chosen in Settings could not be read (its cookie store could not be opened or decrypted), so it could not be used for this download.',
+                nextZh: '到设置的「视频链接下载登录态」换一个浏览器、点「检测登录态」确认，或者选「关闭」，再重试。',
+                nextEn: 'In Settings → "Video link login", pick another browser and press "Check login", or choose Off, then retry.',
+            }),
+        ],
+        [
+            raw.includes('YouTube') && (raw.includes('登录') || raw.includes('机器人') || raw.includes('年龄')),
+            taskErrorDiagnosis({
+                code: 'youtube_login_required',
+                titleZh: 'YouTube 需要登录',
+                titleEn: 'YouTube requires sign-in',
+                detailZh: raw,
+                detailEn: 'YouTube requires sign-in for this video (age check, bot check, or restricted access). In Settings → "Video link login", pick a browser where you are signed into YouTube, then retry.',
+                nextZh: '到设置开启「视频链接下载登录态」（选已登录 YouTube 的浏览器）后重试。',
+                nextEn: 'Enable "Video link login" in Settings (pick a browser signed into YouTube) and retry.',
+            }),
+        ],
+        [
+            aboutLink && raw.includes('没有给出可下载的视频'),
+            taskErrorDiagnosis({
+                code: 'video_link_no_media',
+                titleZh: '平台没有给出可下载的视频',
+                titleEn: 'The platform gave no downloadable video',
+                detailZh: zhOr(raw, '平台没有给出可以下载的视频，可能是图文、已删除或私密作品。'),
+                detailEn: 'The platform returned no video to download; it may be an image post, deleted, or private.',
+                nextZh: '在平台里打开确认；能播放的话，下载到本机后上传。',
+                nextEn: 'Open it on the platform to check; if it plays, download it and upload the file.',
+            }),
+        ],
+        [
+            aboutLink && raw.includes('解析成功，但下载没有成功'),
+            taskErrorDiagnosis({
+                code: 'video_link_download_failed',
+                titleZh: '视频下载没有成功',
+                titleEn: 'The video did not download',
+                detailZh: zhOr(raw, '链接解析成功了，但下载视频时失败。'),
+                detailEn: 'The link resolved, but downloading the video failed.',
+                nextZh: '稍后重试；反复失败的话，下载到本机后上传。',
+                nextEn: 'Retry later; if it keeps failing, download it and upload the file.',
+            }),
+        ],
+        [
+            aboutLink && (raw.includes('需要登录后才能') || raw.includes('需要已登录')),
+            taskErrorDiagnosis({
+                code: 'video_link_login_required',
+                titleZh: '这个链接需要登录',
+                titleEn: 'This link needs a signed-in browser',
+                detailZh: zhOr(raw, '平台要求登录后才能下载这个视频。'),
+                detailEn: 'The platform requires a signed-in account to download this video.',
+                nextZh: '到设置里选择已登录这个平台的浏览器，再重试；或下载到本机后上传。',
+                nextEn: 'Pick a browser signed into the platform in Settings and retry, or download it and upload the file.',
+            }),
+        ],
+        [
+            aboutLink && (raw.includes('限制了请求') || raw.includes('请求过于频繁')),
+            taskErrorDiagnosis({
+                code: 'video_link_rate_limited',
+                titleZh: '平台暂时限制了请求',
+                titleEn: 'The platform is rate limiting',
+                detailZh: zhOr(raw, '平台暂时限制了这台电脑的请求。'),
+                detailEn: 'The platform is temporarily limiting requests from this computer.',
+                nextZh: '过几分钟再重试。',
+                nextEn: 'Retry in a few minutes.',
+            }),
+        ],
+        [
+            raw.includes('视频时长过长'),
+            taskErrorDiagnosis({
+                code: 'video_link_too_long',
+                titleZh: '视频太长',
+                titleEn: 'Video is too long',
+                detailZh: zhOr(raw, '视频时长超过了当前限制。'),
+                detailEn: 'The video is longer than the current limit.',
+                nextZh: '下载到本机，拆分后再上传。',
+                nextEn: 'Download it, split it, and upload the parts.',
+                retryable: false,
+            }),
+        ],
+        [
+            aboutLink && (raw.includes('图文') || lower.includes('image post') || lower.includes('photo post') || lower.includes('slideshow')),
+            taskErrorDiagnosis({
+                code: 'video_link_image_post',
+                titleZh: '这条是图文，不是视频',
+                titleEn: 'This is an image post, not a video',
+                detailZh: zhOr(raw, '这个链接是图文作品，里面没有视频可以下载。'),
+                detailEn: 'This link is an image post; there is no video in it to download.',
+                nextZh: '换一个视频链接。',
+                nextEn: 'Use a link to a video instead.',
+                retryable: false,
+            }),
+        ],
+        [
+            aboutLink && (raw.includes('会员') || raw.includes('试看') || raw.includes('付费') || raw.includes('充电专属')
+            || lower.includes('members-only') || lower.includes("channel's members") || lower.includes('members only')
+            || lower.includes('preview only') || lower.includes('only a preview') || lower.includes('requires payment')),
+            taskErrorDiagnosis({
+                code: 'video_link_member_content',
+                titleZh: '会员或付费内容',
+                titleEn: 'Members-only or paid content',
+                detailZh: zhOr(raw, '这是会员、付费或试看内容，只能拿到试看片段，没法下载完整视频。'),
+                detailEn: 'This is members-only, paid, or preview content; only a preview can be fetched, not the full video.',
+                nextZh: '如果你有这段视频的完整文件，用「本地上传」处理。',
+                nextEn: 'If you have the full file, process it with Local files instead.',
+                retryable: false,
+            }),
+        ],
+        [
+            aboutLink && (raw.includes('私密') || raw.includes('仅自己可见') || raw.includes('仅粉丝可见') || raw.includes('私享') || lower.includes('private video') || lower.includes('this video is private')),
+            taskErrorDiagnosis({
+                code: 'video_link_private',
+                titleZh: '私密视频',
+                titleEn: 'Private video',
+                detailZh: zhOr(raw, '这是私密或仅部分人可见的视频，没有权限的账号看不到。'),
+                detailEn: 'This video is private or limited to some viewers; an account without access cannot see it.',
+                nextZh: '如果你的账号能看，到设置的「视频链接下载登录态」选登录了这个账号的浏览器，再重试。',
+                nextEn: 'If your account can see it, pick the browser signed into that account in Settings → "Video link login", then retry.',
+            }),
+        ],
+        [
+            aboutLink && (/已删除|被.{0,6}删除/.test(raw) || raw.includes('已下架') || raw.includes('作品不存在') || raw.includes('视频不存在')
+            || lower.includes('has been removed') || lower.includes('been deleted') || lower.includes('no longer available')),
+            taskErrorDiagnosis({
+                code: 'video_link_deleted',
+                titleZh: '视频已删除或下架',
+                titleEn: 'Video deleted or removed',
+                detailZh: zhOr(raw, '这个视频已经被删除或下架，链接打不开了。'),
+                detailEn: 'This video has been deleted or taken down; the link no longer opens.',
+                nextZh: '确认链接在浏览器里还能打开；打不开就换一个链接。',
+                nextEn: 'Check that the link still opens in a browser; if not, use another link.',
+                retryable: false,
+            }),
+        ],
+        [
+            linkSizeLimit(raw, lower, videoLink),
+            taskErrorDiagnosis({
+                code: 'video_link_too_large',
+                titleZh: '视频超过链接下载上限',
+                titleEn: 'Video exceeds the link download limit',
+                detailZh: zhOr(raw, '这个视频超过了链接下载的大小上限，重试也一样。'),
+                detailEn: 'This video is larger than the link download limit; retrying gives the same result.',
+                nextZh: '先在浏览器或平台客户端里把视频下载到本机，再用「本地上传」处理（本地文件的上限大得多）。',
+                nextEn: 'Download the video to this computer first (browser or the platform app), then process it with Local files, which allow much larger files.',
+                retryable: false,
+            }),
+        ],
+        [
+            aboutLink && (lower.includes('unsupported url') || raw.includes('不支持这个网站') || raw.includes('不支持该网站') || raw.includes('不支持这个链接') || raw.includes('不支持的链接') || raw.includes('暂不支持这个平台') || raw.includes('目前只支持')),
+            taskErrorDiagnosis({
+                code: 'video_link_unsupported_site',
+                titleZh: '不支持这个网站',
+                titleEn: 'Site not supported',
+                detailZh: zhOr(raw, '这个网站的链接还不支持。目前支持抖音、Bilibili、YouTube 和 .mp4 直链。'),
+                detailEn: 'Links from this site are not supported. Douyin, Bilibili, YouTube, and direct .mp4 links are.',
+                nextZh: '把视频下载到本机后用「本地上传」处理。',
+                nextEn: 'Download the video to this computer and process it with Local files.',
+                retryable: false,
             }),
         ],
         [
@@ -674,13 +870,29 @@ export const isSttProgressUnmeasured = (job) => (
     && sttProgressFraction(job) <= 0
     && job?.sttStatus !== 'transcribing_segments'
 );
+// The download report a link task carries, wherever this job shape keeps it.
+export const videoSourceProgressOf = (job) => (
+    job?.metadata?.video_source_progress || job?.video_source_progress || job?.videoSourceProgress || null
+);
+// A link download whose size the platform did not say (yt-dlp, a stream without
+// a length) has no percentage. The job's own number then stays at the stage's
+// starting value, 10%, until the download ends, which reads as a hung task. Only
+// a reported percent or a known total makes the number mean something. With no
+// report at all there is nothing to judge by, and the job's number stands.
+export const isDownloadProgressUnmeasured = (job) => {
+    if (String(job?.stage || '') !== 'downloading') return false;
+    const report = videoSourceProgressOf(job);
+    if (!report || typeof report !== 'object') return false;
+    if (report.percent !== null && report.percent !== undefined && report.percent !== '' && Number.isFinite(Number(report.percent))) return false;
+    return !(Number(report.total_bytes) > 0);
+};
 // Removing the breath gaps has no percentage to report: it is one ffmpeg pipeline
 // over the whole file, and the pipeline publishes a single number at the start of
 // the stage. On a 24-minute recording that number sat at 2% for twenty minutes,
 // which is how a working task got reported as a hung one. No number is the honest
 // answer here, and the stage's own label says it takes minutes.
 export const isProgressUnmeasured = (job) => (
-    job?.stage === 'prepare_media' || isSttProgressUnmeasured(job)
+    job?.stage === 'prepare_media' || isSttProgressUnmeasured(job) || isDownloadProgressUnmeasured(job)
 );
 export const jobProgressLabel = (job, t) => isProgressUnmeasured(job)
     ? t('dash.progressUnknown')

@@ -1499,6 +1499,53 @@ async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
     )
 
 
+async def _retry_link_task(
+    *,
+    task_id: str,
+    job: dict,
+    client_id: Optional[str],
+    carry: Optional[dict],
+) -> Optional[dict]:
+    """Re-submit a link task that never got its video: fetch the link again.
+
+    A link that failed while downloading has no recording to re-run, and the
+    retry used to answer that the recording "was cleaned up" although there
+    never was one. The full link is kept as ``video_source_url``; older tasks
+    only have the share-text preview, which is searched for a link instead.
+    Returns None when the task is not a link task or no link can be found.
+    """
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    if job.get("source_type") != "video_link" and not metadata.get("video_source_url"):
+        return None
+    from backend.core.video_source import extract_first_url
+    from backend.routers.local_video_sources import submit_video_source_job
+
+    link = str(metadata.get("video_source_url") or "").strip() or extract_first_url(
+        str(metadata.get("video_source_input_preview") or "")
+    )
+    if not link:
+        return None
+    stored = metadata.get("queue_options")
+    raw_options: dict = dict(stored) if isinstance(stored, dict) else {}
+    if "video_source_allow_miuistore" in metadata:
+        raw_options["allow_miuistore"] = "true" if metadata.get("video_source_allow_miuistore") else "false"
+    new_job = await submit_video_source_job(
+        input_text=link,
+        title=str(metadata.get("video_source_title") or "").strip(),
+        raw_options=raw_options,
+        client_id=client_id,
+        extra_metadata={"retry_source_task_id": task_id, **(carry or {})},
+    )
+    retry_task_id = new_job["task_id"]
+    started_job = get_job(retry_task_id, client_id=client_id) or new_job
+    return {
+        "ok": True,
+        "source_task_id": task_id,
+        "task_id": retry_task_id,
+        "job": {**started_job, "task_snapshot": build_task_snapshot(started_job)},
+    }
+
+
 async def retry_task(
     task_id: str,
     *,
@@ -1530,6 +1577,9 @@ async def retry_task(
         )
     source = find_source_file(task_id)
     if not source:
+        link_retry = await _retry_link_task(task_id=task_id, job=job, client_id=client_id, carry=carry)
+        if link_retry is not None:
+            return link_retry
         raise HTTPException(
             status_code=404,
             detail="这个任务的原始录音已按保留策略清理，无法直接重新运行。请重新添加文件后再处理。",

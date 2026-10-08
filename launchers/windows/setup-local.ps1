@@ -130,6 +130,20 @@ if (-not (Test-Path $Python)) {
 Write-Host "Installing FluentFlow Local Python dependencies..."
 Invoke-Checked $Python @("-m", "pip", "install", "-r", (Join-Path $Repo "requirements-local.txt"))
 
+# yt-dlp is kept at its newest release: Douyin, Bilibili and YouTube change their
+# pages often and an old copy fails a whole platform. Not fatal: it only affects
+# video links, and every launch retries through scripts\update_yt_dlp.py.
+Write-Host "Installing/updating yt-dlp (the video link downloader)..."
+try {
+    & $Python -m pip install -U --disable-pip-version-check yt-dlp
+    $YtDlpOk = ($LASTEXITCODE -eq 0)
+} catch {
+    $YtDlpOk = $false
+}
+if (-not $YtDlpOk) {
+    Write-Host "! yt-dlp could not be installed or updated (usually a network problem). Local files still work; video links need it. Every launch retries automatically, or run: .\.venv\Scripts\python.exe scripts\update_yt_dlp.py --force" -ForegroundColor Yellow
+}
+
 if (Test-NvidiaAdapter) {
     Write-Host "NVIDIA adapter detected. Installing FluentFlow's GPU runtime..."
     Invoke-Checked $Python @("-m", "pip", "install", "-r", (Join-Path $Repo "requirements-windows-gpu.txt"))

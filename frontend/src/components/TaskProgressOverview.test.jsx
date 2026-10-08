@@ -142,3 +142,13 @@ describe('a failed task', () => {
         expect(screen.getByText('查看失败原因，按建议重新处理。')).toBeTruthy();
     });
 });
+
+describe('a link download of unknown size', () => {
+    it('shows how much has arrived, not the stage starting 10%', () => {
+        mount(pageFor(
+            {stage: 'downloading', status: 'running', progress: 10, source_type: 'video_link'},
+            {source: {video_source_progress: {message: '正在下载视频', loaded_bytes: 10485760}}},
+        ));
+        expect(percentShown()).toMatch(/已下载 10(\.0)? MB/);
+    });
+});

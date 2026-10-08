@@ -108,7 +108,11 @@ export const LocalSttSpeedRow = ({state}) => {
 
 export const VideoCookiesRow = ({state}) => {
     const {lang} = useI18n();
-    const {settings, updateSettingNow, cookieCheck, setCookieCheck, cookieChecking, runCookieCheck} = state;
+    const {settings, updateSettingNow, cookieCheck, setCookieCheck, cookieChecking, runCookieCheck, updateVideoCookiesBrowser, allowMiuistore = true, updateAllowMiuistore, videoPrefError = ''} = state;
+    const changeBrowser = (value) => {
+        if (updateVideoCookiesBrowser) updateVideoCookiesBrowser(value);
+        else { updateSettingNow({videoCookiesBrowser: value}); setCookieCheck(null); }
+    };
     return (
         <div className={`md:col-span-2 ${cellBase}`}>
             <label className="block text-sm font-bold">{lang === 'zh' ? '视频链接下载登录态' : 'Video link login'}</label>
@@ -116,7 +120,7 @@ export const VideoCookiesRow = ({state}) => {
                 <select
                     className="h-10 w-[220px] rounded-[12px] border border-[#dedada] bg-[#fbfbfb] px-3 text-sm font-bold text-[#111111] outline-none transition focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white"
                     value={settings.videoCookiesBrowser || ''}
-                    onChange={e=>{ updateSettingNow({videoCookiesBrowser:e.target.value}); setCookieCheck(null); }}
+                    onChange={e=>changeBrowser(e.target.value)}
                 >
                     <option value="">{lang === 'zh' ? '关闭（不读取浏览器登录态）' : 'Off (no browser login)'}</option>
                     <option value="chrome">Chrome</option>
@@ -149,7 +153,39 @@ export const VideoCookiesRow = ({state}) => {
                 {lang === 'zh'
                     ? '从所选浏览器复用你的登录 cookie，下载需要登录才能看的视频。仅在本机读取、不会上传；B 站高清和 YouTube 受限视频需要它。'
                     : 'Reuse your login cookies from the chosen browser to download videos that need sign-in. Read locally only, never uploaded; needed for Bilibili HD and restricted YouTube videos.'}
+                {' '}
+                {lang === 'zh'
+                    ? '这个选择存在本机服务里，AI 工具提交的链接也会用它。'
+                    : 'The choice is kept by the local service, so links submitted by AI tools use it too.'}
             </p>
+            {videoPrefError === 'video_cookies_browser' && (
+                <p className="mt-1.5 text-xs font-semibold text-red-600 dark:text-red-300">
+                    {lang === 'zh'
+                        ? '没能存进本机服务：这里提交的链接会用它，AI 工具提交的暂时用不上。'
+                        : 'Could not save it to the local service: links submitted here use it, links from AI tools do not yet.'}
+                </p>
+            )}
+            <label htmlFor="settingsAllowMiuistore" className="mt-4 flex cursor-pointer items-start justify-between gap-3 border-t border-[#efeeee] pt-4 dark:border-white/[0.08]">
+                <span>
+                    <span className="block text-sm font-bold">{lang === 'zh' ? '抖音备用解析' : 'Douyin fallback resolver'}</span>
+                    <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">
+                        {lang === 'zh'
+                            ? '读不到抖音登录时，把分享链接（只发链接本身）交给第三方解析服务 miuistore.com 换取视频地址。关掉后，抖音链接只靠浏览器登录态。'
+                            : 'When no Douyin login can be read, sends the share link (only the link itself) to the third-party resolver miuistore.com to get the video address. Off: Douyin links rely on the browser login only.'}
+                    </span>
+                    {videoPrefError === 'allow_miuistore' && (
+                        <span className="mt-1 block text-xs font-semibold text-red-600 dark:text-red-300">
+                            {lang === 'zh' ? '没能保存，开关已恢复原样。' : 'Could not save; the switch was put back.'}
+                        </span>
+                    )}
+                </span>
+                <SettingCheckbox
+                    id="settingsAllowMiuistore"
+                    checked={!!allowMiuistore}
+                    disabled={!updateAllowMiuistore}
+                    onChange={e=>updateAllowMiuistore?.(e.target.checked)}
+                />
+            </label>
         </div>
     );
 };

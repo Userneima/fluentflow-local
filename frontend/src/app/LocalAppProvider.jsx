@@ -19,6 +19,7 @@ import {
 } from '../lib/jobMappers.js';
 import {normalizeTaskState, TASK_STATE_QUEUED, TASK_STATE_RUNNING} from '../lib/taskState.js';
 import {isBackendUnreachableError} from '../lib/backendHealth.js';
+import {syncVideoLinkPreferences} from '../lib/videoLinkPrefs.js';
 
 const LOCAL_SCOPE = 'local';
 const taskKey = (job) => String(job?.task_id || job?.result?.task_id || '').trim();
@@ -95,6 +96,34 @@ export const LocalAppProvider = ({children}) => {
                 }).catch(() => {}).finally(() => localStorage.setItem('fluentflow_settings', JSON.stringify(sanitizeSettings(rawSettings))));
             }
         } catch (_) {}
+
+        // The browser-login choice for video links lives in the service now, so
+        // links submitted by AI tools use it too. Copy the old stored choice
+        // over once, and mirror the service's answer into stored settings.
+        syncVideoLinkPreferences({
+            getPreferences: async () => {
+                const response = await apiFetch(`${API_BASE}/preferences`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                return data?.preferences && typeof data.preferences === 'object' ? data.preferences : {};
+            },
+            savePreferences: async (patch) => {
+                const response = await apiFetch(`${API_BASE}/preferences`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(patch),
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            },
+            loadSettings: () => {
+                try { return JSON.parse(localStorage.getItem('fluentflow_settings') || '{}'); } catch (_) { return {}; }
+            },
+            saveSettings: (next) => {
+                try { localStorage.setItem('fluentflow_settings', JSON.stringify(sanitizeSettings(next))); } catch (_) {}
+            },
+            storage: (() => { try { return localStorage; } catch (_) { return null; } })(),
+        });
 
         const cached = readCachedAccountJobs(LOCAL_SCOPE);
         tombstonesRef.current = new Set();

@@ -6,7 +6,7 @@
 // This one mounts the real page and looks at what a person would see.
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {cleanup, render, screen} from '@testing-library/react';
+import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 
 const runtimeConfig = {
     allowedSttProviders: ['local'],
@@ -17,6 +17,8 @@ const runtimeConfig = {
 };
 
 let stored = {};
+let servicePreferences = {};
+const savePreferences = vi.fn(async (patch) => ({...servicePreferences, ...patch}));
 
 vi.mock('../app/AppContext.jsx', () => ({
     useApp: () => ({
@@ -41,6 +43,8 @@ vi.mock('../app/shared.jsx', async () => {
             saveCredentials: async () => ({}),
             getSpeakerDiarizationStatus: async () => ({available: false}),
             checkVideoCookies: async () => ({ok: true}),
+            getPreferences: async () => servicePreferences,
+            savePreferences,
         }),
     };
 });
@@ -50,6 +54,9 @@ const {default: Settings} = await import('./settings.jsx');
 describe('local settings page', () => {
     beforeEach(() => {
         stored = {};
+        servicePreferences = {};
+        savePreferences.mockClear();
+        localStorage.clear();
         runtimeConfig.writesItsOwnNote = true;
     });
 
@@ -101,5 +108,34 @@ describe('local settings page', () => {
         render(<Settings/>);
         expect(screen.queryByText('设备与云端')).toBeNull();
         expect(screen.queryByText('账号')).toBeNull();
+    });
+
+    // Links an AI tool submits are downloaded by the service, which only knows
+    // what it was told: the choice has to reach it, not just this browser.
+    it('saves the browser-login choice to the service', async () => {
+        render(<Settings/>);
+        const select = screen.getByDisplayValue('关闭（不读取浏览器登录态）');
+        fireEvent.change(select, {target: {value: 'safari'}});
+        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({video_cookies_browser: 'safari'}));
+        expect(stored.videoCookiesBrowser).toBe('safari');
+    });
+
+    it('shows the service choice rather than an older one stored here', async () => {
+        stored = {videoCookiesBrowser: 'safari'};
+        servicePreferences = {video_cookies_browser: 'chrome'};
+        render(<Settings/>);
+        await waitFor(() => expect(screen.getByDisplayValue('Chrome')).toBeTruthy());
+    });
+
+    it('offers the Douyin fallback as a switch that says what it sends', async () => {
+        servicePreferences = {allow_miuistore: true};
+        render(<Settings/>);
+        expect(screen.getByText('抖音备用解析')).toBeTruthy();
+        expect(screen.getByText(/只发链接本身/)).toBeTruthy();
+        const toggle = screen.getByLabelText(/抖音备用解析/);
+        expect(toggle.checked).toBe(true);
+        fireEvent.click(toggle);
+        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({allow_miuistore: false}));
+        expect(toggle.checked).toBe(false);
     });
 });

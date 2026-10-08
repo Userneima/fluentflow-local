@@ -147,6 +147,21 @@ if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 5MB)) {
 }
 Add-Content -Path $LogFile -Value "---- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') starting backend.local_main:app on :$Port ----"
 
+# Upgrade yt-dlp at most once per day. Platforms change their pages often and an
+# old yt-dlp fails a whole platform with no way for the user to update it. It
+# runs as a separate hidden process so an offline start is not delayed and so
+# closing this window does not kill pip halfway through an install. The backend
+# starts a fresh yt-dlp process per download, so the next download uses it.
+try {
+    Start-Process -FilePath $Python `
+        -ArgumentList @("`"$(Join-Path $Repo 'scripts\update_yt_dlp.py')`"") `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput (Join-Path $LogDir "yt-dlp-update.log") `
+        -RedirectStandardError (Join-Path $LogDir "yt-dlp-update.err.log") | Out-Null
+} catch {
+    Write-Host "Could not start the yt-dlp update check: $_" -ForegroundColor Yellow
+}
+
 Set-Location $Repo
 Start-Job -ScriptBlock {
     param($ProbePort, $ProbeUrl, $ProbeLog)

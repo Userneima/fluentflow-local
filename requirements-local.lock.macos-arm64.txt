@@ -6,6 +6,10 @@
 # Development-only tools (pytest, pylint and what only they pull in) are left out.
 # Platform-specific wheels (mlx, pyobjc) are listed: never install this file on another OS.
 # Re-freeze after a deliberate dependency upgrade; do not edit by hand.
+# yt-dlp is deliberately absent: sites change their pages and yt-dlp ships fixes
+# within days, so a frozen copy stops downloading on its own. setup-local.sh
+# installs it unpinned after this file, and the launcher runs
+# scripts/update_yt_dlp.py to keep it current. Remove it again after a re-freeze.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anthropic==1.4.0
@@ -87,4 +91,3 @@ uvicorn==0.52.4
 uvloop==0.22.1
 watchfiles==1.2.0
 websockets==15.0.1
-yt-dlp==2026.8.19

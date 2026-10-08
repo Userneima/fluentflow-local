@@ -110,7 +110,22 @@ def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = Non
 
 # Non-sensitive, user-remembered choices. ``allow_miuistore`` is the Douyin
 # third-party fallback: on by default, and remembered here when switched off.
-LOCAL_PREFERENCE_FIELDS = {"allow_miuistore"}
+# ``video_cookies_browser`` is the browser whose login link downloads use ("" =
+# none). It lives here, not only in the web page, so links submitted by an AI
+# tool (MCP) use the same login as links pasted into the page.
+LOCAL_PREFERENCE_FIELDS = {"allow_miuistore", "video_cookies_browser"}
+_BOOLEAN_PREFERENCES = {"allow_miuistore"}
+ALLOWED_COOKIE_BROWSERS = frozenset({
+    "chrome", "edge", "firefox", "safari", "brave", "chromium", "opera", "vivaldi",
+})
+
+
+def normalize_cookie_browser(value: Any) -> str | None:
+    """A known browser name, "" for none, or None for anything else."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return text if text in ALLOWED_COOKIE_BROWSERS else None
 
 
 def load_preferences(path: Path | str | None = None) -> dict[str, Any]:
@@ -130,6 +145,14 @@ def save_preferences(patch: dict[str, Any], path: Path | str | None = None) -> d
         value = patch.get(key)
         if value is None:
             next_preferences.pop(key, None)
+        elif key not in _BOOLEAN_PREFERENCES:
+            browser = normalize_cookie_browser(value)
+            if browser is None:
+                raise ValueError(f"不支持的浏览器：{value}")
+            if browser:
+                next_preferences[key] = browser
+            else:
+                next_preferences.pop(key, None)
         elif isinstance(value, bool):
             next_preferences[key] = value
         else:

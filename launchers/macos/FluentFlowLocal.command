@@ -132,6 +132,15 @@ echo "---- $(date '+%Y-%m-%d %H:%M:%S') starting backend.local_main:app on :${PO
 # backend.local_main 启动时会用 python-dotenv 自己正确加载它。
 cd "$REPO"
 
+# 每天最多一次把 yt-dlp 升到最新版。平台一改版旧版本就整个下载不了，而用户没有别的
+# 办法更新它。放在后台跑，离线时也不拖慢启动；后端每次下载都新起一个 yt-dlp 进程，
+# 所以升级完成后的下一次下载就用上新版本。忽略 SIGHUP（子进程会继承）：关掉终端
+# 窗口时别把 pip 打断在半路，留下一个装了一半的 yt-dlp。结果写一行到窗口和日志。
+(
+	trap '' HUP
+	"$VENV_PY" "${REPO}/scripts/update_yt_dlp.py" 2>&1 </dev/null | tee -a "$LOG_FILE"
+) &
+
 # 服务起来后自动开浏览器（后台探测，不阻塞前台 uvicorn）。
 (
 	for _ in $(seq 1 80); do

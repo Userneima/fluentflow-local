@@ -32,6 +32,7 @@ import {
     queueUploadItemsFromQueuedResponse,
 } from '../lib/queueUpload.js';
 import SvgIcon from '../components/SvgIcon.jsx';
+import {submitIgnoredExtraUrls} from '../lib/linkRetry.js';
 import {noteWriterBatchClause, noteWriterSentence, resolveNoteWriter} from '../lib/noteWriter.js';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
@@ -483,7 +484,7 @@ const MediaText = () => {
                 setVideoLinkInput('');
                 abortRef.current = null;
                 setSubmitting(false);
-                navigate('/agent', {state: {job}});
+                navigate('/agent', {state: {job, extraUrlsIgnored: submitIgnoredExtraUrls(data)}});
                 return;
             }
         } catch (err) {
@@ -651,12 +652,12 @@ const MediaText = () => {
 
                                 {sourceMode === 'link' ? (
                                     <div>
-                                        <label className="mb-2 block text-sm font-extrabold text-[#111111] dark:text-white">{lang === 'zh' ? '视频或播客链接' : 'Video or podcast link'}</label>
+                                        <label className="mb-2 block text-sm font-extrabold text-[#111111] dark:text-white">{lang === 'zh' ? '视频链接' : 'Video link'}</label>
                                         <textarea
                                             value={videoLinkInput}
                                             onChange={(e) => setVideoLinkInput(e.target.value)}
                                             className="min-h-[116px] w-full resize-none rounded-[18px] border border-[#dedada] bg-[#fbfbfb] px-5 py-4 text-[15px] font-semibold text-[#111111] outline-none placeholder:text-[#aaa] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/30 dark:focus:border-white/[0.4]"
-                                            placeholder={lang === 'zh' ? '粘贴抖音、Bilibili、YouTube 或视频直链' : 'Paste a Douyin, Bilibili, YouTube, or direct video link'}
+                                            placeholder={lang === 'zh' ? '粘贴一个抖音、Bilibili 或 YouTube 的视频链接（分享文本也行），或 .mp4 直链' : 'Paste one Douyin, Bilibili, or YouTube video link (share text works too), or a direct .mp4 link'}
                                         />
                                     </div>
                                 ) : (

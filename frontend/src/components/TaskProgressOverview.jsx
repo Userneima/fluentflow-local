@@ -4,6 +4,7 @@ import {ListPlus, XCircle} from 'lucide-react';
 import {
     fmtBytes,
     fmtElapsed,
+    isDownloadProgressUnmeasured,
     isSttProgressUnmeasured,
     jobProgressLabel,
     noteModeLabel,
@@ -227,9 +228,15 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
     const task = normalizeTask(pageData, currentJob);
     const isZh = lang === 'zh';
     const progress = Math.max(0, Math.min(100, Number(task.progress) || 0));
-    const progressText = task.taskId === currentJob?.taskId
-        ? jobProgressLabel({...currentJob, progress}, t)
-        : `${Math.round(progress)}%`;
+    // A link download of unknown size has no percentage; say how much has
+    // arrived instead of a 10% that never moves.
+    const downloadUnknown = isDownloadProgressUnmeasured({stage: task.stage, video_source_progress: task.videoSourceProgress});
+    const downloadedBytes = Number(task.videoSourceProgress?.loaded_bytes) || 0;
+    const progressText = downloadUnknown
+        ? (downloadedBytes > 0 ? (isZh ? `已下载 ${fmtBytes(downloadedBytes)}` : `${fmtBytes(downloadedBytes)} downloaded`) : t('dash.progressUnknown'))
+        : task.taskId === currentJob?.taskId
+            ? jobProgressLabel({...currentJob, progress}, t)
+            : `${Math.round(progress)}%`;
     const sttUnknown = task.taskId === currentJob?.taskId && isSttProgressUnmeasured(currentJob);
     const stateText = String(task.stage || task.status || '').toLowerCase();
     const failed = ['failed', 'error', 'cancelled'].includes(stateText);
@@ -389,8 +396,8 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
                         {completed ? '100%' : failed ? '-' : progressText}
                     </p>
                 </div>
-                <div className={`h-2.5 w-full overflow-hidden rounded-full bg-[#efeeee] dark:bg-white/[0.12] ${running && sttUnknown ? 'progress-indeterminate' : ''}`}>
-                    {!sttUnknown && (
+                <div className={`h-2.5 w-full overflow-hidden rounded-full bg-[#efeeee] dark:bg-white/[0.12] ${running && (sttUnknown || downloadUnknown) ? 'progress-indeterminate' : ''}`}>
+                    {!(sttUnknown || (running && downloadUnknown)) && (
                         <div className={`h-full rounded-full transition-all duration-700 ${failed ? 'bg-red-500' : 'bg-[#111111] dark:bg-white'}`} style={{width: `${progressValue}%`}}/>
                     )}
                 </div>

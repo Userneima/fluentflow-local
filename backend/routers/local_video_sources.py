@@ -5,7 +5,10 @@ Functionally local: no accounts, quota, or rate limits; the download worker
 runs on ``local_job_runtime.JOB_EVENTS`` — the same hub the local read (SSE)
 and cancel routes use — so resolving, downloading, processing, and cancelling
 share one hub. The Douyin ``miuistore`` fallback is ON by default and can be switched off
-per request or by a remembered choice (``options.allow_miuistore``). YouTube caption
+per request or by a remembered choice (``options.allow_miuistore``); it runs only
+when yt-dlp cannot get the video. The browser login (``cookies_from_browser``)
+comes from the request, else the remembered ``video_cookies_browser``
+preference, else ``YT_DLP_COOKIES_FROM_BROWSER``. YouTube caption
 downloads reuse the local transcript summarize core in-process instead of the
 hosted HTTP self-call.
 
@@ -19,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
 
@@ -28,7 +32,7 @@ from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import list_jobs, upsert_job
 from backend.core.local_entry_guards import CancellationGate, claim_task_id
-from backend.core.local_config import get_preference
+from backend.core.local_config import ALLOWED_COOKIE_BROWSERS, get_preference, normalize_cookie_browser
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.core.local_limits_config import max_upload_mb
@@ -49,6 +53,9 @@ from backend.core.video_source import (
     check_browser_cookies,
     display_title_for_source_input,
     download_video_source,
+    extra_urls_ignored,
+    extract_first_url,
+    link_too_large_message,
 )
 from backend.routers.local_note_regen import summarize_transcript_source
 from backend.routers.local_processing import (
@@ -62,9 +69,29 @@ from backend.routers.local_processing import (
 router = APIRouter()
 
 _ROUTE = "/video-sources/jobs"
-_ALLOWED_COOKIE_BROWSERS = {
-    "chrome", "edge", "firefox", "safari", "brave", "chromium", "opera", "vivaldi",
-}
+_ALLOWED_COOKIE_BROWSERS = ALLOWED_COOKIE_BROWSERS
+EXTRA_URLS_WARNING = "分享文本里有多个链接，只处理了第一个支持的链接；其余链接请分别提交。"
+
+# Link downloads skip the transcription queue (they compete with nothing it
+# protects), so without a cap a batch of links all downloaded at once, each
+# holding a thread of the default pool the rest of the server shares. They get
+# a small pool of their own and at most this many run together.
+_MAX_CONCURRENT_LINK_DOWNLOADS = 2
+_DOWNLOAD_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_MAX_CONCURRENT_LINK_DOWNLOADS, thread_name_prefix="fluentflow-link-download"
+)
+_download_slots: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Semaphore]] = {}
+
+
+def _download_slot() -> asyncio.Semaphore:
+    """The link-download semaphore of the running event loop (tests run
+    several loops; a semaphore must not be shared between them)."""
+    loop = asyncio.get_running_loop()
+    entry = _download_slots.get(id(loop))
+    if entry is None or entry[0] is not loop:
+        entry = (loop, asyncio.Semaphore(_MAX_CONCURRENT_LINK_DOWNLOADS))
+        _download_slots[id(loop)] = entry
+    return entry[1]
 
 
 # A download reports every megabyte. Writing each report to the database and
@@ -80,9 +107,14 @@ def _friendly_error(error: Any) -> str:
 
 
 def _video_cookies_browser(options: dict[str, Any]) -> str | None:
-    """Only a known browser name is passed to yt-dlp --cookies-from-browser."""
-    value = str((options or {}).get("cookies_from_browser") or "").strip().lower()
-    return value if value in _ALLOWED_COOKIE_BROWSERS else None
+    """The browser whose login yt-dlp reads: the request's choice, else the
+    remembered preference. None leaves yt-dlp to the environment variable.
+    Only a known browser name is ever passed to --cookies-from-browser."""
+    requested = normalize_cookie_browser((options or {}).get("cookies_from_browser"))
+    if requested:
+        return requested
+    remembered = normalize_cookie_browser(get_preference("video_cookies_browser"))
+    return remembered or None
 
 
 def _video_source_progress_value(progress: VideoSourceProgress) -> float:
@@ -233,6 +265,7 @@ async def _download_then_process(
                 queue_options=options,
                 video_source_progress={
                     "message": progress.message,
+                    "percent": progress.percent,
                     "loaded_bytes": progress.loaded_bytes,
                     "total_bytes": progress.total_bytes,
                 },
@@ -245,6 +278,7 @@ async def _download_then_process(
                     "stage": progress.stage,
                     "progress": progress_value,
                     "message": progress.message,
+                    "percent": progress.percent,
                     "loaded_bytes": progress.loaded_bytes,
                     "total_bytes": progress.total_bytes,
                 },
@@ -281,21 +315,30 @@ async def _download_then_process(
             task_id, {"stage": "error", "progress": 100, "error": friendly_error}
         )
 
+    cookies_browser = _video_cookies_browser(options)
+    duration_limit = _effective_duration_limit(options.get("duration_limit_seconds"))
+    slot = _download_slot()
     try:
-        saved = await loop.run_in_executor(
-            None,
-            lambda: download_video_source(
-                input_text,
-                title=title,
-                video_dir=_video_source_storage_dir(),
-                on_progress=on_progress,
-                cookies_from_browser=_video_cookies_browser(options),
-                # Local edition: the Douyin miuistore fallback stays off unless
-                # this request explicitly consented (design contract).
-                allow_miuistore=allow_miuistore,
-                cancellation_event=gate.cancellation_event,
-            ),
-        )
+        if slot.locked():
+            on_progress(VideoSourceProgress(
+                stage="resolving", message="等待前面的链接下载完成", percent=2,
+            ))
+        async with slot:
+            saved = await loop.run_in_executor(
+                _DOWNLOAD_EXECUTOR,
+                lambda: download_video_source(
+                    input_text,
+                    title=title,
+                    video_dir=_video_source_storage_dir(),
+                    on_progress=on_progress,
+                    cookies_from_browser=cookies_browser,
+                    # The Douyin third-party fallback is on unless this request
+                    # or the remembered setting switched it off.
+                    allow_miuistore=allow_miuistore,
+                    duration_limit_seconds=duration_limit,
+                    cancellation_event=gate.cancellation_event,
+                ),
+            )
     except Exception as exc:
         resolution_trace = getattr(exc, "resolution_trace", None)
         await fail(
@@ -310,7 +353,7 @@ async def _download_then_process(
     if saved_size_mb is not None and saved_size_mb > limit_mb:
         await fail(
             "video_source",
-            f"Downloaded video is too large: {saved_size_mb} MB. Limit is {limit_mb:g} MB.",
+            link_too_large_message(saved.size_bytes, int(limit_mb * 1024 * 1024)),
         )
         return
 
@@ -444,6 +487,18 @@ async def submit_video_source_job(
     task_id_value = claim_task_id(None, client_id=client_id)
     raw_title = title or display_title_for_source_input(input_text, input_text[:80])
     display_name = display_title_for_user(raw_title, raw_title)
+    # The link itself, whole, so a retry fetches exactly this link; the preview
+    # below is cut at 200 characters and can lose a link at the end of long
+    # share text.
+    source_url = extract_first_url(input_text)
+    ignored_extra = extra_urls_ignored(input_text)
+    link_metadata: dict[str, Any] = {}
+    if source_url:
+        link_metadata["video_source_url"] = source_url
+    if title:
+        link_metadata["video_source_title"] = title
+    if ignored_extra:
+        link_metadata["video_source_extra_urls_ignored"] = True
     metadata = event_metadata(
         route=route,
         queue_options=options,
@@ -451,6 +506,7 @@ async def submit_video_source_job(
         display_title=display_name,
         video_source_input_preview=input_text[:200],
         video_source_allow_miuistore=allow_miuistore,
+        **link_metadata,
         **(extra_metadata or {}),
     )
     log_event(
@@ -500,6 +556,8 @@ async def submit_video_source_job(
         "source_type": "video_link",
         "source_filename": display_name,
         "metadata": metadata,
+        "extra_urls_ignored": ignored_extra,
+        **({"warning": EXTRA_URLS_WARNING} if ignored_extra else {}),
     }
 
 
@@ -513,7 +571,10 @@ async def create_video_source_job(
         raw_options=payload.get("options") if isinstance(payload.get("options"), dict) else {},
         client_id=local_client_scope(request),
     )
-    return {"ok": True, "job": job}
+    response: dict[str, Any] = {"ok": True, "job": job, "extra_urls_ignored": job.get("extra_urls_ignored", False)}
+    if job.get("warning"):
+        response["warning"] = job["warning"]
+    return response
 
 
 @router.get("/video-sources/jobs")

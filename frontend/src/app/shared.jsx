@@ -166,7 +166,7 @@ export const useI18n = () => useContext(I18nCtx);
 
 export { accountJobsCacheKey, readCachedAccountJobs, writeCachedAccountJobs, cacheJobRecord, mergeCachedJobs, sortJobsForHistoryView, hasTranscriptResult, historyStatusFromJob, jobVisibleInHistory, resultDisplayTitle, jobDisplayTitle, resultToHistoryEntry, jobToHistoryEntry, jobToCurrentJob, historyEntryToResult } from '../lib/jobMappers.js';
 
-export { fmtTime, autoSizeTextarea, composeTranscriptText, normalizeTranscriptSegments, normalizeDisplaySegments, pickTranscriptSegments, pickTranscriptBaselineSegments, pickDisplayTranscriptSegments, buildTranscriptEditRecords, fmtElapsed, fmtFileSize, totalFileSizeMb, fmtBytes, fmtDateTime, friendlyTaskError, diagnoseTaskError, taskErrorContextForJob, providerDisplayName, fmtSttRelative, sttStatusLabel, sttProgressFraction, isSttProgressUnmeasured, jobProgressLabel, timeAgo, noteGenerationDiagnosis } from '../lib/format.js';
+export { fmtTime, autoSizeTextarea, composeTranscriptText, normalizeTranscriptSegments, normalizeDisplaySegments, pickTranscriptSegments, pickTranscriptBaselineSegments, pickDisplayTranscriptSegments, buildTranscriptEditRecords, fmtElapsed, fmtFileSize, totalFileSizeMb, fmtBytes, fmtDateTime, friendlyTaskError, diagnoseTaskError, taskErrorContextForJob, providerDisplayName, fmtSttRelative, sttStatusLabel, sttProgressFraction, isSttProgressUnmeasured, isDownloadProgressUnmeasured, videoSourceProgressOf, jobProgressLabel, timeAgo, noteGenerationDiagnosis } from '../lib/format.js';
 
 export { MD_TABLE_ALIGN_RE, splitMdTableRow, isPipeTableRow, looksLikeMdTable, looksLikeLoosePipeTable, renderTableHtml, simpleMd } from '../lib/markdown.js';
 
@@ -319,6 +319,8 @@ const createApi = () => {
         if(options.speakerDiarization) payloadOptions.speaker_diarization = "true";
         if(options.voiceEnhance) payloadOptions.voice_enhance = "true";
         if(options.cookiesFromBrowser) payloadOptions.cookies_from_browser = options.cookiesFromBrowser;
+        if(options.folderToken) payloadOptions.folder_token = options.folderToken;
+        if(options.durationLimitSeconds) payloadOptions.duration_limit_seconds = String(options.durationLimitSeconds);
         const r = await apiFetch(`${API_BASE}/video-sources/jobs`, {
             method:"POST",
             headers: {"Content-Type":"application/json", ...localExecutionHeaders(options)},
@@ -665,8 +667,26 @@ const createApi = () => {
         if(!r.ok) throw new Error('Credential save failed');
         return await r.json();
     };
+    // The service's remembered choices (see lib/videoLinkPrefs.js). Both return
+    // the whole preference map.
+    const getPreferences = async () => {
+        const r = await apiFetch(`${API_BASE}/preferences`);
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data?.preferences && typeof data.preferences === 'object' ? data.preferences : {};
+    };
+    const savePreferences = async (patch) => {
+        const r = await apiFetch(`${API_BASE}/preferences`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify(patch || {}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data?.preferences && typeof data.preferences === 'object' ? data.preferences : {};
+    };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, getPreferences, savePreferences, checkHealth};
 };
 
 export const useSettings = () => {

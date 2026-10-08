@@ -23,6 +23,23 @@ def _diag(
     }
 
 
+_LINK_SOURCE_FAILURES = (
+    ("链接视频过大", "video_link_too_large", "链接视频过大", "先下载到本机，压缩或拆分后再上传。"),
+    ("视频时长过长", "media_too_long", "视频时长超过限制", "先下载到本机，拆分后再上传；或在设置里调整时长上限。"),
+    ("图文作品没有可转写的音视频", "douyin_image_post", "抖音图文作品", "换一个视频链接。"),
+    ("抖音没有给出可下载的视频", "douyin_no_media", "抖音没有可下载的视频", "在抖音里打开确认；能播放的话，下载到本机后上传。"),
+    ("只能拿到试看片段", "bilibili_preview_only", "B 站会员内容只有试看片段", "用有权限账号的浏览器登录态，或下载完整视频后上传。"),
+    ("这个 B 站链接", "bilibili_link_failed", "B 站链接无法下载", "按提示处理，或上传本地视频。"),
+    ("B 站拒绝了", "bilibili_link_failed", "B 站拒绝下载", "稍后重试，或上传本地视频。"),
+    ("B 站暂时限制了请求", "platform_rate_limited", "平台请求过于频繁", "过几分钟再试，或上传本地视频。"),
+    ("暂时无法解析这个 B 站链接", "bilibili_link_failed", "B 站链接无法解析", "在 B 站里打开确认，或上传本地视频。"),
+    ("这个 YouTube 链接", "youtube_link_failed", "YouTube 视频无法获取", "按提示处理，或上传视频文件。"),
+    ("YouTube 要求验证", "youtube_bot_check", "YouTube 机器人验证", "在设置里选择已登录 YouTube 的浏览器，或上传视频文件。"),
+    ("登录：系统不允许 FluentFlow 读取这个浏览器的数据", "browser_login_unreadable", "读不到浏览器登录", "允许完全磁盘访问权限，或下载到本机后上传。"),
+    ("抖音视频解析成功，但下载没有成功", "douyin_download_failed", "抖音视频下载失败", "稍后再提交一次，或下载到本机后上传。"),
+)
+
+
 def diagnose_error(error: Any) -> dict[str, Any]:
     raw = str(error or "").strip()
     if not raw:
@@ -48,6 +65,32 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "暂不支持这个视频来源",
             "当前链接不属于 FluentFlow 已支持的视频来源。",
             "改用支持的视频链接，或上传本地视频。",
+            retryable=False,
+        )
+    # Link failures whose own sentence already says what happened and what to
+    # do. Retrying the same link gives the same answer, so none of them may
+    # suggest it.
+    for token, code, title, action in _LINK_SOURCE_FAILURES:
+        if token in raw:
+            return _diag(code, title, raw, action, retryable=False)
+    if "fresh cookies" in lowered or "cookies are needed" in lowered:
+        return _diag(
+            "douyin_fresh_cookies",
+            "抖音拒绝了不带登录的请求",
+            "抖音要求先在浏览器里访问过抖音（需要新的 cookies），这次请求被拒绝了。",
+            "在浏览器里打开 douyin.com（登录更好），在设置里选这个浏览器的登录态后再提交；"
+            "或把视频下载到本机后上传。",
+            retryable=False,
+        )
+    if any(
+        token in raw
+        for token in ("视频链接只允许使用公网", "视频下载地址不属于允许的公网媒体域名", "视频链接端口无效", "无账号信息的公网地址")
+    ):
+        return _diag(
+            "video_source_address_refused",
+            "视频地址不在允许范围",
+            "这个视频的下载地址用了 FluentFlow 不访问的端口或域名，重试也是同样结果。",
+            "把视频下载到本机后上传。",
             retryable=False,
         )
     if "必须解析到公网地址" in raw or "不能访问本机、内网或云元数据服务" in raw:
@@ -175,6 +218,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "文件超过限制",
             "文件超过当前处理限制。",
             "压缩或拆分文件后重试，或调整本机限制。",
+            retryable=False,
         )
     if "一次最多提交" in raw or "too many files uploaded" in lowered:
         return _diag(

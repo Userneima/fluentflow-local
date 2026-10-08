@@ -105,7 +105,10 @@ def update_preferences(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     patch = {key: value for key, value in payload.items() if key in LOCAL_PREFERENCE_FIELDS}
     if not patch:
         raise HTTPException(status_code=400, detail="No supported preference in payload")
-    return {"preferences": save_preferences(patch)}
+    try:
+        return {"preferences": save_preferences(patch)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/runtime-config")

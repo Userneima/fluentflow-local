@@ -12,6 +12,8 @@ The local app keeps existing user data compatibility through `backend/core/runti
 
 For normal development, install `requirements-local.txt`, then run `npm run build:frontend` and start `backend.local_main:app`. CI validates the local frontend and the selected local backend suite on Python 3.10.
 
+yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安装脚本在装完锁定依赖后单独装最新版，macOS 和 Windows 启动器每次启动时在后台运行 `scripts/update_yt_dlp.py`，每天最多升级一次（成功的日期记在数据目录的 `yt_dlp_last_update`，失败不记、下次启动再试），升级后的下一次链接下载就用新版本。要立刻更新，运行 `.venv/bin/python scripts/update_yt_dlp.py --force`（Windows 为 `.venv\Scripts\python.exe scripts\update_yt_dlp.py --force`）；国内网络先设 `PIP_INDEX_URL` 镜像。
+
 ## 环境变量
 
 后端和脚本读取的每个 `FLUENTFLOW_*` 变量。写进仓库根目录 `.env` 或启动时的 shell 环境都行；没列默认值的，不设就是关闭或不覆盖。来源按 `backend/` 与 `scripts/` 里的 `os.environ` 读取处整理，改了读取处要同步这里。

@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {
     DEFAULT_DEEPSEEK_MODEL,
     DEFAULT_OPENAI_MODEL,
@@ -13,6 +13,12 @@ import {
     useSettings,
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
+import {
+    MIUISTORE_PREF,
+    VIDEO_COOKIES_PREF,
+    normalizeCookiesBrowser,
+    syncVideoLinkPreferences,
+} from '../lib/videoLinkPrefs.js';
 
 // Everything the settings page needs to read and write, with no page layout:
 // stored settings and credentials.
@@ -20,12 +26,19 @@ export const useSettingsPageState = () => {
     const {t, lang} = useI18n();
     const {loadSettings, saveSettings} = useSettings();
     const {larkExports, runtimeConfig} = useApp();
-    const {getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkVideoCookies} = useApi();
+    const {getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkVideoCookies, getPreferences, savePreferences} = useApi();
     const [settings, setSettings] = useState(() => loadSettings());
     const [credentialStatus, setCredentialStatus] = useState(null);
     const [diarizationStatus, setDiarizationStatus] = useState(null);
     const [cookieCheck, setCookieCheck] = useState(null);
     const [cookieChecking, setCookieChecking] = useState(false);
+    // Kept by the service (see lib/videoLinkPrefs.js); on until it says otherwise.
+    const [allowMiuistore, setAllowMiuistore] = useState(true);
+    // Which video-link choice failed to reach the service, if any.
+    const [videoPrefError, setVideoPrefError] = useState('');
+    // A choice made on this page before the service answered must not be
+    // overwritten by that answer.
+    const touchedVideoPrefsRef = useRef({browser: false, miuistore: false});
     const [secretDraft, setSecretDraft] = useState({});
     const [pyannoteTokenEditing, setPyannoteTokenEditing] = useState(false);
     const [secretSaving, setSecretSaving] = useState(false);
@@ -53,7 +66,57 @@ export const useSettingsPageState = () => {
         }
         getCredentialsStatus().then(setCredentialStatus).catch(() => {});
         getSpeakerDiarizationStatus().then(setDiarizationStatus).catch(() => {});
+        let active = true;
+        if (getPreferences) {
+            syncVideoLinkPreferences({
+                getPreferences,
+                savePreferences,
+                loadSettings,
+                saveSettings,
+                storage: (() => { try { return localStorage; } catch (_) { return null; } })(),
+            }).then((prefs) => {
+                if (!active || !prefs.reachable) return;
+                if (!touchedVideoPrefsRef.current.miuistore) setAllowMiuistore(prefs.allowMiuistore);
+                if (touchedVideoPrefsRef.current.browser) return;
+                setSettings((s) => (
+                    normalizeCookiesBrowser(s.videoCookiesBrowser) === prefs.videoCookiesBrowser
+                        ? s
+                        : {...s, videoCookiesBrowser: prefs.videoCookiesBrowser}
+                ));
+            });
+        }
+        return () => { active = false; };
     }, []);
+
+    // Saved in the service as well as here, so a link an AI tool submits reads
+    // the same browser's login.
+    const updateVideoCookiesBrowser = async (value) => {
+        const browser = normalizeCookiesBrowser(value);
+        touchedVideoPrefsRef.current.browser = true;
+        updateSettingNow({videoCookiesBrowser: browser});
+        setCookieCheck(null);
+        setVideoPrefError('');
+        if (!savePreferences) return;
+        try {
+            await savePreferences({[VIDEO_COOKIES_PREF]: browser});
+        } catch (_) {
+            setVideoPrefError(VIDEO_COOKIES_PREF);
+        }
+    };
+
+    const updateAllowMiuistore = async (allowed) => {
+        const previous = allowMiuistore;
+        touchedVideoPrefsRef.current.miuistore = true;
+        setAllowMiuistore(allowed);
+        setVideoPrefError('');
+        if (!savePreferences) return;
+        try {
+            await savePreferences({[MIUISTORE_PREF]: allowed});
+        } catch (_) {
+            setAllowMiuistore(previous);
+            setVideoPrefError(MIUISTORE_PREF);
+        }
+    };
 
     const updateSettingNow = (patch) => {
         setSettings((s) => {
@@ -164,6 +227,10 @@ export const useSettingsPageState = () => {
         setCookieCheck,
         cookieChecking,
         runCookieCheck,
+        updateVideoCookiesBrowser,
+        allowMiuistore,
+        updateAllowMiuistore,
+        videoPrefError,
         // Text model and its key.
         aiProvider,
         aiModel,

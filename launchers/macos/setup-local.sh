@@ -179,6 +179,16 @@ fi
 "$VENV_PY" -m pip install -r "$REQUIREMENTS" ||
 	fail "安装 Python 依赖失败，请看上面的报错。"
 
+# yt-dlp 不进锁定文件，单独装最新版：抖音、B 站、YouTube 改版后旧版本会整个平台
+# 下载失败。装不上不算安装失败——只影响视频链接，上传本地文件照常可用，而且之后
+# 每次启动都会再试（scripts/update_yt_dlp.py）。
+echo "安装/更新 yt-dlp（视频链接下载器）"
+if ! "$VENV_PY" -m pip install -U --disable-pip-version-check yt-dlp; then
+	echo "⚠ yt-dlp 没有装上或没能更新到最新版（多半是网络问题）。"
+	echo "  上传本地文件不受影响；视频链接功能要等它装好。之后每次启动会自动再试，"
+	echo "  也可以手动运行：${VENV_PY} scripts/update_yt_dlp.py --force"
+fi
+
 # Apple Silicon 上的加速转录引擎由 requirements-local.txt 里的平台标记自动决定，
 # 不需要像 Windows 那样单独装一份 GPU 运行库。这里只是把实际走的那条路说出来。
 if "$VENV_PY" -c 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("mlx_whisper") else 1)' 2>/dev/null; then

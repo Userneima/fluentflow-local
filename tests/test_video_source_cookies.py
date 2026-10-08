@@ -39,7 +39,7 @@ def test_a_stale_douyin_login_is_reported_as_a_login_to_renew(monkeypatch):
     monkeypatch.setattr(
         vs, "_resolve_with_yt_dlp_attempt", lambda *_a, **_k: (None, "fresh_cookies_required", None)
     )
-    monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", lambda *_a, **_k: (None, "no_downloadable_media"))
+    monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", lambda *_a, **_k: (None, "unavailable"))
 
     with pytest.raises(vs.VideoSourceResolutionError, match="登录信息过期了") as caught:
         vs.resolve_video("https://v.douyin.com/abc/", cookies_from_browser="chrome")
@@ -81,7 +81,7 @@ def test_an_unreadable_browser_says_so_when_the_fallback_fails_too(monkeypatch):
     monkeypatch.setattr(vs, "resolve_direct_video", lambda _u: None)
     monkeypatch.setattr(vs, "_resolve_with_yt_dlp_attempt", lambda *_a, **_k: (
         None, "unavailable", "ERROR: could not find chrome cookies database in \"...\""))
-    monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", _fallback_returns(None))
+    monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", lambda *_a, **_k: (None, "unavailable"))
 
     with pytest.raises(vs.VideoSourceResolutionError) as caught:
         vs.resolve_video("https://www.douyin.com/video/1", cookies_from_browser="chrome")

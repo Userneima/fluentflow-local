@@ -18,15 +18,18 @@ import {
     fmtElapsed,
     fmtBytes,
     fmtFileSize,
+    diagnoseTaskError,
     friendlyTaskError,
     taskErrorContextForJob,
     isSttProgressUnmeasured,
+    isDownloadProgressUnmeasured,
     jobDisplayTitle,
     jobToHistoryEntry,
     jobToCurrentJob,
     sortJobsForHistoryView,
     useApi,
     useI18n,
+    useSettings,
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import {
@@ -42,45 +45,11 @@ import {
     TASK_STATE_CACHED_ONLY,
 } from '../lib/taskState.js';
 import {useJobPolling} from '../lib/useJobPolling.js';
+import {extraUrlsIgnoredNotice, retryInputForJob, retryOptionsForJob} from '../lib/linkRetry.js';
 
 const taskIdForJob = (job) => String(job?.task_id || job?.result?.task_id || '').trim();
 
 const isLocalJob = (job) => String(job?.client_id || '').startsWith('local-') || job?.metadata?.stt_provider === 'local';
-
-const retryInputForJob = (job) => {
-    const metadata = job?.metadata || {};
-    const videoSource = metadata.video_source || {};
-    return String(
-        metadata.video_source_input_preview
-        || videoSource.source_url
-        || videoSource.url
-        || videoSource.webpage_url
-        || metadata.raw_input
-        || ''
-    ).trim();
-};
-
-const retryOptionsForJob = (job) => {
-    const queueOptions = job?.metadata?.queue_options;
-    const metadata = job?.metadata || {};
-    const base = queueOptions && typeof queueOptions === 'object' ? queueOptions : metadata;
-    return {
-        exportToLark: base.export_to_lark === true || base.export_to_lark === 'true',
-        larkExportRoute: base.lark_export_route,
-        larkViaCli: base.lark_via_cli === true || base.lark_via_cli === 'true',
-        skipSummary: base.skip_summary === true || base.skip_summary === 'true',
-        aiProvider: base.ai_provider,
-        aiModel: base.ai_model,
-        noteMode: base.note_mode,
-        promptPreset: base.prompt_preset,
-        promptPresetLabel: base.prompt_preset_label,
-        sttProvider: base.stt_provider,
-        sttModel: base.stt_model,
-        sttSpeed: base.stt_speed,
-        sttLanguage: base.stt_language || 'auto',
-        speakerDiarization: base.speaker_diarization === true || base.speaker_diarization === 'true',
-    };
-};
 
 const mediaSourceForJob = (job) => {
     const sourceType = String(job?.source_type || job?.result?.source || '').toLowerCase();
@@ -554,10 +523,19 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', cancelli
     const cancellableLive = live && taskId && !job?.metadata?.queue_provisional;
     const progress = completed ? 100 : Math.max(0, Math.min(100, Number(job?.progress) || (state === TASK_STATE_QUEUED ? 0 : 2)));
     const current = jobToCurrentJob(job);
-    const progressUnknown = isSttProgressUnmeasured(current);
+    const downloadUnknown = isDownloadProgressUnmeasured(job);
+    const progressUnknown = isSttProgressUnmeasured(current) || downloadUnknown;
+    const downloadedBytes = Number(job?.metadata?.video_source_progress?.loaded_bytes) || 0;
     const displayTitle = jobDisplayTitle(job, lang);
+    const diagnosis = failed
+        ? diagnoseTaskError(job?.error_reason || job?.result?.summary_error || '', lang, taskErrorContextForJob(job))
+        : null;
+    // A link that is an image post, members-only, too large, or from a site
+    // that is not supported fails the same way every time; offering "submit
+    // again" there only invites a second identical failure.
+    const retryUseless = failedTerminal && mediaSourceForJob(job) === 'video_link' && diagnosis && !diagnosis.retryable;
     const detail = failed
-        ? friendlyTaskError(job?.error_reason || job?.result?.summary_error || '', lang, taskErrorContextForJob(job))
+        ? diagnosis.detail
         : completed
             ? (lang === 'zh' ? '处理完成，可以打开结果继续校对、下载或重生笔记。' : 'Done. Open the result to review, download, or regenerate notes.')
             : liveStageDetail(job, lang, aheadName);
@@ -567,7 +545,9 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', cancelli
     const progressLabel = failed
         ? failedProgressLabel
         : progressUnknown && live
-            ? (lang === 'zh' ? '处理中' : 'Working')
+            ? (downloadUnknown && downloadedBytes > 0
+                ? (lang === 'zh' ? `已下载 ${fmtBytes(downloadedBytes)}` : `${fmtBytes(downloadedBytes)} downloaded`)
+                : (lang === 'zh' ? '处理中' : 'Working'))
             : `${progress}%`;
     const subtitle = completed ? taskProcessingTimeLabel(job, lang) : stageLabel(job, lang);
     const metaItems = [
@@ -608,7 +588,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', cancelli
                             {openingTaskId === taskId ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <FileText className="size-4" strokeWidth={2.15}/>}
                             {lang === 'zh' ? '查看结果' : 'View result'}
                         </button>
-                    ) : failed ? (
+                    ) : failed && !retryUseless ? (
                         <button type="button" disabled={retryingTaskId === taskId} onClick={() => onRetry(job)} className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] bg-[#f4f3f3] px-4 text-[13px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]">
                             {retryingTaskId === taskId ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <AlertCircle className="size-4" strokeWidth={2.15}/>}
                             {retryingTaskId === taskId ? (lang === 'zh' ? '正在入队…' : 'Queuing…') : (lang === 'zh' ? '重新提交' : 'Submit again')}
@@ -723,6 +703,7 @@ const cardRenderKey = (job) => {
         meta.display_title, meta.queue_position, meta.queue_total, meta.queue_provisional,
         meta.queue_wait?.waiting_for, meta.queue_wait?.since,
         meta.video_source_progress?.message, meta.video_source_progress?.loaded_bytes,
+        meta.video_source_progress?.total_bytes, meta.video_source_progress?.percent,
         job?.task_snapshot?.current_step,
         job?.sttStatus, job?.stt_status, meta.stt_status,
     ].join('\u0001');
@@ -747,6 +728,7 @@ const AgentTasks = () => {
     // (plan Stage 3b).
     const {currentJob, setCurrentJob, setLastResult, addToHistory, removeFromHistory, runtimeConfig, tasks: jobs, ingestJobs, markCancelled, revertCancelled, restoreTask, abortPendingUpload} = useApp();
     const {getJob, cancelJob, deleteJob, retryJob, createVideoSourceJob, fetchJobSourceFile, fetchJobArtifactFile, enqueueProcessFiles} = useApi();
+    const {loadSettings} = useSettings();
     const location = useLocation();
     const navigate = useNavigate();
     const seededJob = location.state?.job && typeof location.state.job === 'object' ? location.state.job : null;
@@ -760,6 +742,12 @@ const AgentTasks = () => {
     // before it could be read. The button just spun and nothing appeared.
     const [retryError, setRetryError] = useState(null);
     const [downloadingTaskId, setDownloadingTaskId] = useState('');
+    // Kept in page state rather than read from the navigation each render: the
+    // polling banner is cleared on every refresh, and this has to stay readable.
+    const [extraUrlsIgnored, setExtraUrlsIgnored] = useState(() => location.state?.extraUrlsIgnored === true);
+    useEffect(() => {
+        if (location.state?.extraUrlsIgnored === true) setExtraUrlsIgnored(true);
+    }, [location.state]);
     const queueUploadJob = currentJob?.queueUpload ? currentJob : null;
     const currentJobRecords = useMemo(() => jobsFromCurrentJob(currentJob), [currentJob]);
     // The shared list already reflects history + cache; merge in the live
@@ -892,7 +880,9 @@ const AgentTasks = () => {
         setError(null);
         setRetryError(null);
         try {
-            const options = retryOptionsForJob(job);
+            // Today's browser-login choice, not the one stored on the job: the
+            // usual fix for a failed link is to pick a browser and try again.
+            const options = retryOptionsForJob(job, {cookiesBrowser: loadSettings().videoCookiesBrowser || ''});
             const sourceKind = mediaSourceForJob(job);
             if (sourceKind === 'video_link') {
                 const input = retryInputForJob(job);
@@ -1025,6 +1015,15 @@ const AgentTasks = () => {
                         {error}
                     </div>
                 )}
+
+                {extraUrlsIgnored ? (
+                    <div data-testid="extra-urls-ignored" className="flex items-start justify-between gap-3 rounded-[16px] border border-[#f5c86b] bg-[#fffaf0] px-4 py-3 text-sm font-semibold text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]">
+                        <span>{extraUrlsIgnoredNotice(lang)}</span>
+                        <button type="button" onClick={() => setExtraUrlsIgnored(false)} className="shrink-0 text-[12px] font-extrabold underline">
+                            {lang === 'zh' ? '知道了' : 'Got it'}
+                        </button>
+                    </div>
+                ) : null}
 
                 {queueUploadJob ? <QueueUploadBanner upload={queueUploadJob} lang={lang} onCancel={cancelPendingUpload}/> : null}
 
