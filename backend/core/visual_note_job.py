@@ -481,6 +481,10 @@ def describe(
         return payload
     if is_running(result):
         payload["reason"] = "这个任务的笔记正在重写中"
+        # Said apart from "cannot": a caller that falls back to another writer
+        # when the frames are out of reach must wait here instead, or two
+        # rewrites race for the same note.
+        payload["running"] = True
         return payload
 
     payload["eligible"] = True
@@ -550,6 +554,8 @@ def _promotion(result: dict[str, Any], markdown: str) -> tuple[dict[str, Any], d
     replaced = {
         "previous_markdown": previous,
         "previous_summary_edited": bool(result.get("summary_edited")),
+        # Kept so a restore can say again who wrote the note it puts back.
+        "previous_summary_written_from": result.get("summary_written_from"),
         "replaced_at": _now(),
     }
     fields = {
@@ -562,6 +568,26 @@ def _promotion(result: dict[str, Any], markdown: str) -> tuple[dict[str, Any], d
         "summary_written_from": SUMMARY_WRITTEN_FROM,
     }
     return fields, replaced
+
+
+def record_replaced_note(result: dict[str, Any], *, replaced_by: str) -> dict[str, Any]:
+    """The ``visual_note`` block after another writer replaced the task's note.
+
+    A note rewritten by the text model must be as recoverable as one rewritten
+    from the frames, so the note it displaces is kept on the same record the
+    frame flow keeps it on. ``restore_previous_note`` then puts it back through
+    the same free switch the page already offers. A task with no note keeps its
+    block unchanged: there is nothing to restore, and an earlier record of a
+    real note is worth more than an empty one.
+    """
+    state = visual_note_state(result)
+    if not str(result.get("summary_markdown") or "").strip():
+        return state
+    _fields, replaced = _promotion(result, "")
+    state["replaced_note"] = {**replaced, "replaced_by": replaced_by}
+    # The frame note, if there is one, is no longer the task's note.
+    state["promoted"] = False
+    return state
 
 
 def _as_float(value: Any) -> float | None:
@@ -978,9 +1004,9 @@ def restore_previous_note(task_id: str, *, client_id: str | None = None) -> dict
             "summary_skipped": False,
             "summary_status": STATUS_COMPLETED,
             "summary_error": None,
-            # The restored note was not written from the cut file, so the stamp
-            # that says it was has to go with it.
-            "summary_written_from": None,
+            # The stamp goes back with the note: the one recorded when it was
+            # replaced, so a restored note never claims to be the frame note.
+            "summary_written_from": replaced.get("previous_summary_written_from") or None,
             "summary_edited": bool(replaced.get("previous_summary_edited")),
         },
         rewrite_artifacts=True,

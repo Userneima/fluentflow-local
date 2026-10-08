@@ -16,6 +16,7 @@ import {
     hasTranscriptResult,
     historyEntryToResult,
     jobToCurrentJob,
+    jobToHistoryEntry,
     larkExportRouteFromSettings,
     normalizeSourceMode,
     normalizeSttModel,
@@ -32,7 +33,7 @@ import {
     queueUploadItemsFromQueuedResponse,
 } from '../lib/queueUpload.js';
 import SvgIcon from '../components/SvgIcon.jsx';
-import {submitIgnoredExtraUrls} from '../lib/linkRetry.js';
+import {finishedDuplicateLink, submitIgnoredExtraUrls, submitWasDuplicateOfActive} from '../lib/linkRetry.js';
 import {noteWriterBatchClause, noteWriterSentence, resolveNoteWriter} from '../lib/noteWriter.js';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
@@ -72,6 +73,7 @@ const MediaText = () => {
         locateDroppedFile,
         processLocalPaths,
         getCredentialsStatus,
+        getJob,
     } = useApi();
     const {loadSettings} = useSettings();
     const navigate = useNavigate();
@@ -136,6 +138,26 @@ const MediaText = () => {
         cookiesFromBrowser: settings.videoCookiesBrowser || '',
     });
 
+    // The settings every way in sends: upload, link, a path from the system
+    // dialog, a whole folder. One builder, so a setting cannot reach one entry
+    // and miss another (the dialog and folder entries used to drop the Feishu
+    // export, the provider and the prompt without saying so).
+    const buildSubmitOptions = (settings) => ({
+        exportToLark: settings.exportToLark || false,
+        larkExportRoute: larkExportRouteFromSettings(settings),
+        larkViaCli: !!settings.larkViaCli,
+        folderToken: settings.larkFolder || undefined,
+        ...buildAiOptions(settings),
+        skipSummary: !!settings.skipAiSummary,
+        // Sent only when the user actually chose an engine; null lets the
+        // server apply its own default.
+        sttProvider: submittedSttProvider(settings, runtimeConfig),
+        sttModel: normalizeSttModel(settings.sttModel),
+        sttSpeed: settings.sttSpeed || 'balanced',
+        sttLanguage: 'auto',
+        voiceEnhance: !!settings.voiceEnhance,
+    });
+
     const settleResult = (result, {taskId, fileName, source = 'media'} = {}) => {
         const displayName = result?.title || result?.filename || fileName;
         setLastResult(result);
@@ -177,10 +199,6 @@ const MediaText = () => {
         setProcessingResult(null);
         setLastResult(null);
         const settings = loadSettings();
-        const sttModel = normalizeSttModel(settings.sttModel);
-        // Sent only when the user actually chose an engine; null lets the
-        // server apply its own default.
-        const sttProvider = submittedSttProvider(settings, runtimeConfig);
 
         // Every local media upload (single or multiple) goes through the
         // background queue so the single worker processes them one at a time.
@@ -209,18 +227,7 @@ const MediaText = () => {
         });
         navigate('/agent');
         try {
-            const data = await enqueueProcessFiles(selectedFiles, {
-                exportToLark: settings.exportToLark || false,
-                larkExportRoute: larkExportRouteFromSettings(settings),
-                larkViaCli: !!settings.larkViaCli,
-                folderToken: settings.larkFolder || undefined,
-                ...buildAiOptions(settings),
-                skipSummary: !!settings.skipAiSummary,
-                sttProvider,
-                sttModel,
-                sttSpeed: settings.sttSpeed || 'balanced',
-                sttLanguage: 'auto',
-            }, {
+            const data = await enqueueProcessFiles(selectedFiles, buildSubmitOptions(settings), {
                 onProgress: (pct) => setCurrentJob((prev) => (
                     prev && prev.queueUpload && !prev.queueSubmitted
                         ? {...prev, progress: Math.max(2, Math.min(99, pct))}
@@ -294,14 +301,7 @@ const MediaText = () => {
                 : `${paths.length} files selected. Each one is cut and transcribed${clause}. Continue?`;
             if (!window.confirm(confirmText)) return null;
         }
-        const settings = loadSettings();
-        return processLocalPaths(paths, {
-            skipSummary: !!settings.skipAiSummary,
-            sttModel: normalizeSttModel(settings.sttModel),
-            sttSpeed: settings.sttSpeed || 'balanced',
-            speakerDiarization: !!settings.speakerDiarization,
-            voiceEnhance: !!settings.voiceEnhance,
-        });
+        return processLocalPaths(paths, buildSubmitOptions(loadSettings()));
     };
 
     // A drop, taken as far as this machine can take it.
@@ -420,15 +420,8 @@ const MediaText = () => {
                 ? `要处理这个文件夹里的 ${count} 个录像吗？每个都会自动去气口、转写${clause}。${tail}`
                 : `Process ${count} recordings in this folder? Each is cut and transcribed${clause}.${tail}`;
             if (!window.confirm(confirmText)) return;
-            const settings = loadSettings();
             setDroppedWithoutPath(0);
-            await processLocalFolder(chosen.path, {
-                skipSummary: !!settings.skipAiSummary,
-                sttModel: normalizeSttModel(settings.sttModel),
-                sttSpeed: settings.sttSpeed || 'balanced',
-                speakerDiarization: !!settings.speakerDiarization,
-                voiceEnhance: !!settings.voiceEnhance,
-            });
+            await processLocalFolder(chosen.path, buildSubmitOptions(loadSettings()));
             navigate('/agent');
         } catch (error) {
             reportBackendError?.(error);
@@ -438,12 +431,11 @@ const MediaText = () => {
         }
     };
 
-    const handleVideoLinkSubmit = async () => {
-        const input = videoLinkInput.trim();
-        if (!input) {
-            setUploadError(t('dash.linkEmpty'));
-            return;
-        }
+    // A link already finished once: {input, existingTaskId, existingStatus}.
+    // Asked about before anything is downloaded a second time.
+    const [duplicateLink, setDuplicateLink] = useState(null);
+
+    const submitVideoLink = async (input, {allowDuplicate = false} = {}) => {
         setUploadError(null);
         setProcessingResult(null);
         setLastResult(null);
@@ -457,19 +449,19 @@ const MediaText = () => {
         abortRef.current = ac;
         setSubmitting(true);
         try {
-            const data = await createVideoSourceJob(input, {
-                exportToLark: settings.exportToLark || false,
-                larkExportRoute: larkExportRouteFromSettings(settings),
-                larkViaCli: !!settings.larkViaCli,
-                folderToken: settings.larkFolder || undefined,
-                ...buildAiOptions(settings),
-                skipSummary: !!settings.skipAiSummary,
-                sttProvider,
-                sttModel,
-                sttSpeed: settings.sttSpeed || 'balanced',
-                sttLanguage: 'auto',
-            }, ac.signal);
+            const options = buildSubmitOptions(settings);
+            const data = await createVideoSourceJob(input, allowDuplicate ? {...options, allowDuplicate: true} : options, ac.signal);
             const job = data?.job || {};
+            if (job.task_id && submitWasDuplicateOfActive(data)) {
+                // Already queued or running: nothing new was started, so the
+                // page's own "current job" is left alone and the person is
+                // taken to the task that has the link.
+                setVideoLinkInput('');
+                abortRef.current = null;
+                setSubmitting(false);
+                navigate('/agent', {state: {job, duplicateOfActive: true, highlightTaskId: job.task_id}});
+                return;
+            }
             if (job.task_id) {
                 setCurrentJob({
                     ...jobToCurrentJob({...job, progress: job.progress ?? 2, created_at: job.created_at || new Date().toISOString()}),
@@ -490,11 +482,52 @@ const MediaText = () => {
                 return;
             }
         } catch (err) {
-            reportBackendError?.(err);
-            setUploadError(friendlyTaskError(err?.message || 'Video link fetch failed.', lang));
+            const duplicate = !allowDuplicate ? finishedDuplicateLink(err) : null;
+            if (duplicate) {
+                setDuplicateLink({input, ...duplicate});
+            } else {
+                reportBackendError?.(err);
+                setUploadError(friendlyTaskError(err?.message || 'Video link fetch failed.', lang));
+            }
         }
         if (abortRef.current === ac) abortRef.current = null;
         setSubmitting(false);
+    };
+
+    const handleVideoLinkSubmit = async () => {
+        const input = videoLinkInput.trim();
+        if (!input) {
+            setUploadError(t('dash.linkEmpty'));
+            return;
+        }
+        await submitVideoLink(input);
+    };
+
+    const handleProcessLinkAgain = async () => {
+        const pending = duplicateLink;
+        setDuplicateLink(null);
+        if (pending) await submitVideoLink(pending.input, {allowDuplicate: true});
+    };
+
+    // Open the earlier result in the editor; if it cannot be read, point at it
+    // in the task list instead of failing silently.
+    const handleOpenExistingLinkTask = async () => {
+        const pending = duplicateLink;
+        setDuplicateLink(null);
+        if (!pending?.existingTaskId) return;
+        setVideoLinkInput('');
+        try {
+            const fresh = await getJob?.(pending.existingTaskId, {sttProvider: 'local'});
+            if (fresh?.result) {
+                setLastResult(fresh.result);
+                addToHistory(jobToHistoryEntry({...fresh, result: fresh.result}));
+                navigate('/editor');
+                return;
+            }
+            navigate('/agent', {state: {...(fresh?.task_id ? {job: fresh} : {}), highlightTaskId: pending.existingTaskId}});
+        } catch (_) {
+            navigate('/agent', {state: {highlightTaskId: pending.existingTaskId}});
+        }
     };
 
     const handleSubtitleSelect = async (eventOrFiles) => {
@@ -824,6 +857,28 @@ const MediaText = () => {
                     )}
                 </section>
             </section>
+            {duplicateLink && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
+                    <div role="dialog" aria-modal="true" aria-labelledby="duplicate-link-title" className="w-full max-w-md rounded-[24px] border border-[#e4e0e0] bg-white p-6 shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
+                        <p id="duplicate-link-title" className="text-sm font-bold leading-relaxed text-[#111111] dark:text-white">
+                            {lang === 'zh'
+                                ? `这个链接已经处理过了（任务 ${duplicateLink.existingTaskId}）。要再处理一次吗？`
+                                : `This link was already processed (task ${duplicateLink.existingTaskId}). Process it again?`}
+                        </p>
+                        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                            <button type="button" onClick={() => setDuplicateLink(null)} className="rounded-[13px] px-4 py-2 text-sm font-bold text-[#666] hover:bg-[#efeeee] dark:text-white/60 dark:hover:bg-white/[0.08]">
+                                {lang === 'zh' ? '取消' : 'Cancel'}
+                            </button>
+                            <button type="button" onClick={handleProcessLinkAgain} className="rounded-[13px] bg-[#efeeee] px-4 py-2 text-sm font-bold text-[#111111] hover:bg-[#e4e0e0] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]">
+                                {lang === 'zh' ? '再处理一次' : 'Process again'}
+                            </button>
+                            <button type="button" onClick={handleOpenExistingLinkTask} className="rounded-[13px] bg-[#111111] px-4 py-2 text-sm font-bold text-white hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
+                                {lang === 'zh' ? '打开已有的' : 'Open the existing one'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </main>
     );
 };

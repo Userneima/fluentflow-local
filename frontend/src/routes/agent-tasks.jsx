@@ -511,8 +511,13 @@ const QueueUploadBanner = ({upload, lang, onCancel}) => {
     );
 };
 
-const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onRetry}) => {
+const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highlighted = false, cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onRetry}) => {
     const taskId = taskIdForJob(job);
+    // The task a resubmitted link pointed back to is brought into view once.
+    const highlightRef = useRef(null);
+    useEffect(() => {
+        if (highlighted) highlightRef.current?.scrollIntoView?.({block: 'center', behavior: 'smooth'});
+    }, [highlighted]);
     const state = normalizeTaskState(job);
     const live = isLiveTask(job);
     const completed = state === TASK_STATE_COMPLETED || state === TASK_STATE_CACHED_ONLY;
@@ -563,7 +568,11 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', cancelli
     ];
     const delivery = cutFileDelivery(job, lang);
     return (
-        <article className="rounded-[24px] border border-[#dedada] bg-white p-5 shadow-[0_18px_44px_-38px_rgba(17,17,17,.45)] dark:border-white/[0.10] dark:bg-white/[0.055] dark:shadow-none">
+        <article
+            ref={highlightRef}
+            data-highlighted={highlighted ? 'true' : undefined}
+            className={`rounded-[24px] border bg-white p-5 shadow-[0_18px_44px_-38px_rgba(17,17,17,.45)] dark:bg-white/[0.055] dark:shadow-none ${highlighted ? 'border-primary ring-2 ring-primary/30' : 'border-[#dedada] dark:border-white/[0.10]'}`}
+        >
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -711,7 +720,7 @@ const cardRenderKey = (job) => {
 // The busy ids are page-wide; a card only cares whether they name it.
 const BUSY_KEYS = ['cancellingTaskId', 'deletingTaskId', 'openingTaskId', 'retryingTaskId', 'downloadingTaskId'];
 const areCardPropsEqual = (prev, next) => {
-    if (prev.lang !== next.lang || prev.aheadName !== next.aheadName || prev.retryError !== next.retryError) return false;
+    if (prev.lang !== next.lang || prev.aheadName !== next.aheadName || prev.retryError !== next.retryError || prev.highlighted !== next.highlighted) return false;
     const taskId = taskIdForJob(next.job);
     for (const key of BUSY_KEYS) {
         if ((prev[key] === taskId) !== (next[key] === taskId)) return false;
@@ -747,6 +756,18 @@ const AgentTasks = () => {
     const [extraUrlsIgnored, setExtraUrlsIgnored] = useState(() => location.state?.extraUrlsIgnored === true);
     useEffect(() => {
         if (location.state?.extraUrlsIgnored === true) setExtraUrlsIgnored(true);
+    }, [location.state]);
+    // A link that was already submitted is not queued a second time: the start
+    // page sends the person here and points at the task that has it. The
+    // notice is said only when that task is still running; a finished one that
+    // could not be opened is just pointed at.
+    const highlightFromState = () => String(location.state?.highlightTaskId || '');
+    const [highlightTaskId, setHighlightTaskId] = useState(highlightFromState);
+    const [duplicateNotice, setDuplicateNotice] = useState(() => location.state?.duplicateOfActive === true);
+    useEffect(() => {
+        const id = String(location.state?.highlightTaskId || '');
+        if (id) setHighlightTaskId(id);
+        if (location.state?.duplicateOfActive === true) setDuplicateNotice(true);
     }, [location.state]);
     const queueUploadJob = currentJob?.queueUpload ? currentJob : null;
     const currentJobRecords = useMemo(() => jobsFromCurrentJob(currentJob), [currentJob]);
@@ -1025,6 +1046,15 @@ const AgentTasks = () => {
                     </div>
                 ) : null}
 
+                {duplicateNotice ? (
+                    <div data-testid="duplicate-link-notice" className="flex items-start justify-between gap-3 rounded-[16px] border border-[#c7d2fe] bg-[#eef2ff] px-4 py-3 text-sm font-semibold text-[#3730a3] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/80">
+                        <span>{lang === 'zh' ? '这个链接已经在处理中，没有重复提交。' : 'This link is already being processed; it was not submitted again.'}</span>
+                        <button type="button" onClick={() => setDuplicateNotice(false)} className="shrink-0 text-[12px] font-extrabold underline">
+                            {lang === 'zh' ? '知道了' : 'Got it'}
+                        </button>
+                    </div>
+                ) : null}
+
                 {queueUploadJob ? <QueueUploadBanner upload={queueUploadJob} lang={lang} onCancel={cancelPendingUpload}/> : null}
 
                 <section className="grid gap-3 sm:grid-cols-3">
@@ -1073,6 +1103,7 @@ const AgentTasks = () => {
                             lang={lang}
                             aheadName={queueAheadName(job)}
                             retryError={retryError?.taskId === taskIdForJob(job) ? retryError.message : ''}
+                            highlighted={!!highlightTaskId && highlightTaskId === taskIdForJob(job)}
                             cancellingTaskId={cancellingTaskId}
                             deletingTaskId={deletingTaskId}
                             openingTaskId={openingTaskId}

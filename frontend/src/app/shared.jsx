@@ -181,32 +181,46 @@ export {DropdownMenu} from './DropdownMenu.jsx';
 // would re-run those effects every render.
 export const useApi = () => useMemo(createApi, []);
 const createApi = () => {
-    const appendAiOptions = (fd, options={}) => {
-        if(options.aiProvider) fd.append("ai_provider", options.aiProvider);
-        if(options.aiModel) fd.append("ai_model", options.aiModel);
-        if(options.systemPrompt) fd.append("system_prompt", options.systemPrompt);
-        if(options.noteMode) fd.append("note_mode", options.noteMode);
-        if(options.promptPreset) fd.append("prompt_preset", options.promptPreset);
-        if(options.promptPresetLabel) fd.append("prompt_preset_label", options.promptPresetLabel);
-        if(options.generateVisuals) fd.append("generate_visuals", "true");
+    // Every way into the pipeline sends the same settings under the same names.
+    // The upload, the link, a path from the system dialog and a whole folder used
+    // to each spell their own list, and the shorter lists dropped settings
+    // without an error: a recording picked through the dialog quietly skipped
+    // the Feishu export the same file got when dragged in. One list, here.
+    const submitOptionFields = (options={}) => {
+        const fields = {};
+        if(options.exportToLark) {
+            const larkRoute = normalizeLarkExportRoute(options.larkExportRoute, !!options.larkViaCli);
+            fields.export_to_lark = "true";
+            fields.lark_export_route = larkRoute;
+            fields.lark_via_cli = isLocalLarkExportRoute(larkRoute) ? "true" : "false";
+        }
+        if(options.title) fields.title = options.title;
+        if(options.folderToken) fields.folder_token = options.folderToken;
+        if(options.skipSummary) fields.skip_summary = "true";
+        if(options.aiProvider) fields.ai_provider = options.aiProvider;
+        if(options.aiModel) fields.ai_model = options.aiModel;
+        if(options.systemPrompt) fields.system_prompt = options.systemPrompt;
+        if(options.noteMode) fields.note_mode = options.noteMode;
+        if(options.promptPreset) fields.prompt_preset = options.promptPreset;
+        if(options.promptPresetLabel) fields.prompt_preset_label = options.promptPresetLabel;
+        if(options.generateVisuals) fields.generate_visuals = "true";
+        if(options.sttProvider) fields.stt_provider = options.sttProvider;
+        if(options.sttModel) fields.stt_model = options.sttModel;
+        if(options.sttSpeed) fields.stt_speed = options.sttSpeed;
+        if(options.sttLanguage) fields.stt_language = options.sttLanguage;
+        if(options.speakerDiarization) fields.speaker_diarization = "true";
+        if(options.voiceEnhance) fields.voice_enhance = "true";
+        if(options.durationLimitSeconds) fields.duration_limit_seconds = String(options.durationLimitSeconds);
+        return fields;
     };
     const appendProcessOptions = (fd, options={}) => {
-        if(options.exportToLark) {
-            fd.append("export_to_lark","true");
-            const larkRoute = normalizeLarkExportRoute(options.larkExportRoute, !!options.larkViaCli);
-            fd.append("lark_export_route", larkRoute);
-            fd.append("lark_via_cli", isLocalLarkExportRoute(larkRoute) ? "true" : "false");
-        }
-        if(options.title) fd.append("title", options.title);
-        if(options.folderToken) fd.append("folder_token", options.folderToken); // kept for future use
-        if(options.skipSummary) fd.append("skip_summary", "true");
-        appendAiOptions(fd, options);
-        if(options.sttProvider) fd.append("stt_provider", options.sttProvider);
-        if(options.sttModel) fd.append("stt_model", options.sttModel);
-        if(options.sttSpeed) fd.append("stt_speed", options.sttSpeed);
-        if(options.sttLanguage) fd.append("stt_language", options.sttLanguage);
-        if(options.speakerDiarization) fd.append("speaker_diarization", "true");
-        if(options.voiceEnhance) fd.append("voice_enhance", "true");
+        Object.entries(submitOptionFields(options)).forEach(([key, value]) => fd.append(key, value));
+    };
+    // A subtitle file is not transcribed or exported: only the note fields apply.
+    const appendAiOptions = (fd, options={}) => {
+        const fields = submitOptionFields(options);
+        ["ai_provider", "ai_model", "system_prompt", "note_mode", "prompt_preset", "prompt_preset_label", "generate_visuals"]
+            .forEach((key) => { if (fields[key]) fd.append(key, fields[key]); });
     };
     const readSseResult = async (r, onProgress) => {
         const reader = r.body.getReader();
@@ -297,39 +311,25 @@ const createApi = () => {
         });
     };
     const createVideoSourceJob = async (input, options={}, signal) => {
-        const payloadOptions = {};
-        if(options.exportToLark) {
-            const larkRoute = normalizeLarkExportRoute(options.larkExportRoute, !!options.larkViaCli);
-            payloadOptions.export_to_lark = "true";
-            payloadOptions.lark_export_route = larkRoute;
-            payloadOptions.lark_via_cli = isLocalLarkExportRoute(larkRoute) ? "true" : "false";
-        }
-        if(options.title) payloadOptions.title = options.title;
-        if(options.skipSummary) payloadOptions.skip_summary = "true";
-        if(options.aiProvider) payloadOptions.ai_provider = options.aiProvider;
-        if(options.aiModel) payloadOptions.ai_model = options.aiModel;
-        if(options.systemPrompt) payloadOptions.system_prompt = options.systemPrompt;
-        if(options.noteMode) payloadOptions.note_mode = options.noteMode;
-        if(options.promptPreset) payloadOptions.prompt_preset = options.promptPreset;
-        if(options.promptPresetLabel) payloadOptions.prompt_preset_label = options.promptPresetLabel;
-        if(options.generateVisuals) payloadOptions.generate_visuals = "true";
-        if(options.sttProvider) payloadOptions.stt_provider = options.sttProvider;
-        if(options.sttModel) payloadOptions.stt_model = options.sttModel;
-        if(options.sttSpeed) payloadOptions.stt_speed = options.sttSpeed;
-        if(options.sttLanguage) payloadOptions.stt_language = options.sttLanguage;
-        if(options.speakerDiarization) payloadOptions.speaker_diarization = "true";
-        if(options.voiceEnhance) payloadOptions.voice_enhance = "true";
+        const payloadOptions = submitOptionFields(options);
         if(options.cookiesFromBrowser) payloadOptions.cookies_from_browser = options.cookiesFromBrowser;
-        if(options.folderToken) payloadOptions.folder_token = options.folderToken;
-        if(options.durationLimitSeconds) payloadOptions.duration_limit_seconds = String(options.durationLimitSeconds);
         const r = await apiFetch(`${API_BASE}/video-sources/jobs`, {
             method:"POST",
             headers: {"Content-Type":"application/json", ...localExecutionHeaders(options)},
-            body: JSON.stringify({input, options: payloadOptions}),
+            // allow_duplicate is a request flag, not a run option: it sits beside
+            // `options`, so it is never stored with the task or reused on retry.
+            body: JSON.stringify({input, options: payloadOptions, ...(options.allowDuplicate ? {allow_duplicate: true} : {})}),
             signal,
         });
         const data = await r.json().catch(()=>({}));
-        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        if(!r.ok) {
+            // A 409 "already processed this link" carries the earlier task, which
+            // the page offers to open; the payload travels with the error.
+            const err = new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+            err.status = r.status;
+            err.payload = data;
+            throw err;
+        }
         return data;
     };
     const checkVideoCookies = async (browser) => {
@@ -528,6 +528,28 @@ const createApi = () => {
         }
         return data;
     };
+    // Whether this task can be rewritten by Claude from its frames: it needs a
+    // cut file still on disk, a recording rather than a subtitle file, and so
+    // on. Asked of the rewrite route itself with `preview: true`, which runs the
+    // same eligibility check as the real run and starts nothing. Returns
+    // {available: true|false|null, reason}; null means the service could not
+    // say, and the page offers both ways then. A busy queue is not part of
+    // this answer: the real start reports it as a 409.
+    const getVisualNoteAvailability = async (taskId, options={}) => {
+        try {
+            const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/visual-note`, {
+                method: "POST",
+                headers: {"Content-Type":"application/json", ...localExecutionHeaders(options)},
+                body: JSON.stringify({preview: true}),
+            });
+            if(!r.ok) return {available: null, reason: null};
+            const data = await r.json().catch(()=>({}));
+            if(typeof data?.eligible !== 'boolean') return {available: null, reason: null};
+            return {available: data.eligible, reason: data.reason ? String(data.reason) : null, running: data.running === true};
+        } catch (_) {
+            return {available: null, reason: null};
+        }
+    };
     // Ask the machine to open its own file dialog, and process what comes back
     // where it lies. The browser's picker cannot tell this page which folder a
     // file came from, so a normal upload has no "next to the original" to save the
@@ -582,21 +604,16 @@ const createApi = () => {
         if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
         return data;
     };
-    // The by-path routes read the persisted queue-option vocabulary, which is
-    // snake_case. Spreading the caller's camelCase options into the body sends
-    // keys the backend never looks at, and nothing errors: the run just quietly
-    // uses defaults. Translate here so every call site keeps one spelling.
+    // The by-path routes take the same fields as the upload (submitOptionFields),
+    // in a JSON body. Two differences, both about what the route does with a
+    // missing field: the paths are always transcribed on this machine, so no
+    // engine is named; and speaker separation is ON when the field is absent
+    // (for callers with no settings page), so "off" has to be said out loud.
     const localQueueBody = (options={}) => {
-        const body = {};
-        if (options.skipSummary) body.skip_summary = "true";
-        if (options.sttModel) body.stt_model = options.sttModel;
-        if (options.sttSpeed) body.stt_speed = options.sttSpeed;
-        if (options.noteMode) body.note_mode = options.noteMode;
-        if (options.promptPreset) body.prompt_preset = options.promptPreset;
-        if (options.promptPresetLabel) body.prompt_preset_label = options.promptPresetLabel;
-        if (options.durationLimitSeconds) body.duration_limit_seconds = String(options.durationLimitSeconds);
-        if (options.speakerDiarization) body.speaker_diarization = "true";
-        if (options.voiceEnhance) body.voice_enhance = "true";
+        const body = submitOptionFields(options);
+        delete body.stt_provider;
+        delete body.stt_language;
+        body.speaker_diarization = options.speakerDiarization ? "true" : "false";
         return body;
     };
     const processLocalFolder = async (path, options={}) => {
@@ -687,7 +704,7 @@ const createApi = () => {
         return data?.preferences && typeof data.preferences === 'object' ? data.preferences : {};
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, getPreferences, savePreferences, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, getPreferences, savePreferences, checkHealth};
 };
 
 export const useSettings = () => {

@@ -966,3 +966,24 @@ def test_a_note_that_failed_is_recorded_with_the_reason(job_store, tmp_path, rec
     assert event["success"] is False
     assert "登录" in event["error_reason"]
     assert event["metadata"]["trigger"] == "manual"
+
+
+def test_the_preview_says_a_rewrite_is_running_apart_from_cannot(job_store):
+    """A page that falls back to the text model when the frames are out of
+    reach must wait instead when a rewrite is already under way."""
+    job_store["result"]["visual_note"] = {"status": vn.STATUS_RUNNING}
+
+    described = vn.describe(TASK, job_store, api_key="sk-ant-test")
+
+    assert described["eligible"] is False
+    assert described["running"] is True
+
+
+def test_a_task_that_simply_cannot_is_not_marked_running(job_store):
+    job_store["result"].pop("debreath")
+    job_store["result"]["artifacts"] = {}
+
+    described = vn.describe(TASK, job_store, api_key="sk-ant-test")
+
+    assert described["eligible"] is False
+    assert not described.get("running")

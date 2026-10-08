@@ -7,7 +7,7 @@ import {useDismissable} from '../lib/useDismissable.js';
 
 const modalOptions = {closeOnOutsideClick: false, trapFocus: true};
 
-export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, onCancel, onConfirm}) => {
+export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, confirmDisabled = false, alternative = null, onAlternative, onCancel, onConfirm}) => {
     const {t, lang} = useI18n();
     const dialogRef = useDismissable(true, onCancel, modalOptions);
     return (
@@ -33,6 +33,22 @@ export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, 
                             <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#777] dark:text-white/45">{lang === 'zh' ? '当前转录' : 'Current transcript'}</p>
                             <p className="truncate text-sm font-bold text-[#111111] dark:text-white">{transcriptTitle}</p>
                         </div>
+                        {alternative && (
+                            <div className="mt-3">
+                                <button
+                                    type="button"
+                                    data-testid="regenerate-alternative"
+                                    onClick={onAlternative}
+                                    disabled={alternative.disabled}
+                                    className="w-full rounded-[13px] border border-[#e4e0e0] bg-white px-3 py-2 text-left text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
+                                >
+                                    {alternative.label}
+                                </button>
+                                {alternative.hint && (
+                                    <p className="mt-1 text-xs font-medium text-[#777] dark:text-white/50">{alternative.hint}</p>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
                 <div className="flex flex-col-reverse gap-3 px-6 py-4 sm:flex-row sm:justify-end">
@@ -46,7 +62,8 @@ export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, 
                     <button
                         type="button"
                         onClick={onConfirm}
-                        className="inline-flex items-center justify-center gap-2 rounded-[13px] bg-[#111111] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
+                        disabled={confirmDisabled}
+                        className="inline-flex items-center justify-center gap-2 rounded-[13px] bg-[#111111] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
                     >
                         <SvgIcon name="refresh" className="text-base"/>
                         {t('edit.regenerateConfirmAction')}

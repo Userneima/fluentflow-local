@@ -101,3 +101,18 @@ describe('applying a finished note', () => {
         expect(merged.visual_note.status).toBe('completed');
     });
 });
+
+describe('regenerating while a rewrite is already running', () => {
+    it('waits instead of starting a second rewrite with either writer', async () => {
+        const {regenerateDialogCopy} = await import('./editor-helpers.js');
+        for (const writerKind of ['claude', 'text_model']) {
+            const copy = regenerateDialogCopy({
+                writerKind, writerLabel: 'X', frameNote: {available: false, reason: '这个任务的笔记正在重写中', running: true},
+                textWriterLabel: 'DeepSeek', textWriterReady: true,
+            }, 'zh');
+            expect(copy.confirmDisabled).toBe(true);
+            expect(copy.alternative).toBe(null);
+            expect(copy.desc).toContain('正在重写');
+        }
+    });
+});

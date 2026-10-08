@@ -131,3 +131,24 @@ describe('a pasted text with several links', () => {
         expect(notice.textContent).toMatch(/只处理了第一个/);
     });
 });
+
+describe('arriving from a link that was already being processed', () => {
+    afterEach(() => cleanup());
+
+    it('says nothing new was submitted and marks the task that has the link', async () => {
+        const running = failedLink({task_id: 'run-3', status: 'running', stage: 'download', error_reason: ''});
+        tasks = [failedLink(), running];
+        mount({job: running, duplicateOfActive: true, highlightTaskId: 'run-3'});
+        expect((await screen.findByTestId('duplicate-link-notice')).textContent).toMatch(/这个链接已经在处理中，没有重复提交/);
+        const marked = document.querySelectorAll('[data-highlighted="true"]');
+        expect(marked.length).toBe(1);
+    });
+
+    it('says nothing when arriving normally', async () => {
+        tasks = [failedLink()];
+        mount();
+        await screen.findAllByRole('article').catch(() => null);
+        expect(screen.queryByTestId('duplicate-link-notice')).toBeNull();
+        expect(document.querySelectorAll('[data-highlighted="true"]').length).toBe(0);
+    });
+});

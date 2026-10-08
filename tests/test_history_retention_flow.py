@@ -218,3 +218,34 @@ def test_a_link_download_whose_de_breathed_version_exists_expires_as_usual():
     assert not task["download"].exists()
     assert (task["artifact_dir"] / "debreath" / "lecture_debreath.mp4").is_file(), "the cut version stays"
     assert job_store.get_job("ret-link-cut")["result"]["source_retention_status"] == "expired"
+
+
+# ── FLUENTFLOW_SOURCE_RETENTION_DAYS=0 keeps sources forever ───────────────
+#
+# Requirement: the maintenance doc says 0 means "do not clean up". Someone who
+# sets it wants every source kept, including a link's only downloaded copy; a
+# finished task must keep its recording now and after any number of passes.
+
+@pytest.mark.parametrize("days", ["0", "-3"])
+def test_zero_days_keeps_the_recording_when_the_task_finishes(monkeypatch, days):
+    monkeypatch.setenv("FLUENTFLOW_SOURCE_RETENTION_DAYS", days)
+    task = _finished_task("retention-forever", expires_in_days=7)
+
+    finished = lp._finalize_local_result_storage("retention-forever", task["result"], {"route": "/process"})
+
+    assert (task["source_dir"] / "source.mp4").exists(), "the recording is not deleted"
+    assert finished["source_file_available"] is True
+    assert not finished.get("source_retention_expires_at"), "no expiry, so no pass will ever take it"
+
+
+def test_zero_days_keeps_the_recording_through_later_passes(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_SOURCE_RETENTION_DAYS", "0")
+    task = _finished_task("retention-forever-pass", expires_in_days=7)
+    finished = lp._finalize_local_result_storage("retention-forever-pass", task["result"], {"route": "/process"})
+    job_store.update_job_result("retention-forever-pass", finished, client_id=CLIENT)
+
+    lp._enforce_local_history_retention(CLIENT)
+    lp._enforce_local_history_retention(CLIENT)
+
+    assert find_source_file("retention-forever-pass") is not None
+    assert job_store.get_job("retention-forever-pass", client_id=CLIENT)["result"]["source_file_available"] is True

@@ -13,6 +13,12 @@
 //     when it is written. A busy queue is reported in plain Chinese.
 //   - When a text model writes the notes, the dialog names it, and warns that
 //     the screenshots go if the current note was written by Claude.
+//   - Whether Claude can rewrite from the frames is decided per task. A task
+//     whose frames are out of reach (subtitle file, no cut file, source gone)
+//     is rewritten by the text model with the chosen prompt, and the dialog
+//     says why. A task that has them still offers the text model as a second
+//     choice, so the chosen prompt can actually be used. When the service
+//     cannot say, both ways are offered.
 
 import {createContext, useContext, useState} from 'react';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -23,6 +29,7 @@ const AppState = createContext(null);
 let runtimeConfig = {};
 let credentialStatus = {};
 let switchTask = null;
+let storedSettings = {};
 
 vi.mock('../app/AppContext.jsx', () => ({
     useApp: () => useContext(AppState),
@@ -46,6 +53,7 @@ const api = {
     saveTranscriptEdit: async () => ({}),
     saveSummaryEdit: vi.fn(async () => ({})),
     startJobVisualNote: vi.fn(async () => ({ok: true, accepted: true})),
+    getVisualNoteAvailability: vi.fn(async () => ({available: true, reason: null})),
     getCredentialsStatus: async () => credentialStatus,
 };
 
@@ -54,7 +62,7 @@ vi.mock('../app/shared.jsx', async () => {
     return {
         ...actual,
         useI18n: () => ({t: (key) => key, lang: 'zh'}),
-        useSettings: () => ({loadSettings: () => ({}), saveSettings: () => {}}),
+        useSettings: () => ({loadSettings: () => storedSettings, saveSettings: () => {}}),
         useApi: () => api,
     };
 });
@@ -108,6 +116,9 @@ beforeEach(() => {
     vi.useFakeTimers();
     runtimeConfig = {allowedSttProviders: ['local'], defaultSttProvider: 'local', limits: {}};
     credentialStatus = {};
+    storedSettings = {};
+    api.getVisualNoteAvailability.mockReset();
+    api.getVisualNoteAvailability.mockImplementation(async () => ({available: true, reason: null}));
     api.getJob.mockReset();
     api.saveSummaryEdit.mockReset();
     api.saveSummaryEdit.mockImplementation(async () => ({}));
@@ -335,5 +346,88 @@ describe('重生笔记 when a text model writes the notes', () => {
         mount(finishedTask());
         await openRegenerateDialog();
         expect(screen.queryByTestId('regenerate-warning')).toBeNull();
+    });
+});
+
+describe('重生笔记 decided per task when Claude writes the notes', () => {
+    // Claude writes the notes, and a DeepSeek key is there for the text model.
+    const claudeWithTextKey = () => {
+        runtimeConfig = {...runtimeConfig, writesItsOwnNote: true};
+        credentialStatus = {visual_note_available: true, deepseek_api_key_configured: true};
+        storedSettings = {aiProvider: 'deepseek', promptPreset: 'custom', customPromptText: '只列三条要点'};
+    };
+    const textRewriteCall = (fetchSpy) => fetchSpy.mock.calls.find(([url]) => String(url).includes('regenerate-summary'));
+    const stubTextRewrite = () => {
+        const fetchSpy = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({summary_markdown: 'text-only note', summary_status: 'completed'}),
+        }));
+        vi.stubGlobal('fetch', fetchSpy);
+        return fetchSpy;
+    };
+
+    it('rewrites a task without frames with the text model and the chosen prompt, and says why', async () => {
+        claudeWithTextKey();
+        api.getVisualNoteAvailability.mockImplementation(async () => ({available: false, reason: '这是字幕文件，没有剪后视频。'}));
+        const fetchSpy = stubTextRewrite();
+        mount(finishedTask());
+
+        const dialog = await openRegenerateDialog();
+        expect(dialog.textContent).toMatch(/这是字幕文件，没有剪后视频/);
+        expect(dialog.textContent).toMatch(/DeepSeek/);
+        expect(dialog.textContent).toMatch(/提示词/);
+        // Only one way is possible here, so no second choice is offered.
+        expect(screen.queryByTestId('regenerate-alternative')).toBeNull();
+        await confirmRegenerate();
+        await advance(0);
+
+        expect(api.startJobVisualNote).not.toHaveBeenCalled();
+        const call = textRewriteCall(fetchSpy);
+        expect(call).toBeTruthy();
+        expect(call[1].body.get('system_prompt')).toBe('只列三条要点');
+        expect(call[1].body.get('prompt_preset')).toBe('custom');
+        expect(screen.getByLabelText('note').value).toBe('text-only note');
+    });
+
+    it('offers the text model as a second choice when the frames are there, and that choice uses the prompt', async () => {
+        claudeWithTextKey();
+        const fetchSpy = stubTextRewrite();
+        mount(finishedTask());
+
+        await openRegenerateDialog();
+        const choice = screen.getByTestId('regenerate-alternative');
+        expect(choice.textContent).toBe('改用文本模型按文字重写（会用你选的提示词，截图不保留）');
+        await act(async () => { fireEvent.click(choice); });
+        await advance(0);
+
+        expect(api.startJobVisualNote).not.toHaveBeenCalled();
+        expect(textRewriteCall(fetchSpy)[1].body.get('system_prompt')).toBe('只列三条要点');
+    });
+
+    it('still lets Claude rewrite from the frames when the task has them', async () => {
+        claudeWithTextKey();
+        const fetchSpy = stubTextRewrite();
+        mount(finishedTask());
+        await openRegenerateDialog();
+        await confirmRegenerate();
+        expect(api.startJobVisualNote).toHaveBeenCalledTimes(1);
+        expect(textRewriteCall(fetchSpy)).toBeUndefined();
+    });
+
+    it('offers both ways when the service cannot say whether the frames are there', async () => {
+        claudeWithTextKey();
+        api.getVisualNoteAvailability.mockImplementation(async () => ({available: null, reason: null}));
+        mount(finishedTask());
+        const dialog = await openRegenerateDialog();
+        expect(dialog.textContent).toMatch(/画面/);
+        expect(screen.getByTestId('regenerate-alternative').disabled).toBe(false);
+    });
+
+    it('says the text model cannot be used when no text-model key is filled in', async () => {
+        claudeWriter();
+        mount(finishedTask());
+        const dialog = await openRegenerateDialog();
+        expect(screen.getByTestId('regenerate-alternative').disabled).toBe(true);
+        expect(dialog.textContent).toMatch(/还没有填文本模型的 Key/);
     });
 });

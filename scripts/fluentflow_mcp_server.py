@@ -196,10 +196,16 @@ def submit_video_link(
     skip_summary: bool = False,
     note_mode: str | None = None,
     prompt_preset: str | None = None,
+    allow_duplicate: bool = False,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Submit a video/share link to FluentFlow and return the created task."""
+    """Submit a video/share link to FluentFlow and return the created task.
+
+    The same link already queued or running comes back as that task with
+    ``duplicate_of_active: true``; one already completed is refused (409,
+    ``duplicate_link``) unless ``allow_duplicate`` is true.
+    """
     return _agent_request(
         "POST",
         "/agent/v1/tasks",
@@ -209,6 +215,7 @@ def submit_video_link(
             "input": input_text,
             "input_type": "video_link",
             "title": title,
+            "allow_duplicate": bool(allow_duplicate),
             "options": _options(
                 stt_provider=stt_provider,
                 skip_summary="true" if skip_summary else "false",
@@ -315,18 +322,19 @@ def retry_task(
 
 def regenerate_note(
     task_id: str,
-    note_mode: str = "auto",
+    note_mode: str | None = None,
     prompt_preset: str | None = None,
+    system_prompt: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Regenerate a task note from the stored transcript."""
+    """Rewrite a task's note by the writer that wrote it; the old note stays restorable."""
     return _agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/note/regenerate",
         api_base=api_base,
         client_id=client_id,
-        payload=_options(note_mode=note_mode, prompt_preset=prompt_preset),
+        payload=_options(note_mode=note_mode, prompt_preset=prompt_preset, system_prompt=system_prompt),
         timeout=180,
     )
 
@@ -461,7 +469,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "By default the task cuts breath gaps out of the media, transcribes the cut file, "
             "then has Claude write the note from its frames (the configured text model "
             "writes it from the transcript when Claude is unreachable). skip_summary=true "
-            "stops at the transcript. Follow with wait_task."
+            "stops at the transcript. Follow with wait_task. "
+            "The same link is never processed twice by accident (tracking parameters "
+            "such as utm_*, share_source, spm_id_from, vd_source are ignored when "
+            "comparing; Bilibili ?p= still counts): if that link is already queued or "
+            "running, no new task is made and the existing one comes back with "
+            "duplicate_of_active=true; if it was already completed, the call fails with "
+            "HTTP 409, code duplicate_link and existing_task_id — read that task, or ask "
+            "the user and resubmit with allow_duplicate=true to process it again. A "
+            "failed or cancelled earlier task never blocks a submission."
         ),
         "inputSchema": {
             "type": "object",
@@ -472,6 +488,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "skip_summary": {"type": "boolean", "default": False},
                 "note_mode": {"type": "string"},
                 "prompt_preset": {"type": "string"},
+                "allow_duplicate": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Process this link again although a completed task already has it. "
+                        "Only after the user confirmed they want a second copy."
+                    ),
+                },
                 "api_base": {"type": "string"},
                 "client_id": {"type": "string"},
             },
@@ -583,13 +607,33 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "regenerate_note",
-        "description": "Regenerate a task note from the stored transcript.",
+        "description": (
+            "Rewrite a finished task's note. Which model writes it: if the current note "
+            "was written by Claude from the video frames and that can still run for this "
+            "task (Claude configured, the cut file still there, the queue idle), Claude "
+            "rewrites it from the frames in the background, exactly as the editor does — "
+            "the answer says writer=claude_frames and returns at once; follow with "
+            "wait_task or get_task_package. Prompt and note_mode do not apply to that "
+            "path. Otherwise the configured text model rewrites it from the transcript "
+            "before answering (writer=text_model), using the system_prompt and note_mode "
+            "given here, or the ones the task was submitted with. The old note is never "
+            "lost: it is kept and can be put back for free with write_note_from_cut_media "
+            "restore_previous_note=true. If the rewrite fails the task stays completed "
+            "with its old note, and summary_status=failed plus summary_error say why."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
-                "note_mode": {"type": "string", "default": "auto"},
-                "prompt_preset": {"type": "string"},
+                "note_mode": {"type": "string", "description": "Text-model path only. Default: the task's own."},
+                "prompt_preset": {
+                    "type": "string",
+                    "description": "A label recorded with the note; the instructions themselves are system_prompt.",
+                },
+                "system_prompt": {
+                    "type": "string",
+                    "description": "Text-model path only: instructions for the note. Default: the task's own.",
+                },
                 "api_base": {"type": "string"},
                 "client_id": {"type": "string"},
             },

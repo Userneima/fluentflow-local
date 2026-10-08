@@ -374,6 +374,60 @@ def extract_first_url(input_text: str) -> str | None:
     return next((url for url in urls if is_supported_source_url(url)), urls[0])
 
 
+# Query parameters that say how a link was shared, not which video it is. Two
+# copies of one video shared twice differ only in these, so they are dropped
+# before two submissions are compared.
+_TRACKING_QUERY_PARAMS = frozenset({
+    "spm_id_from", "vd_source", "from_spmid", "si", "feature", "bbid", "unique_k",
+    "is_story_h5", "timestamp", "ts",
+})
+_TRACKING_QUERY_PREFIXES = ("utm_", "share_")
+# On Bilibili only the part number names a different video on the same page;
+# on Douyin the video is in the path, or in ``modal_id`` on a feed page.
+_BILIBILI_KEPT_PARAMS = frozenset({"p"})
+_DOUYIN_KEPT_PARAMS = frozenset({"modal_id"})
+
+
+def normalize_source_link(input_text: str) -> str | None:
+    """The link a submission fetches, spelled so two shares of one video match.
+
+    Takes the same link the download takes (``extract_first_url``), lower-cases
+    the scheme and host, drops the fragment, a trailing slash and the sharing
+    parameters (``utm_*``, ``share_*``, ``spm_id_from``, ``vd_source`` …). On
+    Bilibili only ``?p=`` survives, because part 2 of a video is a different
+    recording; on Douyin only ``modal_id``. Short links (``b23.tv``, ``v.douyin.com``) are compared as they
+    are: resolving them costs a network request per submission.
+    """
+    url = extract_first_url(input_text or "")
+    if not url:
+        return None
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return None
+    netloc = host if parsed.port is None else f"{host}:{parsed.port}"
+    only_kept = (
+        _BILIBILI_KEPT_PARAMS if is_bilibili_url(url)
+        else _DOUYIN_KEPT_PARAMS if is_douyin_url(url)
+        else None
+    )
+    kept: list[tuple[str, str]] = []
+    for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True):
+        lowered = key.lower()
+        if only_kept is not None:
+            if lowered in only_kept:
+                kept.append((lowered, value))
+            continue
+        if lowered in _TRACKING_QUERY_PARAMS or lowered.startswith(_TRACKING_QUERY_PREFIXES):
+            continue
+        kept.append((key, value))
+    kept.sort()
+    path = parsed.path.rstrip("/") or ""
+    return urllib.parse.urlunparse(
+        ((parsed.scheme or "https").lower(), netloc, path, "", urllib.parse.urlencode(kept), "")
+    )
+
+
 def extra_urls_ignored(input_text: str) -> bool:
     return len(extract_urls(input_text)) > 1
 

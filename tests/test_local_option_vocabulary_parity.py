@@ -30,8 +30,7 @@ the option key set of each call site, so adding an option to the upload path
 without a conscious decision about the by-path entry fails here, not on a user's
 screen.
 
-This test does not assert the by-path entry *should* forward every upload-path
-option -- some are deliberately page-only. It pins the current difference. When
+It pins the difference between the two, which is now none. When
 that difference changes, update the pinned sets below, and while you are here
 decide whether the new option is a real gap (forward it in ``local_path_options``)
 or genuinely page-only (add it to ``EXPECTED_UPLOAD_ONLY`` with a reason).
@@ -71,23 +70,14 @@ def _collect_options_keysets() -> dict[str, set[str]]:
     return found
 
 
-# The keys the by-path entry (local_path_options) intentionally does NOT forward,
-# as of 2026-09-07. Each is dropped for a by-path caller; if one of these is
-# actually a gap it belongs in local_path_options instead of here.
-EXPECTED_UPLOAD_ONLY = {
-    "ai_model",           # AI provider/model come from local backend config for
-    "ai_provider",        #   by-path callers, not the request payload.
-    "export_to_lark",     # Feishu export + its routing/CLI switch are page-only
-    "lark_export_route",  #   controls today.
-    "lark_via_cli",
-    "folder_token",       # Chosen in the page's Feishu picker.
-    "generate_visuals",   # Keyframe/visual note toggle, page-only today.
-    "system_prompt",      # Free-text prompt box, page-only today.
-    "title",              # By-path callers derive the title from the filename.
-}
+# Since 2026-10-08 the by-path entry takes every option the upload routes take:
+# a file chosen with the system dialog or found in a folder used to lose Feishu
+# export, provider and model, prompt and visuals, while the same file dragged in
+# kept them all. Keep both sets empty; an option that is genuinely page-only
+# needs a reason here before it may appear.
+EXPECTED_UPLOAD_ONLY: set[str] = set()
 
-# The key the by-path entry forwards that the upload routes do not build here.
-EXPECTED_BYPATH_ONLY = {"voice_enhance"}
+EXPECTED_BYPATH_ONLY: set[str] = set()
 
 
 def test_the_two_upload_routes_share_one_option_vocabulary() -> None:

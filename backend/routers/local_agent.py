@@ -56,7 +56,7 @@ from backend.routers.local_processing import (
     queue_local_media_file,
     retry_job_from_stored_source,
 )
-from backend.routers.local_video_sources import submit_video_source_job
+from backend.routers.local_video_sources import allow_duplicate_requested, submit_video_source_job
 
 router = APIRouter(prefix="/agent/v1", dependencies=[Depends(require_local_agent_access)])
 
@@ -228,12 +228,14 @@ async def create_agent_task(request: Request, payload: dict[str, Any] = Body(...
             client_id=client_id,
             route=_ROUTE,
             extra_metadata={"agent_input_type": "video_link"},
+            allow_duplicate=allow_duplicate_requested(payload),
         )
         task_id_value = job["task_id"]
         return {
             "ok": True,
             "task_id": task_id_value,
             "status": job.get("status"),
+            "duplicate_of_active": bool(job.get("duplicate_of_active")),
             "package_url": f"/agent/v1/tasks/{task_id_value}/package",
             "job": job,
         }
@@ -490,17 +492,79 @@ def visual_note_agent_task(
     }
 
 
+def _note_written_from_frames(result: dict[str, Any]) -> bool:
+    """Whether the task's current note is the one Claude wrote from the frames."""
+    if result.get("summary_written_from") == visual_note_job.SUMMARY_WRITTEN_FROM:
+        return True
+    state = visual_note_job.visual_note_state(result)
+    return state.get("status") == visual_note_job.STATUS_COMPLETED and bool(state.get("promoted"))
+
+
+def _stored_note_setting(job: dict[str, Any], payload: dict[str, Any], key: str) -> Optional[str]:
+    """The caller's value, else the one the task was submitted with.
+
+    "Regenerate" means the same note settings again unless the caller says
+    otherwise; without this an agent's regenerate quietly dropped the prompt
+    and note mode the user had chosen for the task.
+    """
+    value = str(payload.get(key) or "").strip()
+    if value:
+        return value
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    stored = metadata.get("queue_options") if isinstance(metadata.get("queue_options"), dict) else {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    return str(stored.get(key) or result.get(key) or "").strip() or None
+
+
 @router.post("/tasks/{task_id}/note/regenerate")
 async def regenerate_agent_task_note(
     request: Request,
     task_id: str,
+    background_tasks: BackgroundTasks,
     payload: Optional[dict[str, Any]] = Body(None),
 ) -> dict[str, Any]:
+    """Rewrite a finished task's note, by the same writer that wrote it.
+
+    A note Claude wrote from the frames is rewritten the way the editor rewrites
+    it — the visual note run, in the background — whenever that run can work for
+    this task; the answer then says ``writer: "claude_frames"`` and the caller
+    follows with ``wait_task``/``get_task_package``. Otherwise the configured text
+    model rewrites it from the transcript, here, with the prompt and note mode
+    the caller passed or the task was submitted with.
+
+    Either way the previous note is kept and can be put back for free
+    (``POST /tasks/{id}/visual-note`` with ``restore_previous_note``). A failed
+    rewrite leaves the task completed with its note untouched and says so in
+    ``summary_status``/``summary_error``.
+    """
     payload = payload or {}
     client_id = _local_client_scope(request)
     job = _job_for_request(request, task_id)
     initial_result = deepcopy(job.get("result"))
     result = dict(initial_result or {})
+
+    frame_note_unavailable: Optional[str] = None
+    if _note_written_from_frames(result):
+        described = visual_note_job.describe(
+            task_id, job, api_key=resolve_secret(None, "anthropic_api_key")
+        )
+        if described["eligible"]:
+            accepted = start_local_visual_note(
+                request, task_id, background_tasks, {"replace_note": True}
+            )
+            return {
+                "ok": True,
+                "task_id": task_id,
+                "accepted": True,
+                "writer": "claude_frames",
+                "model": accepted.get("model"),
+                "previous_note_restorable": True,
+                "visual_note": accepted,
+                "package_url": f"/agent/v1/tasks/{task_id}/package",
+                "package": _task_package_response(_job_for_request(request, task_id)),
+            }
+        frame_note_unavailable = str(described.get("reason") or "") or None
+
     transcript_source = (
         "corrected_transcript"
         if str(result.get("corrected_transcript_text") or "").strip()
@@ -512,16 +576,21 @@ async def regenerate_agent_task_note(
     if not transcript:
         raise HTTPException(status_code=400, detail="No transcript available for note regeneration")
 
+    system_prompt = _stored_note_setting(job, payload, "system_prompt")
+    note_mode = _stored_note_setting(job, payload, "note_mode")
+    prompt_preset = _stored_note_setting(job, payload, "prompt_preset")
+    prompt_preset_label = _stored_note_setting(job, payload, "prompt_preset_label")
     kwargs = local_ai_kwargs(
         deepseek_api_key=payload.get("deepseek_api_key"),
         openai_api_key=payload.get("openai_api_key"),
         qwen_api_key=payload.get("qwen_api_key"),
         ai_provider=payload.get("ai_provider"),
         ai_model=payload.get("ai_model"),
-        system_prompt=payload.get("system_prompt"),
-        note_mode=payload.get("note_mode"),
+        system_prompt=system_prompt,
+        note_mode=note_mode,
     )
     route = "/agent/v1/tasks/{task_id}/note/regenerate"
+    conflict = "笔记在生成期间已被修改，本次生成结果未覆盖你的编辑。"
     started_at = time.perf_counter()
     try:
         loop = asyncio.get_running_loop()
@@ -529,13 +598,17 @@ async def regenerate_agent_task_note(
             None,
             lambda: summarize_transcript_with_metadata(transcript, **kwargs),
         )
+        if not str(summary_result.markdown or "").strip():
+            # Writing an empty note through would replace the user's note with
+            # nothing and call that completed.
+            raise RuntimeError("文本模型没有返回笔记内容，原来的笔记保持不变。")
     except Exception as exc:
         detail = friendly_error(exc)
         if _result_changed(task_id, client_id, initial_result):
-            raise HTTPException(
-                status_code=409,
-                detail="笔记在生成期间已被修改，本次生成失败未覆盖你的编辑。",
-            ) from exc
+            raise HTTPException(status_code=409, detail=conflict) from exc
+        # The task itself is still finished, with its transcript and its old
+        # note; only this rewrite failed. Marking the whole task failed hid a
+        # good transcript behind a failure badge.
         result.update({
             "summary_status": "failed",
             "summary_error": detail,
@@ -545,18 +618,15 @@ async def regenerate_agent_task_note(
             task_id=task_id,
             expected_result=initial_result,
             result=result,
-            status="failed",
+            status=str(job.get("status") or "completed"),
             client_id=client_id,
-            stage="summary_regenerate",
+            stage=str(job.get("stage") or "done"),
             progress=job.get("progress"),
             summary_status="failed",
-            error_reason=detail,
+            error_reason=job.get("error_reason"),
         )
         if updated is None:
-            raise HTTPException(
-                status_code=409,
-                detail="笔记在生成期间已被修改，本次生成失败未覆盖你的编辑。",
-            ) from exc
+            raise HTTPException(status_code=409, detail=conflict) from exc
         log_event(
             task_id=task_id,
             event_name="agent_note_regenerated",
@@ -575,15 +645,19 @@ async def regenerate_agent_task_note(
         raise HTTPException(status_code=500, detail=detail) from exc
 
     if _result_changed(task_id, client_id, initial_result):
-        raise HTTPException(
-            status_code=409,
-            detail="笔记在生成期间已被修改，本次生成结果未覆盖你的编辑。",
-        )
+        raise HTTPException(status_code=409, detail=conflict)
+    # Keep the note being replaced where the page's restore switch looks for it.
+    previous_note_restorable = bool(str(result.get("summary_markdown") or "").strip())
+    result["visual_note"] = visual_note_job.record_replaced_note(result, replaced_by="text_model")
     result.update({
         "summary_markdown": summary_result.markdown,
         "summary_status": "completed",
         "summary_error": None,
         "summary_skipped": False,
+        "summary_edited": False,
+        # The note is now the text model's; an earlier frame-note stamp would
+        # make the page describe it as Claude reading the frames.
+        "summary_written_from": "text_regeneration",
         "requested_note_mode": summary_result.requested_mode,
         "resolved_note_mode": summary_result.resolved_mode,
         "note_mode_chunk_count": summary_result.chunk_count,
@@ -594,8 +668,8 @@ async def regenerate_agent_task_note(
         "note_mode_covered_important_evidence_count": getattr(summary_result, "covered_important_evidence_count", None),
         "note_mode_coverage_missing_count": getattr(summary_result, "coverage_missing_count", None),
         "chapter_coverage": getattr(summary_result, "chapter_coverage", None),
-        "prompt_preset": str(payload.get("prompt_preset") or "").strip() or result.get("prompt_preset"),
-        "prompt_preset_label": str(payload.get("prompt_preset_label") or "").strip() or result.get("prompt_preset_label"),
+        "prompt_preset": prompt_preset,
+        "prompt_preset_label": prompt_preset_label,
     })
     result = bind_chapter_coverage_time_ranges(result)
     result = _attach_result_artifacts(task_id, result)
@@ -615,10 +689,7 @@ async def regenerate_agent_task_note(
         latest_result = latest.get("result") if latest else None
         if isinstance(latest_result, dict):
             _attach_result_artifacts(task_id, latest_result)
-        raise HTTPException(
-            status_code=409,
-            detail="笔记在生成期间已被修改，本次生成结果未覆盖你的编辑。",
-        )
+        raise HTTPException(status_code=409, detail=conflict)
     log_event(
         task_id=task_id,
         event_name="agent_note_regenerated",
@@ -630,10 +701,20 @@ async def regenerate_agent_task_note(
         duration_seconds=round(time.perf_counter() - started_at, 3),
         success=True,
         metadata=event_metadata(
-            route=route, note_generation_transcript_source=transcript_source
+            route=route, note_generation_transcript_source=transcript_source,
+            frame_note_unavailable_reason=frame_note_unavailable,
         ),
     )
-    return {"ok": True, "task_id": task_id, "package": _task_package_response(updated)}
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "writer": "text_model",
+        "provider": kwargs.get("provider"),
+        "model": kwargs.get("model"),
+        "previous_note_restorable": previous_note_restorable,
+        **({"frame_note_unavailable_reason": frame_note_unavailable} if frame_note_unavailable else {}),
+        "package": _task_package_response(updated),
+    }
 
 
 @router.post("/tasks/{task_id}/exports")

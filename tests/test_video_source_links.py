@@ -498,32 +498,73 @@ def test_yt_dlp_download_reports_percent(monkeypatch, tmp_path):
 
 # ── 12. retrying a link task fetches the link again ─────────────────────────
 
-def test_retrying_a_link_task_that_never_downloaded_submits_the_link_again(monkeypatch):
-    import backend.routers.local_processing as lp
+# A link no other test submits: the retry goes through the real duplicate check,
+# and a task some other test left queued for a shared link would answer instead.
+_RETRIED_LINK = "https://www.douyin.com/video/7600000000000000001"
 
-    job = {"task_id": "old", "status": "failed", "source_type": "video_link", "metadata": {
-        "video_source_url": "https://www.bilibili.com/video/BV1x",
+
+def _link_job_submitted_with_old_settings() -> dict:
+    """A Douyin task first submitted with the third-party resolver on and
+    Chrome's login, which then failed while downloading."""
+    return {"task_id": "old", "status": "failed", "source_type": "video_link", "metadata": {
+        "video_source_url": _RETRIED_LINK,
         "video_source_input_preview": "cut",
-        "queue_options": {"cookies_from_browser": "chrome"},
-        "video_source_allow_miuistore": False,
+        "queue_options": {"cookies_from_browser": "chrome", "note_mode": "auto"},
+        "video_source_allow_miuistore": True,
     }}
-    monkeypatch.setattr(lp, "get_job", lambda task_id, client_id=None: job if task_id == "old" else None)
+
+
+def _retry_with_preferences(monkeypatch, preferences: dict) -> dict:
+    """Retry the old link task through the real submit path and answer how the
+    download would have been made."""
+    import backend.routers.local_processing as lp
+    from backend.core import job_store
+
+    job = _link_job_submitted_with_old_settings()
+    monkeypatch.setattr(lp, "get_job", lambda task_id, client_id=None: job if task_id == "old" else job_store.get_job(task_id, client_id=client_id))
     monkeypatch.setattr(lp, "find_source_file", lambda _t: None)
-    seen = {}
+    monkeypatch.setattr(lvs, "get_preference", lambda name: preferences.get(name))
+    fetched: dict = {}
 
-    async def submit(**kwargs):
-        seen.update(kwargs)
-        return {"task_id": "new", "status": "queued", "stage": "queued", "progress": 0,
-                "source_type": "video_link", "metadata": {}}
+    async def run_job(**kwargs):
+        fetched.update(kwargs)
+        fetched["cookies_browser"] = lvs._video_cookies_browser(kwargs["options"])
 
-    monkeypatch.setattr(lvs, "submit_video_source_job", submit)
+    async def start(**kwargs):
+        await kwargs["chained_worker"](None, asyncio.Event())
+
+    monkeypatch.setattr(lvs, "_run_local_video_source_job", run_job)
+    monkeypatch.setattr(lvs, "_start_behind_queue", start)
 
     result = asyncio.run(lp.retry_task("old", client_id="c", local_caller=True))
+    assert result["source_task_id"] == "old" and result["task_id"] != "old"
+    # Nothing ran it, so it would stay queued and answer the next retry as an
+    # active duplicate of the same link.
+    job_store.delete_jobs([result["task_id"]], client_id="c")
+    return fetched
 
-    assert result["task_id"] == "new" and result["source_task_id"] == "old"
-    assert seen["input_text"] == "https://www.bilibili.com/video/BV1x"
-    assert seen["raw_options"]["cookies_from_browser"] == "chrome"
-    assert seen["raw_options"]["allow_miuistore"] == "false"
+
+def test_retrying_a_link_task_that_never_downloaded_submits_the_link_again(monkeypatch):
+    fetched = _retry_with_preferences(monkeypatch, {})
+
+    assert fetched["input_text"] == _RETRIED_LINK
+    assert fetched["options"]["note_mode"] == "auto", "the note settings still carry over"
+
+
+def test_a_retry_does_not_use_the_third_party_resolver_the_user_has_since_turned_off(monkeypatch):
+    """Requirement: the user submitted with the Douyin fallback on, then turned
+    it off in settings. A retry (button, MCP retry_task, startup recovery) must
+    not send the link to the third party."""
+    fetched = _retry_with_preferences(monkeypatch, {"allow_miuistore": False})
+
+    assert fetched["allow_miuistore"] is False
+
+
+def test_a_retry_reads_the_browser_login_the_user_chose_now(monkeypatch):
+    fetched = _retry_with_preferences(monkeypatch, {"video_cookies_browser": "safari"})
+
+    assert "cookies_from_browser" not in fetched["options"]
+    assert fetched["cookies_browser"] == "safari"
 
 
 # ── 13. small things ────────────────────────────────────────────────────────

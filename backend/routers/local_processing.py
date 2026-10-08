@@ -919,6 +919,7 @@ async def process_media(
     stt_model: Optional[str] = Form(None),
     stt_speed: Optional[str] = Form(None),
     speaker_diarization: Optional[str] = Form(None),
+    voice_enhance: Optional[str] = Form(None),
     system_prompt: Optional[str] = Form(None),
     prompt_preset: Optional[str] = Form(None),
     prompt_preset_label: Optional[str] = Form(None),
@@ -982,6 +983,7 @@ async def process_media(
         stt_model=stt_model,
         stt_speed=stt_speed,
         speaker_diarization=speaker_diarization,
+        voice_enhance=voice_enhance,
         system_prompt=system_prompt,
         prompt_preset=prompt_preset,
         prompt_preset_label=prompt_preset_label,
@@ -1070,6 +1072,7 @@ async def queue_process(
     stt_model: Optional[str] = Form(None),
     stt_speed: Optional[str] = Form(None),
     speaker_diarization: Optional[str] = Form(None),
+    voice_enhance: Optional[str] = Form(None),
     system_prompt: Optional[str] = Form(None),
     prompt_preset: Optional[str] = Form(None),
     prompt_preset_label: Optional[str] = Form(None),
@@ -1106,6 +1109,7 @@ async def queue_process(
         stt_model=stt_model,
         stt_speed=stt_speed,
         speaker_diarization=speaker_diarization,
+        voice_enhance=voice_enhance,
         system_prompt=system_prompt,
         prompt_preset=prompt_preset,
         prompt_preset_label=prompt_preset_label,
@@ -1271,7 +1275,7 @@ async def queue_local_media_file(
         return {"filename": source_path.name, "status": "rejected", "reason": str(exc)}
     task_id_value = claim_task_id(None, client_id=client_id)
     suffix = source_path.suffix.lower() or ".mp4"
-    raw_title_value = source_path.stem.strip()
+    raw_title_value = (options.get("title") or source_path.stem).strip()
     display_title_value = display_title_for_user(raw_title_value, source_path.name).strip()
     size_mb = file_size_mb(source_path.stat().st_size)
     job_metadata = event_metadata(
@@ -1345,26 +1349,71 @@ def _option_default_on(payload: dict, key: str) -> str:
     return "true" if truthy(str(raw)) else ""
 
 
-def local_path_options(payload: dict) -> tuple[dict, float | None]:
+def _payload_text(payload: dict, key: str) -> Optional[str]:
+    """A JSON payload's value spelled the way a form field would carry it.
+
+    The upload routes receive every option as form text ("true", "1800.0");
+    a JSON caller may send ``true`` or ``1800``. Spelling both the same way is
+    what keeps a task's stored ``queue_options`` identical whichever door it
+    came in through, so a retry or a later reader cannot tell them apart.
+    """
+    value = (payload or {}).get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def local_path_options(
+    payload: dict,
+    *,
+    file_count: int = 1,
+    speaker_diarization_default_on: bool = True,
+) -> tuple[dict, float | None]:
+    """The run options of a by-path submission, in the upload routes' vocabulary.
+
+    Takes every option ``/queue/process`` takes, so a file chosen with the system
+    dialog or found in a folder runs with the same settings as the same file
+    dragged in: export to Feishu, provider and model, prompt, visuals. A key
+    missing here is dropped without an error and the run reports success with
+    the feature never having run, so ``tests/test_local_option_vocabulary_parity.py``
+    pins the two key sets equal.
+
+    ``title`` applies only to a single file, as on the upload route: a batch
+    sharing one typed title would make every task the same name.
+
+    Speaker separation defaults ON for callers with no page — the Agent API, the
+    MCP tool, a curl. The settings page's default never reaches them, and a
+    2026-09-03 report of an 8-person meeting transcribed with no speakers was
+    exactly that gap. The page's own routes pass
+    ``speaker_diarization_default_on=False``: the page always says what the user
+    chose, and an absent switch means off there, exactly as on the upload route.
+    An explicit false always wins.
+    """
     limit = _effective_duration_limit(payload.get("duration_limit_seconds"))
+    if speaker_diarization_default_on:
+        diarization = _option_default_on(payload, "speaker_diarization")
+    else:
+        diarization = _payload_text(payload, "speaker_diarization")
     return _collect_options(
-        skip_summary=payload.get("skip_summary"),
-        note_mode=payload.get("note_mode"),
-        stt_model=payload.get("stt_model"),
-        stt_speed=payload.get("stt_speed"),
-        prompt_preset=payload.get("prompt_preset"),
-        prompt_preset_label=payload.get("prompt_preset_label"),
-        # Read back at :366 as diarization_requested / voice_enhance_requested.
-        # Left out of this list, a caller's switch is dropped without an error
-        # and the run reports success with the feature never having run.
-        #
-        # Speaker separation defaults ON here, not just in the settings page:
-        # the page's default never reaches a caller that has no page — the Agent
-        # API, the MCP tool, a curl. A 2026-09-03 report of an 8-person meeting
-        # transcribed with no speakers was exactly that gap. An explicit false
-        # still wins.
-        speaker_diarization=_option_default_on(payload, "speaker_diarization"),
-        voice_enhance=payload.get("voice_enhance"),
+        export_to_lark=_payload_text(payload, "export_to_lark"),
+        lark_export_route=_payload_text(payload, "lark_export_route"),
+        lark_via_cli=_payload_text(payload, "lark_via_cli"),
+        title=_payload_text(payload, "title") if file_count == 1 else None,
+        folder_token=_payload_text(payload, "folder_token"),
+        ai_provider=_payload_text(payload, "ai_provider"),
+        ai_model=_payload_text(payload, "ai_model"),
+        note_mode=_payload_text(payload, "note_mode"),
+        skip_summary=_payload_text(payload, "skip_summary"),
+        generate_visuals=_payload_text(payload, "generate_visuals"),
+        stt_model=_payload_text(payload, "stt_model"),
+        stt_speed=_payload_text(payload, "stt_speed"),
+        speaker_diarization=diarization,
+        voice_enhance=_payload_text(payload, "voice_enhance"),
+        system_prompt=_payload_text(payload, "system_prompt"),
+        prompt_preset=_payload_text(payload, "prompt_preset"),
+        prompt_preset_label=_payload_text(payload, "prompt_preset_label"),
         duration_limit_seconds=(str(limit) if limit is not None else None),
     ), limit
 
@@ -1523,7 +1572,9 @@ async def queue_process_local_files(request: Request, payload: dict = Body(...))
         except local_folder_intake.FolderIntakeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    options, duration_limit = local_path_options(payload)
+    options, duration_limit = local_path_options(
+        payload, file_count=len(resolved), speaker_diarization_default_on=False
+    )
     queued: list[dict] = []
     for index, source_path in enumerate(resolved, start=1):
         queued.append(await queue_local_media_file(
@@ -1563,7 +1614,9 @@ async def queue_process_folder(request: Request, payload: dict = Body(...)) -> d
     if bool(payload.get("preview")):
         return {"ok": True, "preview": True, **described}
 
-    options, duration_limit = local_path_options(payload)
+    options, duration_limit = local_path_options(
+        payload, file_count=len(listing.files), speaker_diarization_default_on=False
+    )
     queued: list[dict] = []
     for index, source_path in enumerate(listing.files, start=1):
         queued.append(await queue_local_media_file(
@@ -1694,14 +1747,24 @@ async def _retry_link_task(
         return None
     stored = metadata.get("queue_options")
     raw_options: dict = dict(stored) if isinstance(stored, dict) else {}
-    if "video_source_allow_miuistore" in metadata:
-        raw_options["allow_miuistore"] = "true" if metadata.get("video_source_allow_miuistore") else "false"
+    # How the link is fetched follows the user's settings now, not the ones in
+    # force when it was first submitted: someone who turned the third-party
+    # Douyin resolver off, or changed the browser whose login is read, must not
+    # have a retry (theirs, the MCP tool's, or startup recovery's) quietly use
+    # the old choice. Leaving both out lets submit_video_source_job read the
+    # current preferences (`allow_miuistore`, `video_cookies_browser`).
+    raw_options.pop("cookies_from_browser", None)
+    raw_options.pop("allow_miuistore", None)
     new_job = await submit_video_source_job(
         input_text=link,
         title=str(metadata.get("video_source_title") or "").strip(),
         raw_options=raw_options,
         client_id=client_id,
         extra_metadata={"retry_source_task_id": task_id, **(carry or {})},
+        # Retrying this task is the confirmation: a completed copy of the same
+        # link elsewhere does not block it. One already queued or running is
+        # still answered instead of being fetched a second time.
+        allow_duplicate=True,
     )
     retry_task_id = new_job["task_id"]
     started_job = get_job(retry_task_id, client_id=client_id) or new_job

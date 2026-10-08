@@ -228,7 +228,7 @@ describe('the prompt dialog while Claude writes the note', () => {
         cleanup();
     });
 
-    it('says the prompt only applies when a text model rewrites the note', async () => {
+    it('points to the text-model choice in 重生笔记, where the prompt is used', async () => {
         runtimeConfig.writesItsOwnNote = true;
         credentialStatus = {visual_note_available: true};
         mount();
@@ -236,7 +236,8 @@ describe('the prompt dialog while Claude writes the note', () => {
         await waitFor(() => expect(button.getAttribute('title')).toMatch(/Claude 结合画面写笔记/));
         fireEvent.click(button);
         const note = await screen.findByTestId('prompt-scope-note');
-        expect(note.textContent).toBe('当前由 Claude 结合画面写笔记，提示词和笔记模式只在改用文本模型重生时生效。');
+        expect(note.textContent).toMatch(/重生笔记/);
+        expect(note.textContent).toMatch(/改用文本模型按文字重写/);
     });
 
     it('adds nothing when a text model writes the note', async () => {

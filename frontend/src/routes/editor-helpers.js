@@ -258,14 +258,76 @@ export const mergeNoteFields = (current, fresh) => {
 
 // What the regenerate dialog says about who will write the new note, and what
 // the user loses by it.
-export const regenerateDialogCopy = ({writerKind, writerLabel, currentNoteFromClaude}, lang = 'zh') => {
+// What "重生笔记" will do for this task, said before it does it.
+//
+// When Claude writes the notes it rewrites from the cut file's frames, which
+// not every task has (a subtitle file, a link transcribed from its subtitles, a
+// cut file that has since been cleaned up). `frameNote` is the service's answer
+// for this task: {available: true|false|null, reason}; null means it could not
+// say, and both ways are offered. When the frames are out of reach the text
+// model rewrites instead, and the dialog says why. When they are in reach the
+// text model is still offered as a second choice: it is the only rewrite that
+// reads the chosen prompt, so without it "更换提示词" would do nothing.
+//
+//   primary      'claude' | 'text': what the confirm button runs
+//   alternative  {label, disabled, hint} | null: the second choice
+export const TEXT_REWRITE_CHOICE_ZH = '改用文本模型按文字重写（会用你选的提示词，截图不保留）';
+const TEXT_REWRITE_CHOICE_EN = 'Rewrite from the text with the text model instead (uses your chosen prompt; screenshots are not kept)';
+
+export const regenerateDialogCopy = ({
+    writerKind,
+    writerLabel,
+    currentNoteFromClaude,
+    frameNote = null,
+    textWriterLabel = '',
+    textWriterReady = true,
+}, lang = 'zh') => {
     const zh = lang === 'zh';
+    const noTextKey = zh
+        ? '还没有填文本模型的 Key，没法改用文本模型。'
+        : 'No text-model key yet, so the text model cannot be used.';
+    if (frameNote?.running) {
+        // A rewrite is already under way. Starting another one, by either
+        // writer, would race it for the same note.
+        return {
+            desc: zh
+                ? '这个任务的笔记正在重写，写好会自动出现在右侧。等它写完再重生。'
+                : 'This note is already being rewritten and will appear on the right when it is done. Wait for it before regenerating.',
+            warning: '',
+            primary: writerKind === 'claude' ? 'claude' : 'text',
+            confirmDisabled: true,
+            alternative: null,
+        };
+    }
+    if (writerKind === 'claude' && frameNote?.available === false) {
+        const reason = String(frameNote.reason || '').trim().replace(/[。.]+$/, '')
+            || (zh ? '找不到可用的剪后视频' : 'no usable cut video was found');
+        const label = textWriterLabel || (zh ? '文本模型' : 'the text model');
+        return {
+            desc: zh
+                ? `这个任务没法让 Claude 结合画面重写：${reason}。这次会改用 ${label} 按当前转录和你选的提示词重写，笔记里的截图不会保留。`
+                : `Claude cannot rewrite this task from the frames: ${reason}. ${label} will rewrite it from the current transcript with your chosen prompt instead; screenshots in the note are not kept.`,
+            warning: textWriterReady ? '' : (zh
+                ? '还没有填文本模型的 Key，这个任务现在重生不了。去设置填写后再试。'
+                : 'No text-model key yet, so this task cannot be regenerated now. Add one in Settings and try again.'),
+            primary: 'text',
+            confirmDisabled: !textWriterReady,
+            alternative: null,
+        };
+    }
     if (writerKind === 'claude') {
         return {
             desc: zh
                 ? `将由 ${writerLabel} 结合剪后视频的画面和当前转录重写笔记，写好后替换右侧笔记，被替换的笔记可以恢复。需要几分钟，期间可以离开这个页面。`
                 : `${writerLabel} will rewrite the note from the cut video's frames and the current transcript, then replace the note on the right. The replaced note can be restored. This takes a few minutes; you can leave this page meanwhile.`,
             warning: '',
+            primary: 'claude',
+            confirmDisabled: false,
+            alternative: {
+                label: zh ? TEXT_REWRITE_CHOICE_ZH : TEXT_REWRITE_CHOICE_EN,
+                disabled: !textWriterReady,
+                hint: textWriterReady ? '' : noTextKey,
+            },
         };
     }
     return {
@@ -277,6 +339,9 @@ export const regenerateDialogCopy = ({writerKind, writerLabel, currentNoteFromCl
                 ? '当前这份笔记是 Claude 结合画面写的。这次只按文字重写，笔记里的截图不会保留。'
                 : 'The current note was written by Claude from the frames. This rewrite reads text only, so the screenshots in the note will not be kept.')
             : '',
+        primary: 'text',
+        confirmDisabled: false,
+        alternative: null,
     };
 };
 

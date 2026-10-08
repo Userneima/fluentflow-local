@@ -76,3 +76,25 @@ export const extraUrlsIgnoredNotice = (lang) => (
         ? '粘贴的内容里有好几个链接，这次只处理了第一个。其他链接请分开提交。'
         : 'The pasted text had several links; only the first one was used. Submit the others separately.'
 );
+
+// The same link submitted while it is still queued or running: the service
+// answers with the task that already has it instead of starting a second one.
+// Read wherever the response puts the flag, as above.
+export const submitWasDuplicateOfActive = (response) => {
+    const job = response?.job || {};
+    return [response?.duplicate_of_active, job.duplicate_of_active, job.metadata?.duplicate_of_active]
+        .some((value) => value === true || value === 'true');
+};
+
+// The same link submitted after it already finished: a 409 that names the
+// earlier task. Anything else is an ordinary failure and returns null.
+export const finishedDuplicateLink = (error) => {
+    if (error?.status !== 409) return null;
+    const detail = error?.payload?.detail;
+    if (!detail || typeof detail !== 'object' || detail.code !== 'duplicate_link') return null;
+    return {
+        existingTaskId: String(detail.existing_task_id || ''),
+        existingStatus: String(detail.existing_status || ''),
+        message: String(detail.message || ''),
+    };
+};

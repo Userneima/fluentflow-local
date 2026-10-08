@@ -56,6 +56,7 @@ from backend.core.video_source import (
     extra_urls_ignored,
     extract_first_url,
     link_too_large_message,
+    normalize_source_link,
 )
 from backend.routers.local_note_regen import summarize_transcript_source
 from backend.routers.local_processing import (
@@ -459,6 +460,74 @@ async def _download_then_process(
     await run_pipeline_then_note(done, ctx)
 
 
+_ACTIVE_STATUSES = frozenset({"queued", "running"})
+DUPLICATE_LINK_MESSAGE = "这个链接已经处理过了。要再处理一次，请确认后重新提交。"
+
+
+def _same_link_task(link: str | None, client_id: Optional[str]) -> dict[str, Any] | None:
+    """The task this link already has: an active one first, else a completed one.
+
+    Failed and cancelled tasks never count, so a link that went wrong can always
+    be submitted again. Compared on ``normalize_source_link``, so the same video
+    shared twice with different tracking parameters is still the same link.
+    """
+    if not link:
+        return None
+    completed: dict[str, Any] | None = None
+    for job in list_jobs(limit=None, client_id=client_id, include_result=False):
+        metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+        stored = str(metadata.get("video_source_url") or "").strip()
+        if not stored or normalize_source_link(stored) != link:
+            continue
+        status = str(job.get("status") or "")
+        if status in _ACTIVE_STATUSES:
+            return job
+        if status == "completed" and completed is None:
+            completed = job
+    return completed
+
+
+def _refuse_or_reuse_duplicate(
+    input_text: str, client_id: Optional[str], *, allow_duplicate: bool
+) -> dict[str, Any] | None:
+    """Answer a link FluentFlow already has, before anything is downloaded.
+
+    Submitting one link twice used to download, transcribe and write the note
+    twice and leave two identical records (measured 2026-10-08). A link still
+    queued or running answers with that task (``duplicate_of_active``) — the
+    caller wanted it processed and it is being processed. A link already done
+    is refused with 409 ``duplicate_link`` unless the caller confirms with
+    ``allow_duplicate``.
+    """
+    existing = _same_link_task(normalize_source_link(input_text), client_id)
+    if existing is None:
+        return None
+    status = str(existing.get("status") or "")
+    if status in _ACTIVE_STATUSES:
+        return {**existing, "duplicate_of_active": True}
+    if allow_duplicate:
+        return None
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "duplicate_link",
+            "existing_task_id": existing.get("task_id"),
+            "existing_status": status,
+            "message": DUPLICATE_LINK_MESSAGE,
+        },
+    )
+
+
+def allow_duplicate_requested(payload: dict[str, Any] | None) -> bool:
+    """``allow_duplicate`` at the top of the request or inside its options."""
+    body = payload or {}
+    options = body.get("options") if isinstance(body.get("options"), dict) else {}
+    value = body.get("allow_duplicate", options.get("allow_duplicate"))
+    if value is None:
+        return False
+    return value is True or truthy(str(value))
+
+
 async def submit_video_source_job(
     *,
     input_text: str,
@@ -467,13 +536,23 @@ async def submit_video_source_job(
     client_id: Optional[str],
     route: str = _ROUTE,
     extra_metadata: dict[str, Any] | None = None,
+    allow_duplicate: bool = False,
 ) -> dict[str, Any]:
     """Validate, claim, persist, and start a video-source download job on the
-    local hub. Shared by the video-source route and the local Agent API."""
+    local hub. Shared by the video-source route and the local Agent API.
+
+    A link already queued or running returns that task with
+    ``duplicate_of_active: true`` instead of starting a second one; a link
+    already completed is refused (409 ``duplicate_link``) unless
+    ``allow_duplicate`` is true.
+    """
     if not input_text:
         raise HTTPException(status_code=400, detail="缺少视频分享文本或视频链接")
     if len(input_text) > 4000:
         raise HTTPException(status_code=400, detail="分享文本过长")
+    duplicate = _refuse_or_reuse_duplicate(input_text, client_id, allow_duplicate=allow_duplicate)
+    if duplicate is not None:
+        return duplicate
 
     options = _queue_options_from_mapping(raw_options)
     # Per-request choice wins; otherwise the remembered settings choice
@@ -571,8 +650,14 @@ async def create_video_source_job(
         title=str(payload.get("title") or "").strip(),
         raw_options=payload.get("options") if isinstance(payload.get("options"), dict) else {},
         client_id=local_client_scope(request),
+        allow_duplicate=allow_duplicate_requested(payload),
     )
-    response: dict[str, Any] = {"ok": True, "job": job, "extra_urls_ignored": job.get("extra_urls_ignored", False)}
+    response: dict[str, Any] = {
+        "ok": True,
+        "job": job,
+        "extra_urls_ignored": job.get("extra_urls_ignored", False),
+        "duplicate_of_active": bool(job.get("duplicate_of_active")),
+    }
     if job.get("warning"):
         response["warning"] = job["warning"]
     return response

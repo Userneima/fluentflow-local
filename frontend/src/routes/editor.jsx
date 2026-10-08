@@ -116,7 +116,7 @@ const Editor = () => {
         addLarkExport,
         runtimeConfig,
     } = useApp();
-    const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getCredentialsStatus} = useApi();
+    const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
     const {loadSettings, saveSettings} = useSettings();
     const [exporting, setExporting] = useState(false);
     const [regenerating, setRegenerating] = useState(false);
@@ -959,6 +959,38 @@ const Editor = () => {
         finally { setExporting(false); }
     };
 
+    // Whether Claude can rewrite this particular task from its frames. Asked
+    // when the task opens, so the answer is there before the dialog is, and
+    // again when the dialog opens, because a cut file can be cleaned up while
+    // the page sits open. Unknown (null) offers both ways.
+    const [frameNoteAnswer, setFrameNoteAnswer] = useState(null);
+    const frameNoteTaskId = noteWriter.kind === 'claude' ? (result?.task_id || '') : '';
+    const frameNote = frameNoteAnswer && frameNoteAnswer.taskId === frameNoteTaskId ? frameNoteAnswer : null;
+    const frameNoteAskedForRef = useRef('');
+    useEffect(() => {
+        if (!frameNoteTaskId || !getVisualNoteAvailability) return undefined;
+        // Once per task, and again each time the dialog opens.
+        if (!regenerateConfirmOpen && frameNoteAskedForRef.current === frameNoteTaskId) return undefined;
+        frameNoteAskedForRef.current = frameNoteTaskId;
+        let active = true;
+        getVisualNoteAvailability(frameNoteTaskId, resultJobOptionsRef.current)
+            .then((answer) => { if (active && answer) setFrameNoteAnswer({...answer, taskId: frameNoteTaskId}); })
+            .catch(() => {});
+        return () => { active = false; };
+    }, [frameNoteTaskId, regenerateConfirmOpen, getVisualNoteAvailability]);
+
+    // The text model that "改用文本模型" would use: the one selected in
+    // settings, whether or not Claude currently writes the notes.
+    const textWriter = useMemo(
+        () => resolveNoteWriter({
+            runtimeConfig: {...(runtimeConfig || {}), writesItsOwnNote: false},
+            credentialStatus,
+            settings: {...loadSettings(), skipAiSummary: false},
+        }),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [runtimeConfig, credentialStatus],
+    );
+
     const currentNoteFromClaude = noteCameFromClaude(result);
     const regenerateCopy = regenerateDialogCopy({
         writerKind: noteWriter.kind,
@@ -966,6 +998,9 @@ const Editor = () => {
             ? noteWriterLabel(noteWriter, lang)
             : (lang === 'zh' ? '设置里选择的模型' : 'the model chosen in settings'),
         currentNoteFromClaude,
+        frameNote,
+        textWriterLabel: textWriter.kind === 'text_model' ? noteWriterLabel(textWriter, lang) : '',
+        textWriterReady: textWriter.kind === 'text_model',
     }, lang);
 
     // Claude rewrites from the cut file's frames and the transcript, in the
@@ -987,10 +1022,12 @@ const Editor = () => {
         }
     };
 
-    const handleRegenerate = async () => {
+    // `way` is 'claude' (rewrite from the frames) or 'text' (the text model,
+    // with the chosen prompt). The dialog decides which, per task.
+    const handleRegenerate = async (way = regenerateCopy.primary) => {
         setRegenerateConfirmOpen(false);
         if(!transcript || regenerating) return;
-        if (noteWriter.kind === 'claude') {
+        if (way === 'claude') {
             await handleRegenerateWithClaude();
             return;
         }
@@ -1319,8 +1356,11 @@ const Editor = () => {
                 transcriptTitle={rawEditorTitle}
                 description={regenerateCopy.desc}
                 warning={regenerateCopy.warning}
+                confirmDisabled={regenerateCopy.confirmDisabled}
+                alternative={regenerateCopy.alternative}
+                onAlternative={()=>handleRegenerate('text')}
                 onCancel={()=>setRegenerateConfirmOpen(false)}
-                onConfirm={handleRegenerate}
+                onConfirm={()=>handleRegenerate(regenerateCopy.primary)}
             />
         )}
         {retranscribeConfirmOpen && (
