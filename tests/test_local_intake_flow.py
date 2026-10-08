@@ -361,7 +361,22 @@ def test_while_the_note_is_being_written_the_page_does_not_say_it_was_skipped(tm
     assert result["summary_status"] == "pending"
 
 
+def _claude_can_write(monkeypatch):
+    """These tests are about what happens inside the frame note, so the channel
+    is reachable here whatever the machine running them has. Without this a
+    machine without a Claude login took the text-note fallback, which sent a
+    real request to the text model with the test's fake key."""
+    from types import SimpleNamespace
+
+    from backend.core import visual_note_channel
+
+    channel = SimpleNamespace(name="anthropic_api_key", available=True, unavailable_reason=None,
+                              label="test", model="test", write=None)
+    monkeypatch.setattr(visual_note_channel, "resolve_channel", lambda *_a, **_k: channel)
+
+
 def test_a_note_that_cannot_be_written_says_so_where_the_note_belongs(tmp_path, monkeypatch):
+    _claude_can_write(monkeypatch)
     _finished_task()
 
     def refuse(*_a, **_k):
@@ -378,6 +393,7 @@ def test_a_note_that_cannot_be_written_says_so_where_the_note_belongs(tmp_path, 
 
 
 def test_an_unexpected_failure_still_leaves_a_readable_task(tmp_path, monkeypatch):
+    _claude_can_write(monkeypatch)
     _finished_task()
     monkeypatch.setattr(vn, "run_visual_note", lambda *_a, **_k: (_ for _ in ()).throw(ValueError("boom")))
 
