@@ -34,6 +34,11 @@ DEFAULT_MAX_VIDEO_BYTES = 600 * 1024 * 1024
 URL_RE = re.compile(r"https?://[^\s，。！？、'\"“”‘’）)\]】]+", re.I)
 MIUISTORE_ORIGIN = "https://sph.miuistore.com"
 MIUISTORE_HOST_SUFFIXES = ("miuistore.com",)
+# The resolver's result page has, since about 2026-10, been an empty shell that
+# loads the real result from this API host with a script call. Only that call's
+# URL is ever fetched from it; it carries the resolver's own encrypted video id.
+MIUISTORE_API_HOST_SUFFIXES = ("convry.com",)
+_MIUISTORE_INNER_RESULT = re.compile(r"""\$\.get\(\s*["'](https://[^"']+/dy-r\?[^"']+)["']""")
 DOUYIN_MEDIA_HOST_SUFFIXES = ("douyinvod.com", "amemv.com", "snssdk.com")
 BILIBILI_MEDIA_HOST_SUFFIXES = ("bilivideo.com", "hdslb.com", "akamaized.net")
 BILIBILI_USER_AGENT = (
@@ -758,6 +763,18 @@ def _resolve_with_miuistore_attempt(
         page_html = fetch_text(result_url, allowed_host_suffixes=MIUISTORE_HOST_SUFFIXES)
         _raise_if_cancelled(cancellation_event)
         links = parse_miuistore_links(page_html)
+        if not choose_miuistore_video_url(links):
+            # The page can be a shell that fetches its result with a script
+            # call; the fallback answered "no downloadable media" for every
+            # link once the resolver moved to that (seen 2026-10-08).
+            inner = _MIUISTORE_INNER_RESULT.search(page_html or "")
+            if inner:
+                page_html = fetch_text(
+                    html.unescape(inner.group(1)),
+                    allowed_host_suffixes=MIUISTORE_HOST_SUFFIXES + MIUISTORE_API_HOST_SUFFIXES,
+                )
+                _raise_if_cancelled(cancellation_event)
+                links = parse_miuistore_links(page_html)
         download_url = choose_miuistore_video_url(links)
         if not download_url:
             return None, "no_downloadable_media"
@@ -775,6 +792,15 @@ def _resolve_with_miuistore_attempt(
         reason = _resolver_failure_reason(exc)
         logger.warning("miuistore could not resolve the link (%s): %s", reason, _failure_detail(exc))
         return None, reason
+
+
+def _cookie_store_unreadable(detail: str | None) -> bool:
+    """yt-dlp could not open the browser's cookie store at all, as opposed to
+    reading it and being refused by the site."""
+    text = (detail or "").lower()
+    return any(marker in text for marker in (
+        "could not find", "cookies database", "operation not permitted", "permission denied",
+    ))
 
 
 def resolve_video(
@@ -810,14 +836,21 @@ def resolve_video(
         failed["detail"] = failure_detail
     trace.append(failed)
     login_browser = (cookies_from_browser or os.environ.get("YT_DLP_COOKIES_FROM_BROWSER", "")).strip()
-    if failure_reason == "fresh_cookies_required" and login_browser and is_douyin_url(source_url):
-        # Cookies were sent and Douyin still wants fresh ones: the login in the
-        # browser has gone stale, and only the user can renew it.
+    # What to say about the browser login if the fallback fails too. Said only
+    # then: when the fallback works the user gets the video and nothing to fix.
+    login_hint: str | None = None
+    if login_browser and is_douyin_url(source_url):
         browser_label = login_browser.split(":", 1)[0].capitalize()
-        raise VideoSourceResolutionError(
-            f"抖音的登录信息过期了：在 {browser_label} 里打开 douyin.com 登录一次，再重试这个链接。",
-            trace,
-        )
+        if _cookie_store_unreadable(failure_detail):
+            login_hint = (
+                f"读不到 {browser_label} 里的抖音登录：系统不允许 FluentFlow 读取这个浏览器的数据。"
+                "可以在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里允许启动 FluentFlow 的程序，"
+                "或者先把视频下载到本地再上传。"
+            )
+        elif failure_reason == "fresh_cookies_required":
+            # Cookies were sent and Douyin still wants fresh ones: the login in
+            # the browser has gone stale, and only the user can renew it.
+            login_hint = f"抖音的登录信息过期了：在 {browser_label} 里打开 douyin.com 登录一次，再重试这个链接。"
     if is_bilibili_url(source_url):
         raise VideoSourceResolutionError(
             "这个 B 站链接需要登录后才能下载。请在设置里选择“用浏览器登录态下载高清”，或改为上传本地视频。",
@@ -834,6 +867,9 @@ def resolve_video(
                 trace,
             )
         raise VideoSourceResolutionError("暂时无法自动解析这个视频链接，请上传视频文件", trace)
+    if not allow_miuistore and login_hint:
+        trace.append({"provider": "miuistore", "status": "skipped", "reason": "disabled_by_request"})
+        raise VideoSourceResolutionError(login_hint, trace)
     if not allow_miuistore:
         # The fallback runs by default: yt-dlp needs a fresh Douyin login and
         # fails without one, so gating the only working route behind a consent
@@ -841,11 +877,12 @@ def resolve_video(
         # Douyin URL to a third party, and a caller can still switch it off.
         trace.append({"provider": "miuistore", "status": "skipped", "reason": "disabled_by_request"})
         raise VideoSourceResolutionError("暂时无法自动解析这个视频链接，请上传视频文件", trace)
-    if login_browser:
-        # With the user's own browser login available, the link is not handed
-        # to a third party: the fallback exists for machines without one.
-        trace.append({"provider": "miuistore", "status": "skipped", "reason": "browser_login_configured"})
-        raise VideoSourceResolutionError("暂时无法自动解析这个视频链接，请上传视频文件", trace)
+    # A browser login that did not work does not close the fallback. It used
+    # to: with a login configured the link never reached the resolver, so when
+    # macOS 27 stopped letting other programs read Chrome's data, every Douyin
+    # link failed although the fallback could still fetch it (2026-10-08).
+    # When the login works, yt-dlp has already returned above and nothing goes
+    # to the third party; `allow_miuistore` still switches it off entirely.
     resolved, failure_reason = _resolve_with_miuistore_attempt(
         source_url, **_cancellation_kwargs(cancellation_event)
     )
@@ -854,7 +891,7 @@ def resolve_video(
         resolved.resolution_trace = trace
         return resolved
     trace.append({"provider": "miuistore", "status": "failed", "reason": failure_reason or "unavailable"})
-    raise VideoSourceResolutionError("暂时无法自动解析这个视频链接，请上传视频文件", trace)
+    raise VideoSourceResolutionError(login_hint or "暂时无法自动解析这个视频链接，请上传视频文件", trace)
 
 
 def download_referer_for_url(url: str, fallback: str | None = None) -> str:
