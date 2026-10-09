@@ -1700,3 +1700,46 @@ def test_re_rendering_a_cut_never_rewrites_a_hard_linked_copy(tmp_path, fake_too
     sc.render_keeps(source, [TimeRange(0.0, 5.0)], out, runner=_FakeRender())
 
     assert beside.read_bytes() == b"users-copy"
+
+
+class _ConcatFails(_FakeRender):
+    """Renders every part, then the joining step fails."""
+
+    def __call__(self, command):
+        command = [str(part) for part in command]
+        if "concat" in command:
+            return subprocess.CompletedProcess(command, 1, "", "concat: disk full")
+        return super().__call__(command)
+
+
+def test_a_failed_re_cut_leaves_the_previous_cut_in_place(tmp_path, fake_tools):
+    """Requirement: re-cutting a task whose cut already exists, when the new
+    render fails, keeps the previous cut file exactly as it was, so the task's
+    record still points at a file that is there."""
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    out = tmp_path / "out.mp4"
+    out.write_bytes(b"previous cut")
+
+    with pytest.raises(SilenceCutError, match="concat failed"):
+        sc.render_keeps(source, [TimeRange(0.0, 5.0)], out, runner=_ConcatFails())
+
+    assert out.read_bytes() == b"previous cut"
+    assert sorted(child.name for child in tmp_path.iterdir()) == ["in.mp4", "out.mp4"], "no half render left"
+
+
+def test_a_successful_re_cut_replaces_the_cut_and_spares_the_users_hard_linked_copy(tmp_path, fake_tools):
+    import os
+
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"x")
+    out = tmp_path / "out.mp4"
+    out.write_bytes(b"previous cut")
+    beside = tmp_path / "week-8_debreath.mp4"
+    os.link(out, beside)
+
+    sc.render_keeps(source, [TimeRange(0.0, 5.0)], out, runner=_FakeRender())
+
+    assert out.read_bytes() == b"rendered"
+    assert beside.read_bytes() == b"previous cut", "the user's copy keeps what it had"
+    assert sorted(child.name for child in tmp_path.iterdir()) == ["in.mp4", "out.mp4", "week-8_debreath.mp4"]

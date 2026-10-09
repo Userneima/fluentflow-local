@@ -55,7 +55,7 @@ def _saved_video(path: Path) -> SavedVideoSource:
         ok=True, provider="test", source_url="https://example.com/v/1",
         download_url="https://example.com/v/1.mp4", video_id="v1", raw_title="讲座",
         display_title="讲座", title="讲座", filename=path.name, file_path=str(path),
-        file_url="", metadata_path="", size_bytes=path.stat().st_size, downloaded_at="now",
+        metadata_path="", size_bytes=path.stat().st_size, downloaded_at="now",
     )
 
 

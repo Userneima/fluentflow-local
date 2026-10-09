@@ -37,7 +37,7 @@ from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.core.local_limits_config import max_upload_mb
 from backend.core.media_intake import (
-    copy_source_file,
+    adopt_source_file,
     file_size_mb,
     path_size_mb,
 )
@@ -141,8 +141,8 @@ def _public_video_source_metadata(saved: SavedVideoSource) -> dict[str, Any]:
         "display_title": saved.display_title or display_title_for_user(saved.title, saved.filename),
         "title": saved.title,
         "filename": saved.filename,
+        # The task's own copy: the download is handed over to the task.
         "file_path": saved.file_path,
-        "file_url": saved.file_url,
         "metadata_path": saved.metadata_path,
         "size_bytes": saved.size_bytes,
         "downloaded_at": saved.downloaded_at,
@@ -341,6 +341,9 @@ async def _download_then_process(
                     allow_miuistore=allow_miuistore,
                     duration_limit_seconds=duration_limit,
                     cancellation_event=gate.cancellation_event,
+                    deliver=lambda downloaded: adopt_source_file(
+                        task_id, downloaded.suffix or ".mp4", downloaded
+                    ),
                 ),
             )
     except Exception as exc:
@@ -361,9 +364,9 @@ async def _download_then_process(
         )
         return
 
-    source_path = Path(saved.file_path)
-    suffix = source_path.suffix or Path(saved.filename).suffix or ".mp4"
-    target_path = await asyncio.to_thread(copy_source_file, task_id, suffix, source_path)
+    # Already the task's own copy: the downloader handed it over.
+    target_path = Path(saved.file_path)
+    suffix = target_path.suffix or Path(saved.filename).suffix or ".mp4"
     source_file_size_mb = path_size_mb(target_path)
     media_type = saved.media_type or "video"
     source_type = "transcript_file" if media_type == "transcript" else "video"

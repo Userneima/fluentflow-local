@@ -458,6 +458,19 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
             }),
         ],
         [
+            raw.includes('从其他设备访问需要访问令牌'),
+            taskErrorDiagnosis({
+                code: 'lan_access_token_missing',
+                titleZh: '这台设备还没填访问令牌',
+                titleEn: 'This device has no access token yet',
+                detailZh: '从局域网里的其他设备打开 FluentFlow，要先填入运行它的那台电脑上设置的访问令牌。',
+                detailEn: 'Opening FluentFlow from another device on the network needs the access token set on the computer that runs it.',
+                nextZh: '打开「菜单 → Agent 接入」，填入访问令牌后刷新页面。',
+                nextEn: 'Open Menu → Agent access, enter the access token, then reload the page.',
+                retryable: false,
+            }),
+        ],
+        [
             aboutLink && raw.includes('没有给出可下载的视频'),
             taskErrorDiagnosis({
                 code: 'video_link_no_media',

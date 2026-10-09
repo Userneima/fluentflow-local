@@ -1,3 +1,4 @@
+import {setAccessToken} from '../app/shared.jsx';
 import {useMemo, useState} from 'react';
 import {ClipboardCopy, KeyRound, Rocket, Terminal} from 'lucide-react';
 import {useApp} from '../app/AppContext.jsx';
@@ -85,8 +86,7 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null}) => {
     }), [apiBase, token, runtimeConfig.repoRoot, runtimeConfig.pythonExecutable]);
     const saveToken = (value) => {
         setToken(value);
-        if (value.trim()) localStorage.setItem(ACCESS_TOKEN_KEY, value.trim());
-        else localStorage.removeItem(ACCESS_TOKEN_KEY);
+        setAccessToken(value);
     };
     const onCopy = (key) => (value) => copyText(value, (ok) => setCopied(ok ? key : ''));
 

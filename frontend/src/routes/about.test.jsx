@@ -3,7 +3,7 @@
 // The terms and privacy pages. What the person should be told, in both
 // languages: a note Claude writes from the frames sends the transcript too;
 // the app is for this machine only unless LAN mode is turned on, and LAN mode
-// lets anyone on that network read tasks without a token; Feishu export uses
+// lets other devices in only after they enter the access token; Feishu export uses
 // their own identity through lark-cli when signed in, otherwise their own app.
 
 import {afterEach, describe, expect, it, vi} from 'vitest';
@@ -33,7 +33,7 @@ describe('about pages', () => {
     it('says, in Chinese, what the terms and privacy pages must say', () => {
         const service = pageText('service', 'zh');
         expect(service).toMatch(/默认只接受这台电脑自己的访问/);
-        expect(service).toMatch(/局域网模式.*不需要令牌就能看到全部任务.*只在.*可信的网络里开/);
+        expect(service).toMatch(/局域网模式.*要先在那台设备.*填入访问令牌.*只在.*可信的网络里开/);
         expect(service).toMatch(/会把转录稿和从视频里截的画面一起发给 Claude/);
         expect(service).toMatch(/lark-cli 已经登录，默认用你本人的飞书身份；没有登录时用你自己建的飞书应用/);
         const privacy = pageText('privacy', 'zh');
@@ -44,7 +44,7 @@ describe('about pages', () => {
     it('says the same in English', () => {
         const service = pageText('service', 'en');
         expect(service).toMatch(/by default only accepts connections from that computer/);
-        expect(service).toMatch(/LAN mode.*without a token.*network you trust/);
+        expect(service).toMatch(/LAN mode.*must first enter the access token.*network you trust/);
         expect(service).toMatch(/send both the transcript and the frames/);
         expect(service).toMatch(/your own Feishu identity when lark-cli is signed in.*your own Feishu app otherwise/);
         const privacy = pageText('privacy', 'en');

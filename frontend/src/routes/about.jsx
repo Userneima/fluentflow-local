@@ -27,7 +27,7 @@ const serviceSections = [
         body: [
             '程序装在你自己的电脑上，默认只接受这台电脑自己的访问。转录用本机的语音识别模型完成，音频不会因为转录离开这台电脑。',
             '写笔记、翻译、导出飞书和下载视频链接需要联网，见下一条。',
-            '如果你按使用说明（README）打开局域网模式，同一网络里的其他设备也能打开它，而且不需要令牌就能看到全部任务、转录稿和笔记。只在家里或公司这类可信的网络里开。',
+            '如果你按使用说明（README）打开局域网模式，同一网络里的其他设备也能打开它，但要先在那台设备的「菜单 → Agent 接入」里填入访问令牌，才能看到任务、转录稿和笔记。即便如此，也只在家里或公司这类可信的网络里开。',
         ],
     },
     {
@@ -102,7 +102,7 @@ const privacySections = [
 
 const enServiceSections = [
     {title: 'What it does', body: ['FluentFlow Local turns videos, audio, subtitle files, and video links into transcripts, subtitles, and notes, and can export them.', 'It is a tool for studying and organizing material. It does not give legal, medical, financial, or other professional advice.']},
-    {title: 'Where it runs', body: ['The app runs on your own computer and by default only accepts connections from that computer. Transcription uses a speech recognition model on this machine, so your audio does not leave it to be transcribed.', 'Writing notes, translating, exporting to Feishu, and downloading video links need the internet. See the next section.', 'If you turn on LAN mode as described in the README, other devices on the same network can open it too, and they can read every task, transcript, and note without a token. Turn it on only on a network you trust, such as at home or at work.']},
+    {title: 'Where it runs', body: ['The app runs on your own computer and by default only accepts connections from that computer. Transcription uses a speech recognition model on this machine, so your audio does not leave it to be transcribed.', 'Writing notes, translating, exporting to Feishu, and downloading video links need the internet. See the next section.', 'If you turn on LAN mode as described in the README, other devices on the same network can open it too, but each one must first enter the access token under Menu → Agent access before it can see tasks, transcripts, and notes. Even so, turn it on only on a network you trust, such as at home or at work.']},
     {title: 'Outside services it uses', body: ['Notes and translations send the transcript and title to the AI provider you set up in Settings (DeepSeek, OpenAI, Qwen, and others), billed to your own account. Notes Claude writes from the video frames send both the transcript and the frames taken from the video to Claude.', 'Feishu export uses your own Feishu identity when lark-cli is signed in on this computer, and your own Feishu app otherwise. Downloading a video link connects to that video platform; when the browser login cannot be used (none selected, unreadable, or expired), Douyin links are sent to the third-party resolver miuistore. The first time you use speaker labels, the model is downloaded from Hugging Face. Pricing, speed, and content policies of these services are set by the providers and can change at any time.']},
     {title: 'Your content', body: ['Make sure you have the right to transcribe, download, analyze, or export the material, including platform video links, course videos, meeting recordings, and subtitle files.', 'Do not add unlawful, infringing, or confidential material you are not allowed to handle.']},
     {title: 'Check the results', body: ['Transcripts, translations, subtitle breaks, and AI notes can contain typos, gaps, bad line breaks, or misreadings. Listen back to the original for anything important.', 'Retranscribing, regenerating a note, and deleting a task overwrite or remove the current result. You will be asked to confirm first.']},

@@ -24,7 +24,7 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | --- | --- | --- |
 | `FLUENTFLOW_LOCAL_HOST` | 监听地址 | `127.0.0.1` |
 | `FLUENTFLOW_LOCAL_PORT` | 监听端口；macOS 启动器也读这一项 | `8000` |
-| `FLUENTFLOW_ALLOW_NON_LOOPBACK` | 为真时接受局域网请求，否则只收本机 | 关 |
+| `FLUENTFLOW_ALLOW_NON_LOOPBACK` | 为真时接受局域网请求，否则只收本机；其他设备除页面本身外每个请求都要带 `FLUENTFLOW_ACCESS_TOKEN` | 关 |
 | `FLUENTFLOW_DATA_DIR` | 运行数据根目录 | 系统应用数据目录，macOS 为 `~/Library/Application Support/FluentFlow` |
 | `FLUENTFLOW_CONFIG_PATH` | 设置页写入的凭据与偏好文件 | `<数据目录>/fluentflow_config.json` |
 | `FLUENTFLOW_JOB_DB_PATH` | 任务数据库 | `<数据目录>/fluentflow_jobs.sqlite` |
@@ -124,5 +124,5 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | `visual_note_completed` / `visual_note_failed` | 结合画面的笔记写完或失败时 | 总用时、其中挑截图的本机用时、用了多少张截图、失败原因；`trigger` 区分自动和手动 |
 | `task_interrupted_by_restart` | 服务启动时处理被上一次重启打断的任务 | 哪些任务被打断、有没有自动重新排队 |
 
-`stt_completed` 里的 `model_load_seconds` 只算加载模型本身；Apple 芯片上转写第一段的时间另记在转写日志里。
+`stt_completed` 里的 `model_load_seconds` 只算加载模型本身；Apple 芯片上转写第一段的时间另记在转写日志里。每次转写都在自己的进程里跑，这样取消时能干净地停下来；代价是每个任务都要重新加载一次模型，多花几秒（2026-10-08 实测 large-v3 MLX 为 1.6 到 2.5 秒），权衡后不值得为此常驻一个转写进程。
 

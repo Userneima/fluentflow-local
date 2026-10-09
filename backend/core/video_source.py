@@ -108,7 +108,6 @@ class SavedVideoSource:
     title: str
     filename: str
     file_path: str
-    file_url: str
     metadata_path: str
     size_bytes: int
     downloaded_at: str
@@ -156,6 +155,7 @@ def _run_process(
     timeout: float,
     cancellation_event: threading.Event | None = None,
     on_output_line: Callable[[str], None] | None = None,
+    pid_file: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a child process, stopping it and its children on cancel or timeout.
 
@@ -163,11 +163,16 @@ def _run_process(
     process group: yt-dlp runs ffmpeg as a child of its own to merge or remux,
     and terminating yt-dlp alone left that ffmpeg writing into the download
     after the user had cancelled the task.
+
+    ``pid_file`` records the child's pid while it runs, so a service that was
+    killed mid-download can find and stop it on the next start (see
+    ``clean_interrupted_downloads``).
     """
     _raise_if_cancelled(cancellation_event)
     if on_output_line is not None:
         return _run_process_streaming(
-            args, timeout=timeout, cancellation_event=cancellation_event, on_output_line=on_output_line
+            args, timeout=timeout, cancellation_event=cancellation_event, on_output_line=on_output_line,
+            pid_file=pid_file,
         )
     process = subprocess.Popen(
         args,
@@ -176,6 +181,7 @@ def _run_process(
         text=True,
         start_new_session=True,
     )
+    _record_pid(pid_file, process.pid)
     deadline = time.monotonic() + timeout
     while True:
         if cancellation_event is not None and cancellation_event.is_set():
@@ -198,6 +204,7 @@ def _run_process_streaming(
     timeout: float,
     cancellation_event: threading.Event | None,
     on_output_line: Callable[[str], None],
+    pid_file: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """``_run_process`` that hands each stdout line to ``on_output_line`` as it
     is written, so a download can report its progress while it runs."""
@@ -211,6 +218,7 @@ def _run_process_streaming(
         bufsize=1,
         start_new_session=True,
     )
+    _record_pid(pid_file, process.pid)
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
 
@@ -266,6 +274,15 @@ def _run_process_streaming(
         return subprocess.CompletedProcess(args, process.returncode, "".join(stdout_lines), "".join(stderr_lines))
 
 
+def _record_pid(pid_file: Path | None, pid: int) -> None:
+    if pid_file is None:
+        return
+    try:
+        pid_file.write_text(str(pid), encoding="utf-8")
+    except OSError:  # the download itself does not depend on the record
+        logger.debug("could not record pid in %s", pid_file, exc_info=True)
+
+
 def _signal_process_group(process: subprocess.Popen, sig: int) -> None:
     """Send ``sig`` to the child's whole group, or to the child alone if the
     group is already gone or this platform has no process groups."""
@@ -294,6 +311,11 @@ def _stop_process_group(process: subprocess.Popen) -> tuple[str, str]:
 
 # The scratch name a yt-dlp download is written under until it has finished.
 PARTIAL_DOWNLOAD_SUFFIX = ".download"
+# Inside a yt-dlp scratch folder: the pid of the yt-dlp process writing into it.
+DOWNLOAD_PID_FILE = "yt-dlp.pid"
+# A scratch entry younger than this may belong to a download still in progress
+# in a service that is running beside this one; startup leaves it alone.
+INTERRUPTED_DOWNLOAD_MIN_AGE_SECONDS = 300
 
 
 def max_video_bytes() -> int:
@@ -858,6 +880,7 @@ def _run_yt_dlp_step(
     cancellation_event: threading.Event | None = None,
     on_output_line: Callable[[str], None] | None = None,
     before_retry: Callable[[], None] | None = None,
+    pid_file: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one yt-dlp step with the browser login, and again without it when
     the browser's cookie store cannot be read.
@@ -870,7 +893,9 @@ def _run_yt_dlp_step(
     use = cookie_use if cookie_use is not None else CookieUse()
     cookie_args = [] if use.unreadable else _yt_dlp_cookies_args(cookies_from_browser, url)
     use.sent = bool(cookie_args)
-    extra = {"on_output_line": on_output_line} if on_output_line is not None else {}
+    extra: dict[str, Any] = {"on_output_line": on_output_line} if on_output_line is not None else {}
+    if pid_file is not None:
+        extra["pid_file"] = pid_file
     result = _run_process(build_args(cookie_args), timeout=timeout, cancellation_event=cancellation_event, **extra)
     if (
         cookie_args
@@ -1915,6 +1940,7 @@ def download_yt_dlp_media(
                 cancellation_event=cancellation_event,
                 on_output_line=_yt_dlp_progress_reporter(on_progress) if on_progress else None,
                 before_retry=clear_scratch,
+                pid_file=scratch_dir / DOWNLOAD_PID_FILE,
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"视频下载超时：视频可能较大或当前网络较慢，已等待 {timeout} 秒。") from exc
@@ -1925,7 +1951,10 @@ def download_yt_dlp_media(
             raise RuntimeError(detail or f"yt-dlp 下载失败，退出码 {result.returncode}")
         too_large = _MAX_FILESIZE_RE.search(output)
         candidates = sorted(
-            (item for item in scratch_dir.iterdir() if item.is_file() and item.stat().st_size > 0),
+            (
+                item for item in scratch_dir.iterdir()
+                if item.is_file() and item.name != DOWNLOAD_PID_FILE and item.stat().st_size > 0
+            ),
             key=lambda item: (item.suffix.lower() != ".mp4", -item.stat().st_size),
         )
         if not candidates:
@@ -1978,7 +2007,6 @@ def build_asset_strategy(
     media_type: str,
     source_url: str,
     file_path: Path,
-    file_url: str,
     filename: str,
     caption_failure_reason: str | None = None,
     caption_source: str | None = None,
@@ -1991,7 +2019,6 @@ def build_asset_strategy(
                 "source": f"{caption_source or caption_provider(source_url) or 'youtube'}_captions",
                 "filename": filename,
                 "file_path": str(file_path),
-                "file_url": file_url,
             },
             "playback_asset": {
                 "status": "available",
@@ -2015,7 +2042,6 @@ def build_asset_strategy(
             "playback_mode": "local_file",
             "filename": filename,
             "file_path": str(file_path),
-            "file_url": file_url,
         },
         "visual_asset": {
             "status": "pending",
@@ -2024,6 +2050,145 @@ def build_asset_strategy(
         "download_status": "completed",
         "failure_reason": caption_failure_reason,
     }
+
+
+def _hand_over_download(file_path: Path, deliver: Callable[[Path], Path]) -> Path:
+    """Give the finished download to its task and drop the copy left here.
+
+    Every link task used to keep its video twice, once here and once in the
+    task, and the copy here was never cleaned up. The copy here goes only once
+    the task's copy is on disk at the same size; otherwise the task fails and
+    the download stays for the next attempt to reuse.
+    """
+    expected = file_path.stat().st_size
+    delivered = Path(deliver(file_path))
+    try:
+        actual = delivered.stat().st_size
+    except OSError:
+        actual = -1
+    if actual != expected:
+        delivered.unlink(missing_ok=True)
+        raise RuntimeError(f"把下载的视频放进任务目录时出错：应为 {expected} 字节，实际 {max(actual, 0)} 字节")
+    file_path.unlink(missing_ok=True)
+    # The details file an earlier version wrote beside the download.
+    file_path.with_suffix(".source.json").unlink(missing_ok=True)
+    return delivered
+
+
+def _read_process(pid: int) -> tuple[int, int, str] | None:
+    """``(parent pid, process group, command line)`` of a running process,
+    or ``None`` when it is gone or cannot be read on this platform."""
+    if os.name != "posix":
+        return None
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-o", "ppid=", "-o", "pgid=", "-o", "command=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = (result.stdout or "").strip()
+    if result.returncode != 0 or not line:
+        return None
+    parts = line.split(None, 2)
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[0]), int(parts[1]), parts[2]
+    except ValueError:
+        return None
+
+
+def _orphan_download_process(scratch: Path) -> tuple[int, int, int] | None:
+    """The yt-dlp still writing into ``scratch``: ``(pid, ppid, pgid)``.
+
+    Only a process whose command line is yt-dlp *and* names this scratch
+    folder counts. A pid in the file that has since been reused by anything
+    else is never returned, so it is never signalled.
+    """
+    try:
+        pid = int((scratch / DOWNLOAD_PID_FILE).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    if pid <= 1 or pid == os.getpid():
+        return None
+    info = _read_process(pid)
+    if info is None:
+        return None
+    ppid, pgid, command = info
+    if "yt_dlp" not in command or str(scratch) not in command:
+        return None
+    return pid, ppid, pgid
+
+
+def _stop_orphan(scratch: Path, pid: int, pgid: int) -> bool:
+    """SIGTERM, then SIGKILL, the yt-dlp writing into ``scratch`` and the
+    ffmpeg it started. True once it no longer runs."""
+    def send(sig: int) -> None:
+        try:
+            if pgid == pid:
+                os.killpg(pid, sig)
+            else:
+                os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    for sig, wait_seconds in ((signal.SIGTERM, 3.0), (getattr(signal, "SIGKILL", signal.SIGTERM), 2.0)):
+        send(sig)
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            if _orphan_download_process(scratch) is None:
+                return True
+            time.sleep(0.1)
+    return _orphan_download_process(scratch) is None
+
+
+def clean_interrupted_downloads(
+    video_dir: Path, *, min_age_seconds: float = INTERRUPTED_DOWNLOAD_MIN_AGE_SECONDS,
+) -> dict[str, int]:
+    """Remove what a killed service left of its link downloads.
+
+    Run at startup. A crash or a forced quit left the hidden scratch folders
+    (``.<name>.<id>.download``) and files in the video folder for good, and the
+    yt-dlp that was writing into one kept running in its own session.
+
+    A yt-dlp still writing into a scratch folder is stopped first when its
+    parent is gone (it was this service's child) or the folder is older than
+    ``min_age_seconds``; a younger folder whose writer still has a live parent
+    may belong to another running copy of the service and is left alone, and
+    so is any scratch entry younger than that with no writer.
+    """
+    stopped = removed = 0
+    try:
+        entries = [
+            entry for entry in video_dir.iterdir()
+            if entry.name.startswith(".") and entry.name.endswith(PARTIAL_DOWNLOAD_SUFFIX)
+        ]
+    except OSError:
+        return {"stopped": 0, "removed": 0}
+    now = time.time()
+    for entry in entries:
+        try:
+            old = now - entry.stat().st_mtime >= min_age_seconds
+        except OSError:
+            continue
+        orphan = _orphan_download_process(entry) if entry.is_dir() else None
+        if orphan is not None:
+            pid, ppid, pgid = orphan
+            if ppid != 1 and not old:
+                continue
+            if not _stop_orphan(entry, pid, pgid):
+                logger.warning("could not stop the interrupted download %s (pid %s)", entry.name, pid)
+                continue
+            stopped += 1
+        elif not old:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
+        removed += 1
+    return {"stopped": stopped, "removed": removed}
 
 
 def _reusable_download(file_path: Path) -> bool:
@@ -2220,7 +2385,16 @@ def download_video_source(
     allow_miuistore: bool = True,
     duration_limit_seconds: float | None = None,
     cancellation_event: threading.Event | None = None,
+    deliver: Callable[[Path], Path] | None = None,
 ) -> SavedVideoSource:
+    """Resolve and fetch a link into ``video_dir``.
+
+    ``deliver`` takes the finished file and returns the task's own copy of it
+    (see ``media_intake.adopt_source_file``). It runs under the same lock the
+    download held, and once the copy is the same size the download in
+    ``video_dir`` is removed, so a link's video is kept once, in its task.
+    The returned ``file_path`` is then the task's copy.
+    """
     _raise_if_cancelled(cancellation_event)
     normalized = (input_text or "").strip()
     if not normalized:
@@ -2312,6 +2486,8 @@ def download_video_source(
                             f"{caption_label}不可用，且原视频下载失败：{media_exc}"
                         ) from media_exc
                     raise
+        if deliver is not None:
+            file_path = _hand_over_download(file_path, deliver)
 
     _raise_if_cancelled(cancellation_event)
     resolution_trace = list(resolved.resolution_trace or [])
@@ -2319,12 +2495,10 @@ def download_video_source(
         if note not in resolution_trace:
             resolution_trace.insert(0, note)
     on_progress and on_progress(VideoSourceProgress(stage="saving", message="正在保存视频信息", percent=96))
-    file_url = f"/video-sources/files/{urllib.parse.quote(filename)}"
     asset_strategy = build_asset_strategy(
         media_type=media_type,
         source_url=resolved.source_url,
         file_path=file_path,
-        file_url=file_url,
         filename=filename,
         caption_failure_reason=caption_failure_reason,
         caption_source=caption_source,
@@ -2343,13 +2517,14 @@ def download_video_source(
         "title": display_title,
         "filename": filename,
         "file_path": str(file_path),
-        "file_url": file_url,
         "size_bytes": size_bytes,
         "downloaded_at": downloaded_at,
         "media_type": media_type,
         "asset_strategy": asset_strategy,
         "resolution_trace": resolution_trace,
     }
-    metadata_path = write_json_metadata(file_path, metadata)
+    # A delivered file sits in the task's folder, where a second ``source.*``
+    # file would be taken for the recording; its details live on the task.
+    metadata_path = "" if deliver is not None else str(write_json_metadata(file_path, metadata))
     write_source_info(video_dir, display_title, resolved.source_url)
-    return SavedVideoSource(ok=True, metadata_path=str(metadata_path), **metadata)
+    return SavedVideoSource(ok=True, metadata_path=metadata_path, **metadata)

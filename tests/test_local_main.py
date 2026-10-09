@@ -131,7 +131,7 @@ def test_lan_mode_still_refuses_a_page_served_from_elsewhere(monkeypatch):
     assert r.status_code == 403
 
 
-def test_lan_mode_lets_a_lan_client_read_but_asks_the_access_token_to_write(monkeypatch):
+def test_lan_mode_asks_another_device_for_the_access_token_to_write(monkeypatch):
     monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
 
@@ -188,16 +188,104 @@ def test_lan_mode_lets_the_page_opened_on_another_device_write_with_the_token(mo
     assert r.status_code == 200
 
 
-def test_lan_mode_page_without_the_token_is_told_it_can_only_read(monkeypatch):
-    """Requirement: without the token the LAN page is told, in Chinese, that
-    other devices can only read, and how to enable writing."""
+def test_lan_mode_page_without_the_token_is_told_where_to_enter_it(monkeypatch):
+    """Requirement: without the token the LAN page is told, in Chinese, to
+    enter the access token in 「菜单 → Agent 接入」 on that device."""
     monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
 
     r = _lan_page_request("POST")
 
     assert r.status_code == 401
-    assert "只能查看" in r.json()["detail"] and "Agent 接入" in r.json()["detail"]
+    assert "访问令牌" in r.json()["detail"] and "菜单 → Agent 接入" in r.json()["detail"]
+
+
+# Requirement (2026-10-09): in LAN mode another device needs the access token
+# for everything, reads included, because transcripts and notes are private.
+# Only what loads the page and lets the user reach 「菜单 → Agent 接入」 to enter
+# the token is served without it.
+
+def test_lan_mode_another_device_cannot_read_tasks_without_the_token(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    for path in ("/jobs", "/runtime-config", "/version", "/agent/v1/tasks", "/video-sources/jobs"):
+        r = _request_as_peer(_LAN, "GET", path)
+        assert r.status_code == 401, path
+        assert "菜单 → Agent 接入" in r.json()["detail"], path
+
+
+def test_lan_mode_another_device_reads_with_the_token(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    r = _request_as_peer(_LAN, "GET", "/jobs", headers={"x-fluentflow-access-token": "lan-secret"})
+
+    assert r.status_code == 200
+
+
+def test_lan_mode_without_a_configured_token_serves_another_device_no_data(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.delenv("FLUENTFLOW_ACCESS_TOKEN", raising=False)
+
+    r = _request_as_peer(_LAN, "GET", "/jobs")
+
+    assert r.status_code == 403
+    assert "FLUENTFLOW_ACCESS_TOKEN" in r.json()["detail"]
+
+
+def test_lan_mode_serves_the_page_without_a_token_so_the_token_can_be_entered(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    # The page (its routes all serve index.html; 503 when the frontend is not
+    # built on this checkout), its static files and the health check.
+    for path in ("/", "/agent", "/editor/some-task", "/favicon.svg", "/health"):
+        r = _request_as_peer(_LAN, "GET", path)
+        assert r.status_code not in (401, 403), path
+    asset = _request_as_peer(_LAN, "GET", "/assets/does-not-exist.js")
+    assert asset.status_code not in (401, 403)
+
+
+def test_lan_mode_does_not_ask_this_machine_for_a_token_to_read(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+
+    assert _request_as_peer("127.0.0.1", "GET", "/jobs").status_code == 200
+
+
+def test_lan_mode_accepts_this_machines_own_local_name_as_its_page(monkeypatch):
+    """Opened as http://<this-mac>.local:8000 on another device, the page is
+    this server's own page, whichever way the hostname is reported."""
+    import backend.core.local_http_boundary as boundary
+
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+    for reported in ("Studio-Mac.local", "Studio-Mac"):
+        monkeypatch.setattr(boundary.socket, "gethostname", lambda reported=reported: reported)
+        r = _lan_page_request(
+            "POST", host="studio-mac.local:8000", origin="http://studio-mac.local:8000",
+            **{"x-fluentflow-access-token": "lan-secret"},
+        )
+        assert r.status_code == 200, reported
+
+
+def test_lan_mode_refuses_another_devices_local_name(monkeypatch):
+    """A device on the network can announce any .local name and point it at
+    this machine; a page served under a name that is not this machine's is
+    refused even with matching Host and the token (mDNS rebinding)."""
+    import backend.core.local_http_boundary as boundary
+
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "lan-secret")
+    monkeypatch.setattr(boundary.socket, "gethostname", lambda: "Studio-Mac.local")
+
+    r = _lan_page_request(
+        "POST", host="printer.local:8000", origin="http://printer.local:8000",
+        **{"x-fluentflow-access-token": "lan-secret"},
+    )
+
+    assert r.status_code == 403
 
 
 def test_lan_mode_still_refuses_a_rebound_domain_posing_as_this_machine(monkeypatch):
@@ -402,3 +490,21 @@ assert str(job_store.DEFAULT_DB_PATH) == {str(expected_db)!r}
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_screenshots_load_on_another_device_with_the_token_cookie(monkeypatch):
+    """In LAN mode a note's pictures are plain <img> tags, which cannot send the
+    token header; the page keeps the token in a cookie, accepted for reads."""
+    from starlette.requests import Request
+    from backend.core import local_http_boundary as b
+
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "tok-123")
+
+    def req(method, cookie):
+        headers = [(b"cookie", f"fluentflow_access_token={cookie}".encode())] if cookie else []
+        return Request({"type": "http", "method": method, "path": "/jobs/t/artifacts/frame", "headers": headers, "query_string": b""})
+
+    assert b._cookie_token_ok(req("GET", "tok-123")) is True
+    assert b._cookie_token_ok(req("GET", "wrong")) is False
+    assert b._cookie_token_ok(req("GET", None)) is False
+    assert b._cookie_token_ok(req("POST", "tok-123")) is False, "never for writes"

@@ -5,6 +5,7 @@ stdlib; no server_helpers imports."""
 
 from __future__ import annotations
 
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -89,6 +90,32 @@ def copy_source_file(task_id: str, suffix: str, source_path: Path | str) -> Path
     tmp = target_dir / f".source.{uuid.uuid4().hex}.tmp"
     try:
         shutil.copyfile(str(source_path), tmp)
+        tmp.replace(target)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        try:
+            target_dir.rmdir()
+        except OSError:
+            pass
+        raise
+    return target
+
+
+def adopt_source_file(task_id: str, suffix: str, source_path: Path | str) -> Path:
+    """Give a task its own ``source.*`` from a file FluentFlow is about to drop.
+
+    A hard link when both folders are on one disk, so the video is never
+    written twice; a copy otherwise. The caller removes the original.
+    """
+    target_dir = _source_storage_dir() / task_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"source{suffix or '.mp4'}"
+    tmp = target_dir / f".source.{uuid.uuid4().hex}.tmp"
+    try:
+        try:
+            os.link(str(source_path), tmp)
+        except OSError:
+            shutil.copyfile(str(source_path), tmp)
         tmp.replace(target)
     except Exception:
         tmp.unlink(missing_ok=True)

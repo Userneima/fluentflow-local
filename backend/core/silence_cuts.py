@@ -1610,13 +1610,21 @@ def render_keeps(
         # reject it.
         if out.suffix.lower() in {".mp4", ".m4a", ".mov", ".m4v"}:
             concat += ["-movflags", "+faststart"]
-        # Unlinked rather than overwritten: the cut file may be hard-linked to
-        # the copy delivered beside the user's recording, and ffmpeg's ``-y``
-        # truncates in place, which would rewrite the user's copy too.
-        out.unlink(missing_ok=True)
-        result = runner([*concat, "-y", str(out)])
-        if result.returncode != 0 or not out.is_file():
-            raise SilenceCutError(f"concat failed: {(result.stderr or '')[-300:]}")
+        # Written under a name of its own and renamed over the final name only
+        # once it exists. A re-cut used to delete the previous cut first, so a
+        # failed render left the task pointing at a file that was gone. The
+        # rename also gives the result a new inode: the previous cut may be
+        # hard-linked to the copy delivered beside the user's recording, and
+        # writing into it in place would have rewritten the user's copy too.
+        # The suffix stays last because ffmpeg picks the container from it.
+        pending = out.with_name(f".{out.stem}.{uuid.uuid4().hex[:12]}.rendering{out.suffix}")
+        try:
+            result = runner([*concat, "-y", str(pending)])
+            if result.returncode != 0 or not pending.is_file():
+                raise SilenceCutError(f"concat failed: {(result.stderr or '')[-300:]}")
+            os.replace(pending, out)
+        finally:
+            pending.unlink(missing_ok=True)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
     return len(batches)

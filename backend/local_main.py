@@ -57,6 +57,8 @@ from backend.core.local_readiness import (
     format_report,
     run_readiness_checks,
 )
+from backend.core.storage_paths import _video_source_storage_dir
+from backend.core.video_source import clean_interrupted_downloads
 from backend.core.visual_note_job import recover_stranded_notes
 from backend.routers.local_agent import router as agent_router
 from backend.routers.local_events import router as events_router
@@ -268,6 +270,14 @@ async def lifespan(app: FastAPI):
         logged_in = await asyncio.to_thread(claude_code_note.login_state)
         if logged_in is False:
             logger.warning("Claude on this machine is not logged in; notes fall back to the text model")
+    # Before anything is re-queued: a killed service left its link downloads'
+    # scratch folders behind, and the yt-dlp writing into one kept running.
+    leftovers = await asyncio.to_thread(clean_interrupted_downloads, _video_source_storage_dir())
+    if leftovers["removed"] or leftovers["stopped"]:
+        logger.info(
+            "Startup removed %s interrupted link downloads (stopped %s still-running yt-dlp)",
+            leftovers["removed"], leftovers["stopped"],
+        )
     interrupted = [str(job.get("task_id")) for job in list_jobs_by_statuses(("queued", "running"))]
     recovered = recover_stale_jobs()
     if recovered:

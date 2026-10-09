@@ -57,7 +57,7 @@ class FakeYtDlp:
         self.stdout_lines = stdout_lines
         self.fail_with = fail_with
 
-    def __call__(self, args, *, timeout, cancellation_event=None, on_output_line=None):
+    def __call__(self, args, *, timeout, cancellation_event=None, on_output_line=None, **_k):
         self.calls.append(list(args))
         if self.cookies_unreadable and "--cookies-from-browser" in args:
             return subprocess.CompletedProcess(args, 1, "", COOKIE_DB_ERROR)

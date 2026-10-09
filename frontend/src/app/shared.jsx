@@ -15,10 +15,22 @@ export const ACCESS_TOKEN_KEY = 'fluentflow_access_token';
 export const CLIENT_ID_KEY = 'fluentflow_client_id';
 export const LOCAL_SINGLE_USER_CLIENT_ID = 'local-single-user';
 export const getAccessToken = () => (localStorage.getItem(ACCESS_TOKEN_KEY) || '').trim();
+// A cookie copy of the token, for the screenshots in notes: <img> tags cannot
+// send the token header, and from another device in LAN mode every read needs
+// it. The service accepts the cookie for reads only.
+export const rememberAccessTokenCookie = (token) => {
+    try {
+        const value = String(token || '').trim();
+        document.cookie = value
+            ? `${ACCESS_TOKEN_KEY}=${encodeURIComponent(value)}; path=/; SameSite=Strict; max-age=31536000`
+            : `${ACCESS_TOKEN_KEY}=; path=/; SameSite=Strict; max-age=0`;
+    } catch (_) { /* no cookies in this context */ }
+};
 export const setAccessToken = (token) => {
     const value = String(token || '').trim();
     if (value) localStorage.setItem(ACCESS_TOKEN_KEY, value);
     else localStorage.removeItem(ACCESS_TOKEN_KEY);
+    rememberAccessTokenCookie(value);
 };
 export const createClientId = () => (
     window.crypto?.randomUUID?.()
@@ -62,8 +74,10 @@ export const getClientId = () => {
     rememberClientIdCookie(next);
     return next;
 };
+let tokenCookieSynced = false;
 export const apiFetch = (input, init={}) => {
     const token = getAccessToken();
+    if (!tokenCookieSynced) { tokenCookieSynced = true; rememberAccessTokenCookie(token); }
     const headers = new Headers(init.headers || {});
     if (!headers.has('X-FluentFlow-Client-Id')) {
         headers.set('X-FluentFlow-Client-Id', getClientId());

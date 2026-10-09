@@ -44,7 +44,7 @@ def _yt_dlp_fails_with(monkeypatch, stderr: str) -> list[list[str]]:
     """yt-dlp exits non-zero with this on stderr; the commands run are kept."""
     calls: list[list[str]] = []
 
-    def run(args, *, timeout, cancellation_event=None):
+    def run(args, *, timeout, cancellation_event=None, **_k):
         calls.append(list(args))
         return subprocess.CompletedProcess(args, 1, "", stderr)
 

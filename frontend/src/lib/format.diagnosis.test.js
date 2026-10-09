@@ -161,3 +161,12 @@ describe('the export toast', () => {
         expect(larkExportToastText({url: 'u', image_count: 5, image_upload_count: 2}, t)).toBe('已导出到飞书 · 3 张截图没传上去');
     });
 });
+
+describe('another device without the access token', () => {
+    it('says to enter the token instead of showing a generic failure', () => {
+        const d = diagnoseTaskError('从其他设备访问需要访问令牌：请在这台设备的「菜单 → Agent 接入」里填入访问令牌（Agent API 访问令牌无效。）', 'zh');
+        expect(d.code).toBe('lan_access_token_missing');
+        expect(d.retryable).toBe(false);
+        expect(d.nextAction).toContain('Agent 接入');
+    });
+});

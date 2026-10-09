@@ -20,7 +20,7 @@ import backend.core.video_source as vs
 
 
 def _fake_run(*, returncode: int, write: bool, raise_timeout: bool = False):
-    def run(args, *, timeout, cancellation_event=None):
+    def run(args, *, timeout, cancellation_event=None, **_k):
         target = Path(args[args.index("-o") + 1])
         if write:
             target.write_bytes(b"half a video")
@@ -61,7 +61,7 @@ def test_a_timed_out_download_leaves_nothing_at_the_final_name(tmp_path, monkeyp
 
 
 def test_a_cancelled_download_leaves_nothing_at_the_final_name(tmp_path, monkeypatch):
-    def run(args, *, timeout, cancellation_event=None):
+    def run(args, *, timeout, cancellation_event=None, **_k):
         Path(args[args.index("-o") + 1]).write_bytes(b"half")
         raise vs.VideoSourceCancelled("cancelled")
 
