@@ -91,7 +91,21 @@ def safe_filename_stem(value: str | None, fallback: str = "transcript") -> str:
     return (safe_stem or fallback)[:96]
 
 
+def _in_download_folder(path: Path) -> bool:
+    try:
+        return _video_source_storage_dir().resolve() in path.expanduser().resolve().parents
+    except OSError:
+        return False
+
+
 def cleanup_video_source_temp_files(metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Remove what a link download left in the download folder.
+
+    Only that folder. Once a download is handed to its task, ``file_path``
+    names the task's own copy of the video, and that copy is the recording the
+    note reads when the cut was declined; deleting it here, on completion,
+    lost every uncut link task its note.
+    """
     removed: list[str] = []
 
     video_source = (metadata or {}).get("video_source")
@@ -101,6 +115,8 @@ def cleanup_video_source_temp_files(metadata: dict[str, Any] | None = None) -> d
             if not raw_path:
                 continue
             path = Path(raw_path).expanduser()
+            if not _in_download_folder(path):
+                continue
             if remove_tree(path):
                 removed.append(str(path))
     return {

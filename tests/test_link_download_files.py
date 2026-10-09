@@ -381,3 +381,31 @@ def test_startup_removes_what_a_killed_service_left(monkeypatch):
         pass
 
     assert not scratch.exists()
+
+
+# Requirement (2026-10-09, stability run): finishing a link task keeps the
+# task's own copy of the video. A Bilibili task whose cut was declined lost its
+# recording on completion and could not get its note.
+def test_completing_a_link_task_keeps_the_recording_it_was_handed():
+    from backend.core.result_retention import finalize_completed_result_storage
+
+    task_id = "keep-" + os.urandom(6).hex()
+    task_copy = _source_storage_dir() / task_id / "source.mp4"
+    task_copy.parent.mkdir(parents=True, exist_ok=True)
+    task_copy.write_bytes(b"the video")
+    leftover = _video_source_storage_dir() / f"leftover-{task_id}.mp4"
+    leftover.parent.mkdir(parents=True, exist_ok=True)
+    leftover.write_bytes(b"old copy")
+    try:
+        for recorded in (task_copy, leftover):
+            result = finalize_completed_result_storage(
+                task_id, {}, {"video_source": {"file_path": str(recorded)}},
+                source_retention_days=7, find_source_file=find_source_file,
+            )
+        assert task_copy.exists()
+        assert result["source_file_available"] is True
+        assert not leftover.exists()
+    finally:
+        import shutil
+        shutil.rmtree(task_copy.parent, ignore_errors=True)
+        leftover.unlink(missing_ok=True)
