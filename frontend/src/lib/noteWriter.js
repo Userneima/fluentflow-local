@@ -22,14 +22,23 @@ export const resolveNoteWriter = ({runtimeConfig = {}, credentialStatus = null, 
     return {...writer, claudeLoginExpired: !!(credentialStatus || {}).visual_note_login_expired};
 };
 
-const resolveWriterKind = ({runtimeConfig = {}, credentialStatus = null, settings = {}} = {}) => {
+// Whether the selected text model (DeepSeek, OpenAI or Qwen) has its key. The
+// text model is the only writer for anything that does not go through the
+// frame note: a subtitle or transcript file, and the fallback note.
+export const textModelKeyConfigured = ({credentialStatus = null, settings = {}} = {}) => {
     const status = credentialStatus || {};
     const provider = String(settings?.aiProvider || 'deepseek');
-    const textKeyConfigured = provider === 'openai'
+    return provider === 'openai'
         ? !!status.openai_api_key_configured
         : provider === 'qwen'
             ? !!(status.dashscope_api_key_configured || status.qwen_api_key_configured)
             : !!status.deepseek_api_key_configured;
+};
+
+const resolveWriterKind = ({runtimeConfig = {}, credentialStatus = null, settings = {}} = {}) => {
+    const status = credentialStatus || {};
+    const provider = String(settings?.aiProvider || 'deepseek');
+    const textKeyConfigured = textModelKeyConfigured({credentialStatus, settings});
     if (runtimeConfig?.writesItsOwnNote && status.visual_note_available) {
         return {
             kind: 'claude',

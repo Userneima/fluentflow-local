@@ -1,7 +1,9 @@
 import {describe, expect, it, vi} from 'vitest';
 import {
     COOKIES_MIGRATED_STORAGE_KEY,
-    allowMiuistoreFromPreferences,
+    isDouyinLinkText,
+    miuistoreChoiceFromPreferences,
+    needsMiuistoreConsent,
     syncVideoLinkPreferences,
 } from './videoLinkPrefs.js';
 
@@ -90,11 +92,39 @@ describe('the browser-login choice on start', () => {
     });
 });
 
-describe('the Douyin third-party fallback switch', () => {
-    it('is on unless the service says it was switched off', () => {
-        expect(allowMiuistoreFromPreferences({})).toBe(true);
-        expect(allowMiuistoreFromPreferences(null)).toBe(true);
-        expect(allowMiuistoreFromPreferences({allow_miuistore: true})).toBe(true);
-        expect(allowMiuistoreFromPreferences({allow_miuistore: false})).toBe(false);
+// Requirement: sending a Douyin link to a third party needs the person's
+// say-so. The service remembers yes, no, or "never asked"; never asked means
+// the first Douyin link submitted is held until the person answers.
+describe('the Douyin third-party fallback choice', () => {
+    it('keeps "never asked" apart from "no"', () => {
+        expect(miuistoreChoiceFromPreferences({})).toBeNull();
+        expect(miuistoreChoiceFromPreferences(null)).toBeNull();
+        expect(miuistoreChoiceFromPreferences({allow_miuistore: null})).toBeNull();
+        expect(miuistoreChoiceFromPreferences({allow_miuistore: true})).toBe(true);
+        expect(miuistoreChoiceFromPreferences({allow_miuistore: false})).toBe(false);
+    });
+
+    it('recognises Douyin links in every form people paste', () => {
+        expect(isDouyinLinkText('https://v.douyin.com/abcDEF12/')).toBe(true);
+        expect(isDouyinLinkText('https://www.douyin.com/video/7300000000000000000')).toBe(true);
+        expect(isDouyinLinkText('https://www.iesdouyin.com/share/video/1/')).toBe(true);
+        expect(isDouyinLinkText('7.92 复制打开抖音，看看【某某的作品】 https://v.douyin.com/iRNBho6u/ 01/12 abc')).toBe(true);
+        expect(isDouyinLinkText('https://www.bilibili.com/video/BV1xx411c7mD')).toBe(false);
+        expect(isDouyinLinkText('https://notdouyin.com/x')).toBe(false);
+    });
+
+    it('asks only for a Douyin link and only while never asked', () => {
+        const link = 'https://v.douyin.com/abcDEF12/';
+        expect(needsMiuistoreConsent(link, {})).toBe(true);
+        expect(needsMiuistoreConsent(link, {allow_miuistore: true})).toBe(false);
+        expect(needsMiuistoreConsent(link, {allow_miuistore: false})).toBe(false);
+        expect(needsMiuistoreConsent('https://youtu.be/abc', {})).toBe(false);
+        // The service could not be asked: it decides, the page does not guess.
+        expect(needsMiuistoreConsent(link, null)).toBe(false);
+    });
+
+    it('reports "never asked" from the start-up sync instead of turning it on', async () => {
+        const h = harness({preferences: {}});
+        expect((await h.run()).allowMiuistore).toBeNull();
     });
 });

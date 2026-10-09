@@ -168,13 +168,16 @@ export const fmtDateTime = (value, lang='zh') => {
         return '-';
     }
 };
-const taskErrorDiagnosis = ({code, titleZh, titleEn, detailZh, detailEn, nextZh, nextEn, severity='error', retryable=true}) => ({
+// `settingsTarget`: where in Settings the fix is, as a path with an anchor
+// ('/settings#douyin-fallback'), when the fix is a setting the person changes.
+const taskErrorDiagnosis = ({code, titleZh, titleEn, detailZh, detailEn, nextZh, nextEn, severity='error', retryable=true, settingsTarget=''}) => ({
     code,
     title: {zh: titleZh, en: titleEn},
     detail: {zh: detailZh, en: detailEn},
     nextAction: {zh: nextZh, en: nextEn},
     severity,
     retryable,
+    settingsTarget,
 });
 
 const PROVIDER_NAMES = {
@@ -389,6 +392,7 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
         detail: zh ? diag.detail.zh : diag.detail.en,
         nextAction: zh ? diag.nextAction.zh : diag.nextAction.en,
         retryable: diag.retryable !== false,
+        settingsTarget: diag.settingsTarget || '',
         raw,
     });
     if(!raw) return pick(taskErrorDiagnosis({
@@ -415,6 +419,23 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 detailEn: 'The local service is not responding. Reopen FluentFlow Local; your tasks and records are still there.',
                 nextZh: '重新打开 FluentFlow Local 后再试一次。',
                 nextEn: 'Reopen FluentFlow Local and try again.',
+            }),
+        ],
+        // The person has never said whether a Douyin link may go to the
+        // third-party resolver. Ahead of the login rule: the service may put
+        // a login hint in front of this sentence, and allowing the resolver is
+        // the fix that needs no browser. Retryable once it is allowed.
+        [
+            raw.includes('抖音备用解析') || lower.includes('douyin_fallback_not_allowed'),
+            taskErrorDiagnosis({
+                code: 'douyin_fallback_not_allowed',
+                titleZh: '抖音备用解析还没允许',
+                titleEn: 'Douyin fallback resolver not allowed',
+                detailZh: raw,
+                detailEn: 'The direct Douyin download did not work. The link can be sent (only the link itself) to the third-party resolver miuistore.com once you allow it in Settings → Douyin fallback resolver.',
+                nextZh: '去设置里打开「抖音备用解析」，再重新提交这个链接。',
+                nextEn: 'Turn on "Douyin fallback resolver" in Settings, then submit this link again.',
+                settingsTarget: '/settings#douyin-fallback',
             }),
         ],
         [

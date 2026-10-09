@@ -98,3 +98,59 @@ def test_a_task_that_asked_for_a_transcript_only_is_still_left_alone(claude_unre
         assert local_intake_flow.note_is_wanted(task_id, None) is False
     finally:
         job_store.delete_jobs([task_id])
+
+
+# The text note written instead is the note the user asked for: their prompt,
+# note mode and preset, the speaker labels the pipeline's own note stage would
+# have used, and a note file they can download.
+
+def test_the_text_note_written_instead_keeps_the_users_settings_and_speakers(claude_unreachable, monkeypatch):
+    import backend.core.ai_summarizer as summarizer
+
+    task_id = f"owed-settings-{uuid.uuid4().hex[:8]}"
+    job_store.upsert_job(
+        task_id=task_id, status="completed", client_id=None, stage="done",
+        metadata={"queue_options": {
+            "ai_provider": "deepseek", "ai_model": "deepseek-chat",
+            "system_prompt": "只列行动项", "note_mode": "meeting",
+            "prompt_preset": "action_items", "prompt_preset_label": "行动项",
+        }},
+        result={
+            "task_id": task_id,
+            "display_title": "周会",
+            "transcript_text": "我们下周发版。好的我来写公告。",
+            "raw_segments": [
+                {"start": 0.0, "end": 2.0, "text": "我们下周发版。", "speaker": "SPEAKER_00"},
+                {"start": 2.0, "end": 4.0, "text": "好的我来写公告。", "speaker": "SPEAKER_01"},
+            ],
+            "speaker_diarization": {"status": "completed"},
+            "summary_markdown": "",
+            "summary_status": "skipped",
+            "note_deferred_to_visual_note": True,
+        },
+    )
+    import backend.core.local_entry_guards as guards
+    monkeypatch.setattr(guards, "resolve_secret", lambda value, name: "sk-test" if name == "deepseek_api_key" else value)
+    called: dict = {}
+
+    def summarize(transcript, **kw):
+        called.update(transcript=transcript, **kw)
+        return SimpleNamespace(markdown="# 行动项\n\n- 写公告", requested_mode="meeting", resolved_mode="meeting")
+
+    monkeypatch.setattr(summarizer, "summarize_transcript_with_metadata", summarize)
+    try:
+        local_intake_flow.write_note(task_id, None)
+
+        assert called["system_prompt"] == "只列行动项"
+        assert called["note_mode"] == "meeting"
+        assert called["speaker_labeled"] is True
+        assert "说话人 A：" in called["transcript"] and "说话人 B：" in called["transcript"]
+        result = job_store.get_job(task_id)["result"]
+        assert result["summary_markdown"].startswith("# 行动项")
+        assert result["prompt_preset"] == "action_items"
+        assert result["prompt_preset_label"] == "行动项"
+        assert result["speaker_diarization"]["note_input_labeled"] is True
+        note_file = result["artifacts"]["summary_md"]
+        assert note_file and note_file.get("filename", "").endswith("_summary.md")
+    finally:
+        job_store.delete_jobs([task_id])

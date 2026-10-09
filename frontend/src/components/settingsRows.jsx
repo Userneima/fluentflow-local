@@ -14,7 +14,6 @@ import {
     LARK_EXPORT_ROUTE_LOCAL_CLI,
     LARK_EXPORT_ROUTE_OPENAPI,
     DEFAULT_DEEPSEEK_MODEL,
-    isLocalLarkExportRoute,
     normalizeSourceMode,
     timeAgo,
     useI18n,
@@ -192,12 +191,13 @@ export const VideoCookiesRow = ({state}) => {
 };
 
 // Its own row, not a sub-item of the browser login: it is the one setting
-// here that sends something to a third party, and it is on by default.
+// here that sends something to a third party. Until the person has answered,
+// it shows as off and says when it will be asked (the first Douyin link).
 export const DouyinFallbackRow = ({state}) => {
     const {lang} = useI18n();
-    const {allowMiuistore = true, updateAllowMiuistore, videoPrefError = ''} = state;
+    const {allowMiuistore, updateAllowMiuistore, videoPrefError = ''} = state;
     return (
-        <label htmlFor="settingsAllowMiuistore" className={`md:col-span-2 flex cursor-pointer items-start justify-between gap-3 ${cellBase} hover:bg-[#f4f3f3] dark:hover:bg-white/[0.04]`}>
+        <label id="douyin-fallback" htmlFor="settingsAllowMiuistore" className={`md:col-span-2 flex cursor-pointer items-start justify-between gap-3 ${cellBase} hover:bg-[#f4f3f3] dark:hover:bg-white/[0.04]`}>
             <span>
                 <span className="block text-sm font-bold">{lang === 'zh' ? '抖音备用解析' : 'Douyin fallback resolver'}</span>
                 <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">
@@ -205,6 +205,11 @@ export const DouyinFallbackRow = ({state}) => {
                         ? '读不到抖音登录时，把抖音分享链接（只发链接本身）发给第三方解析服务 miuistore.com 换取视频地址。关掉后，抖音链接只靠浏览器登录态。'
                         : 'When no Douyin login can be read, sends the Douyin share link (only the link itself) to the third-party resolver miuistore.com to get the video address. Off: Douyin links rely on the browser login only.'}
                 </span>
+                {allowMiuistore === null && (
+                    <span className="mt-1 block text-xs font-semibold text-on-surface-variant">
+                        {lang === 'zh' ? '还没选，第一次提交抖音链接时会问。' : 'Not chosen yet. You will be asked the first time you submit a Douyin link.'}
+                    </span>
+                )}
                 {videoPrefError === 'allow_miuistore' && (
                     <span className="mt-1 block text-xs font-semibold text-red-600 dark:text-red-300">
                         {lang === 'zh' ? '没能保存，开关已恢复原样。' : 'Could not save; the switch was put back.'}
@@ -213,7 +218,7 @@ export const DouyinFallbackRow = ({state}) => {
             </span>
             <SettingCheckbox
                 id="settingsAllowMiuistore"
-                checked={!!allowMiuistore}
+                checked={allowMiuistore === true}
                 disabled={!updateAllowMiuistore}
                 onChange={e=>updateAllowMiuistore?.(e.target.checked)}
             />
@@ -299,25 +304,31 @@ export const AutoExportRow = ({state}) => {
     );
 };
 
+// AI-tool exports read the route and folder from the service; when saving
+// there failed, this page and those exports disagree until it is saved again.
+const PrefSaveFailed = () => {
+    const {lang} = useI18n();
+    return (
+        <span className="mt-1 block text-xs font-semibold text-red-600 dark:text-red-300">
+            {lang === 'zh' ? '没能保存到本机服务，AI 工具导出时还会用原来的设置。请再改一次。' : 'Could not save to the local service; exports from AI tools still use the old setting. Change it again.'}
+        </span>
+    );
+};
+
 export const LarkExportRouteRow = ({state}) => {
     const {t} = useI18n();
-    const {updateSettingNow, larkExportRoute, larkRouteHint} = state;
+    const {updateLarkExportRoute, larkExportRoute, larkRouteHint, videoPrefError = ''} = state;
     return (
         <div className={`flex items-start justify-between gap-3 ${cellBase}`}>
             <span className="min-w-0">
                 <span className="block text-sm font-bold">{t('set.larkExportRoute')}</span>
                 <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">{larkRouteHint}</span>
+                {videoPrefError === 'lark_export_route' && <PrefSaveFailed/>}
             </span>
             <select
                 className="h-10 w-[168px] shrink-0 rounded-[12px] border border-[#dedada] bg-[#fbfbfb] px-3 text-sm font-bold text-[#111111] outline-none transition focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white"
                 value={larkExportRoute}
-                onChange={e=>{
-                    const route = e.target.value;
-                    updateSettingNow({
-                        larkExportRoute: route,
-                        larkViaCli: isLocalLarkExportRoute(route),
-                    });
-                }}
+                onChange={e=>updateLarkExportRoute(e.target.value)}
             >
                 <option value={LARK_EXPORT_ROUTE_AUTO}>{t('set.larkRouteAuto')}</option>
                 <option value={LARK_EXPORT_ROUTE_LOCAL_CLI}>{t('set.larkRouteLocalCli')}</option>
@@ -331,7 +342,7 @@ export const LarkExportRouteRow = ({state}) => {
 // app's own space, which the user may not be able to open.
 export const LarkFolderRow = ({state}) => {
     const {t} = useI18n();
-    const {settings, updateSettingNow} = state;
+    const {settings, updateLarkFolder, commitLarkFolder, videoPrefError = ''} = state;
     return (
         <div className={`md:col-span-2 space-y-2 ${cellBase}`}>
             <label htmlFor="settingsLarkFolder" className="block text-sm font-bold">{t('set.larkFolder')}</label>
@@ -341,8 +352,10 @@ export const LarkFolderRow = ({state}) => {
                 className={inputClass}
                 placeholder={t('set.larkFolderPh')}
                 value={settings.larkFolder || ''}
-                onChange={e=>updateSettingNow({larkFolder: e.target.value.trim()})}
+                onChange={e=>updateLarkFolder(e.target.value)}
+                onBlur={()=>commitLarkFolder?.()}
             />
+            {videoPrefError === 'lark_folder_token' && <PrefSaveFailed/>}
         </div>
     );
 };

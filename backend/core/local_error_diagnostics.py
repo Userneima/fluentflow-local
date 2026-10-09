@@ -242,6 +242,14 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "改用支持的视频链接，或上传本地视频。",
             retryable=False,
         )
+    if "可以把这个链接交给第三方解析服务" in raw:
+        return _diag(
+            "douyin_fallback_not_allowed",
+            "抖音备用解析未允许",
+            raw,
+            "在 设置 → 抖音备用解析 里允许后重试（只发送链接本身）；"
+            "AI 工具提交时传 allow_miuistore=true；或把视频下载到本机后上传。",
+        )
     # Link failures whose own sentence already says what happened and what to
     # do. Retrying the same link gives the same answer, so none of them may
     # suggest it.

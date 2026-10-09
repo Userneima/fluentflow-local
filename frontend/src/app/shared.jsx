@@ -327,6 +327,9 @@ const createApi = () => {
     const createVideoSourceJob = async (input, options={}, signal) => {
         const payloadOptions = submitOptionFields(options);
         if(options.cookiesFromBrowser) payloadOptions.cookies_from_browser = options.cookiesFromBrowser;
+        // Sent only right after the person answered the Douyin question; left
+        // out, the service applies the remembered answer.
+        if(typeof options.allowMiuistore === 'boolean') payloadOptions.allow_miuistore = options.allowMiuistore;
         const r = await apiFetch(`${API_BASE}/video-sources/jobs`, {
             method:"POST",
             headers: {"Content-Type":"application/json", ...localExecutionHeaders(options)},

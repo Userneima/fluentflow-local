@@ -646,6 +646,14 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                     <span className="min-w-0 break-words">{detail}</span>
                 </p>
             ) : null}
+            {/* The fix is a setting: one click to the row that holds it. */}
+            {failedTerminal && diagnosis?.settingsTarget ? (
+                <div className="mt-2">
+                    <Link to={diagnosis.settingsTarget} className="text-[12px] font-extrabold text-[#111111] underline hover:no-underline dark:text-white">
+                        {lang === 'zh' ? '去设置修改' : 'Change it in Settings'}
+                    </Link>
+                </div>
+            ) : null}
             {/* Why the last "submit again" did not take. It names the recording's
                 own path when the file has moved, which is the one thing this
                 product cannot work out for the reader. */}

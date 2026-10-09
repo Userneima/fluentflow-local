@@ -301,11 +301,25 @@ def _write_text_note_instead(
     from backend.core.event_logger import log_event
     from backend.core.local_entry_guards import local_ai_kwargs
 
+    from backend.core.result_artifacts import _attach_result_artifacts
+    from backend.core.speaker_diarization import build_speaker_annotated_transcript
+
     job = get_job(task_id, client_id=client_id) or {}
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     options = metadata.get("queue_options") if isinstance(metadata.get("queue_options"), dict) else {}
-    kwargs = local_ai_kwargs(ai_provider=options.get("ai_provider"), ai_model=options.get("ai_model"))
+
+    def _option(name: str) -> str | None:
+        return str(options.get(name) or "").strip() or None
+
+    # The settings the user submitted with, exactly as the pipeline's own note
+    # stage would have used them.
+    kwargs = local_ai_kwargs(
+        ai_provider=options.get("ai_provider"),
+        ai_model=options.get("ai_model"),
+        system_prompt=_option("system_prompt"),
+        note_mode=_option("note_mode"),
+    )
     reason = channel.unavailable_reason or "结合画面的笔记现在写不了。"
     log_event(
         task_id=task_id,
@@ -330,9 +344,16 @@ def _write_text_note_instead(
         })
         upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed")
         return
-    transcript = str(result.get("transcript_text") or "")
+    # Same input as the pipeline's note stage: the corrected transcript when
+    # there is one, written as speaker-prefixed lines when two or more people
+    # were told apart.
+    transcript = str(result.get("corrected_transcript_text") or result.get("transcript_text") or "")
+    segments = result.get("corrected_segments") or result.get("raw_segments") or []
+    speaker_text = build_speaker_annotated_transcript(segments if isinstance(segments, list) else [])
     try:
-        summary = summarize_transcript_with_metadata(transcript, **kwargs)
+        summary = summarize_transcript_with_metadata(
+            speaker_text or transcript, speaker_labeled=bool(speaker_text), **kwargs
+        )
         markdown = str(summary.markdown or "").strip()
         if not markdown:
             raise RuntimeError("模型没有返回内容")
@@ -345,7 +366,7 @@ def _write_text_note_instead(
         upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed")
         logger.warning("text-note fallback failed for %s: %s", task_id, exc)
         return
-    _patch_result(task_id, client_id, {
+    fields: dict[str, Any] = {
         "summary_markdown": markdown,
         "summary_status": "completed",
         "summary_error": None,
@@ -354,7 +375,21 @@ def _write_text_note_instead(
         "summary_written_from": "text_fallback",
         "note_fallback_reason": reason,
         "deadline_hit": bool(getattr(summary, "deadline_hit", False)),
-    })
+        "prompt_preset": _option("prompt_preset"),
+        "prompt_preset_label": _option("prompt_preset_label"),
+    }
+    for field, attribute in (("requested_note_mode", "requested_mode"), ("resolved_note_mode", "resolved_mode")):
+        value = getattr(summary, attribute, None)
+        if value:
+            fields[field] = value
+    latest = get_job(task_id, client_id=client_id)
+    if latest:
+        next_result = {**dict(latest.get("result") or {}), **fields}
+        speaker_payload = next_result.get("speaker_diarization")
+        if isinstance(speaker_payload, dict):
+            next_result["speaker_diarization"] = {**speaker_payload, "note_input_labeled": bool(speaker_text)}
+        # The downloadable note file, as the pipeline writes it.
+        update_job_result(task_id, _attach_result_artifacts(task_id, next_result), client_id=client_id)
     upsert_job(task_id=task_id, status="completed", stage="done", summary_status="completed")
 
 __all__ = [

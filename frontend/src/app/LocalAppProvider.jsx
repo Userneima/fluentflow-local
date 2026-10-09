@@ -21,6 +21,7 @@ import {
 import {normalizeTaskState, TASK_STATE_QUEUED, TASK_STATE_RUNNING} from '../lib/taskState.js';
 import {isBackendUnreachableError} from '../lib/backendHealth.js';
 import {syncVideoLinkPreferences} from '../lib/videoLinkPrefs.js';
+import {syncLarkExportPreferences} from '../lib/larkExportPrefs.js';
 
 const LOCAL_SCOPE = 'local';
 const taskKey = (job) => String(job?.task_id || job?.result?.task_id || '').trim();
@@ -105,10 +106,11 @@ export const LocalAppProvider = ({children}) => {
             }
         } catch (_) {}
 
-        // The browser-login choice for video links lives in the service now, so
-        // links submitted by AI tools use it too. Copy the old stored choice
-        // over once, and mirror the service's answer into stored settings.
-        syncVideoLinkPreferences({
+        // The browser-login choice for video links and the Feishu export route
+        // and folder live in the service now, so links submitted and exports
+        // asked for by AI tools use them too. Copy the old stored choices over
+        // once, and mirror the service's answers into stored settings.
+        const preferenceSync = {
             getPreferences: async () => {
                 const response = await apiFetch(`${API_BASE}/preferences`);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -131,7 +133,9 @@ export const LocalAppProvider = ({children}) => {
                 try { localStorage.setItem('fluentflow_settings', JSON.stringify(sanitizeSettings(next))); } catch (_) {}
             },
             storage: (() => { try { return localStorage; } catch (_) { return null; } })(),
-        });
+        };
+        // One after the other: both read and rewrite the same stored settings.
+        syncVideoLinkPreferences(preferenceSync).then(() => syncLarkExportPreferences(preferenceSync));
 
         const cached = readCachedAccountJobs(LOCAL_SCOPE);
         tombstonesRef.current = new Set();

@@ -622,45 +622,56 @@ def _run_debreath(
             padding_seconds=padding_seconds,
             runner=runner,
         )
-        cut_list = write_text_artifact(
-            task_id,
-            CUT_LIST_KIND,
-            _cut_list_filename(source),
-            json.dumps(plan.as_dict(), ensure_ascii=False, indent=1) + "\n",
-        )
-        state: dict[str, Any] = {
-            "stage": "rendering" if (render and plan.cuts) else "done",
-            "plan": _plan_payload(plan),
-            "warnings": list(plan.warnings),
-            "cut_list_updated_at": _now(),
-        }
-        artifacts: dict[str, dict[str, Any]] = {CUT_LIST_KIND: cut_list}
-        # Subtitles for the shortened version, from the cut list. Written with the
-        # cut list rather than with the render, because both are derived from the
-        # same judgement and the list is the deliverable — a caller that asked for
-        # the plan only still gets a transcript it can read against it.
-        if plan.cuts:
-            subtitles, remap = _remapped_subtitles(task_id, source, plan, client_id=client_id)
-            if subtitles:
-                artifacts[TRANSCRIPT_KIND] = subtitles
-            if remap:
-                state["transcript_timeline"] = remap
-        _store(task_id, client_id=client_id, state=state, artifacts=artifacts)
+
+        def plan_outputs() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+            """Write the cut list and the subtitles remapped onto it.
+
+            Both are derived from this plan and describe the file this plan
+            renders, so when a render is asked for they are written only after
+            it succeeded: a failed re-cut keeps the previous cut file, and the
+            previous cut list and subtitles that match it.
+            """
+            cut_list = write_text_artifact(
+                task_id,
+                CUT_LIST_KIND,
+                _cut_list_filename(source),
+                json.dumps(plan.as_dict(), ensure_ascii=False, indent=1) + "\n",
+            )
+            plan_state: dict[str, Any] = {
+                "plan": _plan_payload(plan),
+                "warnings": list(plan.warnings),
+                "cut_list_updated_at": _now(),
+            }
+            outputs: dict[str, dict[str, Any]] = {CUT_LIST_KIND: cut_list}
+            # Subtitles for the shortened version, from the cut list. A caller
+            # that asked for the plan only still gets a transcript it can read
+            # against it.
+            if plan.cuts:
+                subtitles, remap = _remapped_subtitles(task_id, source, plan, client_id=client_id)
+                if subtitles:
+                    outputs[TRANSCRIPT_KIND] = subtitles
+                if remap:
+                    plan_state["transcript_timeline"] = remap
+            return plan_state, outputs
 
         if not render or not plan.cuts:
             # Nothing to cut is a real answer, not a failure: the file would come
             # back identical, and re-encoding it to prove that wastes the CPU.
+            plan_state, outputs = plan_outputs()
             return _store(
                 task_id,
                 client_id=client_id,
                 state={
+                    **plan_state,
                     "status": STATUS_COMPLETED,
                     "stage": "done",
                     "rendered": False,
                     "finished_at": _now(),
                 },
+                artifacts=outputs,
             )
 
+        _store(task_id, client_id=client_id, state={"stage": "rendering"})
         media_filename = _media_filename(source)
         output = artifact_target_path(task_id, media_filename)
         report = silence_cuts.render_cut_plan(source, plan, output, runner=runner)
@@ -668,10 +679,12 @@ def _run_debreath(
         # the de-breath directory, and a record naming only the basename would
         # point at a task root that does not hold it.
         media = describe_existing_artifact(task_id, MEDIA_KIND, media_filename)
+        plan_state, outputs = plan_outputs()
         return _store(
             task_id,
             client_id=client_id,
             state={
+                **plan_state,
                 "status": STATUS_COMPLETED,
                 "stage": "done",
                 "rendered": True,
@@ -693,15 +706,19 @@ def _run_debreath(
                 # finished cut file on disk and a note that refused to be written,
                 # reported as "the cut file is no longer on this machine".
                 #
-                # The subtitles are remapped above, before the render, so the cut
-                # file already carries captions on its own clock; a transcript
-                # made from the recording is not a reason to send the note back to
-                # the recording.
+                # The subtitles are remapped onto this cut, so the cut file
+                # carries captions on its own clock; a transcript made from the
+                # recording is not a reason to send the note back to the
+                # recording.
                 "used_for_transcription": True,
                 "not_used_reason": None,
+                # This cut was made by hand after the transcript existed. The
+                # merge would otherwise keep True from a declined automatic cut,
+                # and the task would read as transcribed from a cut file.
+                "ran_before_transcription": False,
                 "finished_at": _now(),
             },
-            artifacts={MEDIA_KIND: media},
+            artifacts={**outputs, MEDIA_KIND: media},
         )
     except DebreathError:
         raise

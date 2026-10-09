@@ -20,6 +20,12 @@ import {
     normalizeCookiesBrowser,
     syncVideoLinkPreferences,
 } from '../lib/videoLinkPrefs.js';
+import {
+    LARK_FOLDER_PREF,
+    LARK_ROUTE_PREF,
+    larkRouteSettingsPatch,
+    syncLarkExportPreferences,
+} from '../lib/larkExportPrefs.js';
 
 // Everything the settings page needs to read and write, with no page layout:
 // stored settings and credentials.
@@ -33,13 +39,17 @@ export const useSettingsPageState = () => {
     const [diarizationStatus, setDiarizationStatus] = useState(null);
     const [cookieCheck, setCookieCheck] = useState(null);
     const [cookieChecking, setCookieChecking] = useState(false);
-    // Kept by the service (see lib/videoLinkPrefs.js); on until it says otherwise.
-    const [allowMiuistore, setAllowMiuistore] = useState(true);
-    // Which video-link choice failed to reach the service, if any.
+    // Kept by the service (see lib/videoLinkPrefs.js): true, false, or null
+    // when never asked. undefined until the service has answered.
+    const [allowMiuistore, setAllowMiuistore] = useState(undefined);
+    // Which service-kept choice failed to save, if any (its preference name).
     const [videoPrefError, setVideoPrefError] = useState('');
     // A choice made on this page before the service answered must not be
     // overwritten by that answer.
-    const touchedVideoPrefsRef = useRef({browser: false, miuistore: false});
+    const touchedVideoPrefsRef = useRef({browser: false, miuistore: false, lark: false});
+    // The folder value last saved to the service, so leaving the field
+    // without changing it does not save again.
+    const savedLarkFolderRef = useRef(null);
     const [secretDraft, setSecretDraft] = useState({});
     const [pyannoteTokenEditing, setPyannoteTokenEditing] = useState(false);
     const [secretSaving, setSecretSaving] = useState(false);
@@ -69,13 +79,14 @@ export const useSettingsPageState = () => {
         getSpeakerDiarizationStatus().then(setDiarizationStatus).catch(() => {});
         let active = true;
         if (getPreferences) {
-            syncVideoLinkPreferences({
+            const sync = {
                 getPreferences,
                 savePreferences,
                 loadSettings,
                 saveSettings,
                 storage: (() => { try { return localStorage; } catch (_) { return null; } })(),
-            }).then((prefs) => {
+            };
+            syncVideoLinkPreferences(sync).then((prefs) => {
                 if (!active || !prefs.reachable) return;
                 if (!touchedVideoPrefsRef.current.miuistore) setAllowMiuistore(prefs.allowMiuistore);
                 if (touchedVideoPrefsRef.current.browser) return;
@@ -84,6 +95,11 @@ export const useSettingsPageState = () => {
                         ? s
                         : {...s, videoCookiesBrowser: prefs.videoCookiesBrowser}
                 ));
+            }).then(() => syncLarkExportPreferences(sync)).then((lark) => {
+                if (!active || !lark?.reachable) return;
+                savedLarkFolderRef.current = lark.folder;
+                if (touchedVideoPrefsRef.current.lark) return;
+                setSettings((s) => ({...s, ...larkRouteSettingsPatch(lark.route), larkFolder: lark.folder}));
             });
         }
         return () => { active = false; };
@@ -116,6 +132,39 @@ export const useSettingsPageState = () => {
         } catch (_) {
             setAllowMiuistore(previous);
             setVideoPrefError(MIUISTORE_PREF);
+        }
+    };
+
+    // The Feishu route and folder are saved in the service as well as here, so
+    // an export an AI tool asks for goes the same way (lib/larkExportPrefs.js).
+    const updateLarkExportRoute = async (route) => {
+        const patch = larkRouteSettingsPatch(route);
+        touchedVideoPrefsRef.current.lark = true;
+        updateSettingNow(patch);
+        setVideoPrefError('');
+        if (!savePreferences) return;
+        try {
+            await savePreferences({[LARK_ROUTE_PREF]: patch.larkExportRoute});
+        } catch (_) {
+            setVideoPrefError(LARK_ROUTE_PREF);
+        }
+    };
+
+    // Typed or pasted into the field: kept here at once, sent to the service
+    // when the field is left, not on every keystroke.
+    const updateLarkFolder = (value) => {
+        touchedVideoPrefsRef.current.lark = true;
+        updateSettingNow({larkFolder: String(value ?? '').trim()});
+    };
+    const commitLarkFolder = async () => {
+        const folder = String(settings.larkFolder ?? '').trim();
+        if (!savePreferences || savedLarkFolderRef.current === folder) return;
+        setVideoPrefError('');
+        try {
+            await savePreferences({[LARK_FOLDER_PREF]: folder});
+            savedLarkFolderRef.current = folder;
+        } catch (_) {
+            setVideoPrefError(LARK_FOLDER_PREF);
         }
     };
 
@@ -240,8 +289,11 @@ export const useSettingsPageState = () => {
         aiProviderDefaults,
         activeAiSecretKey,
         activeAiConfigured,
-        // Feishu export route.
+        // Feishu export route and folder.
         larkExportRoute,
+        updateLarkExportRoute,
+        updateLarkFolder,
+        commitLarkFolder,
         larkRouteHint,
         // Speaker diarization model token.
         pyannoteTokenConfigured,

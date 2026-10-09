@@ -19,13 +19,29 @@ export const normalizeCookiesBrowser = (value) => {
     return KNOWN_BROWSERS.has(name) ? name : '';
 };
 
-// On by default: without it a Douyin link has no working route unless the
-// browser holds a fresh Douyin login. Only an explicit `false` turns it off.
-export const allowMiuistoreFromPreferences = (preferences) => {
+// Whether a Douyin link may go to the third-party resolver: true, false, or
+// null when the person has never been asked. The service keeps the answer; a
+// null is asked about before the first Douyin link is submitted.
+export const miuistoreChoiceFromPreferences = (preferences) => {
     const value = preferences?.[MIUISTORE_PREF];
-    if (value === undefined || value === null) return true;
-    return value === true || value === 'true';
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return null;
 };
+
+// A Douyin share link or share text: douyin.com, v.douyin.com, iesdouyin.com.
+const DOUYIN_HOST_RE = /(?:^|[^a-z0-9.-])(?:[a-z0-9-]+\.)*(?:iesdouyin|douyin)\.com(?![a-z0-9-])/i;
+export const isDouyinLinkText = (text) => DOUYIN_HOST_RE.test(String(text ?? ''));
+
+// Before a link goes in: does the person have to be asked about the
+// third-party resolver first? Only for a Douyin link, and only while the
+// service holds no answer. A service that could not be asked is not a reason
+// to ask; the service decides from what it holds.
+export const needsMiuistoreConsent = (input, preferences) => (
+    !!preferences && typeof preferences === 'object'
+    && isDouyinLinkText(input)
+    && miuistoreChoiceFromPreferences(preferences) === null
+);
 
 // Decide the browser choice from what the service holds and what this browser
 // stored. `preferences` is null when the service could not be asked.
@@ -79,7 +95,7 @@ export const syncVideoLinkPreferences = async ({getPreferences, savePreferences,
     }
     return {
         videoCookiesBrowser: plan.value,
-        allowMiuistore: allowMiuistoreFromPreferences(preferences),
+        allowMiuistore: miuistoreChoiceFromPreferences(preferences),
         reachable: !!preferences,
     };
 };

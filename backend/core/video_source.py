@@ -1219,6 +1219,12 @@ DOUYIN_NO_MEDIA_MESSAGE = (
     "请在抖音里打开确认；能播放的话，把视频下载到本机后上传。"
 )
 GENERIC_UNRESOLVED_MESSAGE = "暂时无法自动解析这个视频链接，请上传视频文件"
+# Said when the third-party Douyin resolver would have been tried but the user
+# has never said whether it may be (``allow_miuistore`` is None).
+DOUYIN_FALLBACK_NOT_ALLOWED_MESSAGE = (
+    "抖音直接下载没有成功。可以把这个链接交给第三方解析服务再试（只发送链接本身）："
+    "在 设置 → 抖音备用解析 里允许后重试；AI 工具提交时传 allow_miuistore=true。"
+)
 _BILIBILI_LOGIN_REASONS = frozenset({"login_required", "forbidden", "premium_only"})
 
 
@@ -1284,7 +1290,7 @@ def resolve_video(
     input_text: str,
     cookies_from_browser: str | None = None,
     *,
-    allow_miuistore: bool = True,
+    allow_miuistore: bool | None = True,
     cancellation_event: threading.Event | None = None,
 ) -> ResolvedVideo:
     _raise_if_cancelled(cancellation_event)
@@ -1347,10 +1353,15 @@ def resolve_video(
         login_hint = (
             f"抖音的登录信息过期了：在 {_browser_label(login_browser)} 里打开 douyin.com 登录一次，再重试这个链接。"
         )
+    if allow_miuistore is None:
+        # The fallback sends the extracted Douyin URL to a third party; it runs
+        # only once the user has said it may.
+        trace.append({"provider": "miuistore", "status": "skipped", "reason": "not_allowed_yet"})
+        raise VideoSourceResolutionError(
+            f"{login_hint} {DOUYIN_FALLBACK_NOT_ALLOWED_MESSAGE}" if login_hint else DOUYIN_FALLBACK_NOT_ALLOWED_MESSAGE,
+            trace,
+        )
     if not allow_miuistore:
-        # The fallback runs by default: yt-dlp needs a fresh Douyin login and
-        # fails without one. It sends the extracted Douyin URL to a third
-        # party, and a caller can still switch it off.
         trace.append({"provider": "miuistore", "status": "skipped", "reason": "disabled_by_request"})
         raise VideoSourceResolutionError(login_hint or GENERIC_UNRESOLVED_MESSAGE, trace)
     # A browser login that did not work does not close the fallback. When the
@@ -2256,7 +2267,7 @@ def _download_douyin_via_yt_dlp(
     *,
     cookies_from_browser: str | None,
     cookie_use: CookieUse,
-    allow_miuistore: bool,
+    allow_miuistore: bool | None,
     cancellation_event: threading.Event | None,
 ) -> int:
     """Download a Douyin video yt-dlp resolved, with the resolver's retry
@@ -2292,6 +2303,9 @@ def _download_douyin_via_yt_dlp(
             }
             break
     trace = [*(resolved.resolution_trace or []), failure]
+    if allow_miuistore is None:
+        trace.append({"provider": "miuistore", "status": "skipped", "reason": "not_allowed_yet"})
+        raise VideoSourceResolutionError(DOUYIN_FALLBACK_NOT_ALLOWED_MESSAGE, trace)
     if not allow_miuistore:
         trace.append({"provider": "miuistore", "status": "skipped", "reason": "disabled_by_request"})
         raise VideoSourceResolutionError(_DOUYIN_DOWNLOAD_FAILED.format(fallback=""), trace)
@@ -2334,7 +2348,7 @@ def _download_media(
     *,
     cookies_from_browser: str | None,
     cookie_use: CookieUse,
-    allow_miuistore: bool,
+    allow_miuistore: bool | None,
     cancellation_event: threading.Event | None,
 ) -> int:
     if resolved.provider == "yt-dlp" and is_douyin_url(resolved.source_url):
@@ -2382,7 +2396,7 @@ def download_video_source(
     video_dir: Path,
     on_progress: ProgressCallback | None = None,
     cookies_from_browser: str | None = None,
-    allow_miuistore: bool = True,
+    allow_miuistore: bool | None = True,
     duration_limit_seconds: float | None = None,
     cancellation_event: threading.Event | None = None,
     deliver: Callable[[Path], Path] | None = None,

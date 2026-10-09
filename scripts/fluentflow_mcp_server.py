@@ -200,6 +200,7 @@ def submit_video_link(
     allow_duplicate: bool = False,
     speaker_diarization: bool | None = None,
     system_prompt: str | None = None,
+    allow_miuistore: bool | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -226,6 +227,9 @@ def submit_video_link(
                 prompt_preset=prompt_preset,
                 system_prompt=system_prompt,
                 speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
+                # Left out unless the caller decides: the backend then uses the
+                # user's remembered choice, and never decided means no fallback.
+                allow_miuistore=None if allow_miuistore is None else ("true" if allow_miuistore else "false"),
             ),
         },
         timeout=30,
@@ -452,16 +456,24 @@ def export_result(
     task_id: str,
     target: str = "lark",
     title: str | None = None,
+    lark_export_route: str | None = None,
+    folder_token: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Export a completed task note to a supported target such as Lark."""
+    """Export a completed task note to a supported target such as Lark.
+
+    Route and folder are sent only when given; otherwise the backend uses the
+    user's settings (``lark_export_route``, ``lark_folder_token``), then auto.
+    """
     return _agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/exports",
         api_base=api_base,
         client_id=client_id,
-        payload=_options(target=target, title=title),
+        payload=_options(
+            target=target, title=title, lark_export_route=lark_export_route, folder_token=folder_token,
+        ),
         timeout=120,
     )
 
@@ -532,6 +544,16 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "description": (
                         "Process this link again although a completed task already has it. "
                         "Only after the user confirmed they want a second copy."
+                    ),
+                },
+                "allow_miuistore": {
+                    "type": "boolean",
+                    "description": (
+                        "Douyin only: whether the link (the link alone) may be sent to the "
+                        "third-party resolver sph.miuistore.com when the direct download fails. "
+                        "Leave it out to follow the user's setting (设置 → 抖音备用解析); if the "
+                        "user never decided, the fallback is not used and such a link fails with "
+                        "code douyin_fallback_not_allowed. Pass true only after the user agreed."
                     ),
                 },
                 "api_base": {"type": "string"},
@@ -789,13 +811,27 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "export_result",
-        "description": "Export a completed task note to a supported target such as Lark.",
+        "description": (
+            "Export a completed task note to Feishu/Lark. Without lark_export_route or "
+            "folder_token the user's export settings apply (route, then folder), else auto: "
+            "lark-cli when it is signed in, otherwise the user's Feishu app. The document "
+            "link is recorded on the task, so the editor shows it too."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
                 "target": {"type": "string", "default": "lark"},
                 "title": {"type": "string"},
+                "lark_export_route": {
+                    "type": "string",
+                    "enum": ["auto", "local_cli", "openapi"],
+                    "description": "Override the user's export route for this call only.",
+                },
+                "folder_token": {
+                    "type": "string",
+                    "description": "Feishu folder for the app route; default: the user's setting.",
+                },
                 "api_base": {"type": "string"},
                 "client_id": {"type": "string"},
             },

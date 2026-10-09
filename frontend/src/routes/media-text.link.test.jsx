@@ -15,7 +15,11 @@ import {MemoryRouter, Route, Routes, useLocation} from 'react-router-dom';
 const createVideoSourceJob = vi.fn();
 const getJob = vi.fn();
 let lastResultSet = null;
-const stableApi = {createVideoSourceJob, getJob, getCredentialsStatus: async () => ({})};
+// GET /preferences as the service holds it; POST /preferences merges into it.
+let servicePreferences = {};
+const getPreferences = vi.fn(async () => servicePreferences);
+const savePreferences = vi.fn(async (patch) => { servicePreferences = {...servicePreferences, ...patch}; return servicePreferences; });
+const stableApi = {createVideoSourceJob, getJob, getCredentialsStatus: async () => ({}), getPreferences, savePreferences};
 
 vi.mock('../app/AppContext.jsx', () => ({
     useApp: () => ({
@@ -68,6 +72,9 @@ describe('the link box', () => {
         localStorage.setItem('fluentflow_settings', JSON.stringify({defaultSourceMode: 'link'}));
         createVideoSourceJob.mockReset();
         getJob.mockReset();
+        getPreferences.mockClear();
+        savePreferences.mockClear();
+        servicePreferences = {};
         seenState = null;
         lastResultSet = null;
     });
@@ -145,5 +152,74 @@ describe('the link box', () => {
         expect(getJob.mock.calls[0][0]).toBe('old-7');
         expect(lastResultSet?.task_id).toBe('old-7');
         expect(createVideoSourceJob).toHaveBeenCalledTimes(1);
+    });
+});
+
+// Requirement: a Douyin link is not handed to the third-party resolver without
+// the person's say-so. The first Douyin link submitted while they have never
+// answered is held, they are asked once, the answer is remembered by the
+// service, and that link goes in with the answer.
+describe('the first Douyin link', () => {
+    const DOUYIN = '7.92 复制打开抖音，看看 https://v.douyin.com/abcDEF12/ 复制此链接';
+    const QUESTION = '抖音链接可能要交给第三方解析服务（miuistore.com）才能下载。只会发送这条链接，不发送其他内容。允许吗？';
+    const submit = (link) => {
+        fireEvent.change(screen.getByRole('textbox'), {target: {value: link}});
+        fireEvent.click(screen.getByRole('button', {name: /开始|处理|提交/}));
+    };
+
+    beforeEach(() => {
+        localStorage.setItem('fluentflow_settings', JSON.stringify({defaultSourceMode: 'link'}));
+        createVideoSourceJob.mockReset();
+        createVideoSourceJob.mockResolvedValue({ok: true, job: {task_id: 'dy-1', status: 'queued'}});
+        getPreferences.mockClear();
+        savePreferences.mockClear();
+        servicePreferences = {};
+    });
+    afterEach(() => {
+        cleanup();
+        localStorage.clear();
+    });
+
+    it('is held until the person answers', async () => {
+        mount();
+        submit(DOUYIN);
+        expect(await screen.findByText(QUESTION)).toBeTruthy();
+        expect(createVideoSourceJob).not.toHaveBeenCalled();
+    });
+
+    it('"允许（以后不再问）" remembers yes and sends the link allowing the resolver', async () => {
+        mount();
+        submit(DOUYIN);
+        fireEvent.click(await screen.findByRole('button', {name: '允许（以后不再问）'}));
+        await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
+        expect(savePreferences).toHaveBeenCalledWith({allow_miuistore: true});
+        const [input, options] = createVideoSourceJob.mock.calls[0];
+        expect(input).toBe(DOUYIN);
+        expect(options.allowMiuistore).toBe(true);
+    });
+
+    it('"不允许" remembers no and sends the link without the resolver', async () => {
+        mount();
+        submit(DOUYIN);
+        fireEvent.click(await screen.findByRole('button', {name: '不允许'}));
+        await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
+        expect(savePreferences).toHaveBeenCalledWith({allow_miuistore: false});
+        expect(createVideoSourceJob.mock.calls[0][1].allowMiuistore).toBe(false);
+    });
+
+    it('is not asked about again once answered', async () => {
+        servicePreferences = {allow_miuistore: false};
+        mount();
+        submit(DOUYIN);
+        await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
+        expect(screen.queryByText(QUESTION)).toBeNull();
+    });
+
+    it('is not asked for links from other sites', async () => {
+        mount();
+        submit('https://www.bilibili.com/video/BV1xx411c7mD');
+        await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
+        expect(screen.queryByText(QUESTION)).toBeNull();
+        expect(createVideoSourceJob.mock.calls[0][1].allowMiuistore).toBeUndefined();
     });
 });

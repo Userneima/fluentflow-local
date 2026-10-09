@@ -92,6 +92,16 @@ describe('submitting a failed link again', () => {
         expect(options).toMatchObject({generateVisuals: true, voiceEnhance: true, title: '我起的名字', cookiesFromBrowser: 'chrome'});
     });
 
+    // Requirement: when the fix is a setting, the failed card takes the person
+    // to it, and still offers "submit again" for afterwards.
+    it('links a Douyin link refused for want of the fallback to that setting', async () => {
+        tasks = [failedLink({error_reason: '抖音直接下载没有成功。可以把这个链接交给第三方解析服务再试（只发送链接本身）：在 设置 → 抖音备用解析 里允许后重试；AI 工具提交时传 allow_miuistore=true。'})];
+        mount();
+        const link = await screen.findByRole('link', {name: '去设置修改'});
+        expect(link.getAttribute('href')).toBe('/settings#douyin-fallback');
+        expect(screen.getByRole('button', {name: /重新提交/})).toBeTruthy();
+    });
+
     it('offers no retry when retrying cannot change the outcome', async () => {
         tasks = [failedLink({error_reason: '这个抖音链接是图文作品，没有视频可以下载。'})];
         mount();

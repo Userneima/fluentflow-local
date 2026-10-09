@@ -9,6 +9,8 @@ Requirements, in the user's terms:
   cut again: the subtitles and the note are timed to that file, and a second
   cut moves every gap without moving them. The user is told to resubmit the
   original file.
+- A task whose automatic cut was declined (transcribed from the recording) and
+  then cut by hand can be cut again: its transcript is on the recording's clock.
 - A task with neither of these goes ahead.
 """
 
@@ -53,7 +55,10 @@ def test_cutting_is_refused_while_the_note_is_waiting_to_be_written(monkeypatch)
 
 
 def test_a_task_transcribed_from_its_cut_file_is_not_cut_again(monkeypatch):
-    job = _job(debreath={"status": "completed", "used_for_transcription": True, "ran_before_transcription": True})
+    job = _job(
+        transcript_media="debreath_media",
+        debreath={"status": "completed", "used_for_transcription": True, "ran_before_transcription": True},
+    )
 
     r = _client(monkeypatch, job).post("/jobs/t/debreath", json={})
 
@@ -74,6 +79,19 @@ def test_a_finished_task_with_a_written_note_and_no_earlier_cut_goes_ahead(monke
 def test_a_task_cut_by_hand_after_transcription_can_be_cut_again(monkeypatch):
     """A manual cut never changed the transcript's clock, so re-cutting is safe."""
     job = _job(debreath={"status": "completed", "used_for_transcription": True})
+
+    r = _client(monkeypatch, job).post("/jobs/t/debreath", json={})
+
+    assert r.status_code == 200
+
+
+def test_a_declined_automatic_cut_then_a_manual_cut_does_not_block_a_re_cut(monkeypatch):
+    """The state a declined auto cut plus a successful manual cut leave behind:
+    the merge kept ran_before_transcription, the transcript is the recording's."""
+    job = _job(
+        transcript_media="source",
+        debreath={"status": "completed", "used_for_transcription": True, "ran_before_transcription": True},
+    )
 
     r = _client(monkeypatch, job).post("/jobs/t/debreath", json={})
 

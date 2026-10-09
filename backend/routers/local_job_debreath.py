@@ -33,6 +33,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 
 from backend.core import debreath_job, silence_cuts, visual_note_job
 from backend.core.job_store import get_job
+from backend.core.result_artifacts import TRANSCRIPT_MEDIA_CUT
 from backend.core.request_scope import local_client_scope
 from backend.routers.local_processing import queue_is_busy
 
@@ -87,7 +88,14 @@ def note_or_transcript_conflict(job: dict[str, Any]) -> str | None:
     if visual_note_job.is_running(result) or summary_status == "pending":
         return "这个任务的笔记正在写，等笔记写完再去气口，免得两边的结果互相覆盖。"
     state = result.get("debreath") if isinstance(result.get("debreath"), dict) else {}
-    if state.get("used_for_transcription") is True and state.get("ran_before_transcription") is True:
+    # Refused only when the transcript really was made from the cut file. A
+    # declined automatic cut followed by a manual one leaves a transcript made
+    # from the recording, which the remapping handles like any other re-cut.
+    if (
+        str(result.get("transcript_media") or "") == TRANSCRIPT_MEDIA_CUT
+        and state.get("used_for_transcription") is True
+        and state.get("ran_before_transcription") is True
+    ):
         return (
             "这个任务转写时已经去过气口，再剪一次会和转写稿、笔记的时间点对不上；"
             "请重新提交原文件。"

@@ -109,12 +109,18 @@ def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = Non
 
 
 # Non-sensitive, user-remembered choices. ``allow_miuistore`` is the Douyin
-# third-party fallback: on by default, and remembered here when switched off.
+# third-party fallback consent: true, false, or absent (never decided, so the
+# fallback does not run); saving null clears it back to absent.
 # ``video_cookies_browser`` is the browser whose login link downloads use ("" =
-# none). It lives here, not only in the web page, so links submitted by an AI
-# tool (MCP) use the same login as links pasted into the page.
-LOCAL_PREFERENCE_FIELDS = {"allow_miuistore", "video_cookies_browser"}
+# none). ``lark_export_route`` ("auto" | "local_cli" | "openapi") and
+# ``lark_folder_token`` are the Feishu export route and target folder. They
+# live here, not only in the web page, so tasks driven by an AI tool (MCP) use
+# the same choices as the page.
+LOCAL_PREFERENCE_FIELDS = {
+    "allow_miuistore", "video_cookies_browser", "lark_export_route", "lark_folder_token",
+}
 _BOOLEAN_PREFERENCES = {"allow_miuistore"}
+LARK_EXPORT_ROUTES = ("auto", "local_cli", "openapi")
 ALLOWED_COOKIE_BROWSERS = frozenset({
     "chrome", "edge", "firefox", "safari", "brave", "chromium", "opera", "vivaldi",
 })
@@ -145,6 +151,20 @@ def save_preferences(patch: dict[str, Any], path: Path | str | None = None) -> d
         value = patch.get(key)
         if value is None:
             next_preferences.pop(key, None)
+        elif key == "lark_export_route":
+            route = str(value).strip().lower()
+            if route and route not in LARK_EXPORT_ROUTES:
+                raise ValueError(f"不支持的飞书导出路线：{value}")
+            if route:
+                next_preferences[key] = route
+            else:
+                next_preferences.pop(key, None)
+        elif key == "lark_folder_token":
+            token = str(value).strip()
+            if token:
+                next_preferences[key] = token
+            else:
+                next_preferences.pop(key, None)
         elif key not in _BOOLEAN_PREFERENCES:
             browser = normalize_cookie_browser(value)
             if browser is None:

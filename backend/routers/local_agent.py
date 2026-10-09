@@ -37,7 +37,7 @@ from backend.core.job_store import (
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
-from backend.core.local_config import resolve_secret
+from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
 from backend.core import local_folder_intake, visual_note_job
@@ -51,7 +51,7 @@ from backend.core.note_title import resolve_lark_doc_title
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.core.edition_identity import INTAKE_REJECTION
-from backend.routers.local_feishu_export import _local_lark_export_target
+from backend.routers.local_feishu_export import _local_lark_export_target, _record_export_on_task
 from backend.routers.local_job_debreath import start_local_debreath
 from backend.routers.local_job_visual_note import start_local_visual_note
 from backend.routers.local_processing import (
@@ -815,17 +815,21 @@ async def export_agent_task(
         payload.get("title") or result.get("display_title") or job.get("source_filename") or task_id
     ).strip()
     resolved_title = resolve_lark_doc_title(markdown, filename_stem="", form_title=title)
-    # Local-owner routes only; hosted account OAuth is rejected inside.
-    export_target = _local_lark_export_target(
-        payload.get("lark_export_route"), payload.get("lark_via_cli")
+    # The request's route and folder, else the user's export settings, else
+    # auto. Local-owner routes only; hosted account OAuth is rejected inside.
+    # "auto" asks lark-cli whether it is signed in; keep that off the event loop.
+    route_choice = str(payload.get("lark_export_route") or "").strip() or get_preference("lark_export_route") or "auto"
+    folder_token = str(payload.get("folder_token") or "").strip() or get_preference("lark_folder_token")
+    export_target = await asyncio.get_running_loop().run_in_executor(
+        None, _local_lark_export_target, route_choice, payload.get("lark_via_cli")
     )
     kwargs: dict[str, Any] = {}
     if (app_id := resolve_secret(payload.get("lark_app_id"), "lark_app_id")):
         kwargs["app_id"] = app_id
     if (app_secret := resolve_secret(payload.get("lark_app_secret"), "lark_app_secret")):
         kwargs["app_secret"] = app_secret
-    if payload.get("folder_token"):
-        kwargs["folder_token"] = payload.get("folder_token")
+    if folder_token:
+        kwargs["folder_token"] = folder_token
 
     route = "/agent/v1/tasks/{task_id}/exports"
     started_at = time.perf_counter()
@@ -894,6 +898,12 @@ async def export_agent_task(
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Job not found")
+    if export_record["url"]:
+        # Where the editor reads the export from, same as the web export.
+        _record_export_on_task(
+            task_id, client_id, lark_doc_title=resolved_title, lark_response=export_response, lark_error=None,
+        )
+        updated = get_job(task_id, client_id=client_id) or updated
     log_event(
         task_id=task_id,
         event_name="agent_export_completed",

@@ -4,10 +4,12 @@ video link on this machine, download it, and run the local pipeline.
 Functionally local: no accounts, quota, or rate limits; the download worker
 runs on ``local_job_runtime.JOB_EVENTS`` — the same hub the local read (SSE)
 and cancel routes use — so resolving, downloading, processing, and cancelling
-share one hub. The Douyin ``miuistore`` fallback is ON by default and can be switched off
-per request or by a remembered choice (``options.allow_miuistore``); it runs only
-when yt-dlp cannot get the video. The browser login (``cookies_from_browser``)
-comes from the request, else the remembered ``video_cookies_browser``
+share one hub. The Douyin ``miuistore`` fallback runs only with the user's
+consent, given per request or by a remembered choice
+(``options.allow_miuistore``); never decided means it does not run. It is
+tried only when yt-dlp cannot get the video. The browser login
+(``cookies_from_browser``) comes from the request, else the remembered
+``video_cookies_browser``
 preference, else ``YT_DLP_COOKIES_FROM_BROWSER``. YouTube caption
 downloads reuse the local transcript summarize core in-process instead of the
 hosted HTTP self-call.
@@ -107,6 +109,21 @@ def _friendly_error(error: Any) -> str:
     return str(diagnose_error(error).get("detail") or "").strip() or str(error)
 
 
+def _allow_miuistore(raw_options: dict[str, Any] | None) -> bool | None:
+    """Whether the Douyin third-party fallback may run for this link.
+
+    The request's answer wins; otherwise the remembered setting. None means the
+    user has never decided: the fallback does not run, and a link that needed
+    it fails with a message saying how to allow it (it sends the link to a
+    third party, so it waits for consent).
+    """
+    value = (raw_options or {}).get("allow_miuistore")
+    if value is not None and str(value).strip() != "":
+        return truthy(value)
+    remembered = get_preference("allow_miuistore")
+    return None if remembered is None else bool(remembered)
+
+
 def _video_cookies_browser(options: dict[str, Any]) -> str | None:
     """The browser whose login yt-dlp reads: the request's choice, else the
     remembered preference. None leaves yt-dlp to the environment variable.
@@ -165,7 +182,7 @@ async def _run_local_video_source_job(
     input_text: str,
     title: str | None,
     options: dict[str, str],
-    allow_miuistore: bool,
+    allow_miuistore: bool | None,
     client_id: Optional[str],
     gate: CancellationGate,
     route: str = _ROUTE,
@@ -235,7 +252,7 @@ async def _download_then_process(
     input_text: str,
     title: str | None,
     options: dict[str, str],
-    allow_miuistore: bool,
+    allow_miuistore: bool | None,
     client_id: Optional[str],
     gate: CancellationGate,
     route: str,
@@ -336,8 +353,8 @@ async def _download_then_process(
                     video_dir=_video_source_storage_dir(),
                     on_progress=on_progress,
                     cookies_from_browser=cookies_browser,
-                    # The Douyin third-party fallback is on unless this request
-                    # or the remembered setting switched it off.
+                    # The Douyin third-party fallback runs only when this
+                    # request or the remembered setting allows it.
                     allow_miuistore=allow_miuistore,
                     duration_limit_seconds=duration_limit,
                     cancellation_event=gate.cancellation_event,
@@ -561,15 +578,7 @@ async def submit_video_source_job(
         return duplicate
 
     options = _queue_options_from_mapping(raw_options)
-    # Per-request choice wins; otherwise the remembered settings choice
-    # applies. Default is ON: yt-dlp needs a fresh Douyin login and fails
-    # without one, so with the fallback off a Douyin link had no working route
-    # at all.
-    if "allow_miuistore" in (raw_options or {}):
-        allow_miuistore = truthy(raw_options.get("allow_miuistore"))
-    else:
-        remembered = get_preference("allow_miuistore")
-        allow_miuistore = True if remembered is None else bool(remembered)
+    allow_miuistore = _allow_miuistore(raw_options)
     task_id_value = claim_task_id(None, client_id=client_id)
     raw_title = title or display_title_for_source_input(input_text, input_text[:80])
     display_name = display_title_for_user(raw_title, raw_title)

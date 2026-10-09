@@ -6,7 +6,7 @@
 // This one mounts the real page and looks at what a person would see.
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 
 const runtimeConfig = {
     allowedSttProviders: ['local'],
@@ -150,14 +150,31 @@ describe('local settings page', () => {
         expect(screen.queryByRole('option', {name: 'Qwen'})).toBeNull();
     });
 
-    it('drops the note settings only while an upload writes the note itself', () => {
+    // Requirement: auto-illustrate and the Qwen key are hidden only when they
+    // steer nothing, i.e. when Claude writes the note. A build that writes its
+    // own note but has no Claude channel falls back to the text note, where
+    // both still apply and cost money, so they must stay visible.
+    it('keeps auto-illustrate and the Qwen key while the text model writes the note', async () => {
+        runtimeConfig.writesItsOwnNote = true;
+        credentials = {deepseek_api_key_configured: true, visual_note_available: false};
         render(<Settings/>);
-        expect(screen.queryByText('给笔记自动配图')).toBeNull();
-        cleanup();
+        await waitFor(() => expect(screen.getByText('给笔记自动配图')).toBeTruthy());
+        expect(screen.getByText('set.dashscopeKey')).toBeTruthy();
+    });
 
-        runtimeConfig.writesItsOwnNote = false;
+    it('hides them while Claude writes the note', async () => {
+        runtimeConfig.writesItsOwnNote = true;
+        credentials = {anthropic_api_key_configured: true, visual_note_available: true};
         render(<Settings/>);
-        expect(screen.getByText('给笔记自动配图')).toBeTruthy();
+        await waitFor(() => expect(screen.queryByText('给笔记自动配图')).toBeNull());
+        expect(screen.queryByText('set.dashscopeKey')).toBeNull();
+    });
+
+    it('shows them when this build never writes its own note', async () => {
+        runtimeConfig.writesItsOwnNote = false;
+        credentials = {anthropic_api_key_configured: true, visual_note_available: true};
+        render(<Settings/>);
+        await screen.findByText('给笔记自动配图');
     });
 
     it('carries no hosted account surface', () => {
@@ -189,7 +206,7 @@ describe('local settings page', () => {
         expect(screen.getByText('抖音备用解析')).toBeTruthy();
         expect(screen.getByText(/只发链接本身/)).toBeTruthy();
         const toggle = screen.getByLabelText(/抖音备用解析/);
-        expect(toggle.checked).toBe(true);
+        await waitFor(() => expect(toggle.checked).toBe(true));
         fireEvent.click(toggle);
         await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({allow_miuistore: false}));
         expect(toggle.checked).toBe(false);
@@ -203,5 +220,50 @@ describe('local settings page', () => {
         expect(row.textContent).not.toMatch(/视频链接下载登录态/);
         const cookiesRow = screen.getByText('视频链接下载登录态').parentElement;
         expect(cookiesRow.contains(row)).toBe(false);
+    });
+
+    // Requirement: the Douyin fallback has three states. Never answered shows
+    // as off and says when the question will come.
+    it('shows a never-answered Douyin fallback as off, saying when it will be asked', async () => {
+        servicePreferences = {};
+        render(<Settings/>);
+        expect(await screen.findByText('还没选，第一次提交抖音链接时会问。')).toBeTruthy();
+        expect(screen.getByLabelText(/抖音备用解析/).checked).toBe(false);
+    });
+
+    it('shows an answered "no" as off without the not-chosen note', async () => {
+        servicePreferences = {allow_miuistore: false};
+        render(<Settings/>);
+        // Let the service's answer arrive before looking.
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+        expect(screen.getByLabelText(/抖音备用解析/).checked).toBe(false);
+        expect(screen.queryByText('还没选，第一次提交抖音链接时会问。')).toBeNull();
+    });
+
+    // Requirement: exports an AI tool asks for use the route and folder chosen
+    // here, so both reach the service, not just this browser.
+    it('saves the Feishu route to the service', async () => {
+        render(<Settings/>);
+        fireEvent.change(screen.getByDisplayValue('set.larkRouteAuto'), {target: {value: 'openapi'}});
+        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({lark_export_route: 'openapi'}));
+        expect(stored).toMatchObject({larkExportRoute: 'openapi', larkViaCli: false});
+    });
+
+    it('saves the Feishu folder to the service when the field is left', async () => {
+        render(<Settings/>);
+        const field = document.getElementById('settingsLarkFolder');
+        fireEvent.change(field, {target: {value: ' https://x.feishu.cn/drive/folder/fldcnABC '}});
+        expect(savePreferences).not.toHaveBeenCalledWith(expect.objectContaining({lark_folder_token: expect.anything()}));
+        fireEvent.blur(field);
+        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({lark_folder_token: 'https://x.feishu.cn/drive/folder/fldcnABC'}));
+        expect(stored.larkFolder).toBe('https://x.feishu.cn/drive/folder/fldcnABC');
+    });
+
+    it('shows the route and folder the service holds', async () => {
+        localStorage.setItem('fluentflow_lark_export_migrated', '1');
+        servicePreferences = {lark_export_route: 'openapi', lark_folder_token: 'https://x.feishu.cn/drive/folder/fldcnXYZ'};
+        render(<Settings/>);
+        await waitFor(() => expect(screen.getByDisplayValue('set.larkRouteOpenapi')).toBeTruthy());
+        expect(document.getElementById('settingsLarkFolder').value).toBe('https://x.feishu.cn/drive/folder/fldcnXYZ');
     });
 });

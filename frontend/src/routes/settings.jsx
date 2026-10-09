@@ -1,3 +1,4 @@
+import {useEffect} from 'react';
 import {Section} from '../components/settingsPrimitives.jsx';
 import {
     AdvancedKeysFold,
@@ -39,10 +40,19 @@ const Settings = () => {
     // pages never disagree about whose model writes the note.
     const noteWriter = resolveNoteWriter({runtimeConfig, credentialStatus, settings});
     const writerSentence = credentialStatus ? noteWriterSentence(noteWriter, lang) : '';
-    // Off means the pipeline writes the note when asked, so its note settings
-    // are real again. On means that stage never runs and the controls that only
-    // steer it would be wired to nothing.
-    const uploadWritesItsOwnNote = !!runtimeConfig.writesItsOwnNote;
+    // Auto-illustrate and the Qwen key steer the pipeline's text note. They are
+    // hidden only when Claude writes the note instead, which takes both this
+    // build writing its own note and a Claude channel being available; the
+    // build switch alone is not enough, because without Claude the backend
+    // falls back to the text note and these settings apply (and cost money).
+    const claudeWritesNote = noteWriter.kind === 'claude';
+    // Arriving from a task card's "go to settings" link (/settings#douyin-fallback).
+    useEffect(() => {
+        const id = typeof window !== 'undefined' ? decodeURIComponent(window.location.hash.slice(1)) : '';
+        if (!id) return;
+        const target = document.getElementById(id);
+        if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({block: 'center'});
+    }, []);
     // The first sentence states only what is always true; who writes the note
     // is the writer sentence's job, so the two cannot disagree.
     const notesIntro = `${lang === 'zh'
@@ -71,7 +81,7 @@ const Settings = () => {
                 <div className="divide-y divide-[#ece8e8] dark:divide-white/[0.1]">
                     <TextModelKeyRows
                         state={state}
-                        extraKey={aiProvider !== 'qwen' && !uploadWritesItsOwnNote && (
+                        extraKey={aiProvider !== 'qwen' && !claudeWritesNote && (
                             <DashscopeKeyField
                                 state={state}
                                 description={lang === 'zh'
@@ -82,7 +92,7 @@ const Settings = () => {
                     />
                     <div className="grid gap-3 px-5 py-4">
                         <AnthropicKeyField state={state}/>
-                        {!uploadWritesItsOwnNote && <AutoIllustrateRow state={state}/>}
+                        {!claudeWritesNote && <AutoIllustrateRow state={state}/>}
                     </div>
                 </div>
             </Section>

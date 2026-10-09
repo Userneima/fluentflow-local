@@ -470,6 +470,153 @@ def test_export_preserves_edit_saved_during_remote_call(monkeypatch, agent_stack
     assert stored["result"]["exports"][0]["url"] == "https://example.feishu.cn/wiki/w2"
 
 
+# ---- export from an AI tool follows the user's export settings -----------------
+#
+# Requirements: an export started by an AI tool (MCP export_result) uses the
+# route and folder the request names, else the ones the user chose in settings
+# (preferences lark_export_route / lark_folder_token), else "auto". Deciding
+# "auto" may ask lark-cli whether it is signed in, which can take seconds, so it
+# must not run on the server's event loop. A successful export shows up in the
+# editor exactly like one made from the page (lark_response, lark_doc_title).
+
+
+def _export_stack(monkeypatch, agent_stack, task_id, preferences):
+    import backend.routers.local_feishu_export as feishu_export
+
+    job_store.upsert_job(
+        task_id=task_id, status="completed", client_id=LOCAL_OWNER_ID,
+        result={"task_id": task_id, "summary_markdown": "# 周会\n\n内容"},
+        db_path=agent_stack["jobs_db"],
+    )
+    for name in ("get_job", "update_job_result"):
+        monkeypatch.setattr(
+            feishu_export, name,
+            functools.partial(getattr(job_store, name), db_path=agent_stack["jobs_db"]),
+        )
+    monkeypatch.setattr(local_agent, "get_preference", lambda name: preferences.get(name))
+    seen: dict = {}
+    monkeypatch.setattr(
+        local_agent, "export_markdown_via_lark_cli",
+        lambda title, markdown, **kw: seen.update(route="lark_cli", **kw) or {
+            "ok": True, "url": "https://example.feishu.cn/docx/cli", "via": "lark_cli",
+        },
+    )
+    monkeypatch.setattr(
+        local_agent, "export_markdown_to_lark",
+        lambda title, markdown, **kw: seen.update(route="lark_openapi", **kw) or {
+            "ok": True, "url": "https://example.feishu.cn/docx/app",
+        },
+    )
+    return seen
+
+
+def test_agent_export_uses_the_route_and_folder_from_settings(monkeypatch, agent_stack):
+    seen = _export_stack(
+        monkeypatch, agent_stack, "t-pref1",
+        {"lark_export_route": "openapi", "lark_folder_token": "fldSettings"},
+    )
+
+    r = TestClient(_app()).post("/agent/v1/tasks/t-pref1/exports", headers=_HEADERS, json={})
+
+    assert r.status_code == 200
+    assert seen["route"] == "lark_openapi" and seen["folder_token"] == "fldSettings"
+
+
+def test_agent_export_request_values_win_over_settings(monkeypatch, agent_stack):
+    seen = _export_stack(
+        monkeypatch, agent_stack, "t-pref2",
+        {"lark_export_route": "local_cli", "lark_folder_token": "fldSettings"},
+    )
+
+    r = TestClient(_app()).post(
+        "/agent/v1/tasks/t-pref2/exports", headers=_HEADERS,
+        json={"lark_export_route": "openapi", "folder_token": "fldRequest"},
+    )
+
+    assert r.status_code == 200
+    assert seen["route"] == "lark_openapi" and seen["folder_token"] == "fldRequest"
+
+
+@pytest.mark.parametrize("cli_signed_in,expected", [(True, "lark_cli"), (False, "lark_openapi")])
+def test_agent_export_without_any_choice_is_auto(monkeypatch, agent_stack, cli_signed_in, expected):
+    import backend.routers.local_feishu_export as feishu_export
+
+    seen = _export_stack(monkeypatch, agent_stack, f"t-auto-{expected}", {})
+    monkeypatch.setattr(feishu_export, "lark_cli_ready", lambda: cli_signed_in)
+
+    r = TestClient(_app()).post(f"/agent/v1/tasks/t-auto-{expected}/exports", headers=_HEADERS, json={})
+
+    assert r.status_code == 200
+    assert seen["route"] == expected
+
+
+def test_agent_export_decides_the_route_off_the_event_loop(monkeypatch, agent_stack):
+    import asyncio
+
+    _export_stack(monkeypatch, agent_stack, "t-loop", {})
+    decided_on_loop: list[bool] = []
+
+    def decide(route, via_cli):
+        try:
+            asyncio.get_running_loop()
+            decided_on_loop.append(True)
+        except RuntimeError:
+            decided_on_loop.append(False)
+        return "lark_cli"
+
+    monkeypatch.setattr(local_agent, "_local_lark_export_target", decide)
+
+    r = TestClient(_app()).post("/agent/v1/tasks/t-loop/exports", headers=_HEADERS, json={})
+
+    assert r.status_code == 200
+    assert decided_on_loop == [False]
+
+
+def test_agent_export_shows_up_where_the_editor_reads_it(monkeypatch, agent_stack):
+    _export_stack(monkeypatch, agent_stack, "t-shown", {"lark_export_route": "local_cli"})
+
+    r = TestClient(_app()).post(
+        "/agent/v1/tasks/t-shown/exports", headers=_HEADERS, json={"title": "周会纪要"},
+    )
+
+    assert r.status_code == 200
+    stored = job_store.get_job("t-shown", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID)
+    assert stored["result"]["lark_response"]["url"] == "https://example.feishu.cn/docx/cli"
+    assert stored["result"]["lark_doc_title"] == r.json()["export"]["title"]
+    assert stored["result"]["exports"][0]["url"] == "https://example.feishu.cn/docx/cli"
+
+
+def test_export_preferences_round_trip_and_reject_unknown_routes(tmp_path):
+    from backend.core.local_config import save_preferences
+
+    path = tmp_path / "config.json"
+    saved = save_preferences({"lark_export_route": "Local_CLI", "lark_folder_token": " fld1 "}, path)
+    assert saved == {"lark_export_route": "local_cli", "lark_folder_token": "fld1"}
+    with pytest.raises(ValueError):
+        save_preferences({"lark_export_route": "feishu_user_oauth"}, path)
+    cleared = save_preferences({"lark_export_route": "", "lark_folder_token": ""}, path)
+    assert cleared == {}
+
+
+def test_the_mcp_export_tool_leaves_the_route_to_the_server(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "fluentflow_mcp_server.py"
+    spec = importlib.util.spec_from_file_location("fluentflow_mcp_server_export", path)
+    mcp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mcp)
+    calls: list[dict] = []
+    monkeypatch.setattr(mcp, "_agent_request", lambda method, route, **kw: calls.append(kw) or {"ok": True})
+
+    mcp.export_result("t1")
+    mcp.export_result("t1", lark_export_route="local_cli", folder_token="fld")
+
+    assert "lark_export_route" not in calls[0]["payload"] and "folder_token" not in calls[0]["payload"]
+    assert calls[1]["payload"]["lark_export_route"] == "local_cli"
+    assert calls[1]["payload"]["folder_token"] == "fld"
+
+
 # ---- a recording that stays where it is ----------------------------------------
 
 def test_a_path_is_refused_when_the_request_is_not_from_this_machine(agent_stack, monkeypatch):
