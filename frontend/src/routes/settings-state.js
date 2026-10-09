@@ -262,6 +262,7 @@ export const useSettingsPageState = () => {
         larkExports,
         // Credentials.
         credentialStatus,
+        setCredentialStatus,
         credentialConfigured,
         secretDraft,
         setSecretDraft,

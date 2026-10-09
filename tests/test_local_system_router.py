@@ -82,3 +82,106 @@ def test_runtime_config_names_this_checkout_and_its_interpreter(monkeypatch, tmp
     assert repo_root.is_absolute()
     assert (repo_root / "scripts" / "fluentflow_mcp_server.py").is_file()
     assert runtime["python_executable"] == sys.executable
+
+
+# POST /credentials/check. Requirement: right after a first-time user pastes a
+# key, say in plain Chinese whether it works: a wrong key, an empty account and
+# an unreachable server are three different things to go and fix. The check
+# uses the saved key and never echoes it back.
+
+import httpx
+import pytest
+
+from backend.routers import local_system
+
+
+def _fake_provider(monkeypatch, status=200, body=None, error=None):
+    calls = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append({"method": method, "url": url, **kwargs})
+        if error is not None:
+            raise error
+        return httpx.Response(status, json=body if body is not None else {}, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(local_system, "_http_request", fake_request)
+    return calls
+
+
+def _saved(monkeypatch, tmp_path, **secrets):
+    monkeypatch.setenv("FLUENTFLOW_CONFIG_PATH", str(tmp_path / "config.json"))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    client = _client()
+    if secrets:
+        client.post("/credentials", json=secrets)
+    return client
+
+
+def test_key_check_says_a_working_deepseek_key_works(monkeypatch, tmp_path):
+    client = _saved(monkeypatch, tmp_path, deepseek_api_key="sk-good")
+    calls = _fake_provider(monkeypatch, body={"is_available": True, "balance_infos": []})
+
+    result = client.post("/credentials/check", json={"provider": "deepseek"}).json()
+
+    assert result["ok"] is True
+    assert len(calls) == 1
+    assert calls[0]["headers"]["Authorization"] == "Bearer sk-good"
+    assert "sk-good" not in str(result)
+
+
+@pytest.mark.parametrize(
+    ("provider", "secret", "status", "body", "reason", "phrase"),
+    [
+        ("deepseek", "deepseek_api_key", 401, {}, "invalid_key", "Key 不对"),
+        ("deepseek", "deepseek_api_key", 402, {}, "no_balance", "余额不足"),
+        ("deepseek", "deepseek_api_key", 200, {"is_available": False}, "no_balance", "余额不足"),
+        ("anthropic", "anthropic_api_key", 401, {"error": {"message": "invalid x-api-key"}}, "invalid_key", "Key 不对"),
+        (
+            "anthropic", "anthropic_api_key", 400,
+            {"error": {"message": "Your credit balance is too low to access the Anthropic API."}},
+            "no_balance", "余额不足",
+        ),
+    ],
+)
+def test_key_check_tells_a_wrong_key_from_an_empty_account(monkeypatch, tmp_path, provider, secret, status, body, reason, phrase):
+    client = _saved(monkeypatch, tmp_path, **{secret: "sk-test"})
+    _fake_provider(monkeypatch, status=status, body=body)
+
+    result = client.post("/credentials/check", json={"provider": provider}).json()
+
+    assert result["ok"] is False
+    assert result["reason"] == reason
+    assert phrase in result["message"]
+
+
+def test_key_check_says_when_the_server_cannot_be_reached(monkeypatch, tmp_path):
+    client = _saved(monkeypatch, tmp_path, deepseek_api_key="sk-test")
+    _fake_provider(monkeypatch, error=httpx.ConnectTimeout("timed out"))
+
+    result = client.post("/credentials/check", json={"provider": "deepseek"}).json()
+
+    assert result == {"ok": False, "reason": "network", "message": result["message"]}
+    assert "网络" in result["message"]
+
+
+def test_key_check_makes_one_tiny_anthropic_request(monkeypatch, tmp_path):
+    client = _saved(monkeypatch, tmp_path, anthropic_api_key="sk-ant-good")
+    calls = _fake_provider(monkeypatch, body={"content": []})
+
+    result = client.post("/credentials/check", json={"provider": "anthropic"}).json()
+
+    assert result["ok"] is True
+    assert calls[0]["json"]["max_tokens"] == 1
+    assert calls[0]["headers"]["x-api-key"] == "sk-ant-good"
+
+
+def test_key_check_without_a_saved_key_sends_nothing(monkeypatch, tmp_path):
+    client = _saved(monkeypatch, tmp_path)
+    calls = _fake_provider(monkeypatch)
+
+    result = client.post("/credentials/check", json={"provider": "deepseek"}).json()
+
+    assert result["reason"] == "missing"
+    assert calls == []
+    assert client.post("/credentials/check", json={"provider": "nope"}).status_code == 400

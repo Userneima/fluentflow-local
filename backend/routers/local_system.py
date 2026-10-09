@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import sys
-from typing import Any
+from typing import Any, Callable
 
+import httpx
 from fastapi import APIRouter, Body, HTTPException
 
 from backend.core.local_config import (
@@ -17,7 +19,8 @@ from backend.core.local_config import (
     save_preferences,
     save_sensitive_settings,
 )
-from backend.core import claude_code_note, local_intake_flow, visual_note_channel
+from backend.core import claude_code_note, claude_vision, local_intake_flow, visual_note_channel
+from backend.core.ai_client import _provider_base_url
 from backend.core.local_limits_config import (
     max_media_duration_seconds,
     max_queue_files,
@@ -94,6 +97,101 @@ def update_credentials(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return save_sensitive_settings(
         {key: value for key, value in payload.items() if key in LOCAL_SENSITIVE_FIELDS}
     )
+
+
+# The first-run note setup saves a key and then asks whether it works, so a
+# wrong paste or an empty account is found now, not after an hour-long job
+# finishes without a note. One small request with a short timeout: DeepSeek's
+# balance lookup costs nothing and also says whether there is money on the
+# account; Anthropic has no free equivalent that reports credit, so it gets a
+# one-token message (a fraction of a cent) to the model the note would use.
+# The key is read from what was saved, never taken in this request's body.
+_KEY_CHECK_TIMEOUT = httpx.Timeout(15.0, connect=8.0)
+_KEY_CHECK_PROVIDERS = {
+    "deepseek": ("deepseek_api_key", "DEEPSEEK_API_KEY", "DeepSeek"),
+    "anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY", "Anthropic"),
+}
+
+# Replaced in tests; the real one sends the request.
+_http_request: Callable[..., httpx.Response] = httpx.request
+
+
+def _key_check_result(ok: bool, reason: str, message: str) -> dict[str, Any]:
+    return {"ok": ok, "reason": reason, "message": message}
+
+
+def _check_deepseek_key(key: str) -> dict[str, Any]:
+    response = _http_request(
+        "GET",
+        f"{_provider_base_url('deepseek')}/user/balance",
+        headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+        timeout=_KEY_CHECK_TIMEOUT,
+    )
+    if response.status_code == 401:
+        return _key_check_result(False, "invalid_key", "这个 Key 不对，DeepSeek 不认它。请回到申请页重新复制一遍，注意别多带空格。")
+    if response.status_code == 402:
+        return _key_check_result(False, "no_balance", "Key 是对的，但这个 DeepSeek 账户余额不足。充值后就能写笔记。")
+    if response.status_code != 200:
+        return _key_check_result(False, "provider_error", f"DeepSeek 返回了错误（{response.status_code}），稍后再试。")
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    if isinstance(data, dict) and data.get("is_available") is False:
+        return _key_check_result(False, "no_balance", "Key 是对的，但这个 DeepSeek 账户余额不足。充值后就能写笔记。")
+    return _key_check_result(True, "ok", "Key 可以用。")
+
+
+def _check_anthropic_key(key: str) -> dict[str, Any]:
+    base = (os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com").rstrip("/")
+    model = claude_vision.configured_model()
+    response = _http_request(
+        "POST",
+        f"{base}/v1/messages",
+        headers={
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
+        timeout=_KEY_CHECK_TIMEOUT,
+    )
+    status = response.status_code
+    if status == 200:
+        return _key_check_result(True, "ok", "Key 可以用。")
+    try:
+        detail = str(((response.json() or {}).get("error") or {}).get("message") or "")
+    except (ValueError, AttributeError):
+        detail = ""
+    if status == 401:
+        return _key_check_result(False, "invalid_key", "这个 Key 不对，Anthropic 不认它。请回到申请页重新复制一遍，注意别多带空格。")
+    if status == 400 and "credit" in detail.lower():
+        return _key_check_result(False, "no_balance", "Key 是对的，但这个 Anthropic 账户余额不足。充值后就能写笔记。")
+    if status == 403:
+        return _key_check_result(False, "no_permission", f"Key 是对的，但这个账户还不能用写笔记的模型 {model}。")
+    if status == 429:
+        # The key was accepted; the account is only being slowed down.
+        return _key_check_result(True, "ok", "Key 可以用（Anthropic 暂时限流，不影响之后写笔记）。")
+    return _key_check_result(False, "provider_error", f"Anthropic 返回了错误（{status}），稍后再试。")
+
+
+@router.post("/credentials/check")
+def check_credential(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    provider = str(payload.get("provider") or "").strip().lower()
+    if provider not in _KEY_CHECK_PROVIDERS:
+        raise HTTPException(status_code=400, detail="provider must be deepseek or anthropic")
+    secret_name, env_name, label = _KEY_CHECK_PROVIDERS[provider]
+    key = resolve_secret(None, secret_name) or (os.environ.get(env_name) or "").strip()
+    if not key:
+        return _key_check_result(False, "missing", f"还没有保存 {label} 的 Key。")
+    try:
+        if provider == "deepseek":
+            return _check_deepseek_key(key)
+        return _check_anthropic_key(key)
+    except httpx.TimeoutException:
+        return _key_check_result(False, "network", f"连 {label} 的服务器超时了，检查一下网络后再试。")
+    except httpx.HTTPError:
+        return _key_check_result(False, "network", f"连不上 {label} 的服务器，检查一下网络后再试。")
 
 
 @router.get("/preferences")

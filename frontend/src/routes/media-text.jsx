@@ -35,6 +35,8 @@ import {
 import SvgIcon from '../components/SvgIcon.jsx';
 import {finishedDuplicateLink, submitIgnoredExtraUrls, submitWasDuplicateOfActive} from '../lib/linkRetry.js';
 import {noteWriterBatchClause, noteWriterSentence, resolveNoteWriter, textModelKeyConfigured} from '../lib/noteWriter.js';
+import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
+import {dismissNoteKeyOnboarding, noteKeyOnboardingDismissed, shouldAutoOpenNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 import {MIUISTORE_PREF, isDouyinLinkText, needsMiuistoreConsent} from '../lib/videoLinkPrefs.js';
 import {taskStatusLabel} from '../lib/taskState.js';
 import {speakerDiarizationRequested} from '../lib/settingsModel.js';
@@ -122,6 +124,22 @@ const MediaText = () => {
         [runtimeConfig, credentialStatus],
     );
     const noNoteKey = credentialStatus !== null && noteWriter.kind === 'none';
+    // The first-run note setup (lib/noteKeyOnboarding.js). Decided once, when
+    // the key status first arrives; after that only the person opens or
+    // closes it, so a status refresh cannot pop it back up.
+    const [keySetupOpen, setKeySetupOpen] = useState(false);
+    const keySetupDecidedRef = useRef(false);
+    useEffect(() => {
+        if (keySetupDecidedRef.current || credentialStatus === null) return;
+        keySetupDecidedRef.current = true;
+        if (shouldAutoOpenNoteKeyOnboarding({writer: noteWriter, credentialStatus, dismissed: noteKeyOnboardingDismissed()})) {
+            setKeySetupOpen(true);
+        }
+    }, [credentialStatus, noteWriter]);
+    const closeKeySetup = ({completed} = {}) => {
+        if (!completed) dismissNoteKeyOnboarding();
+        setKeySetupOpen(false);
+    };
     // A subtitle or transcript file is turned into a note by the text model
     // only; Claude's frame note needs the video. With no text-model key the
     // job would finish without a note and without saying why.
@@ -675,10 +693,25 @@ const MediaText = () => {
             <section className="mx-auto h-dvh max-w-[1280px] overflow-y-auto px-8 py-9 hide-scrollbar">
                 <input ref={subtitleInputRef} type="file" accept=".srt,.vtt,.txt,.md,text/plain,text/markdown" onChange={handleSubtitleSelect} className="hidden"/>
 
-                {showWriterBanner && (
-                    <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-[#ecd9a8] bg-[#fff8e6] px-4 py-3 text-sm text-[#5c4a1a] dark:border-[#6b5a2a] dark:bg-[#2a2415] dark:text-[#f0dfb0]">
+                {keySetupOpen && (
+                    <NoteKeyOnboarding
+                        runtimeConfig={runtimeConfig}
+                        onClose={closeKeySetup}
+                        onStatusChange={setCredentialStatus}
+                    />
+                )}
+
+                {showWriterBanner && !keySetupOpen && (
+                    <div data-testid="note-writer-banner" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-[#ecd9a8] bg-[#fff8e6] px-4 py-3 text-sm text-[#5c4a1a] dark:border-[#6b5a2a] dark:bg-[#2a2415] dark:text-[#f0dfb0]">
                         <span>{noteWriterSentence(noteWriter, lang)}</span>
-                        {noNoteKey && <Link to="/settings" className="shrink-0 font-extrabold underline">{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>}
+                        {noNoteKey && (
+                            <span className="flex shrink-0 items-center gap-4">
+                                <button type="button" onClick={() => setKeySetupOpen(true)} className="font-extrabold underline">
+                                    {lang === 'zh' ? '怎么拿 Key？' : 'How do I get a key?'}
+                                </button>
+                                <Link to="/settings#notes" className="font-extrabold underline">{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>
+                            </span>
+                        )}
                     </div>
                 )}
 

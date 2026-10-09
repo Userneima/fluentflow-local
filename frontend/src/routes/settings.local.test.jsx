@@ -68,6 +68,17 @@ describe('local settings page', () => {
     // No globals in this project's vitest config, so auto-cleanup is off.
     afterEach(cleanup);
 
+    it('reopens the first-run note setup from the notes section, even after it was closed', async () => {
+        // Requirement: the setup that explains what a key is, where to get one
+        // and what it costs can be opened again from Settings → 笔记.
+        localStorage.setItem('fluentflow_note_key_onboarding_dismissed', '1');
+        render(<Settings/>);
+        fireEvent.click(screen.getByRole('button', {name: /第一次填 Key/}));
+        expect(screen.getByText(/相当于这个模型服务的账号密码/)).toBeTruthy();
+        fireEvent.click(screen.getByRole('button', {name: /以后再说/}));
+        expect(screen.queryByText(/相当于这个模型服务的账号密码/)).toBeNull();
+    });
+
     it('renders the sections this edition has', () => {
         render(<Settings/>);
         expect(screen.getByText('转录')).toBeTruthy();

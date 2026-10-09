@@ -1,4 +1,4 @@
-import {useEffect} from 'react';
+import {useEffect, useState} from 'react';
 import {Section} from '../components/settingsPrimitives.jsx';
 import {
     AdvancedKeysFold,
@@ -23,6 +23,8 @@ import {
 import {LARK_EXPORT_ROUTE_LOCAL_CLI} from '../app/shared.jsx';
 import {useSettingsPageState} from './settings-state.js';
 import {noteWriterSentence, resolveNoteWriter} from '../lib/noteWriter.js';
+import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
+import {dismissNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 
 // The settings page.
 //
@@ -46,6 +48,8 @@ const Settings = () => {
     // build switch alone is not enough, because without Claude the backend
     // falls back to the text note and these settings apply (and cost money).
     const claudeWritesNote = noteWriter.kind === 'claude';
+    // The first-run note setup, opened again by hand from here.
+    const [keySetupOpen, setKeySetupOpen] = useState(false);
     // Arriving from a task card's "go to settings" link (/settings#douyin-fallback).
     useEffect(() => {
         const id = typeof window !== 'undefined' ? decodeURIComponent(window.location.hash.slice(1)) : '';
@@ -78,6 +82,23 @@ const Settings = () => {
                 title={lang === 'zh' ? '笔记' : 'Notes'}
                 description={notesIntro}
             >
+                <div className="px-5 pt-4">
+                    {keySetupOpen ? (
+                        <NoteKeyOnboarding
+                            runtimeConfig={runtimeConfig}
+                            onClose={({completed} = {}) => {
+                                if (!completed) dismissNoteKeyOnboarding();
+                                setKeySetupOpen(false);
+                            }}
+                            onStatusChange={state.setCredentialStatus}
+                            onUseTextProvider={state.updateSettingNow}
+                        />
+                    ) : (
+                        <button type="button" onClick={() => setKeySetupOpen(true)} className="text-xs font-semibold text-primary underline">
+                            {lang === 'zh' ? '第一次填 Key？看看 Key 是什么、去哪里申请、大概花多少钱' : 'First time? What a key is, where to get one, and roughly what it costs'}
+                        </button>
+                    )}
+                </div>
                 <div className="divide-y divide-[#ece8e8] dark:divide-white/[0.1]">
                     <TextModelKeyRows
                         state={state}
