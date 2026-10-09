@@ -36,7 +36,9 @@ LIVE_STATUSES = {"queued", "processing", "running", "pending"}
 # submitted by an agent or by curl without a header lands in the unscoped list.
 SCOPES = (None, "local-single-user")
 
-TIMEOUT_SECONDS = 3
+# The list reads every task; on a machine busy transcribing, three seconds
+# was not enough and the guard answered "could not tell" on an idle queue.
+TIMEOUT_SECONDS = 10
 
 
 def count_for_scope(base_url: str, client_id: str | None) -> int | None:

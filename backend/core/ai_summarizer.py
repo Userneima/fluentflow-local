@@ -1440,23 +1440,32 @@ def generate_bilingual_segments_zh(
     model: str | None = None,
     provider: str | None = None,
     max_chunk_chars: int = 8_000,
+    chat: Callable[[str, str], str] | None = None,
 ) -> BilingualSegmentResult:
-    """Merge adjacent English fragments into readable bilingual subtitle segments."""
+    """Merge adjacent English fragments into readable bilingual subtitle segments.
+
+    ``chat`` replaces the text model with another ``(system, user) -> text``
+    writer, which is how Claude translates when no text-model key is set.
+    """
     load_dotenv()
     source_segments = [dict(segment) for segment in segments if isinstance(segment, dict)]
     if not source_segments:
         return BilingualSegmentResult(segments=[], translated_count=0, chunk_count=0)
 
-    provider_name = _normalize_provider(provider)
-    client = _get_client(provider=provider_name, api_key=api_key)
-    m = _normalize_model(provider_name, model)
+    if chat is None:
+        provider_name = _normalize_provider(provider)
+        client = _get_client(provider=provider_name, api_key=api_key)
+        m = _normalize_model(provider_name, model)
+
+        def chat(system: str, user: str) -> str:
+            return _chat(client, m, system, user, temperature=0.1)
     chunks = _chunk_indexed_segments(source_segments, max_chunk_chars)
     merged_segments: list[dict[str, Any]] = []
     consumed_until = -1
 
     for chunk in chunks:
         payload = json.dumps(chunk, ensure_ascii=False)
-        generated = _extract_json_array(_chat(client, m, _BILINGUAL_SEGMENT_SYSTEM, payload, temperature=0.1))
+        generated = _extract_json_array(chat(_BILINGUAL_SEGMENT_SYSTEM, payload))
         chunk_indices = [int(item["index"]) for item in chunk if "index" in item]
         if not chunk_indices:
             continue

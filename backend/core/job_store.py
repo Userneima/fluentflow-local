@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.core.runtime_paths import default_job_db_path
-from backend.core.result_schema import normalize_result_for_read, normalize_result_for_storage
+from backend.core.result_schema import LEGACY_SEGMENT_KEYS, normalize_result_for_read, normalize_result_for_storage
 from backend.core.title_display import display_title_for_user
 
 logger = logging.getLogger(__name__)
@@ -327,7 +327,11 @@ def list_jobs(
     if since:
         clauses.append("updated_at >= ?")
         params.append(since)
-    sql = "SELECT * FROM jobs"
+    # Decoding and sanitising every task's full result, segments and all, was
+    # most of a two-to-three-second records page, and the reason the restart
+    # guard's three-second request kept timing out. SQLite drops what a list
+    # row never shows before Python sees it.
+    sql = "SELECT * FROM jobs" if include_result else f"SELECT {_SUMMARY_COLUMNS} FROM jobs"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY updated_at DESC"
@@ -398,6 +402,26 @@ def list_jobs_by_statuses(
         _row_to_dict(row) if include_result else _row_to_summary_dict(row)
         for row in rows
     ]
+
+
+# What a list row never shows: every segment list, the full-length transcript
+# variants (the preview comes from transcript_text), and the visual note's own
+# copy of the note and its frame lists. ``visual_note.media_source`` stays,
+# because reading corrects the note's recorded source from it.
+_SUMMARY_DROPPED_KEYS = (
+    "raw_segments", "display_segments", "stt_raw_segments", *sorted(LEGACY_SEGMENT_KEYS),
+    "raw_transcript_text", "cleaned_transcript_text",
+    "visual_note.markdown", "visual_note.frames_sent", "visual_note.frames_opened",
+    "visual_note.frames_cited", "visual_note.basis_note", "visual_note.replaced_note",
+)
+_SUMMARY_COLUMNS = (
+    "task_id, created_at, updated_at, status, client_id, stage, progress, source_type,"
+    " source_filename, source_file_size_mb, summary_status, error_reason, metadata_json,"
+    " json_remove(result_json, " + ", ".join(f"'$.{key}'" for key in _SUMMARY_DROPPED_KEYS) + ") AS result_json,"
+    # What the dropped segments said about subtitles, for an old result that
+    # never had subtitle_mode stored.
+    " instr(result_json, '\"text_zh\"') > 0 AS has_text_zh"
+)
 
 
 def list_job_summaries(
@@ -1021,7 +1045,10 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
 
 
 def _row_to_summary_dict(row: sqlite3.Row) -> dict[str, Any]:
-    result = _result_summary(_json_loads(row["result_json"]))
+    stored = _json_loads(row["result_json"])
+    if isinstance(stored, dict) and not stored.get("subtitle_mode") and "has_text_zh" in row.keys():
+        stored["subtitle_mode"] = "bilingual_zh" if row["has_text_zh"] else "source_only"
+    result = _result_summary(stored)
     metadata = _json_loads(row["metadata_json"])
     return {
         "task_id": row["task_id"],

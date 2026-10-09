@@ -35,6 +35,8 @@ from backend.core.ai_summarizer import (
     visual_requests_to_frame_segments,
 )
 from backend.core.media_probe import media_duration_seconds
+from backend.core.ai_client import _normalize_provider, _provider_api_key
+from backend.core.claude_text import claude_chat
 from backend.core.media_job_stages import (
     clean_transcript,
     export_note_to_lark,
@@ -180,6 +182,29 @@ def _translation_ai_kwargs(ai_kwargs: dict[str, Any]) -> dict[str, Any]:
         for key, value in ai_kwargs.items()
         if key in {"api_key", "model", "provider"}
     }
+
+
+def _translation_writer(
+    translation_kwargs: dict[str, Any], secret_resolver: Any,
+) -> tuple[Any, str]:
+    """Who translates an English recording's subtitles: the chosen text model
+    when it has a key, otherwise Claude through the note's channel.
+
+    Someone whose notes are written by Claude often has no DeepSeek key, and
+    every English recording they processed came back without Chinese subtitles.
+    With neither, the text model is kept so the error names the key to add.
+    """
+    provider = str(translation_kwargs.get("provider") or "")
+    try:
+        _provider_api_key(_normalize_provider(provider or None), translation_kwargs.get("api_key"))
+        return None, provider or "text_model"
+    except ValueError:
+        pass
+    anthropic_key = secret_resolver(None, "anthropic_api_key") if secret_resolver else None
+    found = claude_chat(anthropic_key)
+    if found is None:
+        return None, provider or "text_model"
+    return found
 
 
 async def _run_transcript_correction_stage(
@@ -744,9 +769,12 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                     ai_model=ai_model,
                     system_prompt=None,
                 ))
+                translation_chat, translation_channel = _translation_writer(translation_kwargs, secret_resolver)
                 translation_result = await loop.run_in_executor(
                     None,
-                    lambda: generate_bilingual_segments_zh(segments_payload, **translation_kwargs),
+                    lambda: generate_bilingual_segments_zh(
+                        segments_payload, **translation_kwargs, chat=translation_chat,
+                    ),
                 )
                 bilingual_segments = translation_result.segments
                 translation_status = "completed" if bilingual_segments else "failed"
@@ -770,6 +798,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                         bilingual_segment_count=len(bilingual_segments),
                         translated_segment_count=len([segment for segment in bilingual_segments if segment.get("text_zh")]),
                         translation_chunk_count=translation_result.chunk_count,
+                        translation_channel=translation_channel,
                     ),
                 )
             except Exception as exc:
