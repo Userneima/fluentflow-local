@@ -1,0 +1,21 @@
+round,id,kind,task_id,task_status,note_status,passed,note_usable,would_need_retry,failure_reasons,queue_wait_s,submit_to_transcript_s,submit_to_task_done_s,submit_to_note_s,visual_note_s,cut_outcome,cut_used,transcript_chars,language,expected_language,note_chars,note_starts_with_heading,note_prefix_garbage,frames_cited,frame_urls_200,vn_frames_sent,tracebacks,log_warn_lines
+1,A,lecture_class,57d992f2026349e284bb997f7bdc0802,completed,completed(visual),1,0,0,,0,148.7,148.7,270.7,121.9,already_cut,False,4507,zh,zh,3326,0,1,2,2,111,0,0
+1,B,online_course_en,22cc708f8dd14bc58d4487add1eccfc8,completed,completed(visual),1,1,0,translation_failed: DEEPSEEK_API_KEY 未设置：请在 .env 中配置或在设置页填写 API Key。,170.5,414.7,414.7,560.7,145.7,used,True,17223,en,en,4749,1,0,5,5,115,0,1
+1,C,screen_share_slides,b999ad463b8e4e27a44a4581faedf3b7,completed,completed(visual),1,1,0,,433.6,746.7,746.7,895.7,147.9,used,True,4273,zh,zh,5167,1,0,7,7,29,0,0
+1,D,online_meeting,d59f2328537742f2bb49f91406bafc1f,completed,completed(visual),1,1,0,,793.6,1041.7,1041.7,1236.7,195.0,used,True,4011,zh,zh,4505,1,0,8,8,68,0,0
+1,E,interview,9542a532c6ec450c85fb75d45fc5bdf2,completed,completed(visual),1,0,0,,1074.3,1357.7,1358.7,1534.7,176.0,used,True,5262,zh,zh,4419,0,1,4,4,42,0,0
+1,F,audio_m4a,c000afcb6f9641d4a75fcf9e085a9a46,completed,completed(visual),1,1,0,,1392.0,1574.7,1574.7,1683.7,107.7,used,True,5297,zh,zh,3795,1,0,0,0,,0,0
+1,G,meeting_screen_mov,9e9895e1f7754c748e55634356f254d8,completed,completed(visual),1,1,0,,1575.4,2211.7,2211.7,2493.7,281.7,used,True,5160,zh,zh,4747,1,0,3,3,75,0,0
+1,H,course_video,195a55d42f08421e9b42e315879531ca,completed,completed(visual),1,1,0,,2288.8,2615.7,2615.7,2745.7,129.1,used,True,6617,zh,zh,4761,0,0,5,5,16,0,0
+1,I,douyin_link,441be688cd2740fda7422bf289a4bf95,completed,completed(visual),1,1,0,,2613.8,2732.9,2732.9,2832.9,99.9,used,True,1747,zh,zh,1867,1,0,6,6,84,0,0
+1,J,bilibili_link,e59789481f1642b3a1415fb16a843539,completed,failed(visual),0,0,1,visual_note_failed: 这次转写用的是原录音，笔记也要读原录音，但本机已经找不到这个任务的录音了（可能已过保留期）。重新提交这个文件再写笔记。,2719.8,2981.9,2981.9,2982.9,0.0,too_close_to_speech,False,6516,zh,zh,0,0,0,0,0,,0,1
+2,A,lecture_class,222a0de9ee79417586af2a6117e32711,completed,completed(visual),1,0,0,,0,206.1,206.1,291.1,84.0,already_cut,False,4512,zh,zh,18,0,1,0,0,111,0,0
+2,B,online_course_en,a8afaae2e14f4f0391a4fc8469048a79,completed,completed(visual),1,1,0,translation_failed: DEEPSEEK_API_KEY 未设置：请在 .env 中配置或在设置页填写 API Key。,232.3,543.1,543.1,706.1,162.5,used,True,17223,en,en,5210,0,0,4,4,115,0,1
+2,C,screen_share_slides,2292dc71ec0b42a9bfc4a5468ab42c42,completed,completed(visual),1,1,0,,565.9,1107.1,1107.1,1291.1,183.2,used,True,4273,zh,zh,5583,1,0,7,7,29,0,0
+2,D,online_meeting,2e794c459a4c46158a683a6aed9ee624,completed,completed(visual),1,1,0,,1170.6,1632.1,1632.1,1823.1,190.0,used,True,4011,zh,zh,4415,1,0,9,9,70,0,0
+2,E,interview,917b965bee0b45aea1dfaab7096b5731,completed,completed(visual),1,1,0,,1687.0,2067.1,2067.1,2232.1,164.6,used,True,5262,zh,zh,4506,1,0,5,5,43,0,0
+2,F,audio_m4a,63483b9d54d94f8190e349e4e6a56311,completed,completed(visual),1,1,0,,2104.1,2325.1,2325.1,2412.1,85.9,used,True,5297,zh,zh,2850,1,0,0,0,,0,0
+2,G,meeting_screen_mov,e87d29b9b4cf425b9dd831dd91bb9ab3,completed,completed(visual),1,1,0,,2325.9,3085.1,3085.1,3421.1,334.8,used,True,5160,zh,zh,4133,0,0,2,2,75,0,0
+2,H,course_video,8393295c7cd04d829b152c201a8eb401,completed,completed(visual),1,0,0,,3176.4,3736.1,3736.1,3889.1,153.5,used,True,6617,zh,zh,4416,0,1,4,4,16,0,0
+2,I,douyin_link,937dba68c878479a8a70987f63cb3a35,completed,completed(visual),1,1,0,,3735.1,3873.2,3873.2,3960.2,86.0,used,True,1747,zh,zh,2067,1,0,6,6,84,0,0
+2,J,bilibili_link,7a84e192f6b341438f45ea0ef13f2330,completed,failed(visual),0,0,1,visual_note_failed: 这次转写用的是原录音，笔记也要读原录音，但本机已经找不到这个任务的录音了（可能已过保留期）。重新提交这个文件再写笔记。,3858.4,4166.2,4166.2,4167.2,0.0,too_close_to_speech,False,6516,zh,zh,0,0,0,0,0,,0,1
