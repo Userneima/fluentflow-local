@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, cut_timeline, debreath_job, visual_note_channel
+from backend.core import visual_note_check
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
@@ -756,6 +757,24 @@ def _rewrite_image_targets(markdown: str, task_id: str, frames: list[FrameInput]
     return _IMAGE_RE.sub(replace, markdown or "")
 
 
+def _checked_draft(write, part, frames, *, api_key):
+    """One part's draft, cleaned and checked before anything can store it.
+
+    A draft far too short for its transcript is written once more; failing
+    again, the run fails and the task keeps the note it had. See
+    ``visual_note_check`` for what was measured.
+    """
+    reason = None
+    for _attempt in range(2):
+        draft = write(part.text, frames, api_key=api_key, part=part)
+        markdown = visual_note_check.strip_leading_residue(draft.markdown)
+        reason = visual_note_check.too_short_reason(markdown, part.text)
+        if reason is None:
+            return replace(draft, markdown=markdown)
+        logger.warning("visual note draft refused (%s); writing it again", reason)
+    raise ClaudeVisionError(f"{reason}，重写一次也一样。这份没有替换现有笔记，可以稍后再点「重生笔记」。")
+
+
 def _joined_draft(drafts, parts):
     """One note out of the parts, without paying a model to staple them together.
 
@@ -897,7 +916,7 @@ def _run_visual_note(
                     client_id=client_id,
                     state={"stage": f"writing {part.index}/{part.total}"},
                 )
-            drafts.append(write(part.text, part_frames, api_key=api_key, part=part))
+            drafts.append(_checked_draft(write, part, part_frames, api_key=api_key))
         draft = _joined_draft(drafts, parts)
         cited = cited_frames(draft.markdown, frames)
         markdown = _rewrite_image_targets(draft.markdown, task_id, frames)

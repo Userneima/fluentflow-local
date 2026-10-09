@@ -1033,3 +1033,94 @@ def test_older_records_that_read_the_original_are_corrected_on_read():
     assert normalize_result_for_read(stored)["summary_written_from"] == "source_media_note"
     text_note = normalize_result_for_read({"summary_markdown": "x", "summary_written_from": "text_fallback"})
     assert text_note["note_from_frames"] is False
+
+
+# ── a note is checked before it replaces anything (2026-10-09 stability run) ──
+#
+# Requirements:
+# 1. A note far too short for its recording never becomes the task's note: it
+#    is written once more, and if that is short too the run fails and the task
+#    keeps the note it had.
+# 2. Residue the model put in front of the title is gone from the stored note;
+#    the note's own text is untouched.
+# 3. A short clip's short note is still accepted.
+
+from backend.core import visual_note_check  # noqa: E402
+
+GOOD_NOTE = "# 最小二乘法\n\n" + "这一讲从误差平方和出发，推出正规方程。" * 20
+
+
+def _long_transcript(job_store):
+    job_store["result"]["display_segments"] = [
+        {"start": float(i * 10), "end": float(i * 10 + 5), "text": "今天讲最小二乘法，先看误差平方和怎么定义。" * 10}
+        for i in range(9)
+    ]
+
+
+def _writers(*markdowns):
+    calls = []
+
+    def write(transcript, frames, **kwargs):
+        calls.append(transcript)
+        return VisualNoteDraft(
+            markdown=markdowns[min(len(calls) - 1, len(markdowns) - 1)],
+            basis_note="", model="claude-opus-5", frames_sent=list(frames),
+            transcript_chars=len(transcript),
+        )
+
+    write.calls = calls  # type: ignore[attr-defined]
+    return write
+
+
+def test_a_placeholder_note_is_written_again_and_the_good_one_is_kept(job_store, tmp_path):
+    _long_transcript(job_store)
+    writer = _writers("ewline placeholder", GOOD_NOTE)
+
+    updated = _run(tmp_path, "", writer=writer)
+
+    assert len(writer.calls) == 2
+    assert updated["result"]["summary_markdown"].startswith("# 最小二乘法")
+
+
+def test_two_placeholder_notes_fail_and_the_old_note_stays(job_store, tmp_path):
+    _long_transcript(job_store)
+    writer = _writers("ewline placeholder")
+
+    with pytest.raises(Exception):
+        _run(tmp_path, "", writer=writer)
+
+    assert len(writer.calls) == 2
+    assert job_store["result"]["summary_markdown"] == "原来的文字笔记"
+    state = vn.visual_note_state(job_store["result"])
+    assert state["status"] == vn.STATUS_FAILED
+    assert "重生笔记" in state["error"]
+
+
+@pytest.mark.parametrize("written", [
+    "： # 科学研究从问题开始\n\n正文。",
+    "deep# 深刻理解用户\n\n正文。",
+    "好的，这是一段面试录像的笔记。\n\n# 实习面试记录\n\n正文。",
+])
+def test_residue_before_the_title_is_removed(written):
+    cleaned = visual_note_check.strip_leading_residue(written)
+    assert cleaned.startswith("#")
+    assert cleaned.endswith("正文。")
+
+
+@pytest.mark.parametrize("written", [
+    "## 这次会谈的两件事\n\n一是确认……",
+    "> 访谈笔记：一位内容创作者\n\n## 一、",
+    "了解用户：从冰山到爬山\n\n## 一、理解一个人",
+    "C# 语言入门：第一课\n\n正文。",
+])
+def test_a_note_that_starts_cleanly_is_left_alone(written):
+    assert visual_note_check.strip_leading_residue(written) == written
+
+
+def test_a_short_clip_keeps_its_short_note(job_store, tmp_path):
+    writer = _writers("# 炸面串\n\n雨夜街头。")
+
+    updated = _run(tmp_path, "", writer=writer)
+
+    assert len(writer.calls) == 1
+    assert updated["result"]["summary_markdown"].startswith("# 炸面串")
