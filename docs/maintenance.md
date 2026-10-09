@@ -82,6 +82,7 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | --- | --- | --- |
 | `FLUENTFLOW_VISUAL_NOTE_CHANNEL` | 图文笔记走哪条 Claude 通道。默认用你自己的 Anthropic API Key（设置页填写或 `.env` 里的 `ANTHROPIC_API_KEY`）；设为 `subscription` 才改用本机登录的 Claude Code 订阅，只适合在自己电脑上从源码运行 | `api_key` |
 | `FLUENTFLOW_VISUAL_NOTE_MODEL` | 图文笔记用的 Claude 模型 | `claude-opus-5` |
+| `FLUENTFLOW_NOTE_RULES_PATH` | 写笔记要求文件的位置。文件存在且不为空时，Claude 写笔记按它来；否则用自带的 `backend/core/note_writing_rules.md`。每次写笔记都重新读，改完不用重启 | 数据目录下的 `note_writing_rules.md` |
 | `FLUENTFLOW_VISUAL_NOTE_TIMEOUT` | 图文笔记单次超时秒数，只作用于 `subscription` 通道（本机 `claude` 进程）；API Key 通道的请求超时由 SDK 决定 | `2400` |
 | `FLUENTFLOW_CLAUDE_CLI` | `claude` 命令的路径，不设则在 PATH 上找；只在 `subscription` 通道用到 | 自动 |
 | `FLUENTFLOW_NOTE_DEADLINE_SECONDS` | 文本模型写一份笔记的总时限（秒），到点后已有初稿就保留初稿、跳过后续修订，还没有初稿就报超时 | `3600` |

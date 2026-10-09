@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from backend.core import note_rules
+
 try:  # The local edition must still boot for someone who never wants this.
     import anthropic
 except ImportError:  # pragma: no cover - exercised by the "not installed" path
@@ -281,27 +283,23 @@ _IMAGE_MEDIA_TYPES = {
     ".gif": "image/gif",
 }
 
-SYSTEM_PROMPT = """你在为一段课程或讲座录像写学习笔记。
+# The contract the parser and the frame bookkeeping depend on. The writing
+# rules themselves live in a file (see ``note_rules``), so they can improve
+# without a code change; this part cannot move there, because a rule file that
+# dropped it would break every note.
+NOTE_CONTRACT = """## 输入和输出（固定要求）
 
 你会拿到两样东西：这段录像的转录文字（带时间点），以及若干张从同一段录像里按画面变化抽出的截图，每张都标了文件名和它在录像里的时间点。
 
-请遵守：
+- 引用截图用 Markdown 图片语法：`![一句话图注](文件名.jpg)`。文件名原样使用给你的那些，不改写、不编造。
+- 所有截图都没有可用信息时，只根据转录文字写笔记，并在 basis_note 里直说。
+- note_markdown 里只放笔记本身，第一行就是笔记内容，前面不加任何说明。"""
 
-1. 只写你能从转录文字或截图里确认的内容。不要补充你没有看到的背景知识，不要把推测写成录像里讲过的话。
-2. **画面的作用是补充口播里没有的信息，不是把屏幕誊写一遍。**
 
-看到画面上有东西时，先问：这一屏给了转录文字里没有的什么？可能是一个具体的数字、一个命令、一个被口播说错或含糊带过的名字、一张图表体现出来的结构关系。**把那件事写进正文的叙述里**——它是笔记的一部分，跟你从口播里得到的内容并列，不需要标明"这是从图上看到的"。
+def system_prompt() -> str:
+    """The note rules this machine uses, followed by the fixed contract."""
+    return note_rules.load_rules().text + "\n\n" + NOTE_CONTRACT
 
-如果这一屏上的内容口播已经完整说过了，那它就没有补充任何东西：不用引用，也不用复述。
-
-需要让读者自己去看那张画面时（幻灯片、板书、代码、公式、图表、界面演示、实物演示本身就是要看的），用 Markdown 图片语法引用：`![一句话说清这是哪张画面](文件名.jpg)`。
-
-方括号里**只写一句话，让读者知道点开会看到什么**，比如「文档目录：七项能力的完整清单」「部署前的坑清单模板」。不要写「示意图」「如图所示」这种不含信息的说明；也不要把屏幕上的文字整段抄进方括号——**图注长到读者不点开图也能读完，说明你在用图注替代笔记**。
-3. 文件名必须原样使用给你的那些，不要改写、不要编造。
-4. **打开是为了判断，不是承诺引用。**你可以打开很多张，然后只引用其中少数几张——看过之后发现这张没给笔记增加任何东西，就不要引用它，这是正常且期待的结果，不是浪费。片头、片尾、过渡、纯人像、跟前一张几乎一样的画面一律不要引用。一份笔记引用几张都可以，包括一张都不引用。
-5. 如果所有截图都没有可用信息，就只根据转录文字写笔记，并在 basis_note 里直说这一点。
-
-用中文写笔记。结构自己定，服务于读者复习，不要套固定模板。"""
 
 NOTE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -565,7 +563,7 @@ def write_visual_note(
     request = {
         "model": chosen_model,
         "max_tokens": max_tokens,
-        "system": SYSTEM_PROMPT + (part_instruction(part) if part is not None else ""),
+        "system": system_prompt() + (part_instruction(part) if part is not None else ""),
         "messages": [{"role": "user", "content": build_user_content(text, picked)}],
         "output_config": {"format": {"type": "json_schema", "schema": NOTE_SCHEMA}},
     }
@@ -660,7 +658,8 @@ __all__ = [
     "ClaudeVisionError",
     "DEFAULT_MODEL",
     "NOTE_SCHEMA",
-    "SYSTEM_PROMPT",
+    "NOTE_CONTRACT",
+    "system_prompt",
     "FrameInput",
     "FRAME_INDEX_CAP",
     "FRAME_ATTACH_MAX",

@@ -53,7 +53,7 @@ from backend.core.claude_vision import (
     TranscriptPart,
     part_instruction,
     NOTE_SCHEMA,
-    SYSTEM_PROMPT,
+    system_prompt as note_system_prompt,
     ClaudeVisionError,
     FrameInput,
     VisualNoteDraft,
@@ -354,7 +354,7 @@ def _command(
     model: str,
     frame_dirs: list[str],
     *,
-    system_prompt: str = SYSTEM_PROMPT,
+    system_prompt: str | None = None,
     schema: dict[str, Any] | None = None,
     inline: bool = False,
 ) -> list[str]:
@@ -373,7 +373,7 @@ def _command(
         "--output-format", "stream-json",
         "--verbose",
         "--json-schema", json.dumps(schema if schema is not None else NOTE_SCHEMA, ensure_ascii=False),
-        "--system-prompt", system_prompt,
+        "--system-prompt", system_prompt if system_prompt is not None else note_system_prompt(),
         # With the pictures already in the message there is nothing left to read,
         # so the one tool this errand ever had is taken away too. An agent with no
         # tools cannot wander, and there is no loop for it to wander in.
@@ -680,7 +680,7 @@ def write_visual_note(
     picked = spread_across(list(frames), FRAME_ATTACH_MAX)
     command = _command(
         chosen_model, [], inline=True,
-        system_prompt=SYSTEM_PROMPT + (part_instruction(part) if part is not None else ""),
+        system_prompt=note_system_prompt() + (part_instruction(part) if part is not None else ""),
     )
     payload, _tool_reads = _run_cli(command, build_inline_message(text, picked), execute)
 

@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, cut_timeline, debreath_job, visual_note_channel
-from backend.core import visual_note_check
+from backend.core import note_rules, visual_note_check
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
@@ -907,6 +907,9 @@ def _run_visual_note(
         # reads like a finished one. Each part is written from its own stretch of
         # transcript and its own pictures, and the parts are joined below.
         parts = claude_vision.transcript_parts(transcript)
+        # Which rules this note was written under, read before the first
+        # request; the writers read the same file a moment later.
+        rules = note_rules.load_rules()
         drafts = []
         for part in parts:
             part_frames = claude_vision.frames_for_part(frames, part)
@@ -939,6 +942,8 @@ def _run_visual_note(
             "speaker_labeled": cut_timeline.SPEAKER_LABEL_PREAMBLE in transcript,
             "basis": BASIS_BOTH if cited else BASIS_TRANSCRIPT_ONLY,
             "basis_note": draft.basis_note,
+            "rules_path": str(rules.path),
+            "rules_default": rules.is_default,
             # Offered, opened, cited — three different numbers now, and the gaps
             # between them are the interesting part. Everything distinct the
             # recording had was offered; the model opened what it judged worth a
