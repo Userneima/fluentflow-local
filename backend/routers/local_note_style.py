@@ -27,6 +27,14 @@ def _skill_payload(skill: note_skills.NoteSkill) -> dict[str, Any]:
     return {"text": skill.text, "version": skill.version, "is_default": skill.is_default}
 
 
+def _saved_at(name: str) -> str:
+    """``20261010-142233-…`` as ``2026-10-10 14:22``, the time it was replaced."""
+    stamp = name[:15]
+    if len(stamp) == 15 and stamp[8] == "-":
+        return f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[9:11]}:{stamp[11:13]}"
+    return name
+
+
 def _fail(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
@@ -39,7 +47,7 @@ def read_note_style(request: Request) -> dict[str, Any]:
         "skill": _skill_payload(note_skills.load_note_skill()),
         "default_skill": _skill_payload(note_skills.default_skill()),
         "history": [
-            {"name": path.name, "saved_at": path.name[:15]} for path in note_skills.skill_history()
+            {"name": path.name, "saved_at": _saved_at(path.name)} for path in note_skills.skill_history()
         ],
         "candidates": note_style.candidates(),
         "unread_edits": len(unread),

@@ -732,8 +732,30 @@ const createApi = () => {
         if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
         return data?.preferences && typeof data.preferences === 'object' ? data.preferences : {};
     };
+    // 「我的笔记风格」: the user's own note skill (see backend/routers/local_note_style.py).
+    // One call per action; every one returns the service's JSON or throws its message.
+    const noteStyleCall = async (path, body) => {
+        const r = await apiFetch(`${API_BASE}/note-style${path}`, body === undefined ? undefined : {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify(body || {}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
+    };
+    const noteStyle = {
+        read: () => noteStyleCall(''),
+        previewTasks: () => noteStyleCall('/preview-tasks'),
+        fromEdits: () => noteStyleCall('/candidates/from-edits', {}),
+        fromExamples: (notes) => noteStyleCall('/candidates/from-examples', {notes}),
+        dismiss: (id) => noteStyleCall(`/candidates/${encodeURIComponent(id)}/dismiss`, {}),
+        propose: (payload) => noteStyleCall('/proposal', payload),
+        apply: () => noteStyleCall('/proposal/apply', {}),
+        discard: () => noteStyleCall('/proposal/discard', {}),
+    };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getPreferences, savePreferences, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getPreferences, savePreferences, noteStyle, checkHealth};
 };
 
 export const useSettings = () => {

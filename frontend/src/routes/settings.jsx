@@ -24,6 +24,7 @@ import {LARK_EXPORT_ROUTE_LOCAL_CLI} from '../app/shared.jsx';
 import {useSettingsPageState} from './settings-state.js';
 import {noteWriterSentence, resolveNoteWriter} from '../lib/noteWriter.js';
 import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
+import {NoteStylePanel} from '../components/NoteStylePanel.jsx';
 import {dismissNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 
 // The settings page.
@@ -116,6 +117,20 @@ const Settings = () => {
                         {!claudeWritesNote && <AutoIllustrateRow state={state}/>}
                     </div>
                 </div>
+            </Section>
+
+            <Section
+                id="note-style"
+                title={lang === 'zh' ? '我的笔记风格' : 'My note style'}
+                description={lang === 'zh'
+                    ? 'Claude 写笔记时照这份写法。你在编辑器里改过的笔记会变成写法规则的候选；每次改动生效前，先用同一段录像新旧各写一份给你对比。'
+                    : 'Claude writes notes this way. Your edits become candidate rules; every change is compared on one recording before it takes effect.'}
+            >
+                {claudeWritesNote ? <NoteStylePanel/> : (
+                    <p className="px-5 py-4 text-xs leading-relaxed text-on-surface-variant">
+                        {lang === 'zh' ? '这份写法用于 Claude 写的笔记。上面填好 Anthropic API Key 后就能在这里调整。' : 'This style applies to notes Claude writes. Add an Anthropic API key above to adjust it here.'}
+                    </p>
+                )}
             </Section>
 
             <Section

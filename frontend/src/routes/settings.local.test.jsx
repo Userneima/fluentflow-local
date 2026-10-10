@@ -48,9 +48,16 @@ vi.mock('../app/shared.jsx', async () => {
             checkVideoCookies: async () => ({ok: true}),
             getPreferences: async () => servicePreferences,
             savePreferences,
+            noteStyle,
         }),
     };
 });
+
+// One object, as the real useApi returns, so the note style panel's effects run once.
+const noteStyle = {
+    read: async () => ({skill: {text: '', version: 'v', is_default: true}, candidates: [], unread_edits: 0, proposal: null, history: []}),
+    previewTasks: async () => ({tasks: []}),
+};
 
 const {default: Settings} = await import('./settings.jsx');
 
