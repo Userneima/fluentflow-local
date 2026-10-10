@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, cut_timeline, debreath_job, visual_note_channel
-from backend.core import note_rules, visual_note_check
+from backend.core import note_skills, visual_note_check
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
@@ -757,7 +757,7 @@ def _rewrite_image_targets(markdown: str, task_id: str, frames: list[FrameInput]
     return _IMAGE_RE.sub(replace, markdown or "")
 
 
-def _checked_draft(write, part, frames, *, api_key):
+def _checked_draft(write, part, frames, *, api_key, rules=None):
     """One part's draft, cleaned and checked before anything can store it.
 
     A draft far too short for its transcript is written once more; failing
@@ -766,7 +766,7 @@ def _checked_draft(write, part, frames, *, api_key):
     """
     reason = None
     for _attempt in range(2):
-        draft = write(part.text, frames, api_key=api_key, part=part)
+        draft = write(part.text, frames, api_key=api_key, part=part, rules=rules)
         markdown = visual_note_check.strip_leading_residue(draft.markdown)
         reason = visual_note_check.too_short_reason(markdown, part.text)
         if reason is None:
@@ -829,6 +829,7 @@ def _run_visual_note(
     writer: Callable[..., Any] | None = None,
     channel: Channel | None = None,
     on_local_work_done: Callable[[], None] | None = None,
+    note_skill: note_skills.NoteSkill | None = None,
 ) -> dict[str, Any]:
     """Read the cut file, ask Claude to write from it, record what it read.
 
@@ -909,7 +910,7 @@ def _run_visual_note(
         parts = claude_vision.transcript_parts(transcript)
         # Which rules this note was written under, read before the first
         # request; the writers read the same file a moment later.
-        rules = note_rules.load_rules()
+        skill = note_skill if note_skill is not None else note_skills.load_note_skill()
         drafts = []
         for part in parts:
             part_frames = claude_vision.frames_for_part(frames, part)
@@ -919,7 +920,7 @@ def _run_visual_note(
                     client_id=client_id,
                     state={"stage": f"writing {part.index}/{part.total}"},
                 )
-            drafts.append(_checked_draft(write, part, part_frames, api_key=api_key))
+            drafts.append(_checked_draft(write, part, part_frames, api_key=api_key, rules=skill.rules))
         draft = _joined_draft(drafts, parts)
         cited = cited_frames(draft.markdown, frames)
         markdown = _rewrite_image_targets(draft.markdown, task_id, frames)
@@ -942,8 +943,9 @@ def _run_visual_note(
             "speaker_labeled": cut_timeline.SPEAKER_LABEL_PREAMBLE in transcript,
             "basis": BASIS_BOTH if cited else BASIS_TRANSCRIPT_ONLY,
             "basis_note": draft.basis_note,
-            "rules_path": str(rules.path),
-            "rules_default": rules.is_default,
+            "skill_path": str(skill.path),
+            "skill_default": skill.is_default,
+            "skill_version": skill.version,
             # Offered, opened, cited — three different numbers now, and the gaps
             # between them are the interesting part. Everything distinct the
             # recording had was offered; the model opened what it judged worth a

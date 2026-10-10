@@ -631,6 +631,7 @@ def write_visual_note(
     model: str | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     part: TranscriptPart | None = None,
+    rules: str | None = None,
 ) -> VisualNoteDraft:
     """Run the local Claude Code login on this errand and return the note.
 
@@ -680,7 +681,7 @@ def write_visual_note(
     picked = spread_across(list(frames), FRAME_ATTACH_MAX)
     command = _command(
         chosen_model, [], inline=True,
-        system_prompt=note_system_prompt() + (part_instruction(part) if part is not None else ""),
+        system_prompt=note_system_prompt(rules) + (part_instruction(part) if part is not None else ""),
     )
     payload, _tool_reads = _run_cli(command, build_inline_message(text, picked), execute)
 

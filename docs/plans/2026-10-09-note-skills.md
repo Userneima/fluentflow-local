@@ -19,7 +19,7 @@
 - 内容多的节分层级标题，短的节保持一层。
 - 结尾的回顾直接列条目，不加引导句。
 
-`ai_prompts.py` 的 `FLUENTFLOW_SYSTEM_PROMPT` 和画面笔记提示词（现在在 `backend/core/note_writing_rules.md` 加 `claude_vision.NOTE_CONTRACT`）里讲画面怎么用、图注怎么写的部分，并进默认 skill 或留在原处，不能丢。
+`ai_prompts.py` 的 `FLUENTFLOW_SYSTEM_PROMPT` 和`claude_vision.py` 的画面笔记提示词里讲画面怎么用、图注怎么写的部分，并进默认 skill 或留在原处，不能丢。
 
 ### 元 skill：接住用户的纠正
 
@@ -53,7 +53,7 @@
 
 ## 做法
 
-1. 两份 skill 和读取：默认 skill 在 `backend/note_skills/default/`，元 skill 在 `backend/note_skills/meta/`，用户自己的 skill 在数据目录 `note_skills/mine/`，每次生效都留一份旧版本可退回。画面笔记按「用户的 skill，没有就用默认」来写，固定的输入输出要求仍在代码里。
+1. 两份 skill 和读取：默认 skill 在 `backend/note_skills/fluentflow-note-default/`，元 skill 在 `backend/note_skills/fluentflow-note-style-builder/`，用户自己的 skill 在数据目录 `note_skills/mine/`，每次生效都留一份旧版本可退回。画面笔记按「用户的 skill，没有就用默认」来写，固定的输入输出要求仍在代码里。
 2. 纠正循环后台：找出用户改过的笔记，和原稿对比，交给元 skill 提候选规则；确认的规则由元 skill 并进用户的 skill，生成新旧两版对比，用户确认后生效。
 3. 设置页界面。
 4. `scripts/evaluate_note_quality.py` 补上「同一批录像、新旧两版 skill 各写一遍并排比较」。

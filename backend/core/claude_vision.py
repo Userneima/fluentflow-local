@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from backend.core import note_rules
+from backend.core import note_skills
 
 try:  # The local edition must still boot for someone who never wants this.
     import anthropic
@@ -284,7 +284,7 @@ _IMAGE_MEDIA_TYPES = {
 }
 
 # The contract the parser and the frame bookkeeping depend on. The writing
-# rules themselves live in a file (see ``note_rules``), so they can improve
+# rules themselves live in a note skill (see ``note_skills``), so they can improve
 # without a code change; this part cannot move there, because a rule file that
 # dropped it would break every note.
 NOTE_CONTRACT = """## 输入和输出（固定要求）
@@ -296,9 +296,11 @@ NOTE_CONTRACT = """## 输入和输出（固定要求）
 - note_markdown 里只放笔记本身，第一行就是笔记内容，前面不加任何说明。"""
 
 
-def system_prompt() -> str:
-    """The note rules this machine uses, followed by the fixed contract."""
-    return note_rules.load_rules().text + "\n\n" + NOTE_CONTRACT
+def system_prompt(rules: str | None = None) -> str:
+    """A note skill's rules, followed by the fixed contract. ``rules`` writes
+    with a given skill (a preview of a change); otherwise the one in effect."""
+    text = rules if rules is not None else note_skills.load_note_skill().rules
+    return text.strip() + "\n\n" + NOTE_CONTRACT
 
 
 NOTE_SCHEMA: dict[str, Any] = {
@@ -535,6 +537,7 @@ def write_visual_note(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     client: Any | None = None,
     part: TranscriptPart | None = None,
+    rules: str | None = None,
 ) -> VisualNoteDraft:
     """Send the transcript and the frames to Claude and return the note it wrote.
 
@@ -563,7 +566,7 @@ def write_visual_note(
     request = {
         "model": chosen_model,
         "max_tokens": max_tokens,
-        "system": system_prompt() + (part_instruction(part) if part is not None else ""),
+        "system": system_prompt(rules) + (part_instruction(part) if part is not None else ""),
         "messages": [{"role": "user", "content": build_user_content(text, picked)}],
         "output_config": {"format": {"type": "json_schema", "schema": NOTE_SCHEMA}},
     }
