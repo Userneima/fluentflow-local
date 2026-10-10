@@ -734,6 +734,7 @@ async def regenerate_agent_task_note(
         "summary_error": None,
         "summary_skipped": False,
         "summary_edited": False,
+        "summary_original_markdown": None,
         # The note is now the text model's; an earlier frame-note stamp would
         # make the page describe it as Claude reading the frames.
         "summary_written_from": "text_regeneration",

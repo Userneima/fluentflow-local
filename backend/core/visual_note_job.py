@@ -572,6 +572,10 @@ def _promotion(
         # Not an edit: nobody typed this. The stamp says which flow wrote it and
         # from which file, so the page can say what the note describes.
         "summary_written_from": frame_note_written_from(media_kind),
+        # A freshly written note: no edits yet, and the original kept for
+        # learning from edits is this one, recorded at the first edit.
+        "summary_edited": False,
+        "summary_original_markdown": None,
     }
     return fields, replaced
 
@@ -1039,6 +1043,8 @@ def restore_previous_note(task_id: str, *, client_id: str | None = None) -> dict
             # replaced, so a restored note never claims to be the frame note.
             "summary_written_from": replaced.get("previous_summary_written_from") or None,
             "summary_edited": bool(replaced.get("previous_summary_edited")),
+            # Which text was generated for the restored note is not known.
+            "summary_original_markdown": None,
         },
         rewrite_artifacts=True,
     )

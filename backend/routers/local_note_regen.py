@@ -175,6 +175,8 @@ async def regenerate_summary(
                 )
         payload = {
             "summary_markdown": md,
+            "summary_edited": False,
+            "summary_original_markdown": None,
             "task_id": task_id_value,
             "requested_note_mode": summary_result.requested_mode,
             "resolved_note_mode": summary_result.resolved_mode,

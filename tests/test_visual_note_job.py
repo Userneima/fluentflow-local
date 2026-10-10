@@ -1124,3 +1124,31 @@ def test_a_short_clip_keeps_its_short_note(job_store, tmp_path):
 
     assert len(writer.calls) == 1
     assert updated["result"]["summary_markdown"].startswith("# 炸面串")
+
+
+# ── previewing a note skill change (2026-10-09 note skills plan) ─────────────
+#
+# Requirements: the two versions are written from the same frames; neither
+# draft replaces the task's note, its frame-note record, or its frame files.
+
+from backend.core import note_preview  # noqa: E402
+
+
+def test_a_skill_preview_writes_both_versions_and_changes_nothing(job_store, tmp_path, key):
+    _run(tmp_path, "![幻灯片](note_0001.jpg)\n\n正文。")
+    before_result = json.dumps(job_store["result"], sort_keys=True, ensure_ascii=False)
+    frame_files = sorted(p.name for p in artifact_target_path(TASK, "frames/x").parent.glob("*.jpg"))
+    seen = []
+
+    def write(transcript, frames, **kwargs):
+        seen.append((kwargs.get("rules"), [frame.filename for frame in frames]))
+        return VisualNoteDraft(markdown=f"# 笔记\n\n按 {kwargs.get('rules')} 写。", basis_note="",
+                               model="claude-opus-5", frames_sent=list(frames), transcript_chars=len(transcript))
+
+    old, new = note_preview.compare(TASK, "旧规则", "新规则", client_id="anonymous", writer=write)
+
+    assert [rules for rules, _ in seen] == ["旧规则", "新规则"]
+    assert seen[0][1] == seen[1][1] and seen[0][1], "both versions see the same, existing frames"
+    assert "旧规则" in old.markdown and "新规则" in new.markdown
+    assert json.dumps(job_store["result"], sort_keys=True, ensure_ascii=False) == before_result
+    assert sorted(p.name for p in artifact_target_path(TASK, "frames/x").parent.glob("*.jpg")) == frame_files

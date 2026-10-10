@@ -107,6 +107,11 @@ def update_job_summary(
         raise HTTPException(status_code=413, detail=f"Summary edit is too large: {len(summary)} chars")
 
     edited_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    if not result.get("summary_edited") and not result.get("summary_original_markdown"):
+        # The first edit of a generated note keeps what was generated, so the
+        # user's corrections can later be read as differences from it and
+        # turned into rules for their own note skill.
+        result["summary_original_markdown"] = str(result.get("summary_markdown") or "")
     result.update({
         "task_id": result.get("task_id") or task_id,
         "summary_markdown": summary,

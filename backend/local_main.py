@@ -70,6 +70,7 @@ from backend.routers.local_job_read import router as job_read_router
 from backend.routers.local_job_visual_note import router as job_visual_note_router
 from backend.routers.local_jobs import router as jobs_router
 from backend.routers.local_note_regen import router as note_regen_router
+from backend.routers.local_note_style import router as note_style_router
 from backend.routers.local_processing import retry_task
 from backend.routers.local_processing import router as processing_router
 from backend.routers.local_spa import create_local_spa_router
@@ -90,6 +91,7 @@ LOCAL_API_ROUTERS = (
     processing_router,
     video_sources_router,
     note_regen_router,
+    note_style_router,
     feishu_export_router,
     agent_router,
 )
