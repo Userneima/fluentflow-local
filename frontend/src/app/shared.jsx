@@ -754,8 +754,15 @@ const createApi = () => {
         apply: () => noteStyleCall('/proposal/apply', {}),
         discard: () => noteStyleCall('/proposal/discard', {}),
     };
+    // The models a text provider currently offers, newest first ([] when no
+    // key is saved or the provider cannot be reached).
+    const getProviderModels = async (provider) => {
+        const r = await apiFetch(`${API_BASE}/credentials/models?provider=${encodeURIComponent(provider)}`);
+        const data = await r.json().catch(()=>({}));
+        return r.ok && Array.isArray(data?.models) ? data.models : [];
+    };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getPreferences, savePreferences, noteStyle, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getPreferences, savePreferences, noteStyle, getProviderModels, checkHealth};
 };
 
 export const useSettings = () => {

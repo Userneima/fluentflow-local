@@ -78,7 +78,7 @@ def _subscription_channel() -> Channel:
     return Channel(
         name=CHANNEL_SUBSCRIPTION,
         label=CHANNEL_LABELS[CHANNEL_SUBSCRIPTION],
-        model=claude_vision.configured_model(),
+        model=claude_code_note.subscription_model(),
         unavailable_reason=claude_code_note.unavailable_reason(),
         write=claude_code_note.write_visual_note,
     )

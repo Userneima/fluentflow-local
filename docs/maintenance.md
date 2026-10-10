@@ -81,7 +81,7 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | 变量 | 含义 | 默认 |
 | --- | --- | --- |
 | `FLUENTFLOW_VISUAL_NOTE_CHANNEL` | 图文笔记走哪条 Claude 通道。默认用你自己的 Anthropic API Key（设置页填写或 `.env` 里的 `ANTHROPIC_API_KEY`）；设为 `subscription` 才改用本机登录的 Claude Code 订阅，只适合在自己电脑上从源码运行 | `api_key` |
-| `FLUENTFLOW_VISUAL_NOTE_MODEL` | 图文笔记用的 Claude 模型 | `claude-opus-5` |
+| `FLUENTFLOW_VISUAL_NOTE_MODEL` | 指定图文笔记用的 Claude 模型。不设时跟最新的 Opus 走：订阅通道用 Claude Code 的 `opus`，API Key 通道每天查一次 Anthropic 的模型列表；查不到时用 `claude-opus-5-5` | 最新的 Opus |
 | `FLUENTFLOW_NOTE_SKILL_DIR` | 你自己的笔记 skill 所在的文件夹。里面有不为空的 `SKILL.md` 时，Claude 写笔记按它来；否则用自带的 `backend/note_skills/fluentflow-note-default/SKILL.md`。每次写笔记都重新读，改完不用重启；每次替换都在 `history/` 留一份旧版本 | 数据目录下的 `note_skills/mine` |
 | `FLUENTFLOW_VISUAL_NOTE_TIMEOUT` | 图文笔记单次超时秒数，只作用于 `subscription` 通道（本机 `claude` 进程）；API Key 通道的请求超时由 SDK 决定 | `2400` |
 | `FLUENTFLOW_CLAUDE_CLI` | `claude` 命令的路径，不设则在 PATH 上找；只在 `subscription` 通道用到 | 自动 |

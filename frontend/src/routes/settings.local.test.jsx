@@ -49,6 +49,7 @@ vi.mock('../app/shared.jsx', async () => {
             getPreferences: async () => servicePreferences,
             savePreferences,
             noteStyle,
+            getProviderModels,
         }),
     };
 });
@@ -58,6 +59,8 @@ const noteStyle = {
     read: async () => ({skill: {text: '', version: 'v', is_default: true}, candidates: [], unread_edits: 0, proposal: null, history: []}),
     previewTasks: async () => ({tasks: []}),
 };
+
+const getProviderModels = async () => ['gpt-9-mini', 'gpt-9'];
 
 const {default: Settings} = await import('./settings.jsx');
 

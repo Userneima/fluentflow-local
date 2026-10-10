@@ -28,24 +28,33 @@ into a job result.
 from __future__ import annotations
 
 import base64
+import logging
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from backend.core import note_skills
 
+logger = logging.getLogger(__name__)
+
 try:  # The local edition must still boot for someone who never wants this.
     import anthropic
 except ImportError:  # pragma: no cover - exercised by the "not installed" path
     anthropic = None  # type: ignore[assignment]
 
-# Opus is the default because the model's judgement about which pictures are
-# worth anything, and what each one adds that the speaking did not, is the
-# product here.
-DEFAULT_MODEL = "claude-opus-5"
+# Opus, because the model's judgement about which pictures are worth anything,
+# and what each one adds that the speaking did not, is the product here. And the
+# newest Opus, looked up rather than written down: a fixed id kept every note on
+# claude-opus-5 for months after newer ones shipped, and nothing said so. This
+# id is only the fallback for when the lookup cannot run; each note records the
+# model that actually wrote it.
+DEFAULT_MODEL = "claude-opus-5-5"
+LATEST_MODEL_TTL_SECONDS = 24 * 3600
+_LATEST_MODEL: dict[str, Any] = {"id": None, "at": 0.0}
 DEFAULT_MAX_TOKENS = 32_000
 
 # How many pictures fit in *one request*, which is all this channel gets: it
@@ -399,8 +408,42 @@ def sdk_available() -> bool:
     return anthropic is not None
 
 
+def model_override() -> str:
+    """A model named in ``FLUENTFLOW_VISUAL_NOTE_MODEL``, which always wins."""
+    return (os.environ.get("FLUENTFLOW_VISUAL_NOTE_MODEL") or "").strip()
+
+
 def configured_model() -> str:
-    return (os.environ.get("FLUENTFLOW_VISUAL_NOTE_MODEL") or "").strip() or DEFAULT_MODEL
+    """The model the API-key channel will use, without asking the network:
+    the override, the newest Opus found today, or the fallback."""
+    return model_override() or _LATEST_MODEL["id"] or DEFAULT_MODEL
+
+
+def latest_model(api_key: str | None = None, *, client: Any | None = None, now: float | None = None) -> str:
+    """The newest Opus this key can use, looked up at most once a day.
+
+    Read from Anthropic's model list, newest first by release date. A failed
+    lookup (no network, no SDK, an old SDK) falls back to the last answer or the
+    fallback id; it never costs the note.
+    """
+    override = model_override()
+    if override:
+        return override
+    moment = time.time() if now is None else now
+    if _LATEST_MODEL["id"] and moment - _LATEST_MODEL["at"] < LATEST_MODEL_TTL_SECONDS:
+        return _LATEST_MODEL["id"]
+    try:
+        active = client if client is not None else anthropic.Anthropic(api_key=resolve_api_key(api_key))
+        models = [
+            model for model in active.models.list(limit=100)
+            if str(getattr(model, "id", "")).startswith("claude-opus-")
+        ]
+        models.sort(key=lambda model: str(getattr(model, "created_at", "")), reverse=True)
+        if models:
+            _LATEST_MODEL.update({"id": str(models[0].id), "at": moment})
+    except Exception:  # noqa: BLE001 - the lookup is a convenience, not a dependency
+        logger.info("could not look up the newest Claude model; using %s", configured_model(), exc_info=True)
+    return configured_model()
 
 
 def resolve_api_key(api_key: str | None = None) -> str | None:
@@ -560,7 +603,7 @@ def write_visual_note(
     else:
         text = part.text
     picked = spread_across(frames, MAX_FRAMES)
-    chosen_model = (model or "").strip() or configured_model()
+    chosen_model = (model or "").strip() or latest_model(api_key, client=client)
 
     active = client if client is not None else anthropic.Anthropic(api_key=resolve_api_key(api_key))
     request = {
@@ -676,6 +719,8 @@ __all__ = [
     "VisualNoteDraft",
     "build_user_content",
     "configured_model",
+    "latest_model",
+    "model_override",
     "image_block",
     "require_available",
     "resolve_api_key",

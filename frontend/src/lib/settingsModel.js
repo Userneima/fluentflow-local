@@ -4,7 +4,7 @@ export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashsc
 export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi', 'elevenLabsApiKey'];
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-reasoner';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
-export const DEFAULT_QWEN_MODEL = 'qwen3.7-plus';
+export const DEFAULT_QWEN_MODEL = 'qwen-plus';
 export const SUPPORTED_FRONTEND_NOTE_MODES = new Set(['auto', 'direct', 'high_fidelity', 'chapter_coverage']);
 export const NOTE_MODE_OPTIONS = [
     {value: 'auto', labelEn: 'Auto', labelZh: '自动选择'},

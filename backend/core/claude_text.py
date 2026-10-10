@@ -78,7 +78,7 @@ def claude_chat(api_key: str | None = None, *, runner: Callable | None = None) -
         return None
     if channel.name == CHANNEL_SUBSCRIPTION:
         return _subscription_chat(channel.model, runner), channel.name
-    return _api_key_chat(api_key, channel.model), channel.name
+    return _api_key_chat(api_key, claude_vision.latest_model(api_key)), channel.name
 
 
 __all__ = ["Chat", "claude_chat"]

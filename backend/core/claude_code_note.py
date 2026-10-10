@@ -57,7 +57,7 @@ from backend.core.claude_vision import (
     ClaudeVisionError,
     FrameInput,
     VisualNoteDraft,
-    configured_model,
+    model_override as claude_vision_model_override,
 )
 
 logger = logging.getLogger(__name__)
@@ -626,6 +626,24 @@ def _run_cli_once(
     return payload, opened
 
 
+# Claude Code's own name for its newest Opus. The installed CLI resolves it, so
+# notes move to a new model when Claude Code is updated, with no id to edit here.
+SUBSCRIPTION_MODEL = "opus"
+
+
+def subscription_model() -> str:
+    return claude_vision_model_override() or SUBSCRIPTION_MODEL
+
+
+def _model_that_wrote(payload: dict[str, Any]) -> str:
+    """The model id the CLI reports having used: the alias resolved."""
+    usage = payload.get("modelUsage")
+    if isinstance(usage, dict) and usage:
+        return str(max(usage, key=lambda name: (usage[name] or {}).get("outputTokens", 0)
+                       if isinstance(usage[name], dict) else 0))
+    return str(payload.get("model") or "")
+
+
 def write_visual_note(
     transcript: str,
     frames: list[FrameInput],
@@ -672,7 +690,7 @@ def write_visual_note(
         # a whole note rides along with the prompt.
         text = part.text
         dropped, covered = 0, ""
-    chosen_model = (model or "").strip() or configured_model()
+    chosen_model = (model or "").strip() or subscription_model()
     execute = runner if runner is not None else _run_tracked
 
     # Every frame, attached, in one request. There used to be a pass in front of
@@ -696,7 +714,7 @@ def write_visual_note(
     return VisualNoteDraft(
         markdown=markdown,
         basis_note=basis,
-        model=str(payload.get("model") or chosen_model),
+        model=_model_that_wrote(payload) or chosen_model,
         frames_sent=picked,
         # Everything attached was in the model's context, provably, because this
         # side of the wire put it there. No tool calls to read it out of.

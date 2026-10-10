@@ -194,6 +194,44 @@ def check_credential(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return _key_check_result(False, "network", f"连不上 {label} 的服务器，检查一下网络后再试。")
 
 
+# Which models a text provider offers, for the settings page's model field.
+# Read from the provider's own list with the saved key, so a model released
+# after this build is still offered; the field also takes any name typed in.
+_MODEL_LIST_PROVIDERS = {
+    "deepseek": (("deepseek_api_key",), "DEEPSEEK_API_KEY", lambda name: True),
+    "openai": (("openai_api_key",), "OPENAI_API_KEY", lambda name: name.startswith(("gpt-", "o"))),
+    "qwen": (("dashscope_api_key", "qwen_api_key"), "DASHSCOPE_API_KEY", lambda name: name.startswith("qwen")),
+}
+
+
+@router.get("/credentials/models")
+def list_provider_models(provider: str) -> dict[str, Any]:
+    name = (provider or "").strip().lower()
+    if name not in _MODEL_LIST_PROVIDERS:
+        raise HTTPException(status_code=400, detail="provider must be deepseek, openai or qwen")
+    secret_names, env_name, wanted = _MODEL_LIST_PROVIDERS[name]
+    key = next((value for value in (resolve_secret(None, secret) for secret in secret_names) if value), None)
+    key = key or (os.environ.get(env_name) or "").strip()
+    if not key:
+        return {"models": [], "reason": "missing"}
+    try:
+        response = _http_request(
+            "GET", f"{_provider_base_url(name)}/models",
+            headers={"Authorization": f"Bearer {key}"}, timeout=_KEY_CHECK_TIMEOUT,
+        )
+    except httpx.HTTPError:
+        return {"models": [], "reason": "network"}
+    if response.status_code != 200:
+        return {"models": [], "reason": f"http_{response.status_code}"}
+    try:
+        items = response.json().get("data") or []
+    except ValueError:
+        return {"models": [], "reason": "unreadable"}
+    rows = [item for item in items if isinstance(item, dict) and wanted(str(item.get("id") or ""))]
+    rows.sort(key=lambda item: item.get("created") or 0, reverse=True)
+    return {"models": [str(item["id"]) for item in rows], "reason": "ok"}
+
+
 @router.get("/preferences")
 def get_preferences() -> dict[str, Any]:
     return {"preferences": load_preferences()}

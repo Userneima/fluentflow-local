@@ -1,3 +1,4 @@
+import {useEffect, useState} from 'react';
 import SvgIcon from './SvgIcon.jsx';
 import {
     RouteCard,
@@ -9,13 +10,13 @@ import {
     saveButtonClass,
 } from './settingsPrimitives.jsx';
 import {
-    DEFAULT_QWEN_MODEL,
     LARK_EXPORT_ROUTE_AUTO,
     LARK_EXPORT_ROUTE_LOCAL_CLI,
     LARK_EXPORT_ROUTE_OPENAPI,
     DEFAULT_DEEPSEEK_MODEL,
     normalizeSourceMode,
     timeAgo,
+    useApi,
     useI18n,
 } from '../app/shared.jsx';
 
@@ -412,6 +413,47 @@ const KEY_CONSOLE_URLS = {
     qwen: 'https://bailian.console.aliyun.com/',
 };
 
+// The model a text provider writes with. Free text, so a model released after
+// this build can be used; the suggestions are the provider's own current list,
+// read with the saved key. The list used to be three names written here, and
+// newer models could not be picked at all.
+export const ProviderModelField = ({provider, value, configured, onChange}) => {
+    const {getProviderModels} = useApi();
+    const [models, setModels] = useState([]);
+    const [draft, setDraft] = useState(value || '');
+    useEffect(() => { setDraft(value || ''); }, [value]);
+    useEffect(() => {
+        let live = true;
+        setModels([]);
+        if (configured) {
+            getProviderModels(provider).then((list) => { if (live) setModels(list); }).catch(() => {});
+        }
+        return () => { live = false; };
+    }, [provider, configured, getProviderModels]);
+    const listId = `provider-models-${provider}`;
+    const commit = () => {
+        const next = draft.trim();
+        if (next && next !== value) onChange(next);
+        if (!next) setDraft(value || '');
+    };
+    return (
+        <>
+            <input
+                className={inputClass}
+                list={listId}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onBlur={commit}
+                onKeyDown={(event) => { if (event.key === 'Enter') commit(); }}
+                aria-label="model"
+            />
+            <datalist id={listId}>
+                {models.map((model) => <option key={model} value={model}/>)}
+            </datalist>
+        </>
+    );
+};
+
 // Text-model provider, model, and the key that provider needs. `extraKey` is an
 // optional second key field rendered alongside it.
 export const TextModelKeyRows = ({state, extraKey = null}) => {
@@ -432,21 +474,7 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
             </div>
             <div className="space-y-2">
                 <label className={fieldLabelClass}>{t('set.aiModel')}</label>
-                {aiProvider === 'openai' ? (
-                    <select className={inputClass} value={aiModel} onChange={e=>updateSettingNow({aiModel:e.target.value})}>
-                        <option value="gpt-5.4-mini">gpt-5.4-mini</option>
-                        <option value="gpt-5.4">gpt-5.4</option>
-                        <option value="gpt-5.5">gpt-5.5</option>
-                    </select>
-                ) : aiProvider === 'qwen' ? (
-                    <select className={inputClass} value={aiModel} onChange={e=>updateSettingNow({aiModel:e.target.value})}>
-                        <option value={DEFAULT_QWEN_MODEL}>{DEFAULT_QWEN_MODEL}</option>
-                    </select>
-                ) : (
-                    <select className={inputClass} value={aiModel} onChange={e=>updateSettingNow({aiModel:e.target.value})}>
-                        <option value="deepseek-reasoner">deepseek-reasoner</option>
-                    </select>
-                )}
+                <ProviderModelField provider={aiProvider} value={aiModel} configured={activeAiConfigured} onChange={(model)=>updateSettingNow({aiModel: model})}/>
             </div>
             <div className="space-y-2 md:col-span-2">
                 <label className={fieldLabelClass}>{aiProvider === 'openai' ? t('set.openaiKey') : (aiProvider === 'qwen' ? t('set.dashscopeKey') : t('set.deepseekKey'))}</label>

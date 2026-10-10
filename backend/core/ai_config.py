@@ -12,7 +12,8 @@ OPENAI_BASE_URL: Final[str] = "https://api.openai.com/v1"
 QWEN_BASE_URL: Final[str] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_DEEPSEEK_MODEL: Final[str] = "deepseek-reasoner"
 DEFAULT_OPENAI_MODEL: Final[str] = "gpt-5.4-mini"
-DEFAULT_QWEN_MODEL: Final[str] = "qwen3.7-plus"
+# Qwen's own name for its current Plus model, so the default moves with it.
+DEFAULT_QWEN_MODEL: Final[str] = "qwen-plus"
 # The Qwen default above is a TEXT model. Frame selection must use a vision
 # (multimodal) Qwen model, or images sent to a text model fail and the whole
 # visual-evidence step reports "unavailable". qwen-vl-plus is the cheaper vision
