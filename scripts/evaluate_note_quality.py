@@ -92,7 +92,7 @@ def _compare_skills(args) -> int:
     for task_id in args.task:
         try:
             pair = note_preview.compare(task_id, old_rules, new_rules)
-        except note_preview.PreviewError as exc:
+        except Exception as exc:  # noqa: BLE001 - one task's failure skips that task only
             print(f"{task_id}: {exc}", file=sys.stderr)
             continue
         columns = []

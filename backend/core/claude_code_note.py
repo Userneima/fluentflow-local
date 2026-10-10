@@ -113,6 +113,9 @@ _TRANSIENT_MARKERS = (
     "internal server error",
     "service unavailable",
     "bad gateway",
+    # Seen 2026-10-10 as "API Error: Response stalled mid-stream. The response
+    # above may be incomplete."
+    "stalled mid-stream",
 )
 TRANSIENT_RETRY_DELAY_SECONDS = 10.0
 

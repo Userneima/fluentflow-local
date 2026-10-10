@@ -1101,6 +1101,8 @@ def test_two_placeholder_notes_fail_and_the_old_note_stays(job_store, tmp_path):
     "deep# 深刻理解用户\n\n正文。",
     "好的，这是一段面试录像的笔记。\n\n# 实习面试记录\n\n正文。",
     "厂# 索尼五个产品提案\n\n正文。",
+    "1. # 索尼创新赛五个概念\n\n正文。",
+    "＃ 批判性思维\n\n正文。",
 ])
 def test_residue_before_the_title_is_removed(written):
     cleaned = visual_note_check.strip_leading_residue(written)

@@ -30,9 +30,10 @@ _PREAMBLE_OPENERS = ("好的", "好，", "以下是", "下面是", "这是一", 
 _HEADING = re.compile(r"#{1,6}\s")
 # What residue in front of the ``#`` looks like: punctuation and spaces, or a
 # lowercase word fragment of three letters or more (``deep``), or one or two
-# non-ASCII characters (``厂#``, measured 2026-10-10). A capital letter or a
-# short ASCII word is kept, because ``C# 入门`` is a title.
-_RESIDUE = re.compile(r"[\s\W_]+|[a-z]{3,}\s*|[^\x00-\x7f]{1,2}\s*")
+# non-ASCII characters (``厂#``, measured 2026-10-10), or anything short that
+# ends in a space (``1. #``). A letter touching the ``#`` with no space is kept,
+# because ``C# 入门`` is a title.
+_RESIDUE = re.compile(r"[\s\W_]+|[a-z]{3,}\s*|[^\x00-\x7f]{1,2}\s*|.{0,6}\s")
 # A stray mark at the very start, in front of a title with no ``#`` at all
 # (``« 批判性思维``). Markdown's own openers are not in this set.
 _STRAY_LEAD = re.compile(r"\A[«»‹›¶§•·※]+\s+")
@@ -50,6 +51,9 @@ def strip_leading_residue(markdown: str) -> str:
     if "»" not in text.split("\n", 1)[0]:  # «…» is a pair someone meant
         text = _STRAY_LEAD.sub("", text)
     lines = text.split("\n")
+    # A full-width ＃ opening the title is the heading mark typed in the wrong width.
+    lines[0] = re.sub(r"＃(?=\s)", "#", lines[0], count=1)
+    text = "\n".join(lines)
     first = lines[0]
     hash_at = first.find("#")
     if 0 < hash_at <= _GLUED_PREFIX_MAX and _HEADING.match(first[hash_at:]) and _RESIDUE.fullmatch(first[:hash_at]):

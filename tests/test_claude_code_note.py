@@ -488,6 +488,22 @@ def test_a_dropped_connection_is_tried_once_more(frames, monkeypatch):
     assert "最小二乘法" in draft.markdown
 
 
+def test_a_response_that_stalls_mid_stream_is_tried_once_more(frames, monkeypatch):
+    # Seen 2026-10-10 while comparing note skills.
+    monkeypatch.setattr(ccn, "TRANSIENT_RETRY_DELAY_SECONDS", 0)
+    stalled = json.dumps({
+        "type": "result",
+        "is_error": True,
+        "result": "API Error: Response stalled mid-stream. The response above may be incomplete.",
+    })
+    run, calls = _sequence(stalled, _reply())
+
+    draft = ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+
+    assert len(calls) == 2
+    assert "最小二乘法" in draft.markdown
+
+
 def test_a_connection_that_drops_twice_says_it_was_retried(frames, monkeypatch):
     monkeypatch.setattr(ccn, "TRANSIENT_RETRY_DELAY_SECONDS", 0)
     run, calls = _sequence(_DROPPED, _DROPPED)
