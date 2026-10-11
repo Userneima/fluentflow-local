@@ -1394,6 +1394,34 @@ def _select_expression(batch: Sequence[TimeRange], offset: float) -> str:
     )
 
 
+# How long each kept range fades in and out at its edges. A splice joins two
+# unrelated points of the waveform, and the jump between them is a click on
+# every seam (reported 2026-10-11). A few milliseconds is far too short to hear
+# as a fade and long enough to take the step out. The fade sits inside the kept
+# range, so the cut list's times and the total length are unchanged.
+SEAM_FADE_SECONDS = 0.008
+
+
+def _audio_seam_graph(batch: Sequence[TimeRange], offset: float) -> str:
+    """The audio of ``batch``: each kept range trimmed, faded at both edges, and
+    joined in order. Replaces one ``aselect`` over all ranges, which spliced the
+    ranges hard."""
+    count = len(batch)
+    parts = []
+    sources = ["[0:a]"] if count == 1 else [f"[s{index}]" for index in range(count)]
+    if count > 1:
+        parts.append("[0:a]asplit=" + str(count) + "".join(sources))
+    for index, keep in enumerate(batch):
+        start, end = keep.start - offset, keep.end - offset
+        fade = min(SEAM_FADE_SECONDS, max(0.0, end - start) / 2)
+        parts.append(
+            f"{sources[index]}atrim=start={start:.6f}:end={end:.6f},asetpts=PTS-STARTPTS,"
+            f"afade=t=in:d={fade:.4f},afade=t=out:st={max(0.0, end - start - fade):.6f}:d={fade:.4f}[k{index}]"
+        )
+    parts.append("".join(f"[k{index}]" for index in range(count)) + f"concat=n={count}:v=0:a=1[aout]")
+    return ";".join(parts)
+
+
 def default_encode_args(output: Path | str, *, audio_only: bool) -> tuple[str, ...]:
     """Encoder settings that suit the container being written.
 
@@ -1487,9 +1515,9 @@ def _render_batch(
         chain = f"fps={fps},select='{expression}',setpts=N/{fps}/TB"
         if scale_width:
             chain += f",scale={scale_width}:-2"
-        command += ["-vf", chain]
+        command += ["-map", "0:v:0", "-vf", chain]
     command += [
-        "-af", f"aselect='{expression}',asetpts=N/SR/TB",
+        "-filter_complex", _audio_seam_graph(batch, offset), "-map", "[aout]",
         *encode_args, "-y", str(part),
     ]
     result = runner(command)

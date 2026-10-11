@@ -470,7 +470,7 @@ def test_audio_only_rendering_asks_for_no_picture(tmp_path, fake_tools):
 
     render = runner.commands[0]
     assert "-vf" not in render and "-vn" in render
-    assert "-af" in render
+    assert "-filter_complex" in render
     assert not runner.filters
 
 
@@ -692,7 +692,7 @@ class _SourceProbe(_FakeRender):
 
 
 def _render_command(runner: _SourceProbe) -> list[str]:
-    return next(command for command in runner.commands if "-af" in command)
+    return next(command for command in runner.commands if "-filter_complex" in command)
 
 
 def test_the_encode_ceiling_is_read_off_the_source_not_fixed_in_advance(tmp_path, fake_tools):
@@ -1298,7 +1298,7 @@ def test_a_threshold_that_would_cut_speech_is_pulled_under_it(monkeypatch, tmp_p
 
 
 def _render_commands(runner: _SourceProbe) -> list[list[str]]:
-    return [command for command in runner.commands if "-af" in command]
+    return [command for command in runner.commands if "-filter_complex" in command]
 
 
 def _ceiling_of(command: list[str]) -> int:
@@ -1565,7 +1565,7 @@ class _FailsOneBatch(_FakeRender):
 
     def __call__(self, command):
         command = [str(part) for part in command]
-        if "-af" in command:
+        if "-filter_complex" in command:
             self.batches_asked += 1
             if f"part{self.failing_index:04d}" in command[-1]:
                 return subprocess.CompletedProcess(command, 1, "", "encoder exploded")
