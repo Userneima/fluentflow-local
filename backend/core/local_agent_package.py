@@ -46,6 +46,17 @@ def _local_extra_next_actions(job: dict[str, Any], diagnosis: dict[str, Any]) ->
             "path": f"/agent/v1/tasks/{task_id}/retry",
             "reason": "本机仍保留原始文件，可直接重新处理，无需再次上传。",
         }]
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    note_settled = str(result.get("summary_status") or "") not in {"pending", "running"}
+    if job.get("status") == "completed" and task_id and note_settled and not str(result.get("summary_markdown") or "").strip():
+        # No key configured, or the note was skipped or failed: the calling agent
+        # can write it itself, which is the path that needs nothing set up.
+        return [{
+            "action": "get_agent_note_material",
+            "method": "POST",
+            "path": f"/agent/v1/tasks/{task_id}/agent-note/material",
+            "reason": "这个任务还没有笔记。可以由你来写：取材料（转录、截图、写法要求），写好后交回 save_agent_note。",
+        }]
     return []
 
 

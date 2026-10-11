@@ -85,8 +85,8 @@ const baseWriterSentence = (writer, lang = 'zh') => {
     const zh = lang === 'zh';
     if (!writer || writer.kind === 'none') {
         return zh
-            ? '还没有填写模型 Key。现在处理只会得到转录稿和字幕，没有笔记。'
-            : 'No model key yet. Jobs will produce a transcript and subtitles, but no note.';
+            ? '还没有填写模型 Key。转录照常进行，笔记可以交给你的 agent（Claude Code、Codex 等）来写。'
+            : 'No model key yet. Transcription works as usual, and your agent (Claude Code, Codex, ...) can write the note.';
     }
     if (writer.kind === 'skipped') {
         return zh ? '当前是仅转录模式，不写笔记。' : 'Transcript-only mode is on; no note is written.';
@@ -98,7 +98,7 @@ const baseWriterSentence = (writer, lang = 'zh') => {
 export const noteWriterBatchClause = (writer, lang = 'zh') => {
     const zh = lang === 'zh';
     if (!writer || writer.kind === 'none') {
-        return zh ? '（还没有模型 Key，这次只会得到转录稿，没有笔记）' : ' (no model key yet, so this produces transcripts but no notes)';
+        return zh ? '（还没有模型 Key，这次只出转录稿，笔记可以交给你的 agent 来写）' : ' (no model key yet, so this produces transcripts; your agent can write the notes)';
     }
     if (writer.kind === 'skipped') {
         return zh ? '（仅转录模式，不写笔记）' : ' (transcript-only mode, no notes)';
@@ -153,4 +153,14 @@ export const notePendingSentence = (writer, result = null, lang = 'zh') => {
             : `The note is being written from the text by ${noteWriterLabel(writer, lang)}; it appears here when done.`;
     }
     return zh ? '正在写笔记，写好会自动出现。' : 'The note is being written; it appears here when done.';
+};
+
+// The sentence a person pastes into their agent to have it write this task's
+// note (agent_note on the backend: material in, note back, nothing to set up).
+export const agentNotePrompt = (result, lang = 'zh') => {
+    const taskId = String(result?.task_id || '');
+    const title = String(result?.display_title || result?.filename || '').trim();
+    return lang === 'zh'
+        ? `用 FluentFlow 给任务${title ? `「${title}」` : ''}写笔记（任务 ID：${taskId}）：先用 get_agent_note_material 取材料，按里面的要求写，写好用 save_agent_note 交回。`
+        : `Use FluentFlow to write the note for task${title ? ` "${title}"` : ''} (task ID: ${taskId}): get the material with get_agent_note_material, write it as instructed, and hand it back with save_agent_note.`;
 };

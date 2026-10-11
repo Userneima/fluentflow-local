@@ -59,6 +59,7 @@ import {noteFallbackSentence, notePendingSentence, notePromptScopeSentence, note
 import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
+import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
 import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
 import {
@@ -1997,7 +1998,10 @@ const Editor = () => {
                                 ) : (
                                     <div className="hide-scrollbar min-h-0 flex-1 overflow-y-auto p-6 text-[#111111] dark:text-white">
                                     {result.summary_skipped ? (
-                                        <p className="text-sm italic text-[#666] dark:text-white/60">{t('edit.summarySkipped')}</p>
+                                        <>
+                                            <p className="text-sm italic text-[#666] dark:text-white/60">{t('edit.summarySkipped')}</p>
+                                            <AgentNotePrompt result={result} lang={lang}/>
+                                        </>
                                     ) : result.summary_status === 'failed' || result.summary_error ? (
                                         <div className="space-y-2 text-sm text-[#666] dark:text-white/60">
                                             <p className="italic">{t('edit.summaryFailed')}</p>
@@ -2006,6 +2010,7 @@ const Editor = () => {
                                                     {summaryFailureHint}
                                                 </p>
                                             )}
+                                            <AgentNotePrompt result={result} lang={lang}/>
                                         </div>
                                     ) : (
                                         <p className="text-sm italic text-[#666] dark:text-white/60">{notePendingSentence(noteWriter, result, lang)}</p>

@@ -478,13 +478,70 @@ def export_result(
     )
 
 
+def get_agent_note_material(
+    task_id: str,
+    part: int = 1,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """What you write this task's note from, when you write it yourself.
+
+    Returns one part's transcript (with timestamps), the frames for that part as
+    paths on this machine with their moments in the recording, and
+    ``instructions``: the note skill in effect plus the fixed contract. Open the
+    frames you need, write the note following the instructions, then call
+    ``save_agent_note``. A long recording comes in ``total_parts`` parts: fetch
+    and write each, then save them together. Costs nothing on the user's side;
+    the first call for a video extracts its frames, which takes up to a minute.
+    """
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/agent-note/material",
+        api_base=api_base,
+        client_id=client_id,
+        payload={"part": int(part or 1)},
+        timeout=300,
+    )
+
+
+def save_agent_note(
+    task_id: str,
+    note_markdown: str | None = None,
+    part_notes: list[str] | None = None,
+    basis_note: str = "",
+    model: str = "",
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Make the note you wrote this task's note; the previous one stays restorable.
+
+    Pass ``note_markdown`` for a one-part recording, or ``part_notes`` in order
+    for one in several parts. Cite frames by file name only. A note far too
+    short for its transcript is refused and nothing is replaced.
+    """
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/agent-note",
+        api_base=api_base,
+        client_id=client_id,
+        payload=_options(note_markdown=note_markdown, part_notes=part_notes, basis_note=basis_note, model=model),
+        timeout=60,
+    )
+
+
 # Who writes the note on a media submission, said once for both submit tools.
 _MEDIA_NOTE_FLOW = (
     "By default the task cuts breath gaps out of the media, transcribes the cut file "
     "(the original when the cut is declined), then Claude writes the note from the frames "
     "and the transcript, paid by the user's own Anthropic API key (the local Claude "
     "subscription only when FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription is set). Without a "
-    "usable Claude, the configured text model writes it from the transcript. note_mode, "
+    "usable Claude, the configured text model writes it from the transcript; with neither, the task stops at the transcript and you write the note yourself with get_agent_note_material and save_agent_note. note_mode, "
     "prompt_preset and system_prompt only apply when a text model writes the note; Claude's "
     "frame note ignores them. skip_summary=true stops at the transcript. Speaker separation "
     "defaults on when pyannote is installed on this machine, off otherwise; "
@@ -508,6 +565,8 @@ TOOL_FUNCTIONS = {
     "regenerate_note": regenerate_note,
     "debreath_task": debreath_task,
     "write_note_from_cut_media": write_note_from_cut_media,
+    "get_agent_note_material": get_agent_note_material,
+    "save_agent_note": save_agent_note,
     "export_result": export_result,
 }
 
@@ -803,6 +862,54 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "default": False,
                     "description": "Make the already-written note the task's note again. Free.",
                 },
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "get_agent_note_material",
+        "description": (
+            "Write a task's note yourself instead of a model FluentFlow is configured to pay for "
+            "(the way to get a note when no Anthropic or text-model key is set). Returns one part's "
+            "timestamped transcript, that part's frames as local file paths with their moments, "
+            "and instructions (the note skill in effect plus the fixed contract). Open the frames "
+            "you need, write the note as instructed, then call save_agent_note. Long recordings "
+            "come in total_parts parts: fetch and write each part. The first call for a video "
+            "extracts frames (up to a minute)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "part": {"type": "integer", "default": 1, "description": "Which part, from 1 to total_parts."},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "save_agent_note",
+        "description": (
+            "Save the note you wrote from get_agent_note_material as the task's note. The previous "
+            "note is kept and restorable (write_note_from_cut_media restore_previous_note=true). "
+            "note_markdown for a one-part recording, part_notes in order for several parts. Cite "
+            "frames by file name only. A note far too short for its transcript is refused and "
+            "nothing is replaced."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "note_markdown": {"type": "string"},
+                "part_notes": {"type": "array", "items": {"type": "string"}},
+                "basis_note": {
+                    "type": "string",
+                    "description": "One or two sentences: which parts rest on the frames, which on the transcript only.",
+                },
+                "model": {"type": "string", "description": "Which model wrote it, recorded on the note."},
                 "api_base": {"type": "string"},
                 "client_id": {"type": "string"},
             },

@@ -40,7 +40,8 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import local_folder_intake, visual_note_job
+from backend.core import agent_note, local_folder_intake, visual_note_job
+from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_request_scope import (
     request_client_id,
@@ -56,6 +57,7 @@ from backend.routers.local_job_debreath import start_local_debreath
 from backend.routers.local_job_visual_note import start_local_visual_note
 from backend.routers.local_processing import (
     local_path_options,
+    queue_is_busy,
     queue_local_media_file,
     retry_job_from_stored_source,
 )
@@ -568,6 +570,66 @@ def visual_note_agent_task(
         **accepted,
         "package_url": f"/agent/v1/tasks/{task_id}/package",
         "package": _task_package_response(_job_for_request(request, task_id)),
+    }
+
+
+@router.post("/tasks/{task_id}/agent-note/material")
+def agent_note_material(
+    request: Request,
+    task_id: str,
+    payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """What the calling agent writes this task's note from: one part's transcript,
+    its frames as paths on this machine, and the note skill with the fixed contract.
+
+    The first call for a video extracts the frames (seconds to a minute), so it
+    waits for an idle queue the same way the frame note does.
+    """
+    part = int((payload or {}).get("part") or 1)
+    job = _job_for_request(request, task_id)
+    if not agent_note._stored_frames(task_id, job.get("result") or {}) and queue_is_busy():
+        raise HTTPException(
+            status_code=409,
+            detail="有任务正在处理中，等队列空下来再取材料，避免抽帧和转录同时跑。",
+        )
+    try:
+        return {"ok": True, **agent_note.material(
+            task_id, part=part, client_id=_local_client_scope(request), keyframe_extractor=extract_keyframes,
+        )}
+    except visual_note_job.VisualNoteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{task_id}/agent-note")
+def save_agent_note(
+    request: Request,
+    task_id: str,
+    payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """Make the note the calling agent wrote this task's note.
+
+    The note it replaces is kept and comes back for free through
+    ``POST /tasks/{id}/visual-note`` with ``restore_previous_note``.
+    """
+    body = payload or {}
+    part_notes = body.get("part_notes")
+    try:
+        updated = agent_note.save(
+            task_id,
+            note_markdown=body.get("note_markdown"),
+            part_notes=list(part_notes) if isinstance(part_notes, list) else None,
+            basis_note=str(body.get("basis_note") or ""),
+            model=str(body.get("model") or ""),
+            client_id=_local_client_scope(request),
+        )
+    except visual_note_job.VisualNoteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "previous_note_restorable": True,
+        "package_url": f"/agent/v1/tasks/{task_id}/package",
+        "package": _task_package_response(updated),
     }
 
 

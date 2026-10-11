@@ -1,0 +1,242 @@
+"""The task's note, written by the user's own agent instead of a model FluentFlow pays.
+
+Someone who installed FluentFlow through Claude Code or Codex already pays for a
+capable model. Asking them to also create an Anthropic or DeepSeek account and
+paste a key is the one setup step their agent cannot do for them, so this path
+lets that agent write the note itself: it asks for the material, writes, and
+hands the note back.
+
+The material is exactly what the frame note sends to Claude, so the two paths
+cannot drift apart in what a note is written from:
+
+- the transcript on the clock of the file the note describes, split into the
+  same parts a long recording is split into for one request each;
+- the frames scene detection found in that file, as paths on this machine the
+  agent can open, each with its moment in the recording;
+- the note skill in effect (the user's own, else the product default), followed
+  by the same fixed contract and, for a long recording, the same per-part
+  instruction.
+
+Saving goes through the frame note's own bookkeeping: the note becomes the
+task's note, the note it replaces is kept and can be put back for free, which
+frames it cites is measured from the markdown rather than taken from the agent,
+and the provenance stamp says an agent wrote it. A draft too short for its
+transcript is refused before anything is replaced, the same check the frame
+note applies to Claude, so the agent gets the reason back and writes again.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Callable
+
+from backend.core import claude_vision, note_skills, visual_note_check
+from backend.core import visual_note_job as vn
+from backend.core.claude_vision import FrameInput
+from backend.core.result_artifacts import VISUAL_NOTE_ARTIFACT_FILENAME, VISUAL_NOTE_KIND, write_text_artifact
+from backend.core.result_schema import NOTE_FROM_AGENT
+from backend.core.visual_note_channel import Channel
+
+CHANNEL_AGENT = "agent"
+CHANNEL_AGENT_LABEL = "你的 agent"
+
+# describe() checks that something can write the note. Here the caller is the
+# writer, so the check that matters is everything else: a finished task, usable
+# media, a transcript on the right clock, no run already going.
+_AGENT_CHANNEL = Channel(
+    name=CHANNEL_AGENT,
+    label=CHANNEL_AGENT_LABEL,
+    model=CHANNEL_AGENT,
+    unavailable_reason=None,
+    write=lambda *_args, **_kwargs: None,
+)
+
+# How the agent hands the note back: field names match the save call, so the
+# fixed contract's wording ("note_markdown", "basis_note") stays true here.
+SAVE_INSTRUCTION = (
+    "\n\n## 交回笔记\n\n"
+    "写完后调用 save_agent_note：note_markdown 放笔记本身，basis_note 用一两句话说明依据"
+    "（哪些部分靠画面、哪些只有字幕、有没有看不清或没信息的截图）。"
+    "录像分成几部分时，每部分各取一次材料、各写一份，最后按顺序放进 part_notes 一次交回。"
+    "截图在本机的路径就是 frames 里的 path，打开看过再决定引不引用；引用时只写文件名。"
+)
+
+
+class AgentNoteError(vn.VisualNoteError):
+    pass
+
+
+def _job(task_id: str, client_id: str | None) -> dict[str, Any]:
+    job = vn.get_job(task_id, client_id=client_id)
+    if not job:
+        raise AgentNoteError("任务不存在")
+    return job
+
+
+def _eligible(task_id: str, job: dict[str, Any]) -> tuple[vn.CutMedia, list[claude_vision.TranscriptPart], list]:
+    described = vn.describe(task_id, job, channel=_AGENT_CHANNEL)
+    if not described["eligible"]:
+        raise AgentNoteError(str(described["reason"]))
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    media = vn.cut_media(task_id, result)
+    if media is None:  # pragma: no cover - describe already refused this
+        raise AgentNoteError(vn._cut_media_reason(task_id, result))
+    transcript, _timeline, segments = vn._transcript_for_media(task_id, result, media)
+    return media, claude_vision.transcript_parts(transcript), segments
+
+
+def _stored_frames(task_id: str, result: dict[str, Any]) -> list[FrameInput] | None:
+    """Frames an earlier run already put on disk, or ``None`` when there are none.
+
+    Reused rather than extracted again: extraction rewrites the files under the
+    same names, and the note the task has now may cite them.
+    """
+    records = vn.visual_note_state(result).get("frames_sent") or []
+    frames: list[FrameInput] = []
+    for record in records:
+        if not isinstance(record, dict) or not record.get("filename"):
+            continue
+        path = vn._frame_artifact_path(task_id, str(record["filename"]))
+        if not Path(str(path)).is_file():
+            return None
+        frames.append(FrameInput(
+            filename=str(record["filename"]),
+            path=Path(str(path)),
+            timestamp_seconds=record.get("timestamp_seconds"),
+            source=record.get("source"),
+        ))
+    return frames or None
+
+
+def _frames(task_id: str, client_id: str | None, result: dict[str, Any], media: vn.CutMedia,
+            segments: list, keyframe_extractor: Callable[..., Any],
+            frame_collector: Callable[..., list[FrameInput]]) -> list[FrameInput]:
+    if not media.has_video:
+        return []
+    stored = _stored_frames(task_id, result)
+    if stored is not None:
+        return stored
+    frames = frame_collector(task_id, media.path, keyframe_extractor=keyframe_extractor, segments=segments)
+    vn._store(task_id, client_id=client_id, state={
+        "frames_sent": [vn._frame_record(task_id, frame) for frame in frames],
+    })
+    return frames
+
+
+def _clock(seconds: float | None) -> str:
+    if seconds is None:
+        return ""
+    total = max(int(seconds), 0)
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def material(
+    task_id: str,
+    *,
+    part: int = 1,
+    client_id: str | None = None,
+    keyframe_extractor: Callable[..., Any],
+    frame_collector: Callable[..., list[FrameInput]] = vn.collect_frames,
+) -> dict[str, Any]:
+    """Everything one part of the note is written from, and how to hand it back."""
+    job = _job(task_id, client_id)
+    media, parts, segments = _eligible(task_id, job)
+    if not 1 <= part <= len(parts):
+        raise AgentNoteError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    frames = _frames(task_id, client_id, result, media, segments, keyframe_extractor, frame_collector)
+    chosen = parts[part - 1]
+    skill = note_skills.load_note_skill()
+    return {
+        "task_id": task_id,
+        "title": result.get("display_title") or result.get("filename") or "",
+        "part": chosen.index,
+        "total_parts": chosen.total,
+        "starts_at": chosen.starts_at,
+        "ends_at": chosen.ends_at,
+        "instructions": claude_vision.system_prompt(skill.rules) + claude_vision.part_instruction(chosen)
+        + SAVE_INSTRUCTION,
+        "transcript": chosen.text,
+        "frames": [
+            {"filename": frame.filename, "path": str(frame.path), "at": _clock(frame.timestamp_seconds)}
+            for frame in claude_vision.frames_for_part(frames, chosen)
+        ],
+        "has_video": media.has_video,
+        "skill": {"path": str(skill.path), "default": skill.is_default, "version": skill.version},
+    }
+
+
+def save(
+    task_id: str,
+    *,
+    note_markdown: str | None = None,
+    part_notes: list[str] | None = None,
+    basis_note: str = "",
+    model: str = "",
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Make the agent's note the task's note, keeping the one it replaces."""
+    job = _job(task_id, client_id)
+    media, parts, _segments = _eligible(task_id, job)
+    drafts = list(part_notes or []) if part_notes else ([note_markdown] if note_markdown is not None else [])
+    if len(drafts) != len(parts):
+        raise AgentNoteError(
+            f"这段录像分成 {len(parts)} 部分，要交回 {len(parts)} 份笔记（part_notes），收到 {len(drafts)} 份"
+            if len(parts) > 1 else "没有收到笔记内容（note_markdown）"
+        )
+    cleaned = []
+    for draft, part in zip(drafts, parts):
+        markdown = visual_note_check.strip_leading_residue(str(draft or ""))
+        reason = visual_note_check.too_short_reason(markdown, part.text)
+        if reason:
+            where = f"第 {part.index} 部分" if len(parts) > 1 else "这份笔记"
+            raise AgentNoteError(f"{where}{reason.replace('Claude 返回的笔记', '')}，没有替换现有笔记，请重写后再交")
+        cleaned.append(claude_vision.VisualNoteDraft(markdown=markdown, basis_note=basis_note, model=model))
+    joined = vn._joined_draft(cleaned, parts)
+
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    frames = (_stored_frames(task_id, result) or []) if media.has_video else []
+    cited = vn.cited_frames(joined.markdown, frames)
+    markdown = vn._rewrite_image_targets(joined.markdown, task_id, frames)
+    artifact = write_text_artifact(task_id, VISUAL_NOTE_KIND, VISUAL_NOTE_ARTIFACT_FILENAME, markdown.rstrip() + "\n")
+    skill = note_skills.load_note_skill()
+    result_fields, replaced = vn._promotion(result, markdown, media_kind=media.kind)
+    result_fields["summary_written_from"] = NOTE_FROM_AGENT
+    state = {
+        "status": vn.STATUS_COMPLETED,
+        "stage": "done",
+        "markdown": markdown,
+        "model": model or CHANNEL_AGENT,
+        "provider": CHANNEL_AGENT,
+        "channel": CHANNEL_AGENT,
+        "channel_label": CHANNEL_AGENT_LABEL,
+        "media_source": media.as_dict(),
+        "basis": vn.BASIS_BOTH if cited else vn.BASIS_TRANSCRIPT_ONLY,
+        "basis_note": basis_note,
+        "skill_path": str(skill.path),
+        "skill_default": skill.is_default,
+        "skill_version": skill.version,
+        "frames_sent": [vn._frame_record(task_id, frame) for frame in frames],
+        "frames_opened": [],
+        "frames_cited": [vn._frame_record(task_id, frame) for frame in cited],
+        "cited_without_opening": [],
+        "transcript_chars": sum(len(part.text) for part in parts),
+        "transcript_chars_dropped": 0,
+        "transcript_covered_until": "",
+        "usage": {},
+        "promoted": True,
+        "replaced_note": replaced,
+        "finished_at": vn._now(),
+        "error": None,
+    }
+    return vn._store(
+        task_id,
+        client_id=client_id,
+        state=state,
+        artifacts={VISUAL_NOTE_KIND: artifact},
+        result_fields=result_fields,
+        rewrite_artifacts=True,
+    )
+
+
+__all__ = ["AgentNoteError", "CHANNEL_AGENT", "material", "save"]

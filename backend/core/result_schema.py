@@ -13,6 +13,8 @@ RESULT_SCHEMA_VERSION = "2"
 NOTE_FROM_CUT_MEDIA = "debreath_media_note"
 NOTE_FROM_SOURCE_MEDIA = "source_media_note"
 FRAME_NOTE_WRITTEN_FROM = frozenset({NOTE_FROM_CUT_MEDIA, NOTE_FROM_SOURCE_MEDIA})
+# The user's own agent wrote it from the same material (see ``agent_note``).
+NOTE_FROM_AGENT = "agent_note"
 # visual_note.media_source.kind when the note read the original recording.
 _SOURCE_MEDIA_KINDS = frozenset({"source_no_cuts"})
 
