@@ -93,7 +93,7 @@ MCP_ENV=()
 if command -v claude >/dev/null 2>&1; then
 	if claude mcp get fluentflow-local >/dev/null 2>&1; then
 		echo "Claude Code：已注册过 fluentflow-local，保持不动。"
-	elif claude mcp add --scope user ${MCP_ENV[@]+"${MCP_ENV[@]}"} fluentflow-local -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null; then
+	elif claude mcp add --scope user fluentflow-local ${MCP_ENV[@]+"${MCP_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null; then
 		echo "Claude Code：已注册 fluentflow-local。"
 	else
 		echo "Claude Code：注册失败，可以手动运行：claude mcp add --scope user fluentflow-local -- \"${VENV_PY}\" \"${MCP_SCRIPT}\""

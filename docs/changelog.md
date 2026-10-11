@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Windows 上转录不再一开始就失败。新出的 av 19 去掉了 faster-whisper 读音频时要用的一个参数，按下限装依赖的 Windows 环境装到它之后，每次转录都报 `open() got an unexpected keyword argument 'metadata_errors'`。依赖里给 av 加了上限（低于 19），重新运行安装脚本即可修好；已经装上 av 19 的环境，启动前检查会直接说明并给出修复命令。macOS 用锁定文件安装，不受影响。
+- 一条命令安装时，换过端口的机器也能把 MCP 工具注册进 Claude Code。
+
 ## 0.7.0 - 2026-10-11
 
 - 可以让 agent 替你装好：把仓库链接发给 Claude Code 或 Codex，说「帮我装上 FluentFlow」，它按根目录的 `AGENT_INSTALL.md` 运行一条命令（macOS 的 `install.sh`，Windows 的 `install.ps1`）就装完：下载最新发布版、安装、启动、把 MCP 工具注册到本机的 Claude Code 和 Codex、自检。

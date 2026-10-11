@@ -13,6 +13,10 @@
 # lock for the current platform when one exists.
 
 faster-whisper>=1.0.0
+# faster-whisper (1.2.1 and earlier) opens audio with av.open(..., metadata_errors=...),
+# an argument av 19 removed; with av 19 every transcription fails at its first step.
+# Raise this cap once a faster-whisper release works with av 19.
+av>=11,<19
 # Apple-Silicon fast lane for local transcription. faster-whisper cannot reach
 # the GPU on a Mac (its CTranslate2 backend has no Metal path), and MLX measured
 # 2.2x faster on the same audio through the same entry point. The marker keeps

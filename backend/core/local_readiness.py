@@ -38,6 +38,30 @@ def _module_available(module_name: str) -> bool:
         return False
 
 
+def _av_conflict() -> str | None:
+    """Why transcription would fail on the installed av, or None.
+
+    faster-whisper 1.2.1 and earlier pass ``metadata_errors`` to ``av.open``,
+    which av 19 removed; every transcription then fails at its first step with
+    a TypeError. requirements-local.txt caps av below 19, and this catches an
+    environment installed before the cap.
+    """
+    from importlib import metadata
+
+    try:
+        av_major = int(metadata.version("av").split(".")[0])
+        fw_version = metadata.version("faster-whisper")
+    except (metadata.PackageNotFoundError, ValueError):
+        return None
+    fw_parts = tuple(int(part) for part in fw_version.split(".")[:3] if part.isdigit())
+    if av_major >= 19 and fw_parts <= (1, 2, 1):
+        return (
+            f"av {metadata.version('av')} 和 faster-whisper {fw_version} 不兼容，转录会在读取音频时失败。"
+            "请在项目目录运行：python -m pip install \"av<19\"（Windows 为 .venv\\Scripts\\python.exe -m pip install \"av<19\"）。"
+        )
+    return None
+
+
 def _data_dir_writable() -> tuple[bool, str]:
     root = app_data_root()
     try:
@@ -146,6 +170,10 @@ def run_readiness_checks() -> list[ReadinessCheck]:
         detail=("本地转录引擎可用" if fw
                 else "未安装 faster-whisper：请运行 pip install -r requirements-local.txt。"),
     ))
+
+    av_conflict = _av_conflict()
+    if av_conflict:
+        checks.append(ReadinessCheck(name="av", ok=False, required=True, detail=av_conflict))
 
     ytdlp = _module_available("yt_dlp")
     checks.append(ReadinessCheck(
