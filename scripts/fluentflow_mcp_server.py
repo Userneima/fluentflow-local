@@ -481,10 +481,11 @@ def export_result(
     title: str | None = None,
     lark_export_route: str | None = None,
     folder_token: str | None = None,
+    output_dir: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Export a completed task note to a supported target such as Lark.
+    """Export a completed task note to Lark, or to a PDF file on this machine.
 
     Route and folder are sent only when given; otherwise the backend uses the
     user's settings (``lark_export_route``, ``lark_folder_token``), then auto.
@@ -496,6 +497,7 @@ def export_result(
         client_id=client_id,
         payload=_options(
             target=target, title=title, lark_export_route=lark_export_route, folder_token=folder_token,
+            output_dir=output_dir,
         ),
         timeout=120,
     )
@@ -1082,7 +1084,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "export_result",
         "description": (
-            "Export a completed task note to Feishu/Lark. Without lark_export_route or "
+            "Export a completed task note. target=pdf writes a PDF with its screenshots to output_dir "
+            "(default ~/Documents/FluentFlow 笔记) and returns pdf_path; it needs Chrome or Edge on the "
+            "machine, and without one returns html_path to print instead. target=lark exports to Feishu/Lark. "
+            "For Feishu: without lark_export_route or "
             "folder_token the user's export settings apply (route, then folder), else auto: "
             "lark-cli when it is signed in, otherwise the user's Feishu app. The document "
             "link is recorded on the task, so the editor shows it too."
@@ -1091,7 +1096,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
-                "target": {"type": "string", "default": "lark"},
+                "target": {"type": "string", "enum": ["lark", "pdf"], "default": "lark"},
+                "output_dir": {"type": "string", "description": "pdf only: folder to write the PDF in."},
                 "title": {"type": "string"},
                 "lark_export_route": {
                     "type": "string",

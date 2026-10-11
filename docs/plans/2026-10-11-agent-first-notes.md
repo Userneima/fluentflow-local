@@ -30,6 +30,12 @@
 3. **导出 PDF**。
 4. **打包成 agent 插件**：MCP 服务加一份写给 agent 的 skill，写明拿到视频怎么处理、收到截图反馈怎么走上面的流程；一条命令安装时一起装好。
 
+## 现状（2026-10-11）
+
+- 第 1 到 4 件都已提交：反馈和规则的工具与记录（`backend/core/note_feedback.py`，数据在用户 skill 目录的 `feedback.json`、`rules_log.json`）、「我的笔记风格」里的规则来历、agent 导出 PDF（`backend/core/note_pdf.py`，用本机 Chrome 或 Edge）、随产品的 agent skill（`agent/skills/fluentflow`，一条命令安装时链进 Claude Code 和 Codex）。
+- 编辑器原本就能导出 PDF（浏览器打印），新加的是 agent 不经界面直接生成 PDF 文件。
+- 还没验证：让一个干净的 agent 照 skill 走一遍「截图反馈 → 验证 → 加规则」的完整流程。
+
 ## 测评集现状（2026-10-10 起）
 
 - 选了 11 段录像，用当时的默认 skill 重新生成了笔记和 PDF，放在 `reports/note-evals/2026-10-10-notes/`（不进仓库），字幕快照和子 agent 对照字幕查出的问题在其中的 `.meta/`。

@@ -40,7 +40,7 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import agent_note, local_folder_intake, note_feedback, note_skills, visual_note_job
+from backend.core import agent_note, local_folder_intake, note_feedback, note_pdf, note_skills, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_request_scope import (
@@ -949,8 +949,16 @@ async def export_agent_task(
     if not markdown:
         raise HTTPException(status_code=400, detail="No markdown note available to export")
     target = str(payload.get("target") or "lark").strip().lower()
+    if target == "pdf":
+        try:
+            exported = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: note_pdf.export_pdf(task_id, client_id=client_id, output_dir=payload.get("output_dir")),
+            )
+        except note_pdf.NotePdfError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "target": "pdf", **exported}
     if target not in {"lark", "feishu"}:
-        raise HTTPException(status_code=400, detail="Only lark export is supported")
+        raise HTTPException(status_code=400, detail="target is lark or pdf")
 
     title = str(
         payload.get("title") or result.get("display_title") or job.get("source_filename") or task_id

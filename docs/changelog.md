@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 对笔记的意见直接截图发给 agent 就行。agent 先改好这篇；判断是会反复出现的写法问题时，起草一条规则，用它把出问题的那一段重写几遍，交给另一个没参与写的检查者判断问题还在不在，通过了才写进你的笔记写法，并告诉你一句加了什么规则。同一个问题你再次提出时，才请你一起看规则和新旧对比。每条反馈都存成测试用例，以后改规则时重跑。MCP 新增 `get_note_skill`、`record_note_feedback`、`list_note_feedback`、`draft_note_part`、`apply_note_rule`；设置页「我的笔记风格」列出每条规则来自哪次反馈、验证了几轮。
+- agent 能直接导出 PDF：`export_result` 的 `target=pdf` 用本机的 Chrome 或 Edge 把笔记连同截图排成 PDF，默认放在「文稿/FluentFlow 笔记」。没有这两个浏览器时，给出可打印的网页。
+- 随产品附一份写给 agent 的 skill（`agent/skills/fluentflow`），写明拿到视频怎么处理、收到反馈怎么验证后再改写法；一条命令安装时链进 Claude Code 和 Codex。
+
 - 去气口后的视频在每个剪辑接缝处不再有爆音：每个保留片段首尾各做 8 毫秒淡入淡出后再接起来，剪辑表里的时间点和总时长不变。
 ## 0.7.1 - 2026-10-11
 

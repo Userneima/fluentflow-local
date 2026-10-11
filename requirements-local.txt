@@ -46,6 +46,8 @@ httpx>=0.27.0
 python-multipart>=0.0.9
 uvicorn[standard]>=0.32.0
 python-dotenv>=1.0.0
+# Turns a note into HTML for the PDF an agent exports (note_pdf).
+markdown>=3.5
 # Deliberately a lower bound only: sites change their pages and yt-dlp ships a
 # fix within days, so a pinned version would stop downloading before anyone
 # touched this file.
