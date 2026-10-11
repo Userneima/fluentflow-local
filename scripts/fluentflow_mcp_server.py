@@ -620,6 +620,21 @@ def apply_note_rule(
     )
 
 
+def list_tasks(
+    query: str = "",
+    limit: int = 20,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Recent tasks, or those whose title, note title or file name contains ``query``."""
+    from urllib.parse import urlencode
+
+    return _agent_request(
+        "GET", "/agent/v1/tasks?" + urlencode({"query": query, "limit": int(limit or 20)}),
+        api_base=api_base, client_id=client_id,
+    )
+
+
 # Who writes the note on a media submission, said once for both submit tools.
 _MEDIA_NOTE_FLOW = (
     "By default the task cuts breath gaps out of the media, transcribes the cut file "
@@ -642,6 +657,7 @@ TOOL_FUNCTIONS = {
     "submit_video_link": submit_video_link,
     "submit_transcript": submit_transcript,
     "get_task": get_task,
+    "list_tasks": list_tasks,
     "wait_task": wait_task,
     "get_task_package": get_task_package,
     "diagnose_task": diagnose_task,
@@ -1004,6 +1020,24 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "client_id": {"type": "string"},
             },
             "required": ["task_id"],
+        },
+    },
+    {
+        "name": "list_tasks",
+        "description": (
+            "Find tasks: newest first, or only those whose title, note title (the note's first heading) "
+            "or file name contains query. Use it to find which task a screenshot of a note came from: "
+            "search a few characters of the title in the screenshot. Returns task_id, title, note_title, "
+            "created_at, status, has_note."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "default": 20},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
         },
     },
     {

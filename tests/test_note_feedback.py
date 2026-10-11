@@ -93,3 +93,24 @@ def test_the_shipped_agent_skill_is_named_like_its_folder():
     name = re.search(r"^name:\s*(\S+)", skill.read_text(encoding="utf-8"), re.M).group(1)
     assert name == skill.parent.name
     assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", name)
+
+
+def test_list_tasks_finds_a_note_by_the_title_shown_in_a_screenshot(monkeypatch):
+    """A screenshot shows the note's own heading, which is often not the file name."""
+    from types import SimpleNamespace
+
+    import backend.routers.local_agent as la
+
+    jobs = [
+        {"task_id": "t1", "status": "completed", "created_at": "2026-09-20", "source_filename": "2.1 什么是科学.mp4",
+         "result": {"display_title": "2.1 什么是科学", "summary_markdown": "# 科学与科学研究的结构：什么是科学\n\n正文"}},
+        {"task_id": "t2", "status": "completed", "created_at": "2026-09-21", "source_filename": "b.mp4",
+         "result": {"display_title": "别的课", "summary_markdown": ""}},
+    ]
+    monkeypatch.setattr(la, "list_jobs", lambda **_: jobs)
+    monkeypatch.setattr(la, "_local_client_scope", lambda request: "anonymous")
+
+    found = la.list_agent_tasks(SimpleNamespace(), query="科学研究的结构")["tasks"]
+    assert [t["task_id"] for t in found] == ["t1"]
+    assert found[0]["note_title"] == "科学与科学研究的结构：什么是科学"
+    assert len(la.list_agent_tasks(SimpleNamespace(), query="")["tasks"]) == 2

@@ -175,3 +175,16 @@ def test_mcp_server_reads_the_token_the_installer_wrote(monkeypatch, tmp_path):
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "from-client-config")
     mcp._token_from_project_env()
     assert os.environ["FLUENTFLOW_ACCESS_TOKEN"] == "from-client-config", "the client's own value wins"
+
+
+def test_an_edited_note_keeps_counting_the_frames_it_already_cited(job_store, tmp_path):
+    """An agent fixing the task's own note hands back the served frame URLs it already had."""
+    material = _material(tmp_path)
+    name = material["frames"][0]["filename"]
+
+    updated = an.save(
+        TASK, note_markdown=f"# 笔记\n\n![公式](/jobs/{TASK}/artifacts/frame?file={name})\n\n正文。", client_id="anonymous",
+    )
+
+    state = vn.visual_note_state(updated["result"])
+    assert [f["filename"] for f in state["frames_cited"]] == [name]

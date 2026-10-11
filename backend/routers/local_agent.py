@@ -32,6 +32,7 @@ from backend.core.job_store import (
     append_job_result_list_item,
     finalize_job_result_if_unchanged,
     get_job,
+    list_jobs,
     upsert_job,
 )
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
@@ -426,6 +427,45 @@ async def create_agent_task(
     # Name this edition in the refusal. An input list alone leaves the caller unable
     # to tell a missing capability from the wrong backend answering.
     raise HTTPException(status_code=400, detail=INTAKE_REJECTION)
+
+
+def _note_title(markdown: str) -> str:
+    for line in (markdown or "").splitlines():
+        line = line.strip()
+        if line.startswith("#"):
+            return line.lstrip("#").strip()
+    return ""
+
+
+@router.get("/tasks")
+def list_agent_tasks(request: Request, query: str = "", limit: int = 20) -> dict[str, Any]:
+    """Recent tasks, or the ones whose title, note title or file name contains ``query``.
+
+    How an agent finds the task behind a screenshot of a note: the screenshot
+    shows the note's own title, which is often not the file's name, so both are
+    searched and both are returned for the agent to judge.
+    """
+    needle = query.strip().lower()
+    found = []
+    for job in list_jobs(limit=None, client_id=_local_client_scope(request), include_result=True):
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        note = str(result.get("summary_markdown") or "")
+        title = str(result.get("display_title") or result.get("filename") or job.get("source_filename") or "")
+        note_title = _note_title(note)
+        haystack = " ".join([title, note_title, str(job.get("source_filename") or "")]).lower()
+        if needle and needle not in haystack:
+            continue
+        found.append({
+            "task_id": job.get("task_id"),
+            "title": title,
+            "note_title": note_title,
+            "created_at": job.get("created_at"),
+            "status": job.get("status"),
+            "has_note": bool(note.strip()),
+        })
+        if len(found) >= max(1, min(int(limit or 20), 100)):
+            break
+    return {"ok": True, "tasks": found}
 
 
 @router.get("/tasks/{task_id}")

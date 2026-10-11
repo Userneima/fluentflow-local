@@ -27,6 +27,7 @@ note applies to Claude, so the agent gets the reason back and writes again.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -60,6 +61,9 @@ SAVE_INSTRUCTION = (
     "录像分成几部分时，每部分各取一次材料、各写一份，最后按顺序放进 part_notes 一次交回。"
     "截图在本机的路径就是 frames 里的 path，打开看过再决定引不引用；引用时只写文件名。"
 )
+
+
+_SERVED_FRAME = re.compile(r"\(/jobs/[^)\s]*?[?&]file=(note_\d+\.jpg)\)")
 
 
 class AgentNoteError(vn.VisualNoteError):
@@ -186,7 +190,11 @@ def save(
         )
     cleaned = []
     for draft, part in zip(drafts, parts):
-        markdown = visual_note_check.strip_leading_residue(str(draft or ""))
+        # An agent editing the task's existing note hands back the served URLs
+        # that note already had; turn them back into file names so the frames it
+        # cites are counted and served the same way as freshly cited ones.
+        markdown = _SERVED_FRAME.sub(r"(\1)", str(draft or ""))
+        markdown = visual_note_check.strip_leading_residue(markdown)
         reason = visual_note_check.too_short_reason(markdown, part.text)
         if reason:
             where = f"第 {part.index} 部分" if len(parts) > 1 else "这份笔记"
