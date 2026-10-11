@@ -59,6 +59,23 @@ def strip_leading_residue(markdown: str) -> str:
     if 0 < hash_at <= _GLUED_PREFIX_MAX and _HEADING.match(first[hash_at:]) and _RESIDUE.fullmatch(first[:hash_at]):
         lines[0] = first[hash_at:]
         return "\n".join(lines)
+    # A note opens with its title. One or two short lines with no heading mark
+    # in front of a first-level title are the model talking (「了解了。先看一眼…」,
+    # 「太长，见下」, measured 2026-10-11), whatever words they use.
+    leading = []
+    for index, line in enumerate(lines[:6]):
+        if re.match(r"# \S", line):
+            # A numbered first section ("# 一、") means the line above it was
+            # the title, written without its mark; that line stays.
+            numbered = re.match(r"# ([一二三四五六七八九十]+、|\d+[.、])", line)
+            if leading and not numbered and len(leading) <= 2 and sum(len(item) for item in leading) <= 80:
+                return "\n".join(lines[index:])
+            break
+        if line.strip():
+            # Markdown of its own (a quote, a list, a table) is note content.
+            if "#" in line or re.match(r"\s*([>|*\-+!\[]|\d+\.\s)", line):
+                break
+            leading.append(line.strip())
     if "#" not in first and len(first.strip()) <= _PREAMBLE_MAX and first.startswith(_PREAMBLE_OPENERS):
         rest = [line for line in lines[1:]]
         following = next((line for line in rest if line.strip()), "")

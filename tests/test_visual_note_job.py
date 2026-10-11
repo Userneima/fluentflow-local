@@ -1102,6 +1102,9 @@ def test_two_placeholder_notes_fail_and_the_old_note_stays(job_store, tmp_path):
     "好的，这是一段面试录像的笔记。\n\n# 实习面试记录\n\n正文。",
     "厂# 索尼五个产品提案\n\n正文。",
     "1. # 索尼创新赛五个概念\n\n正文。",
+    "了解了。先看一眼这次启动会讲了什么，再写成笔记。\n\n# 黑客级竞品调研启动\n\n正文。",
+    "太长，见下\n\n# 批判性思维\n\n正文。",
+    "« 学习笔记 »\n\n# 半年五期\n\n正文。",
     "＃ 批判性思维\n\n正文。",
 ])
 def test_residue_before_the_title_is_removed(written):
@@ -1115,7 +1118,8 @@ def test_residue_before_the_title_is_removed(written):
     "> 访谈笔记：一位内容创作者\n\n## 一、",
     "了解用户：从冰山到爬山\n\n## 一、理解一个人",
     "C# 语言入门：第一课\n\n正文。",
-    "« 学习笔记 »\n\n# 半年五期\n\n正文。",
+    "> 《批判性思维》第二讲：三次课分别讲……\n\n# 科学与科学研究\n\n正文。",
+    "批判性思维与科学研究 · 分析论证结构\n\n# 一、为什么要分析论证\n\n正文。",
 ])
 def test_a_note_that_starts_cleanly_is_left_alone(written):
     assert visual_note_check.strip_leading_residue(written) == written
