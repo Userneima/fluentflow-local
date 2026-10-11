@@ -10,13 +10,16 @@
 # 几段，让用户没法走开。所以缺什么装什么，每步开始前说一句在装什么，失败了才停
 # 下来说话。
 #
-# 它动的地方：仓库里的 .venv / node_modules / frontend/dist-local，桌面上的启动
-# 器，以及用 Homebrew 补上缺失的 FFmpeg 和 Node.js。Homebrew 自己不会被装——那
-# 一步要密码，得你自己来。
+# 全程不需要密码，也不会弹系统窗口，所以 agent 可以替人从头装到尾。缺的工具都装进
+# 用户自己的数据目录，不经过 Homebrew，也不调用 /usr/bin 下那些没装命令行开发者
+# 工具时会弹窗的占位程序（python3、git）。
 #
-# 国内网络 pip / npm 下载慢时，先在同一个终端里设置镜像再运行本脚本，脚本不会自己切换：
-#   export PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-#   npm config set registry https://registry.npmmirror.com
+# 它动的地方：仓库里的 .venv / node_modules / frontend/dist-local，桌面上的启动
+# 器，以及数据目录下的 bin/（FFmpeg、uv）和 tools/（构建界面用的 Node.js、uv 装的
+# Python）。
+#
+# 下载失败时自动换国内镜像重试一次：pip 换清华源，npm 换 npmmirror，转录模型换
+# hf-mirror。一开始就设了 PIP_INDEX_URL 或 npm registry 的，按你设的来。
 #
 # 用法：
 #   bash launchers/macos/setup-local.sh
@@ -56,19 +59,55 @@ fail() {
 [[ -f "${REPO}/backend/local_main.py" ]] ||
 	fail "在 ${REPO} 下找不到 backend/local_main.py，这不像 FluentFlow Local 代码目录。"
 
+# 和 backend/core/runtime_paths.py 的 app_data_root 一致：后端启动时会把这里的 bin/
+# 放到 PATH 最前面，所以装在这里的 FFmpeg 后端找得到。
+DATA_DIR="${FLUENTFLOW_DATA_DIR:-${HOME}/Library/Application Support/FluentFlow}"
+TOOLS_BIN="${DATA_DIR}/bin"
+TOOLS_DIR="${DATA_DIR}/tools"
+mkdir -p "$TOOLS_BIN" "$TOOLS_DIR"
+export PATH="${TOOLS_BIN}:${PATH}"
+
+case "$(uname -m)" in
+arm64) ARCH_FFMPEG="arm64" ARCH_UV="aarch64" ARCH_NODE="arm64" ;;
+*) ARCH_FFMPEG="amd64" ARCH_UV="x86_64" ARCH_NODE="x64" ;;
+esac
+
+# 用 curl 下载（它下的文件不带隔离标记，打开时不会被系统拦下）。
+download() {
+	# 有人看着时显示进度条；agent 读日志时不要满屏的进度字符。
+	local progress="-sS"
+	[[ -t 1 ]] && progress="--progress-bar"
+	curl -fL --retry 2 --connect-timeout 20 "$progress" -o "$2" "$1"
+}
+
+# 没装命令行开发者工具时，/usr/bin/python3 和 /usr/bin/git 一运行就弹窗。
+has_dev_tools() { xcode-select -p >/dev/null 2>&1; }
+
 # --- 1. 系统依赖：FFmpeg ---------------------------------------------------
 # 放在最前面。它是必需项，而下面的 pip 安装要下载一两 GB；把这个检查留到最后，
 # 用户会先等十几分钟，再被告知少装一个东西。
 step "检查 FFmpeg"
 if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
 	echo "已安装：$(command -v ffmpeg)"
-elif command -v brew >/dev/null 2>&1; then
-	echo "未找到 FFmpeg（转码和抽帧都要用它），正在用 Homebrew 安装…"
-	brew install ffmpeg || fail "brew install ffmpeg 失败，请手动安装后重试。"
 else
-	fail "未找到 FFmpeg，也没有 Homebrew。
-请先安装 Homebrew（https://brew.sh）再执行 brew install ffmpeg，
-或用其他方式安装 FFmpeg 并确保 ffmpeg、ffprobe 在 PATH 上。"
+	# 静态编译、已签名的版本，解压即用。正式版优先，这个架构暂时没有正式版时用每日构建。
+	echo "未找到 FFmpeg（转码和抽帧都要用它），正在下载到 ${TOOLS_BIN}…"
+	for tool in ffmpeg ffprobe; do
+		got=0
+		for channel in release snapshot; do
+			if download "https://ffmpeg.martin-riedl.de/redirect/latest/macos/${ARCH_FFMPEG}/${channel}/${tool}.zip" \
+				"${TOOLS_DIR}/${tool}.zip"; then
+				got=1
+				break
+			fi
+		done
+		[[ "$got" -eq 1 ]] || fail "${tool} 下载失败，请检查网络后重新运行本脚本。"
+		unzip -oq "${TOOLS_DIR}/${tool}.zip" -d "$TOOLS_BIN" || fail "${tool} 解压失败。"
+		rm -f "${TOOLS_DIR}/${tool}.zip"
+		chmod +x "${TOOLS_BIN}/${tool}"
+		"${TOOLS_BIN}/${tool}" -version >/dev/null 2>&1 || fail "下载的 ${tool} 运行不了。"
+	done
+	echo "已安装：${TOOLS_BIN}/ffmpeg"
 fi
 
 # --- 2. Python 虚拟环境 ----------------------------------------------------
@@ -79,6 +118,10 @@ step "准备 Python 虚拟环境"
 
 python_ok() {
 	[[ -x "$1" ]] || return 1
+	# 没装开发者工具时，系统的 python3 运行一下就弹窗，碰都不能碰。
+	if [[ "$1" == /usr/bin/python3* ]] && ! has_dev_tools; then
+		return 1
+	fi
 	"$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
 }
 
@@ -152,8 +195,22 @@ fi
 
 if [[ ! -x "$VENV_PY" ]]; then
 	BASE_PY="$(best_python || true)"
-	[[ -n "$BASE_PY" ]] || fail "没有找到 3.10 或更高版本的 Python。
-macOS 自带的是 3.9，装不上本项目的依赖。请执行 brew install python 后重试。"
+	if [[ -z "$BASE_PY" ]]; then
+		# 没有合格的 Python 就用 uv 装一个到用户目录：不要密码，不碰系统。
+		echo "没有找到 3.10 以上的 Python，用 uv 装一个到 ${TOOLS_DIR}…"
+		if [[ ! -x "${TOOLS_BIN}/uv" ]]; then
+			download "https://github.com/astral-sh/uv/releases/latest/download/uv-${ARCH_UV}-apple-darwin.tar.gz" \
+				"${TOOLS_DIR}/uv.tar.gz" || fail "uv 下载失败，请检查网络后重新运行本脚本。"
+			tar -xzf "${TOOLS_DIR}/uv.tar.gz" -C "$TOOLS_DIR" || fail "uv 解压失败。"
+			cp "${TOOLS_DIR}/uv-${ARCH_UV}-apple-darwin/uv" "${TOOLS_BIN}/uv"
+			rm -rf "${TOOLS_DIR}/uv.tar.gz" "${TOOLS_DIR}/uv-${ARCH_UV}-apple-darwin"
+		fi
+		# 两个目录都指进数据目录：不设 UV_PYTHON_BIN_DIR 的话，uv 会往 ~/.local/bin 放快捷方式。
+		export UV_PYTHON_INSTALL_DIR="${TOOLS_DIR}/python"
+		export UV_PYTHON_BIN_DIR="${TOOLS_DIR}/python/bin"
+		"${TOOLS_BIN}/uv" python install 3.12 || fail "用 uv 安装 Python 失败，请检查网络后重新运行本脚本。"
+		BASE_PY="$("${TOOLS_BIN}/uv" python find 3.12)" || fail "uv 装好了 Python，但找不到它。"
+	fi
 	echo "使用 ${BASE_PY}（$("$BASE_PY" -V 2>&1)）创建 ${VENV}"
 	"$BASE_PY" -m venv "$VENV" || fail "创建虚拟环境失败。"
 fi
@@ -161,8 +218,15 @@ echo "虚拟环境：${VENV}（$("$VENV_PY" -V 2>&1)）"
 
 # --- 3. Python 依赖 --------------------------------------------------------
 step "安装 Python 依赖（体积较大，首次约需十几分钟）"
+# 失败一次就换清华源再试：国内网络下 pypi.org 常常慢到超时。
+pip_install() {
+	"$VENV_PY" -m pip install "$@" && return 0
+	[[ -n "${PIP_INDEX_URL:-}" ]] && return 1
+	echo "下载失败，换国内镜像（清华源）重试…"
+	PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple "$VENV_PY" -m pip install "$@"
+}
 # 先升 pip：老 pip 拿不到 pyobjc 的预编译包，会转去编译源码然后失败。
-"$VENV_PY" -m pip install --quiet --upgrade pip || fail "升级 pip 失败。"
+pip_install --quiet --upgrade pip || fail "升级 pip 失败。"
 # 有本平台的锁定文件时按它装：那是一份实际测过的版本组合，requirements-local.txt
 # 只写下限，隔几周装出来的就是另一套版本。目前只冻结了 macOS arm64 的；别的平台
 # 落回 requirements-local.txt。
@@ -176,14 +240,14 @@ if [[ -f "$LOCK_FILE" ]]; then
 	echo "按锁定文件安装：$(basename "$LOCK_FILE")"
 	REQUIREMENTS="$LOCK_FILE"
 fi
-"$VENV_PY" -m pip install -r "$REQUIREMENTS" ||
+pip_install -r "$REQUIREMENTS" ||
 	fail "安装 Python 依赖失败，请看上面的报错。"
 
 # yt-dlp 不进锁定文件，单独装最新版：抖音、B 站、YouTube 改版后旧版本会整个平台
 # 下载失败。装不上不算安装失败——只影响视频链接，上传本地文件照常可用，而且之后
 # 每次启动都会再试（scripts/update_yt_dlp.py）。
 echo "安装/更新 yt-dlp（视频链接下载器）"
-if ! "$VENV_PY" -m pip install -U --disable-pip-version-check yt-dlp; then
+if ! pip_install -U --disable-pip-version-check yt-dlp; then
 	echo "⚠ yt-dlp 没有装上或没能更新到最新版（多半是网络问题）。"
 	echo "  上传本地文件不受影响；视频链接功能要等它装好。之后每次启动会自动再试，"
 	echo "  也可以手动运行：${VENV_PY} scripts/update_yt_dlp.py --force"
@@ -199,23 +263,35 @@ fi
 
 # --- 4. 前端 ---------------------------------------------------------------
 step "安装前端依赖并构建"
-# 和上面的 FFmpeg 同样对待。之前这里是直接报错让用户自己去装 Node，而 FFmpeg
-# 缺失时脚本会主动问一句——同一个脚本里两种待遇，先遇到哪个全看运气。
+# 只有构建界面要用 Node.js。机器上没有就下载官方的免安装包放进数据目录，只给这一步用。
+NODE_VERSION="v24.20.0"
 if ! command -v npm >/dev/null 2>&1; then
-	if command -v brew >/dev/null 2>&1; then
-		echo "未找到 Node.js（构建前端界面要用它），正在用 Homebrew 安装…"
-		brew install node || fail "brew install node 失败，请手动安装后重试。"
-	else
-		fail "未找到 npm。请先安装 Node.js（brew install node，或到 https://nodejs.org 下载），
-然后重新运行本脚本。"
+	NODE_HOME="${TOOLS_DIR}/node-${NODE_VERSION}-darwin-${ARCH_NODE}"
+	if [[ ! -x "${NODE_HOME}/bin/npm" ]]; then
+		echo "未找到 Node.js（构建界面要用它），正在下载免安装版到 ${TOOLS_DIR}…"
+		archive="node-${NODE_VERSION}-darwin-${ARCH_NODE}.tar.gz"
+		download "https://nodejs.org/dist/${NODE_VERSION}/${archive}" "${TOOLS_DIR}/${archive}" ||
+			download "https://npmmirror.com/mirrors/node/${NODE_VERSION}/${archive}" "${TOOLS_DIR}/${archive}" ||
+			fail "Node.js 下载失败，请检查网络后重新运行本脚本。"
+		tar -xzf "${TOOLS_DIR}/${archive}" -C "$TOOLS_DIR" || fail "Node.js 解压失败。"
+		rm -f "${TOOLS_DIR}/${archive}"
 	fi
+	export PATH="${NODE_HOME}/bin:${PATH}"
 fi
+
+# 失败一次就换 npmmirror 再试。
+npm_retry() {
+	npm "$@" && return 0
+	[[ -n "$(npm config get registry 2>/dev/null | grep -v registry.npmjs.org)" ]] && return 1
+	echo "下载失败，换国内镜像（npmmirror）重试…"
+	npm "$@" --registry=https://registry.npmmirror.com
+}
 
 cd "$REPO"
 if [[ -f package-lock.json ]]; then
-	npm ci || fail "npm ci 失败。"
+	npm_retry ci || fail "npm ci 失败。"
 else
-	npm install || fail "npm install 失败。"
+	npm_retry install || fail "npm install 失败。"
 fi
 
 # 构建脚本的名字在两套前端里不一样，按 package.json 实际声明的来，避免静默构建
@@ -241,11 +317,12 @@ step "准备转录模型"
 if [[ "$SKIP_MODEL" -eq 1 ]]; then
 	echo "按要求跳过。第一次转录时会自动下载。"
 else
-	"$VENV_PY" "${REPO}/scripts/stt_model.py" fetch ||
-		fail "转录模型没有下载成功，安装还没有完成。
-环境和界面都已经装好，只差模型。请检查网络或代理后，在这个目录里运行：
-  ${VENV_PY} scripts/stt_model.py fetch --mirror
-它会直接从镜像源下载。下载成功后再运行一次本脚本，把剩下的步骤（就绪检查、桌面启动器）做完。"
+	if ! "$VENV_PY" "${REPO}/scripts/stt_model.py" fetch; then
+		echo "下载失败，换镜像源（hf-mirror.com）重试…"
+		"$VENV_PY" "${REPO}/scripts/stt_model.py" fetch --mirror ||
+			fail "转录模型没有下载成功，安装还没有完成。
+环境和界面都已经装好，只差模型。检查网络或代理后重新运行本脚本即可，已装好的部分不会重装。"
+	fi
 fi
 
 # --- 6. 就绪检查 -----------------------------------------------------------

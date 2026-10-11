@@ -10,8 +10,9 @@
 #   数据（--data）：任务历史、转录稿、笔记、媒体文件。删掉不可恢复，所以要单独
 #                   开口，并且再确认一次。
 #
-# 不动 FFmpeg、Node.js、Homebrew 和 Python：它们是系统工具，这台机器上别的东西
-# 很可能也在用。
+# 安装脚本自己下载到数据目录 bin/、tools/ 里的 FFmpeg、Node.js、Python 属于程序，
+# 默认一起删。机器上原本就有的 FFmpeg、Node.js、Homebrew 和 Python 不动：它们是
+# 系统工具，别的东西很可能也在用。
 #
 # 用法：
 #   bash launchers/macos/uninstall-local.sh                # 只卸程序
@@ -157,6 +158,8 @@ add_target "${REPO}/frontend/dist-local" "前端构建产物"
 add_target "${HOME}/Desktop/FluentFlow Local.app" "桌面启动器"
 add_target "${HOME}/Desktop/FluentFlow Local.command" "桌面启动器（旧版）"
 add_target "${HOME}/Library/Logs/FluentFlow" "日志"
+add_target "${DATA_ROOT}/bin" "安装时下载的 FFmpeg 和 uv"
+add_target "${DATA_ROOT}/tools" "安装时下载的 Node.js 和 Python"
 
 for dir in "${model_dirs[@]:-}"; do
 	[[ -n "$dir" ]] && add_target "$dir" "转录模型"

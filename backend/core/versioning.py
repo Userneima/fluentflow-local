@@ -35,6 +35,11 @@ def get_app_version() -> str:
 
 
 def _git_value(*args: str) -> str | None:
+    # Only inside a git checkout. A copy unpacked from a release zip has no .git,
+    # and on a Mac without the command line developer tools running /usr/bin/git
+    # opens a dialog asking to install them, on every start of the service.
+    if not (repo_root() / ".git").exists():
+        return None
     try:
         result = subprocess.run(
             ["git", *args],

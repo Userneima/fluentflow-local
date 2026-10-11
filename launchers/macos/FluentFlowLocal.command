@@ -83,9 +83,12 @@ if [[ -n "$health" ]]; then
 		# 的视频转到一半被杀掉，得从头再来。查不到任务列表就照常重启 —— 那说明这个
 		# 进程连自己的接口都答不上来了，留着也没用。
 		# 数任务交给 count_active_jobs.py，和桌面 App 的重启确认用同一个口径。
-		# 它只用标准库，所以用系统 python3，不依赖后面才找的虚拟环境。-1 表示查不清，
-		# 也要多问一句。
-		running="$(python3 "${REPO}/launchers/macos/count_active_jobs.py" "http://127.0.0.1:${PORT}" 2>/dev/null || echo -1)"
+		# 它只用标准库，优先用项目虚拟环境里的 Python：没装命令行开发者工具的 Mac 上，
+		# 系统的 python3 是一个会弹窗的占位程序。-1 表示查不清，也要多问一句。
+		count_py="${REPO}/venv/bin/python"
+		[[ -x "$count_py" ]] || count_py="${REPO}/.venv/bin/python"
+		[[ -x "$count_py" ]] || count_py="python3"
+		running="$("$count_py" "${REPO}/launchers/macos/count_active_jobs.py" "http://127.0.0.1:${PORT}" 2>/dev/null || echo -1)"
 		if [[ "${running:--1}" != "0" ]]; then
 			if [[ "$running" == "-1" ]]; then
 				echo "查不清后台有没有任务在进行，重启可能会打断正在转写的任务。"
@@ -115,8 +118,7 @@ VENV_PY="${REPO}/venv/bin/python"
 if [[ ! -x "$VENV_PY" ]]; then
 	fail "找不到 Python 虚拟环境。请在终端执行：
 cd ${REPO}
-python3 -m venv venv
-./venv/bin/pip install -r requirements-local.txt"
+bash launchers/macos/setup-local.sh"
 fi
 
 echo "== FluentFlow Local 启动前检查 =="

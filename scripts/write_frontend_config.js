@@ -28,7 +28,11 @@ const fileMtimeIso = (filePath) => {
   }
 };
 
+// Only inside a git checkout. A copy unpacked from a release zip has no .git, and
+// on a Mac without the command line developer tools running /usr/bin/git opens a
+// dialog asking to install them.
 const gitValue = (...args) => {
+  if (!fs.existsSync(path.join(root, ".git"))) return null;
   try {
     return execFileSync("git", args, {
       cwd: root,

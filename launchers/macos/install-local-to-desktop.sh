@@ -29,15 +29,11 @@ command -v osacompile >/dev/null 2>&1 || fail "找不到 osacompile（macOS 自�
 # 和代码目录没有位置关系。
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-python3 - "$SOURCE" "$WORK/main.applescript" "$REPO" <<'PY'
-import sys
-src, dst, repo = sys.argv[1], sys.argv[2], sys.argv[3]
-text = open(src, encoding="utf-8").read()
-if "@@REPO@@" not in text:
-    raise SystemExit("源文件里没有 @@REPO@@ 占位符，安装脚本和源文件不同步了")
-open(dst, "w", encoding="utf-8").write(text.replace("@@REPO@@", repo))
-PY
-
+# 用 bash 自己替换，不调用 python3：没装命令行开发者工具的 Mac 上，/usr/bin/python3
+# 只是一个会弹窗要求安装开发者工具的占位程序。
+TEMPLATE="$(<"$SOURCE")"
+[[ "$TEMPLATE" == *"@@REPO@@"* ]] || fail "源文件里没有 @@REPO@@ 占位符，安装脚本和源文件不同步了"
+printf '%s\n' "${TEMPLATE//@@REPO@@/$REPO}" >"$WORK/main.applescript"
 # 重装时先移走旧的：osacompile 不会覆盖已存在的 .app
 if [[ -e "$DEST" ]]; then
 	rm -rf "$DEST"

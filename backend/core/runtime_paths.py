@@ -78,3 +78,27 @@ def default_transcript_edit_records_dir() -> Path:
 
 def default_video_source_dir() -> Path:
     return runtime_path("FLUENTFLOW_VIDEO_SOURCE_DIR", "video_sources")
+
+
+def bundled_tools_bin() -> Path:
+    """Where the installer puts the tools it downloads (FFmpeg, uv).
+
+    The installer downloads them here instead of going through a package manager
+    that would ask for a password, so an agent can install FluentFlow unattended.
+    """
+    return app_data_root() / "bin"
+
+
+def put_bundled_tools_on_path() -> None:
+    """Put the installer's tool directory first on PATH.
+
+    Prepended, so a downloaded FFmpeg is found by every ``shutil.which`` and
+    subprocess call; skipped when the directory does not exist, so a machine
+    whose FFmpeg came from elsewhere is unaffected.
+    """
+    directory = bundled_tools_bin()
+    if not directory.is_dir():
+        return
+    entries = os.environ.get("PATH", "").split(os.pathsep)
+    if str(directory) not in entries:
+        os.environ["PATH"] = os.pathsep.join([str(directory), *[e for e in entries if e]])

@@ -9,10 +9,14 @@
 # only chops the wait into pieces the user has to sit through. Missing pieces
 # are installed, each step says what it is doing, and only a failure stops it.
 #
-# Slow pip / npm downloads (for example on networks in China): set a mirror in
-# this PowerShell session before running the script; it never switches on its own.
-#   $env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
-#   npm config set registry https://registry.npmmirror.com
+# Nothing here asks for administrator rights, so an agent can run it unattended:
+# Python is installed for the current user only, Node.js (needed only to build
+# the interface) is a portable copy in the data folder, and FFmpeg comes from
+# winget's portable package.
+#
+# A failed download is retried once from a mirror in China: pip from Tsinghua,
+# npm from npmmirror, the transcription model from hf-mirror. A PIP_INDEX_URL or
+# npm registry you set yourself is left alone.
 #
 # Python dependencies are installed from requirements-local.txt (lower bounds,
 # newest matching versions). There is no tested lock file for Windows yet; the
@@ -48,17 +52,31 @@ function Update-SessionPath {
 
 # Same treatment as FFmpeg below: required, one sensible answer, so install it
 # with winget instead of stopping to send the user off to a download page.
-function Install-WithWinget([string]$Id, [string]$What) {
+function Install-WithWinget([string]$Id, [string]$What, [string[]]$Extra = @()) {
     $Winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if (-not $Winget) {
         throw "$What was not found, and winget is not available to install it. Install $What yourself, then run this script again."
     }
     Write-Host "$What was not found. Installing it with winget..."
-    Invoke-Checked $Winget.Source @(
+    Invoke-Checked $Winget.Source (@(
         "install", "--id", $Id, "-e", "--source", "winget",
         "--accept-source-agreements", "--accept-package-agreements"
-    )
+    ) + $Extra)
     Update-SessionPath
+}
+
+# Retried once from a mirror in China when the default index fails.
+function Invoke-Pip([string[]]$Arguments) {
+    & $Python -m pip @Arguments
+    if ($LASTEXITCODE -eq 0) { return }
+    if ($env:PIP_INDEX_URL) { throw "pip failed: $($Arguments -join ' ')" }
+    Write-Host "Download failed; retrying from the Tsinghua mirror..."
+    $env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+    try {
+        Invoke-Checked $Python (@("-m", "pip") + $Arguments)
+    } finally {
+        Remove-Item Env:PIP_INDEX_URL -ErrorAction SilentlyContinue
+    }
 }
 
 function Test-NvidiaAdapter {
@@ -117,7 +135,8 @@ if (-not (Test-Path $Python)) {
         }
     }
     if (-not $PythonOk) {
-        Install-WithWinget "Python.Python.3.12" "Python 3.10 or newer"
+        # User scope: the machine-wide installer asks for administrator rights.
+        Install-WithWinget "Python.Python.3.12" "Python 3.10 or newer" @("--scope", "user")
         $PyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
         if (-not $PyLauncher) {
             throw "Python was installed but py.exe is not on PATH yet. Open a new PowerShell window and run this script again."
@@ -128,7 +147,7 @@ if (-not (Test-Path $Python)) {
 }
 
 Write-Host "Installing FluentFlow Local Python dependencies..."
-Invoke-Checked $Python @("-m", "pip", "install", "-r", (Join-Path $Repo "requirements-local.txt"))
+Invoke-Pip @("install", "-r", (Join-Path $Repo "requirements-local.txt"))
 
 # yt-dlp is kept at its newest release: Douyin, Bilibili and YouTube change their
 # pages often and an old copy fails a whole platform. Not fatal: it only affects
@@ -146,18 +165,46 @@ if (-not $YtDlpOk) {
 
 if (Test-NvidiaAdapter) {
     Write-Host "NVIDIA adapter detected. Installing FluentFlow's GPU runtime..."
-    Invoke-Checked $Python @("-m", "pip", "install", "-r", (Join-Path $Repo "requirements-windows-gpu.txt"))
+    Invoke-Pip @("install", "-r", (Join-Path $Repo "requirements-windows-gpu.txt"))
 } else {
     Write-Host "No NVIDIA adapter detected; FluentFlow will use the CPU transcription runtime."
 }
 
+# Only building the interface needs Node.js. Without one on the machine, a
+# portable copy goes into the data folder for this step alone: the winget
+# package is a machine-wide installer that asks for administrator rights.
+$NodeVersion = "v24.20.0"
 $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if (-not $Npm) {
-    Install-WithWinget "OpenJS.NodeJS.LTS" "Node.js"
+    $DataDir = if ($env:FLUENTFLOW_DATA_DIR) { $env:FLUENTFLOW_DATA_DIR } else { Join-Path $env:APPDATA "FluentFlow" }
+    $ToolsDir = Join-Path $DataDir "tools"
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    $NodeName = "node-$NodeVersion-win-x64"
+    $NodeHome = Join-Path $ToolsDir $NodeName
+    if (-not (Test-Path (Join-Path $NodeHome "npm.cmd"))) {
+        Write-Host "Node.js was not found (building the interface needs it). Downloading a portable copy..."
+        $Zip = Join-Path $ToolsDir "$NodeName.zip"
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/$NodeVersion/$NodeName.zip" -OutFile $Zip
+        } catch {
+            Invoke-WebRequest -UseBasicParsing -Uri "https://npmmirror.com/mirrors/node/$NodeVersion/$NodeName.zip" -OutFile $Zip
+        }
+        Expand-Archive -Force -Path $Zip -DestinationPath $ToolsDir
+        Remove-Item $Zip
+    }
+    $env:Path = "$NodeHome;$env:Path"
     $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if (-not $Npm) {
-        throw "Node.js was installed but npm is not on PATH yet. Open a new PowerShell window and run this script again."
+        throw "Node.js was downloaded but npm.cmd is not runnable from $NodeHome."
     }
+}
+
+# Retried once from npmmirror when the default registry fails.
+function Invoke-Npm([string[]]$Arguments) {
+    & $Npm.Source @Arguments
+    if ($LASTEXITCODE -eq 0) { return }
+    Write-Host "Download failed; retrying from the npmmirror registry..."
+    Invoke-Checked $Npm.Source ($Arguments + @("--registry=https://registry.npmmirror.com"))
 }
 
 # Picked by what package.json declares rather than hard-coded, so a renamed
@@ -174,7 +221,7 @@ if (Test-Path $PackageJson) {
 Push-Location $Repo
 try {
     Write-Host "Installing frontend dependencies..."
-    Invoke-Checked $Npm.Source @("ci")
+    Invoke-Npm @("ci")
     Write-Host "Building the local frontend ($BuildScript)..."
     Invoke-Checked $Npm.Source @("run", $BuildScript)
 } finally {
@@ -189,6 +236,10 @@ if ($SkipModel) {
 } else {
     Write-Host "Preparing the transcription model..."
     & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Download failed; retrying from the hf-mirror.com mirror..."
+        & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch" "--mirror"
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "The model was not downloaded. The first transcription will download it (switching to the hf-mirror.com mirror if huggingface.co is unreachable), or run .\.venv\Scripts\python.exe scripts\stt_model.py fetch --mirror now."
     }

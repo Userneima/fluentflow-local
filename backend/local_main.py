@@ -23,9 +23,12 @@ from fastapi import FastAPI, HTTPException
 
 from backend.core import hf_endpoint
 from backend.core.local_config import load_project_env
+from backend.core.runtime_paths import put_bundled_tools_on_path
 
 # Load repository-local configuration before modules freeze default DB/event paths.
 load_project_env()
+# The FFmpeg the installer downloaded lives in the data directory, not on PATH.
+put_bundled_tools_on_path()
 # Choose the model download host before anything imports `huggingface_hub`,
 # which reads HF_ENDPOINT into a constant at import time. An HF_ENDPOINT from
 # .env or the shell is honoured without a probe; a failed probe never blocks

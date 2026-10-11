@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from backend.core.runtime_paths import put_bundled_tools_on_path  # noqa: E402
 from backend.core.local_readiness import (  # noqa: E402
     failed_required_checks,
     format_report,
@@ -21,6 +22,7 @@ from backend.core.local_readiness import (  # noqa: E402
 
 
 def main() -> int:
+    put_bundled_tools_on_path()
     checks = run_readiness_checks()
     print(format_report(checks))
     failed = failed_required_checks(checks)

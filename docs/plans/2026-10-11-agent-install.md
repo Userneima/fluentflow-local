@@ -36,6 +36,8 @@ FluentFlow 只做本地版。用户把仓库链接交给自己的 agent（Claude
 
 改完后在一台全新的 Mac 和一台全新的 Windows 上各实装一次，确认全程没有任何需要人点或输入的地方。
 
+现状（2026-10-11）：macOS 脚本已改，在本机模拟的空白环境（不用 Homebrew 的工具、没有 Node.js 和 FFmpeg、视为没装开发者工具）里实装通过，全程没有调用 git 和系统 python3；uv 装 Python 那一步单独实测通过。Windows 脚本按同样思路改了（Python 只装给当前用户、Node.js 用免安装版、下载失败换镜像），还没在 Windows 上跑过。真机全新 Mac 的实装也还没做。
+
 ### 三、给 agent 的安装说明
 
 仓库根目录放一份专门写给 agent 的安装说明，README 第一屏指向它。内容：
