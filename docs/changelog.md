@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.1 - 2026-10-11
+
 - Windows 上转录不再一开始就失败。新出的 av 19 去掉了 faster-whisper 读音频时要用的一个参数，按下限装依赖的 Windows 环境装到它之后，每次转录都报 `open() got an unexpected keyword argument 'metadata_errors'`。依赖里给 av 加了上限（低于 19），重新运行安装脚本即可修好；已经装上 av 19 的环境，启动前检查会直接说明并给出修复命令。macOS 用锁定文件安装，不受影响。
 - 一条命令安装时，换过端口的机器也能把 MCP 工具注册进 Claude Code。
 
