@@ -22,6 +22,29 @@ from scripts.local_agent_client import (
 PROTOCOL_VERSION = "2025-06-18"
 
 
+def _token_from_project_env() -> None:
+    """Use the access token the installer wrote into the repository .env.
+
+    The MCP client's own configuration may pass it, and then that value wins; when
+    it does not, the token comes from the same file the backend reads, so the two
+    sides cannot disagree and registering the server needs no secret.
+    """
+    if (os.environ.get("FLUENTFLOW_ACCESS_TOKEN") or "").strip():
+        return
+    try:
+        lines = (PROJECT_ROOT / ".env").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        key, _, value = line.strip().partition("=")
+        if key.strip() == "FLUENTFLOW_ACCESS_TOKEN" and value.strip():
+            os.environ["FLUENTFLOW_ACCESS_TOKEN"] = value.strip().strip("'\"")
+            return
+
+
+_token_from_project_env()
+
+
 def _app_version() -> str:
     try:
         return (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip() or "0.0.0"

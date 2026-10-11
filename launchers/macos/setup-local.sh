@@ -325,12 +325,27 @@ else
 	fi
 fi
 
-# --- 6. 就绪检查 -----------------------------------------------------------
+# --- 6. Agent 接口的访问令牌 -----------------------------------------------
+# 用户的 agent 通过 MCP 工具调用本应用，那个接口要一个令牌才开。这里生成一串随机
+# 字符写进 .env；后端和 MCP 服务都从这个文件读，两边自然一致，没人需要手抄。
+step "开启 Agent 接口"
+ENV_FILE="${REPO}/.env"
+if grep -Eq '^[[:space:]]*FLUENTFLOW_ACCESS_TOKEN=[^[:space:]]+' "$ENV_FILE" 2>/dev/null; then
+	echo "已有访问令牌（${ENV_FILE}）。"
+else
+	# od 只读 24 个字节就停，不会像 tr | head 那样被管道提前掐断、在 pipefail 下让脚本退出。
+	TOKEN="$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')"
+	[[ -s "$ENV_FILE" && -n "$(tail -c 1 "$ENV_FILE")" ]] && echo "" >>"$ENV_FILE"
+	echo "FLUENTFLOW_ACCESS_TOKEN=${TOKEN}" >>"$ENV_FILE"
+	echo "已生成访问令牌，写入 ${ENV_FILE}。"
+fi
+
+# --- 7. 就绪检查 -----------------------------------------------------------
 step "启动前检查"
 "$VENV_PY" "${REPO}/scripts/check_local_readiness.py" ||
 	fail "环境未就绪，请按上面的提示处理后重新运行本脚本。"
 
-# --- 7. 桌面启动器 ---------------------------------------------------------
+# --- 8. 桌面启动器 ---------------------------------------------------------
 if [[ "$SKIP_DESKTOP" -eq 1 ]]; then
 	echo ""
 	echo "✓ 安装完成（按要求跳过了桌面启动器）。"

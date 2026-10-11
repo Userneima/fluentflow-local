@@ -155,3 +155,23 @@ def test_a_finished_task_without_a_note_points_the_agent_at_writing_it():
     assert [a["action"] for a in _local_extra_next_actions(without, {})] == ["get_agent_note_material"]
     assert _local_extra_next_actions(with_note, {}) == []
     assert _local_extra_next_actions(writing, {}) == []
+
+
+def test_mcp_server_reads_the_token_the_installer_wrote(monkeypatch, tmp_path):
+    """Registering the MCP server needs no secret: it reads the repository .env."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import fluentflow_mcp_server as mcp
+
+    (tmp_path / ".env").write_text("FOO=1\nFLUENTFLOW_ACCESS_TOKEN=abc123\n", encoding="utf-8")
+    monkeypatch.setattr(mcp, "PROJECT_ROOT", tmp_path)
+    monkeypatch.delenv("FLUENTFLOW_ACCESS_TOKEN", raising=False)
+    mcp._token_from_project_env()
+    import os
+    assert os.environ["FLUENTFLOW_ACCESS_TOKEN"] == "abc123"
+
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "from-client-config")
+    mcp._token_from_project_env()
+    assert os.environ["FLUENTFLOW_ACCESS_TOKEN"] == "from-client-config", "the client's own value wins"

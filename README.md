@@ -4,6 +4,9 @@
 文件，它把音视频转成文字，再写成一份可以编辑和导出的笔记。转录在本机完成，不上传；笔记
 生成和飞书导出只会连接你自行配置的服务。
 
+**最省事的装法**：把这个仓库的链接发给你的 Claude Code 或 Codex，说「帮我装上 FluentFlow」。它会按
+[AGENT_INSTALL.md](AGENT_INSTALL.md) 从头装到尾，中途不需要你输密码或点任何东西。下面是自己动手装的说明。
+
 ![主界面](docs/images/home.png)
 
 转录用的是本机的 Whisper 模型，Apple 芯片走 GPU 加速。讲话人区分、人声增强、转录速度都
@@ -190,13 +193,12 @@ Key 保存在本机的应用数据目录里，填完立即生效，不必重启�
 ## 让 Claude Code、Codex 等 AI 工具调用它
 
 FluentFlow Local 自带一个 MCP 服务（让 AI 工具直接调用本应用的标准接口），AI 工具可以替你
-提交视频、等待结果、读取笔记。这个接口默认关闭：
+提交视频、等待结果、读取和写笔记。这个接口要一个访问令牌才开，安装脚本已经生成好一串写进了仓库根目录的
+`.env`（`FLUENTFLOW_ACCESS_TOKEN=` 那一行），后台服务和 MCP 服务都从这里读。
 
-1. 在仓库根目录的 `.env` 里加一行 `FLUENTFLOW_ACCESS_TOKEN=`，后面接一串你自己定的随机字符，
-   然后重启 FluentFlow Local。
-2. 在应用左下角「菜单 → Agent 接入」里填入同一串字符，页面会生成可以直接复制的 Claude Code
-   和 Codex 配置。
-3. 想确认接通了，在仓库目录运行
+1. 在应用左下角「菜单 → Agent 接入」里填入 `.env` 里的那串令牌，页面会生成可以直接复制的 Claude Code
+   和 Codex 配置。也可以直接照 [AGENT_INSTALL.md](AGENT_INSTALL.md) 第 4 步注册。
+2. 想确认接通了，在仓库目录运行
    `.venv/bin/python scripts/check_mcp_server.py --backend-e2e`（Windows 为
    `.venv\Scripts\python.exe scripts\check_mcp_server.py --backend-e2e`）：它启动 MCP 服务、核对工具清单，
    再提交一段不写笔记的短文字稿走一遍提交、等待、读取，任务列表里会多出一条「MCP smoke transcript」。

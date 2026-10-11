@@ -245,6 +245,19 @@ if ($SkipModel) {
     }
 }
 
+# The user's agent reaches this app through the MCP tools, and that interface
+# opens only with a token. One is generated into .env, which the backend and the
+# MCP server both read, so nobody has to copy it anywhere.
+$EnvFile = Join-Path $Repo ".env"
+$HasToken = (Test-Path $EnvFile) -and (Select-String -Path $EnvFile -Pattern '^\s*FLUENTFLOW_ACCESS_TOKEN=\S+' -Quiet)
+if (-not $HasToken) {
+    $Bytes = New-Object byte[] 24
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($Bytes)
+    $Token = -join ($Bytes | ForEach-Object { $_.ToString("x2") })
+    Add-Content -Path $EnvFile -Value "`nFLUENTFLOW_ACCESS_TOKEN=$Token" -Encoding UTF8
+    Write-Host "Generated the agent access token in $EnvFile."
+}
+
 Write-Host "Checking local runtime..."
 Invoke-Checked $Python @((Join-Path $Repo "scripts\check_local_readiness.py"))
 Invoke-Checked (Join-Path $ScriptDir "install-local-to-desktop.ps1") @()
