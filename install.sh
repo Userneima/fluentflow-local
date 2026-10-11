@@ -118,7 +118,24 @@ if [[ "$registered" -eq 0 ]]; then
 	echo "$CODEX_TOML"
 fi
 
-# --- 5. 自检 ----------------------------------------------------------------
+# --- 5. 给 agent 的 skill -------------------------------------------------
+# 写明拿到视频怎么处理、收到笔记反馈怎么验证后再改写法。链到代码目录里那份，
+# 升级代码时 skill 跟着更新。已有同名的、不是链接的目录不动：那是用户自己的。
+step "安装给 agent 的 skill"
+SKILL_SRC="${DIR}/agent/skills/fluentflow"
+for skills_dir in "${HOME}/.claude/skills" "${HOME}/.codex/skills"; do
+	tool_dir="$(dirname "$skills_dir")"
+	[[ -d "$tool_dir" ]] || continue
+	mkdir -p "$skills_dir"
+	if [[ -e "${skills_dir}/fluentflow" && ! -L "${skills_dir}/fluentflow" ]]; then
+		echo "${skills_dir}/fluentflow 已存在且不是链接，保持不动。"
+		continue
+	fi
+	ln -sfn "$SKILL_SRC" "${skills_dir}/fluentflow"
+	echo "已链到 ${skills_dir}/fluentflow"
+done
+
+# --- 6. 自检 ----------------------------------------------------------------
 step "自检 MCP 服务"
 "$VENV_PY" "${DIR}/scripts/check_mcp_server.py" >/dev/null || fail "MCP 服务自检没通过，运行 ${VENV_PY} ${DIR}/scripts/check_mcp_server.py 看详情。"
 echo "MCP 服务正常。"

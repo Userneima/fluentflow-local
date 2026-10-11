@@ -82,3 +82,14 @@ def test_mcp_exposes_the_feedback_tools():
 
     names = {tool["name"] for tool in mcp.TOOL_DEFINITIONS}
     assert {"get_note_skill", "record_note_feedback", "list_note_feedback", "draft_note_part", "apply_note_rule"} <= names
+
+
+def test_the_shipped_agent_skill_is_named_like_its_folder():
+    """Hosts other than Claude Code drop a skill whose name is not kebab-case or not its folder name."""
+    import re
+    from pathlib import Path
+
+    skill = Path(__file__).resolve().parents[1] / "agent" / "skills" / "fluentflow" / "SKILL.md"
+    name = re.search(r"^name:\s*(\S+)", skill.read_text(encoding="utf-8"), re.M).group(1)
+    assert name == skill.parent.name
+    assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", name)

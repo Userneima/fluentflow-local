@@ -100,6 +100,23 @@ if (-not $Registered) {
     Write-Host $CodexToml
 }
 
+# The skill tells the agent how to make a note and how to verify a rule before
+# changing how notes are written. Copied (links need administrator rights on
+# Windows); rerunning this script refreshes it. A folder of the same name that
+# this script did not write is left alone.
+Write-Host "== Installing the agent skill =="
+$SkillSrc = Join-Path $Dir "agent\skills\fluentflow"
+foreach ($ToolDir in @((Join-Path $env:USERPROFILE ".claude"), (Join-Path $env:USERPROFILE ".codex"))) {
+    if (-not (Test-Path $ToolDir)) { continue }
+    $Target = Join-Path $ToolDir "skills\fluentflow"
+    $Marker = Join-Path $Target ".installed-by-fluentflow"
+    if ((Test-Path $Target) -and -not (Test-Path $Marker)) { Write-Host "$Target exists and was not installed by FluentFlow; left alone."; continue }
+    New-Item -ItemType Directory -Force -Path $Target | Out-Null
+    Copy-Item -Force -Recurse (Join-Path $SkillSrc "*") $Target
+    Set-Content -Path $Marker -Value "" -Encoding UTF8
+    Write-Host "Installed $Target"
+}
+
 Write-Host "== Checking the MCP server =="
 & $Python (Join-Path $Dir "scripts\check_mcp_server.py") | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "The MCP server check failed; run $Python scripts\check_mcp_server.py for details." }
