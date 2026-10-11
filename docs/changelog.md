@@ -2,11 +2,15 @@
 
 ## Unreleased
 
+## 0.7.2 - 2026-10-11
+
+- agent 能按标题找任务：MCP 新增 `list_tasks`，按任务标题、笔记标题或文件名查找。用户只发一张笔记截图时，agent 用截图上的标题就能找到是哪一篇。
+- agent 改完一篇笔记后重新导出给用户；在已有笔记上修改时，原来引用的截图仍被算作引用。随产品的 agent skill 写清了怎么判断笔记是谁写的、每次重写和检查都交给互相独立的子 agent、验证轮数怎么填。
 - 对笔记的意见直接截图发给 agent 就行。agent 先改好这篇；判断是会反复出现的写法问题时，起草一条规则，用它把出问题的那一段重写几遍，交给另一个没参与写的检查者判断问题还在不在，通过了才写进你的笔记写法，并告诉你一句加了什么规则。同一个问题你再次提出时，才请你一起看规则和新旧对比。每条反馈都存成测试用例，以后改规则时重跑。MCP 新增 `get_note_skill`、`record_note_feedback`、`list_note_feedback`、`draft_note_part`、`apply_note_rule`；设置页「我的笔记风格」列出每条规则来自哪次反馈、验证了几轮。
 - agent 能直接导出 PDF：`export_result` 的 `target=pdf` 用本机的 Chrome 或 Edge 把笔记连同截图排成 PDF，默认放在「文稿/FluentFlow 笔记」。没有这两个浏览器时，给出可打印的网页。
 - 随产品附一份写给 agent 的 skill（`agent/skills/fluentflow`），写明拿到视频怎么处理、收到反馈怎么验证后再改写法；一条命令安装时链进 Claude Code 和 Codex。
-
 - 去气口后的视频在每个剪辑接缝处不再有爆音：每个保留片段首尾各做 8 毫秒淡入淡出后再接起来，剪辑表里的时间点和总时长不变。
+
 ## 0.7.1 - 2026-10-11
 
 - Windows 上转录不再一开始就失败。新出的 av 19 去掉了 faster-whisper 读音频时要用的一个参数，按下限装依赖的 Windows 环境装到它之后，每次转录都报 `open() got an unexpected keyword argument 'metadata_errors'`。依赖里给 av 加了上限（低于 19），重新运行安装脚本即可修好；已经装上 av 19 的环境，启动前检查会直接说明并给出修复命令。macOS 用锁定文件安装，不受影响。
