@@ -558,6 +558,66 @@ def save_agent_note(
     )
 
 
+def get_note_skill(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    """The note-writing rules in effect, and every rule added from the user's feedback."""
+    return _agent_request("GET", "/agent/v1/note-skill", api_base=api_base, client_id=client_id)
+
+
+def record_note_feedback(
+    problem: str,
+    kind: str,
+    task_id: str | None = None,
+    criterion: str = "",
+    note_excerpt: str = "",
+    part: int | None = None,
+    transcript_excerpt: str = "",
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Keep a problem the user reported about a note as a test case."""
+    return _agent_request(
+        "POST", "/agent/v1/note-feedback", api_base=api_base, client_id=client_id,
+        payload=_options(task_id=task_id, problem=problem, kind=kind, criterion=criterion,
+                         note_excerpt=note_excerpt, part=part, transcript_excerpt=transcript_excerpt),
+    )
+
+
+def list_note_feedback(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    """Every problem the user has reported, newest first, with the rule it led to."""
+    return _agent_request("GET", "/agent/v1/note-feedback", api_base=api_base, client_id=client_id)
+
+
+def draft_note_part(
+    task_id: str,
+    rules: str,
+    part: int = 1,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """One part of a task's note written by FluentFlow's own model with candidate rules; not saved."""
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/note-draft", api_base=api_base, client_id=client_id,
+        payload={"rules": rules, "part": int(part or 1)}, timeout=600,
+    )
+
+
+def apply_note_rule(
+    skill_text: str,
+    rule: str,
+    feedback_ids: list[str],
+    rounds: int,
+    evidence: str,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Write a rule you verified into the user's note skill; the previous skill is kept."""
+    return _agent_request(
+        "POST", "/agent/v1/note-skill/rules", api_base=api_base, client_id=client_id,
+        payload={"skill_text": skill_text, "rule": rule, "feedback_ids": list(feedback_ids),
+                 "rounds": int(rounds), "evidence": evidence},
+    )
+
+
 # Who writes the note on a media submission, said once for both submit tools.
 _MEDIA_NOTE_FLOW = (
     "By default the task cuts breath gaps out of the media, transcribes the cut file "
@@ -590,6 +650,11 @@ TOOL_FUNCTIONS = {
     "write_note_from_cut_media": write_note_from_cut_media,
     "get_agent_note_material": get_agent_note_material,
     "save_agent_note": save_agent_note,
+    "get_note_skill": get_note_skill,
+    "record_note_feedback": record_note_feedback,
+    "list_note_feedback": list_note_feedback,
+    "draft_note_part": draft_note_part,
+    "apply_note_rule": apply_note_rule,
     "export_result": export_result,
 }
 
@@ -937,6 +1002,81 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "client_id": {"type": "string"},
             },
             "required": ["task_id"],
+        },
+    },
+    {
+        "name": "get_note_skill",
+        "description": "The note-writing rules in effect (text, version, default or the user's own) and every rule added from feedback, with the feedback each came from.",
+        "inputSchema": {"type": "object", "properties": {"api_base": {"type": "string"}, "client_id": {"type": "string"}}},
+    },
+    {
+        "name": "record_note_feedback",
+        "description": (
+            "Keep a problem the user reported about a note as a test case. kind=one_off for a single "
+            "error (a misspelt name) or pattern for a way of writing that would recur. A pattern needs "
+            "criterion: how a checker tells the problem is fixed. With task_id the transcript of that "
+            "part is frozen into the case. When the user points out a problem in a note (often with a screenshot): fix that note first (save_agent_note). If the problem would come back in other notes, record it with record_note_feedback kind=pattern, check list_note_feedback for the same problem reported before (if so, show the user the existing rule and the old and new versions before changing it), then draft a rule, rewrite the affected part several times with it, have a separate checker that did not write it judge only whether the problem is still there, and when it passes call apply_note_rule and tell the user the rule in one sentence."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "problem": {"type": "string", "description": "What the user said is wrong, in their words."},
+                "kind": {"type": "string", "enum": ["one_off", "pattern"]},
+                "task_id": {"type": "string"},
+                "criterion": {"type": "string", "description": "Pass / fail: what a fixed note does."},
+                "note_excerpt": {"type": "string", "description": "The note text the problem is in."},
+                "part": {"type": "integer"},
+                "transcript_excerpt": {"type": "string", "description": "Only the relevant stretch; default the whole part."},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["problem", "kind"],
+        },
+    },
+    {
+        "name": "list_note_feedback",
+        "description": "Every problem the user has reported, newest first, with rule_id when a rule came of it. Read it to tell whether a new report is a problem that came back.",
+        "inputSchema": {"type": "object", "properties": {"api_base": {"type": "string"}, "client_id": {"type": "string"}}},
+    },
+    {
+        "name": "draft_note_part",
+        "description": (
+            "Have FluentFlow's own model write one part of a task's note with candidate rules, without "
+            "saving it, for verifying a rule when FluentFlow writes the user's notes. When no model is "
+            "configured, write the part yourself from get_agent_note_material with the candidate rules."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "rules": {"type": "string", "description": "The whole candidate skill text."},
+                "part": {"type": "integer", "default": 1},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id", "rules"],
+        },
+    },
+    {
+        "name": "apply_note_rule",
+        "description": (
+            "Write a rule you verified into the user's note skill. skill_text is the whole new skill "
+            "with the rule merged where it belongs; the previous skill is kept and can be restored from "
+            "the settings page. rounds: how many rewrites passed the checker; evidence: one or two "
+            "sentences on what was checked."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "skill_text": {"type": "string"},
+                "rule": {"type": "string", "description": "The rule, as the user will be told it."},
+                "feedback_ids": {"type": "array", "items": {"type": "string"}},
+                "rounds": {"type": "integer"},
+                "evidence": {"type": "string"},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["skill_text", "rule", "feedback_ids", "rounds", "evidence"],
         },
     },
     {

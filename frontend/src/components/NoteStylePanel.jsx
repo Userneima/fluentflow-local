@@ -84,7 +84,7 @@ export const NoteStylePanel = () => {
         return <p className="px-5 py-4 text-xs text-on-surface-variant">{error || '正在读取…'}</p>;
     }
 
-    const {skill, candidates = [], unread_edits: unreadEdits = 0, proposal, history = []} = state;
+    const {skill, candidates = [], unread_edits: unreadEdits = 0, proposal, history = [], rules_log: rulesLog = []} = state;
     const togglePick = (id) => setPicked((list) => (list.includes(id) ? list.filter((item) => item !== id) : [...list, id]));
     const propose = (payload) => act('propose', async () => {
         await noteStyle.propose({task_id: taskId, ...payload});
@@ -105,6 +105,28 @@ export const NoteStylePanel = () => {
             </div>
             {showSkill && (
                 <pre className={`${cellBase} max-h-[40vh] overflow-auto whitespace-pre-wrap text-xs leading-relaxed`}>{skill.text}</pre>
+            )}
+
+            {rulesLog.length > 0 && (
+                <div className="grid gap-2">
+                    <p className="text-sm font-semibold">从你的反馈里加的规则</p>
+                    <ul className="grid gap-2">
+                        {rulesLog.map((entry) => (
+                            <li key={entry.id} className={`${cellBase} grid gap-1 text-xs leading-relaxed`}>
+                                <span className="text-sm">{entry.rule}</span>
+                                {entry.feedback?.map((item) => (
+                                    <span key={item.id} className="text-on-surface-variant">
+                                        来自你的反馈：{item.problem}{item.title ? `（${item.title}）` : ''}
+                                    </span>
+                                ))}
+                                <span className="text-on-surface-variant">
+                                    {String(entry.applied_at || '').slice(0, 10)} 加入 · 验证 {entry.rounds} 轮{entry.evidence ? ` · ${entry.evidence}` : ''}
+                                </span>
+                            </li>
+                        ))}
+                    </ul>
+                    <p className="text-xs text-on-surface-variant">不想要哪条，在下面的旧版本里选它加入之前的那一版，对比后退回。</p>
+                </div>
             )}
 
             {proposal ? (

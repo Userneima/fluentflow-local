@@ -40,6 +40,20 @@ const setup = (first) => {
 };
 
 describe('NoteStylePanel', () => {
+    it('shows each rule the agent added, with the feedback it came from', async () => {
+        setup(state({
+            skill: {...SKILL, is_default: false},
+            rules_log: [{
+                id: 'r1', rule: '结尾不写总结段', applied_at: '2026-10-11T20:00:00+08:00', rounds: 3,
+                evidence: '同一段重写三次都没有总结段',
+                feedback: [{id: 'f1', problem: '每篇结尾都有一段总结', title: '什么是科学'}],
+            }],
+        }));
+        expect(await screen.findByText('结尾不写总结段')).toBeTruthy();
+        expect(screen.getByText('来自你的反馈：每篇结尾都有一段总结（什么是科学）')).toBeTruthy();
+        expect(screen.getByText(/验证 3 轮/)).toBeTruthy();
+    });
+
     it('says which style is in use', async () => {
         setup(state());
         expect(await screen.findByText('FluentFlow 默认写法')).toBeTruthy();

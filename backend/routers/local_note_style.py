@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from backend.core import note_skills, note_style, visual_note_channel
+from backend.core import note_feedback, note_skills, note_style, visual_note_channel
 from backend.core import visual_note_job as vn
 from backend.core.job_store import list_job_summaries
 from backend.core.local_config import resolve_secret
@@ -52,6 +52,8 @@ def read_note_style(request: Request) -> dict[str, Any]:
         "candidates": note_style.candidates(),
         "unread_edits": len(unread),
         "proposal": note_style.proposal(),
+        # Rules the user's agent added from their feedback, and which feedback.
+        "rules_log": note_feedback.rules_log(),
     }
 
 
