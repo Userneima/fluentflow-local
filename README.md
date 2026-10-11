@@ -5,7 +5,14 @@
 生成和飞书导出只会连接你自行配置的服务。
 
 **最省事的装法**：把这个仓库的链接发给你的 Claude Code 或 Codex，说「帮我装上 FluentFlow」。它会按
-[AGENT_INSTALL.md](AGENT_INSTALL.md) 从头装到尾，中途不需要你输密码或点任何东西。下面是自己动手装的说明。
+[AGENT_INSTALL.md](AGENT_INSTALL.md) 从头装到尾，中途不需要你输密码或点任何东西。自己装也只要在终端里
+运行一条命令（Windows 见 AGENT_INSTALL.md）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.sh | bash
+```
+
+下面是分步安装的说明，一条命令装不上时再看。
 
 ![主界面](docs/images/home.png)
 
