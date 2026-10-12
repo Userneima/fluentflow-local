@@ -225,7 +225,7 @@ def save(
             where = f"第 {part.index} 部分" if len(parts) > 1 else "这份笔记"
             raise AgentNoteError(f"{where}{reason.replace('Claude 返回的笔记', '')}，没有替换现有笔记，请重写后再交")
         cleaned.append(claude_vision.VisualNoteDraft(markdown=markdown, basis_note=basis_note, model=model))
-    joined = vn._joined_draft(cleaned, parts)
+    joined = vn._joined_draft(cleaned, parts, title=vn.note_title(job))
 
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     frames = (_stored_frames(task_id, result) or []) if media.has_video else []

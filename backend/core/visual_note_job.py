@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, cut_timeline, debreath_job, visual_note_channel
-from backend.core import note_skills, visual_note_check
+from backend.core import note_join, note_skills, visual_note_check
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
@@ -78,6 +78,7 @@ from backend.core.result_artifacts import (
     write_text_artifact,
 )
 from backend.core.result_schema import NOTE_FROM_CUT_MEDIA, frame_note_written_from
+from backend.core.title_display import display_title_for_user
 from backend.core.storage_paths import _artifact_storage_dir, find_source_file, in_place_source_path
 
 logger = logging.getLogger(__name__)
@@ -779,14 +780,31 @@ def _checked_draft(write, part, frames, *, api_key, rules=None):
     raise ClaudeVisionError(f"{reason}，重写一次也一样。这份没有替换现有笔记，可以稍后再点「重生笔记」。")
 
 
-def _joined_draft(drafts, parts):
+def note_title(job: dict[str, Any] | None) -> str:
+    """The task's title as the note's H1, from the same fields the task list shows."""
+    job = job or {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    source = metadata.get("video_source") if isinstance(metadata.get("video_source"), dict) else {}
+    for value in (result.get("display_title"), metadata.get("display_title"), source.get("display_title")):
+        if str(value or "").strip():
+            return str(value).strip()
+    return display_title_for_user(
+        source.get("title"), result.get("filename") or job.get("source_filename")
+    ) or display_title_for_user(job.get("source_filename"))
+
+
+def _joined_draft(drafts, parts, *, title: str = ""):
     """One note out of the parts, without paying a model to staple them together.
 
     Each part was told to write only its own stretch and to start at a second
-    level heading, so joining is mechanical: the sections follow each other in
-    recording order under whatever title the first part gave. A stitching pass
-    would cost another request to delete introductions the first pass had been
-    instructed not to write.
+    level heading, so joining is mechanical (``note_join``): the note gets one
+    title (the first part's if it wrote one, else ``title``), section numbers run
+    on across parts, and every part's 「存疑」 goes into one section at the end.
+    A stitching pass would cost another request to do what a loop can.
+
+    The comment above each part says which stretch of the recording it covers.
+    Nothing parses it; it is there for whoever reads the markdown.
 
     The counts reported are the whole run's, not the last part's, so "how much of
     this recording did the note actually read" stays answerable afterwards.
@@ -796,18 +814,15 @@ def _joined_draft(drafts, parts):
     first = drafts[0]
     if len(drafts) == 1:
         return first
-    sections = []
+    bodies = []
     for draft, part in zip(drafts, parts):
-        body = (draft.markdown or "").strip()
-        if not body:
-            continue
         span = (
             f"（{part.starts_at}–{part.ends_at}）"
             if part.starts_at and part.ends_at
             else ""
         )
-        sections.append(f"<!-- 第 {part.index}/{part.total} 部分{span} -->\n\n{body}")
-    markdown = "\n\n".join(sections)
+        bodies.append((f"<!-- 第 {part.index}/{part.total} 部分{span} -->", (draft.markdown or "").strip()))
+    markdown = note_join.join_parts(bodies, title=title)
     frames_sent = [frame for draft in drafts for frame in draft.frames_sent]
     frames_opened = [name for draft in drafts for name in draft.frames_opened]
     return replace(
@@ -925,7 +940,7 @@ def _run_visual_note(
                     state={"stage": f"writing {part.index}/{part.total}"},
                 )
             drafts.append(_checked_draft(write, part, part_frames, api_key=api_key, rules=skill.rules))
-        draft = _joined_draft(drafts, parts)
+        draft = _joined_draft(drafts, parts, title=note_title(job))
         cited = cited_frames(draft.markdown, frames)
         markdown = _rewrite_image_targets(draft.markdown, task_id, frames)
         artifact = write_text_artifact(

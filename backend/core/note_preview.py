@@ -79,7 +79,7 @@ def draft_with_rules(
         vn._checked_draft(write, part, claude_vision.frames_for_part(frames, part), api_key=api_key, rules=rules)
         for part in parts
     ]
-    draft = vn._joined_draft(drafts, parts)
+    draft = vn._joined_draft(drafts, parts, title=vn.note_title(job))
     return SkillDraft(
         label=label,
         markdown=draft.markdown,
