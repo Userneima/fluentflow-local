@@ -159,7 +159,7 @@ describe('the link box', () => {
 // the person's say-so. The first Douyin link submitted while they have never
 // answered is held, they are asked once, the answer is remembered by the
 // service, and that link goes in with the answer.
-describe('the first Douyin link', () => {
+describe('a Douyin link', () => {
     const DOUYIN = '7.92 复制打开抖音，看看 https://v.douyin.com/abcDEF12/ 复制此链接';
     const QUESTION = '抖音链接可能要交给第三方解析服务（miuistore.com）才能下载。只会发送这条链接，不发送其他内容。允许吗？';
     const submit = (link) => {
@@ -180,34 +180,15 @@ describe('the first Douyin link', () => {
         localStorage.clear();
     });
 
-    it('is held until the person answers', async () => {
+    it('is sent straight away without a question: the resolver is on by default', async () => {
         mount();
         submit(DOUYIN);
-        expect(await screen.findByText(QUESTION)).toBeTruthy();
-        expect(createVideoSourceJob).not.toHaveBeenCalled();
-    });
-
-    it('"允许（以后不再问）" remembers yes and sends the link allowing the resolver', async () => {
-        mount();
-        submit(DOUYIN);
-        fireEvent.click(await screen.findByRole('button', {name: '允许（以后不再问）'}));
         await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
-        expect(savePreferences).toHaveBeenCalledWith({allow_miuistore: true});
-        const [input, options] = createVideoSourceJob.mock.calls[0];
-        expect(input).toBe(DOUYIN);
-        expect(options.allowMiuistore).toBe(true);
+        expect(screen.queryByText(QUESTION)).toBeNull();
+        expect(createVideoSourceJob.mock.calls[0][0]).toBe(DOUYIN);
     });
 
-    it('"不允许" remembers no and sends the link without the resolver', async () => {
-        mount();
-        submit(DOUYIN);
-        fireEvent.click(await screen.findByRole('button', {name: '不允许'}));
-        await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
-        expect(savePreferences).toHaveBeenCalledWith({allow_miuistore: false});
-        expect(createVideoSourceJob.mock.calls[0][1].allowMiuistore).toBe(false);
-    });
-
-    it('is not asked about again once answered', async () => {
+    it('is not asked about when the resolver was turned off either', async () => {
         servicePreferences = {allow_miuistore: false};
         mount();
         submit(DOUYIN);

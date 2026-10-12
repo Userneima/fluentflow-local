@@ -245,20 +245,19 @@ describe('local settings page', () => {
 
     // Requirement: the Douyin fallback has three states. Never answered shows
     // as off and says when the question will come.
-    it('shows a never-answered Douyin fallback as off, saying when it will be asked', async () => {
+    it('shows the Douyin fallback on when it was never turned off', async () => {
         servicePreferences = {};
         render(<Settings/>);
-        expect(await screen.findByText('还没选，第一次提交抖音链接时会问。')).toBeTruthy();
-        expect(screen.getByLabelText(/抖音备用解析/).checked).toBe(false);
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+        expect(screen.getByLabelText(/抖音备用解析/).checked).toBe(true);
     });
 
-    it('shows an answered "no" as off without the not-chosen note', async () => {
+    it('shows a turned-off fallback as off', async () => {
         servicePreferences = {allow_miuistore: false};
         render(<Settings/>);
         // Let the service's answer arrive before looking.
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
         expect(screen.getByLabelText(/抖音备用解析/).checked).toBe(false);
-        expect(screen.queryByText('还没选，第一次提交抖音链接时会问。')).toBeNull();
     });
 
     // Requirement: exports an AI tool asks for use the route and folder chosen

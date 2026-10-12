@@ -112,16 +112,16 @@ def _friendly_error(error: Any) -> str:
 def _allow_miuistore(raw_options: dict[str, Any] | None) -> bool | None:
     """Whether the Douyin third-party fallback may run for this link.
 
-    The request's answer wins; otherwise the remembered setting. None means the
-    user has never decided: the fallback does not run, and a link that needed
-    it fails with a message saying how to allow it (it sends the link to a
-    third party, so it waits for consent).
+    The request's answer wins; otherwise the remembered setting; otherwise yes.
+    Sharing a public link to be processed is the request to process it, and the
+    fallback sends only that link. Only a user who turned it off in settings
+    keeps it off.
     """
     value = (raw_options or {}).get("allow_miuistore")
     if value is not None and str(value).strip() != "":
         return truthy(value)
     remembered = get_preference("allow_miuistore")
-    return None if remembered is None else bool(remembered)
+    return True if remembered is None else bool(remembered)
 
 
 def _video_cookies_browser(options: dict[str, Any]) -> str | None:

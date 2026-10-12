@@ -560,12 +560,16 @@ def test_a_retry_does_not_use_the_third_party_resolver_the_user_has_since_turned
     assert fetched["allow_miuistore"] is False
 
 
-def test_a_retry_by_a_user_who_never_decided_does_not_use_the_third_party_resolver(monkeypatch):
-    """The first submission had the fallback on; the user has never answered the
-    consent question since it became one, so the retry must not assume yes."""
+def test_a_retry_by_a_user_who_never_turned_it_off_uses_the_third_party_resolver(monkeypatch):
     fetched = _retry_with_preferences(monkeypatch, {})
 
-    assert fetched["allow_miuistore"] is None
+    assert fetched["allow_miuistore"] is True
+
+
+def test_a_retry_by_a_user_who_turned_it_off_does_not_use_it(monkeypatch):
+    fetched = _retry_with_preferences(monkeypatch, {"allow_miuistore": False})
+
+    assert fetched["allow_miuistore"] is False
 
 
 def test_a_retry_reads_the_browser_login_the_user_chose_now(monkeypatch):

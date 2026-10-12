@@ -3,7 +3,6 @@ import {
     COOKIES_MIGRATED_STORAGE_KEY,
     isDouyinLinkText,
     miuistoreChoiceFromPreferences,
-    needsMiuistoreConsent,
     syncVideoLinkPreferences,
 } from './videoLinkPrefs.js';
 
@@ -96,10 +95,10 @@ describe('the browser-login choice on start', () => {
 // say-so. The service remembers yes, no, or "never asked"; never asked means
 // the first Douyin link submitted is held until the person answers.
 describe('the Douyin third-party fallback choice', () => {
-    it('keeps "never asked" apart from "no"', () => {
-        expect(miuistoreChoiceFromPreferences({})).toBeNull();
-        expect(miuistoreChoiceFromPreferences(null)).toBeNull();
-        expect(miuistoreChoiceFromPreferences({allow_miuistore: null})).toBeNull();
+    it('is on unless the person turned it off', () => {
+        expect(miuistoreChoiceFromPreferences({})).toBe(true);
+        expect(miuistoreChoiceFromPreferences(null)).toBe(true);
+        expect(miuistoreChoiceFromPreferences({allow_miuistore: null})).toBe(true);
         expect(miuistoreChoiceFromPreferences({allow_miuistore: true})).toBe(true);
         expect(miuistoreChoiceFromPreferences({allow_miuistore: false})).toBe(false);
     });
@@ -113,18 +112,8 @@ describe('the Douyin third-party fallback choice', () => {
         expect(isDouyinLinkText('https://notdouyin.com/x')).toBe(false);
     });
 
-    it('asks only for a Douyin link and only while never asked', () => {
-        const link = 'https://v.douyin.com/abcDEF12/';
-        expect(needsMiuistoreConsent(link, {})).toBe(true);
-        expect(needsMiuistoreConsent(link, {allow_miuistore: true})).toBe(false);
-        expect(needsMiuistoreConsent(link, {allow_miuistore: false})).toBe(false);
-        expect(needsMiuistoreConsent('https://youtu.be/abc', {})).toBe(false);
-        // The service could not be asked: it decides, the page does not guess.
-        expect(needsMiuistoreConsent(link, null)).toBe(false);
-    });
-
-    it('reports "never asked" from the start-up sync instead of turning it on', async () => {
+    it('reports it on from the start-up sync when never turned off', async () => {
         const h = harness({preferences: {}});
-        expect((await h.run()).allowMiuistore).toBeNull();
+        expect((await h.run()).allowMiuistore).toBe(true);
     });
 });

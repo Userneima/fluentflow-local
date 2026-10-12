@@ -1,20 +1,17 @@
-"""The Douyin third-party fallback runs only with the user's consent.
+"""The Douyin third-party fallback runs unless the user turned it off.
 
-Requirements, in the user's terms:
+Requirements, in the user's terms (decided 2026-10-12):
 
-- The fallback sends the link (only the link) to a third party, so it runs only
-  after the user said yes: in the request, or remembered in settings
-  (``allow_miuistore`` true). A remembered no (false) keeps it off.
-- When the user has never decided and the request does not say, the fallback is
-  not used. A Douyin link that needed it fails with a Chinese message saying the
-  direct download failed and the link can be handed to the third-party resolver
-  (only the link is sent) if the user allows it in 设置 → 抖音备用解析, or with
-  allow_miuistore for AI tools. The diagnosis is ``douyin_fallback_not_allowed``
-  and it is retryable (allowing it and retrying is the fix).
+- Sharing a public link to be processed is the request to process it, and the
+  fallback sends only that link to the third party, so nobody is asked first:
+  a user who never touched the setting gets the fallback.
+- A user who turned it off in 设置 → 抖音备用解析 (``allow_miuistore`` false)
+  keeps it off; a Douyin link that needed it then fails with a Chinese message
+  saying how to turn it back on (``douyin_fallback_not_allowed``, retryable).
 - The request's own answer wins over the remembered one.
-- A retry follows the current setting, so a never-decided user is still asked.
-- The MCP ``submit_video_link`` tool carries the agent's answer when given and
-  leaves the decision to the setting otherwise.
+- A retry follows the current setting.
+- The MCP ``submit_video_link`` tool documents the parameter and tells the
+  agent not to ask the user about it.
 """
 
 from __future__ import annotations
@@ -127,7 +124,7 @@ def test_a_no_keeps_the_fallback_off_without_asking_again(monkeypatch):
 
 
 @pytest.mark.parametrize("request_options,remembered,expected", [
-    ({}, None, None),                              # never decided → not used
+    ({}, None, True),                              # never turned off → used
     ({}, True, True),                              # remembered yes
     ({}, False, False),                            # remembered no
     ({"allow_miuistore": "true"}, None, True),     # the request answers
@@ -141,7 +138,7 @@ def test_the_request_answer_wins_then_the_setting(monkeypatch, request_options, 
     assert lvs._allow_miuistore(request_options) is expected
 
 
-def test_a_submission_without_a_decision_records_none_and_hands_it_down(monkeypatch):
+def test_a_submission_without_a_decision_uses_the_fallback(monkeypatch):
     monkeypatch.setattr(lvs, "get_preference", lambda name: None)
     monkeypatch.setattr(lvs, "_refuse_or_reuse_duplicate", lambda *_a, **_k: None)
     monkeypatch.setattr(lvs, "claim_task_id", lambda *a, **k: "consent-1")
@@ -162,8 +159,8 @@ def test_a_submission_without_a_decision_records_none_and_hands_it_down(monkeypa
         input_text=DOUYIN, title="", raw_options={}, client_id="c",
     ))
 
-    assert job["metadata"].get("video_source_allow_miuistore") is None
-    assert handed["allow_miuistore"] is None
+    assert job["metadata"].get("video_source_allow_miuistore") is True
+    assert handed["allow_miuistore"] is True
 
 
 # ── the MCP tool ───────────────────────────────────────────────────────────
@@ -196,5 +193,5 @@ def test_the_mcp_tool_documents_the_parameter():
     [tool] = [t for t in mcp.TOOL_DEFINITIONS if t["name"] == "submit_video_link"]
     described = tool["inputSchema"]["properties"]["allow_miuistore"]["description"]
 
-    assert described and "douyin_fallback_not_allowed" in described
+    assert described and "Do not ask the user" in described
     assert "allow_miuistore" in inspect.signature(mcp.submit_video_link).parameters

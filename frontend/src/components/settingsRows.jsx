@@ -192,8 +192,7 @@ export const VideoCookiesRow = ({state}) => {
 };
 
 // Its own row, not a sub-item of the browser login: it is the one setting
-// here that sends something to a third party. Until the person has answered,
-// it shows as off and says when it will be asked (the first Douyin link).
+// here that sends something to a third party. On unless the person turned it off.
 export const DouyinFallbackRow = ({state}) => {
     const {lang} = useI18n();
     const {allowMiuistore, updateAllowMiuistore, videoPrefError = ''} = state;
@@ -206,11 +205,6 @@ export const DouyinFallbackRow = ({state}) => {
                         ? '读不到抖音登录时，把抖音分享链接（只发链接本身）发给第三方解析服务 miuistore.com 换取视频地址。关掉后，抖音链接只靠浏览器登录态。'
                         : 'When no Douyin login can be read, sends the Douyin share link (only the link itself) to the third-party resolver miuistore.com to get the video address. Off: Douyin links rely on the browser login only.'}
                 </span>
-                {allowMiuistore === null && (
-                    <span className="mt-1 block text-xs font-semibold text-on-surface-variant">
-                        {lang === 'zh' ? '还没选，第一次提交抖音链接时会问。' : 'Not chosen yet. You will be asked the first time you submit a Douyin link.'}
-                    </span>
-                )}
                 {videoPrefError === 'allow_miuistore' && (
                     <span className="mt-1 block text-xs font-semibold text-red-600 dark:text-red-300">
                         {lang === 'zh' ? '没能保存，开关已恢复原样。' : 'Could not save; the switch was put back.'}
@@ -219,7 +213,7 @@ export const DouyinFallbackRow = ({state}) => {
             </span>
             <SettingCheckbox
                 id="settingsAllowMiuistore"
-                checked={allowMiuistore === true}
+                checked={allowMiuistore !== false}
                 disabled={!updateAllowMiuistore}
                 onChange={e=>updateAllowMiuistore?.(e.target.checked)}
             />

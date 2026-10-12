@@ -37,7 +37,6 @@ import {finishedDuplicateLink, submitIgnoredExtraUrls, submitWasDuplicateOfActiv
 import {noteWriterBatchClause, noteWriterSentence, resolveNoteWriter, textModelKeyConfigured} from '../lib/noteWriter.js';
 import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {dismissNoteKeyOnboarding, noteKeyOnboardingDismissed, shouldAutoOpenNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
-import {MIUISTORE_PREF, isDouyinLinkText, needsMiuistoreConsent} from '../lib/videoLinkPrefs.js';
 import {taskStatusLabel} from '../lib/taskState.js';
 import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 
@@ -80,8 +79,6 @@ const MediaText = () => {
         processLocalPaths,
         getCredentialsStatus,
         getJob,
-        getPreferences,
-        savePreferences,
     } = useApi();
     const {loadSettings} = useSettings();
     const navigate = useNavigate();
@@ -469,23 +466,7 @@ const MediaText = () => {
     // Asked about before anything is downloaded a second time.
     const [duplicateLink, setDuplicateLink] = useState(null);
 
-    // A Douyin link held until the person says whether it may go to the
-    // third-party resolver: {input, allowDuplicate}.
-    const [douyinConsent, setDouyinConsent] = useState(null);
-
-    // `allowMiuistore` is the answer just given to the Douyin question, sent
-    // with this one request; undefined means not asked this time.
     const submitVideoLink = async (input, {allowDuplicate = false, allowMiuistore} = {}) => {
-        if (allowMiuistore === undefined && getPreferences && isDouyinLinkText(input)) {
-            setSubmitting(true);
-            let preferences = null;
-            try { preferences = await getPreferences(); } catch (_) { preferences = null; }
-            setSubmitting(false);
-            if (needsMiuistoreConsent(input, preferences)) {
-                setDouyinConsent({input, allowDuplicate});
-                return;
-            }
-        }
         setUploadError(null);
         setProcessingResult(null);
         setLastResult(null);
@@ -561,16 +542,6 @@ const MediaText = () => {
         const pending = duplicateLink;
         setDuplicateLink(null);
         if (pending) await submitVideoLink(pending.input, {allowDuplicate: true, allowMiuistore: pending.allowMiuistore});
-    };
-
-    // The answer is remembered by the service (so AI-tool submissions follow
-    // it too) and sent with this link, so a failed save still honours it here.
-    const answerDouyinConsent = async (allowed) => {
-        const pending = douyinConsent;
-        setDouyinConsent(null);
-        if (!pending) return;
-        try { await savePreferences?.({[MIUISTORE_PREF]: allowed}); } catch (_) { /* asked again next time */ }
-        await submitVideoLink(pending.input, {allowDuplicate: pending.allowDuplicate, allowMiuistore: allowed});
     };
 
     // Open the earlier result in the editor; if it cannot be read, point at it
@@ -939,25 +910,6 @@ const MediaText = () => {
                     )}
                 </section>
             </section>
-            {douyinConsent && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
-                    <div role="dialog" aria-modal="true" aria-labelledby="douyin-consent-title" className="w-full max-w-md rounded-[24px] border border-[#e4e0e0] bg-white p-6 shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
-                        <p id="douyin-consent-title" className="text-sm font-bold leading-relaxed text-[#111111] dark:text-white">
-                            {lang === 'zh'
-                                ? '抖音链接可能要交给第三方解析服务（miuistore.com）才能下载。只会发送这条链接，不发送其他内容。允许吗？'
-                                : 'A Douyin link may need the third-party resolver (miuistore.com) to download. Only this link is sent, nothing else. Allow it?'}
-                        </p>
-                        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                            <button type="button" onClick={() => answerDouyinConsent(false)} className="rounded-[13px] bg-[#efeeee] px-4 py-2 text-sm font-bold text-[#111111] hover:bg-[#e4e0e0] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]">
-                                {lang === 'zh' ? '不允许' : 'Do not allow'}
-                            </button>
-                            <button type="button" onClick={() => answerDouyinConsent(true)} className="rounded-[13px] bg-[#111111] px-4 py-2 text-sm font-bold text-white hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
-                                {lang === 'zh' ? '允许（以后不再问）' : 'Allow (do not ask again)'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
             {duplicateLink && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
                     <div role="dialog" aria-modal="true" aria-labelledby="duplicate-link-title" className="w-full max-w-md rounded-[24px] border border-[#e4e0e0] bg-white p-6 shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">

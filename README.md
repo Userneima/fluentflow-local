@@ -140,13 +140,11 @@ Anthropic API Key）；导出飞书发笔记内容和截图到你的飞书，默
 
 抖音链接有一个例外：用浏览器登录态解析或下载不了时（没有选、读不到、或者过期了），会把这条分享链接
 （只有链接本身，不含任何其他信息）交给第三方解析服务 `sph.miuistore.com` 换取下载地址；这个服务再从
-它自己的接口 `apikr.convry.com` 取结果，那一步发过去的是它加密过的视频编号。这个回退要你允许才会用：
-网页第一次提交抖音链接前会问一次并记下你的选择，之后在设置里的「抖音备用解析」随时可改；AI 工具提交的链接和
-重试也照这个设置。还没做过选择时不用它，需要它的抖音链接会失败并提示去设置里允许。AI 工具也可以在
-`submit_video_link` 里传 `allow_miuistore` 只对这一条做决定，或者直接改这项偏好（`null` 清回「没选过」）：
+它自己的接口 `apikr.convry.com` 取结果，那一步发过去的是它加密过的视频编号。这个回退默认开着，网页和 AI 工具
+提交、重试都会用；不想用的话，在设置里关掉「抖音备用解析」，或者：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/preferences -H 'Content-Type: application/json' -d '{"allow_miuistore": true}'
+curl -X POST http://127.0.0.1:8000/preferences -H 'Content-Type: application/json' -d '{"allow_miuistore": false}'
 ```
 
 ## 停止
