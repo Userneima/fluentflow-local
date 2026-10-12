@@ -808,6 +808,8 @@ def _media_preparation(result: dict[str, Any]) -> dict[str, Any] | None:
         # copy beside the original can fail, and the only thing that knew was the
         # log.
         "delivery_error": _text(state.get("delivery_error")),
+        "compressed_path": _text(state.get("compressed_path")),
+        "compress_error": _text(state.get("compress_error")),
         "cut_count": plan.get("cut_count"),
         "removed_seconds": plan.get("removed_seconds"),
         "removed_percent": plan.get("removed_percent"),

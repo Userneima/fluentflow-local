@@ -139,3 +139,11 @@ def test_a_folder_pass_skips_the_copies(tmp_path):
     listing = local_folder_intake.list_media(tmp_path)
 
     assert [p.name for p in listing.files] == ["会议.mov"]
+
+
+def test_the_agent_package_says_where_the_copy_is():
+    from backend.core.agent_package_core import _agent_debreath
+
+    block = _agent_debreath({"debreath": {"rendered": False, "compressed_path": "/u/会议_压缩.mp4"}}, {})
+
+    assert block["compressed_path"] == "/u/会议_压缩.mp4"
