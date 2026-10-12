@@ -806,10 +806,10 @@ def _covered_draft(draft, part, *, checker, reviser, rules: str | None):
     """
     if checker is None:
         return draft, note_coverage.unchecked("本机没有可用来查漏的模型")
-    check = note_coverage.check_against_transcript(checker, part.text, draft.markdown)
+    skill_rules = rules if rules is not None else note_skills.load_note_skill().rules
+    check = note_coverage.check_against_transcript(checker, part.text, draft.markdown, rules=skill_rules)
     if not check.missing or reviser is None:
         return draft, check.as_record()
-    skill_rules = rules if rules is not None else note_skills.load_note_skill().rules
     system = skill_rules.strip() + claude_vision.part_instruction(part)
     revised = note_coverage.revise(reviser, system, draft.markdown, check)
     if revised:

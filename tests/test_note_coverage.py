@@ -14,13 +14,14 @@ What has to hold, written from the requirement rather than the code:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 import backend.core.agent_note as an
 import backend.core.ai_summarizer as summ
 import backend.core.visual_note_job as vn
-from backend.core import note_coverage
+from backend.core import note_coverage, note_skills
 from backend.core.ai_prompts import _CHAPTER_EVIDENCE_SYSTEM, _CHAPTER_NOTE_SYSTEM, _CHAPTER_OUTLINE_SYSTEM
 from backend.core.claude_vision import VisualNoteDraft
 from test_visual_note_job import TASK, _fake_extractor, job_store, no_ambient_key  # noqa: F401
@@ -92,6 +93,30 @@ def test_a_checklist_item_whose_request_failed_is_neither_found_nor_missing():
     assert check.failed_requests >= 1
 
 
+def test_missing_is_judged_by_the_rules_the_note_was_written_under():
+    """A point the writing rules say to leave out is not a gap: the check is
+    handed those rules, and never counts course logistics or chat as knowledge."""
+    seen: list[str] = []
+
+    def chat(system, user):
+        seen.append(system)
+        return _points_reply(("一点", True))
+
+    note_coverage.check_against_transcript(chat, "转录", "# 笔记", rules="讲者没讨论的文档内容留给读者看原文。")
+    note_coverage.check_against_points(chat, [{"id": "E001", "text": "一点"}], "# 笔记", rules="只写结论。")
+
+    assert "讲者没讨论的文档内容留给读者看原文。" in seen[0]
+    assert "只写结论。" in seen[1]
+    assert all("考勤作业" in system for system in seen)
+
+
+def test_the_revision_is_told_to_weave_points_in_and_not_repeat_them():
+    request = note_coverage.revision_request("# 笔记", [{"point": "公式", "source": "原稿"}])
+
+    assert "和前后文接上" in request
+    assert "已经写过" in request and "不再写" in request
+
+
 def test_a_revision_that_shrinks_the_note_is_not_used():
     note = "x" * 1000
     assert note_coverage.accept_revision(note, "y" * 500) is None
@@ -113,7 +138,7 @@ def test_a_short_note_that_missed_a_point_gets_it_written_back_in(no_network, mo
     asked: list[str] = []
 
     def chat(client, model, system, user, *, temperature=0.3):
-        if system == note_coverage._CHECK_TRANSCRIPT_SYSTEM:
+        if system.startswith(note_coverage._CHECK_TRANSCRIPT_SYSTEM):
             return _points_reply(("定义", True), ("前提条件：误差独立同分布", False))
         if "没写到的知识点" in user:
             asked.append(user)
@@ -153,7 +178,7 @@ def test_a_chapter_note_counts_a_point_only_when_the_final_text_says_it(no_netwo
             return json.dumps([{"title": "开场", "used_evidence_ids": ["E001", "E002"]}])
         if system.startswith(_CHAPTER_NOTE_SYSTEM[:40]):
             return chapter
-        if system == note_coverage._CHECK_POINTS_SYSTEM:
+        if system.startswith(note_coverage._CHECK_POINTS_SYSTEM):
             checked_note.append(user)
             return '{"missing_ids": ["E002"]}'
         if "没写到的知识点" in user:
@@ -184,7 +209,7 @@ def test_a_chapter_note_whose_check_failed_reports_no_coverage_number(no_network
             return json.dumps([{"text": "定义", "source_segment_ids": [seg], "importance": 5}])
         if system == _CHAPTER_OUTLINE_SYSTEM:
             return json.dumps([{"title": "开场", "used_evidence_ids": ["E001"]}])
-        if system == note_coverage._CHECK_POINTS_SYSTEM:
+        if system.startswith(note_coverage._CHECK_POINTS_SYSTEM):
             return "出错了"
         return "## 一、开场\n\n" + "正文。\n" * 50
 
@@ -219,19 +244,25 @@ def test_a_frame_note_that_missed_a_point_is_completed_by_claude_before_it_is_sa
     checked: list[str] = []
     revisions: list[tuple[str, str]] = []
 
+    checked_systems: list[str] = []
+
     def checker(system, user):
         checked.append(user)
+        checked_systems.append(system)
         return _points_reply(("定义", True), ("幻灯片上的公式", False))
 
     def reviser(system, user):
         revisions.append((system, user))
         return NOTE + "\n## 二、公式\n\n幻灯片上的公式是残差平方和。\n"
 
-    updated = _run(tmp_path, checker=(checker, "text_model"), reviser=reviser)
+    updated = _run(tmp_path, checker=(checker, "text_model"), reviser=reviser,
+                   note_skill=note_skills.NoteSkill(
+                       text="---\nname: mine\n---\n我的写法：只写结论。\n", path=Path("SKILL.md"), is_default=False))
 
     result = updated["result"]
     assert "幻灯片上的公式是残差平方和" in result["summary_markdown"]
     assert "看这张幻灯片上的公式" in checked[0], "checked against the transcript the note was written from"
+    assert "我的写法：只写结论。" in checked_systems[0], "judged by the skill the note was written under"
     system, user = revisions[0]
     assert "幻灯片上的公式" in user
     assert "固定要求" not in system, "the revision is plain markdown, not the JSON contract"

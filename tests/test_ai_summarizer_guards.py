@@ -30,7 +30,7 @@ class _FakeChat:
         if system == _EVIDENCE_SYSTEM:
             self.stages.append("evidence")
             return "- 证据 1：课程要解决的问题"
-        if system in (note_coverage._CHECK_TRANSCRIPT_SYSTEM, note_coverage._CHECK_POINTS_SYSTEM):
+        if system.startswith((note_coverage._CHECK_TRANSCRIPT_SYSTEM, note_coverage._CHECK_POINTS_SYSTEM)):
             self.stages.append("coverage")
             return '{"points": [{"point": "结尾的总结", "in_note": false, "source": "最后总结了一遍"}]}'
         if "没写到的知识点" in user:

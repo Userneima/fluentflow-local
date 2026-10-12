@@ -245,6 +245,7 @@ _CHAPTER_EVIDENCE_SYSTEM: Final[str] = f"""你是 FluentFlow 的长字幕证据�
 - evidence_id 可以先用临时编号，程序会重排成稳定编号。
 - importance 使用 1-5；4-5 表示重要证据。
 - 保留具体例子、数字、限制条件和老师强调。
+- 课程安排、考勤作业和考试说明、讲者的个人经历和闲聊、口头鼓励、寒暄不抽成证据。
 - 不要为了整齐而编造分类或内容。
 {_SOURCE_FAITHFULNESS_RULES}"""
 

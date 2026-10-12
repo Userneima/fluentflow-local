@@ -46,7 +46,7 @@ def recorded_provider(monkeypatch):
     def fake_chat(client, model, system, user, *, temperature=0.3):
         seen.setdefault("models", []).append(model)
         seen.setdefault("prompts", []).append(system)
-        if system == note_coverage._CHECK_TRANSCRIPT_SYSTEM:
+        if system.startswith(note_coverage._CHECK_TRANSCRIPT_SYSTEM):
             return '{"points": [{"point": "课程要解决的问题", "in_note": true}]}'
         return NOTE
 

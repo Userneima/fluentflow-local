@@ -42,27 +42,46 @@ _MAX_WORKERS = 4
 # given rewrote or dropped content, and the note it was given is kept.
 MIN_REVISION_RATIO = 0.9
 
-_CHECK_TRANSCRIPT_SYSTEM = """你是 FluentFlow 的笔记查漏助手。
+# What a lecture says that is not a knowledge point. Counted as one, the
+# check sent a course's attendance rules and a lecturer's war stories back
+# into the note (measured 2026-10-12: 60 of 292 "missing" points on eight
+# real lectures). The default note skill says the same in its own words.
+NOT_KNOWLEDGE = "课程安排、考勤作业和考试说明、讲者的个人经历和闲聊（用来说明某个观点的例子除外）、口头鼓励、寒暄、口头语、重复前文的话"
+
+_CHECK_TRANSCRIPT_SYSTEM = f"""你是 FluentFlow 的笔记查漏助手。
 输入是一段转录文字（原稿的一部分）和根据原稿写成的笔记。
 
-先列出这段原稿讲到的每个知识点：概念和定义、观点和它的依据、方法和步骤、例子、数字、限制条件、讲者特意强调的地方。寒暄、口头语、重复的话、和主题无关的闲聊不算知识点。
+先列出这段原稿讲到的每个知识点：概念和定义、观点和它的依据、方法和步骤、例子、数字、限制条件、讲者特意强调的地方。{NOT_KNOWLEDGE}不算知识点。
 再逐条判断笔记里有没有写到它。意思写到了就算写到：换了说法、合并进别的句子、压缩成一句都算。笔记里找不到这个意思才算没写到。
+转录里明显是语音识别错误、读不通的话，不要照着错字列成知识点。
 
 输出严格 JSON 对象，不要输出 Markdown 或代码围栏：
-{"points": [{"point": "知识点，一句话", "in_note": true}]}
+{{"points": [{{"point": "知识点，一句话", "in_note": true}}]}}
 没写到的项加一个 "source" 字段：原稿里讲这一点的要点或原话，供补写用。"""
 
-_CHECK_POINTS_SYSTEM = """你是 FluentFlow 的笔记查漏助手。
+_CHECK_POINTS_SYSTEM = f"""你是 FluentFlow 的笔记查漏助手。
 输入是一份知识点清单（每项有 id）和一份笔记。逐项判断笔记里有没有写到它。
 意思写到了就算写到：换了说法、合并进别的句子、压缩成一句都算。笔记里找不到这个意思才算没写到。
+清单里属于{NOT_KNOWLEDGE}的项，不算没写到。
 
 输出严格 JSON 对象，不要输出 Markdown 或代码围栏：
-{"missing_ids": ["没写到的 id"]}
-全部写到时输出 {"missing_ids": []}。"""
+{{"missing_ids": ["没写到的 id"]}}
+全部写到时输出 {{"missing_ids": []}}。"""
+
+_RULES_SECTION = """
+
+--- 这份笔记的写法 ---
+
+笔记是按下面这套写法写的。判断漏没漏以它为准：写法要求省略、合并或留给读者看原文的内容，不算没写到。
+
+{rules}"""
 
 _REVISION_REQUEST = """下面是一份已经写好的笔记，以及查漏时发现它没写到的知识点。
-把这些知识点补进笔记里合适的位置：放进讲它的那一节，没有合适的节就按原稿顺序新开一节。
-不推翻原结构，不删原有内容，不新增原稿里没有的信息。原有的截图引用 `![图注](文件名)` 原样保留，不新增截图引用。
+把这些知识点写进笔记，读起来要像一开始就写在那里：
+- 每一点放进讲它的那一段或那一节，和前后文接上；需要时改写所在句子，不在段落后面另起一行补充。
+- 一点在笔记里已经写过（换了说法也算），就不再写。
+- 原稿里读不通、像是语音识别错误的人名、数字，按写法里「存疑」的规则处理，不当成确定的内容写。
+- 不推翻原结构，不删原有内容，不新增原稿里没有的信息。原有的截图引用 `![图注](文件名)` 原样保留，不新增截图引用。
 只输出补完后的完整笔记 Markdown，第一行就是笔记内容，前面不加任何说明。
 
 --- 笔记 ---
@@ -73,6 +92,10 @@ _REVISION_REQUEST = """下面是一份已经写好的笔记，以及查漏时发
 
 {missing}
 """
+
+
+def _with_rules(system: str, rules: str | None) -> str:
+    return system + _RULES_SECTION.format(rules=rules.strip()) if (rules or "").strip() else system
 
 
 @dataclass(frozen=True)
@@ -159,16 +182,22 @@ def _map(fn: Callable[[Any], Any], items: list[Any]) -> list[Any]:
 
 
 def check_against_transcript(
-    chat: Chat, transcript: str, note: str, *, chunk_chars: int = TRANSCRIPT_CHUNK_CHARS,
+    chat: Chat, transcript: str, note: str, *, rules: str | None = None,
+    chunk_chars: int = TRANSCRIPT_CHUNK_CHARS,
 ) -> CoverageCheck:
-    """List what the transcript teaches and which of it the note never says."""
+    """List what the transcript teaches and which of it the note never says.
+
+    ``rules`` is what the note was written under (the note skill, or the text
+    model's prompt): "missing" means missing by those rules, so the check never
+    asks for what the writing rules told the writer to leave out."""
+    system = _with_rules(_CHECK_TRANSCRIPT_SYSTEM, rules)
     chunks = _split(transcript, chunk_chars)
     if not chunks or not (note or "").strip():
         return CoverageCheck(checked=False, point_count=0)
 
     def one(chunk: str) -> dict[str, Any] | None:
         user = f"--- 原稿片段 ---\n\n{chunk}\n\n--- 笔记 ---\n\n{note}"
-        return _ask(chat, _CHECK_TRANSCRIPT_SYSTEM, user)
+        return _ask(chat, system, user)
 
     point_count = 0
     missing: list[dict[str, str]] = []
@@ -193,9 +222,12 @@ def check_against_transcript(
 
 
 def check_against_points(
-    chat: Chat, points: list[dict[str, str]], note: str, *, batch_chars: int = POINTS_BATCH_CHARS,
+    chat: Chat, points: list[dict[str, str]], note: str, *, rules: str | None = None,
+    batch_chars: int = POINTS_BATCH_CHARS,
 ) -> CoverageCheck:
-    """Which items of an existing checklist (``{"id", "text"}``) the note never says."""
+    """Which items of an existing checklist (``{"id", "text"}``) the note never
+    says, judged by ``rules`` as in ``check_against_transcript``."""
+    system = _with_rules(_CHECK_POINTS_SYSTEM, rules)
     items = [item for item in points if str(item.get("id") or "") and str(item.get("text") or "").strip()]
     if not items or not (note or "").strip():
         return CoverageCheck(checked=False, point_count=len(items))
@@ -211,7 +243,7 @@ def check_against_points(
 
     def one(batch: list[dict[str, str]]) -> dict[str, Any] | None:
         listing = json.dumps([{"id": i["id"], "text": i["text"]} for i in batch], ensure_ascii=False)
-        return _ask(chat, _CHECK_POINTS_SYSTEM, f"--- 知识点清单 ---\n\n{listing}\n\n--- 笔记 ---\n\n{note}")
+        return _ask(chat, system, f"--- 知识点清单 ---\n\n{listing}\n\n--- 笔记 ---\n\n{note}")
 
     by_id = {item["id"]: item for item in items}
     missing: list[dict[str, str]] = []
@@ -274,6 +306,7 @@ def revise(write: Chat, system: str, note: str, check: CoverageCheck) -> str | N
 
 
 __all__ = [
+    "NOT_KNOWLEDGE",
     "Chat",
     "CoverageCheck",
     "accept_revision",

@@ -1224,6 +1224,7 @@ def _run_chapter_coverage_mode(
             _text_checker(client, model),
             [{"id": item["evidence_id"], "text": item["text"], "source": item.get("quote") or ""} for item in evidence],
             final_note,
+            rules=prompt,
         )
         revised_note, coverage_revision_used, deadline_stage = _fill_gaps(
             client, model, prompt, final_note, coverage_check, deadline,
@@ -1390,7 +1391,7 @@ def summarize_transcript_with_metadata(
                 deadline_hit=bool(draft.strip()),
                 deadline_stage="写笔记" if draft.strip() else None,
             )
-        check = note_coverage.check_against_transcript(_text_checker(client, m), transcript_text, draft)
+        check = note_coverage.check_against_transcript(_text_checker(client, m), transcript_text, draft, rules=prompt)
         final_note, revision_used, deadline_stage = _fill_gaps(client, m, prompt, draft, check, deadline)
         return SummaryResult(
             markdown=final_note,
@@ -1451,7 +1452,7 @@ def summarize_transcript_with_metadata(
     coverage_revision_used = False
     final_note = draft
     if deadline_stage is None:
-        check = note_coverage.check_against_transcript(_text_checker(client, m), transcript_text, draft)
+        check = note_coverage.check_against_transcript(_text_checker(client, m), transcript_text, draft, rules=prompt)
         final_note, coverage_revision_used, deadline_stage = _fill_gaps(client, m, prompt, draft, check, deadline)
         coverage_checked = check.checked
         coverage_record = check.as_record(revised=final_note != draft)

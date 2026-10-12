@@ -61,8 +61,7 @@ SAVE_INSTRUCTION = (
     "（哪些部分靠画面、哪些只有字幕、有没有看不清或没信息的截图）。"
     "录像分成几部分时，每部分各取一次材料、各写一份，最后按顺序放进 part_notes 一次交回。"
     "截图在本机的路径就是 frames 里的 path，打开看过再决定引不引用；引用时只写文件名。"
-    "\n\n交回之前，对照这部分转录逐条查一遍：讲到的概念、观点和依据、方法步骤、例子、数字、"
-    "限制条件、讲者强调的地方，笔记里都要写到，没写到的补进去。"
+    "\n\n交回之前，按上面写法里「不漏」一节对照这部分转录逐条查一遍，没写到的写进讲它的那一段。"
     "交回后 FluentFlow 会再查一遍：返回的 coverage.missing 里列着它认为没写到的知识点，"
     "非空时把这些补进对应部分，再调用一次 save_agent_note。"
 )
@@ -296,10 +295,11 @@ def _coverage(drafts, parts, checker) -> dict[str, Any]:
             for part in parts
         ], "missing": []}
     chat, name = checker
+    rules = note_skills.load_note_skill().rules
     records = []
     missing = []
     for draft, part in zip(drafts, parts):
-        check = note_coverage.check_against_transcript(chat, part.text, draft.markdown)
+        check = note_coverage.check_against_transcript(chat, part.text, draft.markdown, rules=rules)
         records.append({"part": part.index, **check.as_record()})
         missing.extend({"part": part.index, **item} for item in check.missing)
     return {"checker": name, "parts": records, "missing": missing}
