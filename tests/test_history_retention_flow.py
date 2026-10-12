@@ -249,3 +249,33 @@ def test_zero_days_keeps_the_recording_through_later_passes(monkeypatch):
 
     assert find_source_file("retention-forever-pass") is not None
     assert job_store.get_job("retention-forever-pass", client_id=CLIENT)["result"]["source_file_available"] is True
+
+
+# ── by default nothing is cleaned up ───────────────────────────────────────
+#
+# Requirement (owner, 2026-10-13): FluentFlow's copy of the original is never
+# deleted on its own. The de-breathed cut does not fully replace it, and a
+# deleted original is expensive to get back. Tasks that finished while a
+# seven-day window was the default still carry its expiry; they are kept too.
+
+def test_with_no_setting_a_finished_task_keeps_its_recording_and_gets_no_expiry(monkeypatch):
+    monkeypatch.delenv("FLUENTFLOW_SOURCE_RETENTION_DAYS", raising=False)
+    task = _finished_task("retention-default", expires_in_days=7)
+
+    finished = lp._finalize_local_result_storage("retention-default", task["result"], {"route": "/process"})
+
+    assert finished["source_file_available"] is True
+    assert not finished.get("source_retention_expires_at")
+
+
+def test_with_no_setting_an_old_expiry_no_longer_deletes_anything(monkeypatch):
+    monkeypatch.delenv("FLUENTFLOW_SOURCE_RETENTION_DAYS", raising=False)
+    upload = _finished_task("retention-old-upload", expires_in_days=-30)
+    link = _link_task("retention-old-link", with_cut=True)
+
+    lp._enforce_local_history_retention(CLIENT)
+
+    assert (upload["source_dir"] / "source.mp4").is_file()
+    assert link["download"].is_file(), "a de-breathed version existing is no reason to drop the original"
+    for task_id in ("retention-old-upload", "retention-old-link"):
+        assert job_store.get_job(task_id, client_id=CLIENT)["result"]["source_file_available"] is True

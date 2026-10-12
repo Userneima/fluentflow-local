@@ -6,9 +6,14 @@ de-breathed audio or video stay until the user deletes the task. The user
 manages their own original recordings, so retention does not reach into their
 folders either.
 
-What remains is FluentFlow's private copy of an uploaded file, kept in its data
-directory so a task can be re-run. Deleting the original elsewhere does not
-remove that copy, so it still expires after the source window.
+FluentFlow's own copy of the recording (an upload's copy, a link's download)
+is kept as well unless ``FLUENTFLOW_SOURCE_RETENTION_DAYS`` is set above 0
+(owner, 2026-10-13: the de-breathed cut does not fully replace the original,
+and a deleted original is expensive to get back). With the setting at 0 this
+pass expires nothing, including tasks that finished while a window was in
+force and still carry the expiry it wrote.
+
+With a window set, an upload's copy expires after it.
 
 A video downloaded from a link is different: there is no original anywhere
 else, so the task's copy is the only copy of the recording. It expires only
@@ -48,7 +53,6 @@ def enforce_history_retention(
     Keyword arguments from the retired whole-task rule (``keep_count``,
     ``artifact_days``, ``delete_jobs``) are accepted and ignored.
     """
-    del source_days  # each task carries its own expiry, set when it finished
     if not client_id:
         return {"pruned_count": 0, "task_ids": [], "expired_source_count": 0}
     now = datetime.now(timezone.utc)
@@ -57,7 +61,13 @@ def enforce_history_retention(
         task_id = str(job.get("task_id") or "")
         if not task_id or job.get("status") not in _FINISHED:
             continue
+        # A second copy of the same download goes whatever the window: the
+        # task's own copy, the one kept, is checked to be there first.
         _drop_link_download_kept_twice(task_id, job.get("metadata"))
+        # Each task carries its own expiry, set when it finished; the window
+        # only decides whether expiring happens at all.
+        if source_days <= 0:
+            continue
         result = job.get("result") if isinstance(job.get("result"), dict) else {}
         expires = parse_job_time(result.get("source_retention_expires_at"))
         if not (result.get("source_file_available") and expires and expires <= now):

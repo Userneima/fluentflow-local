@@ -35,7 +35,7 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | `FLUENTFLOW_TRANSCRIPT_EDIT_RECORDS_DIR` | 转录稿修改记录 | `<数据目录>/transcript_edit_records` |
 | `FLUENTFLOW_VIDEO_SOURCE_DIR` | 从链接下载的视频 | `<数据目录>/video_sources` |
 | `FLUENTFLOW_DIARIZATION_MODEL_DIR` | 讲话人分离模型目录，由 `scripts/fetch_diarization_models.py` 填充 | `<数据目录>/models/pyannote` |
-| `FLUENTFLOW_SOURCE_RETENTION_DAYS` | FluentFlow 另存的原片保留多少天，`0` 为不清理。从链接下载的视频只有在已有去气口版本时才按这个天数清理，否则一直保留。任务产出的其他东西都不会被自动删除 | `7` |
+| `FLUENTFLOW_SOURCE_RETENTION_DAYS` | FluentFlow 另存的原片保留多少天，`0` 为一直保留。设为正数才会清理：上传文件的副本到期删除；从链接下载的视频只有在已有去气口版本时才到期删除。任务产出的其他东西都不会被自动删除 | `0` |
 
 ### 限额与超时
 
