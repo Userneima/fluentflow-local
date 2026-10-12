@@ -115,6 +115,7 @@ def test_the_revision_is_told_to_weave_points_in_and_not_repeat_them():
 
     assert "和前后文接上" in request
     assert "已经写过" in request and "不再写" in request
+    assert "只改说法，不改意思" in request, "polishing the whole note is asked for, within the facts"
 
 
 def test_a_revision_that_shrinks_the_note_is_not_used():
