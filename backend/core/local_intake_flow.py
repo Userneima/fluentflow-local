@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import debreath_job, local_folder_intake, visual_note_channel, visual_note_job
+from backend.core import compress_media, debreath_job, local_folder_intake, visual_note_channel, visual_note_job
 from backend.core.job_store import get_job, update_job_result, upsert_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core.storage_cleanup import is_managed_path
@@ -150,6 +150,16 @@ def preprocess_media(task_id: str, source: Path) -> debreath_job.PreparedCut | N
             path=prepared.path,
             used=prepared.used,
             state={**prepared.state, **_deliver_beside_original(path, prepared.path)},
+            artifacts=prepared.artifacts,
+        )
+    if not prepared.used and not is_managed_path(path) and not prepared.state.get("already_cut"):
+        # The cut was declined, so nothing made the recording smaller; a
+        # high-bitrate screen recording would stay gigabytes. A compressed copy
+        # goes beside it; the original and the transcript are untouched.
+        return debreath_job.PreparedCut(
+            path=prepared.path,
+            used=False,
+            state={**prepared.state, **compress_media.compress_beside(path)},
             artifacts=prepared.artifacts,
         )
     return prepared
