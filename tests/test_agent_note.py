@@ -188,3 +188,19 @@ def test_an_edited_note_keeps_counting_the_frames_it_already_cited(job_store, tm
 
     state = vn.visual_note_state(updated["result"])
     assert [f["filename"] for f in state["frames_cited"]] == [name]
+
+
+def test_a_task_with_only_a_transcript_gets_a_note_from_the_transcript(job_store, tmp_path):
+    """YouTube captions, a subtitle file, a pasted transcript: no recording to read, still a note."""
+    job_store["result"].pop("debreath")
+    job_store["result"]["artifacts"] = {}
+
+    material = _material(tmp_path)
+    assert material["has_video"] is False and material["frames"] == []
+    assert "[01:05] 看这张幻灯片上的公式" in material["transcript"], "the transcript's own clock"
+
+    updated = an.save(TASK, note_markdown="# 最小二乘法\n\n正文。", client_id="anonymous")
+    state = vn.visual_note_state(updated["result"])
+    assert updated["result"]["summary_written_from"] == NOTE_FROM_AGENT
+    assert state["basis"] == vn.BASIS_TRANSCRIPT_ONLY
+    assert state["media_source"]["kind"] == "transcript_only"

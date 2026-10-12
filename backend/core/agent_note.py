@@ -28,10 +28,11 @@ note applies to Claude, so the agent gets the reason back and writes again.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import claude_vision, note_skills, visual_note_check
+from backend.core import claude_vision, cut_timeline, note_skills, visual_note_check
 from backend.core import visual_note_job as vn
 from backend.core.claude_vision import FrameInput
 from backend.core.result_artifacts import VISUAL_NOTE_ARTIFACT_FILENAME, VISUAL_NOTE_KIND, write_text_artifact
@@ -77,14 +78,38 @@ def _job(task_id: str, client_id: str | None) -> dict[str, Any]:
     return job
 
 
-def _eligible(task_id: str, job: dict[str, Any]) -> tuple[vn.CutMedia, list[claude_vision.TranscriptPart], list]:
+@dataclass(frozen=True)
+class _TranscriptOnly:
+    """Stands in for the media of a task that has a transcript and no recording.
+
+    A YouTube link whose captions were used, a subtitle file, a pasted
+    transcript: there is no file to take frames from or to cut, and the note is
+    written from the transcript alone, on the transcript's own clock.
+    """
+
+    has_video: bool = False
+    kind: str = "transcript_only"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"kind": self.kind, "has_video": False}
+
+
+def _eligible(task_id: str, job: dict[str, Any]) -> tuple[Any, list[claude_vision.TranscriptPart], list]:
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    media = vn.cut_media(task_id, result)
+    if media is None:
+        if str(job.get("status") or "") not in vn.ELIGIBLE_STATUSES:
+            raise AgentNoteError(f"只有已完成的任务能写笔记，这个任务现在是 {job.get('status') or '未知状态'}")
+        if vn.is_running(result):
+            raise AgentNoteError("这个任务的笔记正在重写中")
+        segments = cut_timeline.timeline_segments(result)
+        transcript = cut_timeline.timestamped_transcript(segments) if segments else ""
+        if not transcript.strip():
+            raise AgentNoteError(vn._cut_media_reason(task_id, result))
+        return _TranscriptOnly(), claude_vision.transcript_parts(transcript), segments
     described = vn.describe(task_id, job, channel=_AGENT_CHANNEL)
     if not described["eligible"]:
         raise AgentNoteError(str(described["reason"]))
-    result = job.get("result") if isinstance(job.get("result"), dict) else {}
-    media = vn.cut_media(task_id, result)
-    if media is None:  # pragma: no cover - describe already refused this
-        raise AgentNoteError(vn._cut_media_reason(task_id, result))
     transcript, _timeline, segments = vn._transcript_for_media(task_id, result, media)
     return media, claude_vision.transcript_parts(transcript), segments
 
