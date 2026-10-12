@@ -1,7 +1,7 @@
-// The two video-link choices that the local service, not the browser, keeps:
-// which browser's login to read, and whether Douyin may fall back to a
-// third-party resolver. They live in the service's preferences so that a link
-// submitted by an AI tool (MCP) is downloaded the same way as one pasted here.
+// The video-link choice that the local service, not the browser, keeps: which
+// browser's login to read. It lives in the service's preferences so that a
+// link submitted by an AI tool (MCP) is downloaded the same way as one pasted
+// here.
 //
 // The browser choice used to live only in this browser's stored settings. On
 // the first start after that changed, the stored value is copied to the
@@ -9,7 +9,6 @@
 // mirrors it.
 
 export const VIDEO_COOKIES_PREF = 'video_cookies_browser';
-export const MIUISTORE_PREF = 'allow_miuistore';
 export const COOKIES_MIGRATED_STORAGE_KEY = 'fluentflow_video_cookies_migrated';
 
 const KNOWN_BROWSERS = new Set(['chrome', 'edge', 'firefox', 'safari', 'brave', 'chromium', 'opera', 'vivaldi']);
@@ -18,18 +17,6 @@ export const normalizeCookiesBrowser = (value) => {
     const name = String(value ?? '').trim().toLowerCase();
     return KNOWN_BROWSERS.has(name) ? name : '';
 };
-
-// Whether a Douyin link may go to the third-party resolver. On unless the
-// person turned it off: sharing a public link is asking to process it, and the
-// resolver gets only that link.
-export const miuistoreChoiceFromPreferences = (preferences) => {
-    const value = preferences?.[MIUISTORE_PREF];
-    return !(value === false || value === 'false');
-};
-
-// A Douyin share link or share text: douyin.com, v.douyin.com, iesdouyin.com.
-const DOUYIN_HOST_RE = /(?:^|[^a-z0-9.-])(?:[a-z0-9-]+\.)*(?:iesdouyin|douyin)\.com(?![a-z0-9-])/i;
-export const isDouyinLinkText = (text) => DOUYIN_HOST_RE.test(String(text ?? ''));
 
 // Decide the browser choice from what the service holds and what this browser
 // stored. `preferences` is null when the service could not be asked.
@@ -83,7 +70,6 @@ export const syncVideoLinkPreferences = async ({getPreferences, savePreferences,
     }
     return {
         videoCookiesBrowser: plan.value,
-        allowMiuistore: miuistoreChoiceFromPreferences(preferences),
         reachable: !!preferences,
     };
 };

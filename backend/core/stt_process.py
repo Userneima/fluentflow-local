@@ -34,7 +34,7 @@ def _transcribe_worker(
     try:
         common_kwargs = {
             "model_size": options.get("model_size") or DEFAULT_MODEL_SIZE,
-            "speed_profile": options.get("speed_profile") or "balanced",
+            "speed_profile": options.get("speed_profile") or "accurate",
             "language": options.get("language") or "auto",
             "compute_type": options.get("compute_type") or "int8",
             "device": options.get("device") or "auto",

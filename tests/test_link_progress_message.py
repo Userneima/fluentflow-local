@@ -36,7 +36,7 @@ def test_download_text_is_the_progress_message_not_the_note_status(monkeypatch):
 
     asyncio.run(lvs._download_then_process(
         task_id=task_id, input_text="https://www.youtube.com/watch?v=abc", title=None, options={},
-        allow_miuistore=False, client_id="c", gate=CancellationGate(), route="/r", previous=None,
+        client_id="c", gate=CancellationGate(), route="/r", previous=None,
         done=asyncio.Event(),
     ))
 

@@ -4,10 +4,8 @@ video link on this machine, download it, and run the local pipeline.
 Functionally local: no accounts, quota, or rate limits; the download worker
 runs on ``local_job_runtime.JOB_EVENTS`` — the same hub the local read (SSE)
 and cancel routes use — so resolving, downloading, processing, and cancelling
-share one hub. The Douyin ``miuistore`` fallback runs only with the user's
-consent, given per request or by a remembered choice
-(``options.allow_miuistore``); never decided means it does not run. It is
-tried only when yt-dlp cannot get the video. The browser login
+share one hub. Douyin links are fetched through the third-party ``miuistore``
+resolver, always (see ``video_source._resolve_douyin``). The browser login
 (``cookies_from_browser``) comes from the request, else the remembered
 ``video_cookies_browser``
 preference, else ``YT_DLP_COOKIES_FROM_BROWSER``. YouTube caption
@@ -109,21 +107,6 @@ def _friendly_error(error: Any) -> str:
     return str(diagnose_error(error).get("detail") or "").strip() or str(error)
 
 
-def _allow_miuistore(raw_options: dict[str, Any] | None) -> bool | None:
-    """Whether the Douyin third-party fallback may run for this link.
-
-    The request's answer wins; otherwise the remembered setting; otherwise yes.
-    Sharing a public link to be processed is the request to process it, and the
-    fallback sends only that link. Only a user who turned it off in settings
-    keeps it off.
-    """
-    value = (raw_options or {}).get("allow_miuistore")
-    if value is not None and str(value).strip() != "":
-        return truthy(value)
-    remembered = get_preference("allow_miuistore")
-    return True if remembered is None else bool(remembered)
-
-
 def _video_cookies_browser(options: dict[str, Any]) -> str | None:
     """The browser whose login yt-dlp reads: the request's choice, else the
     remembered preference. None leaves yt-dlp to the environment variable.
@@ -182,7 +165,6 @@ async def _run_local_video_source_job(
     input_text: str,
     title: str | None,
     options: dict[str, str],
-    allow_miuistore: bool | None,
     client_id: Optional[str],
     gate: CancellationGate,
     route: str = _ROUTE,
@@ -208,7 +190,6 @@ async def _run_local_video_source_job(
             input_text=input_text,
             title=title,
             options=options,
-            allow_miuistore=allow_miuistore,
             client_id=client_id,
             gate=gate,
             route=route,
@@ -252,7 +233,6 @@ async def _download_then_process(
     input_text: str,
     title: str | None,
     options: dict[str, str],
-    allow_miuistore: bool | None,
     client_id: Optional[str],
     gate: CancellationGate,
     route: str,
@@ -355,8 +335,7 @@ async def _download_then_process(
                     cookies_from_browser=cookies_browser,
                     # The Douyin third-party fallback runs only when this
                     # request or the remembered setting allows it.
-                    allow_miuistore=allow_miuistore,
-                    duration_limit_seconds=duration_limit,
+                            duration_limit_seconds=duration_limit,
                     cancellation_event=gate.cancellation_event,
                     deliver=lambda downloaded: adopt_source_file(
                         task_id, downloaded.suffix or ".mp4", downloaded
@@ -578,7 +557,6 @@ async def submit_video_source_job(
         return duplicate
 
     options = _queue_options_from_mapping(raw_options)
-    allow_miuistore = _allow_miuistore(raw_options)
     task_id_value = claim_task_id(None, client_id=client_id)
     raw_title = title or display_title_for_source_input(input_text, input_text[:80])
     display_name = display_title_for_user(raw_title, raw_title)
@@ -600,7 +578,6 @@ async def submit_video_source_job(
         raw_title=raw_title,
         display_title=display_name,
         video_source_input_preview=input_text[:200],
-        video_source_allow_miuistore=allow_miuistore,
         **link_metadata,
         **(extra_metadata or {}),
     )
@@ -635,7 +612,6 @@ async def submit_video_source_job(
             input_text=input_text,
             title=title or None,
             options=options,
-            allow_miuistore=allow_miuistore,
             client_id=client_id,
             gate=gate,
             route=route,

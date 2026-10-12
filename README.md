@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/ins
 
 ![主界面](docs/images/home.png)
 
-转录用的是本机的 Whisper 模型，Apple 芯片走 GPU 加速。讲话人区分、人声增强、转录速度都
+转录用的是本机的 Whisper 模型，Apple 芯片走 GPU 加速。讲话人区分、人声增强都
 在设置里，处理过程中的判断会写进每个任务的记录，而不是藏在日志里。
 
 ![设置](docs/images/settings.png)
@@ -117,7 +117,7 @@ npm run build:frontend
 3. 回到首页，贴一条视频链接，或者切到「本地上传」选一个文件，点「开始生成笔记」。
 4. 处理完的任务在「处理记录」里，点进去可以改转录稿、改笔记、导出 Markdown，或者发到飞书。
 
-抖音、Bilibili 高清、YouTube 受限视频要登录才能下载。在「设置 → 转录 → 视频链接下载登录态」
+Bilibili 高清、YouTube 受限视频要登录才能下载。在「设置 → 转录 → 视频链接下载登录态」
 里选你平时登录这些网站的浏览器，它会在本机读取那个浏览器的登录状态，不上传。macOS 上读取
 Chrome、Edge、Brave 的登录态要解开浏览器的 Cookie 密钥，系统会弹出钥匙串访问的授权框，点「始终允许」
 即可；较新版本的 Chrome 加了额外的保护，读取可能失败，这时换 Safari 或 Firefox，或者在浏览器里把
@@ -138,14 +138,9 @@ B 站和 YouTube 视频最高下载 720p，够转写和截图用。链接下载�
 Anthropic API Key）；导出飞书发笔记内容和截图到你的飞书，默认通过 `lark-cli` 以你本人的身份写入，没装
 `lark-cli` 时才用你在设置里填的飞书应用；下载视频链接访问对应的视频平台。
 
-抖音链接有一个例外：用浏览器登录态解析或下载不了时（没有选、读不到、或者过期了），会把这条分享链接
-（只有链接本身，不含任何其他信息）交给第三方解析服务 `sph.miuistore.com` 换取下载地址；这个服务再从
-它自己的接口 `apikr.convry.com` 取结果，那一步发过去的是它加密过的视频编号。这个回退默认开着，网页和 AI 工具
-提交、重试都会用；不想用的话，在设置里关掉「抖音备用解析」，或者：
-
-```bash
-curl -X POST http://127.0.0.1:8000/preferences -H 'Content-Type: application/json' -d '{"allow_miuistore": false}'
-```
+抖音链接有一个例外：它经第三方解析服务下载，会把这条分享链接（只有链接本身，不含任何其他信息）
+交给 `sph.miuistore.com` 换取下载地址；这个服务再从它自己的接口 `apikr.convry.com` 取结果，那一步
+发过去的是它加密过的视频编号。不想让抖音链接经过第三方，就把视频下载到本机后上传。
 
 ## 停止
 

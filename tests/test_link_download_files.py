@@ -157,7 +157,7 @@ def test_the_link_task_records_its_own_copy_and_no_dead_address(monkeypatch):
     job_store.upsert_job(task_id=task_id, status="queued", client_id="c", stage="queued")
 
     asyncio.run(lvs._download_then_process(
-        task_id=task_id, input_text=LINK, title=None, options={}, allow_miuistore=False,
+        task_id=task_id, input_text=LINK, title=None, options={},
         client_id="c", gate=CancellationGate(), route="/r", previous=None, done=asyncio.Event(),
     ))
 

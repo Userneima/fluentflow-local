@@ -234,6 +234,7 @@ def test_douyin_with_no_media_says_image_post_deleted_or_private_not_login(monke
     message = str(caught.value)
     assert "图文" in message and "删除" in message and "私密" in message
     assert "读不到" not in message
+    assert vs._run_process.calls == []
 
 
 @pytest.mark.parametrize("stderr,expected", [
@@ -373,36 +374,6 @@ def test_two_submissions_of_one_link_download_it_once(monkeypatch, tmp_path):
     assert results[0].file_path == results[1].file_path
 
 
-# ── 8. Douyin resolved by yt-dlp but failing to download ────────────────────
-
-def test_a_douyin_download_failure_falls_back_to_the_third_party_resolver(monkeypatch, tmp_path):
-    resolved = vs.ResolvedVideo(provider="yt-dlp", source_url=DOUYIN, download_url="https://v5.douyinvod.com/x",
-                                resolution_trace=[{"provider": "yt-dlp", "status": "selected"}])
-
-    def failing(*_a, **_k):
-        raise RuntimeError("ERROR: unable to download video data: HTTP Error 403: Forbidden")
-
-    monkeypatch.setattr(vs, "download_yt_dlp_media", failing)
-    fallback = vs.ResolvedVideo(provider="miuistore", source_url=DOUYIN, download_url="https://v5.douyinvod.com/y")
-    monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", lambda *_a, **_k: (fallback, None))
-    monkeypatch.setattr(vs, "download_file", lambda url, path, *_a, **_k: path.write_bytes(b"v") or 1)
-
-    size = vs._download_media(resolved, tmp_path / "v.mp4", None, cookies_from_browser=None,
-                              cookie_use=vs.CookieUse(), allow_miuistore=True, cancellation_event=None)
-
-    assert size == 1
-    assert [s["provider"] for s in resolved.resolution_trace] == ["yt-dlp", "yt-dlp-download", "miuistore"]
-
-
-def test_a_douyin_download_failure_without_fallback_is_explained_in_chinese(monkeypatch, tmp_path):
-    resolved = vs.ResolvedVideo(provider="yt-dlp", source_url=DOUYIN, download_url="x")
-    monkeypatch.setattr(vs, "download_yt_dlp_media", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("ERROR: boom")))
-    with pytest.raises(vs.VideoSourceResolutionError) as caught:
-        vs._download_media(resolved, tmp_path / "v.mp4", None, cookies_from_browser=None,
-                           cookie_use=vs.CookieUse(), allow_miuistore=False, cancellation_event=None)
-    assert "ERROR" not in str(caught.value) and "抖音" in str(caught.value)
-
-
 # ── 9. size and length are checked before downloading ──────────────────────
 
 def test_the_link_limit_is_the_upload_limit(monkeypatch):
@@ -471,7 +442,7 @@ def test_no_more_than_two_links_download_at_once(monkeypatch):
 
         await asyncio.gather(*(
             lvs._download_then_process(
-                task_id=f"t{i}", input_text=YOUTUBE, title=None, options={}, allow_miuistore=True,
+                task_id=f"t{i}", input_text=YOUTUBE, title=None, options={},
                 client_id="c", gate=CancellationGate(), route="/r", previous=None, done=asyncio.Event(),
             )
             for i in range(5)
@@ -504,13 +475,12 @@ _RETRIED_LINK = "https://www.douyin.com/video/7600000000000000001"
 
 
 def _link_job_submitted_with_old_settings() -> dict:
-    """A Douyin task first submitted with the third-party resolver on and
-    Chrome's login, which then failed while downloading."""
+    """A Douyin task first submitted with Chrome's login, which then failed
+    while downloading."""
     return {"task_id": "old", "status": "failed", "source_type": "video_link", "metadata": {
         "video_source_url": _RETRIED_LINK,
         "video_source_input_preview": "cut",
         "queue_options": {"cookies_from_browser": "chrome", "note_mode": "auto"},
-        "video_source_allow_miuistore": True,
     }}
 
 
@@ -551,27 +521,6 @@ def test_retrying_a_link_task_that_never_downloaded_submits_the_link_again(monke
     assert fetched["options"]["note_mode"] == "auto", "the note settings still carry over"
 
 
-def test_a_retry_does_not_use_the_third_party_resolver_the_user_has_since_turned_off(monkeypatch):
-    """Requirement: the user submitted with the Douyin fallback on, then turned
-    it off in settings. A retry (button, MCP retry_task, startup recovery) must
-    not send the link to the third party."""
-    fetched = _retry_with_preferences(monkeypatch, {"allow_miuistore": False})
-
-    assert fetched["allow_miuistore"] is False
-
-
-def test_a_retry_by_a_user_who_never_turned_it_off_uses_the_third_party_resolver(monkeypatch):
-    fetched = _retry_with_preferences(monkeypatch, {})
-
-    assert fetched["allow_miuistore"] is True
-
-
-def test_a_retry_by_a_user_who_turned_it_off_does_not_use_it(monkeypatch):
-    fetched = _retry_with_preferences(monkeypatch, {"allow_miuistore": False})
-
-    assert fetched["allow_miuistore"] is False
-
-
 def test_a_retry_reads_the_browser_login_the_user_chose_now(monkeypatch):
     fetched = _retry_with_preferences(monkeypatch, {"video_cookies_browser": "safari"})
 
@@ -591,20 +540,9 @@ def test_a_direct_link_is_titled_by_its_file_name():
     assert resolved.title == "讲座"
 
 
-@pytest.mark.parametrize("cookies,expected_calls", [(None, 1), ("chrome", 4)])
-def test_douyin_is_retried_only_when_a_login_was_sent(monkeypatch, cookies, expected_calls):
-    fake = FakeYtDlp(fail_with="ERROR: [Douyin] 1: Fresh cookies (not necessarily logged in) are needed")
-    monkeypatch.setattr(vs, "_run_process", fake)
-    monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", lambda *_a, **_k: (None, "unavailable"))
-    with pytest.raises(vs.VideoSourceResolutionError):
-        vs.resolve_video(DOUYIN, cookies_from_browser=cookies)
-    assert len(fake.calls) == expected_calls
-
-
 def test_the_browser_login_preference_round_trips_as_a_name(monkeypatch, tmp_path):
     """Requirement: POST /preferences {"video_cookies_browser": "chrome"} is
-    stored as the browser name, while allow_miuistore stays a boolean, and a
-    link task without its own choice uses the remembered browser."""
+    stored as the browser name, and a link task without its own choice uses the remembered browser."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -618,8 +556,8 @@ def test_the_browser_login_preference_round_trips_as_a_name(monkeypatch, tmp_pat
     app.include_router(local_system.router)
     client = TestClient(app)
 
-    saved = client.post("/preferences", json={"video_cookies_browser": "Chrome", "allow_miuistore": "true"})
-    assert saved.json()["preferences"] == {"video_cookies_browser": "chrome", "allow_miuistore": True}
+    saved = client.post("/preferences", json={"video_cookies_browser": "Chrome"})
+    assert saved.json()["preferences"] == {"video_cookies_browser": "chrome"}
     assert client.post("/preferences", json={"video_cookies_browser": "netscape"}).status_code == 400
     cleared = client.post("/preferences", json={"video_cookies_browser": ""})
     assert "video_cookies_browser" not in cleared.json()["preferences"]

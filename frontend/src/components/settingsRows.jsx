@@ -113,21 +113,6 @@ export const VoiceEnhanceRow = ({state}) => {
     );
 };
 
-export const LocalSttSpeedRow = ({state}) => {
-    const {t} = useI18n();
-    const {settings, updateSettingNow} = state;
-    return (
-        <div className={`flex items-center justify-between gap-3 ${cellBase}`}>
-            <span className="text-sm font-bold">{t('set.sttSpeed')}</span>
-            <select className="h-10 shrink-0 rounded-[12px] border border-[#dedada] bg-[#fbfbfb] px-3 text-sm font-bold text-[#111111] outline-none transition focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white" value={settings.sttSpeed || 'balanced'} onChange={e=>updateSettingNow({sttSpeed:e.target.value})}>
-                <option value="fast">{t('set.speedFast')}</option>
-                <option value="balanced">{t('set.speedBalanced')}</option>
-                <option value="accurate">{t('set.speedAccurate')}</option>
-            </select>
-        </div>
-    );
-};
-
 export const VideoCookiesRow = ({state}) => {
     const {lang} = useI18n();
     const {settings, updateSettingNow, cookieCheck, setCookieCheck, cookieChecking, runCookieCheck, updateVideoCookiesBrowser, videoPrefError = ''} = state;
@@ -188,36 +173,6 @@ export const VideoCookiesRow = ({state}) => {
                 </p>
             )}
         </div>
-    );
-};
-
-// Its own row, not a sub-item of the browser login: it is the one setting
-// here that sends something to a third party. On unless the person turned it off.
-export const DouyinFallbackRow = ({state}) => {
-    const {lang} = useI18n();
-    const {allowMiuistore, updateAllowMiuistore, videoPrefError = ''} = state;
-    return (
-        <label id="douyin-fallback" htmlFor="settingsAllowMiuistore" className={`md:col-span-2 flex cursor-pointer items-start justify-between gap-3 ${cellBase} hover:bg-[#f4f3f3] dark:hover:bg-white/[0.04]`}>
-            <span>
-                <span className="block text-sm font-bold">{lang === 'zh' ? '抖音备用解析' : 'Douyin fallback resolver'}</span>
-                <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">
-                    {lang === 'zh'
-                        ? '读不到抖音登录时，把抖音分享链接（只发链接本身）发给第三方解析服务 miuistore.com 换取视频地址。关掉后，抖音链接只靠浏览器登录态。'
-                        : 'When no Douyin login can be read, sends the Douyin share link (only the link itself) to the third-party resolver miuistore.com to get the video address. Off: Douyin links rely on the browser login only.'}
-                </span>
-                {videoPrefError === 'allow_miuistore' && (
-                    <span className="mt-1 block text-xs font-semibold text-red-600 dark:text-red-300">
-                        {lang === 'zh' ? '没能保存，开关已恢复原样。' : 'Could not save; the switch was put back.'}
-                    </span>
-                )}
-            </span>
-            <SettingCheckbox
-                id="settingsAllowMiuistore"
-                checked={allowMiuistore !== false}
-                disabled={!updateAllowMiuistore}
-                onChange={e=>updateAllowMiuistore?.(e.target.checked)}
-            />
-        </label>
     );
 };
 

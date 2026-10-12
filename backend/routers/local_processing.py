@@ -806,7 +806,9 @@ def _local_media_job_context(
         task_started_at=time.perf_counter(),
         loop=asyncio.get_event_loop(),
         model_size=(options.get("stt_model") or "").strip() or DEFAULT_LOCAL_STT_MODEL,
-        speed_profile=(options.get("stt_speed") or "").strip() or "balanced",
+        # Always the most accurate profile. The speed choice was a setting
+        # nobody knew how to use; a stored or sent ``stt_speed`` is ignored.
+        speed_profile="accurate",
         language="auto",
         stt_provider_value=LOCAL_STT_PROVIDER,
         diarization_requested=truthy(options.get("speaker_diarization")),
@@ -1755,13 +1757,11 @@ async def _retry_link_task(
     stored = metadata.get("queue_options")
     raw_options: dict = dict(stored) if isinstance(stored, dict) else {}
     # How the link is fetched follows the user's settings now, not the ones in
-    # force when it was first submitted: someone who turned the third-party
-    # Douyin resolver off, or changed the browser whose login is read, must not
-    # have a retry (theirs, the MCP tool's, or startup recovery's) quietly use
-    # the old choice. Leaving both out lets submit_video_source_job read the
-    # current preferences (`allow_miuistore`, `video_cookies_browser`).
+    # force when it was first submitted: someone who changed the browser whose
+    # login is read must not have a retry (theirs, the MCP tool's, or startup
+    # recovery's) quietly use the old choice. Leaving it out lets
+    # submit_video_source_job read the current `video_cookies_browser`.
     raw_options.pop("cookies_from_browser", None)
-    raw_options.pop("allow_miuistore", None)
     new_job = await submit_video_source_job(
         input_text=link,
         title=str(metadata.get("video_source_title") or "").strip(),

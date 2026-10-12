@@ -7,12 +7,10 @@ import {
     AutoIllustrateRow,
     DashscopeKeyField,
     DefaultSourceRow,
-    DouyinFallbackRow,
     FeishuAppCredentialRows,
     LarkExportHistory,
     LarkExportRouteRow,
     LarkFolderRow,
-    LocalSttSpeedRow,
     PyannoteTokenRow,
     SettingsPageShell,
     SpeakerDiarizationRow,
@@ -51,7 +49,7 @@ const Settings = () => {
     const claudeWritesNote = noteWriter.kind === 'claude';
     // The first-run note setup, opened again by hand from here.
     const [keySetupOpen, setKeySetupOpen] = useState(false);
-    // Arriving from a task card's "go to settings" link (/settings#douyin-fallback).
+    // Arriving from a task card's "go to settings" link (/settings#<row id>).
     useEffect(() => {
         const id = typeof window !== 'undefined' ? decodeURIComponent(window.location.hash.slice(1)) : '';
         if (!id) return;
@@ -143,9 +141,7 @@ const Settings = () => {
                 <div className="grid gap-3 p-5 md:grid-cols-2">
                     <SpeakerDiarizationRow state={state} status={diarizationStatus}/>
                     <VoiceEnhanceRow state={state}/>
-                    <LocalSttSpeedRow state={state}/>
                     <VideoCookiesRow state={state}/>
-                    <DouyinFallbackRow state={state}/>
                 </div>
             </Section>
 

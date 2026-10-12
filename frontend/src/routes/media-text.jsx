@@ -184,7 +184,6 @@ const MediaText = () => {
         // server apply its own default.
         sttProvider: submittedSttProvider(settings, runtimeConfig),
         sttModel: normalizeSttModel(settings.sttModel),
-        sttSpeed: settings.sttSpeed || 'balanced',
         sttLanguage: 'auto',
         voiceEnhance: !!settings.voiceEnhance,
     });
@@ -466,7 +465,7 @@ const MediaText = () => {
     // Asked about before anything is downloaded a second time.
     const [duplicateLink, setDuplicateLink] = useState(null);
 
-    const submitVideoLink = async (input, {allowDuplicate = false, allowMiuistore} = {}) => {
+    const submitVideoLink = async (input, {allowDuplicate = false} = {}) => {
         setUploadError(null);
         setProcessingResult(null);
         setLastResult(null);
@@ -483,7 +482,6 @@ const MediaText = () => {
             const options = {
                 ...buildSubmitOptions(settings),
                 ...(allowDuplicate ? {allowDuplicate: true} : {}),
-                ...(typeof allowMiuistore === 'boolean' ? {allowMiuistore} : {}),
             };
             const data = await createVideoSourceJob(input, options, ac.signal);
             const job = data?.job || {};
@@ -507,7 +505,6 @@ const MediaText = () => {
                     noteMode: settings.noteMode || 'auto',
                     sttProvider,
                     sttModel,
-                    sttSpeed: settings.sttSpeed || 'balanced',
                     sttLanguage: 'auto',
                 });
                 setVideoLinkInput('');
@@ -519,7 +516,7 @@ const MediaText = () => {
         } catch (err) {
             const duplicate = !allowDuplicate ? finishedDuplicateLink(err) : null;
             if (duplicate) {
-                setDuplicateLink({input, allowMiuistore, ...duplicate});
+                setDuplicateLink({input, ...duplicate});
             } else {
                 reportBackendError?.(err);
                 setUploadError(friendlyTaskError(err?.message || 'Video link fetch failed.', lang));
@@ -541,7 +538,7 @@ const MediaText = () => {
     const handleProcessLinkAgain = async () => {
         const pending = duplicateLink;
         setDuplicateLink(null);
-        if (pending) await submitVideoLink(pending.input, {allowDuplicate: true, allowMiuistore: pending.allowMiuistore});
+        if (pending) await submitVideoLink(pending.input, {allowDuplicate: true});
     };
 
     // Open the earlier result in the editor; if it cannot be read, point at it

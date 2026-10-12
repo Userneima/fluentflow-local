@@ -728,9 +728,9 @@ def _write_wav_chunks(
 
 
 def _transcribe_profile_defaults(speed_profile: str | None) -> dict[str, Any]:
-    profile = (speed_profile or "balanced").strip().lower()
+    profile = (speed_profile or "accurate").strip().lower()
     if profile not in _STT_SPEED_PROFILES:
-        profile = "balanced"
+        profile = "accurate"
     return {
         key: (value.copy() if isinstance(value, dict) else value)
         for key, value in _STT_SPEED_PROFILES[profile].items()

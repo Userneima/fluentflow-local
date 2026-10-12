@@ -155,10 +155,8 @@ describe('the link box', () => {
     });
 });
 
-// Requirement: a Douyin link is not handed to the third-party resolver without
-// the person's say-so. The first Douyin link submitted while they have never
-// answered is held, they are asked once, the answer is remembered by the
-// service, and that link goes in with the answer.
+// Requirement (2026-10-12): a Douyin link always goes to the third-party
+// resolver, so it is submitted at once, with no question and no switch sent.
 describe('a Douyin link', () => {
     const DOUYIN = '7.92 复制打开抖音，看看 https://v.douyin.com/abcDEF12/ 复制此链接';
     const QUESTION = '抖音链接可能要交给第三方解析服务（miuistore.com）才能下载。只会发送这条链接，不发送其他内容。允许吗？';
@@ -186,14 +184,7 @@ describe('a Douyin link', () => {
         await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
         expect(screen.queryByText(QUESTION)).toBeNull();
         expect(createVideoSourceJob.mock.calls[0][0]).toBe(DOUYIN);
-    });
-
-    it('is not asked about when the resolver was turned off either', async () => {
-        servicePreferences = {allow_miuistore: false};
-        mount();
-        submit(DOUYIN);
-        await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
-        expect(screen.queryByText(QUESTION)).toBeNull();
+        expect(createVideoSourceJob.mock.calls[0][1].allowMiuistore).toBeUndefined();
     });
 
     it('is not asked for links from other sites', async () => {
@@ -201,6 +192,5 @@ describe('a Douyin link', () => {
         submit('https://www.bilibili.com/video/BV1xx411c7mD');
         await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
         expect(screen.queryByText(QUESTION)).toBeNull();
-        expect(createVideoSourceJob.mock.calls[0][1].allowMiuistore).toBeUndefined();
     });
 });

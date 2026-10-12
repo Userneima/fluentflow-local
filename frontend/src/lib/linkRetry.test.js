@@ -72,7 +72,6 @@ describe('the options a retry sends', () => {
             promptPresetLabel: '讲座',
             generateVisuals: true,
             sttModel: 'large',
-            sttSpeed: 'accurate',
             sttLanguage: 'zh',
             speakerDiarization: true,
             voiceEnhance: true,

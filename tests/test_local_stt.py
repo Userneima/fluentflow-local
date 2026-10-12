@@ -134,10 +134,11 @@ class TestLocalStt(unittest.TestCase):
         self.assertEqual(defaults["beam_size"], 1)
         self.assertEqual(defaults["best_of"], 1)
 
-    def test_unknown_profile_falls_back_to_balanced(self) -> None:
-        defaults = _transcribe_profile_defaults("unknown")
-        self.assertEqual(defaults["beam_size"], 3)
-        self.assertEqual(defaults["best_of"], 3)
+    def test_unknown_or_missing_profile_falls_back_to_accurate(self) -> None:
+        for profile in ("unknown", None):
+            defaults = _transcribe_profile_defaults(profile)
+            self.assertEqual(defaults["beam_size"], 5)
+            self.assertEqual(defaults["best_of"], 5)
 
     def test_chinese_transcribe_defaults_do_not_inject_hotwords(self) -> None:
         defaults = _build_transcribe_defaults(

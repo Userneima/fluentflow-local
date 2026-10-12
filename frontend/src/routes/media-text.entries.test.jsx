@@ -54,7 +54,6 @@ const SETTINGS = {
     autoIllustrate: true,
     voiceEnhance: true,
     speakerDiarization: true,
-    sttSpeed: 'balanced',
 };
 
 // Request bodies seen on the wire, by entry.

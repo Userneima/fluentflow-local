@@ -59,5 +59,7 @@ def test_an_old_cloud_engine_request_is_still_run_locally(tmp_path):
 
     ctx = asyncio.run(build())
     assert ctx.stt_provider_value == "local"
-    assert ctx.speed_profile == "fast"
+    # Requirement (2026-10-12): transcription always runs the accurate
+    # profile; an old client's or stored job's speed choice is ignored.
+    assert ctx.speed_profile == "accurate"
     assert not hasattr(ctx, "remote_stt_policy")

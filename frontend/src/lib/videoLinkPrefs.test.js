@@ -1,8 +1,6 @@
 import {describe, expect, it, vi} from 'vitest';
 import {
     COOKIES_MIGRATED_STORAGE_KEY,
-    isDouyinLinkText,
-    miuistoreChoiceFromPreferences,
     syncVideoLinkPreferences,
 } from './videoLinkPrefs.js';
 
@@ -88,32 +86,5 @@ describe('the browser-login choice on start', () => {
         const h = harness({preferences: {}, settings: {videoCookiesBrowser: 'safari'}, failSave: true});
         await h.run();
         expect(h.storage.data[COOKIES_MIGRATED_STORAGE_KEY]).toBeUndefined();
-    });
-});
-
-// Requirement: sending a Douyin link to a third party needs the person's
-// say-so. The service remembers yes, no, or "never asked"; never asked means
-// the first Douyin link submitted is held until the person answers.
-describe('the Douyin third-party fallback choice', () => {
-    it('is on unless the person turned it off', () => {
-        expect(miuistoreChoiceFromPreferences({})).toBe(true);
-        expect(miuistoreChoiceFromPreferences(null)).toBe(true);
-        expect(miuistoreChoiceFromPreferences({allow_miuistore: null})).toBe(true);
-        expect(miuistoreChoiceFromPreferences({allow_miuistore: true})).toBe(true);
-        expect(miuistoreChoiceFromPreferences({allow_miuistore: false})).toBe(false);
-    });
-
-    it('recognises Douyin links in every form people paste', () => {
-        expect(isDouyinLinkText('https://v.douyin.com/abcDEF12/')).toBe(true);
-        expect(isDouyinLinkText('https://www.douyin.com/video/7300000000000000000')).toBe(true);
-        expect(isDouyinLinkText('https://www.iesdouyin.com/share/video/1/')).toBe(true);
-        expect(isDouyinLinkText('7.92 复制打开抖音，看看【某某的作品】 https://v.douyin.com/iRNBho6u/ 01/12 abc')).toBe(true);
-        expect(isDouyinLinkText('https://www.bilibili.com/video/BV1xx411c7mD')).toBe(false);
-        expect(isDouyinLinkText('https://notdouyin.com/x')).toBe(false);
-    });
-
-    it('reports it on from the start-up sync when never turned off', async () => {
-        const h = harness({preferences: {}});
-        expect((await h.run()).allowMiuistore).toBe(true);
     });
 });

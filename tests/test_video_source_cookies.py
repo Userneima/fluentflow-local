@@ -34,60 +34,39 @@ def test_a_named_profile_or_an_unknown_site_is_left_as_given(chrome):
     assert vs.browser_cookie_spec("", "https://v.douyin.com/abc/") is None
 
 
-def test_a_stale_douyin_login_is_reported_as_a_login_to_renew(monkeypatch):
-    monkeypatch.setattr(vs, "resolve_direct_video", lambda _u: None)
-    monkeypatch.setattr(
-        vs, "_resolve_with_yt_dlp_attempt", lambda *_a, **_k: (None, "fresh_cookies_required", None)
-    )
-    monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", lambda *_a, **_k: (None, "unavailable"))
-
-    with pytest.raises(vs.VideoSourceResolutionError, match="登录信息过期了") as caught:
-        vs.resolve_video("https://v.douyin.com/abc/", cookies_from_browser="chrome")
-
-    assert "Chrome" in str(caught.value)
-
-
-
-# ── a browser login that does not work does not close the fallback ──────────
+# ── Douyin links go straight to the third-party resolver ───────────────────
 #
-# Requirement (2026-10-08): Douyin links download without any setting, as they
-# did before. A configured browser login is tried first; if it cannot be read
-# (macOS 27 blocks other programs from Chrome's data) or has gone stale, the
-# fallback still runs, and the login problem is mentioned only when the
-# fallback fails too.
+# Requirement (2026-10-12): yt-dlp never fetched a Douyin link on this machine
+# (every Douyin task came through the resolver after yt-dlp failed), so a
+# Douyin link is not handed to yt-dlp at all, browser login or not.
 
-def _fallback_returns(video):
-    return lambda *_a, **_k: (video, None if video else "no_downloadable_media")
-
-
-@pytest.mark.parametrize("reason,detail", [
-    ("unavailable", 'ERROR: could not find chrome cookies database in "/Users/x/Library/Application Support/Google/Chrome"'),
-    ("fresh_cookies_required", "ERROR: [Douyin] 1: Fresh cookies (not necessarily logged in) are needed"),
-])
-def test_a_login_that_does_not_work_still_gets_the_video_through_the_fallback(monkeypatch, reason, detail):
+@pytest.mark.parametrize("cookies", [None, "chrome"])
+def test_a_douyin_link_never_reaches_yt_dlp(monkeypatch, cookies):
     monkeypatch.setattr(vs, "resolve_direct_video", lambda _u: None)
-    monkeypatch.setattr(vs, "_resolve_with_yt_dlp_attempt", lambda *_a, **_k: (None, reason, detail))
+    monkeypatch.setattr(vs, "_resolve_with_yt_dlp_attempt",
+                        lambda *_a, **_k: pytest.fail("yt-dlp was asked for a Douyin link"))
+    monkeypatch.setattr(vs, "download_yt_dlp_media",
+                        lambda *_a, **_k: pytest.fail("yt-dlp downloaded a Douyin link"))
     video = vs.ResolvedVideo(provider="miuistore", source_url="https://www.douyin.com/video/1",
                              download_url="https://v5.douyinvod.com/x.mp4")
-    monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", _fallback_returns(video))
+    monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", lambda *_a, **_k: (video, None))
 
-    resolved = vs.resolve_video("https://www.douyin.com/video/1", cookies_from_browser="chrome")
+    resolved = vs.resolve_video("https://v.douyin.com/abc/", cookies_from_browser=cookies)
 
     assert resolved.provider == "miuistore"
-    assert [step["provider"] for step in resolved.resolution_trace] == ["yt-dlp", "miuistore"]
+    assert resolved.resolution_trace == [{"provider": "miuistore", "status": "selected"}]
 
 
-def test_an_unreadable_browser_says_so_when_the_fallback_fails_too(monkeypatch):
+def test_a_douyin_link_the_resolver_cannot_read_is_explained_without_login_talk(monkeypatch):
     monkeypatch.setattr(vs, "resolve_direct_video", lambda _u: None)
-    monkeypatch.setattr(vs, "_resolve_with_yt_dlp_attempt", lambda *_a, **_k: (
-        None, "unavailable", "ERROR: could not find chrome cookies database in \"...\""))
     monkeypatch.setattr(vs, "_resolve_with_miuistore_attempt", lambda *_a, **_k: (None, "unavailable"))
 
     with pytest.raises(vs.VideoSourceResolutionError) as caught:
         vs.resolve_video("https://www.douyin.com/video/1", cookies_from_browser="chrome")
 
-    assert "读不到 Chrome" in str(caught.value)
-    assert "完全磁盘访问权限" in str(caught.value)
+    message = str(caught.value)
+    assert "上传" in message
+    assert "登录" not in message
 
 
 # ── the resolver's result page loads its result with a script call ─────────

@@ -15,7 +15,6 @@ import {
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import {
-    MIUISTORE_PREF,
     VIDEO_COOKIES_PREF,
     normalizeCookiesBrowser,
     syncVideoLinkPreferences,
@@ -39,14 +38,11 @@ export const useSettingsPageState = () => {
     const [diarizationStatus, setDiarizationStatus] = useState(null);
     const [cookieCheck, setCookieCheck] = useState(null);
     const [cookieChecking, setCookieChecking] = useState(false);
-    // Kept by the service (see lib/videoLinkPrefs.js): true, false, or null
-    // when never asked. undefined until the service has answered.
-    const [allowMiuistore, setAllowMiuistore] = useState(undefined);
     // Which service-kept choice failed to save, if any (its preference name).
     const [videoPrefError, setVideoPrefError] = useState('');
     // A choice made on this page before the service answered must not be
     // overwritten by that answer.
-    const touchedVideoPrefsRef = useRef({browser: false, miuistore: false, lark: false});
+    const touchedVideoPrefsRef = useRef({browser: false, lark: false});
     // The folder value last saved to the service, so leaving the field
     // without changing it does not save again.
     const savedLarkFolderRef = useRef(null);
@@ -88,7 +84,6 @@ export const useSettingsPageState = () => {
             };
             syncVideoLinkPreferences(sync).then((prefs) => {
                 if (!active || !prefs.reachable) return;
-                if (!touchedVideoPrefsRef.current.miuistore) setAllowMiuistore(prefs.allowMiuistore);
                 if (touchedVideoPrefsRef.current.browser) return;
                 setSettings((s) => (
                     normalizeCookiesBrowser(s.videoCookiesBrowser) === prefs.videoCookiesBrowser
@@ -118,20 +113,6 @@ export const useSettingsPageState = () => {
             await savePreferences({[VIDEO_COOKIES_PREF]: browser});
         } catch (_) {
             setVideoPrefError(VIDEO_COOKIES_PREF);
-        }
-    };
-
-    const updateAllowMiuistore = async (allowed) => {
-        const previous = allowMiuistore;
-        touchedVideoPrefsRef.current.miuistore = true;
-        setAllowMiuistore(allowed);
-        setVideoPrefError('');
-        if (!savePreferences) return;
-        try {
-            await savePreferences({[MIUISTORE_PREF]: allowed});
-        } catch (_) {
-            setAllowMiuistore(previous);
-            setVideoPrefError(MIUISTORE_PREF);
         }
     };
 
@@ -281,8 +262,6 @@ export const useSettingsPageState = () => {
         cookieChecking,
         runCookieCheck,
         updateVideoCookiesBrowser,
-        allowMiuistore,
-        updateAllowMiuistore,
         videoPrefError,
         // Text model and its key.
         aiProvider,

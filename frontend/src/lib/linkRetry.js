@@ -53,7 +53,6 @@ export const retryOptionsForJob = (job, {cookiesBrowser = ''} = {}) => {
         generateVisuals: truthy(base.generate_visuals),
         sttProvider: base.stt_provider,
         sttModel: base.stt_model,
-        sttSpeed: base.stt_speed,
         sttLanguage: base.stt_language || 'auto',
         speakerDiarization: truthy(base.speaker_diarization),
         voiceEnhance: truthy(base.voice_enhance),

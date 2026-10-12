@@ -171,25 +171,14 @@ describe('another device without the access token', () => {
     });
 });
 
-// Requirement: a Douyin link that failed because the third-party resolver was
-// never allowed is fixed in Settings and then works, so the diagnosis points
-// there and keeps "submit again".
-describe('Douyin fallback not allowed', () => {
-    const MESSAGE = '抖音直接下载没有成功。可以把这个链接交给第三方解析服务再试（只发送链接本身）：在 设置 → 抖音备用解析 里允许后重试；AI 工具提交时传 allow_miuistore=true。';
-
-    it('points to the Douyin fallback setting and stays retryable', () => {
-        const diag = diagnoseTaskError(MESSAGE, 'zh', {sourceType: 'video_link'});
-        expect(diag.code).toBe('douyin_fallback_not_allowed');
+// Requirement (2026-10-12): the Douyin resolver has no switch any more, so an
+// old task's "allow the resolver" failure sends nobody to a setting.
+describe('an old Douyin fallback failure', () => {
+    it('points to no setting and can be submitted again', () => {
+        const old = '抖音直接下载没有成功。可以把这个链接交给第三方解析服务再试（只发送链接本身）：在 设置 → 抖音备用解析 里允许后重试；AI 工具提交时传 allow_miuistore=true。';
+        const diag = diagnoseTaskError(old, 'zh', {sourceType: 'video_link'});
+        expect(diag.code).not.toBe('douyin_fallback_not_allowed');
+        expect(diag.settingsTarget).toBe('');
         expect(diag.retryable).toBe(true);
-        expect(diag.settingsTarget).toBe('/settings#douyin-fallback');
-    });
-
-    it('wins over an expired-login hint the service puts in front of it', () => {
-        const diag = diagnoseTaskError(`抖音的登录信息过期了：在 Chrome 里打开 douyin.com 登录一次。 ${MESSAGE}`, 'zh', {sourceType: 'video_link'});
-        expect(diag.code).toBe('douyin_fallback_not_allowed');
-    });
-
-    it('gives other failures no settings link', () => {
-        expect(diagnoseTaskError('抖音的登录信息过期了', 'zh').settingsTarget).toBe('');
     });
 });

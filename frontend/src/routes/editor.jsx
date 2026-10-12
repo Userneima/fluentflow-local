@@ -1144,7 +1144,6 @@ const Editor = () => {
             fileSizeMb,
             sttProvider,
             sttModel,
-            sttSpeed: settings.sttSpeed||'balanced',
             sttLanguage: 'auto',
             skipSummary: !!settings.skipAiSummary,
             exportToLark: !!settings.exportToLark,
@@ -1163,7 +1162,6 @@ const Editor = () => {
                 skipSummary: !!settings.skipAiSummary,
                 sttProvider,
                 sttModel,
-                sttSpeed: settings.sttSpeed||'balanced',
                 sttLanguage: 'auto',
             }, (ev) => {
                 setCurrentJob(prev => prev ? {

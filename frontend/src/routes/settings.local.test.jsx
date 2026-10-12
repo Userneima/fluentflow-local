@@ -6,7 +6,7 @@
 // This one mounts the real page and looks at what a person would see.
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 
 const runtimeConfig = {
     allowedSttProviders: ['local'],
@@ -107,6 +107,14 @@ describe('local settings page', () => {
         expect(screen.getByText('set.deepseekKey')).toBeTruthy();
     });
 
+    // Requirement (2026-10-12): transcription always runs at the accurate
+    // setting, so there is no speed to choose.
+    it('offers no transcription speed choice', () => {
+        render(<Settings/>);
+        expect(screen.queryByText('set.sttSpeed')).toBeNull();
+        expect(screen.queryByText('转录速度')).toBeNull();
+    });
+
     it('offers no transcription-route choice, because there is only one route', () => {
         render(<Settings/>);
         expect(screen.queryByText('转录路线')).toBeNull();
@@ -115,7 +123,6 @@ describe('local settings page', () => {
 
     it('shows the device-side controls without asking whether local transcription is allowed', async () => {
         render(<Settings/>);
-        expect(screen.getByText('set.sttSpeed')).toBeTruthy();
         expect(screen.getByText('视频链接下载登录态')).toBeTruthy();
         expect(await screen.findByText('讲话人区分令牌（Hugging Face）')).toBeTruthy();
     });
@@ -221,43 +228,11 @@ describe('local settings page', () => {
         await waitFor(() => expect(screen.getByDisplayValue('Chrome')).toBeTruthy());
     });
 
-    it('offers the Douyin fallback as a switch that says what it sends', async () => {
-        servicePreferences = {allow_miuistore: true};
+    // Requirement (2026-10-12): Douyin links always use the third-party
+    // resolver, so there is no switch for it.
+    it('offers no Douyin fallback switch', () => {
         render(<Settings/>);
-        expect(screen.getByText('抖音备用解析')).toBeTruthy();
-        expect(screen.getByText(/只发链接本身/)).toBeTruthy();
-        const toggle = screen.getByLabelText(/抖音备用解析/);
-        await waitFor(() => expect(toggle.checked).toBe(true));
-        fireEvent.click(toggle);
-        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({allow_miuistore: false}));
-        expect(toggle.checked).toBe(false);
-    });
-
-    // Requirement: the one switch that sends something to a third party is a
-    // row of its own, not a sub-item of the browser-login row.
-    it('gives the Douyin fallback its own row', () => {
-        render(<Settings/>);
-        const row = screen.getByLabelText(/抖音备用解析/).closest('label');
-        expect(row.textContent).not.toMatch(/视频链接下载登录态/);
-        const cookiesRow = screen.getByText('视频链接下载登录态').parentElement;
-        expect(cookiesRow.contains(row)).toBe(false);
-    });
-
-    // Requirement: the Douyin fallback has three states. Never answered shows
-    // as off and says when the question will come.
-    it('shows the Douyin fallback on when it was never turned off', async () => {
-        servicePreferences = {};
-        render(<Settings/>);
-        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-        expect(screen.getByLabelText(/抖音备用解析/).checked).toBe(true);
-    });
-
-    it('shows a turned-off fallback as off', async () => {
-        servicePreferences = {allow_miuistore: false};
-        render(<Settings/>);
-        // Let the service's answer arrive before looking.
-        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-        expect(screen.getByLabelText(/抖音备用解析/).checked).toBe(false);
+        expect(screen.queryByText('抖音备用解析')).toBeNull();
     });
 
     // Requirement: exports an AI tool asks for use the route and folder chosen

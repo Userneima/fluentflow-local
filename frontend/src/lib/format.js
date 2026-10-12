@@ -169,7 +169,7 @@ export const fmtDateTime = (value, lang='zh') => {
     }
 };
 // `settingsTarget`: where in Settings the fix is, as a path with an anchor
-// ('/settings#douyin-fallback'), when the fix is a setting the person changes.
+// ('/settings#<row id>'), when the fix is a setting the person changes.
 const taskErrorDiagnosis = ({code, titleZh, titleEn, detailZh, detailEn, nextZh, nextEn, severity='error', retryable=true, settingsTarget=''}) => ({
     code,
     title: {zh: titleZh, en: titleEn},
@@ -419,23 +419,6 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 detailEn: 'The local service is not responding. Reopen FluentFlow Local; your tasks and records are still there.',
                 nextZh: '重新打开 FluentFlow Local 后再试一次。',
                 nextEn: 'Reopen FluentFlow Local and try again.',
-            }),
-        ],
-        // The person has never said whether a Douyin link may go to the
-        // third-party resolver. Ahead of the login rule: the service may put
-        // a login hint in front of this sentence, and allowing the resolver is
-        // the fix that needs no browser. Retryable once it is allowed.
-        [
-            raw.includes('抖音备用解析') || lower.includes('douyin_fallback_not_allowed'),
-            taskErrorDiagnosis({
-                code: 'douyin_fallback_not_allowed',
-                titleZh: '抖音备用解析还没允许',
-                titleEn: 'Douyin fallback resolver not allowed',
-                detailZh: raw,
-                detailEn: 'The direct Douyin download did not work. The link can be sent (only the link itself) to the third-party resolver miuistore.com once you allow it in Settings → Douyin fallback resolver.',
-                nextZh: '去设置里打开「抖音备用解析」，再重新提交这个链接。',
-                nextEn: 'Turn on "Douyin fallback resolver" in Settings, then submit this link again.',
-                settingsTarget: '/settings#douyin-fallback',
             }),
         ],
         [
@@ -758,8 +741,8 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 titleEn: 'Transcription timed out',
                 detailZh: '转写超过时间上限被中止。通常是音视频太长，或所选引擎在当前机器上跑不完。',
                 detailEn: 'Transcription was stopped at the time limit, usually because the recording is long or the chosen engine cannot finish it on this machine.',
-                nextZh: '在设置里把「转录速度」调成「快速」后重试；如果素材很长，先拆成几段再处理。',
-                nextEn: 'Set Transcription speed to Fast in settings and retry, or split a long recording into parts.',
+                nextZh: '素材很长的话，先拆成几段再处理。',
+                nextEn: 'Split a long recording into parts and process them one by one.',
             }),
         ],
         [

@@ -239,7 +239,7 @@ def get_preferences() -> dict[str, Any]:
 
 @router.post("/preferences")
 def update_preferences(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """Persist remembered user choices (e.g. the Douyin miuistore consent)."""
+    """Persist remembered user choices (browser login, Feishu export route)."""
     patch = {key: value for key, value in payload.items() if key in LOCAL_PREFERENCE_FIELDS}
     if not patch:
         raise HTTPException(status_code=400, detail="No supported preference in payload")

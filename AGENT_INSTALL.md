@@ -64,5 +64,5 @@ parts; fetch and write each, then save them together.
   a network or a proxy, then run the command again.
 - **Windows without winget**: ask the user to install "App Installer" from the
   Microsoft Store.
-- **Videos that need a login** (some Douyin and Bilibili links): the user chooses a
+- **Videos that need a login** (some Bilibili and YouTube links): the user chooses a
   browser in the app's settings whose login FluentFlow may reuse.
