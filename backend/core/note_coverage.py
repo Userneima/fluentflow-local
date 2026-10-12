@@ -1,0 +1,286 @@
+"""Whether a finished note still carries every knowledge point it was written from.
+
+Every way FluentFlow gets a note runs this once the note is written: the text
+model (DeepSeek, OpenAI, Qwen), Claude from the frames, and the user's own agent
+saving through MCP. The check reads the note that will actually be stored, not
+an intermediate plan of it: a point counts as covered when the final text says
+it, never because it was assigned to a chapter that was then written without it.
+
+Two shapes, one judgement:
+
+- ``check_against_transcript`` hands the model a stretch of transcript and the
+  note, has it list what that stretch teaches and mark which of those the note
+  never says. Used where no checklist exists yet.
+- ``check_against_points`` hands it a checklist that already exists (the
+  chapter mode's evidence) and the note, and asks which items are absent.
+
+Both are a model's judgement, so a pass means "a model compared the two and
+found nothing missing", not a proof. What is missing is written back in by
+whoever wrote the note (``revise``), or, for an agent, handed back to it.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
+
+Chat = Callable[[str, str], str]
+
+# One stretch of transcript per request, with the whole note beside it. Small
+# enough that a text model's window holds both, large enough that a typical
+# lecture part is two or three requests.
+TRANSCRIPT_CHUNK_CHARS = 24_000
+POINTS_BATCH_CHARS = 16_000
+_MAX_WORKERS = 4
+# A revision only adds; one that comes back much shorter than the note it was
+# given rewrote or dropped content, and the note it was given is kept.
+MIN_REVISION_RATIO = 0.9
+
+_CHECK_TRANSCRIPT_SYSTEM = """你是 FluentFlow 的笔记查漏助手。
+输入是一段转录文字（原稿的一部分）和根据原稿写成的笔记。
+
+先列出这段原稿讲到的每个知识点：概念和定义、观点和它的依据、方法和步骤、例子、数字、限制条件、讲者特意强调的地方。寒暄、口头语、重复的话、和主题无关的闲聊不算知识点。
+再逐条判断笔记里有没有写到它。意思写到了就算写到：换了说法、合并进别的句子、压缩成一句都算。笔记里找不到这个意思才算没写到。
+
+输出严格 JSON 对象，不要输出 Markdown 或代码围栏：
+{"points": [{"point": "知识点，一句话", "in_note": true}]}
+没写到的项加一个 "source" 字段：原稿里讲这一点的要点或原话，供补写用。"""
+
+_CHECK_POINTS_SYSTEM = """你是 FluentFlow 的笔记查漏助手。
+输入是一份知识点清单（每项有 id）和一份笔记。逐项判断笔记里有没有写到它。
+意思写到了就算写到：换了说法、合并进别的句子、压缩成一句都算。笔记里找不到这个意思才算没写到。
+
+输出严格 JSON 对象，不要输出 Markdown 或代码围栏：
+{"missing_ids": ["没写到的 id"]}
+全部写到时输出 {"missing_ids": []}。"""
+
+_REVISION_REQUEST = """下面是一份已经写好的笔记，以及查漏时发现它没写到的知识点。
+把这些知识点补进笔记里合适的位置：放进讲它的那一节，没有合适的节就按原稿顺序新开一节。
+不推翻原结构，不删原有内容，不新增原稿里没有的信息。原有的截图引用 `![图注](文件名)` 原样保留，不新增截图引用。
+只输出补完后的完整笔记 Markdown，第一行就是笔记内容，前面不加任何说明。
+
+--- 笔记 ---
+
+{note}
+
+--- 没写到的知识点 ---
+
+{missing}
+"""
+
+
+@dataclass(frozen=True)
+class CoverageCheck:
+    """What one check found. ``checked`` is false when no request gave a usable
+    answer; ``failed_requests`` counts the ones that did not, so a partly checked
+    note says so instead of reading as fully checked."""
+
+    checked: bool
+    point_count: int
+    missing: list[dict[str, str]] = field(default_factory=list)
+    failed_requests: int = 0
+    # Checklist ids whose request failed: neither found nor missing.
+    unchecked_ids: list[str] = field(default_factory=list)
+
+    @property
+    def missing_count(self) -> int:
+        return len(self.missing)
+
+    def as_record(self, *, revised: bool = False) -> dict[str, Any]:
+        return {
+            "checked": self.checked,
+            "point_count": self.point_count,
+            "missing_count": self.missing_count,
+            "missing_points": [item.get("point", "") for item in self.missing],
+            "failed_requests": self.failed_requests,
+            "revised": revised,
+        }
+
+
+def unchecked(reason: str) -> dict[str, Any]:
+    """The record for a note no check ran on, and why."""
+    return {"checked": False, "reason": reason}
+
+
+def _json_object(raw: str) -> dict[str, Any] | None:
+    text = (raw or "").strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        value = json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _ask(chat: Chat, system: str, user: str) -> dict[str, Any] | None:
+    """One judgement, asked twice at most: models occasionally answer with
+    malformed JSON, and a second try costs less than an unchecked note."""
+    for _attempt in range(2):
+        try:
+            payload = _json_object(chat(system, user))
+        except Exception as exc:  # noqa: BLE001 - a failed check leaves the note as written
+            logger.warning("note coverage check request failed: %s", exc)
+            return None
+        if payload is not None:
+            return payload
+    logger.warning("note coverage check returned no usable JSON twice")
+    return None
+
+
+def _split(text: str, max_chars: int) -> list[str]:
+    """Line-boundary pieces of at most ``max_chars`` (a single longer line is cut)."""
+    text = (text or "").strip()
+    pieces: list[str] = []
+    while text:
+        if len(text) <= max_chars:
+            pieces.append(text)
+            break
+        boundary = text.rfind("\n", 0, max_chars)
+        cut = boundary if boundary > max_chars // 2 else max_chars
+        pieces.append(text[:cut].rstrip())
+        text = text[cut:].lstrip("\n")
+    return pieces
+
+
+def _map(fn: Callable[[Any], Any], items: list[Any]) -> list[Any]:
+    if len(items) <= 1:
+        return [fn(item) for item in items]
+    with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(items))) as pool:
+        return list(pool.map(fn, items))
+
+
+def check_against_transcript(
+    chat: Chat, transcript: str, note: str, *, chunk_chars: int = TRANSCRIPT_CHUNK_CHARS,
+) -> CoverageCheck:
+    """List what the transcript teaches and which of it the note never says."""
+    chunks = _split(transcript, chunk_chars)
+    if not chunks or not (note or "").strip():
+        return CoverageCheck(checked=False, point_count=0)
+
+    def one(chunk: str) -> dict[str, Any] | None:
+        user = f"--- 原稿片段 ---\n\n{chunk}\n\n--- 笔记 ---\n\n{note}"
+        return _ask(chat, _CHECK_TRANSCRIPT_SYSTEM, user)
+
+    point_count = 0
+    missing: list[dict[str, str]] = []
+    failed = 0
+    for payload in _map(one, chunks):
+        points = payload.get("points") if payload else None
+        if not isinstance(points, list):
+            failed += 1
+            continue
+        for item in points:
+            if not isinstance(item, dict) or not str(item.get("point") or "").strip():
+                continue
+            point_count += 1
+            if item.get("in_note") is False:
+                missing.append({
+                    "point": str(item.get("point")).strip(),
+                    "source": str(item.get("source") or "").strip(),
+                })
+    return CoverageCheck(
+        checked=failed < len(chunks), point_count=point_count, missing=missing, failed_requests=failed,
+    )
+
+
+def check_against_points(
+    chat: Chat, points: list[dict[str, str]], note: str, *, batch_chars: int = POINTS_BATCH_CHARS,
+) -> CoverageCheck:
+    """Which items of an existing checklist (``{"id", "text"}``) the note never says."""
+    items = [item for item in points if str(item.get("id") or "") and str(item.get("text") or "").strip()]
+    if not items or not (note or "").strip():
+        return CoverageCheck(checked=False, point_count=len(items))
+    batches: list[list[dict[str, str]]] = [[]]
+    size = 0
+    for item in items:
+        length = len(item["text"]) + len(item["id"]) + 8
+        if batches[-1] and size + length > batch_chars:
+            batches.append([])
+            size = 0
+        batches[-1].append(item)
+        size += length
+
+    def one(batch: list[dict[str, str]]) -> dict[str, Any] | None:
+        listing = json.dumps([{"id": i["id"], "text": i["text"]} for i in batch], ensure_ascii=False)
+        return _ask(chat, _CHECK_POINTS_SYSTEM, f"--- 知识点清单 ---\n\n{listing}\n\n--- 笔记 ---\n\n{note}")
+
+    by_id = {item["id"]: item for item in items}
+    missing: list[dict[str, str]] = []
+    unchecked_ids: list[str] = []
+    failed = 0
+    for batch, payload in zip(batches, _map(one, batches)):
+        ids = payload.get("missing_ids") if payload else None
+        if not isinstance(ids, list):
+            failed += 1
+            unchecked_ids.extend(item["id"] for item in batch)
+            continue
+        in_batch = {item["id"] for item in batch}
+        for raw in ids:
+            key = str(raw)
+            if key in in_batch and key in by_id:
+                missing.append({"id": key, "point": by_id[key]["text"], "source": by_id[key].get("source", "")})
+                in_batch.discard(key)
+    return CoverageCheck(
+        checked=failed < len(batches), point_count=len(items), missing=missing, failed_requests=failed,
+        unchecked_ids=unchecked_ids,
+    )
+
+
+def missing_listing(missing: list[dict[str, str]]) -> str:
+    lines = []
+    for item in missing:
+        source = str(item.get("source") or "").strip()
+        lines.append(f"- {item.get('point', '')}" + (f"\n  原稿：{source}" if source else ""))
+    return "\n".join(lines)
+
+
+def revision_request(note: str, missing: list[dict[str, str]]) -> str:
+    return _REVISION_REQUEST.format(note=note, missing=missing_listing(missing))
+
+
+def accept_revision(note: str, revised: str) -> str | None:
+    """The revision when it plausibly kept the note and added to it, else ``None``."""
+    candidate = (revised or "").strip()
+    if not candidate or len(candidate) < len((note or "").strip()) * MIN_REVISION_RATIO:
+        logger.warning(
+            "coverage revision returned %d chars for a %d-char note; keeping the note",
+            len(candidate), len((note or "").strip()),
+        )
+        return None
+    return candidate
+
+
+def revise(write: Chat, system: str, note: str, check: CoverageCheck) -> str | None:
+    """The note with what ``check`` found missing written back in, by ``write``
+    under the writer's own rules; ``None`` when there was nothing to add or the
+    rewrite was not usable."""
+    if not check.missing:
+        return None
+    try:
+        revised = write(system, revision_request(note, check.missing))
+    except Exception as exc:  # noqa: BLE001 - the unrevised note is still a note
+        logger.warning("coverage revision request failed: %s", exc)
+        return None
+    return accept_revision(note, revised)
+
+
+__all__ = [
+    "Chat",
+    "CoverageCheck",
+    "accept_revision",
+    "check_against_points",
+    "check_against_transcript",
+    "missing_listing",
+    "revise",
+    "revision_request",
+    "unchecked",
+]

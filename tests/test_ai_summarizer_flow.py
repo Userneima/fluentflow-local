@@ -16,6 +16,7 @@ import pytest
 
 import backend.core.ai_client as ai_client
 import backend.core.ai_summarizer as summ
+from backend.core import note_coverage
 from backend.core.local_entry_guards import friendly_error
 from backend.core.local_error_diagnostics import diagnose_error
 
@@ -45,6 +46,8 @@ def recorded_provider(monkeypatch):
     def fake_chat(client, model, system, user, *, temperature=0.3):
         seen.setdefault("models", []).append(model)
         seen.setdefault("prompts", []).append(system)
+        if system == note_coverage._CHECK_TRANSCRIPT_SYSTEM:
+            return '{"points": [{"point": "课程要解决的问题", "in_note": true}]}'
         return NOTE
 
     monkeypatch.setattr(summ, "_get_client", fake_client)
@@ -66,9 +69,10 @@ def test_a_short_transcript_gets_a_note_with_its_sections_and_a_record_of_how(re
         assert heading in result.markdown
     assert recorded_provider["provider"] == "deepseek"
     assert recorded_provider["api_key"] == "sk-test"
-    assert recorded_provider["models"] == ["deepseek-reasoner"], "the model the user picked is the one called"
+    assert set(recorded_provider["models"]) == {"deepseek-reasoner"}, "the model the user picked is the one called"
     assert result.requested_mode == "auto"
     assert result.resolved_mode == "direct", "a transcript this short is written in one call"
+    assert result.coverage["checked"] is True, "and the note is then checked against it"
     assert result.chunk_count == 1
     assert result.transcript_length == len(TRANSCRIPT)
 
@@ -77,7 +81,7 @@ def test_the_providers_default_model_is_used_when_none_is_chosen(recorded_provid
     summ.summarize_transcript_with_metadata(TRANSCRIPT, provider="qwen")
 
     assert recorded_provider["provider"] == "qwen"
-    assert recorded_provider["models"] == [ai_client._provider_default_model("qwen")]
+    assert set(recorded_provider["models"]) == {ai_client._provider_default_model("qwen")}
 
 
 def test_the_users_own_prompt_reaches_the_model(recorded_provider):

@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import claude_vision, cut_timeline, note_skills, visual_note_check
+from backend.core import claude_vision, cut_timeline, note_coverage, note_skills, visual_note_check
 from backend.core import visual_note_job as vn
 from backend.core.claude_vision import FrameInput
 from backend.core.result_artifacts import VISUAL_NOTE_ARTIFACT_FILENAME, VISUAL_NOTE_KIND, write_text_artifact
@@ -61,6 +61,10 @@ SAVE_INSTRUCTION = (
     "（哪些部分靠画面、哪些只有字幕、有没有看不清或没信息的截图）。"
     "录像分成几部分时，每部分各取一次材料、各写一份，最后按顺序放进 part_notes 一次交回。"
     "截图在本机的路径就是 frames 里的 path，打开看过再决定引不引用；引用时只写文件名。"
+    "\n\n交回之前，对照这部分转录逐条查一遍：讲到的概念、观点和依据、方法步骤、例子、数字、"
+    "限制条件、讲者强调的地方，笔记里都要写到，没写到的补进去。"
+    "交回后 FluentFlow 会再查一遍：返回的 coverage.missing 里列着它认为没写到的知识点，"
+    "非空时把这些补进对应部分，再调用一次 save_agent_note。"
 )
 
 
@@ -203,8 +207,15 @@ def save(
     basis_note: str = "",
     model: str = "",
     client_id: str | None = None,
+    checker: tuple[note_coverage.Chat, str] | None | bool = True,
 ) -> dict[str, Any]:
-    """Make the agent's note the task's note, keeping the one it replaces."""
+    """Make the agent's note the task's note, keeping the one it replaces.
+
+    The note is saved whatever the coverage check finds; what it finds missing
+    is recorded on the note's state as ``coverage`` for the caller to hand back
+    to the agent. ``checker`` is who checks: ``True`` resolves it the way the
+    frame note does (``vn.coverage_checker``), ``None`` checks nothing.
+    """
     job = _job(task_id, client_id)
     media, parts, _segments = _eligible(task_id, job)
     drafts = list(part_notes or []) if part_notes else ([note_markdown] if note_markdown is not None else [])
@@ -225,6 +236,7 @@ def save(
             where = f"第 {part.index} 部分" if len(parts) > 1 else "这份笔记"
             raise AgentNoteError(f"{where}{reason.replace('Claude 返回的笔记', '')}，没有替换现有笔记，请重写后再交")
         cleaned.append(claude_vision.VisualNoteDraft(markdown=markdown, basis_note=basis_note, model=model))
+    coverage = _coverage(cleaned, parts, checker)
     joined = vn._joined_draft(cleaned, parts, title=vn.note_title(job))
 
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
@@ -257,6 +269,7 @@ def save(
         "transcript_chars_dropped": 0,
         "transcript_covered_until": "",
         "usage": {},
+        "coverage": coverage,
         "promoted": True,
         "replaced_note": replaced,
         "finished_at": vn._now(),
@@ -270,6 +283,26 @@ def save(
         result_fields=result_fields,
         rewrite_artifacts=True,
     )
+
+
+def _coverage(drafts, parts, checker) -> dict[str, Any]:
+    """Each part checked against its own transcript, nothing rewritten: the
+    agent wrote the note, so the agent fills what is missing."""
+    if checker is True:
+        checker = vn.coverage_checker()
+    if not checker:
+        return {"checker": "", "parts": [
+            {"part": part.index, **note_coverage.unchecked("本机没有可用来查漏的模型，请按材料里的要求自己查漏")}
+            for part in parts
+        ], "missing": []}
+    chat, name = checker
+    records = []
+    missing = []
+    for draft, part in zip(drafts, parts):
+        check = note_coverage.check_against_transcript(chat, part.text, draft.markdown)
+        records.append({"part": part.index, **check.as_record()})
+        missing.extend({"part": part.index, **item} for item in check.missing)
+    return {"checker": name, "parts": records, "missing": missing}
 
 
 __all__ = ["AgentNoteError", "CHANNEL_AGENT", "material", "save"]

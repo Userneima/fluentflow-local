@@ -301,11 +301,6 @@ _HIGH_FIDELITY_FINAL_WRAPPER: Final[str] = (
     "严格遵循系统说明中的角色、内容边界与格式偏好，按材料本身的结构组织章节。\n\n---\n\n"
 )
 
-_COVERAGE_SYSTEM: Final[str] = """你是 FluentFlow 的笔记覆盖率审查助手。
-请对照「证据清单」和「已生成笔记」，检查笔记是否遗漏了重要概念、例子、数字、步骤、限制条件或老师强调。
-如果没有明显遗漏，只输出：COVERED
-如果有遗漏，请用 Markdown 列出「需要补入的遗漏点」，不要重写整篇笔记。"""
-
 _SEGMENT_TRANSLATION_SYSTEM: Final[str] = """你是 FluentFlow 的字幕翻译助手。
 请把输入 JSON 数组中的英文字幕逐条翻译为自然、准确、简洁的中文。
 
@@ -331,18 +326,6 @@ _BILINGUAL_SEGMENT_SYSTEM: Final[str] = """你是 FluentFlow 的英文字幕断�
   {"start_index": 数字, "end_index": 数字, "text_en": "整理后的英文", "text_zh": "中文翻译"}
 - start_index 和 end_index 都是包含端点。
 - 不要输出 Markdown 或代码围栏。"""
-
-_REVISION_WRAPPER: Final[str] = """下面是已生成的学习笔记，以及覆盖率审查发现的遗漏点。
-请在不推翻原结构的前提下，把遗漏点自然补入笔记，输出完整修订版 Markdown。
-
---- 已生成笔记 ---
-
-{draft}
-
---- 需要补入的遗漏点 ---
-
-{coverage}
-"""
 
 
 _NOTE_SPEAKER_ATTRIBUTION: Final[str] = """

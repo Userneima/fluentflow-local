@@ -130,3 +130,18 @@ def no_real_claude_login_check(monkeypatch, request):
 
     claude_code_note.reset_login_cache()
     monkeypatch.setattr(claude_code_note, "login_state", lambda **_kw: None)
+
+
+@pytest.fixture(autouse=True)
+def no_real_coverage_checker(monkeypatch, request):
+    """Tests never send a finished note to a real model to be checked for gaps.
+
+    Which model would answer depends on the keys in a developer's .env; with
+    none set the check is simply skipped, which is what this pins. Tests of the
+    check pass their own checker, or mark themselves ``real_coverage_checker``.
+    """
+    if request.node.get_closest_marker("real_coverage_checker"):
+        return
+    from backend.core import visual_note_job
+
+    monkeypatch.setattr(visual_note_job, "coverage_checker", lambda *_a, **_kw: None)

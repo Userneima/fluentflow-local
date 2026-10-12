@@ -49,10 +49,9 @@ from backend.core.ai_prompts import (
     _CHAPTER_NOTE_SYSTEM,
     _CHAPTER_STYLE_SYSTEM,
     _HIGH_FIDELITY_FINAL_WRAPPER,
-    _COVERAGE_SYSTEM,
     _BILINGUAL_SEGMENT_SYSTEM,
-    _REVISION_WRAPPER,
 )
+from backend.core import note_coverage
 from backend.core.ai_client import (
     _normalize_provider,
     _normalize_model,
@@ -117,6 +116,10 @@ class SummaryResult:
     covered_important_evidence_count: int | None = None
     coverage_missing_count: int | None = None
     chapter_coverage: dict[str, Any] | None = None
+    # What the coverage check found in the finished note (``note_coverage``):
+    # how many points it listed, which the note did not say, whether they were
+    # written back in. ``None`` only for an empty transcript.
+    coverage: dict[str, Any] | None = None
     # The overall time limit passed after a draft existed: the note is that
     # draft, and the stages after it (style, coverage revision) did not run.
     deadline_hit: bool = False
@@ -222,6 +225,47 @@ def _accept_revision(draft: str, revised: str, *, stage: str) -> str:
         )
         return draft
     return candidate
+
+
+def _fill_gaps(
+    client: OpenAI,
+    model: str,
+    prompt: str,
+    note: str,
+    check: note_coverage.CoverageCheck,
+    deadline: _NoteDeadline,
+) -> tuple[str, bool, str | None]:
+    """The note with what ``check`` found missing written back in by the same
+    model under the same prompt. Returns the note, whether a revision was
+    attempted, and the stage name when the time limit stopped it first. An
+    unusable revision (empty, or much shorter than the note) keeps the note."""
+    if not check.missing:
+        return note, False, None
+    if deadline.out_of_time("覆盖率审查", note):
+        return note, False, "覆盖率审查"
+    revised = note_coverage.revise(
+        lambda system, user: _strip_prompt_leakage(_chat(client, model, system, user, temperature=0.2)),
+        prompt, note, check,
+    )
+    return (revised or note), True, None
+
+
+def _text_checker(client: OpenAI, model: str) -> note_coverage.Chat:
+    return lambda system, user: _chat(client, model, system, user, temperature=0.1)
+
+
+def text_model_chat(
+    *, provider: str | None = None, api_key: str | None = None, model: str | None = None, **_unused: Any,
+) -> note_coverage.Chat | None:
+    """A ``(system, user) -> text`` call on the configured text model, or
+    ``None`` when no key for it is set. Accepts ``local_ai_kwargs()`` as is."""
+    load_dotenv()
+    try:
+        provider_name = _normalize_provider(provider)
+        client = _get_client(provider=provider_name, api_key=api_key)
+    except Exception:  # noqa: BLE001 - no usable key is an answer, not an error
+        return None
+    return _text_checker(client, _normalize_model(provider_name, model))
 
 
 def _compose_note_system_prompt(
@@ -909,13 +953,16 @@ def _build_chapter_coverage_table(
     segments: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
     chapters: list[dict[str, Any]],
-    covered_ids: set[str],
+    in_note_ids: set[str],
     important_ids: set[str],
     uncovered_important: list[str],
     coverage_checked: bool,
     coverage_revision_used: bool,
-    coverage_missing_count: int,
+    coverage_missing_count: int | None,
 ) -> dict[str, Any]:
+    """``in_note_ids`` is what the coverage check found in the written note,
+    before any revision added the rest; ``covered_by_chapter_ids`` is only the
+    plan, which chapter each piece was handed to."""
     segments_by_id = {str(segment.get("segment_id")): segment for segment in segments}
     chapter_ids_by_evidence: dict[str, list[str]] = {}
     for chapter in chapters:
@@ -952,7 +999,7 @@ def _build_chapter_coverage_table(
             "source_segment_ids": source_ids,
             "char_start": source_range["char_start"],
             "char_end": source_range["char_end"],
-            "covered": evidence_id in covered_ids,
+            "covered": evidence_id in in_note_ids if coverage_checked else None,
             "covered_by_chapter_ids": chapter_ids_by_evidence.get(evidence_id, []),
         })
 
@@ -985,7 +1032,9 @@ def _build_chapter_coverage_table(
             "evidence_count": len(evidence),
             "chapter_count": len(chapters),
             "important_evidence_count": len(important_ids),
-            "covered_important_evidence_count": len(important_ids) - len(uncovered_important),
+            "covered_important_evidence_count": (
+                len(important_ids) - len(uncovered_important) if coverage_checked else None
+            ),
             "coverage_missing_count": coverage_missing_count,
             "coverage_checked": coverage_checked,
             "coverage_revision_used": coverage_revision_used,
@@ -1137,10 +1186,6 @@ def _run_chapter_coverage_mode(
             if evidence_id in evidence_by_id
         ]
 
-    covered_ids: set[str] = set()
-    for chapter in chapters:
-        covered_ids.update(item["evidence_id"] for item in _chapter_evidence_for(chapter))
-
     def _write_chapter(chapter: dict[str, Any]) -> str:
         user = json.dumps({
             "chapter_id": chapter["chapter_id"],
@@ -1169,41 +1214,32 @@ def _run_chapter_coverage_mode(
             deadline_stage = "统一文风"
 
     important_ids = {item["evidence_id"] for item in evidence if int(item.get("importance") or 0) >= 4}
-    uncovered_important = sorted(important_ids - covered_ids)
-    coverage_payload = {
-        "total_evidence": len(evidence),
-        "important_evidence": len(important_ids),
-        "covered_important_evidence": len(important_ids) - len(uncovered_important),
-        "unused_important_evidence_ids": uncovered_important,
-    }
-    coverage_input = (
-        f"--- 覆盖矩阵 ---\n\n{json.dumps(coverage_payload, ensure_ascii=False, indent=2)}"
-        f"\n\n--- 证据清单 ---\n\n{_evidence_markdown(evidence)}"
-        f"\n\n--- 已生成笔记 ---\n\n{final_note}"
-    )
-    coverage_checked = deadline_stage is None and len(coverage_input) <= max_final_input_chars
+    # Every piece of evidence is checked against the note as it now reads, not
+    # against the chapter plan: a point assigned to a chapter whose writer left
+    # it out is missing from the note, and only the final text can say so.
+    coverage_check = note_coverage.CoverageCheck(checked=False, point_count=len(evidence))
     coverage_revision_used = False
-    missing_count = len(uncovered_important)
-    if coverage_checked:
-        coverage = _chat(client, model, _COVERAGE_SYSTEM, coverage_input, temperature=0.1).strip()
-        if coverage and coverage != "COVERED" and deadline.out_of_time("覆盖率审查", final_note):
-            deadline_stage = "覆盖率审查"
-        elif coverage and coverage != "COVERED":
-            final_note = _accept_revision(
-                final_note,
-                _strip_prompt_leakage(
-                    _chat(
-                        client,
-                        model,
-                        prompt,
-                        _REVISION_WRAPPER.format(draft=final_note, coverage=coverage),
-                        temperature=0.2,
-                    )
-                ),
-                stage="coverage revision",
-            )
-            coverage_revision_used = True
-            missing_count = max(missing_count, 1)
+    if deadline_stage is None:
+        coverage_check = note_coverage.check_against_points(
+            _text_checker(client, model),
+            [{"id": item["evidence_id"], "text": item["text"], "source": item.get("quote") or ""} for item in evidence],
+            final_note,
+        )
+        revised_note, coverage_revision_used, deadline_stage = _fill_gaps(
+            client, model, prompt, final_note, coverage_check, deadline,
+        )
+        coverage_record = coverage_check.as_record(revised=revised_note != final_note)
+        final_note = revised_note
+    else:
+        coverage_record = note_coverage.unchecked(f"时间上限在「{deadline_stage}」用完")
+    coverage_checked = coverage_check.checked
+    missing_ids = {item["id"] for item in coverage_check.missing}
+    in_note_ids = (
+        {item["evidence_id"] for item in evidence} - missing_ids - set(coverage_check.unchecked_ids)
+        if coverage_checked else set()
+    )
+    uncovered_important = sorted(important_ids - in_note_ids)
+    missing_count = len(missing_ids) if coverage_checked else None
 
     # Chapters are written independently, so normalize the assembled note into
     # one consistent numbered hierarchy (## 一、 + ### x.y).
@@ -1213,7 +1249,7 @@ def _run_chapter_coverage_mode(
         segments=segments,
         evidence=evidence,
         chapters=chapters,
-        covered_ids=covered_ids,
+        in_note_ids=in_note_ids,
         important_ids=important_ids,
         uncovered_important=uncovered_important,
         coverage_checked=coverage_checked,
@@ -1233,9 +1269,10 @@ def _run_chapter_coverage_mode(
         evidence_count=len(evidence),
         chapter_count=len(chapters),
         important_evidence_count=len(important_ids),
-        covered_important_evidence_count=len(important_ids) - len(uncovered_important),
+        covered_important_evidence_count=(len(important_ids) - len(uncovered_important)) if coverage_checked else None,
         coverage_missing_count=missing_count,
         chapter_coverage=chapter_coverage,
+        coverage=coverage_record,
         deadline_hit=deadline_stage is not None,
         deadline_stage=deadline_stage,
     )
@@ -1341,12 +1378,32 @@ def summarize_transcript_with_metadata(
         )
 
     if resolved_mode == "direct":
+        draft = _strip_prompt_leakage(_chat(client, m, prompt, transcript_text))
+        if not draft.strip() or deadline.out_of_time("写笔记", draft):
+            return SummaryResult(
+                markdown=draft,
+                requested_mode=normalized_mode,
+                resolved_mode=resolved_mode,
+                transcript_length=transcript_length,
+                chunk_count=1,
+                coverage=note_coverage.unchecked("没有笔记可查" if not draft.strip() else "时间上限在「写笔记」用完"),
+                deadline_hit=bool(draft.strip()),
+                deadline_stage="写笔记" if draft.strip() else None,
+            )
+        check = note_coverage.check_against_transcript(_text_checker(client, m), transcript_text, draft)
+        final_note, revision_used, deadline_stage = _fill_gaps(client, m, prompt, draft, check, deadline)
         return SummaryResult(
-            markdown=_strip_prompt_leakage(_chat(client, m, prompt, transcript_text)),
+            markdown=final_note,
             requested_mode=normalized_mode,
             resolved_mode=resolved_mode,
             transcript_length=transcript_length,
             chunk_count=1,
+            coverage_checked=check.checked,
+            coverage_revision_used=revision_used,
+            coverage_missing_count=check.missing_count if check.checked else None,
+            coverage=check.as_record(revised=final_note != draft),
+            deadline_hit=deadline_stage is not None,
+            deadline_stage=deadline_stage,
         )
 
     if resolved_mode == "chapter_coverage":
@@ -1389,29 +1446,20 @@ def summarize_transcript_with_metadata(
     deadline.check("整理证据")
     draft = _strip_prompt_leakage(_chat(client, m, prompt, _HIGH_FIDELITY_FINAL_WRAPPER + evidence))
     deadline_stage: str | None = "写初稿" if deadline.out_of_time("写初稿", draft) else None
-    coverage_input = f"--- 证据清单 ---\n\n{evidence}\n\n--- 已生成笔记 ---\n\n{draft}"
-    coverage_checked = deadline_stage is None and len(coverage_input) <= max_final_input_chars
+    # Checked against the transcript itself, not the condensed evidence: the
+    # condensing is where a long recording's details are most likely lost.
     coverage_revision_used = False
     final_note = draft
-    if coverage_checked:
-        coverage = _chat(client, m, _COVERAGE_SYSTEM, coverage_input, temperature=0.1).strip()
-        if coverage and coverage != "COVERED" and deadline.out_of_time("覆盖率审查", draft):
-            deadline_stage = "覆盖率审查"
-        elif coverage and coverage != "COVERED":
-            final_note = _accept_revision(
-                draft,
-                _strip_prompt_leakage(
-                    _chat(
-                        client,
-                        m,
-                        prompt,
-                        _REVISION_WRAPPER.format(draft=draft, coverage=coverage),
-                        temperature=0.2,
-                    )
-                ),
-                stage="coverage revision",
-            )
-            coverage_revision_used = True
+    if deadline_stage is None:
+        check = note_coverage.check_against_transcript(_text_checker(client, m), transcript_text, draft)
+        final_note, coverage_revision_used, deadline_stage = _fill_gaps(client, m, prompt, draft, check, deadline)
+        coverage_checked = check.checked
+        coverage_record = check.as_record(revised=final_note != draft)
+        missing_count = check.missing_count if check.checked else None
+    else:
+        coverage_checked = False
+        coverage_record = note_coverage.unchecked(f"时间上限在「{deadline_stage}」用完")
+        missing_count = None
 
     return SummaryResult(
         markdown=final_note,
@@ -1421,6 +1469,8 @@ def summarize_transcript_with_metadata(
         chunk_count=total,
         coverage_checked=coverage_checked,
         coverage_revision_used=coverage_revision_used,
+        coverage_missing_count=missing_count,
+        coverage=coverage_record,
         deadline_hit=deadline_stage is not None,
         deadline_stage=deadline_stage,
     )

@@ -12,7 +12,8 @@ import pytest
 
 import backend.core.ai_client as ai_client
 import backend.core.ai_summarizer as summ
-from backend.core.ai_prompts import _COVERAGE_SYSTEM, _EVIDENCE_SYSTEM
+from backend.core import note_coverage
+from backend.core.ai_prompts import _EVIDENCE_SYSTEM
 
 DRAFT = "## 一、开场\n\n" + "这一段是初稿里的正文，讲了课程要解决的问题。\n" * 40
 TRANSCRIPT = "讲座内容。" * 400
@@ -29,10 +30,10 @@ class _FakeChat:
         if system == _EVIDENCE_SYSTEM:
             self.stages.append("evidence")
             return "- 证据 1：课程要解决的问题"
-        if system == _COVERAGE_SYSTEM:
+        if system in (note_coverage._CHECK_TRANSCRIPT_SYSTEM, note_coverage._CHECK_POINTS_SYSTEM):
             self.stages.append("coverage")
-            return "缺少：结尾的总结"
-        if "需要补入的遗漏点" in user:
+            return '{"points": [{"point": "结尾的总结", "in_note": false, "source": "最后总结了一遍"}]}'
+        if "没写到的知识点" in user:
             self.stages.append("revision")
             return self.revision_reply
         self.stages.append("draft")

@@ -664,10 +664,19 @@ def save_agent_note(
         )
     except visual_note_job.VisualNoteError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    coverage = visual_note_job.visual_note_state(updated.get("result")).get("coverage") or {}
     return {
         "ok": True,
         "task_id": task_id,
         "previous_note_restorable": True,
+        # What FluentFlow's own check found the note does not say. The note is
+        # saved either way; a non-empty ``missing`` asks the agent to write
+        # those points in and save again.
+        "coverage": {
+            "checked": any(part.get("checked") for part in coverage.get("parts") or []),
+            "missing": coverage.get("missing") or [],
+            "parts": coverage.get("parts") or [],
+        },
         "package_url": f"/agent/v1/tasks/{task_id}/package",
         "package": _task_package_response(updated),
     }

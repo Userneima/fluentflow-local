@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, cut_timeline, debreath_job, visual_note_channel
-from backend.core import note_join, note_skills, visual_note_check
+from backend.core import note_coverage, note_join, note_skills, visual_note_check
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
@@ -780,6 +780,47 @@ def _checked_draft(write, part, frames, *, api_key, rules=None):
     raise ClaudeVisionError(f"{reason}，重写一次也一样。这份没有替换现有笔记，可以稍后再点「重生笔记」。")
 
 
+def coverage_checker(api_key: str | None = None) -> tuple[note_coverage.Chat, str] | None:
+    """Who checks a written note for missing points, and their name.
+
+    The configured text model when there is one: the check is a comparison, not
+    writing, and it is the cheapest request this machine can make. Otherwise
+    Claude through the note's own channel. ``None`` when neither is reachable.
+    """
+    from backend.core import ai_summarizer, claude_text
+    from backend.core.local_entry_guards import local_ai_kwargs
+
+    chat = ai_summarizer.text_model_chat(**local_ai_kwargs())
+    if chat is not None:
+        return chat, "text_model"
+    return claude_text.claude_chat(api_key)
+
+
+def _covered_draft(draft, part, *, checker, reviser, rules: str | None):
+    """The part's draft after its coverage check, and what the check found.
+
+    What the check finds missing is written back in by Claude (``reviser``)
+    under the same note skill, so the added passages read like the rest. A
+    rewrite that fails the frame note's own checks is dropped and the draft
+    stands; so does a check that could not run. Either way it is recorded.
+    """
+    if checker is None:
+        return draft, note_coverage.unchecked("本机没有可用来查漏的模型")
+    check = note_coverage.check_against_transcript(checker, part.text, draft.markdown)
+    if not check.missing or reviser is None:
+        return draft, check.as_record()
+    skill_rules = rules if rules is not None else note_skills.load_note_skill().rules
+    system = skill_rules.strip() + claude_vision.part_instruction(part)
+    revised = note_coverage.revise(reviser, system, draft.markdown, check)
+    if revised:
+        revised = visual_note_check.strip_leading_residue(revised)
+        if visual_note_check.too_short_reason(revised, part.text):
+            revised = None
+    if revised:
+        return replace(draft, markdown=revised), check.as_record(revised=True)
+    return draft, check.as_record()
+
+
 def note_title(job: dict[str, Any] | None) -> str:
     """The task's title as the note's H1, from the same fields the task list shows."""
     job = job or {}
@@ -849,8 +890,15 @@ def _run_visual_note(
     channel: Channel | None = None,
     on_local_work_done: Callable[[], None] | None = None,
     note_skill: note_skills.NoteSkill | None = None,
+    checker: tuple[note_coverage.Chat, str] | None = None,
+    reviser: note_coverage.Chat | None = None,
 ) -> dict[str, Any]:
     """Read the cut file, ask Claude to write from it, record what it read.
+
+    Each part is checked for missing knowledge points once written, and what is
+    missing is written back in before the parts are joined (``_covered_draft``).
+    ``checker``/``reviser`` override who does that, for tests; with ``writer``
+    given and neither passed, no check runs.
 
     ``on_local_work_done`` is called once the frames are on disk and before the
     first request to Claude: everything after it is waiting on a remote model,
@@ -930,7 +978,16 @@ def _run_visual_note(
         # Which rules this note was written under, read before the first
         # request; the writers read the same file a moment later.
         skill = note_skill if note_skill is not None else note_skills.load_note_skill()
+        if writer is None and checker is None:
+            checker = coverage_checker(api_key)
+        if writer is None and reviser is None:
+            from backend.core import claude_text
+
+            found = claude_text.claude_chat(api_key)
+            reviser = found[0] if found else None
+        check_chat, checker_name = checker if checker else (None, "")
         drafts = []
+        coverage_parts = []
         for part in parts:
             part_frames = claude_vision.frames_for_part(frames, part)
             if len(parts) > 1:
@@ -939,7 +996,18 @@ def _run_visual_note(
                     client_id=client_id,
                     state={"stage": f"writing {part.index}/{part.total}"},
                 )
-            drafts.append(_checked_draft(write, part, part_frames, api_key=api_key, rules=skill.rules))
+            part_draft = _checked_draft(write, part, part_frames, api_key=api_key, rules=skill.rules)
+            if check_chat is not None:
+                _store(
+                    task_id,
+                    client_id=client_id,
+                    state={"stage": "checking" if len(parts) == 1 else f"checking {part.index}/{part.total}"},
+                )
+            part_draft, part_coverage = _covered_draft(
+                part_draft, part, checker=check_chat, reviser=reviser, rules=skill.rules,
+            )
+            drafts.append(part_draft)
+            coverage_parts.append({"part": part.index, **part_coverage})
         draft = _joined_draft(drafts, parts, title=note_title(job))
         cited = cited_frames(draft.markdown, frames)
         markdown = _rewrite_image_targets(draft.markdown, task_id, frames)
@@ -985,6 +1053,11 @@ def _run_visual_note(
             "transcript_chars_dropped": draft.transcript_chars_dropped,
             "transcript_covered_until": draft.transcript_covered_until,
             "usage": dict(draft.usage),
+            # Not shown on the page: whether a note is complete is the reader's
+            # call. Kept so a note that missed something can be traced to what
+            # the check said. The check's and revision's tokens are not in
+            # ``usage``: the text call does not report them.
+            "coverage": {"checker": checker_name, "parts": coverage_parts},
             "promoted": bool(replace_note),
             "finished_at": _now(),
             "error": None,

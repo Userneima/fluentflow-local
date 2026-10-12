@@ -13,7 +13,7 @@ If the tools fail because nothing answers at `127.0.0.1:8000`, ask the user to o
 
 1. Submit: `submit_local_media` for a file path, `submit_video_link` for a link. One call per recording; a folder is several calls.
 2. `wait_task` until the task is done. Transcription takes a few minutes per hour of recording on Apple silicon.
-3. If the task already has a note (the user configured a model key in FluentFlow), use it. Otherwise call `get_agent_note_material`, open the frames you need, write the note following `instructions` exactly, and save it with `save_agent_note`. A long recording comes in `total_parts` parts: fetch and write each, save them together with `part_notes`.
+3. If the task already has a note (the user configured a model key in FluentFlow), use it. Otherwise call `get_agent_note_material`, open the frames you need, write the note following `instructions` exactly, and save it with `save_agent_note`. A long recording comes in `total_parts` parts: fetch and write each, save them together with `part_notes`. The answer's `coverage.missing` lists knowledge points FluentFlow's check found the note never mentions, by part; when it is not empty, write those points in and save again once.
 4. Put the note where the user reads it: `export_result` with `target=pdf` (a PDF with its screenshots, in ~/Documents/FluentFlow 笔记 unless they said otherwise), or `target=lark` when they read in Feishu. Tell them in one or two sentences what the recording was and where the note is. Do not paste the whole note into the conversation unless asked.
 
 ## When the user says a note is wrong
