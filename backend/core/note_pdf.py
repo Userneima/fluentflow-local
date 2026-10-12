@@ -71,6 +71,38 @@ def _browser() -> str | None:
     return None
 
 
+_LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s")
+
+
+def _markdown_for_print(text: str) -> str:
+    """The note as Python-Markdown needs it to keep lists as lists.
+
+    Notes are written for renderers that start a list right under a sentence and
+    nest with two spaces; Python-Markdown needs a blank line before the list and
+    four spaces per level, otherwise the items run on as one paragraph. Nothing
+    changes inside code blocks.
+    """
+    out: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            out.append(line)
+            continue
+        if fenced:
+            out.append(line)
+            continue
+        item = _LIST_ITEM.match(line)
+        if item:
+            indent = item.group(1).replace("\t", "    ")
+            line = " " * (len(indent) * 2) + line.lstrip()
+            previous = out[-1] if out else ""
+            if previous.strip() and not _LIST_ITEM.match(previous) and not previous.startswith(" "):
+                out.append("")
+        out.append(line)
+    return "\n".join(out)
+
+
 def printable_html(task_id: str, note_markdown: str, title: str) -> str:
     """The note as a standalone page whose screenshots load from this machine."""
 
@@ -79,7 +111,7 @@ def printable_html(task_id: str, note_markdown: str, title: str) -> str:
         return f"]({path.as_uri()})" if path.is_file() else match.group(0)
 
     body = markdown.markdown(
-        _FRAME_REF.sub(local, note_markdown), extensions=["tables", "fenced_code", "sane_lists"]
+        _markdown_for_print(_FRAME_REF.sub(local, note_markdown)), extensions=["tables", "fenced_code", "sane_lists"]
     )
     return (
         f'<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>{html.escape(title)}</title>'
@@ -95,7 +127,10 @@ def export_pdf(task_id: str, *, client_id: str | None = None, output_dir: str | 
     note = str(result.get("summary_markdown") or "").strip()
     if not note:
         raise NotePdfError("这个任务还没有笔记")
-    title = str(result.get("display_title") or result.get("filename") or task_id).strip()
+    # The note's own title names the file: for a link the task title is often the
+    # name of a subtitle file or a video id.
+    heading = next((line.lstrip("#").strip() for line in note.splitlines() if line.startswith("# ")), "")
+    title = heading or str(result.get("display_title") or result.get("filename") or task_id).strip()
     directory = Path(output_dir).expanduser() if output_dir else default_output_dir()
     directory.mkdir(parents=True, exist_ok=True)
     stem = _UNSAFE_NAME.sub("_", title)[:80].strip() or task_id

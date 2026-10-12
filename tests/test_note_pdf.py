@@ -36,3 +36,11 @@ def test_a_task_without_a_note_is_refused(job_store, tmp_path):  # noqa: F811
     else:
         raise AssertionError("expected a refusal")
     assert vn.get_job(TASK)
+
+
+def test_a_list_right_under_a_sentence_stays_a_list():
+    """Python-Markdown runs such a list into the sentence unless a blank line comes first."""
+    page = np_.markdown.markdown(np_._markdown_for_print("疑点：\n- 监控\n  - 细节\n- 房间\n"))
+
+    assert page.count("<li>") == 3
+    assert "<ul>" in page
