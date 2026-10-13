@@ -157,3 +157,32 @@ def test_the_task_shows_the_step_and_a_moving_percentage(monkeypatch):
     assert written[1]["metadata"]["progress_message"].endswith("50%")
     progress = [row["progress"] for row in written]
     assert progress == sorted(progress) and progress[-1] == media_job.PREPARE_PROGRESS_END
+
+
+def test_a_query_inside_a_measured_phase_keeps_its_answer(monkeypatch):
+    """Requirement (2026-10-14): during a task, a command that answers on its
+    own output (``ffmpeg -encoders``) returns that answer intact, so a Mac with
+    a hardware encoder is not taken for one without."""
+    import subprocess as sp
+
+    from backend.core.task_watch import TaskWatch
+
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, argv, **_kwargs):
+            seen["argv"] = argv
+            self.pid = 0
+            self.returncode = 0
+            self.stdout = iter([" V....D hevc_videotoolbox    VideoToolbox H.265 Encoder\n"])
+            self.stderr = type("E", (), {"read": lambda _self: ""})()
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(sp, "Popen", FakePopen)
+    watch = TaskWatch()
+    with watch.phase("压缩", 100):
+        done = watch.runner(["/opt/homebrew/bin/ffmpeg", "-hide_banner", "-encoders"])
+    assert "-progress" not in seen["argv"]
+    assert "hevc_videotoolbox" in done.stdout

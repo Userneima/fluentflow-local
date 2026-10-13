@@ -161,6 +161,12 @@ class TaskWatch:
     def _reports_progress(self, argv: list[str]) -> bool:
         if not self._expected or os.path.basename(argv[0]) != "ffmpeg" or "-progress" in argv:
             return False
+        # Only an encode reads an input. A query such as ``ffmpeg -encoders``
+        # answers on stdout, and reporting progress there swallowed the answer:
+        # a 2026-10-14 task read "no hardware HEVC encoder" on a Mac that has
+        # one and skipped compressing a 6.9GB recording.
+        if "-i" not in argv:
+            return False
         # A command that already writes to stdout keeps it to itself.
         return not any(part in {"-", "pipe:1", "pipe:"} or part.endswith("file=-") for part in argv)
 
