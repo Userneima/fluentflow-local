@@ -132,9 +132,9 @@ export const noteFallbackSentence = (result, lang = 'zh') => {
     if (!noteWasTextFallback(result)) return '';
     const reason = String(result?.note_fallback_reason || '').trim();
     if (lang === 'zh') {
-        return `这次改由文本模型按文字写的笔记（没有截图）。${reason ? `原因：${reason}` : ''}`;
+        return `没连上 Claude，这篇改由文本模型只照转录稿写，没有看画面、没有截图，质量可能差一些。${reason ? `原因：${reason}` : ''}`;
     }
-    return `This note was written from the text by the text model instead (no screenshots).${reason ? ` Reason: ${reason}` : ''}`;
+    return `Claude could not be reached, so the text model wrote this note from the transcript only, without the frames or screenshots; it may be lower quality.${reason ? ` Reason: ${reason}` : ''}`;
 };
 
 // What the editor says while the note is still being written. Only Claude,

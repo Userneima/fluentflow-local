@@ -479,7 +479,7 @@ describe('what the note panel says', () => {
         mount(fallback);
         await advance(0);
         expect(screen.getByTestId('note-fallback').textContent)
-            .toBe('这次改由文本模型按文字写的笔记（没有截图）。原因：本机 Claude 的登录已过期。');
+            .toBe('没连上 Claude，这篇改由文本模型只照转录稿写，没有看画面、没有截图，质量可能差一些。原因：本机 Claude 的登录已过期。');
     });
 
     it('says nothing of the kind for a note Claude wrote', async () => {

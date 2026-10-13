@@ -386,10 +386,10 @@ def queue_is_busy() -> bool:
     )
 
 
-def _log_visual_note_unavailable(task_id: str, *, source_type: str, source_filename: str) -> None:
+def _log_visual_note_unavailable(task_id: str, *, source_type: str, source_filename: str) -> str:
     """The automatic frame note is on but cannot run, so this task gets the text
     note instead. Recorded because it is invisible otherwise: the task looks
-    like any other text-note task."""
+    like any other text-note task. Returns the reason, which the note carries."""
     channel = visual_note_channel.resolve_channel(resolve_secret(None, "anthropic_api_key"))
     login_expired = (
         channel.name == visual_note_channel.CHANNEL_SUBSCRIPTION
@@ -409,6 +409,9 @@ def _log_visual_note_unavailable(task_id: str, *, source_type: str, source_filen
             fallback="text_note",
         ),
     )
+    if login_expired:
+        return "本机 Claude 的登录已过期。"
+    return channel.unavailable_reason or "结合画面的笔记现在写不了。"
 
 
 async def wait_for_queue_turn(
@@ -787,8 +790,9 @@ def _local_media_job_context(
     upload and retry entries cannot drift apart."""
     skip_summary = truthy(options.get("skip_summary"))
     visual_note_will_run = local_intake_flow.auto_note_will_run()
+    note_fallback_reason = None
     if not skip_summary and local_intake_flow.auto_note_enabled() and not visual_note_will_run:
-        _log_visual_note_unavailable(task_id, source_type=source_type, source_filename=source_filename)
+        note_fallback_reason = _log_visual_note_unavailable(task_id, source_type=source_type, source_filename=source_filename)
     return MediaJobContext(
         task_id_value=task_id,
         client_id=client_id,
@@ -826,6 +830,7 @@ def _local_media_job_context(
         # fresh install with no note at all.
         summary_disabled=skip_summary or visual_note_will_run,
         note_deferred_to_visual_note=visual_note_will_run and not skip_summary,
+        note_fallback_reason=note_fallback_reason,
         generate_visuals=truthy(options.get("generate_visuals")),
         source_last_modified_ms=None,
         export_to_lark=options.get("export_to_lark"),

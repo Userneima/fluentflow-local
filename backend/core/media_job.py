@@ -413,6 +413,10 @@ class MediaJobContext:
     # Why the pipeline's own note stage is off: the user asked for a transcript
     # only, or the note will be written from the frames after the transcript.
     note_deferred_to_visual_note: bool = False
+    # Set when the frame note was wanted but Claude could not be reached at
+    # submission, so the text model writes the note instead. The reason is shown
+    # with that note, with a warning that it is written from the transcript only.
+    note_fallback_reason: str | None = None
     # The entry that started this job, written on every event it logs. Without
     # it every upload, batch, folder, retry and link read as "/process".
     event_route: str = "/process"
@@ -1293,6 +1297,12 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             prompt_preset_label=(prompt_preset_label or "").strip() or None,
             deadline_hit=bool(getattr(summary_result, "deadline_hit", False)),
         )
+        if ctx.note_fallback_reason:
+            result.update({
+                "note_written_by": "text_fallback",
+                "summary_written_from": "text_fallback",
+                "note_fallback_reason": ctx.note_fallback_reason,
+            })
         if visual_requests:
             result["visual_requests"] = visual_requests
         if visual_selections:

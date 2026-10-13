@@ -109,6 +109,9 @@ def test_a_task_that_falls_back_to_the_text_note_says_why(monkeypatch, events, i
     assert event["task_id"] == task
     assert event["metadata"]["reason"] == "login_expired"
     assert event["metadata"]["fallback"] == "text_note"
+    # Requirement (2026-10-14): the text note written in Claude's place says
+    # so, with the reason, so the user knows why it has no frames.
+    assert ctx.note_fallback_reason == "本机 Claude 的登录已过期。"
 
 
 def test_a_transcript_only_task_records_no_fallback(monkeypatch, events, ids):
@@ -116,9 +119,10 @@ def test_a_transcript_only_task_records_no_fallback(monkeypatch, events, ids):
     monkeypatch.setattr(local_intake_flow, "auto_note_will_run", lambda: False)
     [task] = ids("transcript-only")
 
-    _ctx(task, monkeypatch, skip_summary=True)
+    ctx = _ctx(task, monkeypatch, skip_summary=True)
 
     assert not [e for e in events if e["event_name"] == "visual_note_unavailable"]
+    assert ctx.note_fallback_reason is None
 
 
 def test_events_name_the_entry_a_task_came_in_through(monkeypatch, ids):
