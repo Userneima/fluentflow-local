@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from backend.core.compress_media import COMPRESSED_FILE_MARKER
 from backend.core.media_intake import AUDIO_SUFFIXES, VIDEO_SUFFIXES
 from backend.core.result_artifacts import CUT_FILE_NAME_MARKER
 from backend.core.storage_cleanup import is_managed_path
@@ -116,7 +117,7 @@ def list_media(folder: Path, *, limit: int = MAX_FILES_PER_FOLDER) -> FolderList
         if suffix not in INTAKE_SUFFIXES:
             skipped_other += 1
             continue
-        if CUT_FILE_MARKER in entry.stem:
+        if CUT_FILE_MARKER in entry.stem or COMPRESSED_FILE_MARKER in entry.stem:
             skipped_cut += 1
             continue
         files.append(entry)

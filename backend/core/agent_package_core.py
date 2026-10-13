@@ -271,6 +271,11 @@ def _agent_debreath(result: dict[str, Any], artifacts: dict[str, dict[str, Any]]
         "transcript_artifact": DEBREATH_TRANSCRIPT_KIND if DEBREATH_TRANSCRIPT_KIND in artifacts else None,
         "transcript_timeline": state.get("transcript_timeline") if isinstance(state.get("transcript_timeline"), dict) else None,
         "media_filename": _text(state.get("media_filename")) or None,
+        # Where the user's own copy is: the shortened file beside the recording,
+        # or, when the cut was declined, the compressed copy beside it.
+        "delivered_path": _text(state.get("delivered_path")) or None,
+        "compressed_path": _text(state.get("compressed_path")) or None,
+        "compress_error": _text(state.get("compress_error")) or None,
     }
 
 
