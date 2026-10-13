@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import cut_timeline, silence_cuts
+from backend.core import cut_timeline, device_profile, silence_cuts
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import get_job, list_jobs_by_statuses, update_job_result
@@ -421,6 +421,9 @@ def _prepare_cut_media(
     }
     base: dict[str, Any] = {
         "threshold_choice": threshold_choice or None,
+        # The machine and the preset this cut was made under, so a result that
+        # differs from another machine's can be traced to which path it took.
+        "processing": device_profile.summary(),
         "status": STATUS_COMPLETED,
         "stage": "done",
         "settings": settings,

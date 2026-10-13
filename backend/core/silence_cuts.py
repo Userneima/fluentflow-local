@@ -59,6 +59,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Callable, Sequence
 
+from backend.core import device_profile
+
 logger = logging.getLogger(__name__)
 
 # Material-dependent on purpose, and deliberately not tuned to one number.
@@ -1337,7 +1339,8 @@ def bitrate_ceiling_bps(
 def cap_video_bitrate() -> bool:
     """Whether the cut video is held under the source's own bitrate.
 
-    Off unless ``FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE`` is set. The cap kept a
+    Off unless ``FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE`` is set or the size
+    preset is chosen (``device_profile.cap_video_bitrate``). The cap kept a
     cut file from being larger per second than its recording, and on the
     low-bitrate screen recordings this is mostly used on it cost the text: two
     re-encodes each under what an already tightly compressed recording spent
@@ -1345,9 +1348,7 @@ def cap_video_bitrate() -> bool:
     gaps). Without it a cut video is larger per second than its source, and with
     half the runtime removed about the size of the recording overall.
     """
-    return (os.environ.get("FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    return device_profile.cap_video_bitrate()
 
 
 def _bitrate_ceiling_args(ceiling_bps: float) -> list[str]:
@@ -1404,34 +1405,30 @@ def _with_source_audio_shape(
 
 
 def hardware_encode_enabled() -> bool:
-    """Whether to hand the re-encode to this Mac's media engine.
-
-    Off by default, and deliberately an opt-in rather than a platform check: this
-    module is shared with the hosted edition, and an encoder swap is not something
-    a shared module should decide for a caller who never asked.
+    """Whether to hand the re-encode to this Mac's media engine
+    (``device_profile.hardware_encode``: its variable, else the speed preset on
+    a machine that has one).
 
     Measured on 2026-08-23, 60 seconds of a 2560x1440 screen recording under
     identical load: libx264 at `-preset veryfast -crf 20` took 94 seconds at
-    700-870% CPU; `h264_videotoolbox` took 28 seconds at almost none.
+    700-870% CPU; `h264_videotoolbox` took 28 seconds at almost none. Measured
+    2026-10-13 it needs about twice the source's bitrate to keep the text of a
+    low-bitrate recording, and at a high bitrate it made a file six times the
+    software encode's for the same picture.
     """
-    return (os.environ.get("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    return device_profile.hardware_encode()
 
 
 def hardware_bitrate_factor() -> float:
-    """How many times the source's own bitrate the media engine is given.
+    """How many times the source's own bitrate the media engine is given
+    (``device_profile.hardware_bitrate_factor``).
 
     The media engine needs more bits than libx264 for the same text: measured
     2026-10-13 on a 336 kbps shared-document screen recording, at the source's
     rate it smeared a highlighted line beyond reading, at twice the rate it read
-    like the software encode, at three times better than it. Set with
-    ``FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR``; 1 when unset.
+    like the software encode, at three times better than it.
     """
-    try:
-        return max(float(os.environ.get("FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR") or 1.0), 0.1)
-    except ValueError:
-        return 1.0
+    return device_profile.hardware_bitrate_factor()
 
 
 def _ceiling_margin() -> float:
@@ -1905,7 +1902,7 @@ def render_cut_plan(
     *,
     fps: int | None = None,
     ranges_per_batch: int = DEFAULT_RANGES_PER_BATCH,
-    workers: int = DEFAULT_RENDER_WORKERS,
+    workers: int | None = None,
     encode_args: Sequence[str] | None = None,
     scale_width: int | None = None,
     work_dir: Path | str | None = None,
@@ -1940,7 +1937,7 @@ def render_cut_plan(
     with _RENDER_GATE:
         return _render_cut_plan_locked(
             source, plan, Path(output), fps=fps, ranges_per_batch=ranges_per_batch,
-            workers=workers, encode_args=encode_args, scale_width=scale_width,
+            workers=workers or device_profile.render_workers(), encode_args=encode_args, scale_width=scale_width,
             work_dir=work_dir, runner=runner,
         )
 

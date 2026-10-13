@@ -38,6 +38,7 @@ from backend.core.local_entry_guards import (
 )
 from backend.core import (
     claude_code_note,
+    device_profile,
     local_file_chooser,
     local_folder_intake,
     local_intake_flow,
@@ -203,7 +204,7 @@ async def _persist_uploaded_source(
 # same machine under that pressure rendered at a tenth of its healthy rate and
 # did not recover until the load came off. One job at a time is slower and does
 # not do that.
-QUEUE_CONCURRENCY = 1
+QUEUE_CONCURRENCY = device_profile.queue_concurrency()
 
 # The last few jobs handed out, newest last. A job waits on the one
 # QUEUE_CONCURRENCY places behind it, which is nothing at all until that many

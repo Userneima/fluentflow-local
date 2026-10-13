@@ -65,10 +65,13 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | `FLUENTFLOW_TRANSCRIPT_CORRECTION_ENABLED` | 转录后用模型做高置信纠错（`FLUENTFLOW_TRANSCRIPT_CORRECTION` 是旧名，同义） | 关 |
 | `FLUENTFLOW_KEYFRAME_EXTRACTION` | 抽关键帧 | 开 |
 | `FLUENTFLOW_KEYFRAME_PROVIDER` | 抽帧实现 | `local_ffmpeg` |
-| `FLUENTFLOW_DEBREATH_HARDWARE_ENCODE` | 剪气口重编码时用硬件编码器 | 关 |
-| `FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR` | 硬件编码时给原视频码率的几倍；低码率录屏按原码率编会糊，2 倍和软件编码相当 | `1` |
-| `FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE` | 剪后视频按原视频的码率封顶；默认不封顶，按画质编码，剪后视频每秒会比原片大 | 关 |
-| `FLUENTFLOW_DEBREATH_AUDIO_FIRST` | 先剪出音频开始转录，视频同时在后台渲染；和软件编码同时跑会互相拖慢 | 关 |
+| `FLUENTFLOW_DEBREATH_HARDWARE_ENCODE` | 剪气口重编码时用硬件编码器；不设时由处理偏好决定（速度优先且本机有硬件编码器才用） | 按偏好 |
+| `FLUENTFLOW_PROCESSING_PRESET` | 处理偏好：`quality` 画质优先（软件编码，画面和原片一致）、`speed` 速度优先（有硬件编码器时用硬件编码、给原码率两倍，并且转录和视频渲染同时进行，文件更大）、`size` 省空间（剪后视频按原码率封顶，低码率录屏的字会糊） | `quality` |
+| `FLUENTFLOW_RENDER_WORKERS` | 剪气口同时开几个编码进程；不设时按本机内存（每 5GB 一个）和性能核（不超过一半）算，最多 6 | 按本机 |
+| `FLUENTFLOW_QUEUE_CONCURRENCY` | 同时处理几个任务。16GB 的机器上同时跑两个实测会把系统拖垮，更大的机器还没测过 | `1` |
+| `FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR` | 硬件编码时给原视频码率的几倍；低码率录屏按原码率编会糊，2 倍和软件编码相当 | 速度优先时 `2`，否则 `1` |
+| `FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE` | 剪后视频按原视频的码率封顶；默认不封顶，按画质编码，剪后视频每秒会比原片大 | 省空间时开，否则关 |
+| `FLUENTFLOW_DEBREATH_AUDIO_FIRST` | 先剪出音频开始转录，视频同时在后台渲染；和软件编码同时跑会互相拖慢 | 速度优先且有硬件编码器时开，否则关 |
 | `FLUENTFLOW_MEDIA_PREFLIGHT_ENABLED` | 入库前的媒体检查总开关，设为假时下面每项都关 | 开 |
 | `FLUENTFLOW_MEDIA_GUARD_EMPTY_FILE_ENABLED` | 拒绝空文件 | 开 |
 | `FLUENTFLOW_MEDIA_GUARD_EXTENSION_ENABLED` | 拒绝扩展名和容器不符的文件 | 开 |

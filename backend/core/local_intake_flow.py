@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import compress_media, debreath_job, local_folder_intake, silence_cuts, visual_note_channel, visual_note_job
+from backend.core import device_profile
 from backend.core.task_watch import TaskWatch
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -156,7 +157,7 @@ def preprocess_media(
         return None
     path = Path(source)
     watch = watch or TaskWatch()
-    audio_first = audio_first or os.environ.get("FLUENTFLOW_DEBREATH_AUDIO_FIRST", "").strip().lower() in {"1", "true", "yes", "on"}
+    audio_first = audio_first or device_profile.audio_first()
     prepared = debreath_job.prepare_cut_media(task_id, path, watch=watch, audio_first=audio_first)
     if prepared.video is not None:
         # The cut video is still rendering; what happens to it once it exists
