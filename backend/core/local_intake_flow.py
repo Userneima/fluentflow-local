@@ -46,6 +46,8 @@ from typing import Any, Callable
 
 from backend.core import compress_media, debreath_job, local_folder_intake, silence_cuts, visual_note_channel, visual_note_job
 from backend.core.task_watch import TaskWatch
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from backend.core.job_store import get_job, update_job_result, upsert_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core.storage_cleanup import is_managed_path
@@ -135,7 +137,7 @@ def _link_or_copy(cut: Path, target: Path) -> bool:
 
 
 def preprocess_media(
-    task_id: str, source: Path, watch: TaskWatch | None = None,
+    task_id: str, source: Path, watch: TaskWatch | None = None, audio_first: bool = True,
 ) -> debreath_job.PreparedCut | None:
     """The pipeline's media-preparation hook: cut the gaps, or hand back the file.
 
@@ -146,10 +148,29 @@ def preprocess_media(
         return None
     path = Path(source)
     watch = watch or TaskWatch()
-    prepared = debreath_job.prepare_cut_media(task_id, path, watch=watch)
+    prepared = debreath_job.prepare_cut_media(task_id, path, watch=watch, audio_first=audio_first)
+    if prepared.video is not None:
+        # The cut video is still rendering; what happens to it once it exists
+        # (delivered beside the original) is decided then, off the same rules.
+        video = prepared.video
+        finished = _AFTER_RENDER.submit(lambda: _settled(video.result(), path, watch))
+        return replace(prepared, video=finished)
+    return _settled(prepared, path, watch)
+
+
+# Waits on a background render and then delivers it; holds no lock of its own.
+_AFTER_RENDER = ThreadPoolExecutor(max_workers=2, thread_name_prefix="debreath-deliver")
+
+
+def _settled(prepared: debreath_job.PreparedCut, path: Path, watch: TaskWatch) -> debreath_job.PreparedCut:
+    """What a finished cut means for the user's folder: the cut beside the
+    original, or, when the cut was declined, a compressed copy."""
     # A recording inside FluentFlow's own storage came from an upload; one outside
     # it is a file in the user's folder, and that is the case with somewhere to
     # deliver to.
+    if prepared.used and prepared.path.suffix.lower() == ".m4a" and prepared.state.get("video_render_failed"):
+        # Only the cut audio came out of a video recording: not a stand-in for it.
+        return prepared
     if prepared.used and not is_managed_path(path):
         return debreath_job.PreparedCut(
             path=prepared.path,

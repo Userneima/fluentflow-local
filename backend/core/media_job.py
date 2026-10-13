@@ -12,7 +12,7 @@ cleanup). Neither imports back into this module.
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Callable
+from typing import Any, AsyncGenerator
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -119,33 +119,61 @@ PREPARE_PROGRESS_END = 18
 _PREPARE_WRITE_SECONDS = 2.0
 
 
-def _prepare_progress_writer(task_id: str) -> Callable[[str, "float | None"], None]:
+class _PrepareProgressWriter:
     """Write the preparing step's progress onto the job, at most every two
-    seconds (the render reports from several ffmpeg processes at once)."""
-    lock = threading.Lock()
-    last = {"at": 0.0, "label": None}
+    seconds (the render reports from several ffmpeg processes at once).
 
-    def write(label: str, fraction: float | None) -> None:
+    While the cut video renders behind the transcription (``background``), the
+    job's stage and percentage belong to transcription; the render's progress
+    then goes into ``video_render_*`` metadata only. If the pipeline ends up
+    waiting for it (stage ``render_video``), it is that stage's line again.
+    """
+
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        self.background = False
+        self.waiting = False
+        self._lock = threading.Lock()
+        self._last = {"at": 0.0, "label": None}
+
+    def __call__(self, label: str, fraction: float | None) -> None:
         now = time.monotonic()
-        with lock:
-            if label == last["label"] and now - last["at"] < _PREPARE_WRITE_SECONDS and fraction != 1.0:
+        with self._lock:
+            if label == self._last["label"] and now - self._last["at"] < _PREPARE_WRITE_SECONDS and fraction != 1.0:
                 return
-            last.update(at=now, label=label)
+            self._last.update(at=now, label=label)
         message = label if fraction is None else f"{label} {round(fraction * 100)}%"
+        rounded = None if fraction is None else round(fraction, 4)
+        if self.waiting:
+            upsert_job(task_id=self.task_id, status="running", stage=RENDER_VIDEO_STAGE,
+                       metadata={**progress_message_metadata(message, RENDER_VIDEO_STAGE),
+                                 "video_render_fraction": rounded})
+            return
+        if self.background:
+            upsert_job(task_id=self.task_id, status="running",
+                       metadata={"video_render_step": label, "video_render_fraction": rounded})
+            return
         progress = 2 if fraction is None else round(2 + fraction * (PREPARE_PROGRESS_END - 2), 1)
         upsert_job(
-            task_id=task_id,
+            task_id=self.task_id,
             status="running",
             stage="prepare_media",
             progress=progress,
             metadata={
                 **progress_message_metadata(message, "prepare_media"),
                 "prepare_step": label,
-                "prepare_fraction": None if fraction is None else round(fraction, 4),
+                "prepare_fraction": rounded,
             },
         )
 
-    return write
+
+def _prepare_progress_writer(task_id: str) -> _PrepareProgressWriter:
+    return _PrepareProgressWriter(task_id)
+
+
+# The stage a task shows when transcription has finished before the cut video it
+# renders alongside: what is left is that render.
+RENDER_VIDEO_STAGE = "render_video"
 
 
 def _summary_result_metadata(summary_result: Any) -> dict[str, Any]:
@@ -457,6 +485,9 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     # the result does not exist yet at that point in the pipeline.
     preprocess_state: dict[str, Any] = {}
     preprocess_artifacts: dict[str, dict[str, Any]] = {}
+    # The cut video, when it renders while the cut audio is transcribed.
+    pending_video = None
+    prepare_watch: TaskWatch | None = None
     try:
         if secret_resolver is None:
             raise RuntimeError("Media job context is missing a secret resolver")
@@ -481,14 +512,11 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             # The step runs in a worker thread; ``watch`` is its line back. Its
             # progress lands on the job, and a cancelled task stops the ffmpeg it
             # is running instead of leaving it to re-encode the whole recording.
-            watch = TaskWatch(on_progress=_prepare_progress_writer(task_id_value))
-            try:
-                prepared = await loop.run_in_executor(
-                    None, lambda: media_preprocessor(task_id_value, in_path, watch=watch)
-                )
-            except asyncio.CancelledError:
-                watch.cancel()
-                raise
+            progress_writer = _prepare_progress_writer(task_id_value)
+            prepare_watch = watch = TaskWatch(on_progress=progress_writer)
+            prepared = await loop.run_in_executor(
+                None, lambda: media_preprocessor(task_id_value, in_path, watch=watch)
+            )
             audio_start_progress = PREPARE_PROGRESS_END
             if prepared is not None:
                 preprocess_state = dict(getattr(prepared, "state", None) or {})
@@ -496,6 +524,9 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 prepared_path = getattr(prepared, "path", None)
                 if prepared_path:
                     in_path = Path(prepared_path)
+                pending_video = getattr(prepared, "video", None)
+                if pending_video is not None:
+                    progress_writer.background = True
 
         # ── Stage 1: Audio extraction ──────────────────────
         current_stage = "audio"
@@ -776,6 +807,19 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             "display_title": display_title_value,
             "source_file_available": True,
         }
+        if pending_video is not None:
+            # Transcribed from the cut audio; the result records the cut video,
+            # so it waits for it here. Usually it is long done.
+            if not pending_video.done():
+                current_stage = RENDER_VIDEO_STAGE
+                progress_writer.waiting = True
+                upsert_job(task_id=task_id_value, status="running", stage=RENDER_VIDEO_STAGE)
+                yield _sse({"stage": RENDER_VIDEO_STAGE})
+            finished = await asyncio.wrap_future(pending_video)
+            pending_video = None
+            preprocess_state = dict(finished.state or {})
+            preprocess_artifacts = dict(finished.artifacts or {})
+            in_path = Path(finished.path)
         if preprocess_state:
             base_result["debreath"] = preprocess_state
             # Which file this transcript describes, and therefore which file the
@@ -1403,6 +1447,12 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         )
         yield _sse({"stage": "error", "progress": 0, "error": friendly_error})
     finally:
+        # A job that ends any other way than by taking the cut video (cancelled,
+        # failed) stops the render it started instead of leaving it running.
+        if prepare_watch is not None and pending_video is not None and not pending_video.done():
+            prepare_watch.cancel()
+        elif prepare_watch is not None and current_stage == "prepare_media":
+            prepare_watch.cancel()
         if stt_process is not None and stt_process.is_alive():
             terminate_process(stt_process)
         if stt_queue is not None:

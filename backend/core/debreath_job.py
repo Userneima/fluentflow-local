@@ -26,6 +26,7 @@ import logging
 import subprocess
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -323,11 +324,20 @@ class PreparedCut:
     used: bool
     state: dict[str, Any]
     artifacts: dict[str, dict[str, Any]]
+    # Set when ``path`` is the cut *audio* and the cut video is still rendering:
+    # resolves to the final ``PreparedCut``, the one the task's result records.
+    video: "Future[PreparedCut] | None" = None
 
 
 # What the task shows while this step runs.
 PHASE_ANALYSE = "去气口：找出没人说话的地方"
 PHASE_RENDER = "去气口：剪掉空白，重新导出"
+PHASE_AUDIO = "去气口：先剪出音频，交给转录"
+
+# The cut video renders here while the cut audio is transcribed. Renders queue
+# on ``silence_cuts``' own render lock, so two workers is one running and one
+# waiting, never two encodes at once.
+_VIDEO_RENDERS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="debreath-video")
 
 
 def _render_seconds(source: Path, plan: Any, runner: Callable[..., Any]) -> float:
@@ -351,8 +361,17 @@ def _prepare_cut_media(
     padding_seconds: float = silence_cuts.DEFAULT_PADDING_SECONDS,
     runner: Callable[..., Any] = silence_cuts.run_command,
     watch: TaskWatch | None = None,
+    audio_first: bool = False,
 ) -> PreparedCut:
     """Cut the breath gaps before transcription, or explain why the original stands.
+
+    ``audio_first`` hands transcription the cut audio as soon as it exists and
+    renders the cut video in the background (``PreparedCut.video``). The audio is
+    cut by the same graph the video render uses for its own soundtrack, so the
+    transcript is on the cut video's clock either way. Transcription needs only
+    the audio, and waiting for a whole-file video encode first was the largest
+    idle stretch in a task (measured 2026-10-13: about nine minutes for a 58-minute
+    2560x1440 recording, before transcription could start).
 
     ``watch`` is the task's line back (``task_watch``): every command runs
     through it, so cancelling the task stops the ffmpeg that is running, and the
@@ -509,47 +528,22 @@ def _prepare_cut_media(
                 artifacts=artifacts,
             )
 
-        media_filename = _media_filename(source)
-        output = artifact_target_path(task_id, media_filename)
-        with watch.phase(PHASE_RENDER, _render_seconds(source, plan, runner)):
-            report = silence_cuts.render_cut_plan(source, plan, output, runner=runner)
-        artifacts[MEDIA_KIND] = describe_existing_artifact(task_id, MEDIA_KIND, media_filename)
-        if not report.ok:
-            # The file is kept and downloadable, as everywhere else here — but a
-            # render that does not measure up to its own plan is not something to
-            # transcribe and then call the task's material.
-            return PreparedCut(
-                path=source,
-                used=False,
-                state={
-                    **measured,
-                    "rendered": True,
-                    "media_filename": media_filename,
-                    "render": report.as_dict(),
-                    "render_verified": False,
-                    "used_for_transcription": False,
-                    "not_used_reason": (
-                        "剪出来的文件和剪辑表对不上（没通过自检），这次按原文件转写。"
-                        "剪后的文件保留了下来，可以自己听一遍。"
-                    ),
-                    "finished_at": _now(),
-                },
-                artifacts=artifacts,
-            )
-        return PreparedCut(
-            path=output,
-            used=True,
-            state={
-                **measured,
-                "rendered": True,
-                "media_filename": media_filename,
-                "render": report.as_dict(),
-                "render_verified": True,
-                "used_for_transcription": True,
-                "finished_at": _now(),
-            },
-            artifacts=artifacts,
-        )
+        if audio_first and source.suffix.lower() not in AUDIO_SOURCE_SUFFIXES:
+            audio = _render_cut_audio(task_id, source, plan, watch, runner)
+            if audio is not None:
+                audio_path, audio_artifact = audio
+                video = _VIDEO_RENDERS.submit(
+                    _render_video_after_audio, task_id, source, plan, measured, dict(artifacts),
+                    audio_path, audio_artifact, watch, runner,
+                )
+                return PreparedCut(
+                    path=audio_path,
+                    used=True,
+                    state={**measured, "video_rendering": True, "used_for_transcription": True},
+                    artifacts=dict(artifacts),
+                    video=video,
+                )
+        return _render_video(task_id, source, plan, measured, artifacts, watch, runner)
     except (SilenceCutError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
         # TimeoutExpired is what ``run_command`` raises when ffmpeg overruns its
         # four-hour limit; it is not an OSError, and uncaught it failed the whole
@@ -569,6 +563,128 @@ def _prepare_cut_media(
             },
             artifacts=artifacts,
         )
+
+
+def _render_video(
+    task_id: str,
+    source: Path,
+    plan: CutPlan,
+    measured: dict[str, Any],
+    artifacts: dict[str, dict[str, Any]],
+    watch: TaskWatch,
+    runner: Callable[..., Any],
+) -> PreparedCut:
+    """Render the cut recording and decide whether it is the task's file."""
+    media_filename = _media_filename(source)
+    output = artifact_target_path(task_id, media_filename)
+    with watch.phase(PHASE_RENDER, _render_seconds(source, plan, runner)):
+        report = silence_cuts.render_cut_plan(source, plan, output, runner=runner)
+    artifacts[MEDIA_KIND] = describe_existing_artifact(task_id, MEDIA_KIND, media_filename)
+    if not report.ok:
+        # The file is kept and downloadable, as everywhere else here — but a
+        # render that does not measure up to its own plan is not something to
+        # transcribe and then call the task's material.
+        return PreparedCut(
+            path=source,
+            used=False,
+            state={
+                **measured,
+                "rendered": True,
+                "media_filename": media_filename,
+                "render": report.as_dict(),
+                "render_verified": False,
+                "used_for_transcription": False,
+                "not_used_reason": (
+                    "剪出来的文件和剪辑表对不上（没通过自检），这次按原文件转写。"
+                    "剪后的文件保留了下来，可以自己听一遍。"
+                ),
+                "finished_at": _now(),
+            },
+            artifacts=artifacts,
+        )
+    return PreparedCut(
+        path=output,
+        used=True,
+        state={
+            **measured,
+            "rendered": True,
+            "media_filename": media_filename,
+            "render": report.as_dict(),
+            "render_verified": True,
+            "used_for_transcription": True,
+            "finished_at": _now(),
+        },
+        artifacts=artifacts,
+    )
+
+
+def _render_cut_audio(
+    task_id: str, source: Path, plan: CutPlan, watch: TaskWatch, runner: Callable[..., Any],
+) -> tuple[Path, dict[str, Any]] | None:
+    """The cut soundtrack alone, checked against the plan; ``None`` when it could
+    not be made, and the caller renders the video first as before."""
+    filename = f"{ARTIFACT_DIRNAME}/{source.stem}_debreath_audio{AUDIO_OUTPUT_SUFFIX}"
+    output = artifact_target_path(task_id, filename)
+    try:
+        with watch.phase(PHASE_AUDIO, plan.kept_seconds):
+            batches = silence_cuts.render_keeps(source, plan.keeps, output, audio_only=True, runner=runner)
+            report = silence_cuts.verify_render(
+                output, expected_seconds=plan.kept_seconds, batches=batches, audio_only=True, runner=runner,
+            )
+    except (SilenceCutError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        logger.warning("cut audio for %s failed, rendering the video first: %s", task_id, exc)
+        output.unlink(missing_ok=True)
+        return None
+    if not report.ok:
+        logger.warning("cut audio for %s failed its check: %s", task_id, ", ".join(report.failed_checks))
+        output.unlink(missing_ok=True)
+        return None
+    return output, describe_existing_artifact(task_id, MEDIA_KIND, filename)
+
+
+def _render_video_after_audio(
+    task_id: str,
+    source: Path,
+    plan: CutPlan,
+    measured: dict[str, Any],
+    artifacts: dict[str, dict[str, Any]],
+    audio_path: Path,
+    audio_artifact: dict[str, Any],
+    watch: TaskWatch,
+    runner: Callable[..., Any],
+) -> PreparedCut:
+    """The video half of an audio-first cut. Its outcome is the task's file.
+
+    The transcript is already made from the cut audio, so a video that does not
+    come out is not answered by going back to the recording, whose clock the
+    transcript does not share: the cut audio becomes the task's file and the
+    note is written from the transcript alone. A cancelled task raises.
+    """
+    try:
+        prepared = _render_video(task_id, source, plan, measured, artifacts, watch, runner)
+    except (SilenceCutError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        prepared = None
+        reason = f"剪后视频没渲染成功（{exc}）"
+    else:
+        reason = None if prepared.used else str(prepared.state.get("not_used_reason") or "剪后视频没通过自检")
+    if prepared is not None and prepared.used:
+        audio_path.unlink(missing_ok=True)
+        return prepared
+    return PreparedCut(
+        path=audio_path,
+        used=True,
+        state={
+            **measured,
+            "rendered": True,
+            "media_filename": audio_artifact.get("filename"),
+            "render_verified": True,
+            "used_for_transcription": True,
+            "video_render_failed": True,
+            "not_used_reason": f"{reason}。转录用的是剪后的音频，这个任务的文件就是它，笔记只根据转录写。",
+            "finished_at": _now(),
+        },
+        artifacts={**artifacts, MEDIA_KIND: audio_artifact},
+    )
 
 
 def cut_file_on_disk(task_id: str, result: Any) -> Path | None:
@@ -868,10 +984,20 @@ def _log_debreath(task_id: str, state: dict[str, Any], *, trigger: str, started:
 
 
 def prepare_cut_media(task_id: str, source: Path, **kwargs: Any) -> PreparedCut:
-    """Cut before transcription (see ``_prepare_cut_media``), and record it."""
+    """Cut before transcription (see ``_prepare_cut_media``), and record it —
+    once the cut video exists, when it renders behind the transcription."""
     started = time.perf_counter()
     prepared = _prepare_cut_media(task_id, source, **kwargs)
-    _log_debreath(task_id, prepared.state, trigger="before_transcription", started=started)
+    if prepared.video is None:
+        _log_debreath(task_id, prepared.state, trigger="before_transcription", started=started)
+        return prepared
+
+    def log_when_rendered(video: "Future[PreparedCut]") -> None:
+        if video.cancelled() or video.exception() is not None:
+            return
+        _log_debreath(task_id, video.result().state, trigger="before_transcription", started=started)
+
+    prepared.video.add_done_callback(log_when_rendered)
     return prepared
 
 

@@ -31,6 +31,7 @@ const stageLabel = (stage, lang, {audioOnly = false} = {}) => {
         // generic "处理中" at 2% and read as a hung task — which is exactly how it
         // was reported.
         prepare_media: isZh ? '剪掉气口（要几分钟）' : 'Removing breath gaps (minutes)',
+        render_video: isZh ? '等剪后视频导出完' : 'Finishing the cut video',
         // Extracting audio *from* an audio file is the product misreading what it
         // was given. It converts either way; only the word is wrong.
         audio: audioOnly

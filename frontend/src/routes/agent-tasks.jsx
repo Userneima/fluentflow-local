@@ -213,6 +213,7 @@ const stageLabel = (job, lang) => {
         // Named in this map because the pipeline has this stage now; without it the
         // card fell through to the generic status and a working cut read as stalled.
         prepare_media: isZh ? '剪掉气口（要几分钟）' : 'Removing breath gaps (minutes)',
+        render_video: isZh ? '等剪后视频导出完' : 'Finishing the cut video',
         // "提取音频" from an audio file is the product telling the user it thinks
         // they uploaded a video. It is still converting — just not extracting.
         audio: audioOnly
@@ -285,8 +286,8 @@ const liveStageDetail = (job, lang, aheadName = '') => {
             ? (lang === 'zh' ? '录音' : 'recording')
             : (lang === 'zh' ? '录像' : 'video');
         return lang === 'zh'
-            ? `正在把${material}里的空白剪掉，之后的转写和笔记都基于剪好的那份。素材长的话要几分钟，没有百分比可报。`
-            : `Removing the quiet stretches from the ${material}; the transcript and note will both come from the shortened file. Minutes on long material, with no percentage to report.`;
+            ? `正在把${material}里的空白剪掉，之后的转写和笔记都基于剪好的那份。素材长的话要几分钟。`
+            : `Removing the quiet stretches from the ${material}; the transcript and note will both come from the shortened file. Minutes on long material.`;
     }
     return lang === 'zh' ? '进度会在这里持续更新，离开本页也不会中断任务。' : 'Progress keeps updating here; leaving this page will not stop the task.';
 };
