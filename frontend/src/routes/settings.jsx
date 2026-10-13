@@ -5,6 +5,7 @@ import {
     AnthropicKeyField,
     AutoExportRow,
     AutoIllustrateRow,
+    CpuUsageRow,
     DashscopeKeyField,
     DefaultSourceRow,
     FeishuAppCredentialRows,
@@ -143,6 +144,16 @@ const Settings = () => {
                     <VoiceEnhanceRow state={state}/>
                     <VideoCookiesRow state={state}/>
                 </div>
+            </Section>
+
+            <Section
+                id="cpu-usage"
+                title={lang === 'zh' ? '电脑占用' : 'Computer load'}
+                description={lang === 'zh'
+                    ? '剪辑录像时最多占用多少处理器。'
+                    : 'How much of the processor cutting a recording may take.'}
+            >
+                <CpuUsageRow state={state}/>
             </Section>
 
             <Section

@@ -212,6 +212,63 @@ export const DefaultSourceRow = ({state}) => {
     );
 };
 
+// How much of the processor a cut may take. Kept by the local service, which is
+// what runs ffmpeg (backend/core/device_profile.py). At full use the one thing
+// the user would otherwise blame on the product is said here: a video playing
+// beside the cut can stutter or pop because the machine is busy, not because a
+// file is broken.
+export const CPU_USAGE_OPTIONS = ['light', 'balanced', 'full'];
+
+export const CpuUsageRow = ({state}) => {
+    const {lang} = useI18n();
+    const {cpuUsage, updateCpuUsage, videoPrefError = ''} = state;
+    const zh = lang === 'zh';
+    const options = [
+        {
+            value: 'light',
+            label: zh ? '省着用' : 'Light',
+            description: zh ? '最多用一半左右的处理器。剪得慢一些，边处理边看视频、开会最稳。' : 'Up to about half the processor. Slower, and the steadiest while you watch videos or join calls.',
+        },
+        {
+            value: 'balanced',
+            label: zh ? '留出余量（推荐）' : 'Leave room (recommended)',
+            description: zh ? '用四分之三左右，并让你正在用的软件优先。' : 'About three quarters, and the apps you are using go first.',
+        },
+        {
+            value: 'full',
+            label: zh ? '不限制' : 'No limit',
+            description: zh ? '处理器有多少用多少。' : 'As much of the processor as it can get.',
+        },
+    ];
+    return (
+        <div className="p-5">
+            <div className="grid gap-3 md:grid-cols-3">
+                {options.map((option) => (
+                    <RouteCard
+                        key={option.value}
+                        label={option.label}
+                        description={option.description}
+                        active={cpuUsage === option.value}
+                        onClick={() => updateCpuUsage(option.value)}
+                    />
+                ))}
+            </div>
+            {cpuUsage === 'full' && (
+                <p className="mt-3 text-xs font-semibold leading-relaxed text-amber-600 dark:text-amber-300">
+                    {zh
+                        ? '处理时同时播放视频或开会，可能会卡顿、爆音。这是电脑忙不过来，文件本身没有问题，处理完再播放就正常。'
+                        : 'A video or call running while this processes may stutter or pop. That is the computer being busy; the files are fine and play normally once processing ends.'}
+                </p>
+            )}
+            {videoPrefError === 'cpu_usage' && (
+                <p className="mt-2 text-xs font-semibold text-red-600 dark:text-red-300">
+                    {zh ? '没能保存到本机服务，处理时还会用原来的档位。请再选一次。' : 'Could not save to the local service; processing still uses the old level. Choose again.'}
+                </p>
+            )}
+        </div>
+    );
+};
+
 export const AutoIllustrateRow = ({state}) => {
     const {lang} = useI18n();
     const {settings, updateSettingNow} = state;

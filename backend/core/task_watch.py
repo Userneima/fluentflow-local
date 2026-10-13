@@ -31,6 +31,8 @@ import time
 from contextlib import contextmanager
 from typing import Callable, Iterator, Sequence
 
+from backend.core import device_profile
+
 ProgressCallback = Callable[[str, "float | None"], None]
 
 _POLL_SECONDS = 0.25
@@ -104,13 +106,15 @@ class TaskWatch:
         """``silence_cuts.run_command``, but cancellable and, for encodes inside a
         measured phase, reporting how far they got."""
         self.check()
-        argv = [str(part) for part in command]
+        # Held to the CPU share the user chose, like ``run_command``.
+        argv = device_profile.limit_ffmpeg_threads(command)
         reports = self._reports_progress(argv)
         if reports:
             argv = [argv[0], "-progress", "pipe:1", "-nostats", *argv[1:]]
         key = next(_COMMAND_IDS)
         process = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            **device_profile.lowered_priority_kwargs(),
         )
         stdout_chunks: list[str] = []
         stderr_chunks: list[str] = []

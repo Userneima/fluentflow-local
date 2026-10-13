@@ -261,4 +261,27 @@ describe('local settings page', () => {
         await waitFor(() => expect(screen.getByDisplayValue('set.larkRouteOpenapi')).toBeTruthy());
         expect(document.getElementById('settingsLarkFolder').value).toBe('https://x.feishu.cn/drive/folder/fldcnXYZ');
     });
+    // Requirement (2026-10-13): a cut leaves the machine room unless the user
+    // chooses otherwise; the choice reaches the service, which runs ffmpeg; and
+    // at no limit the page says that stutter or pops in a video playing beside
+    // it come from the busy computer, not the product.
+    it('leaves room by default and says nothing about stutter there', async () => {
+        render(<Settings/>);
+        expect(screen.getByText('电脑占用')).toBeTruthy();
+        expect(screen.getByRole('button', {name: /留出余量/}).getAttribute('aria-pressed')).toBe('true');
+        expect(screen.queryByText(/卡顿、爆音/)).toBeNull();
+    });
+
+    it('saves the CPU choice to the service and warns at no limit', async () => {
+        render(<Settings/>);
+        fireEvent.click(screen.getByRole('button', {name: /不限制/}));
+        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({cpu_usage: 'full'}));
+        expect(screen.getByText(/卡顿、爆音.*文件本身没有问题/)).toBeTruthy();
+    });
+
+    it('shows the CPU choice the service holds', async () => {
+        servicePreferences = {cpu_usage: 'light'};
+        render(<Settings/>);
+        await waitFor(() => expect(screen.getByRole('button', {name: /省着用/}).getAttribute('aria-pressed')).toBe('true'));
+    });
 });

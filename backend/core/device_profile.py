@@ -29,7 +29,7 @@ import shutil
 import subprocess
 from dataclasses import asdict, dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Sequence
 
 PRESET_QUALITY = "quality"
 PRESET_SPEED = "speed"
@@ -125,14 +125,98 @@ CORES_PER_RENDER_WORKER = 3
 
 
 def render_workers(profile: DeviceProfile | None = None) -> int:
-    """Cut encoders side by side, by memory and by cores, whichever allows fewer."""
+    """Cut encoders side by side, by memory and by cores, whichever allows fewer,
+    and never more than the CPU share allows threads."""
     override = _env_int("FLUENTFLOW_RENDER_WORKERS")
     if override:
         return override
     profile = profile or current()
     by_memory = int(profile.memory_gb // MEMORY_GB_PER_RENDER_WORKER) if profile.memory_gb else 3
     by_cores = max(1, profile.cpu_cores // CORES_PER_RENDER_WORKER)
-    return max(1, min(by_memory, by_cores, MAX_RENDER_WORKERS))
+    budget = cpu_thread_budget(profile) or MAX_RENDER_WORKERS
+    return max(1, min(by_memory, by_cores, budget, MAX_RENDER_WORKERS))
+
+
+# How much of the processor a cut may take. Requirement (owner, 2026-10-13):
+# leave the machine room by default, let the user choose, and say plainly that
+# at full use a video playing beside the cut may stutter or pop. That stutter is
+# the player being starved, not a fault in any file: on 2026-10-13 a fanless
+# 10-core Air at load average 44 (three encoders, each with ffmpeg's default
+# thread count) made the untouched source play with pops too, and every file
+# played cleanly once the cut finished.
+#
+# Two levers, both on the ffmpeg processes only: a thread budget split across
+# the encoders that run side by side, and a lower scheduling priority, so what
+# the user is doing in the foreground is served first.
+CPU_USAGE_LIGHT = "light"
+CPU_USAGE_BALANCED = "balanced"
+CPU_USAGE_FULL = "full"
+CPU_USAGES = (CPU_USAGE_LIGHT, CPU_USAGE_BALANCED, CPU_USAGE_FULL)
+_CPU_SHARE = {CPU_USAGE_LIGHT: 0.5, CPU_USAGE_BALANCED: 0.75}
+_CPU_NICENESS = {CPU_USAGE_LIGHT: 15, CPU_USAGE_BALANCED: 10}
+
+
+def cpu_usage() -> str:
+    """``FLUENTFLOW_CPU_USAGE`` if set, else the choice saved on the settings
+    page, else ``balanced``."""
+    chosen = (os.environ.get("FLUENTFLOW_CPU_USAGE") or "").strip().lower()
+    if chosen not in CPU_USAGES:
+        try:
+            from backend.core.local_config import get_preference
+
+            chosen = str(get_preference("cpu_usage") or "").strip().lower()
+        except Exception:  # noqa: BLE001 - an unreadable config falls back to the default
+            chosen = ""
+    return chosen if chosen in CPU_USAGES else CPU_USAGE_BALANCED
+
+
+def cpu_thread_budget(profile: DeviceProfile | None = None) -> int | None:
+    """Threads all cut encoders together may use; None at full use (no limit)."""
+    share = _CPU_SHARE.get(cpu_usage())
+    if share is None:
+        return None
+    profile = profile or current()
+    return max(1, round(profile.cpu_cores * share))
+
+
+def process_niceness() -> int:
+    """How far below normal priority ffmpeg runs (0 = normal)."""
+    return _CPU_NICENESS.get(cpu_usage(), 0)
+
+
+def limit_ffmpeg_threads(argv: Sequence[str], profile: DeviceProfile | None = None) -> list[str]:
+    """``argv`` with each decoder, encoder and filter graph of an ffmpeg command
+    held to its share of the thread budget. Commands that are not ffmpeg, and
+    every command at full use, come back unchanged."""
+    argv = [str(part) for part in argv]
+    budget = cpu_thread_budget(profile)
+    if budget is None or not argv or os.path.basename(argv[0]) != "ffmpeg" or "-threads" in argv:
+        return argv
+    threads = str(max(1, budget // render_workers(profile)))
+    out = [argv[0], "-filter_threads", threads, "-filter_complex_threads", threads]
+    index = 1
+    while index < len(argv):
+        part = argv[index]
+        if part == "-i":
+            out += ["-threads", threads, part]
+        elif part in {"-c:v", "-vcodec", "-codec:v"} and index + 1 < len(argv):
+            out += [part, argv[index + 1], "-threads", threads]
+            index += 1
+        else:
+            out.append(part)
+        index += 1
+    return out
+
+
+def lowered_priority_kwargs() -> dict[str, Any]:
+    """``subprocess`` keyword arguments that start the process below normal
+    priority, or none at full use."""
+    niceness = process_niceness()
+    if niceness <= 0:
+        return {}
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)}
+    return {"preexec_fn": lambda: os.nice(niceness)}
 
 
 def queue_concurrency() -> int:
@@ -184,14 +268,22 @@ def summary() -> dict[str, Any]:
         "hardware_encode": hardware_encode(),
         "cap_video_bitrate": cap_video_bitrate(),
         "audio_first": audio_first(),
+        "cpu_usage": cpu_usage(),
+        "cpu_thread_budget": cpu_thread_budget(),
     }
 
 
 __all__ = [
     "DeviceProfile",
     "PRESETS",
+    "CPU_USAGES",
     "audio_first",
     "cap_video_bitrate",
+    "cpu_thread_budget",
+    "cpu_usage",
+    "limit_ffmpeg_threads",
+    "lowered_priority_kwargs",
+    "process_niceness",
     "current",
     "hardware_bitrate_factor",
     "hardware_encode",

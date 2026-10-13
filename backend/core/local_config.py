@@ -112,15 +112,18 @@ def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = Non
 # none). ``lark_export_route`` ("auto" | "local_cli" | "openapi") and
 # ``lark_folder_token`` are the Feishu export route and target folder. They
 # live here, not only in the web page, so tasks driven by an AI tool (MCP) use
-# the same choices as the page.
+# the same choices as the page. ``cpu_usage`` ("light" | "balanced" |
+# "full") is how much of the processor a cut may take; see
+# ``device_profile.cpu_usage``.
 LOCAL_PREFERENCE_FIELDS = {
-    "video_cookies_browser", "lark_export_route", "lark_folder_token",
+    "video_cookies_browser", "lark_export_route", "lark_folder_token", "cpu_usage",
 }
 # Preferences that no longer exist, dropped from the file on the next save.
 # ``allow_miuistore`` switched the Douyin third-party resolver, which now
 # always runs.
 _RETIRED_PREFERENCES = ("allow_miuistore",)
 LARK_EXPORT_ROUTES = ("auto", "local_cli", "openapi")
+CPU_USAGE_CHOICES = ("light", "balanced", "full")
 ALLOWED_COOKIE_BROWSERS = frozenset({
     "chrome", "edge", "firefox", "safari", "brave", "chromium", "opera", "vivaldi",
 })
@@ -159,6 +162,14 @@ def save_preferences(patch: dict[str, Any], path: Path | str | None = None) -> d
                 raise ValueError(f"不支持的飞书导出路线：{value}")
             if route:
                 next_preferences[key] = route
+            else:
+                next_preferences.pop(key, None)
+        elif key == "cpu_usage":
+            usage = str(value).strip().lower()
+            if usage and usage not in CPU_USAGE_CHOICES:
+                raise ValueError(f"不支持的 CPU 占用档位：{value}")
+            if usage:
+                next_preferences[key] = usage
             else:
                 next_preferences.pop(key, None)
         elif key == "lark_folder_token":

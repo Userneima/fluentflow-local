@@ -241,11 +241,13 @@ class SilenceCutError(RuntimeError):
 
 
 def run_command(command: Sequence[str], timeout: float = 14400) -> "subprocess.CompletedProcess[str]":
+    """Run one command; ffmpeg is held to the CPU share the user chose."""
     return subprocess.run(
-        [str(part) for part in command],
+        device_profile.limit_ffmpeg_threads(command),
         capture_output=True,
         text=True,
         timeout=timeout,
+        **device_profile.lowered_priority_kwargs(),
     )
 
 

@@ -54,6 +54,7 @@ export const RouteCard = ({label, description, active, disabled = false, onClick
     <button
         type="button"
         disabled={disabled}
+        aria-pressed={active}
         className={routeButtonClass(active, disabled)}
         onClick={() => { if (!disabled) onClick(); }}
     >

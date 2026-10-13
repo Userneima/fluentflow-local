@@ -40,6 +40,9 @@ export const useSettingsPageState = () => {
     const [cookieChecking, setCookieChecking] = useState(false);
     // Which service-kept choice failed to save, if any (its preference name).
     const [videoPrefError, setVideoPrefError] = useState('');
+    // How much of the processor a cut may take; kept only by the service.
+    const [cpuUsage, setCpuUsage] = useState('balanced');
+    const touchedCpuUsageRef = useRef(false);
     // A choice made on this page before the service answered must not be
     // overwritten by that answer.
     const touchedVideoPrefsRef = useRef({browser: false, lark: false});
@@ -75,6 +78,11 @@ export const useSettingsPageState = () => {
         getSpeakerDiarizationStatus().then(setDiarizationStatus).catch(() => {});
         let active = true;
         if (getPreferences) {
+            getPreferences().then((prefs) => {
+                if (!active || touchedCpuUsageRef.current) return;
+                const stored = String(prefs?.cpu_usage || '');
+                if (['light', 'balanced', 'full'].includes(stored)) setCpuUsage(stored);
+            }).catch(() => {});
             const sync = {
                 getPreferences,
                 savePreferences,
@@ -128,6 +136,18 @@ export const useSettingsPageState = () => {
             await savePreferences({[LARK_ROUTE_PREF]: patch.larkExportRoute});
         } catch (_) {
             setVideoPrefError(LARK_ROUTE_PREF);
+        }
+    };
+
+    const updateCpuUsage = async (value) => {
+        touchedCpuUsageRef.current = true;
+        setCpuUsage(value);
+        setVideoPrefError('');
+        if (!savePreferences) return;
+        try {
+            await savePreferences({cpu_usage: value});
+        } catch (_) {
+            setVideoPrefError('cpu_usage');
         }
     };
 
@@ -269,6 +289,9 @@ export const useSettingsPageState = () => {
         aiProviderDefaults,
         activeAiSecretKey,
         activeAiConfigured,
+        // Processor share for cuts.
+        cpuUsage,
+        updateCpuUsage,
         // Feishu export route and folder.
         larkExportRoute,
         updateLarkExportRoute,
