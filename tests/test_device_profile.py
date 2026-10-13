@@ -12,9 +12,9 @@ import pytest
 from backend.core import device_profile as dp
 
 
-def _machine(memory_gb: float, performance_cores: int, hardware: bool = True) -> dp.DeviceProfile:
+def _machine(memory_gb: float, cpu_cores: int, hardware: bool = True) -> dp.DeviceProfile:
     return dp.DeviceProfile(
-        cpu_cores=performance_cores + 4, performance_cores=performance_cores, memory_gb=memory_gb,
+        cpu_cores=cpu_cores, performance_cores=max(1, cpu_cores // 2), memory_gb=memory_gb,
         apple_silicon=True, hardware_video_encoder=hardware,
     )
 
@@ -30,12 +30,12 @@ def clean_env(monkeypatch):
 
 
 def test_the_machine_this_was_tuned_on_keeps_three_encoders():
-    assert dp.render_workers(_machine(16, 8)) == 3
+    assert dp.render_workers(_machine(16, 10)) == 3
 
 
 def test_a_larger_machine_runs_more_and_a_smaller_one_fewer():
-    assert dp.render_workers(_machine(64, 12)) == 6
-    assert dp.render_workers(_machine(8, 4)) == 1
+    assert dp.render_workers(_machine(64, 18)) == 6
+    assert dp.render_workers(_machine(8, 8)) == 1
 
 
 def test_a_setting_of_its_own_wins_over_the_machine(monkeypatch):

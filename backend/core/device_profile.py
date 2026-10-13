@@ -118,15 +118,20 @@ def _env_flag(name: str) -> bool | None:
     return None
 
 
+# One cut encoder per this many cores: each encoder is itself multi-threaded.
+# Three per encoder keeps the measured three on the 10-core machine they were
+# tuned on.
+CORES_PER_RENDER_WORKER = 3
+
+
 def render_workers(profile: DeviceProfile | None = None) -> int:
-    """Cut encoders side by side: by memory, and no more than half the
-    performance cores, since each encoder is itself multi-threaded."""
+    """Cut encoders side by side, by memory and by cores, whichever allows fewer."""
     override = _env_int("FLUENTFLOW_RENDER_WORKERS")
     if override:
         return override
     profile = profile or current()
     by_memory = int(profile.memory_gb // MEMORY_GB_PER_RENDER_WORKER) if profile.memory_gb else 3
-    by_cores = max(1, profile.performance_cores // 2)
+    by_cores = max(1, profile.cpu_cores // CORES_PER_RENDER_WORKER)
     return max(1, min(by_memory, by_cores, MAX_RENDER_WORKERS))
 
 
