@@ -106,7 +106,7 @@ def _deliver_beside_original(source: Path, cut: Path) -> dict[str, Any]:
     renamed output the user cannot find is the same problem as no output at all.
     """
     try:
-        target = local_folder_intake.cut_file_target(source)
+        target = local_folder_intake.cut_file_target(source, cut.suffix)
         linked = _link_or_copy(cut, target)
     except (OSError, local_folder_intake.FolderIntakeError) as exc:
         logger.warning("could not deliver the cut file next to %s: %s", source, exc)

@@ -224,8 +224,13 @@ def locate_dropped_file(
     return matches[0] if len(matches) == 1 else None
 
 
-def cut_file_target(source: Path) -> Path:
+def cut_file_target(source: Path, suffix: str | None = None) -> Path:
     """Where the cut version of this recording goes: beside it, under a new name.
+
+    ``suffix`` is the cut file's own extension. The cut is always written as mp4
+    (m4a for audio), so naming it after the original made a .mov, .mkv or .webm
+    recording's cut carry an extension its contents do not match (found
+    2026-10-13).
 
     Never the original's own name, and never a name already taken. A numbered
     suffix is used rather than overwriting, because the file that is already there
@@ -233,7 +238,7 @@ def cut_file_target(source: Path) -> Path:
     """
     folder = source.parent
     base = f"{source.stem}{CUT_FILE_MARKER}"
-    suffix = source.suffix.lower() or ".mp4"
+    suffix = (suffix or source.suffix).lower() or ".mp4"
     candidate = folder / f"{base}{suffix}"
     index = 2
     while candidate.exists():
