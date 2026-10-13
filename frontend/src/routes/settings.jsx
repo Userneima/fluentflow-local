@@ -6,6 +6,7 @@ import {
     AutoExportRow,
     AutoIllustrateRow,
     CpuUsageRow,
+    ProcessingPresetRow,
     DashscopeKeyField,
     DefaultSourceRow,
     FeishuAppCredentialRows,
@@ -148,12 +149,15 @@ const Settings = () => {
 
             <Section
                 id="cpu-usage"
-                title={lang === 'zh' ? '电脑占用' : 'Computer load'}
+                title={lang === 'zh' ? '剪辑' : 'Cutting'}
                 description={lang === 'zh'
-                    ? '剪辑录像时最多占用多少处理器。'
-                    : 'How much of the processor cutting a recording may take.'}
+                    ? '剪掉气口时更看重什么，以及最多占用多少处理器。'
+                    : 'What cutting the gaps favours, and how much of the processor it may take.'}
             >
-                <CpuUsageRow state={state}/>
+                <div className="divide-y divide-[#ece8e8] dark:divide-white/[0.1]">
+                    <ProcessingPresetRow state={state}/>
+                    <CpuUsageRow state={state}/>
+                </div>
             </Section>
 
             <Section

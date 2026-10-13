@@ -98,8 +98,22 @@ def current() -> DeviceProfile:
     )
 
 
+def _saved_choice(name: str) -> str:
+    """A choice saved on the settings page, or "" when none can be read."""
+    try:
+        from backend.core.local_config import get_preference
+
+        return str(get_preference(name) or "").strip().lower()
+    except Exception:  # noqa: BLE001 - an unreadable config falls back to the default
+        return ""
+
+
 def preset() -> str:
+    """``FLUENTFLOW_PROCESSING_PRESET`` if set, else the choice saved on the
+    settings page, else ``quality``."""
     chosen = (os.environ.get("FLUENTFLOW_PROCESSING_PRESET") or "").strip().lower()
+    if chosen not in PRESETS:
+        chosen = _saved_choice("processing_preset")
     return chosen if chosen in PRESETS else PRESET_QUALITY
 
 
@@ -163,12 +177,7 @@ def cpu_usage() -> str:
     page, else ``balanced``."""
     chosen = (os.environ.get("FLUENTFLOW_CPU_USAGE") or "").strip().lower()
     if chosen not in CPU_USAGES:
-        try:
-            from backend.core.local_config import get_preference
-
-            chosen = str(get_preference("cpu_usage") or "").strip().lower()
-        except Exception:  # noqa: BLE001 - an unreadable config falls back to the default
-            chosen = ""
+        chosen = _saved_choice("cpu_usage")
     return chosen if chosen in CPU_USAGES else CPU_USAGE_BALANCED
 
 

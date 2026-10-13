@@ -212,6 +212,52 @@ export const DefaultSourceRow = ({state}) => {
     );
 };
 
+// What a cut favours (backend/core/device_profile.py preset). Kept by the
+// local service beside the CPU share; FLUENTFLOW_PROCESSING_PRESET still wins.
+export const ProcessingPresetRow = ({state}) => {
+    const {lang} = useI18n();
+    const {processingPreset, updateProcessingPreset, videoPrefError = ''} = state;
+    const zh = lang === 'zh';
+    const options = [
+        {
+            value: 'quality',
+            label: zh ? '画质优先（推荐）' : 'Picture first (recommended)',
+            description: zh ? '剪后画面和原片一样清楚，共享文档里的小字也能读。' : 'The cut looks like the recording, small shared-document text included.',
+        },
+        {
+            value: 'speed',
+            label: zh ? '速度优先' : 'Speed first',
+            description: zh ? '用这台电脑的硬件编码器，边剪边转录，更快；剪后文件更大。没有硬件编码器时和画质优先一样。' : 'Uses this computer\'s hardware encoder and transcribes while cutting; faster, larger files. Same as picture first without one.',
+        },
+        {
+            value: 'size',
+            label: zh ? '省空间' : 'Save space',
+            description: zh ? '剪后文件不超过原片的码率，更小；码率低的录屏里小字会糊。' : 'The cut stays within the recording\'s bitrate, so it is smaller; small text in low-bitrate recordings blurs.',
+        },
+    ];
+    return (
+        <div className="p-5">
+            <label className={`${fieldLabelClass} mb-2.5 block`}>{zh ? '处理偏好' : 'Processing preference'}</label>
+            <div className="grid gap-3 md:grid-cols-3">
+                {options.map((option) => (
+                    <RouteCard
+                        key={option.value}
+                        label={option.label}
+                        description={option.description}
+                        active={processingPreset === option.value}
+                        onClick={() => updateProcessingPreset(option.value)}
+                    />
+                ))}
+            </div>
+            {videoPrefError === 'processing_preset' && (
+                <p className="mt-2 text-xs font-semibold text-red-600 dark:text-red-300">
+                    {zh ? '没能保存到本机服务，处理时还会用原来的偏好。请再选一次。' : 'Could not save to the local service; processing still uses the old preference. Choose again.'}
+                </p>
+            )}
+        </div>
+    );
+};
+
 // How much of the processor a cut may take. Kept by the local service, which is
 // what runs ffmpeg (backend/core/device_profile.py). At full use the one thing
 // the user would otherwise blame on the product is said here: a video playing
@@ -242,6 +288,7 @@ export const CpuUsageRow = ({state}) => {
     ];
     return (
         <div className="p-5">
+            <label className={`${fieldLabelClass} mb-2.5 block`}>{zh ? '电脑占用' : 'Computer load'}</label>
             <div className="grid gap-3 md:grid-cols-3">
                 {options.map((option) => (
                     <RouteCard

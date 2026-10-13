@@ -66,9 +66,9 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | `FLUENTFLOW_KEYFRAME_EXTRACTION` | 抽关键帧 | 开 |
 | `FLUENTFLOW_KEYFRAME_PROVIDER` | 抽帧实现 | `local_ffmpeg` |
 | `FLUENTFLOW_DEBREATH_HARDWARE_ENCODE` | 剪气口重编码时用硬件编码器；不设时由处理偏好决定（速度优先且本机有硬件编码器才用） | 按偏好 |
-| `FLUENTFLOW_PROCESSING_PRESET` | 处理偏好：`quality` 画质优先（软件编码，画面和原片一致）、`speed` 速度优先（有硬件编码器时用硬件编码、给原码率两倍，并且转录和视频渲染同时进行，文件更大）、`size` 省空间（剪后视频按原码率封顶，低码率录屏的字会糊） | `quality` |
+| `FLUENTFLOW_PROCESSING_PRESET` | 处理偏好：`quality` 画质优先（软件编码，画面和原片一致）、`speed` 速度优先（有硬件编码器时用硬件编码、给原码率两倍，并且转录和视频渲染同时进行，文件更大）、`size` 省空间（剪后视频按原码率封顶，低码率录屏的字会糊）。设了它就盖过设置页「剪辑 → 处理偏好」的选择 | 设置页的选择，没选过是 `quality` |
 | `FLUENTFLOW_RENDER_WORKERS` | 剪气口同时开几个编码进程；不设时按本机内存（每 5GB 一个）和核数（每 3 核一个）取较小者，最多 6，也不超过 CPU 占用档位允许的线程数 | 按本机 |
-| `FLUENTFLOW_CPU_USAGE` | 剪辑时 ffmpeg 最多占多少处理器：`light` 约一半、`balanced` 约四分之三、`full` 不限制。`light` 和 `balanced` 还会调低 ffmpeg 的运行优先级。设了它就盖过设置页「电脑占用」的选择 | 设置页的选择，没选过是 `balanced` |
+| `FLUENTFLOW_CPU_USAGE` | 剪辑时 ffmpeg 最多占多少处理器：`light` 约一半、`balanced` 约四分之三、`full` 不限制。`light` 和 `balanced` 还会调低 ffmpeg 的运行优先级。设了它就盖过设置页「剪辑 → 电脑占用」的选择 | 设置页的选择，没选过是 `balanced` |
 | `FLUENTFLOW_QUEUE_CONCURRENCY` | 同时处理几个任务。16GB 的机器上同时跑两个实测会把系统拖垮，更大的机器还没测过 | `1` |
 | `FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR` | 硬件编码时给原视频码率的几倍；低码率录屏按原码率编会糊，2 倍和软件编码相当 | 速度优先时 `2`，否则 `1` |
 | `FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE` | 剪后视频按原视频的码率封顶；默认不封顶，按画质编码，剪后视频每秒会比原片大 | 省空间时开，否则关 |

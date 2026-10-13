@@ -43,6 +43,9 @@ export const useSettingsPageState = () => {
     // How much of the processor a cut may take; kept only by the service.
     const [cpuUsage, setCpuUsage] = useState('balanced');
     const touchedCpuUsageRef = useRef(false);
+    // What a cut favours; kept only by the service.
+    const [processingPreset, setProcessingPreset] = useState('quality');
+    const touchedPresetRef = useRef(false);
     // A choice made on this page before the service answered must not be
     // overwritten by that answer.
     const touchedVideoPrefsRef = useRef({browser: false, lark: false});
@@ -82,6 +85,11 @@ export const useSettingsPageState = () => {
                 if (!active || touchedCpuUsageRef.current) return;
                 const stored = String(prefs?.cpu_usage || '');
                 if (['light', 'balanced', 'full'].includes(stored)) setCpuUsage(stored);
+            }).catch(() => {});
+            getPreferences().then((prefs) => {
+                if (!active || touchedPresetRef.current) return;
+                const stored = String(prefs?.processing_preset || '');
+                if (['quality', 'speed', 'size'].includes(stored)) setProcessingPreset(stored);
             }).catch(() => {});
             const sync = {
                 getPreferences,
@@ -148,6 +156,18 @@ export const useSettingsPageState = () => {
             await savePreferences({cpu_usage: value});
         } catch (_) {
             setVideoPrefError('cpu_usage');
+        }
+    };
+
+    const updateProcessingPreset = async (value) => {
+        touchedPresetRef.current = true;
+        setProcessingPreset(value);
+        setVideoPrefError('');
+        if (!savePreferences) return;
+        try {
+            await savePreferences({processing_preset: value});
+        } catch (_) {
+            setVideoPrefError('processing_preset');
         }
     };
 
@@ -292,6 +312,8 @@ export const useSettingsPageState = () => {
         // Processor share for cuts.
         cpuUsage,
         updateCpuUsage,
+        processingPreset,
+        updateProcessingPreset,
         // Feishu export route and folder.
         larkExportRoute,
         updateLarkExportRoute,

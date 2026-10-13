@@ -20,7 +20,11 @@ def _machine(memory_gb: float, cpu_cores: int, hardware: bool = True) -> dp.Devi
 
 
 @pytest.fixture(autouse=True)
-def clean_env(monkeypatch):
+def clean_env(monkeypatch, tmp_path):
+    # Choices saved on this machine's settings page must not leak into tests.
+    from backend.core import local_config
+
+    monkeypatch.setattr(local_config, "config_path", lambda: tmp_path / "isolated-config.json")
     for name in (
         "FLUENTFLOW_PROCESSING_PRESET", "FLUENTFLOW_RENDER_WORKERS", "FLUENTFLOW_QUEUE_CONCURRENCY",
         "FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR",
@@ -217,3 +221,17 @@ def test_a_real_command_runs_lowered(monkeypatch, no_saved_choice):
     done = silence_cuts.run_command(["/bin/echo", "ok"])
     assert done.returncode == 0 and done.stdout.strip() == "ok"
     assert len(seen) == 1
+
+
+def test_the_preset_saved_in_settings_is_used_and_env_wins(monkeypatch, no_saved_choice):
+    """Requirement (2026-10-14): the processing preset is chosen on the settings
+    page, beside the CPU share; FLUENTFLOW_PROCESSING_PRESET still wins."""
+    from backend.core import local_config
+
+    assert dp.preset() == "quality"
+    local_config.save_preferences({"processing_preset": "size"})
+    assert dp.preset() == "size"
+    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "speed")
+    assert dp.preset() == "speed"
+    with pytest.raises(ValueError):
+        local_config.save_preferences({"processing_preset": "fastest"})

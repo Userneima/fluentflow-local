@@ -284,4 +284,13 @@ describe('local settings page', () => {
         render(<Settings/>);
         await waitFor(() => expect(screen.getByRole('button', {name: /省着用/}).getAttribute('aria-pressed')).toBe('true'));
     });
+    // Requirement (2026-10-14): the processing preset sits beside the CPU
+    // share in settings, defaults to picture first, and reaches the service.
+    it('offers the processing preset beside the CPU share and saves it', async () => {
+        render(<Settings/>);
+        expect(screen.getByText('处理偏好')).toBeTruthy();
+        expect(screen.getByRole('button', {name: /^画质优先/}).getAttribute('aria-pressed')).toBe('true');
+        fireEvent.click(screen.getByRole('button', {name: /省空间/}));
+        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({processing_preset: 'size'}));
+    });
 });

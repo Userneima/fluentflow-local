@@ -113,10 +113,11 @@ def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = Non
 # ``lark_folder_token`` are the Feishu export route and target folder. They
 # live here, not only in the web page, so tasks driven by an AI tool (MCP) use
 # the same choices as the page. ``cpu_usage`` ("light" | "balanced" |
-# "full") is how much of the processor a cut may take; see
-# ``device_profile.cpu_usage``.
+# "full") is how much of the processor a cut may take, and
+# ``processing_preset`` ("quality" | "speed" | "size") what a cut favours; see
+# ``device_profile``.
 LOCAL_PREFERENCE_FIELDS = {
-    "video_cookies_browser", "lark_export_route", "lark_folder_token", "cpu_usage",
+    "video_cookies_browser", "lark_export_route", "lark_folder_token", "cpu_usage", "processing_preset",
 }
 # Preferences that no longer exist, dropped from the file on the next save.
 # ``allow_miuistore`` switched the Douyin third-party resolver, which now
@@ -124,6 +125,7 @@ LOCAL_PREFERENCE_FIELDS = {
 _RETIRED_PREFERENCES = ("allow_miuistore",)
 LARK_EXPORT_ROUTES = ("auto", "local_cli", "openapi")
 CPU_USAGE_CHOICES = ("light", "balanced", "full")
+PROCESSING_PRESET_CHOICES = ("quality", "speed", "size")
 ALLOWED_COOKIE_BROWSERS = frozenset({
     "chrome", "edge", "firefox", "safari", "brave", "chromium", "opera", "vivaldi",
 })
@@ -164,12 +166,13 @@ def save_preferences(patch: dict[str, Any], path: Path | str | None = None) -> d
                 next_preferences[key] = route
             else:
                 next_preferences.pop(key, None)
-        elif key == "cpu_usage":
-            usage = str(value).strip().lower()
-            if usage and usage not in CPU_USAGE_CHOICES:
-                raise ValueError(f"不支持的 CPU 占用档位：{value}")
-            if usage:
-                next_preferences[key] = usage
+        elif key in ("cpu_usage", "processing_preset"):
+            choice = str(value).strip().lower()
+            allowed = CPU_USAGE_CHOICES if key == "cpu_usage" else PROCESSING_PRESET_CHOICES
+            if choice and choice not in allowed:
+                raise ValueError(f"不支持的选项：{value}")
+            if choice:
+                next_preferences[key] = choice
             else:
                 next_preferences.pop(key, None)
         elif key == "lark_folder_token":
