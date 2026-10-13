@@ -209,11 +209,14 @@ PEAK_WINDOW_PERCENTILE = 95.0
 DEFAULT_AUDIO_ENCODE_ARGS = ("-c:a", "aac", "-b:a", "128k")
 MP3_ENCODE_ARGS = ("-c:a", "libmp3lame", "-b:a", "192k")
 
-# Outside this band the detection threshold probably does not suit the material:
-# near 0% means nothing was found and the file will come back unchanged, while a
-# very high share means speech is being read as silence. Reported, never enforced
-# — a slide-heavy recording really can be half quiet.
-PLAUSIBLE_SILENCE_RATIO_PERCENT = (5.0, 60.0)
+# Below this share the detection threshold probably does not suit the material:
+# near 0% means nothing was found and the file will come back unchanged.
+# Reported, never enforced. A high share is not warned about: a recording with
+# long stretches of nobody talking really is mostly silent, and the share said
+# nothing about whether speech was cut (a 2026-10-13 run removed over 60% of
+# pure silence and was flagged anyway). Whether speech was cut is what the
+# level separation below measures.
+MIN_PLAUSIBLE_SILENCE_RATIO_PERCENT = 5.0
 
 # How far below the kept speech the removed stretches should measure. The share
 # of a file that is silent says nothing about whether the threshold separated
@@ -807,15 +810,11 @@ def build_cut_plan(
         min_silence_seconds=min_silence_seconds,
         padding_seconds=padding_seconds,
     )
-    low, high = PLAUSIBLE_SILENCE_RATIO_PERCENT
+    low = MIN_PLAUSIBLE_SILENCE_RATIO_PERCENT
     ratio = plan.silence_ratio_percent
     if plan.cuts and ratio < low:
         plan.warnings.append(
             f"只找到 {ratio:.1f}% 的静音，低于 {low:g}%：阈值 {noise_db:g}dB 可能不适合这份材料"
-        )
-    if ratio > high:
-        plan.warnings.append(
-            f"静音占 {ratio:.1f}%，高于 {high:g}%：可能把说话当成了静音，先看剪辑表再渲染"
         )
     if not plan.cuts:
         plan.warnings.append("没有找到可剪的气口，成品会和原片一样长")

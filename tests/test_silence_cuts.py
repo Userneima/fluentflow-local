@@ -123,10 +123,14 @@ def test_the_plan_reports_what_it_would_remove():
 
 # ── warnings report, they do not refuse ─────────────────────────────────────
 
-def test_an_implausibly_quiet_result_warns_and_still_returns_the_plan():
+def test_a_mostly_silent_recording_is_not_warned_about_for_its_share():
+    """Requirement (2026-10-14): removing a large share is not by itself a
+    sign of a wrong cut; a recording can really be mostly silence. Whether
+    speech was cut is judged by the level separation, not the share."""
     plan = build_cut_plan(100.0, _silences((10.0, 80.0)), padding_seconds=0.0)
-    assert plan.cuts, "the plan is still returned"
-    assert any("高于" in warning for warning in plan.warnings)
+    assert plan.cuts
+    assert plan.silence_ratio_percent > 60
+    assert plan.warnings == []
 
 
 def test_finding_almost_no_silence_warns_about_the_threshold():
