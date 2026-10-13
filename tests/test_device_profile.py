@@ -92,6 +92,10 @@ def test_this_machine_is_read_without_error():
 #    FLUENTFLOW_CPU_USAGE wins over it.
 # 3. Full use behaves as before: commands run unchanged, at normal priority.
 # 4. Only ffmpeg is limited; every decoder and encoder in a command gets a share.
+# 5. (2026-10-14) A lone ffmpeg (the frame-rate pass) gets the whole budget;
+#    only encodes running side by side split it.
+# 6. (2026-10-14) Priority is lowered without ``preexec_fn``, which Python
+#    documents as able to deadlock when threads start processes.
 
 FFMPEG_CUT = ["/opt/homebrew/bin/ffmpeg", "-y", "-i", "in.mov", "-c:v", "libx264", "-crf", "18", "out.mp4"]
 
@@ -111,7 +115,6 @@ def test_default_leaves_room_and_lowers_priority(no_saved_choice):
     budget = dp.cpu_thread_budget(machine)
     assert budget is not None and budget < machine.cpu_cores
     assert dp.process_niceness() > 0
-    assert dp.lowered_priority_kwargs()
 
 
 def test_light_is_about_half_and_below_balanced(monkeypatch, no_saved_choice):
@@ -142,15 +145,19 @@ def test_unknown_choice_is_refused(no_saved_choice):
 def test_full_use_runs_commands_unchanged(monkeypatch, no_saved_choice):
     monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "full")
     assert dp.limit_ffmpeg_threads(FFMPEG_CUT, _machine(16, 10)) == FFMPEG_CUT
-    assert dp.lowered_priority_kwargs() == {}
+    calls = []
+    monkeypatch.setattr(dp.os, "setpriority", lambda *args: calls.append(args))
+    dp.lower_priority(12345)
+    assert calls == []
 
 
 def test_every_decoder_and_encoder_gets_a_share(monkeypatch, no_saved_choice):
     monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "balanced")
     machine = _machine(16, 10)
     command = [*FFMPEG_CUT[:4], "-i", "in2.wav", *FFMPEG_CUT[4:]]
-    limited = dp.limit_ffmpeg_threads(command, machine)
-    share = str(dp.cpu_thread_budget(machine) // dp.render_workers(machine))
+    with dp.parallel_encodes(3):
+        limited = dp.limit_ffmpeg_threads(command, machine)
+    share = str(dp.cpu_thread_budget(machine) // 3)
     for position, part in enumerate(limited):
         if part == "-i":
             assert limited[position - 2:position] == ["-threads", share]
@@ -168,3 +175,45 @@ def test_only_ffmpeg_is_limited(monkeypatch, no_saved_choice):
 def test_encoders_never_outnumber_the_budget(monkeypatch, no_saved_choice):
     monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "light")
     assert dp.render_workers(_machine(64, 2)) == 1
+
+
+def test_a_lone_ffmpeg_gets_the_whole_budget(monkeypatch, no_saved_choice):
+    monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "balanced")
+    machine = _machine(16, 10)
+    budget = str(dp.cpu_thread_budget(machine))
+    lone = dp.limit_ffmpeg_threads(FFMPEG_CUT, machine)
+    assert lone[lone.index("libx264") + 2] == budget
+    with dp.parallel_encodes(3):
+        side_by_side = dp.limit_ffmpeg_threads(FFMPEG_CUT, machine)
+    assert int(side_by_side[side_by_side.index("libx264") + 2]) * 3 <= int(budget)
+    after = dp.limit_ffmpeg_threads(FFMPEG_CUT, machine)
+    assert after[after.index("libx264") + 2] == budget
+
+
+def test_priority_is_lowered_from_the_parent(monkeypatch, no_saved_choice):
+    monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "balanced")
+    monkeypatch.setattr(dp.os, "name", "posix")
+    calls = []
+    monkeypatch.setattr(dp.os, "setpriority", lambda *args: calls.append(args))
+    dp.lower_priority(12345)
+    assert calls == [(dp.os.PRIO_PROCESS, 12345, dp.process_niceness())]
+
+
+def test_no_launcher_uses_preexec_fn():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "backend" / "core"
+    for name in ("silence_cuts.py", "task_watch.py", "device_profile.py"):
+        source = (root / name).read_text(encoding="utf-8")
+        assert "preexec_fn=" not in source and "\"preexec_fn\"" not in source, name
+
+
+def test_a_real_command_runs_lowered(monkeypatch, no_saved_choice):
+    from backend.core import silence_cuts
+
+    monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "light")
+    seen = []
+    monkeypatch.setattr(dp, "lower_priority", lambda pid: seen.append(pid))
+    done = silence_cuts.run_command(["/bin/echo", "ok"])
+    assert done.returncode == 0 and done.stdout.strip() == "ok"
+    assert len(seen) == 1

@@ -242,13 +242,16 @@ class SilenceCutError(RuntimeError):
 
 def run_command(command: Sequence[str], timeout: float = 14400) -> "subprocess.CompletedProcess[str]":
     """Run one command; ffmpeg is held to the CPU share the user chose."""
-    return subprocess.run(
-        device_profile.limit_ffmpeg_threads(command),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        **device_profile.lowered_priority_kwargs(),
-    )
+    argv = device_profile.limit_ffmpeg_threads(command)
+    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+        device_profile.lower_priority(process.pid)
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 def _ffmpeg_path() -> str:
@@ -1787,7 +1790,8 @@ def render_keeps(
                 scale_width=target_width, runner=runner,
             )
 
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        with device_profile.parallel_encodes(min(max(1, workers), len(batches))), \
+                ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
             futures = [pool.submit(one, job) for job in enumerate(batches)]
             # Stop at the first failed batch. ``pool.map`` would keep encoding
             # every remaining batch of a render that is already lost, for as

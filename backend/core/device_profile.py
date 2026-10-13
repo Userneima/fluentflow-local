@@ -27,9 +27,11 @@ import os
 import platform
 import shutil
 import subprocess
+import threading
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from functools import lru_cache
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 PRESET_QUALITY = "quality"
 PRESET_SPEED = "speed"
@@ -184,6 +186,28 @@ def process_niceness() -> int:
     return _CPU_NICENESS.get(cpu_usage(), 0)
 
 
+# How many encodes run side by side right now. Set by the one place that runs
+# them in parallel (``silence_cuts.render_keeps``) for as long as its pool
+# lives; everything else runs one ffmpeg at a time and gets the whole budget.
+# Splitting by the configured worker count instead held the single-process
+# frame-rate pass to a third of its budget (found 2026-10-14).
+_parallel_encodes = 1
+_parallel_lock = threading.Lock()
+
+
+@contextmanager
+def parallel_encodes(count: int) -> Iterator[None]:
+    """Within this block, each ffmpeg gets ``budget // count`` threads."""
+    global _parallel_encodes
+    with _parallel_lock:
+        previous, _parallel_encodes = _parallel_encodes, max(1, int(count))
+    try:
+        yield
+    finally:
+        with _parallel_lock:
+            _parallel_encodes = previous
+
+
 def limit_ffmpeg_threads(argv: Sequence[str], profile: DeviceProfile | None = None) -> list[str]:
     """``argv`` with each decoder, encoder and filter graph of an ffmpeg command
     held to its share of the thread budget. Commands that are not ffmpeg, and
@@ -192,7 +216,7 @@ def limit_ffmpeg_threads(argv: Sequence[str], profile: DeviceProfile | None = No
     budget = cpu_thread_budget(profile)
     if budget is None or not argv or os.path.basename(argv[0]) != "ffmpeg" or "-threads" in argv:
         return argv
-    threads = str(max(1, budget // render_workers(profile)))
+    threads = str(max(1, budget // _parallel_encodes))
     out = [argv[0], "-filter_threads", threads, "-filter_complex_threads", threads]
     index = 1
     while index < len(argv):
@@ -208,15 +232,29 @@ def limit_ffmpeg_threads(argv: Sequence[str], profile: DeviceProfile | None = No
     return out
 
 
-def lowered_priority_kwargs() -> dict[str, Any]:
-    """``subprocess`` keyword arguments that start the process below normal
-    priority, or none at full use."""
+def lower_priority(pid: int) -> None:
+    """Move a started process below normal priority; nothing at full use.
+
+    Done from the parent after the start rather than in the child before it
+    (``preexec_fn``), which Python documents as unsafe when threads are running
+    and can deadlock the child: the cut starts several encoders from a thread
+    pool at once. The process runs at normal priority for the instant between
+    its start and this call."""
     niceness = process_niceness()
     if niceness <= 0:
-        return {}
-    if os.name == "nt":
-        return {"creationflags": getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)}
-    return {"preexec_fn": lambda: os.nice(niceness)}
+        return
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x0200, False, pid)  # PROCESS_SET_INFORMATION
+            if handle:
+                ctypes.windll.kernel32.SetPriorityClass(handle, 0x4000)  # BELOW_NORMAL_PRIORITY_CLASS
+                ctypes.windll.kernel32.CloseHandle(handle)
+        else:
+            os.setpriority(os.PRIO_PROCESS, pid, niceness)
+    except (OSError, AttributeError):
+        pass  # the process already ended, or the platform has no such call
 
 
 def queue_concurrency() -> int:
@@ -282,7 +320,8 @@ __all__ = [
     "cpu_thread_budget",
     "cpu_usage",
     "limit_ffmpeg_threads",
-    "lowered_priority_kwargs",
+    "lower_priority",
+    "parallel_encodes",
     "process_niceness",
     "current",
     "hardware_bitrate_factor",

@@ -114,8 +114,8 @@ class TaskWatch:
         key = next(_COMMAND_IDS)
         process = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            **device_profile.lowered_priority_kwargs(),
         )
+        device_profile.lower_priority(process.pid)
         stdout_chunks: list[str] = []
         stderr_chunks: list[str] = []
 
