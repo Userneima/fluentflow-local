@@ -343,6 +343,11 @@ async def create_agent_task(
         # parallel implementation is how one entry ends up missing a guard the other
         # one has.
         options_for_path, duration_limit = local_path_options(options)
+        # The title the agent passed names the task, as it does for a link; the
+        # queue helper reads it from the options (found dropped 2026-10-13).
+        title = str(payload.get("title") or "").strip()
+        if title:
+            options_for_path = {**options_for_path, "title": title}
         queued = await queue_local_media_file(
             source,
             client_id=client_id,

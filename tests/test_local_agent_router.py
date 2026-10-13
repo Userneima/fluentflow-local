@@ -680,6 +680,8 @@ def test_a_local_path_is_queued_through_the_page_entry_helper(agent_stack, monke
     assert body["package_url"] == "/agent/v1/tasks/t-local-1/package"
     assert seen["source"] == media
     assert seen["origin"]["chosen_with"] == "agent_api"
+    # Requirement (2026-10-14): the title the agent passed names the task.
+    assert seen["options"]["title"] == "Talk"
 
 
 def test_empty_submission_names_this_edition(agent_stack) -> None:
