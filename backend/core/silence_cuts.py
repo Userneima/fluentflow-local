@@ -12,15 +12,16 @@ even when they also keep the render.
 Two behaviours here look like extra work and are not. Both come from real broken
 output, and removing either brings the failure straight back:
 
-1. The source is re-encoded to a strictly constant frame rate before any cutting.
-   Screen recordings routinely declare a frame rate they do not have (15fps
-   running at 29.4, 60fps at 25.3). Cutting renumbers frames by count, which is
-   only correct at the declared rate, so cutting an uncorrected file produced
-   video that ran at a third of its container length — slow motion against
-   normal-speed audio. Correcting inside the cutting pass was not enough once
-   many batches were concatenated: three of thirteen files came out with
-   timestamps inflated 3.128x, and a short test missed it because the corruption
-   only appears at scale.
+1. A source that does not evenly hold the frame rate it declares is re-encoded
+   to a strictly constant one before any cutting. Screen recordings routinely
+   declare a frame rate they do not have (15fps running at 29.4, 60fps at 25.3).
+   Cutting renumbers frames by count, which is only correct at the declared rate,
+   so cutting an uncorrected file produced video that ran at a third of its
+   container length — slow motion against normal-speed audio. Correcting inside
+   the cutting pass was not enough once many batches were concatenated: three of
+   thirteen files came out with timestamps inflated 3.128x, and a short test
+   missed it because the corruption only appears at scale. A source measured to
+   be evenly at its declared rate (``is_constant_frame_rate``) skips that pass.
 2. Keep ranges are clamped to the length of the *video* stream, never the
    container. Silence is detected on audio, and these recordings carry audio that
    outlasts their video by up to 1.1s, so the last silence can end past the final
@@ -28,14 +29,12 @@ output, and removing either brings the failure straight back:
    as a 4KB audio-only part, and concatenating a part with a missing stream
    inflated the whole output.
 
-Nothing rendered here may cost more per second than the file it was cut from.
-Frame-accurate cuts cannot be made by stream copy, so every output is re-encoded,
-and a fixed quality target spends whatever that target asks for regardless of what
-the source carried: a 1080p meeting recording holding 752 kbps came back over 957
-kbps, so removing 13.6% of its runtime still produced a bigger file. The encode
-ceiling is therefore read off the source, and callers that need a real reduction
-can ask for a smaller picture instead — the one lever that shrinks a screen
-recording by an order of magnitude.
+The cut video should look like the recording with the gaps taken out. Frame-
+accurate cuts cannot be made by stream copy, so every output is re-encoded, at a
+quality target rather than under the source's bitrate: a tightly compressed
+screen recording re-encoded under its own bitrate came back with its text
+smeared. A cut file can therefore be larger per second than its source; holding
+it under the source is an opt-in (``cap_video_bitrate``).
 
 Checks report, they never destroy. A render that fails verification is still
 written and still returned, flagged. An earlier version of this check was given
@@ -619,6 +618,53 @@ def changed_frame_share(
     if sampled <= 0:
         return None
     return min(changed / (sampled * fps), 1.0)
+
+
+def _frame_rate_value(raw: str) -> float:
+    numerator, _, denominator = (raw or "").strip().partition("/")
+    try:
+        value = float(numerator) / float(denominator or 1)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+    return value if value > 0 else 0.0
+
+
+def is_constant_frame_rate(media: Path | str, runner: CommandRunner = run_command) -> bool:
+    """Whether the recording really holds the frame rate it declares, evenly.
+
+    The normalize pass exists for recordings that do not: one declared 60fps and
+    averaged 29.8, its frames 32-35 ms apart. A recording that does — a meeting
+    captured at 60fps measured 16.67 ms between every frame — gains nothing from
+    a whole-file re-encode to a rate it already has. Both the declared and the
+    average rate must agree, and the spacing between frames in three ten-second
+    samples must be the declared spacing within 1%. Anything unreadable is not
+    constant.
+    """
+    rates = probe_value(
+        media, ["-select_streams", "v:0", "-show_entries", "stream=r_frame_rate,avg_frame_rate"], runner=runner,
+    ).split(",")
+    if len(rates) < 2:
+        return False
+    declared, average = _frame_rate_value(rates[0]), _frame_rate_value(rates[1])
+    if not declared or not average or abs(declared - average) / declared > 0.01:
+        return False
+    duration = media_duration_seconds(media, runner=runner)
+    if duration <= 0:
+        return False
+    spacing = 1.0 / declared
+    for share in (0.1, 0.5, 0.9):
+        start = max(0.0, duration * share - 5.0)
+        raw = probe_value(
+            media,
+            ["-select_streams", "v:0", "-read_intervals", f"{start:.3f}%+10",
+             "-show_entries", "packet=pts_time"],
+            runner=runner,
+        )
+        times = sorted(float(line) for line in raw.splitlines() if line.strip().replace(".", "", 1).isdigit())
+        gaps = [later - earlier for earlier, later in zip(times, times[1:])]
+        if len(gaps) < 10 or any(abs(gap - spacing) > spacing * 0.01 + 1e-4 for gap in gaps):
+            return False
+    return True
 
 
 def reduced_frame_rate(fps: int) -> int | None:
@@ -1934,6 +1980,12 @@ def _render_cut_plan_locked(
     try:
         if audio_only:
             cut_source = source
+        elif scale_width is None and is_constant_frame_rate(source, runner=runner):
+            # Already evenly at the rate it declares: the cutting pass reads it
+            # directly, one whole-file encode fewer.
+            cut_source = source
+            if frame_rate_choice is not None:
+                frame_rate_choice = {**frame_rate_choice, "normalize": "skipped_constant_rate"}
         else:
             # The resize happens in this pass, so the batches below read frames
             # that are already the delivered size.
@@ -1941,6 +1993,8 @@ def _render_cut_plan_locked(
                 source, normalized, fps=fps, scale_width=scale_width, runner=runner,
             )
             cut_source = normalized
+            if frame_rate_choice is not None:
+                frame_rate_choice = {**frame_rate_choice, "normalize": "done"}
         batches = render_keeps(
             cut_source,
             plan.keeps,

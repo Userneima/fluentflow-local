@@ -341,14 +341,18 @@ _VIDEO_RENDERS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="debreath-
 
 
 def _render_seconds(source: Path, plan: Any, runner: Callable[..., Any]) -> float:
-    """How many seconds of media the render will write: a video is encoded once
-    whole (the normalize pass) and once more for what it keeps; audio only once."""
+    """How many seconds of media the render will write: what it keeps, plus the
+    whole recording once more when it needs the normalize pass first (a video
+    that does not evenly hold its declared rate)."""
     kept = float(getattr(plan, "kept_seconds", 0.0) or 0.0)
     try:
-        has_video = silence_cuts.has_video_stream(source, runner=runner)
+        normalized = (
+            silence_cuts.has_video_stream(source, runner=runner)
+            and not silence_cuts.is_constant_frame_rate(source, runner=runner)
+        )
     except (SilenceCutError, OSError, subprocess.TimeoutExpired):
-        has_video = False
-    whole = float(getattr(plan, "source_duration_seconds", 0.0) or 0.0) if has_video else 0.0
+        normalized = False
+    whole = float(getattr(plan, "source_duration_seconds", 0.0) or 0.0) if normalized else 0.0
     return whole + kept
 
 

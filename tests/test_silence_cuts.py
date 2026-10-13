@@ -1838,3 +1838,50 @@ def test_the_sampler_tells_a_still_screen_from_a_moving_one(tmp_path):
     moving_share = sc.changed_frame_share(moving, duration=40.0, fps=60)
 
     assert still_share < sc.MOSTLY_STILL_CHANGED_SHARE < moving_share
+
+
+# ── a recording already at an even rate is cut directly ──────────────────
+#
+# Requirement (2026-10-13): the whole-file normalize encode runs only for a
+# recording that does not evenly hold the rate it declares; one that does is cut
+# directly, and the result still passes its own checks at full length.
+
+needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+
+
+def _lavfi(target: Path, video: str, extra: list[str] | None = None) -> Path:
+    subprocess.run(
+        [shutil.which("ffmpeg"), "-v", "error", "-y", "-f", "lavfi", "-i", video,
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=20:sample_rate=48000,volume=enable='between(t,5,9)':volume=0",
+         *(extra or []), "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-shortest", str(target)],
+        check=True,
+    )
+    return target
+
+
+@needs_ffmpeg
+def test_an_evenly_paced_recording_is_recognised_and_an_uneven_one_is_not(tmp_path):
+    even = _lavfi(tmp_path / "even.mp4", "testsrc2=s=320x240:r=60:d=20")
+    # Frames that repeat their predecessor dropped and kept at their own times:
+    # what a screen recorder writes for a mostly still screen.
+    uneven = _lavfi(tmp_path / "uneven.mp4", "color=c=white:s=320x240:r=60:d=20,drawbox=enable='lt(mod(t,3),0.4)':c=red:t=fill",
+                    ["-vf", "mpdecimate", "-fps_mode", "vfr"])
+
+    assert sc.is_constant_frame_rate(even) is True
+    assert sc.is_constant_frame_rate(uneven) is False
+
+
+@needs_ffmpeg
+def test_an_even_recording_is_cut_without_the_normalize_pass_and_checks_out(tmp_path, monkeypatch):
+    source = _lavfi(tmp_path / "even.mp4", "testsrc2=s=320x240:r=60:d=20")
+    normalized: list[Path] = []
+    monkeypatch.setattr(sc, "normalize_to_constant_frame_rate", lambda *a, **k: normalized.append(a[0]))
+    plan = sc.plan_silence_cuts(source)
+
+    report = sc.render_cut_plan(source, plan, tmp_path / "out.mp4")
+
+    assert normalized == [], "the whole-file encode was skipped"
+    assert report.ok, report.failed_checks
+    assert report.frame_rate_choice["normalize"] == "skipped_constant_rate"
+    assert abs(report.actual_seconds - plan.kept_seconds) < 0.2
