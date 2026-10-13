@@ -1516,23 +1516,76 @@ def yt_dlp_login_configured(cookies_from_browser: str | None = None) -> bool:
     return bool(_yt_dlp_cookies_args(cookies_from_browser))
 
 
-def check_browser_cookies(browser: str) -> dict[str, Any]:
+# Where each browser keeps its cookies on macOS, under the home folder. Used
+# only to tell "macOS refused" apart from "not installed" before yt-dlp tries:
+# yt-dlp reports a folder it was not allowed to read as a database it could not
+# find, and the old message then sent the user to reinstall a browser they had.
+_MAC_BROWSER_DATA = {
+    "chrome": ("Google Chrome", "Library/Application Support/Google/Chrome"),
+    "edge": ("Microsoft Edge", "Library/Application Support/Microsoft Edge"),
+    "brave": ("Brave", "Library/Application Support/BraveSoftware/Brave-Browser"),
+    "chromium": ("Chromium", "Library/Application Support/Chromium"),
+    "opera": ("Opera", "Library/Application Support/com.operasoftware.Opera"),
+    "vivaldi": ("Vivaldi", "Library/Application Support/Vivaldi"),
+    "firefox": ("Firefox", "Library/Application Support/Firefox"),
+    "safari": ("Safari", "Library/Containers/com.apple.Safari/Data/Library/Cookies"),
+}
+
+
+def _permission_denied_message(name: str) -> str:
+    return (
+        f"macOS 不允许 FluentFlow 读取 {name} 的数据，所以读不到登录态。"
+        "到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」，打开启动 FluentFlow 的那个程序（通常是「终端」），"
+        "然后退出 FluentFlow 再打开，权限才会生效。"
+    )
+
+
+def _mac_browser_data_state(browser: str, home: Path | None = None) -> str | None:
+    """"denied", "missing" or "readable" for the browser's data folder on macOS;
+    None elsewhere or for a browser not listed."""
+    if sys.platform != "darwin" or browser not in _MAC_BROWSER_DATA:
+        return None
+    folder = (home or Path.home()) / _MAC_BROWSER_DATA[browser][1]
+    try:
+        os.listdir(folder)
+    except PermissionError:
+        return "denied"
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return None
+    return "readable"
+
+
+def check_browser_cookies(browser: str, *, home: Path | None = None) -> dict[str, Any]:
     """Read cookies from the given local browser and report whether the login
     state is usable. No network request — it only opens the browser's cookie DB.
     A live download can still fail later (expired cookie, anti-crawl), so this is
     a best-effort check, not a guarantee."""
     browser = (browser or "").strip().lower()
+    name = _MAC_BROWSER_DATA.get(browser, (browser, ""))[0]
+    state = _mac_browser_data_state(browser, home)
+    if state == "denied":
+        return {"ok": False, "code": "permission_denied", "message": _permission_denied_message(name)}
+    if state == "missing":
+        return {
+            "ok": False,
+            "code": "browser_not_found",
+            "message": f"这台电脑上没找到 {name} 的数据。请确认装的是这个浏览器、并且用它登录过网站，或者换选另一个浏览器。",
+        }
     try:
         from yt_dlp.cookies import extract_cookies_from_browser
     except Exception as exc:  # pragma: no cover - yt-dlp always installed in prod
         return {"ok": False, "code": "yt_dlp_missing", "message": f"无法加载 yt-dlp 的 cookie 读取模块：{exc}"}
     try:
         jar = extract_cookies_from_browser(browser)
+    except PermissionError:
+        return {"ok": False, "code": "permission_denied", "message": _permission_denied_message(name)}
     except Exception as exc:
         return {
             "ok": False,
             "code": "read_failed",
-            "message": f"读不到 {browser} 的登录态：{exc}。请确认已安装该浏览器；若仍失败，试试完全关闭该浏览器后重试。",
+            "message": f"读不到 {name} 的登录态：{exc}。完全退出 {name} 后再检测一次；如果弹出钥匙串窗口，点「始终允许」。",
         }
     cookies = list(jar)
     bilibili_login = any(
