@@ -49,12 +49,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
 import uuid
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from statistics import median
 from typing import Any, Callable, Sequence
@@ -80,13 +81,22 @@ MIN_KEEP_SECONDS = 0.10
 
 DEFAULT_RENDER_FPS = 30
 
-# The cut video is written at no more than this. Course and meeting recordings
-# are mostly a still screen with someone talking: on a 14-minute 60fps meeting,
-# 242 of 843 seconds had any change at all. Measured 2026-10-13 on its busiest
-# minute (window drags, scrolling): 60, 30 and 15 fps looked the same to the
-# owner, and the cut took 29 s, 18 s and 13 s. 30 rather than 15 keeps margin
-# for motion that 15 would make jerky. Below it, the recording's own rate stands.
+# A recording above this rate is written at a lower one when it is mostly a
+# still picture — course and meeting recordings, a screen with someone talking.
+# Measured 2026-10-13 on a 14-minute 60fps meeting: its busiest minute (window
+# drags, scrolling) looked the same to the owner at 60, 30 and 15 fps, and the
+# cut took 29 s, 18 s and 13 s. Whether a recording is mostly still is measured
+# (``choose_render_fps``), never assumed: a game, a sport, a camera pan keeps
+# every frame it has.
 MAX_RENDER_FPS = 30
+# Sampled share of frames that differ from the one before, below which a
+# recording counts as mostly still. Measured 2026-10-13 with the sampler below:
+# the 60fps meeting 3.8%, two course recordings 10% and 18%, a synthetic
+# full-motion clip 98%. Camera footage changes every frame (sensor noise) and
+# stays well above it.
+MOSTLY_STILL_CHANGED_SHARE = 0.25
+MOTION_SAMPLE_WINDOWS = 10
+MOTION_SAMPLE_SECONDS = 3.0
 
 # Above this, following the source's own frame rate stops being fidelity and
 # starts being a way to spend hours of CPU on frames nobody asked for. Ordinary
@@ -335,6 +345,8 @@ class RenderReport:
     audio_only: bool = False
     # Checks the container could not answer, as opposed to checks that failed.
     unmeasured_checks: list[str] = field(default_factory=list)
+    # The frame rate written and why (``choose_render_fps``), when it was chosen here.
+    frame_rate_choice: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -357,6 +369,8 @@ class RenderReport:
             "failed_checks": self.failed_checks,
             "unmeasured_checks": list(self.unmeasured_checks),
         }
+        if self.frame_rate_choice is not None:
+            payload["frame_rate_choice"] = dict(self.frame_rate_choice)
         if not self.audio_only:
             # Reporting a skew against a video stream that does not exist reads
             # as a huge sync problem; there is simply no picture.
@@ -571,6 +585,74 @@ def source_frame_rate(media: Path | str, runner: CommandRunner = run_command) ->
     return _rounded_frame_rate(
         probe_value(media, ["-select_streams", "v:0", "-show_entries", "stream=avg_frame_rate"], runner=runner)
     )
+
+
+def changed_frame_share(
+    media: Path | str, *, duration: float, fps: float, runner: CommandRunner = run_command,
+) -> float | None:
+    """Share of frames that differ from the one before, sampled across the
+    recording. ``None`` when nothing could be read.
+
+    A few seconds from evenly spaced points, decoded small, with ``mpdecimate``
+    dropping every frame that repeats its predecessor: what survives changed.
+    Sampled because the decode is the cost, and a whole high-resolution
+    recording took three minutes to decode for this; ten short windows take
+    seconds. Each window starts at the keyframe before its point
+    (``-noaccurate_seek``) rather than decoding up to it.
+    """
+    if duration <= 0 or fps <= 0:
+        return None
+    seconds = min(MOTION_SAMPLE_SECONDS, duration)
+    changed = 0
+    sampled = 0.0
+    for index in range(MOTION_SAMPLE_WINDOWS):
+        start = max(0.0, duration * (index + 0.5) / MOTION_SAMPLE_WINDOWS - seconds / 2)
+        result = runner([
+            _ffmpeg_path(), "-hide_banner", "-nostats", "-noaccurate_seek",
+            "-ss", f"{start:.3f}", "-t", f"{seconds:.3f}", "-i", str(media), "-an",
+            "-vf", "scale=160:-2,mpdecimate=hi=200:lo=64:frac=0.1,showinfo", "-f", "null", "-",
+        ])
+        if result.returncode != 0:
+            continue
+        changed += len(re.findall(r"pts_time:", result.stderr or ""))
+        sampled += seconds
+    if sampled <= 0:
+        return None
+    return min(changed / (sampled * fps), 1.0)
+
+
+def reduced_frame_rate(fps: int) -> int | None:
+    """The highest rate at or below ``MAX_RENDER_FPS`` that keeps every Nth
+    frame — 60 to 30, 50 to 25, 120 to 30. ``None`` when no whole step gets
+    there without falling below half of it: dropping 2 frames in 5 (50 to 30)
+    moves in a stutter, and a prime rate would only divide down to 1."""
+    for step in range(2, fps + 1):
+        if fps % step == 0 and fps // step <= MAX_RENDER_FPS:
+            reduced = fps // step
+            return reduced if reduced >= MAX_RENDER_FPS // 2 else None
+    return None
+
+
+def choose_render_fps(source: Path | str, runner: CommandRunner = run_command) -> tuple[int, dict[str, Any]]:
+    """The rate to write the cut video at, and why. The recording's own rate
+    unless it is above ``MAX_RENDER_FPS``, divides evenly to a rate under it,
+    and is measured to be mostly still; any doubt keeps every frame."""
+    source_fps = source_frame_rate(source, runner=runner) or DEFAULT_RENDER_FPS
+    choice: dict[str, Any] = {"source_fps": source_fps, "fps": source_fps}
+    if source_fps <= MAX_RENDER_FPS:
+        return source_fps, {**choice, "reason": "source_rate"}
+    reduced = reduced_frame_rate(source_fps)
+    if reduced is None:
+        return source_fps, {**choice, "reason": "no_even_step"}
+    share = changed_frame_share(
+        source, duration=media_duration_seconds(source, runner=runner), fps=source_fps, runner=runner,
+    )
+    choice["changed_share"] = None if share is None else round(share, 4)
+    if share is None:
+        return source_fps, {**choice, "reason": "motion_unmeasured"}
+    if share >= MOSTLY_STILL_CHANGED_SHARE:
+        return source_fps, {**choice, "reason": "moving_picture"}
+    return reduced, {**choice, "fps": reduced, "reason": "mostly_still"}
 
 
 def parse_silencedetect(stderr: str, offset: float = 0.0) -> list[TimeRange]:
@@ -1831,8 +1913,12 @@ def _render_cut_plan_locked(
     runner: CommandRunner,
 ) -> RenderReport:
     audio_only = not has_video_stream(source, runner=runner)
+    frame_rate_choice: dict[str, Any] | None = None
     if fps is None:
-        fps = min((0 if audio_only else source_frame_rate(source, runner=runner)) or DEFAULT_RENDER_FPS, MAX_RENDER_FPS)
+        if audio_only:
+            fps = DEFAULT_RENDER_FPS
+        else:
+            fps, frame_rate_choice = choose_render_fps(source, runner=runner)
     if encode_args is None:
         # Measured on the file the user handed over, never on the normalized
         # intermediate: that intermediate has already been re-encoded once, and
@@ -1884,6 +1970,8 @@ def _render_cut_plan_locked(
         audio_only=audio_only,
         runner=runner,
     )
+    if frame_rate_choice is not None:
+        report = replace(report, frame_rate_choice=frame_rate_choice)
     if not report.ok:
         logger.warning(
             "debreath render failed verification for %s: %s",

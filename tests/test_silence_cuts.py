@@ -986,6 +986,7 @@ def test_the_keyframe_interval_follows_the_rate_the_render_writes(tmp_path, fake
     at every rate. Both encodes are checked, because the normalize pass writes the
     intermediate that every batch then reads."""
     monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "1")
+    monkeypatch.setattr(sc, "changed_frame_share", lambda *a, **k: 0.01)
     source = tmp_path / "in.mp4"
     source.write_bytes(b"x")
     runner = _SourceProbe(
@@ -993,7 +994,7 @@ def test_the_keyframe_interval_follows_the_rate_the_render_writes(tmp_path, fake
         frame_rates={"in.mp4": "60/1", "normalized.mp4": "30/1"},
     )
 
-    # A 60fps recording is written at 30 (MAX_RENDER_FPS): five seconds is 150 frames.
+    # A mostly still 60fps recording is written at 30: five seconds is 150 frames.
     sc.render_cut_plan(
         source,
         build_cut_plan(30.0, _silences((10.0, 12.0))),
@@ -1783,26 +1784,57 @@ def test_by_default_the_video_is_encoded_for_quality_not_held_under_the_source(m
         assert args[args.index("-crf") + 1] == "18"
 
 
-def test_a_sixty_frame_recording_is_cut_at_thirty(monkeypatch, tmp_path):
-    """Requirement (owner, 2026-10-13): the cut video is written at no more than
-    30 fps; slower recordings keep their own rate."""
-    seen: list[int] = []
+# ── the frame rate follows what the picture does ─────────────────────────
+#
+# Requirement (owner, 2026-10-13): a recording that is mostly a still picture
+# is written at a lower rate, by keeping every Nth frame so motion stays even;
+# one that moves keeps every frame; any doubt keeps every frame.
 
-    def normalize(source, output, *, fps, **kwargs):
-        seen.append(fps)
-        raise SilenceCutError("stop after choosing the rate")
+def _choose(monkeypatch, source_fps, share):
+    monkeypatch.setattr(sc, "source_frame_rate", lambda *a, **k: source_fps)
+    monkeypatch.setattr(sc, "media_duration_seconds", lambda *a, **k: 600.0)
+    monkeypatch.setattr(sc, "changed_frame_share", lambda *a, **k: share)
+    return sc.choose_render_fps("in.mp4")
 
-    monkeypatch.setattr(sc, "has_video_stream", lambda *a, **k: True)
-    monkeypatch.setattr(sc, "encode_args_for_source", lambda *a, **k: ())
-    monkeypatch.setattr(sc, "stream_skew_seconds", lambda *a, **k: 0.0)
-    monkeypatch.setattr(sc, "normalize_to_constant_frame_rate", normalize)
-    plan = build_cut_plan(4.0, [TimeRange(1.0, 2.0)], padding_seconds=0.0)
-    for source_fps in (60, 25):
-        monkeypatch.setattr(sc, "source_frame_rate", lambda *a, _f=source_fps, **k: _f)
-        with pytest.raises(SilenceCutError):
-            sc._render_cut_plan_locked(
-                tmp_path / "in.mp4", plan, tmp_path / "out.mp4", fps=None, ranges_per_batch=25, workers=1,
-                encode_args=None, scale_width=None, work_dir=tmp_path / "w", runner=sc.run_command,
-            )
 
-    assert seen == [30, 25]
+def test_a_mostly_still_sixty_frame_recording_is_written_at_thirty(monkeypatch):
+    fps, why = _choose(monkeypatch, 60, 0.04)
+    assert fps == 30 and why["reason"] == "mostly_still" and why["changed_share"] == 0.04
+
+
+def test_a_moving_picture_keeps_every_frame(monkeypatch):
+    assert _choose(monkeypatch, 60, 0.9)[0] == 60
+
+
+def test_fifty_frames_become_twenty_five_not_thirty(monkeypatch):
+    assert _choose(monkeypatch, 50, 0.04)[0] == 25
+
+
+def test_a_rate_with_no_even_step_and_an_unmeasured_picture_are_left_alone(monkeypatch):
+    assert sc.reduced_frame_rate(45) == 15
+    assert sc.reduced_frame_rate(31) is None
+    assert _choose(monkeypatch, 31, 0.01)[0] == 31
+    assert _choose(monkeypatch, 60, None)[0] == 60
+
+
+def test_thirty_and_below_are_not_measured_at_all(monkeypatch):
+    def must_not_run(*a, **k):
+        raise AssertionError("no need to look")
+
+    monkeypatch.setattr(sc, "source_frame_rate", lambda *a, **k: 25)
+    monkeypatch.setattr(sc, "changed_frame_share", must_not_run)
+    assert sc.choose_render_fps("in.mp4")[0] == 25
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_the_sampler_tells_a_still_screen_from_a_moving_one(tmp_path):
+    still = tmp_path / "still.mp4"
+    moving = tmp_path / "moving.mp4"
+    for target, source in ((still, "color=c=white:s=640x360:r=60:d=40"), (moving, "testsrc2=s=640x360:r=60:d=40")):
+        subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-y", "-f", "lavfi", "-i", source,
+                        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(target)], check=True)
+
+    still_share = sc.changed_frame_share(still, duration=40.0, fps=60)
+    moving_share = sc.changed_frame_share(moving, duration=40.0, fps=60)
+
+    assert still_share < sc.MOSTLY_STILL_CHANGED_SHARE < moving_share
