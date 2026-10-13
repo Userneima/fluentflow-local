@@ -333,6 +333,16 @@ def test_a_finished_task_is_left_alone_when_no_note_channel_is_reachable(tmp_pat
     assert flow.note_is_wanted(TASK, "anonymous") is False
 
 
+def test_a_transcript_only_task_gets_no_note_even_when_claude_is_reachable(tmp_path, monkeypatch):
+    """Requirement (2026-10-14): a task submitted as transcript only
+    (``skip_summary=true``) stops at the transcript. No note is written and
+    nothing is spent, whether or not Claude could write one."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-configured")
+    _finished_task(note_declined=True)
+
+    assert flow.note_is_wanted(TASK, "anonymous") is False
+
+
 def test_a_task_that_already_has_a_note_is_left_alone(tmp_path):
     _finished_task(summary_markdown="已经有笔记了")
 

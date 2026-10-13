@@ -264,6 +264,8 @@ def note_is_wanted(task_id: str, client_id: str | None) -> bool:
     if not job or str(job.get("status") or "") != "completed":
         return False
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if result.get("note_declined"):
+        return False
     if str(result.get("summary_markdown") or "").strip():
         return False
     if not (result.get("transcript_text") or result.get("raw_segments")):

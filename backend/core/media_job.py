@@ -36,6 +36,7 @@ from backend.core.ai_summarizer import (
     visual_requests_to_frame_segments,
 )
 from backend.core.media_probe import media_duration_seconds
+from backend.core.runtime_env import truthy
 from backend.core.ai_client import _normalize_provider, _provider_api_key
 from backend.core.claude_text import claude_chat
 from backend.core.media_job_stages import (
@@ -1038,6 +1039,10 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             # The note step after the pipeline reads this: a deferred note is
             # still owed even if Claude has become unreachable since submission.
             result["note_deferred_to_visual_note"] = bool(ctx.note_deferred_to_visual_note)
+            # The caller asked for the transcript only (skip_summary). The note
+            # step after the pipeline must not write one anyway (found
+            # 2026-10-13: it asked only whether Claude was reachable).
+            result["note_declined"] = truthy(ctx.skip_summary)
             result = _attach_result_artifacts(task_id_value, result)
             result = _finalize_result_storage(ctx, result)
             upsert_job(
