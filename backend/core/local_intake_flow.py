@@ -137,12 +137,20 @@ def _link_or_copy(cut: Path, target: Path) -> bool:
 
 
 def preprocess_media(
-    task_id: str, source: Path, watch: TaskWatch | None = None, audio_first: bool = True,
+    task_id: str, source: Path, watch: TaskWatch | None = None, audio_first: bool = False,
 ) -> debreath_job.PreparedCut | None:
     """The pipeline's media-preparation hook: cut the gaps, or hand back the file.
 
     Returning ``None`` when switched off leaves the pipeline exactly as it was.
     ``watch`` carries the task's progress out and its cancellation in.
+
+    ``audio_first`` (transcribe the cut audio while the cut video renders) is off.
+    Measured 2026-10-13 on a 58-minute 2560x1440 recording: run side by side,
+    the software video encode took 25 minutes instead of about 9 alone, and the
+    transcription of the 30-minute cut ran at 0.57x realtime instead of about
+    0.15x, so the transcript was ready after 25 minutes instead of about 15. Both
+    compete for the same CPU. It is worth measuring again once the video encode
+    runs on the hardware encoder, which does not.
     """
     if not cut_first_enabled():
         return None

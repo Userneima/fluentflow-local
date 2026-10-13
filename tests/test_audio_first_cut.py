@@ -1,5 +1,9 @@
 """Transcription starts on the cut audio while the cut video renders.
 
+Off in the pipeline for now (see ``local_intake_flow.preprocess_media``): side by
+side with a software video encode it was slower, measured. These tests keep the
+mechanism correct for when the encode moves to the hardware encoder.
+
 What has to hold, written from the requirement rather than the code:
 
 - Transcription gets the cut audio as soon as it exists, before the cut video.
@@ -99,7 +103,7 @@ def test_cut_audio_alone_is_not_delivered_beside_the_recording(tmp_path, artifac
     monkeypatch.setattr(silence_cuts, "render_cut_plan",
                         lambda *a, **k: (_ for _ in ()).throw(silence_cuts.SilenceCutError("no video")))
 
-    prepared = local_intake_flow.preprocess_media("t-af-deliver", source)
+    prepared = local_intake_flow.preprocess_media("t-af-deliver", source, audio_first=True)
     final = prepared.video.result(timeout=120)
 
     assert final.state["video_render_failed"] is True
@@ -131,7 +135,7 @@ def test_the_cut_video_still_lands_beside_the_recording(tmp_path, artifacts, mon
     monkeypatch.setattr(local_intake_flow, "cut_first_enabled", lambda: True)
     monkeypatch.setattr(local_intake_flow, "is_managed_path", lambda path: False)
 
-    prepared = local_intake_flow.preprocess_media("t-af-beside", source)
+    prepared = local_intake_flow.preprocess_media("t-af-beside", source, audio_first=True)
     final = prepared.video.result(timeout=120)
 
     assert final.path.suffix == ".mp4"
