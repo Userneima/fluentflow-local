@@ -599,9 +599,10 @@ def write_visual_note(
         raise ClaudeVisionError("这个任务还没有转录文字，无法生成笔记")
     if part is None:
         fitted = transcript_for_request(text)
-        text = fitted.text
     else:
-        text = part.text
+        # A part is already sized to one request: nothing of it is dropped.
+        fitted = TranscriptForRequest(text=part.text, chars_sent=len(part.text), chars_dropped=0)
+    text = fitted.text
     picked = spread_across(frames, MAX_FRAMES)
     chosen_model = (model or "").strip() or latest_model(api_key, client=client)
 

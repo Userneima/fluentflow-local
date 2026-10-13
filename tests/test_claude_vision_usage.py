@@ -217,3 +217,23 @@ def test_an_unplaceable_frame_goes_to_the_first_part_rather_than_vanishing():
 
     assert orphan in groups[0]
     assert all(orphan not in g for g in groups[1:])
+
+
+# ── the key channel writes each part of a recording ────────────────────────
+#
+# Requirement: someone using their own Anthropic key gets a note. The frame
+# note always writes through parts, so the writer is called with ``part=``
+# exactly the way the run calls it; it used to fail after the paid response
+# came back, and nothing was saved.
+
+def test_a_note_written_part_by_part_through_the_key_comes_back(frames):
+    from backend.core import visual_note_job as vn
+
+    part = cv.transcript_parts("[00:12] 今天讲最小二乘法\n[00:40] 残差平方和最小")[0]
+    write = lambda *args, **kwargs: cv.write_visual_note(*args, client=_answer(), **kwargs)  # noqa: E731
+
+    draft = vn._checked_draft(write, part, frames, api_key="sk-test-not-a-real-key")
+
+    assert draft.markdown.startswith("# 笔记")
+    assert draft.transcript_chars == len(part.text)
+    assert draft.transcript_chars_dropped == 0, "a part is never cut short"
