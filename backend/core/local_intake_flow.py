@@ -156,6 +156,7 @@ def preprocess_media(
         return None
     path = Path(source)
     watch = watch or TaskWatch()
+    audio_first = audio_first or os.environ.get("FLUENTFLOW_DEBREATH_AUDIO_FIRST", "").strip().lower() in {"1", "true", "yes", "on"}
     prepared = debreath_job.prepare_cut_media(task_id, path, watch=watch, audio_first=audio_first)
     if prepared.video is not None:
         # The cut video is still rendering; what happens to it once it exists

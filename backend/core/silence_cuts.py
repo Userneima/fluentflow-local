@@ -511,7 +511,7 @@ def _with_ceiling_values(args: Sequence[str], ceiling_bps: float) -> list[str]:
     """
     if ceiling_bps <= 0:
         return list(args)
-    target = str(int(ceiling_bps * BITRATE_CEILING_MARGIN))
+    target = str(int(ceiling_bps * _ceiling_margin()))
     out = list(args)
     for index in range(len(out) - 1):
         if out[index] in {"-maxrate:v", "-bufsize:v", "-b:v"}:
@@ -1206,7 +1206,7 @@ def _bitrate_ceiling_args(ceiling_bps: float) -> list[str]:
     """
     if ceiling_bps <= 0:
         return []
-    ceiling = ceiling_bps * BITRATE_CEILING_MARGIN
+    ceiling = ceiling_bps * _ceiling_margin()
     return [
         "-maxrate:v", f"{int(ceiling)}",
         "-bufsize:v", f"{int(ceiling)}",
@@ -1260,6 +1260,25 @@ def hardware_encode_enabled() -> bool:
     }
 
 
+def hardware_bitrate_factor() -> float:
+    """How many times the source's own bitrate the media engine is given.
+
+    The media engine needs more bits than libx264 for the same text: measured
+    2026-10-13 on a 336 kbps shared-document screen recording, at the source's
+    rate it smeared a highlighted line beyond reading, at twice the rate it read
+    like the software encode, at three times better than it. Set with
+    ``FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR``; 1 when unset.
+    """
+    try:
+        return max(float(os.environ.get("FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR") or 1.0), 0.1)
+    except ValueError:
+        return 1.0
+
+
+def _ceiling_margin() -> float:
+    return BITRATE_CEILING_MARGIN * (hardware_bitrate_factor() if hardware_encode_enabled() else 1.0)
+
+
 def _with_hardware_video_encoder(
     args: Sequence[str],
     ceiling_bps: float,
@@ -1295,7 +1314,7 @@ def _with_hardware_video_encoder(
             continue
         kept.append(args[index])
         index += 1
-    target = int(ceiling_bps * BITRATE_CEILING_MARGIN)
+    target = int(ceiling_bps * _ceiling_margin())
     rate = float(fps) if fps and float(fps) > 0 else float(DEFAULT_RENDER_FPS)
     keyframe_interval = max(1, round(rate * HARDWARE_KEYFRAME_SECONDS))
     return [
