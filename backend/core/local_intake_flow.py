@@ -44,7 +44,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import compress_media, debreath_job, local_folder_intake, visual_note_channel, visual_note_job
+from backend.core import compress_media, debreath_job, local_folder_intake, silence_cuts, visual_note_channel, visual_note_job
+from backend.core.task_watch import TaskWatch
 from backend.core.job_store import get_job, update_job_result, upsert_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core.storage_cleanup import is_managed_path
@@ -133,15 +134,19 @@ def _link_or_copy(cut: Path, target: Path) -> bool:
     return False
 
 
-def preprocess_media(task_id: str, source: Path) -> debreath_job.PreparedCut | None:
+def preprocess_media(
+    task_id: str, source: Path, watch: TaskWatch | None = None,
+) -> debreath_job.PreparedCut | None:
     """The pipeline's media-preparation hook: cut the gaps, or hand back the file.
 
     Returning ``None`` when switched off leaves the pipeline exactly as it was.
+    ``watch`` carries the task's progress out and its cancellation in.
     """
     if not cut_first_enabled():
         return None
     path = Path(source)
-    prepared = debreath_job.prepare_cut_media(task_id, path)
+    watch = watch or TaskWatch()
+    prepared = debreath_job.prepare_cut_media(task_id, path, watch=watch)
     # A recording inside FluentFlow's own storage came from an upload; one outside
     # it is a file in the user's folder, and that is the case with somewhere to
     # deliver to.
@@ -159,10 +164,29 @@ def preprocess_media(task_id: str, source: Path) -> debreath_job.PreparedCut | N
         return debreath_job.PreparedCut(
             path=prepared.path,
             used=False,
-            state={**prepared.state, **compress_media.compress_beside(path)},
+            state={**prepared.state, **_compress_beside(path, watch)},
             artifacts=prepared.artifacts,
         )
     return prepared
+
+
+def _compress_beside(path: Path, watch: TaskWatch) -> dict[str, Any]:
+    with watch.phase(PHASE_COMPRESS, _duration_or_zero(path)):
+        state = compress_media.compress_beside(path, runner=watch.runner)
+    # compress_beside keeps whatever goes wrong to itself; a cancelled task is
+    # not one of its failures to report.
+    watch.check()
+    return state
+
+
+def _duration_or_zero(path: Path) -> float:
+    try:
+        return silence_cuts.media_duration_seconds(path)
+    except Exception:  # noqa: BLE001 - no length only means no percentage
+        return 0.0
+
+
+PHASE_COMPRESS = "剪不动气口，另存一份压缩版"
 
 
 def _now() -> str:

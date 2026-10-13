@@ -121,10 +121,10 @@ def test_the_copy_is_made_for_a_declined_cut_in_the_users_folder(monkeypatch, so
     calls = []
     monkeypatch.setattr(local_intake_flow, "cut_first_enabled", lambda: True)
     monkeypatch.setattr(local_intake_flow.debreath_job, "prepare_cut_media",
-                        lambda task_id, path: _declined(path, **({"already_cut": True} if already_cut else {})))
+                        lambda task_id, path, **_: _declined(path, **({"already_cut": True} if already_cut else {})))
     monkeypatch.setattr(local_intake_flow, "is_managed_path", lambda path: managed)
     monkeypatch.setattr(local_intake_flow.compress_media, "compress_beside",
-                        lambda path: calls.append(path) or {"compressed": True})
+                        lambda path, **_: calls.append(path) or {"compressed": True})
 
     prepared = local_intake_flow.preprocess_media("t1", source)
 

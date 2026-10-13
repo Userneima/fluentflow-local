@@ -1023,13 +1023,15 @@ export const isDownloadProgressUnmeasured = (job) => {
     if (report.percent !== null && report.percent !== undefined && report.percent !== '' && Number.isFinite(Number(report.percent))) return false;
     return !(Number(report.total_bytes) > 0);
 };
-// Removing the breath gaps has no percentage to report: it is one ffmpeg pipeline
-// over the whole file, and the pipeline publishes a single number at the start of
-// the stage. On a 24-minute recording that number sat at 2% for twenty minutes,
-// which is how a working task got reported as a hung one. No number is the honest
-// answer here, and the stage's own label says it takes minutes.
+// Removing the breath gaps reports its render as a share of the media it has
+// written (metadata.prepare_fraction). Its analysis, and services from before
+// that report, have no share to give: the job's number then stays where the
+// stage started, and no number is the honest answer.
+export const isPrepareProgressUnmeasured = (job) => (
+    job?.stage === 'prepare_media' && !Number.isFinite(Number(job?.metadata?.prepare_fraction ?? NaN))
+);
 export const isProgressUnmeasured = (job) => (
-    job?.stage === 'prepare_media' || isSttProgressUnmeasured(job) || isDownloadProgressUnmeasured(job)
+    isPrepareProgressUnmeasured(job) || isSttProgressUnmeasured(job) || isDownloadProgressUnmeasured(job)
 );
 export const jobProgressLabel = (job, t) => isProgressUnmeasured(job)
     ? t('dash.progressUnknown')

@@ -12,11 +12,12 @@ cleanup). Neither imports back into this module.
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Callable
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import asyncio
+import threading
 import shutil
 import time
 import logging
@@ -62,7 +63,8 @@ from backend.core.job_lifecycle import (
     result_for_summary_success,
     result_for_transcript_only,
 )
-from backend.core.job_store import get_job, upsert_job
+from backend.core.job_store import get_job, progress_message_metadata, upsert_job
+from backend.core.task_watch import TaskWatch
 from backend.core.result_artifacts import (
     DEBREATH_MEDIA_KIND,
     TRANSCRIPT_MEDIA_CUT,
@@ -108,6 +110,42 @@ def _transcribed_total(duration_estimate_sec: float | None, transcription: Any) 
         return round(float(total), 1) if total else None
     except (TypeError, ValueError):
         return None
+
+
+# Where the job's percentage stands while the media is prepared: from 2% to
+# here, then the audio stage takes over. Cutting a long screen recording can take
+# as long as transcribing it, so it gets a real share instead of one number.
+PREPARE_PROGRESS_END = 18
+_PREPARE_WRITE_SECONDS = 2.0
+
+
+def _prepare_progress_writer(task_id: str) -> Callable[[str, "float | None"], None]:
+    """Write the preparing step's progress onto the job, at most every two
+    seconds (the render reports from several ffmpeg processes at once)."""
+    lock = threading.Lock()
+    last = {"at": 0.0, "label": None}
+
+    def write(label: str, fraction: float | None) -> None:
+        now = time.monotonic()
+        with lock:
+            if label == last["label"] and now - last["at"] < _PREPARE_WRITE_SECONDS and fraction != 1.0:
+                return
+            last.update(at=now, label=label)
+        message = label if fraction is None else f"{label} {round(fraction * 100)}%"
+        progress = 2 if fraction is None else round(2 + fraction * (PREPARE_PROGRESS_END - 2), 1)
+        upsert_job(
+            task_id=task_id,
+            status="running",
+            stage="prepare_media",
+            progress=progress,
+            metadata={
+                **progress_message_metadata(message, "prepare_media"),
+                "prepare_step": label,
+                "prepare_fraction": None if fraction is None else round(fraction, 4),
+            },
+        )
+
+    return write
 
 
 def _summary_result_metadata(summary_result: Any) -> dict[str, Any]:
@@ -435,13 +473,23 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         # timestamps, the note, the page's player — belongs to one file. It runs
         # before the duration limit is measured on purpose: the shortened file is
         # what the user is going to work with, so it is what should be measured.
+        audio_start_progress = 5
         if media_preprocessor is not None:
             current_stage = "prepare_media"
             upsert_job(task_id=task_id_value, status="running", stage="prepare_media", progress=2)
             yield _sse({"stage": "prepare_media", "progress": 2})
-            prepared = await loop.run_in_executor(
-                None, lambda: media_preprocessor(task_id_value, in_path)
-            )
+            # The step runs in a worker thread; ``watch`` is its line back. Its
+            # progress lands on the job, and a cancelled task stops the ffmpeg it
+            # is running instead of leaving it to re-encode the whole recording.
+            watch = TaskWatch(on_progress=_prepare_progress_writer(task_id_value))
+            try:
+                prepared = await loop.run_in_executor(
+                    None, lambda: media_preprocessor(task_id_value, in_path, watch=watch)
+                )
+            except asyncio.CancelledError:
+                watch.cancel()
+                raise
+            audio_start_progress = PREPARE_PROGRESS_END
             if prepared is not None:
                 preprocess_state = dict(getattr(prepared, "state", None) or {})
                 preprocess_artifacts = dict(getattr(prepared, "artifacts", None) or {})
@@ -451,8 +499,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
 
         # ── Stage 1: Audio extraction ──────────────────────
         current_stage = "audio"
-        upsert_job(task_id=task_id_value, status="running", stage="audio", progress=5)
-        yield _sse({"stage": "audio", "progress": 5})
+        upsert_job(task_id=task_id_value, status="running", stage="audio", progress=audio_start_progress)
+        yield _sse({"stage": "audio", "progress": audio_start_progress})
         audio_started_at = time.perf_counter()
 
         # Only when asked. Most material does not need correcting, the

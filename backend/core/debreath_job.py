@@ -49,6 +49,7 @@ from backend.core.result_artifacts import (
     write_text_artifact,
 )
 from backend.core.silence_cuts import CutPlan, SilenceCutError
+from backend.core.task_watch import TaskWatch
 from backend.core.storage_paths import _artifact_storage_dir, find_source_file, in_place_source_path
 from backend.core.subtitle_format import _format_srt
 
@@ -324,6 +325,23 @@ class PreparedCut:
     artifacts: dict[str, dict[str, Any]]
 
 
+# What the task shows while this step runs.
+PHASE_ANALYSE = "去气口：找出没人说话的地方"
+PHASE_RENDER = "去气口：剪掉空白，重新导出"
+
+
+def _render_seconds(source: Path, plan: Any, runner: Callable[..., Any]) -> float:
+    """How many seconds of media the render will write: a video is encoded once
+    whole (the normalize pass) and once more for what it keeps; audio only once."""
+    kept = float(getattr(plan, "kept_seconds", 0.0) or 0.0)
+    try:
+        has_video = silence_cuts.has_video_stream(source, runner=runner)
+    except (SilenceCutError, OSError, subprocess.TimeoutExpired):
+        has_video = False
+    whole = float(getattr(plan, "source_duration_seconds", 0.0) or 0.0) if has_video else 0.0
+    return whole + kept
+
+
 def _prepare_cut_media(
     task_id: str,
     source: Path,
@@ -332,8 +350,14 @@ def _prepare_cut_media(
     min_silence_seconds: float = silence_cuts.DEFAULT_MIN_SILENCE_SECONDS,
     padding_seconds: float = silence_cuts.DEFAULT_PADDING_SECONDS,
     runner: Callable[..., Any] = silence_cuts.run_command,
+    watch: TaskWatch | None = None,
 ) -> PreparedCut:
     """Cut the breath gaps before transcription, or explain why the original stands.
+
+    ``watch`` is the task's line back (``task_watch``): every command runs
+    through it, so cancelling the task stops the ffmpeg that is running, and the
+    render reports how much of the recording it has written. A cancelled step
+    raises ``TaskCancelled`` rather than falling back to the original.
 
     Cutting first is what makes everything downstream belong to one file: the
     transcript is made *from* the shortened audio, so its timestamps are the
@@ -361,7 +385,11 @@ def _prepare_cut_media(
     Writes no job result: the caller owns the result at this point in the
     pipeline, and this returns the state and artifacts to merge into it.
     """
-    noise_db, threshold_choice = adapt_threshold(source, noise_db, runner=runner)
+    watch = watch or TaskWatch()
+    if runner is silence_cuts.run_command:
+        runner = watch.runner
+    with watch.phase(PHASE_ANALYSE):
+        noise_db, threshold_choice = adapt_threshold(source, noise_db, runner=runner)
     settings = {
         "noise_db": noise_db,
         "min_silence_seconds": min_silence_seconds,
@@ -398,19 +426,21 @@ def _prepare_cut_media(
         return fallback(f"不支持这种文件（{source.suffix or '无扩展名'}），没有去气口，按原文件处理。")
     # Not for safety — re-cutting was measured harmless. This skips a re-encode of
     # the whole file that would gain a fraction of a second.
-    already = already_cut_reason(source, runner=runner)
+    with watch.phase(PHASE_ANALYSE):
+        already = already_cut_reason(source, runner=runner)
     if already:
         return fallback(already, already_cut=True)
 
     artifacts: dict[str, dict[str, Any]] = {}
     try:
-        plan = silence_cuts.plan_silence_cuts(
-            source,
-            noise_db=noise_db,
-            min_silence_seconds=min_silence_seconds,
-            padding_seconds=padding_seconds,
-            runner=runner,
-        )
+        with watch.phase(PHASE_ANALYSE):
+            plan = silence_cuts.plan_silence_cuts(
+                source,
+                noise_db=noise_db,
+                min_silence_seconds=min_silence_seconds,
+                padding_seconds=padding_seconds,
+                runner=runner,
+            )
         cut_list = write_text_artifact(
             task_id,
             CUT_LIST_KIND,
@@ -481,7 +511,8 @@ def _prepare_cut_media(
 
         media_filename = _media_filename(source)
         output = artifact_target_path(task_id, media_filename)
-        report = silence_cuts.render_cut_plan(source, plan, output, runner=runner)
+        with watch.phase(PHASE_RENDER, _render_seconds(source, plan, runner)):
+            report = silence_cuts.render_cut_plan(source, plan, output, runner=runner)
         artifacts[MEDIA_KIND] = describe_existing_artifact(task_id, MEDIA_KIND, media_filename)
         if not report.ok:
             # The file is kept and downloadable, as everywhere else here — but a
