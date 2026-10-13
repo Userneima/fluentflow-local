@@ -66,6 +66,9 @@ yt-dlp（抖音、B 站、YouTube 的下载器）不进任何锁定文件：安�
 | `FLUENTFLOW_KEYFRAME_EXTRACTION` | 抽关键帧 | 开 |
 | `FLUENTFLOW_KEYFRAME_PROVIDER` | 抽帧实现 | `local_ffmpeg` |
 | `FLUENTFLOW_DEBREATH_HARDWARE_ENCODE` | 剪气口重编码时用硬件编码器 | 关 |
+| `FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR` | 硬件编码时给原视频码率的几倍；低码率录屏按原码率编会糊，2 倍和软件编码相当 | `1` |
+| `FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE` | 剪后视频按原视频的码率封顶；默认不封顶，按画质编码，剪后视频每秒会比原片大 | 关 |
+| `FLUENTFLOW_DEBREATH_AUDIO_FIRST` | 先剪出音频开始转录，视频同时在后台渲染；和软件编码同时跑会互相拖慢 | 关 |
 | `FLUENTFLOW_MEDIA_PREFLIGHT_ENABLED` | 入库前的媒体检查总开关，设为假时下面每项都关 | 开 |
 | `FLUENTFLOW_MEDIA_GUARD_EMPTY_FILE_ENABLED` | 拒绝空文件 | 开 |
 | `FLUENTFLOW_MEDIA_GUARD_EXTENSION_ENABLED` | 拒绝扩展名和容器不符的文件 | 开 |

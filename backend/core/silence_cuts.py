@@ -103,15 +103,22 @@ DEFAULT_RENDER_WORKERS = 3
 # the same minute. The gate serialises; it never refuses.
 _RENDER_GATE = threading.Semaphore(1)
 
+# Quality, not size, is what the cut video is held to: it should look like the
+# recording with the gaps taken out. crf 18 is the level where a shared-document
+# screen recording reads the same as its source when cropped and enlarged three
+# times (measured 2026-10-13 on a 204 kbps 2560x1440 recording; crf 20 under a
+# source-bitrate cap smeared it). Both passes use it, because the second pass
+# reads the first one's output and cannot put back what that lost.
 DEFAULT_ENCODE_ARGS = (
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
 )
 
-# The frame rate correction pass. Slightly cheaper than the delivery encode
-# because its output is a scratch file that the cutting pass reads and deletes.
+# The frame rate correction pass. Its output is a scratch file the cutting pass
+# reads and deletes, so it is held to the same quality: detail it drops is gone
+# from the delivered file too.
 NORMALIZE_ENCODE_ARGS = (
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
 )
 
@@ -1191,6 +1198,22 @@ def bitrate_ceiling_bps(
     return ceiling if ceiling >= MIN_TRUSTED_VIDEO_BITRATE else 0.0
 
 
+def cap_video_bitrate() -> bool:
+    """Whether the cut video is held under the source's own bitrate.
+
+    Off unless ``FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE`` is set. The cap kept a
+    cut file from being larger per second than its recording, and on the
+    low-bitrate screen recordings this is mostly used on it cost the text: two
+    re-encodes each under what an already tightly compressed recording spent
+    came back unreadable (owner, 2026-10-13: keep the picture, only remove the
+    gaps). Without it a cut video is larger per second than its source, and with
+    half the runtime removed about the size of the recording overall.
+    """
+    return (os.environ.get("FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _bitrate_ceiling_args(ceiling_bps: float) -> list[str]:
     """Constrained-quality settings: keep `-crf` as the target, cap the result.
 
@@ -1204,7 +1227,7 @@ def _bitrate_ceiling_args(ceiling_bps: float) -> list[str]:
     six-second clip. Measured on a nine-second test clip capped at 208 kbps: a
     two-second buffer came back at 277 kbps, over its source.
     """
-    if ceiling_bps <= 0:
+    if ceiling_bps <= 0 or not cap_video_bitrate():
         return []
     ceiling = ceiling_bps * _ceiling_margin()
     return [
@@ -1388,7 +1411,9 @@ def normalize_to_constant_frame_rate(
     # The file is scratch and is deleted when the render finishes, so the cost of
     # being generous here is disk for the length of one job, not a larger
     # delivered file — that is still capped by what the source spent.
-    if ceiling > 0:
+    # The per-second scan reads the whole packet table; only a cap or the
+    # hardware encoder (which takes a bitrate, not a quality) uses its answer.
+    if ceiling > 0 and (cap_video_bitrate() or hardware_encode_enabled()):
         peak = peak_window_bitrate_bps(video_second_bytes(source, runner=runner))
         ceiling = max(ceiling, peak)
     headroom = ceiling * NORMALIZE_BITRATE_HEADROOM

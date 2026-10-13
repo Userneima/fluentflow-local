@@ -24,6 +24,14 @@ from backend.core.silence_cuts import (
 )
 
 
+
+@pytest.fixture()
+def video_cap(monkeypatch):
+    """The source-bitrate cap is opt-in (``FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE``);
+    the tests that use this fixture are about how it behaves when it is on."""
+    monkeypatch.setenv("FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE", "1")
+
+
 def _silences(*pairs: tuple[float, float]) -> list[TimeRange]:
     return [TimeRange(start, end) for start, end in pairs]
 
@@ -695,6 +703,7 @@ def _render_command(runner: _SourceProbe) -> list[str]:
     return next(command for command in runner.commands if "-filter_complex" in command)
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_the_encode_ceiling_is_read_off_the_source_not_fixed_in_advance(tmp_path, fake_tools):
     """A 1080p meeting recording carrying 752 kbps came back over 957 kbps at the
     fixed -crf 20: 13.6% of the runtime removed, and the file still cost more per
@@ -724,6 +733,7 @@ def test_a_source_that_declares_no_bitrate_is_encoded_exactly_as_before(tmp_path
     assert args == sc.DEFAULT_ENCODE_ARGS
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_a_container_that_reports_only_a_total_pays_for_the_audio_out_of_it(tmp_path, fake_tools):
     source = tmp_path / "in.mkv"
     source.write_bytes(b"x")
@@ -758,6 +768,7 @@ def test_a_generously_recorded_source_keeps_the_default_audio_bitrate(tmp_path, 
     assert args[args.index("-b:a") + 1] == "128k", "the ceiling is a ceiling, not a target"
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_the_ceiling_is_measured_before_the_normalize_pass_inflates_it(tmp_path, fake_tools):
     """The intermediate is itself a re-encode. Reading its bitrate would measure
     the inflation this ceiling exists to prevent and then permit it."""
@@ -901,6 +912,7 @@ def test_hardware_encoding_is_off_unless_asked(tmp_path, fake_tools, monkeypatch
     assert "libx264" in args and "h264_videotoolbox" not in args
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_the_media_engine_is_aimed_at_what_the_recording_carried(tmp_path, fake_tools, monkeypatch):
     """The hardware encoder has no crf, so it gets the source's own bitrate.
 
@@ -1080,6 +1092,7 @@ def test_an_audio_only_render_ignores_a_scale_request(tmp_path, fake_tools):
     not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
     reason="ffmpeg/ffprobe not installed",
 )
+@pytest.mark.usefixtures("video_cap")
 def test_a_real_render_never_costs_more_per_second_than_its_source(tmp_path):
     """The whole defect in one assertion, on a source encoded the way the broken
     material was: hard-limited, well below what -crf 20 would ask for.
@@ -1305,6 +1318,7 @@ def _ceiling_of(command: list[str]) -> int:
     return int(command[command.index("-maxrate:v") + 1])
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_each_part_is_held_to_what_the_source_spent_on_the_frames_it_keeps(tmp_path, fake_tools):
     """A recording whose content changes gets one ceiling per part, not one average.
 
@@ -1341,6 +1355,7 @@ def test_each_part_is_held_to_what_the_source_spent_on_the_frames_it_keeps(tmp_p
     )
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_the_part_ceiling_moves_the_buffer_with_it(tmp_path, fake_tools):
     source = tmp_path / "in.mp4"
     source.write_bytes(b"x")
@@ -1360,6 +1375,7 @@ def test_the_part_ceiling_moves_the_buffer_with_it(tmp_path, fake_tools):
     )
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_a_container_with_no_packet_table_is_rendered_exactly_as_before(tmp_path, fake_tools):
     """Matroska declares no packet sizes. Nothing measurable means nothing changes."""
     source = tmp_path / "in.mp4"
@@ -1395,6 +1411,7 @@ def test_encode_args_the_caller_chose_are_not_re_pointed_per_part(tmp_path, fake
         assert _ceiling_of(command) == 111_000
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_a_part_that_measures_below_the_trust_floor_keeps_the_file_ceiling(tmp_path, fake_tools):
     """A few kbps is read as a bad probe, not as a budget — the same judgement the
     whole-file ceiling already makes."""
@@ -1425,6 +1442,7 @@ def test_ranges_bitrate_reads_only_the_kept_stretches(tmp_path):
     assert sc.ranges_bitrate_bps(seconds, []) == 0.0
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_the_pipeline_path_actually_varies_the_part_ceilings(tmp_path, fake_tools):
     """render_cut_plan hands down its own encode args, and an earlier version of
     this feature read that as "the caller chose these, leave them alone" — so the
@@ -1459,6 +1477,7 @@ def test_the_pipeline_path_actually_varies_the_part_ceilings(tmp_path, fake_tool
     )
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_the_part_ceiling_is_measured_on_the_original_not_the_intermediate(tmp_path, fake_tools):
     """The batches are cut from a normalized copy that has already been re-encoded.
     Measuring that copy would read the normalize pass's output back as if it were
@@ -1492,6 +1511,7 @@ def test_the_part_ceiling_is_measured_on_the_original_not_the_intermediate(tmp_p
     )
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_the_scratch_copy_is_sized_by_the_busiest_minute_not_the_average(tmp_path, fake_tools):
     """Every batch reads its frames from the normalized intermediate, so detail
     squeezed out there cannot be restored by any later ceiling. On a recording
@@ -1518,6 +1538,7 @@ def test_the_scratch_copy_is_sized_by_the_busiest_minute_not_the_average(tmp_pat
     )
 
 
+@pytest.mark.usefixtures("video_cap")
 def test_the_scratch_ceiling_never_drops_below_the_old_one(tmp_path, fake_tools):
     """A uniform recording has no busy minute to find. Taking the larger of the two
     keeps this from becoming a downgrade on the material it was already right for."""
@@ -1743,3 +1764,19 @@ def test_a_successful_re_cut_replaces_the_cut_and_spares_the_users_hard_linked_c
     assert out.read_bytes() == b"rendered"
     assert beside.read_bytes() == b"previous cut", "the user's copy keeps what it had"
     assert sorted(child.name for child in tmp_path.iterdir()) == ["in.mp4", "out.mp4", "week-8_debreath.mp4"]
+
+
+# ── by default the cut video keeps the picture ────────────────────────────
+#
+# Requirement (owner, 2026-10-13): a low-bitrate screen recording keeps its
+# picture; only the gaps go. Held under the source's bitrate, two re-encodes
+# smeared its text. So by default nothing caps the video and both passes encode
+# at the quality that read the same as the source.
+
+def test_by_default_the_video_is_encoded_for_quality_not_held_under_the_source(monkeypatch):
+    monkeypatch.delenv("FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE", raising=False)
+    monkeypatch.delenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", raising=False)
+
+    assert sc._bitrate_ceiling_args(204_000) == []
+    for args in (sc.DEFAULT_ENCODE_ARGS, sc.NORMALIZE_ENCODE_ARGS):
+        assert args[args.index("-crf") + 1] == "18"
