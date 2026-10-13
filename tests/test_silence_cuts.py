@@ -990,9 +990,10 @@ def test_the_keyframe_interval_follows_the_rate_the_render_writes(tmp_path, fake
     source.write_bytes(b"x")
     runner = _SourceProbe(
         bitrates={("in.mp4", "v:0"): 400000},
-        frame_rates={"in.mp4": "60/1", "normalized.mp4": "60/1"},
+        frame_rates={"in.mp4": "60/1", "normalized.mp4": "30/1"},
     )
 
+    # A 60fps recording is written at 30 (MAX_RENDER_FPS): five seconds is 150 frames.
     sc.render_cut_plan(
         source,
         build_cut_plan(30.0, _silences((10.0, 12.0))),
@@ -1002,7 +1003,7 @@ def test_the_keyframe_interval_follows_the_rate_the_render_writes(tmp_path, fake
 
     encodes = [command for command in runner.commands if "h264_videotoolbox" in command]
     assert encodes, "the hardware encoder was asked for"
-    assert all(command[command.index("-g") + 1] == "300" for command in encodes)
+    assert all(command[command.index("-g") + 1] == "150" for command in encodes)
 
 
 def test_software_encoding_is_left_to_its_own_keyframe_spacing(tmp_path, fake_tools, monkeypatch):
@@ -1780,3 +1781,28 @@ def test_by_default_the_video_is_encoded_for_quality_not_held_under_the_source(m
     assert sc._bitrate_ceiling_args(204_000) == []
     for args in (sc.DEFAULT_ENCODE_ARGS, sc.NORMALIZE_ENCODE_ARGS):
         assert args[args.index("-crf") + 1] == "18"
+
+
+def test_a_sixty_frame_recording_is_cut_at_thirty(monkeypatch, tmp_path):
+    """Requirement (owner, 2026-10-13): the cut video is written at no more than
+    30 fps; slower recordings keep their own rate."""
+    seen: list[int] = []
+
+    def normalize(source, output, *, fps, **kwargs):
+        seen.append(fps)
+        raise SilenceCutError("stop after choosing the rate")
+
+    monkeypatch.setattr(sc, "has_video_stream", lambda *a, **k: True)
+    monkeypatch.setattr(sc, "encode_args_for_source", lambda *a, **k: ())
+    monkeypatch.setattr(sc, "stream_skew_seconds", lambda *a, **k: 0.0)
+    monkeypatch.setattr(sc, "normalize_to_constant_frame_rate", normalize)
+    plan = build_cut_plan(4.0, [TimeRange(1.0, 2.0)], padding_seconds=0.0)
+    for source_fps in (60, 25):
+        monkeypatch.setattr(sc, "source_frame_rate", lambda *a, _f=source_fps, **k: _f)
+        with pytest.raises(SilenceCutError):
+            sc._render_cut_plan_locked(
+                tmp_path / "in.mp4", plan, tmp_path / "out.mp4", fps=None, ranges_per_batch=25, workers=1,
+                encode_args=None, scale_width=None, work_dir=tmp_path / "w", runner=sc.run_command,
+            )
+
+    assert seen == [30, 25]

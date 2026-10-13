@@ -80,6 +80,14 @@ MIN_KEEP_SECONDS = 0.10
 
 DEFAULT_RENDER_FPS = 30
 
+# The cut video is written at no more than this. Course and meeting recordings
+# are mostly a still screen with someone talking: on a 14-minute 60fps meeting,
+# 242 of 843 seconds had any change at all. Measured 2026-10-13 on its busiest
+# minute (window drags, scrolling): 60, 30 and 15 fps looked the same to the
+# owner, and the cut took 29 s, 18 s and 13 s. 30 rather than 15 keeps margin
+# for motion that 15 would make jerky. Below it, the recording's own rate stands.
+MAX_RENDER_FPS = 30
+
 # Above this, following the source's own frame rate stops being fidelity and
 # starts being a way to spend hours of CPU on frames nobody asked for. Ordinary
 # 24/25/30/50/60 material is well inside it.
@@ -1824,7 +1832,7 @@ def _render_cut_plan_locked(
 ) -> RenderReport:
     audio_only = not has_video_stream(source, runner=runner)
     if fps is None:
-        fps = (0 if audio_only else source_frame_rate(source, runner=runner)) or DEFAULT_RENDER_FPS
+        fps = min((0 if audio_only else source_frame_rate(source, runner=runner)) or DEFAULT_RENDER_FPS, MAX_RENDER_FPS)
     if encode_args is None:
         # Measured on the file the user handed over, never on the normalized
         # intermediate: that intermediate has already been re-encoded once, and
