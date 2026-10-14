@@ -20,7 +20,7 @@ current workflow. If the task is for Hosted, switch to the independent
 
 ## Open problems
 
-Open work, including known problems not yet fixed, is in `docs/01-待办.md`, grouped into batches that can be done together. Read it before working in an area it covers; remove an entry when you fix, drop or park it.
+Open work, including known problems not yet fixed, is in `docs/01-待办.md`. Its order is the owner's priority rule: items that change what a recording turns into (the cut, the transcript, the note) come first, install next, speed and convenience last; within each, batches that can be done together. When you add an entry, place it by that rule, and for a result-changing item say whether redoing it needs the original recording or only the cut video and output folder, since the owner decides from that whether to keep his originals (decision 8.3). Read it before working in an area it covers; remove an entry when you fix, drop or park it.
 
 Why things are the way they are is in `docs/02-决策记录.md`, grouped by product part (submission, where to cut, exporting the cut video, transcription, notes, outputs, install, ways of working); each entry carries its date, who decided and its commits on the line under its heading. Check the part a change touches before changing something already decided. When you fix, drop, park or narrow an item, add an entry to the part it belongs to and, if users notice the change, a line in `docs/03-更新记录.md`; never delete a decision entry, write a new one that supersedes it.
 
