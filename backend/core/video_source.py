@@ -1662,10 +1662,13 @@ def download_timeout_seconds(
             return max(int(float(override)), 60)
         except ValueError:
             pass
+    # The budget already grows with the video; the cap only stops a download that
+    # hangs. At one hour it also stopped any link longer than about four hours,
+    # which there is no reason to refuse now that length is not limited.
     try:
-        max_timeout = max(int(float(os.environ.get("FLUENTFLOW_YT_DLP_MAX_TIMEOUT_SECONDS", "3600"))), 300)
+        max_timeout = max(int(float(os.environ.get("FLUENTFLOW_YT_DLP_MAX_TIMEOUT_SECONDS", "21600"))), 300)
     except ValueError:
-        max_timeout = 3600
+        max_timeout = 21600
     budgets = [900]
     if duration_seconds:
         budgets.append(180 + int(float(duration_seconds) * 0.22))
