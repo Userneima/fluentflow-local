@@ -45,6 +45,7 @@ import {
     TASK_STATE_CANCELLED,
     TASK_STATE_CACHED_ONLY,
     taskStatusLabel,
+    isNoteStillBeingWritten,
 } from '../lib/taskState.js';
 import {useJobPolling} from '../lib/useJobPolling.js';
 import {extraUrlsIgnoredNotice, retryInputForJob, retryOptionsForJob} from '../lib/linkRetry.js';
@@ -460,8 +461,8 @@ export const noteTileValue = (job, lang) => {
     return isZh ? '等处理' : 'Pending';
 };
 
-const statePillClass = (state) => {
-    if (state === TASK_STATE_COMPLETED) return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-100';
+const statePillClass = (state, job) => {
+    if (state === TASK_STATE_COMPLETED && !isNoteStillBeingWritten(job)) return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-100';
     if (state === TASK_STATE_FAILED || state === TASK_STATE_CANCELLED) return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300';
     return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-200';
 };
@@ -577,7 +578,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-extrabold ${statePillClass(state)}`}>
+                        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-extrabold ${statePillClass(state, job)}`}>
                             {statusLabel(job, lang)}
                         </span>
                         <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">

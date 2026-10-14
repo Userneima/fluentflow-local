@@ -44,11 +44,22 @@ export const normalizeTaskState = (job={}) => {
 };
 
 // The task's state as one word, the same on every page that lists tasks.
+// A task whose transcript is done while its note is still being written. The
+// backend counts it completed (the transcript is usable), but showing a green
+// "已完成" beside "正在写…" told people the note was ready when it was not.
+export const isNoteStillBeingWritten = (job = {}) => {
+    const state = normalizeTaskState(job);
+    if (state !== TASK_STATE_COMPLETED) return false;
+    const pending = (value) => String(value || '').toLowerCase() === 'pending';
+    return pending(job?.result?.summary_status) || pending(job?.summary_status);
+};
+
 export const taskStatusLabel = (job, lang = 'zh') => {
     const state = normalizeTaskState(job);
     const zh = lang === 'zh';
     if (state === TASK_STATE_UPLOADING) return zh ? '上传中' : 'Uploading';
     if (state === TASK_STATE_QUEUED) return zh ? '排队中' : 'Queued';
+    if (isNoteStillBeingWritten(job)) return zh ? '写笔记中' : 'Writing note';
     if (state === TASK_STATE_COMPLETED || state === TASK_STATE_CACHED_ONLY) return zh ? '已完成' : 'Completed';
     if (state === TASK_STATE_FAILED) return zh ? '失败' : 'Failed';
     if (state === TASK_STATE_CANCELLED) return zh ? '已取消' : 'Cancelled';
