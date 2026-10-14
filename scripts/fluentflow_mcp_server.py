@@ -511,8 +511,8 @@ def get_agent_note_material(
     paths on this machine with their moments in the recording, and
     ``instructions``: the note skill in effect plus the fixed contract. Open the
     frames you need, write the note following the instructions, then call
-    ``save_agent_note``. A long recording comes in ``total_parts`` parts: fetch
-    and write each, then save them together. Costs nothing on the user's side;
+    ``save_agent_note``. A long recording comes in ``total_parts`` parts: fetch,
+    write and save one part at a time (``part``). Costs nothing on the user's side;
     the first call for a video extracts its frames, which takes up to a minute.
     """
     refusal = _require_local_edition(normalize_api_base(api_base))
@@ -531,6 +531,7 @@ def get_agent_note_material(
 def save_agent_note(
     task_id: str,
     note_markdown: str | None = None,
+    part: int | None = None,
     part_notes: list[str] | None = None,
     basis_note: str = "",
     model: str = "",
@@ -539,9 +540,12 @@ def save_agent_note(
 ) -> dict[str, Any]:
     """Make the note you wrote this task's note; the previous one stays restorable.
 
-    Pass ``note_markdown`` for a one-part recording, or ``part_notes`` in order
-    for one in several parts. Cite frames by file name only. A note far too
-    short for its transcript is refused and nothing is replaced.
+    Pass ``note_markdown`` for a one-part recording. For one in several parts,
+    save each part as it is written with ``part`` and ``note_markdown``; the
+    task's note is replaced once every part is in, and saving a part again later
+    updates it. ``note_markdown`` without ``part`` on such a recording is a whole
+    edited note. Cite frames by file name only. A note far too short for its
+    transcript is refused and nothing is replaced.
 
     The saved note is checked against its transcript for knowledge points it
     never mentions; ``coverage.missing`` lists them by part. When it is not
@@ -555,10 +559,29 @@ def save_agent_note(
         f"/agent/v1/tasks/{task_id}/agent-note",
         api_base=api_base,
         client_id=client_id,
-        payload=_options(note_markdown=note_markdown, part_notes=part_notes, basis_note=basis_note, model=model),
+        payload=_options(note_markdown=note_markdown, part=part, part_notes=part_notes, basis_note=basis_note,
+                         model=model),
         # Saving runs FluentFlow's coverage check on each part, a model request
         # over that part's whole transcript.
         timeout=600,
+    )
+
+
+def get_agent_note_part(
+    task_id: str,
+    part: int,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """One part of the note as you saved it, without its transcript, for the read-through."""
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _agent_request(
+        "GET",
+        f"/agent/v1/tasks/{task_id}/agent-note/parts/{int(part)}",
+        api_base=api_base,
+        client_id=client_id,
     )
 
 
@@ -670,6 +693,7 @@ TOOL_FUNCTIONS = {
     "write_note_from_cut_media": write_note_from_cut_media,
     "get_agent_note_material": get_agent_note_material,
     "save_agent_note": save_agent_note,
+    "get_agent_note_part": get_agent_note_part,
     "get_note_skill": get_note_skill,
     "record_note_feedback": record_note_feedback,
     "list_note_feedback": list_note_feedback,
@@ -974,7 +998,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "timestamped transcript, that part's frames as local file paths with their moments, "
             "and instructions (the note skill in effect plus the fixed contract). Open the frames "
             "you need, write the note as instructed, then call save_agent_note. Long recordings "
-            "come in total_parts parts: fetch and write each part. The first call for a video "
+            "come in total_parts parts: fetch, write and save one part at a time. The first call for a video "
             "extracts frames (up to a minute)."
         ),
         "inputSchema": {
@@ -993,18 +1017,23 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "description": (
             "Save the note you wrote from get_agent_note_material as the task's note. The previous "
             "note is kept and restorable (write_note_from_cut_media restore_previous_note=true). "
-            "note_markdown for a one-part recording, part_notes in order for several parts. Cite "
+            "note_markdown for a one-part recording. For several parts, save each as soon as it is "
+            "written with part and note_markdown: saved parts stay in FluentFlow across conversations, "
+            "the task's note is replaced once every part is in, and the answer's next says what to do "
+            "(the remaining parts, then a read-through). note_markdown without part on such a recording "
+            "is a whole edited note. Cite "
             "frames by file name only. A note far too short for its transcript is refused and "
             "nothing is replaced. Saving also checks each part against its transcript for knowledge "
             "points the note never mentions (when FluentFlow has a text-model or Anthropic key) and "
             "returns them in coverage.missing, by part: when it is not empty, write those points "
-            "into the note and call save_agent_note again."
+            "into that part and save it again."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
                 "note_markdown": {"type": "string"},
+                "part": {"type": "integer", "description": "Which part this note is, from 1 to total_parts."},
                 "part_notes": {"type": "array", "items": {"type": "string"}},
                 "basis_note": {
                     "type": "string",
@@ -1015,6 +1044,24 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "client_id": {"type": "string"},
             },
             "required": ["task_id"],
+        },
+    },
+    {
+        "name": "get_agent_note_part",
+        "description": (
+            "Read back one part of the note you saved with save_agent_note(part=...), without its "
+            "transcript. Used for the read-through once every part is saved: read the parts one at a "
+            "time, then save again only the parts you change."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "part": {"type": "integer"},
+                "api_base": {"type": "string"},
+                "client_id": {"type": "string"},
+            },
+            "required": ["task_id", "part"],
         },
     },
     {

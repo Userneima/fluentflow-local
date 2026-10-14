@@ -653,12 +653,42 @@ def save_agent_note(
 ) -> dict[str, Any]:
     """Make the note the calling agent wrote this task's note.
 
-    The note it replaces is kept and comes back for free through
-    ``POST /tasks/{id}/visual-note`` with ``restore_previous_note``.
+    With ``part``, one part of a long recording is kept and the note is replaced
+    only once every part is in. The note it replaces is kept and comes back for
+    free through ``POST /tasks/{id}/visual-note`` with ``restore_previous_note``.
     """
     body = payload or {}
     part_notes = body.get("part_notes")
     try:
+        if body.get("part") is not None:
+            saved = agent_note.save_part(
+                task_id,
+                part=int(body.get("part")),
+                note_markdown=body.get("note_markdown"),
+                basis_note=str(body.get("basis_note") or ""),
+                model=str(body.get("model") or ""),
+                client_id=_local_client_scope(request),
+            )
+            answer = {
+                "ok": True,
+                "task_id": task_id,
+                "part": saved["part"],
+                "total_parts": saved["total_parts"],
+                "remaining_parts": saved["remaining_parts"],
+                "completed": saved["completed"],
+                "next": saved["next"],
+                # What FluentFlow's check found this part does not say. Non-empty
+                # asks the agent to write those points in and save the part again.
+                "coverage": {
+                    "checked": any(part.get("checked") for part in saved["coverage"]["parts"]),
+                    "missing": saved["coverage"]["missing"],
+                    "parts": saved["coverage"]["parts"],
+                },
+            }
+            if saved["job"] is not None:
+                answer["previous_note_restorable"] = True
+                answer["package_url"] = f"/agent/v1/tasks/{task_id}/package"
+            return answer
         updated = agent_note.save(
             task_id,
             note_markdown=body.get("note_markdown"),
@@ -669,6 +699,8 @@ def save_agent_note(
         )
     except visual_note_job.VisualNoteError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="part 要是一个整数") from exc
     coverage = visual_note_job.visual_note_state(updated.get("result")).get("coverage") or {}
     return {
         "ok": True,
@@ -685,6 +717,18 @@ def save_agent_note(
         "package_url": f"/agent/v1/tasks/{task_id}/package",
         "package": _task_package_response(updated),
     }
+
+
+@router.get("/tasks/{task_id}/agent-note/parts/{part}")
+def get_agent_note_part(request: Request, task_id: str, part: int) -> dict[str, Any]:
+    """One saved part of the agent's note, without its transcript: what the
+    read-through reads, a part at a time."""
+    try:
+        return {"ok": True, "task_id": task_id, **agent_note.saved_part(
+            task_id, part=part, client_id=_local_client_scope(request),
+        )}
+    except visual_note_job.VisualNoteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _feedback_call(action, *args, **kwargs):

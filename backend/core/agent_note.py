@@ -9,8 +9,8 @@ hands the note back.
 The material is exactly what the frame note sends to Claude, so the two paths
 cannot drift apart in what a note is written from:
 
-- the transcript on the clock of the file the note describes, split into the
-  same parts a long recording is split into for one request each;
+- the transcript on the clock of the file the note describes, split into parts
+  small enough that one part arrives in one tool result (``AGENT_PART_CHARS``);
 - the frames scene detection found in that file, as paths on this machine the
   agent can open, each with its moment in the recording;
 - the note skill in effect (the user's own, else the product default), followed
@@ -27,6 +27,8 @@ note applies to Claude, so the agent gets the reason back and writes again.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +37,12 @@ from typing import Any, Callable
 from backend.core import claude_vision, cut_timeline, note_coverage, note_skills, visual_note_check
 from backend.core import visual_note_job as vn
 from backend.core.claude_vision import FrameInput
-from backend.core.result_artifacts import VISUAL_NOTE_ARTIFACT_FILENAME, VISUAL_NOTE_KIND, write_text_artifact
+from backend.core.result_artifacts import (
+    VISUAL_NOTE_ARTIFACT_FILENAME,
+    VISUAL_NOTE_KIND,
+    artifact_target_path,
+    write_text_artifact,
+)
 from backend.core.result_schema import NOTE_FROM_AGENT
 from backend.core.visual_note_channel import Channel
 
@@ -53,17 +60,41 @@ _AGENT_CHANNEL = Channel(
     write=lambda *_args, **_kwargs: None,
 )
 
+# A part is sized for the agent's host, not for a request FluentFlow makes. Claude
+# Code hands a tool result over 25,000 tokens to the agent as a file to read in
+# pieces, and its file reader stops at the same size; Chinese runs about one
+# token a character (measured 2026-10-14: a 60,000-character part came to 54,766
+# tokens and arrived as a file). 15,000 characters leaves room for the
+# instructions, the user's own rules and the list of frames in the same answer.
+# The frame note's own requests keep claude_vision's larger parts.
+AGENT_PART_CHARS = 15_000
+
+# Parts saved so far, kept beside the task's other artifacts so a conversation
+# that was compacted, or a new one, carries on from them.
+_PARTS_FILENAME = "agent_note_parts.json"
+
 # How the agent hands the note back: field names match the save call, so the
 # fixed contract's wording ("note_markdown", "basis_note") stays true here.
 SAVE_INSTRUCTION = (
     "\n\n## 交回笔记\n\n"
     "写完后调用 save_agent_note：note_markdown 放笔记本身，basis_note 用一两句话说明依据"
     "（哪些部分靠画面、哪些只有字幕、有没有看不清或没信息的截图）。"
-    "录像分成几部分时，每部分各取一次材料、各写一份，最后按顺序放进 part_notes 一次交回。"
+    "录像分成几部分时，每写完一部分就带上 part（这一部分的序号）保存，不用等全部写完；"
+    "存过的部分留在 FluentFlow 里，换了对话也能接着写下一部分，全部存齐后才替换任务的笔记。"
     "截图在本机的路径就是 frames 里的 path，打开看过再决定引不引用；引用时只写文件名。"
     "\n\n交回之前，按上面写法里「不漏」一节对照这部分转录逐条查一遍，没写到的写进讲它的那一段。"
     "交回后 FluentFlow 会再查一遍：返回的 coverage.missing 里列着它认为没写到的知识点，"
-    "非空时把这些补进对应部分，再调用一次 save_agent_note。"
+    "非空时把这些补进这一部分，再用同一个 part 保存一次。"
+)
+
+# Said once the last part is in. Each part only saw its own stretch, so what the
+# parts share is what a reader trips over: the same conclusion twice, a term
+# explained in two places, a question raised early and answered later.
+READ_THROUGH_INSTRUCTION = (
+    "所有部分已经拼成一篇，成了这个任务的笔记。最后通读一遍：用 get_agent_note_part 逐部分取回已存的笔记"
+    "（只有笔记，没有转录），找出几部分之间重复的结论、重复解释的术语（只在第一次出现的地方解释）、"
+    "前面提出后面才回答的问题。改动落在哪一部分，就用 save_agent_note 带同一个 part 重新保存那一部分；"
+    "没有要改的就结束。"
 )
 
 
@@ -109,12 +140,16 @@ def _eligible(task_id: str, job: dict[str, Any]) -> tuple[Any, list[claude_visio
         transcript = cut_timeline.timestamped_transcript(segments) if segments else ""
         if not transcript.strip():
             raise AgentNoteError(vn._cut_media_reason(task_id, result))
-        return _TranscriptOnly(), claude_vision.transcript_parts(transcript), segments
+        return _TranscriptOnly(), _parts(transcript), segments
     described = vn.describe(task_id, job, channel=_AGENT_CHANNEL)
     if not described["eligible"]:
         raise AgentNoteError(str(described["reason"]))
     transcript, _timeline, segments = vn._transcript_for_media(task_id, result, media)
-    return media, claude_vision.transcript_parts(transcript), segments
+    return media, _parts(transcript), segments
+
+
+def _parts(transcript: str) -> list[claude_vision.TranscriptPart]:
+    return claude_vision.transcript_parts(transcript, max_chars=AGENT_PART_CHARS)
 
 
 def _stored_frames(task_id: str, result: dict[str, Any]) -> list[FrameInput] | None:
@@ -198,6 +233,19 @@ def material(
     }
 
 
+def _cleaned(draft: str | None, part: claude_vision.TranscriptPart, *, where: str,
+             basis_note: str, model: str) -> claude_vision.VisualNoteDraft:
+    # An agent editing the task's existing note hands back the served URLs
+    # that note already had; turn them back into file names so the frames it
+    # cites are counted and served the same way as freshly cited ones.
+    markdown = _SERVED_FRAME.sub(r"(\1)", str(draft or ""))
+    markdown = visual_note_check.strip_leading_residue(markdown)
+    reason = visual_note_check.too_short_reason(markdown, part.text)
+    if reason:
+        raise AgentNoteError(f"{where}{reason.replace('Claude 返回的笔记', '')}，没有替换现有笔记，请重写后再交")
+    return claude_vision.VisualNoteDraft(markdown=markdown, basis_note=basis_note, model=model)
+
+
 def save(
     task_id: str,
     *,
@@ -210,6 +258,10 @@ def save(
 ) -> dict[str, Any]:
     """Make the agent's note the task's note, keeping the one it replaces.
 
+    Three shapes: ``note_markdown`` alone for a one-part recording or for a whole
+    note an agent edited; ``part_notes`` with every part at once. A note written
+    part by part goes through ``save_part`` instead.
+
     The note is saved whatever the coverage check finds; what it finds missing
     is recorded on the note's state as ``coverage`` for the caller to hand back
     to the agent. ``checker`` is who checks: ``True`` resolves it the way the
@@ -217,34 +269,158 @@ def save(
     """
     job = _job(task_id, client_id)
     media, parts, _segments = _eligible(task_id, job)
-    drafts = list(part_notes or []) if part_notes else ([note_markdown] if note_markdown is not None else [])
-    if len(drafts) != len(parts):
-        raise AgentNoteError(
-            f"这段录像分成 {len(parts)} 部分，要交回 {len(parts)} 份笔记（part_notes），收到 {len(drafts)} 份"
-            if len(parts) > 1 else "没有收到笔记内容（note_markdown）"
-        )
-    cleaned = []
-    for draft, part in zip(drafts, parts):
-        # An agent editing the task's existing note hands back the served URLs
-        # that note already had; turn them back into file names so the frames it
-        # cites are counted and served the same way as freshly cited ones.
-        markdown = _SERVED_FRAME.sub(r"(\1)", str(draft or ""))
-        markdown = visual_note_check.strip_leading_residue(markdown)
-        reason = visual_note_check.too_short_reason(markdown, part.text)
-        if reason:
-            where = f"第 {part.index} 部分" if len(parts) > 1 else "这份笔记"
-            raise AgentNoteError(f"{where}{reason.replace('Claude 返回的笔记', '')}，没有替换现有笔记，请重写后再交")
-        cleaned.append(claude_vision.VisualNoteDraft(markdown=markdown, basis_note=basis_note, model=model))
-    coverage = _coverage(cleaned, parts, checker)
-    joined = vn._joined_draft(cleaned, parts, title=vn.note_title(job))
+    if part_notes:
+        if len(part_notes) != len(parts):
+            raise AgentNoteError(
+                f"这段录像分成 {len(parts)} 部分，要交回 {len(parts)} 份笔记（part_notes），收到 {len(part_notes)} 份"
+            )
+        cleaned = [
+            _cleaned(draft, part, where=f"第 {part.index} 部分" if len(parts) > 1 else "这份笔记",
+                     basis_note=basis_note, model=model)
+            for draft, part in zip(part_notes, parts)
+        ]
+        coverage = _coverage(cleaned, parts, checker)
+        updated = _finish(task_id, job, media, parts, cleaned, coverage,
+                          basis_note=basis_note, model=model, client_id=client_id)
+        _write_store(task_id, parts, {
+            part.index: _stored(part, draft.markdown, record)
+            for part, draft, record in zip(parts, cleaned, coverage["parts"])
+        }, joined=_note_of(updated), basis_note=basis_note, model=model)
+        return updated
+    if note_markdown is None:
+        raise AgentNoteError("没有收到笔记内容（note_markdown）")
+    if len(parts) == 1:
+        cleaned = [_cleaned(note_markdown, parts[0], where="这份笔记", basis_note=basis_note, model=model)]
+        coverage = _coverage(cleaned, parts, checker)
+        updated = _finish(task_id, job, media, parts, cleaned, coverage,
+                          basis_note=basis_note, model=model, client_id=client_id)
+        _write_store(task_id, parts, {1: _stored(parts[0], cleaned[0].markdown, coverage["parts"][0])},
+                     joined=_note_of(updated), basis_note=basis_note, model=model)
+        return updated
+    # A whole note for a recording in several parts: an agent fixing the note it
+    # read. It is taken as it is, measured against the whole transcript; the
+    # parts saved earlier no longer describe the note, so they go.
+    whole = claude_vision.TranscriptPart(text="\n".join(part.text for part in parts), index=1, total=1)
+    cleaned = [_cleaned(note_markdown, whole, where="这份笔记", basis_note=basis_note, model=model)]
+    coverage = {"checker": "", "parts": [
+        {"part": part.index, **note_coverage.unchecked("整篇交回的修改，没有逐部分查漏")} for part in parts
+    ], "missing": []}
+    updated = _finish(task_id, job, media, parts, cleaned, coverage, basis_note=basis_note, model=model,
+                      client_id=client_id, joined_markdown=cleaned[0].markdown)
+    _drop_store(task_id)
+    return updated
 
+
+def save_part(
+    task_id: str,
+    *,
+    part: int,
+    note_markdown: str | None,
+    basis_note: str = "",
+    model: str = "",
+    client_id: str | None = None,
+    checker: tuple[note_coverage.Chat, str] | None | bool = True,
+) -> dict[str, Any]:
+    """Keep one part of the note; once every part is in, they become the task's note.
+
+    Saving as each part is written keeps a long recording from having to sit in
+    the agent's conversation whole: the conversation can be compacted, or a new
+    one started, and nothing written is lost. Until the last part arrives the
+    task's note is left alone.
+
+    Saving a part again after the note was joined updates that part in the note,
+    which is how the read-through and the coverage fill land. It is refused when
+    the note was changed after the join (an edit, another writer), because
+    joining the stored parts again would throw that change away.
+    """
+    job = _job(task_id, client_id)
+    media, parts, _segments = _eligible(task_id, job)
+    if not note_markdown:
+        raise AgentNoteError("没有收到这一部分的笔记内容（note_markdown）")
+    if not 1 <= part <= len(parts):
+        raise AgentNoteError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")
+    target = parts[part - 1]
+    where = f"第 {part} 部分" if len(parts) > 1 else "这份笔记"
+    draft = _cleaned(note_markdown, target, where=where, basis_note=basis_note, model=model)
+    store = _read_store(task_id)
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    joined = store.get("joined_hash")
+    if joined and joined != _hash(str(result.get("summary_markdown") or "")) and _complete(store, parts):
+        raise AgentNoteError(
+            "这篇笔记在各部分拼好之后又被改过（编辑器里的修改或别的写法重写），按部分保存会把那些改动覆盖掉。"
+            "请用 get_task_package 读出现在的整篇笔记，改好后用 note_markdown 整篇交回，不传 part。"
+        )
+    coverage = _coverage([draft], [target], checker)
+    saved = _valid_parts(store, parts)
+    saved[part] = _stored(target, draft.markdown, coverage["parts"][0])
+    basis_note = basis_note or str(store.get("basis_note") or "")
+    model = model or str(store.get("model") or "")
+    remaining = [p.index for p in parts if p.index not in saved]
+    answer: dict[str, Any] = {
+        "part": part,
+        "total_parts": len(parts),
+        "remaining_parts": remaining,
+        "coverage": {"checker": coverage["checker"], "parts": coverage["parts"], "missing": coverage["missing"]},
+        "completed": not remaining,
+        "job": None,
+    }
+    if remaining:
+        _write_store(task_id, parts, saved, joined=None, basis_note=basis_note, model=model)
+        answer["next"] = f"第 {part} 部分已保存。还差第 {'、'.join(str(i) for i in remaining)} 部分，写完一部分存一部分。"
+        return answer
+    cleaned = [
+        claude_vision.VisualNoteDraft(markdown=saved[p.index]["markdown"], basis_note=basis_note, model=model)
+        for p in parts
+    ]
+    combined = {"checker": coverage["checker"], "parts": [saved[p.index]["coverage"] for p in parts],
+                "missing": [{"part": p.index, **item}
+                            for p in parts for item in (saved[p.index]["coverage"].get("missing") or [])]}
+    keep = vn.visual_note_state(result).get("replaced_note") if joined else None
+    updated = _finish(task_id, job, media, parts, cleaned, combined, basis_note=basis_note, model=model,
+                      client_id=client_id, keep_replaced=keep)
+    _write_store(task_id, parts, saved, joined=_note_of(updated), basis_note=basis_note, model=model)
+    answer["job"] = updated
+    answer["next"] = READ_THROUGH_INSTRUCTION if len(parts) > 1 else "笔记已保存。"
+    return answer
+
+
+def saved_part(task_id: str, *, part: int, client_id: str | None = None) -> dict[str, Any]:
+    """One part of the note as it was saved, without its transcript: what the
+    read-through reads, a part at a time, so it fits where the whole note would not."""
+    job = _job(task_id, client_id)
+    _media, parts, _segments = _eligible(task_id, job)
+    if not 1 <= part <= len(parts):
+        raise AgentNoteError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")
+    saved = _valid_parts(_read_store(task_id), parts)
+    if part not in saved:
+        raise AgentNoteError(f"第 {part} 部分还没有保存过（或转录改过之后没有重新保存）")
+    return {
+        "part": part,
+        "total_parts": len(parts),
+        "starts_at": parts[part - 1].starts_at,
+        "ends_at": parts[part - 1].ends_at,
+        "markdown": saved[part]["markdown"],
+        "coverage": saved[part]["coverage"],
+    }
+
+
+def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, model: str,
+            client_id: str | None, joined_markdown: str | None = None,
+            keep_replaced: dict[str, Any] | None = None) -> dict[str, Any]:
+    joined = joined_markdown if joined_markdown is not None else (
+        vn._joined_draft(cleaned, parts, title=vn.note_title(job)).markdown
+    )
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     frames = (_stored_frames(task_id, result) or []) if media.has_video else []
-    cited = vn.cited_frames(joined.markdown, frames)
-    markdown = vn._rewrite_image_targets(joined.markdown, task_id, frames)
+    cited = vn.cited_frames(joined, frames)
+    markdown = vn._rewrite_image_targets(joined, task_id, frames)
     artifact = write_text_artifact(task_id, VISUAL_NOTE_KIND, VISUAL_NOTE_ARTIFACT_FILENAME, markdown.rstrip() + "\n")
     skill = note_skills.load_note_skill()
     result_fields, replaced = vn._promotion(result, markdown, media_kind=media.kind)
+    # A part saved again after the join replaces the agent's own earlier join;
+    # the note to put back is still the one from before the agent started.
+    if keep_replaced:
+        replaced = keep_replaced
     result_fields["summary_written_from"] = NOTE_FROM_AGENT
     state = {
         "status": vn.STATUS_COMPLETED,
@@ -284,6 +460,66 @@ def save(
     )
 
 
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _stored(part: claude_vision.TranscriptPart, markdown: str, coverage: dict[str, Any]) -> dict[str, Any]:
+    return {"transcript_hash": _hash(part.text), "markdown": markdown, "coverage": coverage}
+
+
+def _note_of(job: dict[str, Any]) -> str:
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    return str(result.get("summary_markdown") or "")
+
+
+def _read_store(task_id: str) -> dict[str, Any]:
+    path = artifact_target_path(task_id, _PARTS_FILENAME)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _valid_parts(store: dict[str, Any], parts: list[claude_vision.TranscriptPart]) -> dict[int, dict[str, Any]]:
+    """The saved parts that still match the transcript as it is now split.
+
+    A part is kept only while its stretch of transcript is unchanged: after an
+    edit to the transcript, or a change in how it splits, the saved note no
+    longer describes that stretch and is written again.
+    """
+    saved = store.get("parts") if isinstance(store.get("parts"), dict) else {}
+    if store.get("total_parts") != len(parts):
+        return {}
+    valid = {}
+    for part in parts:
+        entry = saved.get(str(part.index))
+        if isinstance(entry, dict) and entry.get("transcript_hash") == _hash(part.text):
+            valid[part.index] = entry
+    return valid
+
+
+def _complete(store: dict[str, Any], parts: list[claude_vision.TranscriptPart]) -> bool:
+    return len(_valid_parts(store, parts)) == len(parts)
+
+
+def _write_store(task_id: str, parts, saved: dict[int, dict[str, Any]], *, joined: str | None,
+                 basis_note: str, model: str) -> None:
+    path = artifact_target_path(task_id, _PARTS_FILENAME)
+    path.write_text(json.dumps({
+        "total_parts": len(parts),
+        "parts": {str(index): entry for index, entry in sorted(saved.items())},
+        "joined_hash": _hash(joined) if joined is not None else None,
+        "basis_note": basis_note,
+        "model": model,
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def _drop_store(task_id: str) -> None:
+    artifact_target_path(task_id, _PARTS_FILENAME).unlink(missing_ok=True)
+
+
 def _coverage(drafts, parts, checker) -> dict[str, Any]:
     """Each part checked against its own transcript, nothing rewritten: the
     agent wrote the note, so the agent fills what is missing."""
@@ -305,4 +541,4 @@ def _coverage(drafts, parts, checker) -> dict[str, Any]:
     return {"checker": name, "parts": records, "missing": missing}
 
 
-__all__ = ["AgentNoteError", "CHANNEL_AGENT", "material", "save"]
+__all__ = ["AGENT_PART_CHARS", "AgentNoteError", "CHANNEL_AGENT", "material", "save", "save_part", "saved_part"]

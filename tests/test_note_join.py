@@ -164,7 +164,8 @@ def test_a_note_written_in_parts_is_stored_with_one_title_and_running_numbers(tm
 
 @pytest.mark.usefixtures("job_store")
 def test_an_agent_note_saved_in_parts_is_joined_the_same_way(tmp_path, monkeypatch):
-    monkeypatch.setattr(vn.claude_vision, "MAX_TRANSCRIPT_CHARS", 20)
+    # An agent's parts are sized for its tool results, not for the frame note's requests.
+    monkeypatch.setattr(an, "AGENT_PART_CHARS", 20)
     material = an.material(TASK, client_id="anonymous", keyframe_extractor=_fake_extractor(tmp_path))
     total = material["total_parts"]
     assert total > 1
