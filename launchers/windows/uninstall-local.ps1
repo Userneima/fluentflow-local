@@ -1,4 +1,4 @@
-# Uninstall FluentFlow Local from this Windows machine.
+﻿# Uninstall FluentFlow Local from this Windows machine.
 #
 # Three layers, because "uninstall" means three very different things here:
 #   Program (always): virtual environment, frontend dependencies and build,
@@ -48,7 +48,7 @@ function Get-EnvFilePort([string]$RepoDir) {
 $Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } elseif (Get-EnvFilePort $Repo) { Get-EnvFilePort $Repo } else { "8000" }
 
 if (-not (Test-Path (Join-Path $Repo "backend\local_main.py"))) {
-    throw "backend\local_main.py was not found under $Repo; this does not look like the FluentFlow Local checkout."
+    throw "在 ${Repo} 下找不到 backend\local_main.py，这不像 FluentFlow Local 代码目录。"
 }
 
 function Get-FolderSize([string]$Path) {
@@ -70,7 +70,7 @@ function Format-Size([double]$Bytes) {
 }
 
 # The service holds files this script is about to delete, so stop it first.
-Write-Host "`n== Checking whether the service is running =="
+Write-Host "`n== 检查服务是否在运行 =="
 $Health = $null
 try {
     $Health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
@@ -82,30 +82,30 @@ try {
 # reading a top-level "execution" never matched, so a running service went
 # unnoticed and its environment was deleted under it.
 if ($Health -and ($Health.edition -eq "local" -or $Health.runtime.execution -eq "local")) {
-    Write-Host "FluentFlow Local is running on port $Port."
+    Write-Host "FluentFlow Local 正在端口 ${Port} 上运行。"
     try {
         $Jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?limit=100" -TimeoutSec 3
         $Busy = @($Jobs.jobs | Where-Object { $_.status -in @("queued", "processing", "running", "pending") }).Count
         if ($Busy -gt 0) {
-            Write-Host "WARNING: $Busy job(s) are still running; stopping now interrupts them."
+            Write-Host "注意：后台还有 ${Busy} 个任务在进行中，停止会让它们中断。"
         }
     } catch {
         # A service that cannot answer its own job list is not worth protecting.
     }
     if ($DryRun) {
-        Write-Host "(-DryRun: it will not actually be stopped)"
+        Write-Host "（-DryRun：不会真的停止它）"
     } else {
         if (-not $Yes) {
-            $Reply = Read-Host "Stop it and continue uninstalling? [y/N]"
-            if ($Reply -notmatch '^[Yy]') { throw "Cancelled. Nothing was deleted." }
+            $Reply = Read-Host "停止它并继续卸载？[y/N]"
+            if ($Reply -notmatch '^[Yy]') { throw "已取消，什么都没有删除。" }
         }
         Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
             ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 2
-        Write-Host "Stopped."
+        Write-Host "已停止。"
     }
 } else {
-    Write-Host "The service is not running."
+    Write-Host "服务没有在运行。"
 }
 
 # Ask the code where the data lives: FLUENTFLOW_DATA_DIR can move it.
@@ -124,7 +124,7 @@ if (Test-Path $Python) {
 }
 if (-not $DataRoot) {
     $DataRoot = if ($env:FLUENTFLOW_DATA_DIR) { $env:FLUENTFLOW_DATA_DIR } else { Join-Path $env:APPDATA "FluentFlow" }
-    Write-Host "`n(Could not ask the code where data lives; using the default: $DataRoot)"
+    Write-Host "`n（问不到代码里的数据目录，按默认位置处理：${DataRoot}）"
 }
 
 $ModelDirs = @()
@@ -138,9 +138,9 @@ if ($Models) {
         }
     }
     if ($ModelDirs.Count -eq 0) {
-        Write-Host "`n(Could not list the model directories: the virtual environment may already be gone."
-        Write-Host " They are usually under %USERPROFILE%\.cache\huggingface\hub\ in directories starting"
-        Write-Host " with models--mlx-community--whisper- or models--Systran--faster-whisper-.)"
+        Write-Host "`n（列不出模型目录：虚拟环境可能已经不可用。模型通常在"
+        Write-Host "  %USERPROFILE%\.cache\huggingface\hub\ 下以 models--mlx-community--whisper-"
+        Write-Host "  和 models--Systran--faster-whisper- 开头的目录里，可自行确认后删除。）"
     }
 }
 
@@ -151,21 +151,21 @@ function Add-Target([string]$Path, [string]$Label, [bool]$Sensitive = $false) {
     }
 }
 
-Add-Target (Join-Path $Repo ".venv") "Python virtual environment"
-Add-Target (Join-Path $Repo "venv") "Python virtual environment (old location)"
-Add-Target (Join-Path $Repo "node_modules") "Frontend dependencies"
-Add-Target (Join-Path $Repo "frontend\dist-local") "Frontend build output"
-Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd") "Desktop launcher"
-Add-Target (Join-Path $env:LOCALAPPDATA "FluentFlow\Logs") "Logs"
-foreach ($Dir in $ModelDirs) { Add-Target $Dir "Transcription model" }
-if ($Data) { Add-Target $DataRoot "Task history, transcripts, notes, media" $true }
+Add-Target (Join-Path $Repo ".venv") "Python 虚拟环境"
+Add-Target (Join-Path $Repo "venv") "Python 虚拟环境（旧位置）"
+Add-Target (Join-Path $Repo "node_modules") "前端依赖"
+Add-Target (Join-Path $Repo "frontend\dist-local") "前端构建产物"
+Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd") "桌面启动器"
+Add-Target (Join-Path $env:LOCALAPPDATA "FluentFlow\Logs") "日志"
+foreach ($Dir in $ModelDirs) { Add-Target $Dir "转录模型" }
+if ($Data) { Add-Target $DataRoot "任务历史、转录稿、笔记、媒体文件" $true }
 
 if ($Targets.Count -eq 0) {
-    Write-Host "`nNothing left to remove."
+    Write-Host "`n✓ 没有找到需要删除的东西。"
     exit 0
 }
 
-Write-Host "`n== Will be deleted =="
+Write-Host "`n== 将要删除 =="
 $HasSensitive = $false
 foreach ($Target in $Targets) {
     Write-Host ("  {0,-10} {1}" -f (Format-Size (Get-FolderSize $Target.Path)), $Target.Path)
@@ -174,40 +174,40 @@ foreach ($Target in $Targets) {
 }
 
 if ($DryRun) {
-    Write-Host "`n(-DryRun: nothing above was actually deleted.)"
+    Write-Host "`n（-DryRun：以上都没有真的删除。）"
     exit 0
 }
 
 Write-Host ""
 if ($HasSensitive) {
-    Write-Host "WARNING: this includes your task data. It cannot be recovered."
+    Write-Host "注意：其中包含你的任务数据，删掉之后无法恢复。"
     if (-not $Yes) {
-        $Reply = Read-Host "Type DELETE to confirm (anything else cancels)"
-        if ($Reply -ne "DELETE") { throw "Cancelled. Nothing was deleted." }
+        $Reply = Read-Host "确认请输入 DELETE（其他任何输入都会取消）"
+        if ($Reply -ne "DELETE") { throw "已取消，什么都没有删除。" }
     }
 } elseif (-not $Yes) {
-    $Reply = Read-Host "Delete everything listed above? [y/N]"
-    if ($Reply -notmatch '^[Yy]') { throw "Cancelled. Nothing was deleted." }
+    $Reply = Read-Host "确认删除以上内容？[y/N]"
+    if ($Reply -notmatch '^[Yy]') { throw "已取消，什么都没有删除。" }
 }
 
-Write-Host "`n== Deleting =="
+Write-Host "`n== 删除 =="
 foreach ($Target in $Targets) {
     Remove-Item -Recurse -Force -LiteralPath $Target.Path
-    Write-Host "Removed: $($Target.Path)"
+    Write-Host "已删除：$($Target.Path)"
 }
 
-Write-Host "`n== Still here =="
+Write-Host "`n== 还剩下 =="
 if ((-not $Data) -and (Test-Path $DataRoot)) {
-    Write-Host "  Your task data ($(Format-Size (Get-FolderSize $DataRoot))): $DataRoot"
-    Write-Host "    To remove it too: .\launchers\windows\uninstall-local.ps1 -Data"
+    Write-Host "  你的任务数据（$(Format-Size (Get-FolderSize $DataRoot))）：${DataRoot}"
+    Write-Host "    要一并删除：.\launchers\windows\uninstall-local.ps1 -Data"
 }
 if (-not $Models) {
-    Write-Host "  Transcription models (usually several GB): in the Hugging Face cache"
-    Write-Host "    To remove them too: .\launchers\windows\uninstall-local.ps1 -Models"
+    Write-Host "  转录模型（通常几 GB）：在 Hugging Face 缓存里"
+    Write-Host "    要一并删除：.\launchers\windows\uninstall-local.ps1 -Models"
 }
-Write-Host "  The checkout: $Repo"
-Write-Host "    This script lives inside it, so removing it is left to you."
+Write-Host "  代码目录：${Repo}"
+Write-Host "    本脚本就在里面，所以留给你自己删。"
 Write-Host ""
-Write-Host "  FFmpeg, Node.js and Python were left alone; other programs on this"
-Write-Host "  machine are likely to be using them."
-Write-Host "`nUninstall complete."
+Write-Host "  没有动 FFmpeg、Node.js 和 Python，它们是系统工具，"
+Write-Host "  这台机器上别的程序可能也在用。"
+Write-Host "`n✓ 卸载完成。"

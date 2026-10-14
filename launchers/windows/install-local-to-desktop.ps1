@@ -1,4 +1,4 @@
-# Create a Desktop shortcut command that keeps the current checkout path.
+﻿# Create a Desktop shortcut command that keeps the current checkout path.
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -8,10 +8,10 @@ $Desktop = [Environment]::GetFolderPath("Desktop")
 $Destination = Join-Path $Desktop "FluentFlow Local.cmd"
 
 if (-not (Test-Path $Launcher)) {
-    throw "Cannot find $Launcher"
+    throw "找不到 ${Launcher}"
 }
 
 $Content = "@echo off`r`nset `"FLUENTFLOW_REPO=$Repo`"`r`ncall `"$Launcher`"`r`n"
 [System.IO.File]::WriteAllText($Destination, $Content, [System.Text.UTF8Encoding]::new($false))
-Write-Host "Installed: $Destination"
+Write-Host "已安装：${Destination}"
 Start-Process explorer.exe -ArgumentList "/select,`"$Destination`""

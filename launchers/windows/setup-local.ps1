@@ -1,4 +1,4 @@
-# One-time Windows setup for FluentFlow Local.
+﻿# One-time Windows setup for FluentFlow Local.
 # Creates the project virtual environment, installs project-owned GPU runtime
 # DLLs when an NVIDIA adapter is present, builds the frontend, downloads the
 # transcription model, and creates the Desktop launcher. It never installs a
@@ -36,7 +36,7 @@ $Python = Join-Path $Venv "Scripts\python.exe"
 function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Command failed ($LASTEXITCODE): $FilePath $($Arguments -join ' ')"
+        throw "命令失败（退出码 ${LASTEXITCODE}）：$FilePath $($Arguments -join ' ')"
     }
 }
 
@@ -55,9 +55,9 @@ function Update-SessionPath {
 function Install-WithWinget([string]$Id, [string]$What, [string[]]$Extra = @()) {
     $Winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if (-not $Winget) {
-        throw "$What was not found, and winget is not available to install it. Install $What yourself, then run this script again."
+        throw "没找到 ${What}，也没有 winget 可以自动安装。请自己安装 ${What}，然后重新运行本脚本。"
     }
-    Write-Host "$What was not found. Installing it with winget..."
+    Write-Host "没找到 ${What}，正在用 winget 安装…"
     Invoke-Checked $Winget.Source (@(
         "install", "--id", $Id, "-e", "--source", "winget",
         "--accept-source-agreements", "--accept-package-agreements"
@@ -69,8 +69,8 @@ function Install-WithWinget([string]$Id, [string]$What, [string[]]$Extra = @()) 
 function Invoke-Pip([string[]]$Arguments) {
     & $Python -m pip @Arguments
     if ($LASTEXITCODE -eq 0) { return }
-    if ($env:PIP_INDEX_URL) { throw "pip failed: $($Arguments -join ' ')" }
-    Write-Host "Download failed; retrying from the Tsinghua mirror..."
+    if ($env:PIP_INDEX_URL) { throw "pip 失败：$($Arguments -join ' ')" }
+    Write-Host "下载失败，换国内镜像（清华源）重试…"
     $env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
     try {
         Invoke-Checked $Python (@("-m", "pip") + $Arguments)
@@ -97,7 +97,7 @@ if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
     -not (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
     $Winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if ($Winget) {
-        Write-Host "FFmpeg was not found (transcoding and frame extraction need it). Installing it..."
+        Write-Host "未找到 FFmpeg（转码和抽帧都要用它），正在安装…"
         # The agreement switches are what make this unattended: without them
         # winget stops on a prompt the user did not ask to be shown.
         Invoke-Checked $Winget.Source @(
@@ -110,11 +110,11 @@ if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
         Update-SessionPath
         if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
             -not (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
-            throw "FFmpeg was installed by winget but ffmpeg.exe / ffprobe.exe are still not on PATH. Close this PowerShell window, open a new one, and run this script again. If they are still missing, add FFmpeg's bin folder to PATH yourself."
+            throw "winget 已装好 FFmpeg，但 PATH 里还找不到 ffmpeg.exe 或 ffprobe.exe。请关掉这个 PowerShell 窗口，开一个新窗口，重新运行本脚本。还是找不到的话，把 FFmpeg 的 bin 目录手动加进 PATH。"
         }
-        Write-Host "FFmpeg installed: $((Get-Command ffmpeg.exe).Source)"
+        Write-Host "已安装 FFmpeg：$((Get-Command ffmpeg.exe).Source)"
     } else {
-        throw "FFmpeg was not found. Install it (winget install Gyan.FFmpeg) and make sure ffmpeg.exe and ffprobe.exe are on PATH, then run this script again."
+        throw "未找到 FFmpeg。请先安装（winget install Gyan.FFmpeg），确认 ffmpeg.exe 和 ffprobe.exe 在 PATH 里，再重新运行本脚本。"
     }
 }
 
@@ -136,23 +136,23 @@ if (-not (Test-Path $Python)) {
     }
     if (-not $PythonOk) {
         # User scope: the machine-wide installer asks for administrator rights.
-        Install-WithWinget "Python.Python.3.12" "Python 3.10 or newer" @("--scope", "user")
+        Install-WithWinget "Python.Python.3.12" "3.10 以上的 Python" @("--scope", "user")
         $PyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
         if (-not $PyLauncher) {
-            throw "Python was installed but py.exe is not on PATH yet. Open a new PowerShell window and run this script again."
+            throw "Python 已经装好，但 PATH 里还找不到 py.exe。请开一个新的 PowerShell 窗口，重新运行本脚本。"
         }
     }
-    Write-Host "Creating project virtual environment..."
+    Write-Host "创建项目虚拟环境…"
     Invoke-Checked $PyLauncher.Source @("-3", "-m", "venv", $Venv)
 }
 
-Write-Host "Installing FluentFlow Local Python dependencies..."
+Write-Host "安装 Python 依赖（体积较大，首次约需十几分钟）…"
 Invoke-Pip @("install", "-r", (Join-Path $Repo "requirements-local.txt"))
 
 # yt-dlp is kept at its newest release: Douyin, Bilibili and YouTube change their
 # pages often and an old copy fails a whole platform. Not fatal: it only affects
 # video links, and every launch retries through scripts\update_yt_dlp.py.
-Write-Host "Installing/updating yt-dlp (the video link downloader)..."
+Write-Host "安装/更新 yt-dlp（视频链接下载器）…"
 try {
     & $Python -m pip install -U --disable-pip-version-check yt-dlp
     $YtDlpOk = ($LASTEXITCODE -eq 0)
@@ -160,14 +160,14 @@ try {
     $YtDlpOk = $false
 }
 if (-not $YtDlpOk) {
-    Write-Host "! yt-dlp could not be installed or updated (usually a network problem). Local files still work; video links need it. Every launch retries automatically, or run: .\.venv\Scripts\python.exe scripts\update_yt_dlp.py --force" -ForegroundColor Yellow
+    Write-Host "! yt-dlp 没有装上或没能更新到最新版（多半是网络问题）。上传本地文件不受影响，视频链接功能要等它装好。之后每次启动会自动再试，也可以手动运行：.\.venv\Scripts\python.exe scripts\update_yt_dlp.py --force" -ForegroundColor Yellow
 }
 
 if (Test-NvidiaAdapter) {
-    Write-Host "NVIDIA adapter detected. Installing FluentFlow's GPU runtime..."
+    Write-Host "检测到 NVIDIA 显卡，正在安装 FluentFlow 的 GPU 运行库…"
     Invoke-Pip @("install", "-r", (Join-Path $Repo "requirements-windows-gpu.txt"))
 } else {
-    Write-Host "No NVIDIA adapter detected; FluentFlow will use the CPU transcription runtime."
+    Write-Host "没有检测到 NVIDIA 显卡，FluentFlow 将用 CPU 转录。"
 }
 
 # Only building the interface needs Node.js. Without one on the machine, a
@@ -182,7 +182,7 @@ if (-not $Npm) {
     $NodeName = "node-$NodeVersion-win-x64"
     $NodeHome = Join-Path $ToolsDir $NodeName
     if (-not (Test-Path (Join-Path $NodeHome "npm.cmd"))) {
-        Write-Host "Node.js was not found (building the interface needs it). Downloading a portable copy..."
+        Write-Host "未找到 Node.js（构建界面要用它），正在下载免安装版…"
         $Zip = Join-Path $ToolsDir "$NodeName.zip"
         try {
             Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/$NodeVersion/$NodeName.zip" -OutFile $Zip
@@ -195,7 +195,7 @@ if (-not $Npm) {
     $env:Path = "$NodeHome;$env:Path"
     $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if (-not $Npm) {
-        throw "Node.js was downloaded but npm.cmd is not runnable from $NodeHome."
+        throw "Node.js 已下载，但运行不了 ${NodeHome} 里的 npm.cmd。"
     }
 }
 
@@ -203,7 +203,7 @@ if (-not $Npm) {
 function Invoke-Npm([string[]]$Arguments) {
     & $Npm.Source @Arguments
     if ($LASTEXITCODE -eq 0) { return }
-    Write-Host "Download failed; retrying from the npmmirror registry..."
+    Write-Host "下载失败，换国内镜像（npmmirror）重试…"
     Invoke-Checked $Npm.Source ($Arguments + @("--registry=https://registry.npmmirror.com"))
 }
 
@@ -220,9 +220,9 @@ if (Test-Path $PackageJson) {
 
 Push-Location $Repo
 try {
-    Write-Host "Installing frontend dependencies..."
+    Write-Host "安装前端依赖…"
     Invoke-Npm @("ci")
-    Write-Host "Building the local frontend ($BuildScript)..."
+    Write-Host "构建前端：npm run ${BuildScript}"
     Invoke-Checked $Npm.Source @("run", $BuildScript)
 } finally {
     Pop-Location
@@ -232,16 +232,16 @@ try {
 # wait has no progress and no explanation. A failure is not fatal: the model can
 # be fetched later, and the first run falls back to downloading it itself.
 if ($SkipModel) {
-    Write-Host "Skipping the transcription model; the first transcription will download it."
+    Write-Host "按要求跳过转录模型，第一次转录时会自动下载。"
 } else {
-    Write-Host "Preparing the transcription model..."
+    Write-Host "准备转录模型…"
     & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch"
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Download failed; retrying from the hf-mirror.com mirror..."
+        Write-Host "下载失败，换镜像源（hf-mirror.com）重试…"
         & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch" "--mirror"
     }
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "The model was not downloaded. The first transcription will download it (switching to the hf-mirror.com mirror if huggingface.co is unreachable), or run .\.venv\Scripts\python.exe scripts\stt_model.py fetch --mirror now."
+        Write-Host "转录模型没有下载成功。第一次转录时会自动下载（连不上 huggingface.co 时换 hf-mirror.com 镜像），也可以现在运行：.\.venv\Scripts\python.exe scripts\stt_model.py fetch --mirror"
     }
 }
 
@@ -255,10 +255,10 @@ if (-not $HasToken) {
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($Bytes)
     $Token = -join ($Bytes | ForEach-Object { $_.ToString("x2") })
     Add-Content -Path $EnvFile -Value "`nFLUENTFLOW_ACCESS_TOKEN=$Token" -Encoding UTF8
-    Write-Host "Generated the agent access token in $EnvFile."
+    Write-Host "已生成访问令牌，写入 ${EnvFile}。"
 }
 
-Write-Host "Checking local runtime..."
+Write-Host "启动前检查…"
 Invoke-Checked $Python @((Join-Path $Repo "scripts\check_local_readiness.py"))
 Invoke-Checked (Join-Path $ScriptDir "install-local-to-desktop.ps1") @()
-Write-Host "Setup complete. Double-click 'FluentFlow Local.cmd' on your Desktop."
+Write-Host "安装完成。双击桌面上的「FluentFlow Local.cmd」即可启动。"
