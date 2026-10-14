@@ -78,27 +78,85 @@ def _stem(source: Path) -> str:
     return _UNSAFE.sub("_", source.stem).strip() or "recording"
 
 
-def _owner(folder: Path) -> str:
+def _owners(folder: Path) -> list[tuple[str, str]]:
+    """(task id, name suffix) for each task that has put files in ``folder``.
+
+    The marker holds one line per task: the id, and after a tab the suffix its
+    file names carry (empty for the first task)."""
     try:
-        return (folder / MARKER_NAME).read_text(encoding="utf-8").strip()
+        lines = (folder / MARKER_NAME).read_text(encoding="utf-8").splitlines()
     except OSError:
-        return ""
+        return []
+    owners = []
+    for line in lines:
+        task, _, suffix = line.partition("\t")
+        if task.strip():
+            owners.append((task.strip(), suffix))
+    return owners
 
 
-def claim(task_id: str, source: Path) -> Path:
-    """This task's folder beside ``source``: the one it already marked, else the
-    first name not taken, created and marked now."""
-    base = source.parent / _stem(source)
+def _owner(folder: Path) -> str:
+    owners = _owners(folder)
+    return owners[0][0] if owners else ""
+
+
+def _add_owner(folder: Path, task_id: str, suffix: str) -> None:
+    with (folder / MARKER_NAME).open("a", encoding="utf-8") as handle:
+        handle.write(f"{task_id}\t{suffix}\n" if suffix else f"{task_id}\n")
+
+
+def _lives_in_its_own_folder(source: Path) -> bool:
+    """The user moved the recording into the folder made for it (found
+    2026-10-14). Its outputs go into that folder rather than a new one nested
+    inside it."""
+    return source.parent.name == _stem(source)
+
+
+def _taken(folder: Path, stem: str, suffix: str) -> bool:
+    names = [f"{stem}_{label}{suffix}" for label in (CUT_LABEL, COMPRESSED_LABEL, NOTE_LABEL)]
+    return any(path.stem in names for path in folder.iterdir() if path.is_file())
+
+
+def place(task_id: str, source: Path) -> tuple[Path, str]:
+    """This task's folder, and the suffix its file names carry there.
+
+    Beside the recording: the folder named after it that this task marked, else
+    the first such name not taken (``<name> (2)`` ...), created and marked now;
+    file names carry no suffix. When the recording already sits in its own
+    folder, that folder is shared by every task on it, and a later task's files
+    carry `` (2)``, `` (3)``... so nothing an earlier task left is overwritten."""
+    stem = _stem(source)
+    if _lives_in_its_own_folder(source):
+        folder = source.parent
+        for task, suffix in _owners(folder):
+            if task == task_id:
+                return folder, suffix
+        used = {suffix for _task, suffix in _owners(folder)}
+        for n in range(1, MAX_FOLDERS_PER_RECORDING + 1):
+            suffix = "" if n == 1 else f" ({n})"
+            if suffix not in used and not _taken(folder, stem, suffix):
+                _add_owner(folder, task_id, suffix)
+                return folder, suffix
+        raise OutputFolderError(f"这个文件夹里的结果版本太多了，先清理一下：{folder}")
+    base = source.parent / stem
     candidates = [base] + [base.with_name(f"{base.name} ({n})") for n in range(2, MAX_FOLDERS_PER_RECORDING + 1)]
     for candidate in candidates:
         if candidate.is_dir() and _owner(candidate) == task_id:
-            return candidate
+            return candidate, ""
     for candidate in candidates:
         if not candidate.exists():
             candidate.mkdir(parents=False)
-            (candidate / MARKER_NAME).write_text(task_id + "\n", encoding="utf-8")
-            return candidate
+            _add_owner(candidate, task_id, "")
+            return candidate, ""
     raise OutputFolderError(f"「{base.name}」开头的文件夹太多了，先清理一下：{source.parent}")
+
+
+def claim(task_id: str, source: Path) -> Path:
+    return place(task_id, source)[0]
+
+
+def file_name(source: Path, label: str, suffix: str, extension: str) -> str:
+    return f"{_stem(source)}_{label}{suffix}{extension}"
 
 
 # ── putting files in it ─────────────────────────────────────────────────────
@@ -129,8 +187,8 @@ def deliver_media(task_id: str, source: Path, media: Path, label: str) -> dict[s
     Returns the fields the cut state has always carried (``delivered_path`` and
     so on) plus where the folder is."""
     try:
-        folder = claim(task_id, source)
-        target = folder / f"{_stem(source)}_{label}{media.suffix.lower() or '.mp4'}"
+        folder, suffix = place(task_id, source)
+        target = folder / file_name(source, label, suffix, media.suffix.lower() or ".mp4")
         how = _link_or_copy(media, target)
     except (OSError, OutputFolderError) as exc:
         logger.warning("could not put %s in the output folder for %s: %s", media, source, exc)
@@ -187,7 +245,7 @@ def frame_file(task_id: str, src: str) -> Path | None:
 
 
 def _note_for_folder(task_id: str, note: str, shots: Path) -> tuple[str, list[Path]]:
-    """The note with each screenshot pointing at ``截图/<file>``, and the files to copy."""
+    """The note with each screenshot pointing at ``<shots dir>/<file>``, and the files to copy."""
     files: list[Path] = []
 
     def local(match: re.Match[str]) -> str:
@@ -195,7 +253,7 @@ def _note_for_folder(task_id: str, note: str, shots: Path) -> tuple[str, list[Pa
         if path is None:
             return match.group(0)
         files.append(path)
-        return f"{match.group(1)}{SHOTS_DIRNAME}/{path.name}{match.group(3)}"
+        return f"{match.group(1)}{shots.name}/{path.name}{match.group(3)}"
 
     return _IMAGE.sub(local, note), files
 
@@ -233,24 +291,25 @@ def _sync_locked(task_id: str) -> dict[str, Any] | None:
 
 
 def _sync_files(task_id: str, source: Path, result: dict[str, Any]) -> dict[str, Any]:
-    folder = claim(task_id, source)
+    folder, suffix = place(task_id, source)
     process = folder / PROCESS_DIRNAME
     process.mkdir(exist_ok=True)
     stem = _stem(source)
     artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
 
-    for kind, suffix in (("transcript_txt", ".txt"), ("transcript_srt", ".srt")):
+    for kind, extension in (("transcript_txt", ".txt"), ("transcript_srt", ".srt")):
         path = _artifact_file(task_id, artifacts.get(kind))
         if path is not None:
-            shutil.copyfile(path, process / f"{stem}{suffix}")
+            shutil.copyfile(path, process / f"{stem}{suffix}{extension}")
     cut_list = _artifact_file(task_id, artifacts.get("debreath_cut_list"))
     if cut_list is not None:
-        shutil.copyfile(cut_list, process / f"{stem}_{CUT_LIST_LABEL}.json")
+        shutil.copyfile(cut_list, process / f"{stem}_{CUT_LIST_LABEL}{suffix}.json")
 
     record: dict[str, Any] = {"path": str(folder), "error": None}
     note = str(result.get("summary_markdown") or "").strip()
     if note:
-        shots = process / SHOTS_DIRNAME
+        # Per task when tasks share a folder: two notes' note_0001.jpg are different pictures.
+        shots = process / f"{SHOTS_DIRNAME}{suffix}"
         text, files = _note_for_folder(task_id, note, shots)
         if files:
             shots.mkdir(exist_ok=True)
@@ -258,12 +317,12 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any]) -> dict[str,
                 target = shots / path.name
                 if not target.exists():
                     shutil.copyfile(path, target)
-        changed = _write_if_changed(process / f"{stem}_{NOTE_LABEL}.md", text.rstrip() + "\n")
-        pdf = folder / f"{stem}_{NOTE_LABEL}.pdf"
+        changed = _write_if_changed(process / f"{stem}_{NOTE_LABEL}{suffix}.md", text.rstrip() + "\n")
+        pdf = folder / f"{stem}_{NOTE_LABEL}{suffix}.pdf"
         digest = hashlib.sha256(note.encode("utf-8")).hexdigest()
         previous = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
         if changed or not pdf.is_file() or previous.get("note_digest") != digest:
-            record.update(_export_pdf(task_id, folder, f"{stem}_{NOTE_LABEL}"))
+            record.update(_export_pdf(task_id, folder, f"{stem}_{NOTE_LABEL}{suffix}"))
         else:
             record["pdf_path"] = str(pdf)
         record["note_digest"] = digest
@@ -333,6 +392,8 @@ __all__ = [
     "OutputFolderError",
     "PROCESS_DIRNAME",
     "claim",
+    "file_name",
+    "place",
     "deliver_media",
     "frame_file",
     "original_path",

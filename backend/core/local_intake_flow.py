@@ -157,8 +157,8 @@ def _settled(
 
 def _compress_beside(path: Path, watch: TaskWatch, task_id: str) -> dict[str, Any]:
     try:
-        folder = output_folder.claim(task_id, path)
-        target = folder / f"{output_folder._stem(path)}_{output_folder.COMPRESSED_LABEL}.mp4"
+        folder, suffix = output_folder.place(task_id, path)
+        target = folder / output_folder.file_name(path, output_folder.COMPRESSED_LABEL, suffix, ".mp4")
     except (OSError, output_folder.OutputFolderError) as exc:
         logger.warning("no output folder for %s, compressing beside it: %s", path, exc)
         folder, target = None, None

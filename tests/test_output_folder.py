@@ -163,7 +163,7 @@ def test_a_folder_that_cannot_be_written_is_reported_not_raised(tmp_path, pdfs, 
     def refuse(*_a, **_k):
         raise PermissionError("Operation not permitted")
 
-    monkeypatch.setattr(output_folder, "claim", refuse)
+    monkeypatch.setattr(output_folder, "place", refuse)
 
     record = output_folder.sync(task)
 
@@ -179,3 +179,60 @@ def test_a_folder_scan_skips_the_videos_it_produces(tmp_path):
     listing = local_folder_intake.list_media(source.parent)
 
     assert [p.name for p in listing.files] == ["week-8.mov"]
+
+
+def _inside_its_own_folder(tmp_path: Path) -> Path:
+    folder = tmp_path / "lectures" / "week-8"
+    folder.mkdir(parents=True)
+    source = folder / "week-8.mov"
+    source.write_bytes(b"original")
+    return source
+
+
+def test_a_recording_moved_into_its_folder_gets_no_folder_inside_it(tmp_path, pdfs):
+    """Requirement (2026-10-14): when the user has moved the recording into the
+    folder named after it, outputs go into that folder, not a nested one."""
+    source = _inside_its_own_folder(tmp_path)
+    task = _task(source, note=NOTE.format(task="{task}"))
+    job_store.update_job_result(task, {**job_store.get_job(task)["result"], "summary_markdown": NOTE.format(task=task)})
+
+    record = output_folder.sync(task)
+
+    assert record["path"] == str(source.parent)
+    assert not (source.parent / "week-8").exists(), "no folder nested inside it"
+    assert (source.parent / "week-8_笔记.pdf").is_file()
+    assert "](截图/ts_0130_1.jpg)" in (source.parent / "过程文件" / "week-8_笔记.md").read_text(encoding="utf-8")
+
+
+def test_a_second_task_in_that_folder_overwrites_nothing(tmp_path, pdfs):
+    """Requirement (2026-10-14): processing it again there keeps the earlier
+    results; the new files carry (2), with their own screenshots."""
+    source = _inside_its_own_folder(tmp_path)
+    first = _task(source, note="# 第一次\n")
+    second = _task(source, note="# 第二次\n")
+    job_store.update_job_result(second, {**job_store.get_job(second)["result"], "summary_markdown": NOTE.format(task=second)})
+
+    output_folder.sync(first)
+    output_folder.sync(second)
+    output_folder.sync(first)
+
+    process = source.parent / "过程文件"
+    assert "第一次" in (process / "week-8_笔记.md").read_text(encoding="utf-8")
+    assert "截图 (2)/ts_0130_1.jpg" in (process / "week-8_笔记 (2).md").read_text(encoding="utf-8")
+    assert (source.parent / "week-8_笔记 (2).pdf").is_file()
+    assert (process / "week-8 (2).txt").is_file() and (process / "week-8.txt").is_file()
+    assert not (source.parent / "week-8").exists()
+
+
+def test_a_cut_moved_in_with_the_recording_is_not_replaced(tmp_path, pdfs):
+    """A user-made folder with no FluentFlow marker but an earlier cut in it:
+    the new task does not take that file's name."""
+    source = _inside_its_own_folder(tmp_path)
+    (source.parent / "week-8_去气口.mp4").write_bytes(b"kept")
+    cut = tmp_path / "cut.mp4"
+    cut.write_bytes(b"new cut")
+
+    state = output_folder.deliver_media("t-moved", source, cut, output_folder.CUT_LABEL)
+
+    assert (source.parent / "week-8_去气口.mp4").read_bytes() == b"kept"
+    assert state["delivered_path"] == str(source.parent / "week-8_去气口 (2).mp4")
