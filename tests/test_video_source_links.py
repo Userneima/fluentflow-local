@@ -189,6 +189,20 @@ def test_a_douyin_download_asks_for_the_open_redirect_policy(monkeypatch, tmp_pa
     assert seen["redirect_to_any_public_host"] is True
 
 
+def test_a_direct_download_bigger_than_the_free_disk_is_refused_before_writing(monkeypatch, tmp_path):
+    """Requirement (2026-10-14): with no size limit, a direct or Douyin link is
+    refused when its reported size would fill the disk, before anything is written."""
+
+    class Response(io.BytesIO):
+        headers = {"content-length": str(40 * 1024 ** 3)}
+
+    monkeypatch.setattr(vs, "open_public_http_url", lambda *_a, **_k: Response(b"video"))
+    monkeypatch.setattr(vs.shutil, "disk_usage", lambda _p: type("U", (), {"free": 10 * 1024 ** 3})())
+    with pytest.raises(RuntimeError, match="磁盘空间不够"):
+        vs.download_file("https://example.com/talk.mp4", tmp_path / "talk.mp4")
+    assert list(tmp_path.iterdir()) == []
+
+
 # ── 4. a Bilibili preview is not a success ──────────────────────────────────
 
 def test_a_bilibili_members_only_video_that_yields_a_preview_fails_clearly(monkeypatch, tmp_path):

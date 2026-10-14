@@ -340,6 +340,25 @@ def max_video_bytes() -> int | None:
 DISK_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024
 
 
+def _free_disk_bytes(where: Path) -> int | None:
+    """Free space on the disk ``where`` is on (the nearest existing folder up)."""
+    try:
+        probe = Path(where)
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        return shutil.disk_usage(probe).free
+    except OSError:
+        return None
+
+
+def _refuse_if_disk_short(size_bytes: float, where: Path) -> None:
+    """Refuse a download of ``size_bytes`` that would leave less than the
+    headroom free on the disk it lands on."""
+    free = _free_disk_bytes(where)
+    if free is not None and size_bytes + DISK_HEADROOM_BYTES > free:
+        raise RuntimeError(link_needs_more_disk_message(size_bytes, free))
+
+
 def link_needs_more_disk_message(size_bytes: float, free_bytes: float) -> str:
     return (
         f"磁盘空间不够：这个视频约 {_megabytes(size_bytes)} MB，处理时还要留出剪辑和转录的空间，"
@@ -1455,6 +1474,10 @@ def download_file(
             content_length = int(response.headers.get("content-length") or 0)
             if max_bytes and content_length > max_bytes:
                 raise RuntimeError(link_too_large_message(content_length, max_bytes))
+            # A direct link reports its size here rather than to the resolver, so
+            # the disk check that guards yt-dlp downloads happens here for these.
+            if content_length:
+                _refuse_if_disk_short(content_length, file_path.parent)
             on_progress and on_progress(VideoSourceProgress(
                 stage="downloading",
                 message="正在下载视频" if content_length else "正在下载视频，文件大小未知",
@@ -1471,6 +1494,12 @@ def download_file(
                     downloaded += len(chunk)
                     if max_bytes and downloaded > max_bytes:
                         raise RuntimeError(link_too_large_message(None, max_bytes))
+                    # Without a size up front, stop before the disk fills rather
+                    # than when a write fails with the machine already out of room.
+                    if not content_length and downloaded % (256 * 1024 * 1024) < len(chunk):
+                        free = _free_disk_bytes(file_path.parent)
+                        if free is not None and free < DISK_HEADROOM_BYTES // 4:
+                            raise RuntimeError(link_needs_more_disk_message(downloaded, free))
                     output.write(chunk)
                     percent = min(99, round(downloaded / content_length * 100)) if content_length else None
                     on_progress and on_progress(VideoSourceProgress(
@@ -2299,15 +2328,7 @@ def _check_limits_before_download(
     if size and limit_bytes and size > limit_bytes:
         raise RuntimeError(link_too_large_message(size, limit_bytes, estimated=True))
     if size and video_dir is not None:
-        try:
-            probe = Path(video_dir)
-            while not probe.exists() and probe != probe.parent:
-                probe = probe.parent
-            free = shutil.disk_usage(probe).free
-        except OSError:
-            free = None
-        if free is not None and size + DISK_HEADROOM_BYTES > free:
-            raise RuntimeError(link_needs_more_disk_message(size, free))
+        _refuse_if_disk_short(size, video_dir)
     if (
         duration_limit_seconds
         and resolved.duration_seconds
