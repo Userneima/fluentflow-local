@@ -228,6 +228,27 @@ def _stale_job_seconds() -> float:
         return 7200.0
 
 
+class _SttWatch:
+    """Stops a transcription that has gone quiet, never one that is just long.
+
+    The limit counts from the last word the worker sent (progress, a status, a
+    result), not from the start. Measured from the start it was a cap on
+    recording length in disguise: a hosted-era setting that killed a local
+    transcription at two hours however steadily it was moving, and threw the
+    finished part away with it.
+    """
+
+    def __init__(self, limit_seconds: float, now: float) -> None:
+        self.limit_seconds = limit_seconds
+        self.last_heard = now
+
+    def heard(self, now: float) -> None:
+        self.last_heard = now
+
+    def stalled(self, now: float) -> bool:
+        return now - self.last_heard > self.limit_seconds
+
+
 def _normalized_source_language(value: str | None) -> str | None:
     text = (value or "").strip().lower()
     if not text:
@@ -648,7 +669,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         }
 
         stt_started_at = time.perf_counter()
-        stt_timeout = _stale_job_seconds()
+        stt_watch = _SttWatch(_stale_job_seconds(), stt_started_at)
         stt_process, stt_queue = start_transcription_process(
             out_audio,
             model_size=model_size,
@@ -660,12 +681,15 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         last_sent_progress = 22.0
         last_emit_at = time.perf_counter()
         while True:
-            if time.perf_counter() - stt_started_at > stt_timeout:
+            if stt_watch.stalled(time.perf_counter()):
                 if stt_process is not None and stt_process.is_alive():
                     stt_process.terminate()
                     stt_process.join(timeout=5)
-                raise RuntimeError("STT processing timed out")
+                raise RuntimeError(
+                    f"STT processing timed out: no progress for {stt_watch.limit_seconds / 60:.0f} minutes"
+                )
             for message in drain_queue(stt_queue):
+                stt_watch.heard(time.perf_counter())
                 message_type = message.get("type")
                 if message_type == "progress":
                     safe_frac = max(0.0, min(float(message.get("value") or 0), 1.0))

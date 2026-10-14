@@ -348,15 +348,15 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "视频平台暂时限制了请求。",
             "稍后重试，或直接上传本地视频/字幕文件。",
         )
-    # Before the download-timeout rule, which matches any "timeout": on the
-    # local edition a long recording on a slow machine hits the transcription
-    # time limit, and blaming the download would send the reader nowhere.
+    # Before the download-timeout rule, which matches any "timeout": a
+    # transcription that stopped making progress has nothing to do with
+    # downloading, and blaming the download would send the reader nowhere.
     if "stt processing timed out" in lowered or "转写超时" in raw:
         return _diag(
             "stt_timeout",
             "转写超时",
-            "转写超过时间上限被中止，通常是音视频太长或这台机器跑不完。",
-            "把素材拆短再试，或在设置里换更快的转写档位。",
+            "转写很长时间没有任何进展，被当作卡住中止了。",
+            "重试一次。同一个文件反复卡住，把本机日志发给维护者。",
         )
     if "视频下载超时" in raw or "timed out" in lowered or "timeout" in lowered:
         return _diag(

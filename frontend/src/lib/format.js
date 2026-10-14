@@ -730,7 +730,7 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
             }),
         ],
         // Must precede the download-timeout rule below, which matches any
-        // "timeout": a transcription that ran out of time has nothing to do
+        // "timeout": a transcription that stopped making progress has nothing to do
         // with downloading, and telling someone who uploaded a local file to
         // "upload the local video" sends them after the wrong subsystem.
         [
@@ -739,10 +739,10 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 code: 'stt_timeout',
                 titleZh: '转写超时',
                 titleEn: 'Transcription timed out',
-                detailZh: '转写超过时间上限被中止。通常是音视频太长，或所选引擎在当前机器上跑不完。',
-                detailEn: 'Transcription was stopped at the time limit, usually because the recording is long or the chosen engine cannot finish it on this machine.',
-                nextZh: '素材很长的话，先拆成几段再处理。',
-                nextEn: 'Split a long recording into parts and process them one by one.',
+                detailZh: '转写很长时间没有任何进展，被当作卡住中止了。',
+                detailEn: 'Transcription made no progress for a long time and was stopped as stuck.',
+                nextZh: '重试一次。同一个文件反复卡住，把本机日志发给维护者。',
+                nextEn: 'Retry once. If the same file gets stuck again, send the local log to the maintainer.',
             }),
         ],
         [
