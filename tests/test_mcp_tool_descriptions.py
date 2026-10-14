@@ -60,3 +60,22 @@ def test_descriptions_say_what_the_tools_really_do():
     assert "new task" in _description("retry_task") and "completed" in _description("retry_task")
     noise = next(i for i in mcp.TOOL_DEFINITIONS if i["name"] == "debreath_task")["inputSchema"]["properties"]["noise_db"]
     assert "measured" in noise["description"]
+
+
+def test_retry_task_can_turn_speaker_separation_on(monkeypatch):
+    """Requirement (2026-10-15): the agent re-runs a multi-person recording with
+    speaker separation through retry_task, and the tool says how."""
+    sent: dict = {}
+    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: sent.update(kw, path=path) or {"ok": True})
+
+    mcp.retry_task("t-1", speaker_diarization=True)
+    assert sent["path"] == "/agent/v1/tasks/t-1/retry"
+    assert sent["payload"] == {"speaker_diarization": True}
+
+    sent.clear()
+    mcp.retry_task("t-1")
+    assert sent["payload"] is None
+
+    tool = next(t for t in mcp.TOOL_DEFINITIONS if t["name"] == "retry_task")
+    assert "speaker_diarization" in tool["inputSchema"]["properties"]
+    assert "speaker_diarization=true" in tool["description"]

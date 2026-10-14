@@ -53,5 +53,9 @@ markdown>=3.5
 # touched this file.
 yt-dlp>=2025.10.14
 
-# Optional speaker diarization:
-#   pip install -r requirements-speaker.txt
+# Speaker diarization ("区分不同讲话人"). ONNX runtime only, no PyTorch; the two
+# model files come from scripts/fetch_diarization_models.py, which the installers
+# run. 1.13.8 is the version measured against pyannote (decision log 4.1).
+sherpa-onnx>=1.13.8,<1.14
+# The optional, slower and more accurate pyannote backend is in
+# requirements-speaker.txt (FLUENTFLOW_SPEAKER_BACKEND=pyannote).

@@ -228,6 +228,15 @@ try {
     Pop-Location
 }
 
+# Two small speaker-diarization models (about 47 MB), so the speaker separation
+# switch works right after install. They exist only on GitHub, with no mirror; a
+# failure costs only that switch, so it is reported and the install continues.
+Write-Host "准备讲话人区分模型…"
+& $Python (Join-Path $Repo "scripts\fetch_diarization_models.py")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "提示：讲话人区分模型没有下载成功，其余功能不受影响。网络能打开 github.com 后运行这一句补上：.\.venv\Scripts\python.exe scripts\fetch_diarization_models.py"
+}
+
 # Downloaded here rather than inside the user's first transcription, where the
 # wait has no progress and no explanation. A failure is not fatal: the model can
 # be fetched later, and the first run falls back to downloading it itself.

@@ -1,7 +1,7 @@
-"""Requirement: an agent that says nothing about speaker separation gets the
-same answer whether it hands over a file path or a link — on when pyannote is
-installed, and not requested at all when it is not (a request that is always
-skipped only plants a failed-looking step). An explicit choice always wins.
+"""Requirement (2026-10-15): an agent that says nothing about speaker
+separation gets it off, whether it hands over a file path or a link, and
+whether or not the component is installed. It runs only when asked for; an
+explicit choice always wins.
 """
 
 from __future__ import annotations
@@ -15,13 +15,6 @@ from backend.core import speaker_diarization
 from backend.routers.local_processing import local_path_options
 
 _TOKEN = "speaker-default-token"
-
-
-@pytest.fixture()
-def installed(monkeypatch):
-    def set_installed(value: bool) -> None:
-        monkeypatch.setattr(speaker_diarization, "diarization_status", lambda: {"dependency_installed": value})
-    return set_installed
 
 
 def _link_options(monkeypatch, options: dict) -> dict:
@@ -45,21 +38,18 @@ def _link_options(monkeypatch, options: dict) -> dict:
 
 
 @pytest.mark.parametrize("dependency", [True, False])
-def test_path_and_link_get_the_same_default(monkeypatch, installed, dependency):
-    installed(dependency)
+def test_path_and_link_leave_it_off_when_not_asked(monkeypatch, dependency):
+    monkeypatch.setattr(speaker_diarization, "diarization_status", lambda: {"dependency_installed": dependency, "available": dependency})
 
     path_options, _ = local_path_options({})
     link_options = _link_options(monkeypatch, {})
 
-    expected = "true" if dependency else None
-    assert path_options.get("speaker_diarization") == expected
-    assert link_options.get("speaker_diarization") == expected
+    assert path_options.get("speaker_diarization") is None
+    assert link_options.get("speaker_diarization") is None
 
 
-def test_an_explicit_choice_wins_either_way(monkeypatch, installed):
-    installed(True)
+def test_an_explicit_choice_wins_either_way(monkeypatch):
     assert "speaker_diarization" not in local_path_options({"speaker_diarization": False})[0]
     assert _link_options(monkeypatch, {"speaker_diarization": False})["speaker_diarization"] is False
-
-    installed(False)
     assert local_path_options({"speaker_diarization": True})[0]["speaker_diarization"] == "true"
+    assert _link_options(monkeypatch, {"speaker_diarization": True})["speaker_diarization"] is True

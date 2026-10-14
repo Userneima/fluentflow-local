@@ -50,9 +50,9 @@ export const SettingsPageShell = ({banner = null, overlays = null, children}) =>
 };
 
 // What the speaker-separation switch can honestly say, from
-// GET /speaker-diarization/status. The launcher installs without pyannote, so
-// on most machines the answer is "not in this build", and that is what the row
-// says instead of showing a grey switch with no reason.
+// GET /speaker-diarization/status. The installers put sherpa-onnx and its two
+// models in place; when either is missing the row says what to run instead of
+// showing a grey switch with no reason.
 export const diarizationAvailability = (status) => {
     if (!status || typeof status !== 'object') return 'unknown';
     if (status.dependency_installed === false) return 'not_installed';
@@ -67,10 +67,11 @@ export const SpeakerDiarizationRow = ({state, status}) => {
     const available = availability === 'available';
     const zh = lang === 'zh';
     const description = availability === 'not_installed'
-        ? (zh ? '这个版本没有带讲话人区分组件，暂时用不了。' : 'This build does not include the speaker separation component, so it cannot be used for now.')
+        ? (zh ? '这台电脑还没装讲话人区分组件。重新运行一次安装脚本就会装上。' : 'The speaker separation component is not installed on this computer. Run the installer again to add it.')
         : availability === 'needs_model'
-            ? (zh ? '要先在下方「高级」里填讲话人区分令牌（Hugging Face），下载模型后才能用。' : 'Fill in the speaker separation token (Hugging Face) under Advanced below first, so the model can be downloaded.')
-            : (zh ? '适合多人访谈或讲座。' : 'Useful for interviews or lectures.');
+            ? (zh ? '讲话人区分的模型还没下载（约 47MB）。在 FluentFlow 文件夹里运行 scripts/fetch_diarization_models.py 即可。' : 'The speaker separation models are not downloaded yet (about 47 MB). Run scripts/fetch_diarization_models.py in the FluentFlow folder.')
+            : (zh ? '标出每句话是谁说的，适合多人会议和访谈。默认关闭，要用时打开。' : 'Labels who said each line. Useful for meetings and interviews. Off unless you turn it on.');
+    const fallback = status?.fallback_reason || '';
     return (
         <label htmlFor="settingsSpeakerDiarization" className={`flex items-start justify-between gap-3 ${cellBase} ${available ? 'cursor-pointer hover:bg-[#f4f3f3] dark:hover:bg-white/[0.04]' : 'cursor-not-allowed'}`}>
             <span>
@@ -78,6 +79,11 @@ export const SpeakerDiarizationRow = ({state, status}) => {
                 <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant" data-testid="diarization-availability">
                     {description}
                 </span>
+                {fallback && (
+                    <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant" data-testid="diarization-fallback">
+                        {fallback}
+                    </span>
+                )}
             </span>
             {availability !== 'not_installed' && (
                 <SettingCheckbox
@@ -647,11 +653,11 @@ export const PyannoteTokenRow = ({state}) => {
         <div className="px-5 py-4">
             <div className="mb-3 flex items-start justify-between gap-3">
                 <div>
-                    <label className={fieldLabelClass}>{lang === 'zh' ? '讲话人区分令牌（Hugging Face）' : 'Speaker separation token (Hugging Face)'}</label>
+                    <label className={fieldLabelClass}>{lang === 'zh' ? 'pyannote 模型令牌（Hugging Face）' : 'pyannote model token (Hugging Face)'}</label>
                     <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">
                         {pyannoteTokenConfigured
                             ? (lang === 'zh' ? '已配置。token 不会显示，需要更换时重新输入。' : 'Configured. The token is hidden. Re-enter it only when replacing it.')
-                            : (lang === 'zh' ? '用来下载讲话人区分模型，下载一次后在本机运行。' : 'Used to download the speaker separation model once; it then runs on this machine.')}
+                            : (lang === 'zh' ? '选了 pyannote 讲话人区分才用得上：用来下载它的模型，下载一次后在本机运行。' : 'Only for the pyannote speaker separation backend: downloads its model once; it then runs on this machine.')}
                     </p>
                 </div>
                 {pyannoteTokenConfigured && !pyannoteTokenEditing && (

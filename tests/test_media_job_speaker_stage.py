@@ -78,7 +78,7 @@ def test_a_local_run_relabels_the_segments(events, monkeypatch):
 
 
 def test_a_local_run_that_overruns_its_budget_is_skipped_not_raised(events, monkeypatch):
-    """A stalled pyannote download must not hold the task forever."""
+    """A stalled diarization run must not hold the task forever."""
     monkeypatch.setattr(stages, "_diarization_timeout_seconds", lambda _d: 0.01)
     monkeypatch.setattr(stages, "diarize_audio", lambda path: [])
     original = [{"text": "hi"}]

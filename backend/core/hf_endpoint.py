@@ -5,8 +5,8 @@ fine on some networks and unusable on others, and the unusable case does not
 look like an error: on 2026-09-03 this project measured the Hugging Face API
 answering in about a second while the file CDN returned 206 and then zero
 bytes, with no timeout of its own, so a download sat there for over an hour
-saying nothing. `scripts/fetch_diarization_models.py` already carries a mirror
-for the speaker models because of that day; this is the same answer for the
+saying nothing. `scripts/fetch_pyannote_models.py` already carries a mirror
+for the optional pyannote speaker models because of that day; this is the same answer for the
 transcription models.
 
 So the probe fetches a real file rather than asking the API whether the

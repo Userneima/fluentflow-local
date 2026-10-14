@@ -397,6 +397,31 @@ def test_a_retry_queues_a_new_task_from_the_stored_upload_with_the_same_title_an
     assert Path(pipeline["contexts"][-1].in_path).parent == _source_storage_dir() / retry_id, "its own copy"
 
 
+def test_an_agent_retry_can_switch_speaker_separation_on(client, pipeline, monkeypatch):
+    """Requirement (2026-10-15): an agent that finds a multi-person recording
+    was transcribed without speaker separation re-runs it with the option on,
+    through retry_task; every other option stays the original task's."""
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "retry-token")
+    client.post(
+        "/process",
+        files={"file": _upload("周会.mp4")},
+        data={"task_id": "http-meeting", "note_mode": "high_fidelity"},
+    )
+    _wait_until_done(client, "http-meeting")
+
+    response = client.post(
+        "/agent/v1/tasks/http-meeting/retry",
+        headers={"x-fluentflow-access-token": "retry-token"},
+        json={"speaker_diarization": True},
+    )
+
+    assert response.status_code == 200, response.text
+    retried = _wait_until_done(client, response.json()["task_id"])
+    assert retried["metadata"]["queue_options"]["speaker_diarization"] == "true"
+    assert retried["metadata"]["queue_options"]["note_mode"] == "high_fidelity"
+    assert pipeline["contexts"][-1].diarization_requested is True
+
+
 def test_a_retry_of_a_task_still_running_is_refused(client, pipeline, monkeypatch):
     async def never_finishes(ctx):
         await asyncio.sleep(3600)

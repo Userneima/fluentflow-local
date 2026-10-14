@@ -39,7 +39,8 @@ def _tool_vendor(tool_id: str, result: dict[str, Any], job: dict[str, Any]) -> s
     if tool_id == "local_stt":
         return "faster-whisper"
     if tool_id == "diarize_speakers":
-        return "pyannote"
+        speaker = result.get("speaker_diarization") if isinstance(result.get("speaker_diarization"), dict) else {}
+        return str(speaker.get("backend") or "sherpa-onnx")
     if tool_id in ("generate_note", "plan_note_mode"):
         return result.get("prompt_preset_label") or result.get("ai_provider")
     return None

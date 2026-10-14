@@ -1,3 +1,17 @@
-# Optional dependency for speaker diarization.
-# Install only when you need to label transcript segments by speaker.
+# Optional, more accurate speaker-separation backend (pyannote.audio).
+# The default backend, sherpa-onnx, comes with requirements-local.txt and needs
+# nothing from here. This one is slower and adds about 900 MB (PyTorch).
+#
+# Install into the app's venv, stage its models, then choose it in .env:
+#   .venv/bin/python -m pip install -r requirements-speaker.txt
+#   .venv/bin/python scripts/fetch_pyannote_models.py
+#   FLUENTFLOW_SPEAKER_BACKEND=pyannote   (in .env, then restart FluentFlow)
+#
+# torch and torchaudio are pinned: measured 2026-10-14, the unpinned install
+# pulled 2.11, where pyannote.audio 3.4 fails to import
+# (torchaudio.AudioMetaData is gone); 2.8 works. torch 2.8 publishes wheels
+# only up to Python 3.13, so this file installs only into a venv on Python
+# 3.13 or older; on 3.14 pip reports that no torch 2.8 matches.
 pyannote.audio>=3.1,<4
+torch==2.8.*
+torchaudio==2.8.*

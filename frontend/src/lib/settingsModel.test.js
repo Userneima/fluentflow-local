@@ -27,8 +27,9 @@ describe('Lark export route', () => {
 });
 
 describe('speaker diarization default', () => {
-    it('turns speaker separation on when the setting was never set', () => {
-        expect(sanitizeSettings({}).speakerDiarization).toBe(true);
+    // Requirement (2026-10-15): off for every entry until the user turns it on.
+    it('leaves speaker separation off when the setting was never set', () => {
+        expect(sanitizeSettings({}).speakerDiarization).toBe(false);
     });
 
     it('keeps an explicit opt-out', () => {

@@ -72,13 +72,10 @@ export const sanitizeSettings = (settings={}) => {
         next.noteMode = 'auto';
     }
     next.sttModel = normalizeSttModel(next.sttModel);
-    // Speaker separation defaults to on for every material: a meeting is the
-    // case that needs it, nobody opens Settings before uploading one, and a
-    // single-speaker recording just yields one speaker. Only the absent key is
-    // filled in — someone who switched it off stays switched off.
-    next.speakerDiarization = next.speakerDiarization === undefined || next.speakerDiarization === null
-        ? true
-        : !!next.speakerDiarization;
+    // Speaker separation is off unless the user turns it on (2026-10-15): it
+    // only pays off for meetings and interviews, and the agent offers it when a
+    // transcript turns out to be one. Someone who switched it on stays on.
+    next.speakerDiarization = !!next.speakerDiarization;
     next.defaultSourceMode = normalizeSourceMode(next.defaultSourceMode);
     next.larkExportRoute = larkExportRouteFromSettings(next);
     next.larkViaCli = isLocalLarkExportRoute(next.larkExportRoute);
@@ -106,9 +103,8 @@ export const normalizeSttModel = (_model) => (
     DEFAULT_STT_MODEL
 );
 
-// Whether a new task should ask for speaker separation. The installed build
-// usually has no pyannote; asking there only produces a request that is always
-// skipped. An unknown status (not fetched yet, or the service did not answer)
+// Whether a new task should ask for speaker separation. A build without the
+// component would only produce a request that is always skipped. An unknown status (not fetched yet, or the service did not answer)
 // leaves the decision to the service.
 export const speakerDiarizationRequested = (settings = {}, diarizationStatus = null) => (
     !!settings?.speakerDiarization && diarizationStatus?.dependency_installed !== false

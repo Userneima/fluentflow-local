@@ -6,9 +6,10 @@ import pytest
 
 from types import SimpleNamespace
 
+from backend.core import speaker_diarization_pyannote as pyannote_backend
+
 from backend.core.speaker_diarization import (
     SpeakerTurn,
-    _load_pyannote_pipeline,
     assign_speakers_to_segments,
     build_speaker_annotated_transcript,
     diarization_status,
@@ -35,7 +36,7 @@ def test_assign_speakers_by_largest_time_overlap() -> None:
 def test_diarization_status_is_safe_without_optional_dependency() -> None:
     status = diarization_status()
     assert "available" in status
-    assert status["backend"] == "pyannote.audio"
+    assert status["backend"] == "sherpa-onnx"
 
 
 def test_load_pyannote_pipeline_prefers_new_token_argument() -> None:
@@ -44,7 +45,7 @@ def test_load_pyannote_pipeline_prefers_new_token_argument() -> None:
         def from_pretrained(cls, model: str, **kwargs):
             return {"model": model, "kwargs": kwargs}
 
-    pipeline = _load_pyannote_pipeline(Pipeline, "hf_token")
+    pipeline = pyannote_backend._load_pyannote_pipeline(Pipeline, "hf_token")
 
     assert pipeline["kwargs"] == {"token": "hf_token"}
 
@@ -69,7 +70,7 @@ def test_load_pyannote_pipeline_compat_translates_legacy_hf_token(monkeypatch) -
             fake_hub.hf_hub_download(repo_id=model, use_auth_token=kwargs.get("use_auth_token"))
             return {"model": model}
 
-    pipeline = _load_pyannote_pipeline(Pipeline, "hf_token")
+    pipeline = pyannote_backend._load_pyannote_pipeline(Pipeline, "hf_token")
 
     assert pipeline["model"] == "pyannote/speaker-diarization-3.1"
     assert calls == [{"repo_id": "pyannote/speaker-diarization-3.1", "token": "hf_token"}]
@@ -128,13 +129,13 @@ def test_diarization_budget_scales_with_audio_and_stays_bounded() -> None:
 
 
 def test_status_reports_local_models_and_needs_no_token(monkeypatch, tmp_path) -> None:
-    from backend.core import speaker_diarization as sd
+    from backend.core import speaker_diarization_pyannote as sd
 
     (tmp_path / "config.yaml").write_text("version: 3.1.0\n", encoding="utf-8")
-    monkeypatch.setattr(sd, "default_diarization_model_dir", lambda: tmp_path)
+    monkeypatch.setattr(sd, "default_pyannote_model_dir", lambda: tmp_path)
     monkeypatch.setattr(sd, "get_sensitive_setting", lambda *_args, **_kwargs: "")
 
-    status = sd.diarization_status()
+    status = sd.pyannote_status()
 
     assert status["models_local"] is True
     assert status["auth_configured"] is False
@@ -143,19 +144,19 @@ def test_status_reports_local_models_and_needs_no_token(monkeypatch, tmp_path) -
 
 
 def test_status_without_local_models_falls_back_to_the_token(monkeypatch, tmp_path) -> None:
-    from backend.core import speaker_diarization as sd
+    from backend.core import speaker_diarization_pyannote as sd
 
-    monkeypatch.setattr(sd, "default_diarization_model_dir", lambda: tmp_path)
+    monkeypatch.setattr(sd, "default_pyannote_model_dir", lambda: tmp_path)
     monkeypatch.setattr(sd, "get_sensitive_setting", lambda *_args, **_kwargs: "hf_token")
 
-    status = sd.diarization_status()
+    status = sd.pyannote_status()
 
     assert status["models_local"] is False
     assert status["auth_configured"] is True
 
 
 def test_torch_full_load_compat_restores_the_environment(monkeypatch) -> None:
-    from backend.core.speaker_diarization import _torch_full_load_compat
+    from backend.core.speaker_diarization_pyannote import _torch_full_load_compat
 
     monkeypatch.delenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", raising=False)
     with _torch_full_load_compat():
@@ -169,7 +170,7 @@ def test_local_models_are_ignored_when_a_checkpoint_is_missing(monkeypatch, tmp_
     This directory takes priority, so claiming a pipeline whose checkpoints are
     gone would fail every run on a machine where the token would have worked.
     """
-    from backend.core import speaker_diarization as sd
+    from backend.core import speaker_diarization_pyannote as sd
 
     (tmp_path / "segmentation.bin").write_bytes(b"weights")
     (tmp_path / "config.yaml").write_text(
@@ -179,13 +180,13 @@ def test_local_models_are_ignored_when_a_checkpoint_is_missing(monkeypatch, tmp_
         f"    embedding: {(tmp_path / 'wespeaker.bin').as_posix()}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(sd, "default_diarization_model_dir", lambda: tmp_path)
+    monkeypatch.setattr(sd, "default_pyannote_model_dir", lambda: tmp_path)
 
     assert sd.local_model_config() is None
 
 
 def test_local_models_are_used_when_every_checkpoint_is_present(monkeypatch, tmp_path) -> None:
-    from backend.core import speaker_diarization as sd
+    from backend.core import speaker_diarization_pyannote as sd
 
     (tmp_path / "segmentation.bin").write_bytes(b"weights")
     (tmp_path / "wespeaker.bin").write_bytes(b"weights")
@@ -196,14 +197,14 @@ def test_local_models_are_used_when_every_checkpoint_is_present(monkeypatch, tmp
         f"    embedding: {(tmp_path / 'wespeaker.bin').as_posix()}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(sd, "default_diarization_model_dir", lambda: tmp_path)
+    monkeypatch.setattr(sd, "default_pyannote_model_dir", lambda: tmp_path)
 
     assert sd.local_model_config() == tmp_path / "config.yaml"
 
 
 def test_config_referencing_hub_repo_ids_is_still_usable(monkeypatch, tmp_path) -> None:
     """A repo id is fetched at run time and is not this check's business."""
-    from backend.core import speaker_diarization as sd
+    from backend.core import speaker_diarization_pyannote as sd
 
     (tmp_path / "config.yaml").write_text(
         "pipeline:\n"
@@ -212,16 +213,16 @@ def test_config_referencing_hub_repo_ids_is_still_usable(monkeypatch, tmp_path) 
         "    embedding: pyannote/wespeaker-voxceleb-resnet34-LM\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(sd, "default_diarization_model_dir", lambda: tmp_path)
+    monkeypatch.setattr(sd, "default_pyannote_model_dir", lambda: tmp_path)
 
     assert sd.local_model_config() == tmp_path / "config.yaml"
 
 
 def test_unparseable_config_falls_back_instead_of_claiming_local_models(monkeypatch, tmp_path) -> None:
-    from backend.core import speaker_diarization as sd
+    from backend.core import speaker_diarization_pyannote as sd
 
     (tmp_path / "config.yaml").write_text("pipeline: [unclosed", encoding="utf-8")
-    monkeypatch.setattr(sd, "default_diarization_model_dir", lambda: tmp_path)
+    monkeypatch.setattr(sd, "default_pyannote_model_dir", lambda: tmp_path)
 
     assert sd.local_model_config() is None
 
@@ -230,7 +231,7 @@ def test_torch_compat_serialises_overlapping_loads() -> None:
     """Two loads must not have the first to finish undo the second's relaxation."""
     import threading
 
-    from backend.core.speaker_diarization import _torch_full_load_compat
+    from backend.core.speaker_diarization_pyannote import _torch_full_load_compat
 
     seen: list[str | None] = []
     started = threading.Event()

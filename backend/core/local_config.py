@@ -27,6 +27,8 @@ LOCAL_SENSITIVE_FIELDS = {
     "anthropic_api_key",
     "lark_app_id",
     "lark_app_secret",
+    # Only the optional pyannote backend uses it, to fetch its models from
+    # Hugging Face when they are not staged locally.
     "pyannote_auth_token",
 }
 

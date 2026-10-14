@@ -18,8 +18,8 @@ const runtimeConfig = {
 
 let stored = {};
 let servicePreferences = {};
-// GET /speaker-diarization/status. The installed build has no pyannote.
-let diarization = {available: false, dependency_installed: true, models_local: false};
+// GET /speaker-diarization/status: sherpa-onnx installed, models not downloaded.
+let diarization = {available: false, dependency_installed: true, models_local: false, requested_backend: 'sherpa'};
 let credentials = {};
 const savePreferences = vi.fn(async (patch) => ({...servicePreferences, ...patch}));
 
@@ -68,7 +68,7 @@ describe('local settings page', () => {
     beforeEach(() => {
         stored = {};
         servicePreferences = {};
-        diarization = {available: false, dependency_installed: true, models_local: false};
+        diarization = {available: false, dependency_installed: true, models_local: false, requested_backend: 'sherpa'};
         credentials = {};
         savePreferences.mockClear();
         localStorage.clear();
@@ -124,29 +124,52 @@ describe('local settings page', () => {
     it('shows the device-side controls without asking whether local transcription is allowed', async () => {
         render(<Settings/>);
         expect(screen.getByText('视频链接下载登录态')).toBeTruthy();
-        expect(await screen.findByText('讲话人区分令牌（Hugging Face）')).toBeTruthy();
+        expect(await screen.findByText('区分不同讲话人')).toBeTruthy();
     });
 
-    // Requirement: a build without the speaker separation component says so in
-    // one line, offers no switch, and asks for no token it could never use.
-    it('says speaker separation is not in this build when the component is missing', async () => {
-        diarization = {available: false, dependency_installed: false, models_local: false};
+    // Requirement: when the component is missing, the row says what to run,
+    // offers no switch, and asks for no token.
+    it('says how to install speaker separation when the component is missing', async () => {
+        diarization = {available: false, dependency_installed: false, models_local: false, requested_backend: 'sherpa'};
         stored = {speakerDiarization: true};
         render(<Settings/>);
-        expect(await screen.findByText('这个版本没有带讲话人区分组件，暂时用不了。')).toBeTruthy();
+        expect(await screen.findByText(/还没装讲话人区分组件。重新运行一次安装脚本/)).toBeTruthy();
         expect(document.getElementById('settingsSpeakerDiarization')).toBeNull();
-        expect(screen.queryByText('讲话人区分令牌（Hugging Face）')).toBeNull();
+        expect(screen.queryByText(/模型令牌（Hugging Face）/)).toBeNull();
     });
 
-    it('asks for the token only while the component is there and the model is not', async () => {
+    // Requirement: the default backend needs no token; a missing model names
+    // the script that downloads it.
+    it('names the download script when the models are missing, and asks for no token', async () => {
         render(<Settings/>);
-        expect(await screen.findByText(/要先在下方「高级」里填讲话人区分令牌/)).toBeTruthy();
+        expect(await screen.findByText(/scripts\/fetch_diarization_models\.py/)).toBeTruthy();
         expect(document.getElementById('settingsSpeakerDiarization').disabled).toBe(true);
-        cleanup();
-        diarization = {available: true, dependency_installed: true, models_local: true};
+        expect(screen.queryByText(/模型令牌（Hugging Face）/)).toBeNull();
+        expect(screen.queryByText(/Hugging Face/)).toBeNull();
+    });
+
+    // Requirement (2026-10-15): installed and ready, the switch works but is off
+    // until the user turns it on.
+    it('offers the switch, off by default, once sherpa-onnx and its models are in place', async () => {
+        diarization = {available: true, dependency_installed: true, models_local: true, requested_backend: 'sherpa', backend: 'sherpa-onnx'};
         render(<Settings/>);
         await waitFor(() => expect(document.getElementById('settingsSpeakerDiarization').disabled).toBe(false));
-        expect(screen.queryByText('讲话人区分令牌（Hugging Face）')).toBeNull();
+        expect(document.getElementById('settingsSpeakerDiarization').checked).toBe(false);
+        expect(screen.queryByText(/模型令牌（Hugging Face）/)).toBeNull();
+    });
+
+    // Requirement: the pyannote token appears only for the optional pyannote
+    // backend, installed but without staged models; a fallback is explained.
+    it('asks for the pyannote token only when pyannote is chosen and its models are missing', async () => {
+        diarization = {
+            available: true, dependency_installed: true, models_local: true, backend: 'sherpa-onnx',
+            requested_backend: 'pyannote',
+            fallback_reason: '设置里选了 pyannote，但它的模型文件和 Hugging Face 令牌都没有，这次改用默认的 sherpa-onnx。',
+            pyannote: {available: false, dependency_installed: true, models_local: false, auth_configured: false},
+        };
+        render(<Settings/>);
+        expect(await screen.findByText('pyannote 模型令牌（Hugging Face）')).toBeTruthy();
+        expect(screen.getByTestId('diarization-fallback').textContent).toMatch(/改用默认的 sherpa-onnx/);
     });
 
     it('names the Feishu app credentials in Chinese', () => {

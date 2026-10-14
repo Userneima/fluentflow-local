@@ -272,7 +272,7 @@ export const useSettingsPageState = () => {
     const larkRouteHint = isLocalLarkExportRoute(larkExportRoute)
         ? t('set.larkRouteLocalCliHint')
         : (larkExportRoute === LARK_EXPORT_ROUTE_AUTO ? t('set.larkRouteAutoHint') : t('set.larkRouteOpenapiHint'));
-    const pyannoteTokenConfigured = !!(credentialStatus?.pyannote_auth_token_configured || diarizationStatus?.auth_configured);
+    const pyannoteTokenConfigured = !!(credentialStatus?.pyannote_auth_token_configured || diarizationStatus?.pyannote?.auth_configured);
 
     return {
         t,

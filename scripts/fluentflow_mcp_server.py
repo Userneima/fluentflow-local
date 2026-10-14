@@ -205,8 +205,7 @@ def submit_local_media(
                 prompt_preset=prompt_preset,
                 system_prompt=system_prompt,
                 stt_model=stt_model,
-                # Left out unless the caller asks: the backend then applies its
-                # own default (on only when pyannote is installed).
+                # Left out unless the caller asks: the backend default is off.
                 speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
             ),
         },
@@ -343,6 +342,7 @@ def diagnose_task(
 
 def retry_task(
     task_id: str,
+    speaker_diarization: bool | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -350,13 +350,17 @@ def retry_task(
 
     Returns the new task's ``task_id``; the old task stays as it was. Re-reads the
     recording FluentFlow kept, or the user's file for a task submitted by path; a
-    link task whose video is gone downloads the link again.
+    link task whose video is gone downloads the link again. ``speaker_diarization``
+    switches speaker separation on or off for the new task; left out, the old
+    task's choice is kept.
     """
+    payload = None if speaker_diarization is None else {"speaker_diarization": bool(speaker_diarization)}
     return _agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/retry",
         api_base=api_base,
         client_id=client_id,
+        payload=payload,
         timeout=30,
     )
 
@@ -669,12 +673,14 @@ _MEDIA_NOTE_FLOW = (
     "usable Claude, the configured text model writes it from the transcript; with neither, the task stops at the transcript and you write the note yourself with get_agent_note_material and save_agent_note. note_mode, "
     "prompt_preset and system_prompt only apply when a text model writes the note; Claude's "
     "frame note ignores them. skip_summary=true stops at the transcript. Speaker separation "
-    "defaults on when pyannote is installed on this machine, off otherwise; "
-    "speaker_diarization overrides it. Returns at once; follow with wait_task."
+    "is off unless speaker_diarization=true. Returns at once; follow with wait_task."
 )
 _SPEAKER_DIARIZATION_SCHEMA = {
     "type": "boolean",
-    "description": "Label who spoke. Default: on when pyannote is installed on this machine.",
+    "description": (
+        "Label who spoke (说话人 A, B, ...) in the transcript and the note. Default: off. "
+        "Turn it on for a meeting, interview or panel; it adds little for a lecture or one speaker."
+    ),
 }
 _TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's frame note)."
 
@@ -853,11 +859,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "completed tasks; a queued or running task must be cancelled first. Re-reads the "
             "recording FluentFlow kept, or the user's file for a task submitted by path; a link "
             "task whose video is gone downloads the link again, with the current browser-login "
-            "setting. Follow with wait_task on the new task_id."
+            "setting. speaker_diarization=true re-runs it with speaker separation (who said "
+            "what) switched on; left out, the old task's choice is kept. Follow with wait_task "
+            "on the new task_id."
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+            "properties": {
+                "task_id": {"type": "string"},
+                "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
+                "api_base": {"type": "string"},
+            },
             "required": ["task_id"],
         },
     },

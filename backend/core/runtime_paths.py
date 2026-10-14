@@ -55,13 +55,23 @@ def default_source_dir() -> Path:
 
 
 def default_diarization_model_dir() -> Path:
-    """Where local speaker-diarization model files live.
+    """Where the speaker-diarization model files live.
 
-    pyannote normally fetches these from Hugging Face on first use. Where the
-    Hugging Face file CDN is unreachable, `scripts/fetch_diarization_models.py`
-    fills this directory from ModelScope instead and the loader prefers it.
+    Holds ``segmentation.onnx`` and ``embedding.onnx`` for the default
+    sherpa-onnx backend, put there by `scripts/fetch_diarization_models.py`
+    (the installers run it).
     """
-    return runtime_path("FLUENTFLOW_DIARIZATION_MODEL_DIR", "models", "pyannote")
+    return runtime_path("FLUENTFLOW_DIARIZATION_MODEL_DIR", "models", "speaker")
+
+
+def default_pyannote_model_dir() -> Path:
+    """Where the optional pyannote backend's model files live.
+
+    Filled by `scripts/fetch_pyannote_models.py` (``config.yaml`` plus two
+    checkpoints, from ModelScope). Only used with
+    ``FLUENTFLOW_SPEAKER_BACKEND=pyannote``.
+    """
+    return runtime_path("FLUENTFLOW_PYANNOTE_MODEL_DIR", "models", "pyannote")
 
 
 def default_artifact_dir() -> Path:

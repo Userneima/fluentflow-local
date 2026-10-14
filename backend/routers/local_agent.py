@@ -60,7 +60,7 @@ from backend.routers.local_processing import (
     local_path_options,
     queue_is_busy,
     queue_local_media_file,
-    retry_job_from_stored_source,
+    retry_for_request,
 )
 from backend.routers.local_video_sources import allow_duplicate_requested, submit_video_source_job
 
@@ -583,7 +583,19 @@ def get_agent_task_diagnosis(request: Request, task_id: str) -> dict[str, Any]:
 
 @router.post("/tasks/{task_id}/retry")
 async def retry_agent_task(request: Request, task_id: str) -> dict[str, Any]:
-    retried = await retry_job_from_stored_source(request, task_id)
+    # Optional JSON body {"speaker_diarization": true|false}: re-run the
+    # recording with speaker separation switched on or off. Every other option
+    # is the original task's.
+    overrides: dict[str, str] = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - an empty or non-JSON body means no overrides
+        body = None
+    if isinstance(body, dict) and body.get("speaker_diarization") is not None:
+        value = body.get("speaker_diarization")
+        on = value if isinstance(value, bool) else str(value).strip().lower() in {"1", "true", "yes", "on"}
+        overrides["speaker_diarization"] = "true" if on else "false"
+    retried = await retry_for_request(request, task_id, overrides=overrides or None)
     next_task_id = str(retried.get("task_id") or "")
     job = retried.get("job") if isinstance(retried.get("job"), dict) else {}
     return {

@@ -1,205 +1,320 @@
-"""Optional speaker diarization integration.
+"""Speaker diarization on this machine.
 
 This module intentionally avoids heuristic speaker guessing. Speaker labels are
-only produced when a real diarization backend is installed and configured.
+only produced when a real backend is installed with its models:
+
+- ``sherpa`` (default, installed with the app): sherpa-onnx with two small ONNX
+  models. Decision log 4.1 measured it against pyannote: the same answers on
+  real meetings at clustering threshold 1.0, 6 to 20 times faster, no PyTorch.
+- ``pyannote`` (optional, ``FLUENTFLOW_SPEAKER_BACKEND=pyannote``): more
+  accurate on hard meetings, slower, about 900 MB more to install; see
+  `backend.core.speaker_diarization_pyannote`. When it is chosen but cannot
+  run, sherpa runs instead and the status says why.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import os
-import sys
-import threading
-from contextlib import contextmanager
-from dataclasses import dataclass
+import shutil
+import subprocess
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Mapping, Sequence
 
-from backend.core.local_config import get_sensitive_setting
+from backend.core import speaker_diarization_pyannote as pyannote_backend
 from backend.core.runtime_paths import default_diarization_model_dir
+from backend.core.speaker_turns import SpeakerTurn
+
+BACKEND_ENV = "FLUENTFLOW_SPEAKER_BACKEND"
+BACKEND_SHERPA = "sherpa"
+BACKEND_PYANNOTE = "pyannote"
 
 
-_TORCH_LOAD_LOCK = threading.Lock()
+SEGMENTATION_MODEL_FILENAME = "segmentation.onnx"
+EMBEDDING_MODEL_FILENAME = "embedding.onnx"
+
+SAMPLE_RATE = 16000
+# Measured in decision log 4.1: 1.0 matched pyannote across meetings and a
+# lecture; 1.05 and up merged distinct people in larger meetings.
+CLUSTERING_THRESHOLD = 1.0
+MIN_DURATION_ON = 0.3
+MIN_DURATION_OFF = 0.5
+MAX_THREADS = 4
+# A cluster with less speaking time than this is almost always a stray split of
+# someone already present, not a new person.
+SMALL_SPEAKER_SECONDS = 8.0
+# A small speaker is folded into an established one only when their voices are
+# at least this similar (cosine of mean embeddings). Measured 2026-10-15 on three
+# meetings: a stray piece of an established speaker scored 0.57 and 0.76 against
+# that speaker; two real people who only interjected a line scored 0.21 and 0.41
+# against their nearest neighbour, and distinct established speakers scored 0.09
+# to 0.49 against each other. Folding every small speaker regardless swallowed
+# both real interjections.
+MERGE_MIN_SIMILARITY = 0.5
+# How much audio of one speaker goes into the voice average used to place the
+# small ones. Their longest turns are enough to characterise a voice, and
+# re-embedding a speaker's whole hour would double the work for nothing.
+_REFERENCE_SECONDS_PER_SPEAKER = 120.0
+# Turns shorter than this give an embedding too noisy to average in.
+_MIN_EMBEDDING_TURN_SECONDS = 0.5
 
 
-@dataclass(frozen=True)
-class SpeakerTurn:
-    start: float
-    end: float
-    speaker: str
+def model_paths() -> tuple[Path, Path]:
+    """The segmentation and embedding model files, present or not."""
+    model_dir = default_diarization_model_dir()
+    return model_dir / SEGMENTATION_MODEL_FILENAME, model_dir / EMBEDDING_MODEL_FILENAME
 
 
-def local_model_config() -> Path | None:
-    """The locally staged pipeline config, when a usable one is present.
-
-    Preferred over the Hugging Face repo id: on 2026-09-03 this machine reached
-    the Hugging Face API fine but got zero bytes from its model CDN, and
-    `from_pretrained` neither failed nor finished. Local files remove the
-    download from the request path entirely.
-
-    "Usable" means every checkpoint the config points at is really on disk. The
-    config alone is not enough to answer that, and treating it as enough is
-    worse than having no local models: this directory takes priority over the
-    token route, so a half-populated one would report the feature available and
-    then fail every run, on a machine where the token would have worked.
-    """
-    config = default_diarization_model_dir() / "config.yaml"
-    if not config.is_file():
-        return None
-    return config if _referenced_checkpoints_exist(config) else None
+def models_present() -> bool:
+    return all(path.is_file() and path.stat().st_size > 0 for path in model_paths())
 
 
-def _referenced_checkpoints_exist(config: Path) -> bool:
+def _sherpa_installed() -> bool:
     try:
-        import yaml  # type: ignore
-
-        loaded = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
-        params = ((loaded.get("pipeline") or {}).get("params") or {})
-    except Exception:
-        # Unreadable or unparseable: fall back to the token route rather than
-        # claim a local pipeline that cannot be checked.
+        return importlib.util.find_spec("sherpa_onnx") is not None
+    except (ImportError, ValueError):
         return False
-    for value in (params.get("segmentation"), params.get("embedding")):
-        text = str(value or "").strip()
-        # A bare repo id ("pyannote/segmentation-3.0") is fetched at run time and
-        # is not ours to verify; only a path is.
-        if not text or not (text.startswith("/") or text.startswith("~")):
-            continue
-        if not Path(text).expanduser().is_file():
-            return False
-    return True
+
+
+def requested_backend() -> str:
+    """The backend the user chose; anything but ``pyannote`` means sherpa."""
+    value = (os.environ.get(BACKEND_ENV) or "").strip().lower()
+    return BACKEND_PYANNOTE if value == BACKEND_PYANNOTE else BACKEND_SHERPA
+
+
+def sherpa_status() -> dict[str, Any]:
+    installed = _sherpa_installed()
+    has_models = models_present()
+    return {
+        "available": installed and has_models,
+        "backend": "sherpa-onnx",
+        "dependency_installed": installed,
+        "models_local": has_models,
+        "model_dir": str(default_diarization_model_dir()),
+    }
 
 
 def diarization_status() -> dict[str, Any]:
-    try:
-        has_pyannote = importlib.util.find_spec("pyannote.audio") is not None
-    except ModuleNotFoundError:
-        has_pyannote = False
-    has_token = bool(get_sensitive_setting("pyannote_auth_token"))
-    has_local_models = local_model_config() is not None
+    """What will run when speaker separation is asked for, and why.
+
+    ``backend`` is the backend that will actually run. ``requested_backend`` is
+    the user's choice; when the two differ, ``fallback_reason`` says why in
+    Chinese, for the result and the settings page.
+    """
+    requested = requested_backend()
+    status = sherpa_status()
+    fallback_reason = None
+    pyannote_detail = None
+    if requested == BACKEND_PYANNOTE:
+        pyannote_detail = pyannote_backend.pyannote_status()
+        if pyannote_detail["available"]:
+            status = {**pyannote_detail, "model_dir": str(pyannote_backend.default_pyannote_model_dir())}
+        elif not pyannote_detail["dependency_installed"]:
+            fallback_reason = "设置里选了 pyannote，但这台电脑没装 pyannote.audio，这次改用默认的 sherpa-onnx。"
+        else:
+            fallback_reason = (
+                "设置里选了 pyannote，但它的模型文件和 Hugging Face 令牌都没有，这次改用默认的 sherpa-onnx。"
+            )
     return {
-        # Local model files need no token: nothing is fetched at run time.
-        "available": has_pyannote and (has_local_models or has_token),
-        "backend": "pyannote.audio",
-        "dependency_installed": has_pyannote,
-        "auth_configured": has_token,
-        "models_local": has_local_models,
+        **status,
+        "requested_backend": requested,
+        "fallback_reason": fallback_reason,
+        "pyannote": pyannote_detail,
     }
 
 
 def default_on_for_agents() -> bool:
     """Whether a caller with no page (Agent API, MCP, curl) gets speaker
-    separation without asking for it.
+    separation without asking for it: no.
 
-    Only when the dependency is installed: without pyannote every such request
-    is skipped at run time, so defaulting it on only plants a step that never
-    runs. Every Agent entry (path and link) asks this same question.
+    Off by default everywhere (2026-10-15, product owner): it runs only when the
+    user turns it on or the caller passes ``speaker_diarization=true``. The
+    bundled agent skill suggests turning it on for a recording that turns out
+    to be a conversation among several people.
     """
-    return bool(diarization_status().get("dependency_installed"))
+    return False
+
+
+def decode_audio(audio_path: str | Path) -> Any:
+    """Any audio or video file as 16 kHz mono float32 samples, via ffmpeg."""
+    import numpy as np
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found on PATH; it is required for speaker diarization")
+    completed = subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-i", str(audio_path),
+            "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "-",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg could not decode {audio_path}: {detail[-500:]}")
+    return np.frombuffer(completed.stdout, dtype=np.float32).copy()
+
+
+def _thread_count() -> int:
+    try:
+        from backend.core.device_profile import cpu_thread_budget
+
+        budget = cpu_thread_budget()
+    except Exception:  # noqa: BLE001 - a missing profile must not block diarization
+        budget = None
+    return max(1, min(MAX_THREADS, budget or MAX_THREADS))
 
 
 def diarize_audio(audio_path: str | Path) -> list[SpeakerTurn]:
     status = diarization_status()
+    if status.get("backend") == BACKEND_PYANNOTE:
+        return pyannote_backend.diarize_with_pyannote(audio_path)
+    return diarize_with_sherpa(audio_path)
+
+
+def diarize_with_sherpa(audio_path: str | Path) -> list[SpeakerTurn]:
+    status = sherpa_status()
     if not status["available"]:
+        if not status["dependency_installed"]:
+            raise RuntimeError("Speaker diarization needs the sherpa-onnx package (pip install sherpa-onnx)")
         raise RuntimeError(
-            "Speaker diarization needs pyannote.audio plus either local model files "
-            "(scripts/fetch_diarization_models.py) or PYANNOTE_AUTH_TOKEN"
+            "Speaker diarization model files are missing; run scripts/fetch_diarization_models.py"
         )
 
-    from pyannote.audio import Pipeline  # type: ignore
+    import sherpa_onnx  # type: ignore
 
-    local_config = local_model_config()
-    if local_config is not None:
-        pipeline = _load_local_pyannote_pipeline(Pipeline, local_config)
-    else:
-        token = get_sensitive_setting("pyannote_auth_token")
-        if not token:
-            raise RuntimeError("Speaker diarization requires pyannote.audio and PYANNOTE_AUTH_TOKEN")
-        pipeline = _load_pyannote_pipeline(Pipeline, token)
-    diarization = pipeline(str(audio_path))
-    turns: list[SpeakerTurn] = []
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        turns.append(SpeakerTurn(start=float(turn.start), end=float(turn.end), speaker=str(speaker)))
-    return turns
+    segmentation_model, embedding_model = model_paths()
+    threads = _thread_count()
+    config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
+        segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
+            pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(segmentation_model)),
+            num_threads=threads,
+        ),
+        embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding_model), num_threads=threads),
+        clustering=sherpa_onnx.FastClusteringConfig(num_clusters=-1, threshold=CLUSTERING_THRESHOLD),
+        min_duration_on=MIN_DURATION_ON,
+        min_duration_off=MIN_DURATION_OFF,
+    )
+    if not config.validate():
+        raise RuntimeError(f"Speaker diarization model files in {segmentation_model.parent} are not usable")
+
+    samples = decode_audio(audio_path)
+    if samples.size == 0:
+        return []
+    diarizer = sherpa_onnx.OfflineSpeakerDiarization(config)
+    result = diarizer.process(samples).sort_by_start_time()
+    turns = [
+        SpeakerTurn(start=float(item.start), end=float(item.end), speaker=f"SPEAKER_{int(item.speaker):02d}")
+        for item in result
+    ]
+    if not small_speakers(turns):
+        return turns
+    extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+        sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding_model), num_threads=threads)
+    )
+    embeddings = speaker_embeddings(extractor, samples, turns)
+    return merge_small_speakers(turns, embeddings)
 
 
-def _load_local_pyannote_pipeline(pipeline_cls: Any, config_path: Path) -> Any:
-    with _torch_full_load_compat():
-        return pipeline_cls.from_pretrained(str(config_path))
+def speaking_seconds(turns: Iterable[SpeakerTurn]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for turn in turns:
+        totals[turn.speaker] = totals.get(turn.speaker, 0.0) + max(0.0, turn.end - turn.start)
+    return totals
 
 
-@contextmanager
-def _torch_full_load_compat() -> Iterator[None]:
-    """Let Lightning read pyannote checkpoints on torch >= 2.6.
+def small_speakers(turns: Iterable[SpeakerTurn], min_seconds: float = SMALL_SPEAKER_SECONDS) -> set[str]:
+    return {speaker for speaker, seconds in speaking_seconds(turns).items() if seconds < min_seconds}
 
-    Torch 2.6 flipped `torch.load` to `weights_only=True`, and these
-    checkpoints carry pickled objects, so loading them raises
-    `UnpicklingError`. Torch's own escape hatch is this environment variable;
-    it is set only around the load, and only for checkpoints that came from
-    pyannote's own published models.
+
+def speaker_embeddings(extractor: Any, samples: Any, turns: Sequence[SpeakerTurn]) -> dict[str, Any]:
+    """Mean, length-normalised voice embedding per speaker over its turns.
+
+    Small speakers use every turn they have; the others use their longest turns
+    up to ``_REFERENCE_SECONDS_PER_SPEAKER``.
     """
-    key = "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"
-    # The variable is process-wide, so two overlapping loads would have the
-    # first one to finish undo the relaxation the second still needs, failing a
-    # run that succeeds when it is the only one. Serialising the loads also
-    # keeps the window in which any other thread's `torch.load` would silently
-    # lose its unpickling check down to one load at a time.
-    with _TORCH_LOAD_LOCK:
-        previous = os.environ.get(key)
-        os.environ[key] = "1"
-        try:
-            yield
-        finally:
-            if previous is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = previous
+    import numpy as np
+
+    small = small_speakers(turns)
+    by_speaker: dict[str, list[SpeakerTurn]] = {}
+    for turn in turns:
+        by_speaker.setdefault(turn.speaker, []).append(turn)
+
+    output: dict[str, Any] = {}
+    for speaker, speaker_turns in by_speaker.items():
+        ordered = sorted(speaker_turns, key=lambda t: t.end - t.start, reverse=True)
+        usable = [t for t in ordered if t.end - t.start >= _MIN_EMBEDDING_TURN_SECONDS] or ordered[:1]
+        if speaker not in small:
+            chosen: list[SpeakerTurn] = []
+            total = 0.0
+            for turn in usable:
+                if total >= _REFERENCE_SECONDS_PER_SPEAKER:
+                    break
+                chosen.append(turn)
+                total += turn.end - turn.start
+            usable = chosen
+        vectors = []
+        for turn in usable:
+            chunk = samples[int(turn.start * SAMPLE_RATE): int(turn.end * SAMPLE_RATE)]
+            if chunk.size == 0:
+                continue
+            stream = extractor.create_stream()
+            stream.accept_waveform(SAMPLE_RATE, chunk)
+            stream.input_finished()
+            if not extractor.is_ready(stream):
+                continue
+            vector = np.asarray(extractor.compute(stream), dtype=np.float32)
+            norm = float(np.linalg.norm(vector))
+            if norm > 0:
+                vectors.append(vector / norm)
+        if vectors:
+            output[speaker] = np.mean(vectors, axis=0)
+    return output
 
 
-def _load_pyannote_pipeline(pipeline_cls: Any, token: str) -> Any:
-    model = "pyannote/speaker-diarization-3.1"
-    try:
-        return pipeline_cls.from_pretrained(model, token=token)
-    except TypeError as exc:
-        if "token" not in str(exc):
-            raise
-        with _hf_hub_download_auth_compat():
-            return pipeline_cls.from_pretrained(model, use_auth_token=token)
+def _cosine(a: Any, b: Any) -> float:
+    import numpy as np
+
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+    return float(np.dot(a, b) / denominator) if denominator > 0 else -1.0
 
 
-@contextmanager
-def _hf_hub_download_auth_compat() -> Iterator[None]:
-    try:
-        import huggingface_hub  # type: ignore
-    except Exception:
-        yield
-        return
+def merge_small_speakers(
+    turns: Sequence[SpeakerTurn],
+    embeddings: Mapping[str, Any],
+    min_seconds: float = SMALL_SPEAKER_SECONDS,
+    min_similarity: float = MERGE_MIN_SIMILARITY,
+) -> list[SpeakerTurn]:
+    """Fold each speaker with under ``min_seconds`` of speech into the
+    established speaker whose voice is most similar, when it is similar enough.
 
-    original = getattr(huggingface_hub, "hf_hub_download", None)
-    if original is None:
-        yield
-        return
-
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        if "use_auth_token" in kwargs and "token" not in kwargs:
-            kwargs["token"] = kwargs.pop("use_auth_token")
-        else:
-            kwargs.pop("use_auth_token", None)
-        return original(*args, **kwargs)
-
-    patched: list[tuple[Any, Any]] = []
-    for module in list(sys.modules.values()):
-        if getattr(module, "hf_hub_download", None) is original:
-            patched.append((module, original))
-            setattr(module, "hf_hub_download", wrapper)
-    try:
-        yield
-    finally:
-        for module, previous in patched:
-            try:
-                setattr(module, "hf_hub_download", previous)
-            except Exception:
-                pass
+    Similarity is the cosine of mean voice embeddings, never position: merging
+    a stray cluster into the neighbouring turn's speaker measured lower
+    agreement with pyannote (decision log 4.1). A small speaker whose best match
+    is under ``min_similarity`` is a person who said little, and stays a
+    speaker of its own. When every speaker is small there is nothing
+    established to merge into, and a speaker without an embedding stays as it is.
+    """
+    totals = speaking_seconds(turns)
+    small = {speaker for speaker, seconds in totals.items() if seconds < min_seconds}
+    established = [speaker for speaker in totals if speaker not in small and speaker in embeddings]
+    if not small or not established:
+        return list(turns)
+    target: dict[str, str] = {}
+    for speaker in small:
+        if speaker not in embeddings:
+            continue
+        best = max(established, key=lambda other: _cosine(embeddings[speaker], embeddings[other]))
+        if _cosine(embeddings[speaker], embeddings[best]) >= min_similarity:
+            target[speaker] = best
+    return [
+        SpeakerTurn(start=turn.start, end=turn.end, speaker=target.get(turn.speaker, turn.speaker))
+        for turn in turns
+    ]
 
 
 def assign_speakers_to_segments(segments: Iterable[Any], turns: Iterable[SpeakerTurn]) -> list[dict[str, Any]]:
@@ -240,7 +355,7 @@ def _speaker_for_span(start: float, end: float, turns: list[SpeakerTurn]) -> str
 def speaker_display_map(segments: Iterable[Any]) -> dict[str, str]:
     """Map raw diarization ids to reader-facing labels in first-appearance order.
 
-    pyannote and the cloud providers emit ids like ``SPEAKER_00``. Notes and
+    The diarizer and the cloud providers emit ids like ``SPEAKER_00``. Notes and
     transcripts show ``说话人 A`` instead. The mapping is per material, never a
     real name: identifying who a label is remains out of scope (see
     docs/speaker_attribution_plan.md).

@@ -43,7 +43,7 @@ def _diarization_executor() -> ThreadPoolExecutor:
     """A pool of its own for diarization, because a timed-out run leaks a thread.
 
     `asyncio.wait_for` stops waiting; it cannot stop the thread, which stays
-    inside pyannote's model download for the life of the process. On the shared
+    inside the diarizer for the life of the process. On the shared
     default executor those leaked threads accumulate until nothing else can run
     — every ffmpeg call, transcription and summarizer call in the pipeline goes
     through `run_in_executor` — which is the same silent hang the timeout exists
@@ -87,11 +87,17 @@ async def label_speakers(
     Diarizing the audio is the expensive, hang-prone path the timeout exists
     for.
     """
+    status = diarization_status()
     speaker_payload: dict[str, Any] = {
         "requested": ctx.diarization_requested,
-        "available": diarization_status()["available"],
+        "available": status["available"],
         "applied": False,
+        "backend": status.get("backend"),
     }
+    if ctx.diarization_requested and status.get("fallback_reason"):
+        # The user chose pyannote and it cannot run here: sherpa-onnx runs
+        # instead, and the result says so rather than failing the task.
+        speaker_payload["fallback_reason"] = status["fallback_reason"]
     rounded_duration = round(duration_sec, 1) if duration_sec is not None else None
     common: dict[str, Any] = {
         "task_id": ctx.task_id_value,
@@ -106,7 +112,7 @@ async def label_speakers(
         # this was 62 "failed" steps in two weeks on the one machine using this,
         # each read back to the user as an error. It is a missing option, not a
         # failure, and the settings page already says so.
-        speaker_payload["skipped_reason"] = "这台电脑没有装讲话人区分需要的组件，已跳过。"
+        speaker_payload["skipped_reason"] = "这台电脑上讲话人区分还不能用，已跳过。设置页写了缺什么、怎么补。"
         log_event(
             event_name="speaker_diarization_skipped",
             success=True,
@@ -117,14 +123,11 @@ async def label_speakers(
         started_at = time.perf_counter()
         budget = _diarization_timeout_seconds(duration_sec)
         try:
-            # Bounded on purpose. pyannote fetches its models on first use
-            # and `from_pretrained` has no timeout of its own: on a slow
-            # link it neither fails nor finishes, and a 2026-09-03 run sat
-            # in it for over an hour with the task stuck at "stt" and no
-            # error anywhere. Speaker labels are optional, so give them a
-            # budget and move on without them when it is spent. The
-            # executor thread is left to finish its download, which warms
-            # the cache for the next run.
+            # Bounded on purpose. A 2026-09-03 run of the previous backend
+            # sat in a model download for over an hour with the task stuck
+            # at "stt" and no error anywhere. Speaker labels are optional,
+            # so give them a budget and move on without them when it is
+            # spent; the executor thread is left to finish on its own.
             turns = await asyncio.wait_for(
                 ctx.loop.run_in_executor(
                     _diarization_executor(), lambda: diarize_audio(audio_path)
@@ -149,7 +152,6 @@ async def label_speakers(
         except asyncio.TimeoutError:
             error_reason = (
                 f"说话人区分超过 {int(budget)} 秒预算，已跳过。"
-                "首次使用需要下载 pyannote 模型；下载完成后重试即可。"
             )
             speaker_payload.update({"applied": False, "error_reason": error_reason})
             logger.warning(

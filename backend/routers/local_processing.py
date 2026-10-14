@@ -1407,14 +1407,13 @@ def local_path_options(
     ``title`` applies only to a single file, as on the upload route: a batch
     sharing one typed title would make every task the same name.
 
-    Speaker separation defaults ON for callers with no page — the Agent API, the
-    MCP tool, a curl — when pyannote is installed (otherwise the request would
-    always be skipped, so it is not made). The settings page's default never reaches them, and a
-    2026-09-03 report of an 8-person meeting transcribed with no speakers was
-    exactly that gap. The page's own routes pass
-    ``speaker_diarization_default_on=False``: the page always says what the user
-    chose, and an absent switch means off there, exactly as on the upload route.
-    An explicit false always wins.
+    For callers with no page (the Agent API, the MCP tool, a curl) an absent
+    ``speaker_diarization`` follows ``speaker_diarization.default_on_for_agents``,
+    which is off since 2026-10-15: speaker separation runs only when asked for,
+    and the bundled agent skill offers it for multi-person recordings. The
+    page's own routes pass ``speaker_diarization_default_on=False``: the page
+    always says what the user chose, and an absent switch means off there,
+    exactly as on the upload route. An explicit value always wins.
     """
     limit = _effective_duration_limit(payload.get("duration_limit_seconds"))
     if speaker_diarization_default_on:
@@ -1699,6 +1698,7 @@ async def _retry_in_place(
     client_id: Optional[str],
     job: dict,
     origin: dict,
+    overrides: Optional[dict] = None,
 ) -> dict:
     """Re-run a task from the file it was read from, where that file still is.
 
@@ -1717,7 +1717,7 @@ async def _retry_in_place(
             status_code=404,
             detail=f"原文件已不在这个位置，无法重新处理：{original}",
         )
-    options = _stored_queue_options(job)
+    options = {**_stored_queue_options(job), **(overrides or {})}
     duration_limit = _effective_duration_limit(options.get("duration_limit_seconds"))
     queued = await queue_local_media_file(
         original,
@@ -1751,10 +1751,16 @@ async def _retry_in_place(
 @router.post("/jobs/{task_id}/retry")
 async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
     """Re-run a task from its stored source file, on the local hub."""
+    return await retry_for_request(request, task_id)
+
+
+async def retry_for_request(request: Request, task_id: str, overrides: Optional[dict] = None) -> dict:
+    """The retry route's work, with optional queue-option overrides for the Agent API."""
     return await retry_task(
         task_id,
         client_id=local_client_scope(request),
         local_caller=request_is_localhost(request),
+        overrides=overrides,
     )
 
 
@@ -1764,6 +1770,7 @@ async def _retry_link_task(
     job: dict,
     client_id: Optional[str],
     carry: Optional[dict],
+    overrides: Optional[dict] = None,
 ) -> Optional[dict]:
     """Re-submit a link task that never got its video: fetch the link again.
 
@@ -1792,6 +1799,7 @@ async def _retry_link_task(
     # recovery's) quietly use the old choice. Leaving it out lets
     # submit_video_source_job read the current `video_cookies_browser`.
     raw_options.pop("cookies_from_browser", None)
+    raw_options.update(overrides or {})
     new_job = await submit_video_source_job(
         input_text=link,
         title=str(metadata.get("video_source_title") or "").strip(),
@@ -1819,6 +1827,7 @@ async def retry_task(
     client_id: Optional[str],
     local_caller: bool,
     carry: Optional[dict] = None,
+    overrides: Optional[dict] = None,
 ) -> dict:
     """Queue a fresh task from this one's recording; the old row stays as it was.
 
@@ -1826,7 +1835,9 @@ async def retry_task(
     re-runs through exactly the path the user's own retry button takes.
     ``local_caller`` says the request came from this machine, which is what
     allows reading a file by its path. ``carry`` is written onto the new task
-    when it is created, before anything can run it.
+    when it is created, before anything can run it. ``overrides`` replaces
+    stored queue options for the new task (an agent re-running a recording with
+    speaker separation turned on).
     """
     job = get_job(task_id, client_id=client_id)
     if not job:
@@ -1841,10 +1852,13 @@ async def retry_task(
             client_id=client_id,
             job=job,
             origin={**in_place, **(carry or {})},
+            overrides=overrides,
         )
     source = find_source_file(task_id)
     if not source:
-        link_retry = await _retry_link_task(task_id=task_id, job=job, client_id=client_id, carry=carry)
+        link_retry = await _retry_link_task(
+            task_id=task_id, job=job, client_id=client_id, carry=carry, overrides=overrides
+        )
         if link_retry is not None:
             return link_retry
         raise HTTPException(
@@ -1892,6 +1906,7 @@ async def retry_task(
     metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     stored = metadata.get("queue_options")
     options = _queue_options_from_mapping(stored if isinstance(stored, dict) else metadata)
+    options.update(overrides or {})
     raw_title_value = str(
         options.get("title") or metadata.get("raw_title") or Path(filename).stem
     ).strip()

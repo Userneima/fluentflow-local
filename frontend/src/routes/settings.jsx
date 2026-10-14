@@ -63,17 +63,19 @@ const Settings = () => {
     const notesIntro = `${lang === 'zh'
         ? '转录在本机完成，不需要 Key。'
         : 'Transcription runs on this machine and needs no key.'}${writerSentence ? ` ${writerSentence}` : ''}`;
-    // The token only fetches the model, so it is asked for only where the
-    // component is installed and the model files are not already here.
-    const showPyannoteToken = !!diarizationStatus
-        && diarizationStatus.dependency_installed !== false
-        && !diarizationStatus.models_local;
+    // The token only fetches the optional pyannote backend's model, so it is
+    // asked for only when that backend is chosen and installed and its model
+    // files are not already here. The default backend needs no token.
+    const pyannote = diarizationStatus?.requested_backend === 'pyannote' ? diarizationStatus.pyannote : null;
+    const showPyannoteToken = !!pyannote
+        && pyannote.dependency_installed !== false
+        && !pyannote.models_local;
     const showFeishuAppRows = larkExportRoute !== LARK_EXPORT_ROUTE_LOCAL_CLI;
     const advancedDescription = (() => {
         const zh = lang === 'zh';
-        if (showFeishuAppRows && showPyannoteToken) return zh ? '飞书应用凭证和讲话人区分令牌，用到时再展开。' : 'Feishu app credentials and the speaker separation token. Open when you need them.';
+        if (showFeishuAppRows && showPyannoteToken) return zh ? '飞书应用凭证和 pyannote 模型令牌，用到时再展开。' : 'Feishu app credentials and the pyannote model token. Open when you need them.';
         if (showFeishuAppRows) return zh ? '飞书应用凭证，用到时再展开。' : 'Feishu app credentials. Open when you need them.';
-        return zh ? '讲话人区分令牌，用到时再展开。' : 'The speaker separation token. Open when you need it.';
+        return zh ? 'pyannote 模型令牌，用到时再展开。' : 'The pyannote model token. Open when you need it.';
     })();
 
     return (
