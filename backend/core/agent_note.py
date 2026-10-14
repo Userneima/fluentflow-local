@@ -285,7 +285,7 @@ def save(
         _write_store(task_id, parts, {
             part.index: _stored(part, draft.markdown, record)
             for part, draft, record in zip(parts, cleaned, coverage["parts"])
-        }, joined=_note_of(updated), basis_note=basis_note, model=model)
+        }, joined=_note_of(updated), kept_replaced=_replaced_of(updated), basis_note=basis_note, model=model)
         return updated
     if note_markdown is None:
         raise AgentNoteError("没有收到笔记内容（note_markdown）")
@@ -295,7 +295,8 @@ def save(
         updated = _finish(task_id, job, media, parts, cleaned, coverage,
                           basis_note=basis_note, model=model, client_id=client_id)
         _write_store(task_id, parts, {1: _stored(parts[0], cleaned[0].markdown, coverage["parts"][0])},
-                     joined=_note_of(updated), basis_note=basis_note, model=model)
+                     joined=_note_of(updated), kept_replaced=_replaced_of(updated),
+                     basis_note=basis_note, model=model)
         return updated
     # A whole note for a recording in several parts: an agent fixing the note it
     # read. It is taken as it is, measured against the whole transcript; the
@@ -329,9 +330,14 @@ def save_part(
     task's note is left alone.
 
     Saving a part again after the note was joined updates that part in the note,
-    which is how the read-through and the coverage fill land. It is refused when
-    the note was changed after the join (an edit, another writer), because
-    joining the stored parts again would throw that change away.
+    which is how the read-through and the coverage fill land; the note that can
+    be put back stays the one from before the agent's first join, also when a
+    transcript edit in between made some parts be written again.
+
+    When the task's note changed after the join (an edit in the editor, another
+    writer), the saved parts no longer describe it. They are dropped and this
+    part starts a new round: nothing replaces the changed note until every part
+    is in again, and then the changed note is the one that can be put back.
     """
     job = _job(task_id, client_id)
     media, parts, _segments = _eligible(task_id, job)
@@ -345,11 +351,9 @@ def save_part(
     store = _read_store(task_id)
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     joined = store.get("joined_hash")
-    if joined and joined != _hash(str(result.get("summary_markdown") or "")) and _complete(store, parts):
-        raise AgentNoteError(
-            "这篇笔记在各部分拼好之后又被改过（编辑器里的修改或别的写法重写），按部分保存会把那些改动覆盖掉。"
-            "请用 get_task_package 读出现在的整篇笔记，改好后用 note_markdown 整篇交回，不传 part。"
-        )
+    if joined and joined != _hash(str(result.get("summary_markdown") or "")):
+        store = {}
+        joined = None
     coverage = _coverage([draft], [target], checker)
     saved = _valid_parts(store, parts)
     saved[part] = _stored(target, draft.markdown, coverage["parts"][0])
@@ -364,8 +368,10 @@ def save_part(
         "completed": not remaining,
         "job": None,
     }
+    kept = store.get("kept_replaced") if joined else None
     if remaining:
-        _write_store(task_id, parts, saved, joined=None, basis_note=basis_note, model=model)
+        _write_store(task_id, parts, saved, joined_hash=joined, kept_replaced=kept,
+                     basis_note=basis_note, model=model)
         answer["next"] = f"第 {part} 部分已保存。还差第 {'、'.join(str(i) for i in remaining)} 部分，写完一部分存一部分。"
         return answer
     cleaned = [
@@ -375,10 +381,10 @@ def save_part(
     combined = {"checker": coverage["checker"], "parts": [saved[p.index]["coverage"] for p in parts],
                 "missing": [{"part": p.index, **item}
                             for p in parts for item in (saved[p.index]["coverage"].get("missing") or [])]}
-    keep = vn.visual_note_state(result).get("replaced_note") if joined else None
     updated = _finish(task_id, job, media, parts, cleaned, combined, basis_note=basis_note, model=model,
-                      client_id=client_id, keep_replaced=keep)
-    _write_store(task_id, parts, saved, joined=_note_of(updated), basis_note=basis_note, model=model)
+                      client_id=client_id, keep_replaced=kept)
+    _write_store(task_id, parts, saved, joined=_note_of(updated), kept_replaced=kept or _replaced_of(updated),
+                 basis_note=basis_note, model=model)
     answer["job"] = updated
     answer["next"] = READ_THROUGH_INSTRUCTION if len(parts) > 1 else "笔记已保存。"
     return answer
@@ -468,6 +474,11 @@ def _stored(part: claude_vision.TranscriptPart, markdown: str, coverage: dict[st
     return {"transcript_hash": _hash(part.text), "markdown": markdown, "coverage": coverage}
 
 
+def _replaced_of(job: dict[str, Any]) -> dict[str, Any] | None:
+    """The note an agent's join displaced, as the task records it for restoring."""
+    return vn.visual_note_state(job.get("result")).get("replaced_note") or None
+
+
 def _note_of(job: dict[str, Any]) -> str:
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     return str(result.get("summary_markdown") or "")
@@ -500,17 +511,18 @@ def _valid_parts(store: dict[str, Any], parts: list[claude_vision.TranscriptPart
     return valid
 
 
-def _complete(store: dict[str, Any], parts: list[claude_vision.TranscriptPart]) -> bool:
-    return len(_valid_parts(store, parts)) == len(parts)
-
-
-def _write_store(task_id: str, parts, saved: dict[int, dict[str, Any]], *, joined: str | None,
+def _write_store(task_id: str, parts, saved: dict[int, dict[str, Any]], *, joined: str | None = None,
+                 joined_hash: str | None = None, kept_replaced: dict[str, Any] | None = None,
                  basis_note: str, model: str) -> None:
+    """``joined`` is the task's note right after a join; ``joined_hash`` carries an
+    earlier join forward while parts are being written again. ``kept_replaced``
+    is the note from before the agent's first join, the one restore puts back."""
     path = artifact_target_path(task_id, _PARTS_FILENAME)
     path.write_text(json.dumps({
         "total_parts": len(parts),
         "parts": {str(index): entry for index, entry in sorted(saved.items())},
-        "joined_hash": _hash(joined) if joined is not None else None,
+        "joined_hash": _hash(joined) if joined is not None else joined_hash,
+        "kept_replaced": kept_replaced,
         "basis_note": basis_note,
         "model": model,
     }, ensure_ascii=False), encoding="utf-8")

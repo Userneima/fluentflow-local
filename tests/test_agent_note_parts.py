@@ -144,20 +144,51 @@ def test_a_part_saved_against_an_older_transcript_is_not_used(job_store, tmp_pat
     assert job_store["result"]["summary_markdown"] == "原来的文字笔记"
 
 
-def test_a_part_never_overwrites_changes_made_after_the_join(job_store, tmp_path, small_parts):
+def test_a_part_saved_after_the_note_was_edited_starts_over_and_keeps_the_edit(job_store, tmp_path, small_parts):
     _long(job_store)
     total = _material(tmp_path)["total_parts"]
     for index in range(1, total + 1):
         _save(index)
     job_store["result"]["summary_markdown"] += "\n\n用户在编辑器里加的一句。"
+    edited = job_store["result"]["summary_markdown"]
 
-    with pytest.raises(an.AgentNoteError, match="note_markdown"):
-        _save(1)
-    assert "用户在编辑器里加的一句" in job_store["result"]["summary_markdown"]
+    first = _save(1)
+    assert first["completed"] is False
+    assert first["remaining_parts"] == list(range(2, total + 1))
+    assert job_store["result"]["summary_markdown"] == edited
+
+    for index in range(2, total + 1):
+        _save(index)
+    restored = vn.restore_previous_note(TASK, client_id="anonymous")
+    assert restored["result"]["summary_markdown"] == edited
+
+
+def test_a_whole_note_handed_back_is_accepted(job_store, tmp_path, small_parts):
+    _long(job_store)
+    total = _material(tmp_path)["total_parts"]
+    for index in range(1, total + 1):
+        _save(index)
 
     whole = job_store["result"]["summary_markdown"] + "\n\n整篇交回时改的一句。"
     updated = an.save(TASK, note_markdown=whole, client_id="anonymous", checker=None)
     assert "整篇交回时改的一句" in updated["result"]["summary_markdown"]
+
+
+def test_the_note_before_the_agent_stays_restorable_through_a_transcript_edit(job_store, tmp_path, small_parts):
+    _long(job_store)
+    _material(tmp_path)
+    total = _material(tmp_path)["total_parts"]
+    for index in range(1, total + 1):
+        _save(index)
+
+    segments = job_store["result"]["display_segments"]
+    segments[-1] = {**segments[-1], "text": segments[-1]["text"] + "补一句。"}
+    total = _material(tmp_path)["total_parts"]
+    for index in range(1, total + 1):
+        _save(index)
+
+    restored = vn.restore_previous_note(TASK, client_id="anonymous")
+    assert restored["result"]["summary_markdown"] == "原来的文字笔记"
 
 
 def test_a_part_out_of_range_or_too_short_is_refused(job_store, tmp_path, monkeypatch):
