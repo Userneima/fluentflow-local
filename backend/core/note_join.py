@@ -1,15 +1,18 @@
 """Join the parts of a long recording's note into one note, without a model.
 
 Each part is written on its own and only knows its own stretch, so each one
-numbers its sections from 「一、」 and ends with its own 「存疑」 section. Read in
-a row that is four notes stapled together. The fixes are all mechanical, which is
+numbers its sections from 「一、」. Read in a row that is four notes stapled
+together. The fixes are all mechanical, which is
 why they live here and not in another request:
 
 - one H1 title for the whole note: the one the first part wrote if it wrote one,
   otherwise the task's title; titles written by later parts are dropped;
 - numbered second level headings are renumbered in order across all parts;
-- every 「存疑」 section is lifted out of its part and the items are put in one
-  section at the end of the note.
+- a 「存疑」 section, if a part wrote one, is lifted out and the items are put
+  in one section at the end of the note. The default skill marks a doubtful word
+  where it stands with 「（存疑）」 and writes no such section, so this only acts
+  for a user's own skill copied before that change, which still asks for one;
+  without it those notes would carry a doubt section in the middle of every part.
 
 Headings inside fenced code blocks are left alone.
 """

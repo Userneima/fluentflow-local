@@ -841,7 +841,8 @@ def _joined_draft(drafts, parts, *, title: str = ""):
     Each part was told to write only its own stretch and to start at a second
     level heading, so joining is mechanical (``note_join``): the note gets one
     title (the first part's if it wrote one, else ``title``), section numbers run
-    on across parts, and every part's 「存疑」 goes into one section at the end.
+    on across parts, and a 「存疑」 section a user's older skill still asks for goes
+    to the end once.
     A stitching pass would cost another request to do what a loop can.
 
     The comment above each part says which stretch of the recording it covers.

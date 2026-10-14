@@ -132,8 +132,11 @@ def test_the_default_skill_is_anonymous_and_has_the_agreed_rules():
         "内容多的节分层级标题",
         "标题下面直接列条目",
         "图注一句话",
+        "后面紧跟「（存疑）」",
+        "笔记不另设「存疑」一节",
     ):
         assert agreed in text, agreed
+    assert "末尾的「存疑」一节" not in text
 
 
 def test_each_skill_is_named_after_its_folder():

@@ -5,8 +5,12 @@ What has to hold, written from the requirement rather than the code (found on a
 
 - Section numbers continue across parts: four parts of two sections each are
   「一、」 to 「八、」, each number once, in recording order.
-- Every part's 「存疑」 section ends up in one 「存疑」 section at the end of the
-  note, with every item kept; a note whose parts had none has no such section.
+- A doubtful word is marked 「（存疑）」 where it stands (default skill since
+  2026-10-14), and joining leaves every such mark where the part put it and adds
+  no 「存疑」 section.
+- A user's own skill copied before then still asks for a 「存疑」 section per
+  part; those end up in one 「存疑」 section at the end of the note, with every
+  item kept; a note whose parts had none has no such section.
 - The note has exactly one H1. The task's title is used when no part wrote one;
   a title the first part wrote is kept; a title a later part wrote is not.
 - The join is mechanical: no model call, and the marker saying which stretch of
@@ -184,3 +188,15 @@ def test_the_recording_writer_still_reaches_the_note(tmp_path, monkeypatch):
     note = vn.visual_note_state(updated["result"])["markdown"]
     for call in writer.calls:
         assert f"## 第{call['part'].index}段" in note
+
+
+def test_inline_doubt_marks_stay_where_the_part_put_them():
+    notes = [
+        _part_note(1, doubt=False).replace("第1部分讲的第一件事。", "拉模拟（存疑）做得差不多了。"),
+        _part_note(2, doubt=False).replace("第2部分讲的第二件事。", "版本 3.2（存疑）下周发。"),
+    ]
+    note = _join(notes)
+
+    assert "存疑" not in "".join(_h2(note)), "an inline mark is not a section"
+    first, second = note.index("拉模拟（存疑）做得差不多了。"), note.index("版本 3.2（存疑）下周发。")
+    assert note.index("第1部分的开头") < first < note.index("第2部分的开头") < second
