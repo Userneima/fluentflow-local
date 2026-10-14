@@ -1,8 +1,7 @@
-"""Result artifacts, transcript/segment canonicalization, and edit backups,
-extracted from server_helpers.py so both the hosted and local editions can
-(re)generate downloadable artifacts and edit backups without the hosted helper
-barrel. Depends only on shared modules (result_schema, subtitle_format,
-storage_paths, storage_cleanup) plus stdlib; no server_helpers imports."""
+"""Result artifacts, transcript/segment canonicalization, and edit backups:
+(re)generating a task's downloadable files and keeping a backup before an edit.
+Depends only on result_schema, subtitle_format, storage_paths and
+storage_cleanup plus stdlib."""
 
 from __future__ import annotations
 

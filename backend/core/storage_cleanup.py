@@ -1,7 +1,5 @@
-"""Task-file cleanup, extracted from server_helpers.py so both the hosted and
-local editions can delete a task's on-disk files without the hosted helper
-barrel. Depends only on the shared storage-path helpers plus stdlib; no
-server_helpers imports."""
+"""Task-file cleanup: deleting a task's files on disk. Depends only on the
+storage-path helpers plus stdlib."""
 
 from __future__ import annotations
 

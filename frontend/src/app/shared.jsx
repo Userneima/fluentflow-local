@@ -93,9 +93,6 @@ export const apiErrorMessage = (payload, fallback='Request failed') => {
     if (Array.isArray(detail)) return detail.map((item) => item?.msg || item?.message || String(item)).join('; ');
     if (detail && typeof detail === 'object') {
         const message = detail.message || detail.detail || fallback;
-        if (detail.required_units != null && detail.balance_units != null) {
-            return `${message} 当前 ${detail.balance_units}，预计需要 ${detail.required_units}。`;
-        }
         return String(message);
     }
     return fallback;

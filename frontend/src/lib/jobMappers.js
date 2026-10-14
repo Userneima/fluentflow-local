@@ -17,13 +17,6 @@ import {
 
 export const accountJobsCacheKey = (accountId) => `fluentflow_account_jobs_cache_${accountId || 'local'}`;
 
-const jobBelongsToAccountCache = (accountId, job) => {
-    const normalizedAccountId = String(accountId || 'local').trim();
-    if (!normalizedAccountId || normalizedAccountId === 'local') return true;
-    const clientId = String(job?.client_id || '').trim();
-    return clientId === `user:${normalizedAccountId}` || clientId === `user${normalizedAccountId}`;
-};
-
 const compactTextForCache = (value, maxChars=240) => (
     value ? String(value).slice(0, maxChars) : ''
 );
@@ -80,7 +73,7 @@ export const readCachedAccountJobs = (accountId) => {
     try {
         const parsed = JSON.parse(localStorage.getItem(accountJobsCacheKey(accountId)) || '{}');
         const jobs = Array.isArray(parsed?.jobs) ? parsed.jobs : [];
-        return jobs.filter((job) => job && typeof job === 'object' && jobBelongsToAccountCache(accountId, job));
+        return jobs.filter((job) => job && typeof job === 'object');
     } catch(_) {
         return [];
     }
@@ -89,7 +82,6 @@ export const readCachedAccountJobs = (accountId) => {
 export const writeCachedAccountJobs = (accountId, jobs) => {
     try {
         const compactJobs = (Array.isArray(jobs) ? jobs : [])
-            .filter((job) => jobBelongsToAccountCache(accountId, job))
             .map(minimizeJobForCache)
             .filter(Boolean)
             .slice(0, 100);
@@ -154,7 +146,6 @@ export const reconcileTaskList = ({
     optimistic = [],
     tombstones = [],
     cancelled = [],
-    accountId = 'local',
     // True when ``fetched`` is the backend's whole list (``/jobs`` returns every
     // task). A cached task missing from it was deleted, from another browser or
     // by clearing the data folder, and must not come back as a finished ghost.
@@ -170,8 +161,7 @@ export const reconcileTaskList = ({
     // persisted yet is retained at equal freshness; mergeCachedJobs still lets a
     // fresher backend row (newer updated_at) win over a stale optimistic one.
     const merged = mergeCachedJobs(optimistic, cached, fetched);
-    const owned = merged.filter((job) => jobBelongsToAccountCache(accountId, job));
-    const alive = owned.filter((job) => !dropped.has(taskKeyForJob(job)));
+    const alive = merged.filter((job) => !dropped.has(taskKeyForJob(job)));
     // A locally-cancelled task stays cancelled even if a slow backend poll still
     // reports it as running, until the backend catches up (bridges the gap the
     // per-page locallyCancelled set used to cover).

@@ -1,5 +1,4 @@
-"""SRT/VTT subtitle formatting helpers, extracted from server_helpers.py.
-Pure leaf functions (typing only) — re-imported by server_helpers."""
+"""SRT/VTT subtitle formatting helpers. Pure leaf functions (typing only)."""
 
 from __future__ import annotations
 

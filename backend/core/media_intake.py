@@ -1,7 +1,5 @@
-"""Media upload intake helpers, extracted from server_helpers.py so both the
-hosted and local editions can validate and persist an uploaded media file
-without the hosted helper barrel. Depends only on shared storage_paths plus
-stdlib; no server_helpers imports."""
+"""Media intake helpers: validating and persisting a media file handed to
+the service. Depends only on storage_paths plus stdlib."""
 
 from __future__ import annotations
 

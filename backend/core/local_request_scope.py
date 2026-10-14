@@ -9,26 +9,9 @@ from typing import Optional
 from fastapi import HTTPException, Request
 
 
-EXECUTION_TARGET_HEADER = "x-fluentflow-execution-target"
-EXECUTION_TARGET_LOCAL = "local"
 EXECUTION_SCOPE_LOCAL = "local"
 
 LOCAL_REQUEST_HOSTS = {"127.0.0.1", "localhost", "::1", "testclient"}
-
-LOCAL_EXECUTION_EXACT_PATHS = {
-    "/process",
-    "/queue/process",
-    "/summarize-transcript-file",
-    "/regenerate-summary",
-    "/export-lark",
-    "/video-sources/jobs",
-    "/jobs",
-}
-LOCAL_EXECUTION_PATH_PREFIXES = (
-    "/jobs/",
-    "/agent/",
-)
-
 
 AGENT_ACCESS_TOKEN_ENV = "FLUENTFLOW_ACCESS_TOKEN"
 AGENT_ACCESS_HEADER = "x-fluentflow-access-token"
@@ -81,23 +64,3 @@ def request_is_localhost(request: Request) -> bool:
     """
     client_host = ((request.client.host if request.client else "") or "").strip().lower()
     return client_host in LOCAL_REQUEST_HOSTS
-
-
-def request_prefers_local_execution(request: Request) -> bool:
-    return (
-        request.headers.get(EXECUTION_TARGET_HEADER) or ""
-    ).strip().lower() == EXECUTION_TARGET_LOCAL
-
-
-def route_allows_local_execution(path: str) -> bool:
-    return path in LOCAL_EXECUTION_EXACT_PATHS or any(
-        path.startswith(prefix) for prefix in LOCAL_EXECUTION_PATH_PREFIXES
-    )
-
-
-def request_is_local_execution(request: Request) -> bool:
-    return (
-        request_prefers_local_execution(request)
-        and request_is_localhost(request)
-        and route_allows_local_execution(request.url.path)
-    )

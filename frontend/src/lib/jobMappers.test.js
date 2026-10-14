@@ -45,18 +45,6 @@ describe('reconcileTaskList', () => {
         expect(ids(list)).toEqual(['t1']);
     });
 
-    // e53885b: another account's cached jobs leaked into the current list.
-    it('keeps only jobs belonging to the active account', () => {
-        const list = reconcileTaskList({
-            cached: [
-                makeJob('a', { client_id: 'user:A' }),
-                makeJob('b', { client_id: 'user:B' }),
-            ],
-            accountId: 'A',
-        });
-        expect(ids(list)).toEqual(['a']);
-    });
-
     it('treats the local account as owning every job', () => {
         const list = reconcileTaskList({
             cached: [makeJob('a', { client_id: 'user:A' }), makeJob('x')],
@@ -199,15 +187,6 @@ describe('entryToJob round trip', () => {
         expect(rt.taskId).toBe('f1');
         expect(rt.status).toBe('failed');
         expect(rt.name).toBeTruthy();
-    });
-
-    it('stamps client_id so account owner filtering keeps the record', () => {
-        const job = entryToJob(
-            { taskId: 'o1', name: 'x', status: 'completed', timestamp: 1751328000000 },
-            { clientId: 'user:A' },
-        );
-        expect(ids(reconcileTaskList({ optimistic: [job], accountId: 'A' }))).toEqual(['o1']);
-        expect(reconcileTaskList({ optimistic: [job], accountId: 'B' })).toEqual([]);
     });
 
     it('returns null for a missing entry or one without a task id', () => {

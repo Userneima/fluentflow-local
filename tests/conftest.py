@@ -35,7 +35,6 @@ RUNTIME_PATH_ENV_VARS = {
     "FLUENTFLOW_EDITED_TRANSCRIPT_DIR": "edited_transcripts",
     "FLUENTFLOW_TRANSCRIPT_EDIT_RECORDS_DIR": "transcript_edit_records",
     "FLUENTFLOW_VIDEO_SOURCE_DIR": "video_sources",
-    "FLUENTFLOW_CODEX_EXPORT_DIR": "codex_exports",
     "FLUENTFLOW_DIARIZATION_MODEL_DIR": "models/pyannote",
 }
 

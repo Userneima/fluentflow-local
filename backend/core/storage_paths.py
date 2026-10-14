@@ -1,6 +1,4 @@
-"""Storage-directory path helpers, extracted from server_helpers.py.
-Thin wrappers over runtime_paths — re-imported by server_helpers so
-H._artifact_storage_dir etc. keep working. No server_helpers imports."""
+"""Storage-directory path helpers: thin wrappers over runtime_paths."""
 
 from __future__ import annotations
 
