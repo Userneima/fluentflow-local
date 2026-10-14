@@ -123,7 +123,7 @@ const Editor = () => {
         runtimeConfig,
         diarizationStatus,
     } = useApp();
-    const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
+    const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
     const {loadSettings, saveSettings} = useSettings();
     const [exporting, setExporting] = useState(false);
     const [regenerating, setRegenerating] = useState(false);
@@ -1243,29 +1243,18 @@ const Editor = () => {
         } else retranscribeInputRef.current?.click();
     };
 
-    const handleMediaFileSelected = async (file) => {
+    // A file picked here plays for this visit only. FluentFlow keeps no copy:
+    // on this machine that would mean copying a recording of several gigabytes
+    // through the browser, for the rare case where both the original and the
+    // cut file have gone missing.
+    const handleMediaFileSelected = (file) => {
         if (!file) return;
         setLastSourceFile(file);
         loadMediaFile(file);
         if (!result?.task_id) return;
-        try {
-            const data = await uploadJobPlaybackAudio(result.task_id, file);
-            if (data?.result) {
-                setLastResult(data.result);
-                addToHistory(resultToHistoryEntry(data.result, {
-                    taskId: data.result.task_id || result.task_id,
-                    name: data.result.filename || file.name,
-                }));
-            }
-            showToast(lang === 'zh' ? '原音频已保存，下次打开不用重选。' : 'Source audio saved for next time.');
-        } catch (err) {
-            showToast(
-                lang === 'zh'
-                    ? `当前可播放，但保存失败，刷新后可能还要重选。${err?.message ? ` ${err.message}` : ''}`
-                    : `Playback works for now, but saving failed. You may need to choose it again after refresh.${err?.message ? ` ${err.message}` : ''}`,
-                false,
-            );
-        }
+        showToast(lang === 'zh'
+            ? '这次可以播放了。FluentFlow 不另存这个文件，下次打开还读不到的话需要再选一次。'
+            : 'Playing now. FluentFlow does not keep a copy, so choose it again next time if it still cannot be found.');
     };
 
     if(!result) return (

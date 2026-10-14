@@ -1,7 +1,7 @@
 """Local job read-side routes: live event stream and source/artifact file reads.
 
-Read-only. Job mutation (cancel, retry, delete, transcript/summary patch,
-playback-audio upload) lives elsewhere.
+Read-only. Job mutation (cancel, retry, delete, transcript/summary patch)
+lives elsewhere.
 """
 
 from __future__ import annotations

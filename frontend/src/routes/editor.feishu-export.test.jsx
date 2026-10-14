@@ -57,7 +57,6 @@ vi.mock('../app/shared.jsx', async () => {
             processVideoSSE: async () => ({}),
             fetchJobSourceFile: async () => { throw new Error('no source'); },
             fetchJobArtifactFile: async () => { throw new Error('no artifact'); },
-            uploadJobPlaybackAudio: async () => ({}),
             recordEvent: () => {},
             getJob: async () => ({}),
             saveTranscriptEdit: async () => ({}),

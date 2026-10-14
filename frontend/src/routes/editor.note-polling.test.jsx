@@ -47,7 +47,6 @@ const api = {
     processVideoSSE: async () => ({}),
     fetchJobSourceFile: async () => { throw new Error('no source'); },
     fetchJobArtifactFile: async () => { throw new Error('no artifact'); },
-    uploadJobPlaybackAudio: async () => ({}),
     recordEvent: () => {},
     getJob: vi.fn(),
     saveTranscriptEdit: async () => ({}),

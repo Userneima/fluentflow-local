@@ -453,18 +453,6 @@ const createApi = () => {
         const blob = await r.blob();
         return new File([blob], filename || kind, {type: blob.type || 'application/octet-stream'});
     };
-    const uploadJobPlaybackAudio = async (taskId, file) => {
-        const fd = new FormData();
-        fd.append("file", file);
-        const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/playback-audio`, {
-            method: "POST",
-            headers: localExecutionHeaders({sttProvider: 'local'}),
-            body: fd,
-        });
-        const data = await r.json().catch(()=>({}));
-        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
-        return data;
-    };
     // Every task, not a window: the records page lists all of them. A poll
     // passes `updatedSince` (the newest `updated_at` it already holds) to get
     // only the rows written since, instead of every summary again.
@@ -758,7 +746,7 @@ const createApi = () => {
         return r.ok && Array.isArray(data?.models) ? data.models : [];
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, uploadJobPlaybackAudio, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getPreferences, savePreferences, noteStyle, getProviderModels, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getPreferences, savePreferences, noteStyle, getProviderModels, checkHealth};
 };
 
 export const useSettings = () => {
