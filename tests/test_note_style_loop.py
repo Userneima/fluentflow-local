@@ -1,6 +1,6 @@
 """Building a user's own note skill from their corrections.
 
-Requirements (2026-10-09, docs/plans/2026-10-09-note-skills.md):
+Requirements (2026-10-09, docs/方案/2026-10-09-写笔记改用skill.md):
 
 1. The first edit of a generated note keeps what was generated; later edits
    keep that same original; a newly written note starts over.

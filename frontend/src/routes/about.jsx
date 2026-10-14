@@ -191,7 +191,7 @@ const ChangelogPage = ({zh}) => {
 
     useEffect(() => {
         let active = true;
-        import('../../../docs/changelog.md?raw')
+        import('../../../docs/03-更新记录.md?raw')
             .then((mod) => {
                 if (!active) return;
                 setReleases(parseChangelog(mod.default || ''));
@@ -212,12 +212,12 @@ const ChangelogPage = ({zh}) => {
                 <div className="space-y-3">
                     <p className="max-w-[70ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/58">
                         {zh
-                            ? '此页直接读取项目里的 docs/changelog.md。以后只维护一份更新日志，前端页面会随构建同步。'
-                            : 'This page reads docs/changelog.md directly. The project keeps one changelog source and syncs this page at build time.'}
+                            ? '此页直接读取项目里的 docs/03-更新记录.md。以后只维护一份更新日志，前端页面会随构建同步。'
+                            : 'This page reads docs/03-更新记录.md directly. The project keeps one changelog source and syncs this page at build time.'}
                     </p>
                     <div className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] px-4 text-sm font-extrabold text-[#676970] dark:border-white/[0.12] dark:text-white/58">
                         <SvgIcon name="description" className="text-[18px]"/>
-                        docs/changelog.md
+                        docs/03-更新记录.md
                     </div>
                 </div>
             </section>

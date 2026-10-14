@@ -1,6 +1,6 @@
 """Every FLUENTFLOW_* environment variable the code reads is in the table.
 
-Requirement: someone tuning this install reads docs/maintenance.md and finds
+Requirement: someone tuning this install reads docs/04-维护手册.md and finds
 every setting backend/ and scripts/ honour; a variable read in code but missing
 from the table is a setting nobody can discover. Code-level constants that only
 share the prefix (e.g. the FLUENTFLOW_SYSTEM_PROMPT prompt text) are not
@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TABLE = ROOT / "docs" / "maintenance.md"
+TABLE = ROOT / "docs" / "04-维护手册.md"
 
 
 def _read_in_code() -> set[str]:
@@ -40,9 +40,9 @@ def test_every_variable_read_in_code_is_in_the_table():
     read = _read_in_code()
     assert "FLUENTFLOW_NOTE_DEADLINE_SECONDS" in read, "the scan no longer finds the reads"
     missing = sorted(read - _in_table())
-    assert missing == [], f"read in backend/ or scripts/ but missing from docs/maintenance.md: {missing}"
+    assert missing == [], f"read in backend/ or scripts/ but missing from docs/04-维护手册.md: {missing}"
 
 
 def test_the_table_lists_nothing_the_code_does_not_read():
     stale = sorted(_in_table() - _read_in_code())
-    assert stale == [], f"listed in docs/maintenance.md but read nowhere: {stale}"
+    assert stale == [], f"listed in docs/04-维护手册.md but read nowhere: {stale}"

@@ -18,7 +18,7 @@ guarded here:
 Local-edition only, and that is a recorded boundary rather than an omission: the
 flow does not exist on the hosted server at all, neither as a page route nor as
 an agent route, because who pays for the outbound Claude call on a shared server
-is unanswered. See `docs/visual_note_plan.md` and `docs/edition_boundaries.md`.
+is unanswered. See `docs/visual_note_plan.md` and `docs/05-仓库边界.md`.
 The other side of that boundary is asserted in the `fluentflow` repository,
 which has to prove its task package does not advertise this route; from here
 there is no hosted router to look at.

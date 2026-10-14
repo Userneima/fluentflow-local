@@ -8,7 +8,7 @@ import {simpleMd} from '../lib/markdown.js';
 // The user's own note skill grows from their corrections: edited notes become
 // candidate rules, the user picks some, and before anything changes the same
 // recording is written with the current and the new version side by side.
-// Only "用新写法" changes the skill. See docs/plans/2026-10-09-note-skills.md.
+// Only "用新写法" changes the skill. See docs/方案/2026-10-09-写笔记改用skill.md.
 
 const POLL_MS = 5000;
 const EXAMPLE_SEPARATOR = /\n\s*={3,}\s*\n/;

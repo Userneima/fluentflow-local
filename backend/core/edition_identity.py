@@ -12,7 +12,7 @@ So identity and intake are declared, not inferred: ``/health`` carries them, and
 an intake rejection names this edition rather than only its input list.
 
 Ported deliberately, not shared: the hosted repository keeps its own copy with
-its own values (see ``docs/edition_boundaries.md``).
+its own values (see ``docs/05-仓库边界.md``).
 """
 
 from __future__ import annotations

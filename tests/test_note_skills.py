@@ -1,6 +1,6 @@
 """The note skills FluentFlow writes with.
 
-Requirements (2026-10-09, docs/plans/2026-10-09-note-skills.md):
+Requirements (2026-10-09, docs/方案/2026-10-09-写笔记改用skill.md):
 
 1. With no skill of the user's own, Claude gets the product's default skill,
    followed by the fixed input/output contract.

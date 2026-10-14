@@ -4,7 +4,7 @@
 
 This repository is the independent source repository for FluentFlow Local: a local-first video/audio transcription and note workspace. Its HTTP application is `backend/local_main.py`; it must not acquire hosted accounts, quotas, deployment configuration, or cloud-only administration.
 
-Before any implementation or handoff, read `docs/edition_boundaries.md` and
+Before any implementation or handoff, read `docs/05-仓库边界.md` and
 confirm that the task belongs to Local. Historical export terminology is not a
 current workflow. If the task is for Hosted, switch to the independent
 `fluentflow` repository and follow its `AGENTS.md`.
@@ -20,9 +20,9 @@ current workflow. If the task is for Hosted, switch to the independent
 
 ## Open problems
 
-Known problems found in review and not yet fixed are listed in `docs/known_issues.md`. Read it before working in an area it covers; remove an entry when you fix it.
+Open work, including known problems not yet fixed, is in `docs/01-待办.md`, grouped into batches that can be done together. Read it before working in an area it covers; remove an entry when you fix, drop or park it.
 
-Why things are the way they are is in `docs/decisions.md`: one entry per decision (done, dropped, parked or narrowed), with the options weighed, the evidence and the commits. Check it before changing something already decided. When you fix, drop, park or narrow an item, append an entry there and, if users notice the change, a line in `docs/changelog.md`; never delete a decision entry, write a new one that supersedes it.
+Why things are the way they are is in `docs/02-决策记录.md`, grouped by product part (submission, where to cut, exporting the cut video, transcription, notes, outputs, install, ways of working); each entry carries its date, who decided and its commits on the line under its heading. Check the part a change touches before changing something already decided. When you fix, drop, park or narrow an item, add an entry to the part it belongs to and, if users notice the change, a line in `docs/03-更新记录.md`; never delete a decision entry, write a new one that supersedes it.
 
 ## Validation
 

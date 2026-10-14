@@ -289,7 +289,7 @@ FFmpeg、Node.js、Homebrew 和 Python 不会被动，它们是系统工具。�
 ## Development
 
 这是本地版的独立开发仓库，功能、构建、测试、启动器和文档都在这里维护。与 FluentFlow Hosted
-的边界和跨仓库移植规则见 `docs/edition_boundaries.md`。
+的边界和跨仓库移植规则见 `docs/05-仓库边界.md`。
 
 ```bash
 npm run lint:frontend
@@ -301,7 +301,7 @@ npm run test:frontend
 
 `npm run build:frontend` 生成本地版由 `backend.local_main` 提供的 `frontend/dist-local`。
 版本号只写在 `VERSION` 文件里，`package.json` 的 `version` 必须和它一致，CI 会比对。
-每个 `FLUENTFLOW_*` 环境变量的含义和默认值列在 `docs/maintenance.md`。
+每个 `FLUENTFLOW_*` 环境变量的含义和默认值列在 `docs/04-维护手册.md`。
 不要提交该构建目录、`.env`、媒体、任务数据库或导出内容。
 
 启动前的环境检查可以单独跑，它会说明转录会走哪条路、模型在不在本机：

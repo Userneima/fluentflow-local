@@ -4,7 +4,7 @@ A skill is a ``SKILL.md`` file of writing rules for the model that writes the
 note. FluentFlow reads it itself and hands it to Claude on every note, on both
 channels, so it is always applied. Claude Code's own skill loading is not used:
 there the model decides whether to open a skill, and the API-key channel has no
-such mechanism (see ``docs/plans/2026-10-09-note-skills.md``).
+such mechanism (see ``docs/方案/2026-10-09-写笔记改用skill.md``).
 
 - ``backend/note_skills/fluentflow-note-default/SKILL.md`` ships with the product.
 - ``backend/note_skills/fluentflow-note-style-builder/SKILL.md`` is how a user's own skill is built from

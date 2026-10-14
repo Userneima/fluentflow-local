@@ -55,7 +55,7 @@ const gitDirty = () => {
 const appVersion = String(process.env.FLUENTFLOW_VERSION || readText(path.join(root, "VERSION")) || "0.0.0-dev").trim();
 const commit = String(process.env.FLUENTFLOW_GIT_COMMIT || gitValue("rev-parse", "HEAD") || "").trim() || null;
 const changelogUpdatedAt = String(
-  process.env.FLUENTFLOW_CHANGELOG_UPDATED_AT || fileMtimeIso(path.join(root, "docs", "changelog.md")) || ""
+  process.env.FLUENTFLOW_CHANGELOG_UPDATED_AT || fileMtimeIso(path.join(root, "docs", "03-更新记录.md")) || ""
 ).trim() || null;
 
 const config = {

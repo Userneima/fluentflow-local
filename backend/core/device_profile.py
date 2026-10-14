@@ -15,7 +15,7 @@ Two layers:
 - ``preset()`` is the user's priority, set with
   ``FLUENTFLOW_PROCESSING_PRESET``: ``quality`` (default), ``speed`` or
   ``size``. What each one changes was measured on 2026-10-13 (see
-  ``docs/maintenance.md``); a preset only selects among paths that exist.
+  ``docs/04-维护手册.md``); a preset only selects among paths that exist.
 
 Every setting derived here can still be set directly by its own variable, which
 wins.
