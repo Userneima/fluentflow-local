@@ -35,10 +35,8 @@ from backend.core.local_entry_guards import CancellationGate, claim_task_id
 from backend.core.local_config import ALLOWED_COOKIE_BROWSERS, get_preference, normalize_cookie_browser
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_job_runtime import JOB_EVENTS
-from backend.core.local_limits_config import max_upload_mb
 from backend.core.media_intake import (
     adopt_source_file,
-    file_size_mb,
     path_size_mb,
 )
 from backend.core.media_preflight import MediaPreflightError, preflight_media_file
@@ -55,7 +53,6 @@ from backend.core.video_source import (
     download_video_source,
     extra_urls_ignored,
     extract_first_url,
-    link_too_large_message,
     normalize_source_link,
 )
 from backend.routers.local_note_regen import summarize_transcript_source
@@ -348,15 +345,6 @@ async def _download_then_process(
             "video_source",
             exc,
             video_source={"resolution_trace": resolution_trace} if resolution_trace else None,
-        )
-        return
-
-    saved_size_mb = file_size_mb(saved.size_bytes)
-    limit_mb = max_upload_mb()
-    if saved_size_mb is not None and saved_size_mb > limit_mb:
-        await fail(
-            "video_source",
-            link_too_large_message(saved.size_bytes, int(limit_mb * 1024 * 1024)),
         )
         return
 

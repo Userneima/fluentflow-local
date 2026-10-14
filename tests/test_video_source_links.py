@@ -376,13 +376,29 @@ def test_two_submissions_of_one_link_download_it_once(monkeypatch, tmp_path):
 
 # ── 9. size and length are checked before downloading ──────────────────────
 
-def test_the_link_limit_is_the_upload_limit(monkeypatch):
+def test_a_link_has_no_size_limit_unless_one_is_set(monkeypatch):
+    """Requirement (2026-10-14): a three-hour lecture link is not refused for its
+    size; VIDEO_SOURCE_MAX_BYTES still sets a limit."""
+    monkeypatch.delenv("VIDEO_SOURCE_MAX_BYTES", raising=False)
     monkeypatch.setenv("FLUENTFLOW_MAX_UPLOAD_MB", "2048")
-    assert vs.max_video_bytes() == 2048 * 1024 * 1024
+    assert vs.max_video_bytes() is None
+    monkeypatch.setenv("VIDEO_SOURCE_MAX_BYTES", str(100 * 1024 * 1024))
+    assert vs.max_video_bytes() == 100 * 1024 * 1024
+
+
+def test_a_link_bigger_than_the_free_disk_is_refused_before_downloading(monkeypatch, tmp_path):
+    monkeypatch.setattr(vs, "resolve_video", lambda *_a, **_k: vs.ResolvedVideo(
+        provider="yt-dlp", source_url=YOUTUBE, download_url="x", estimated_size_bytes=3 * 1024 ** 3))
+    monkeypatch.setattr(vs, "captions_first_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(vs, "_download_media", lambda *_a, **_k: pytest.fail("downloaded anyway"))
+    monkeypatch.setattr(vs.shutil, "disk_usage", lambda _p: type("U", (), {"free": 4 * 1024 ** 3})())
+
+    with pytest.raises(RuntimeError, match="磁盘空间不够"):
+        vs.download_video_source(YOUTUBE, video_dir=tmp_path)
 
 
 def test_a_link_known_to_be_too_large_is_refused_before_downloading(monkeypatch, tmp_path):
-    monkeypatch.setenv("FLUENTFLOW_MAX_UPLOAD_MB", "100")
+    monkeypatch.setenv("VIDEO_SOURCE_MAX_BYTES", str(100 * 1024 * 1024))
     monkeypatch.setattr(vs, "resolve_video", lambda *_a, **_k: vs.ResolvedVideo(
         provider="yt-dlp", source_url=YOUTUBE, download_url="x", estimated_size_bytes=300 * 1024 * 1024))
     monkeypatch.setattr(vs, "captions_first_provider", lambda *_a, **_k: None)
@@ -406,6 +422,7 @@ def test_a_link_known_to_be_too_long_is_refused_before_downloading(monkeypatch, 
 
 def test_yt_dlp_refusing_a_large_file_reports_the_size_not_a_missing_file(monkeypatch, tmp_path):
     line = "[download] File is larger than max-filesize (900000000 bytes > 600000000 bytes). Aborting."
+    monkeypatch.setenv("VIDEO_SOURCE_MAX_BYTES", "600000000")  # yt-dlp is only told a limit when one is set
     monkeypatch.setattr(vs, "_run_process", FakeYtDlp(download_bytes=b"", stdout_lines=[line]))
     with pytest.raises(RuntimeError) as caught:
         vs.download_yt_dlp_media(YOUTUBE, tmp_path / "v.mp4")

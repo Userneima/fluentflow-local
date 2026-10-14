@@ -27,7 +27,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core.local_limits_config import max_upload_mb
 from backend.core.title_display import display_title_for_user
 
 logger = logging.getLogger(__name__)
@@ -318,12 +317,14 @@ DOWNLOAD_PID_FILE = "yt-dlp.pid"
 INTERRUPTED_DOWNLOAD_MIN_AGE_SECONDS = 300
 
 
-def max_video_bytes() -> int:
-    """The largest file a link may download: the same limit an upload has.
+def max_video_bytes() -> int | None:
+    """The largest file a link may download, or ``None`` for no limit (the default).
 
-    A separate, smaller link limit (it was 600MB against 2048MB for uploads)
-    refused links whose file the user could then upload by hand without
-    trouble. ``VIDEO_SOURCE_MAX_BYTES`` still overrides it.
+    The link limit used to be the upload limit, 2GB, a hosted-era guard for a
+    shared server. On the user's own machine it refused a three-hour lecture at
+    720p and nothing else: what actually bounds a download here is free disk
+    space, checked before downloading (``_check_limits_before_download``).
+    ``VIDEO_SOURCE_MAX_BYTES`` still sets a limit for anyone who wants one.
     """
     try:
         parsed = int(os.environ.get("VIDEO_SOURCE_MAX_BYTES", ""))
@@ -331,7 +332,19 @@ def max_video_bytes() -> int:
             return parsed
     except ValueError:
         pass
-    return int(max_upload_mb() * 1024 * 1024)
+    return None
+
+
+# Room left on the disk after a link's video lands: the cut, the audio and the
+# transcription all write beside it.
+DISK_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def link_needs_more_disk_message(size_bytes: float, free_bytes: float) -> str:
+    return (
+        f"磁盘空间不够：这个视频约 {_megabytes(size_bytes)} MB，处理时还要留出剪辑和转录的空间，"
+        f"这台电脑现在只剩 {_megabytes(free_bytes)} MB。清理出空间后再提交。"
+    )
 
 
 def _megabytes(size_bytes: float) -> str:
@@ -842,9 +855,9 @@ def browser_cookie_spec(browser: str | None, url: str) -> str | None:
 
 
 # Bilibili and YouTube list every quality up to 4K; transcription needs the
-# sound and a picture good enough for keyframes. Capping at 720p keeps a long
-# talk well under the size limit (measured 2026-10-08: a YouTube link that hit
-# the old 600MB limit at its best quality came down as 720p with audio in 4s).
+# sound and a picture good enough for keyframes. 720p is that, and keeps a long
+# talk's download small and quick (measured 2026-10-08: a YouTube link that was
+# 600MB at its best quality came down as 720p with audio in 4s).
 CAPPED_FORMAT = "bv*[height<=720]+ba/b[height<=720]/b"
 DOUYIN_FORMAT = "best[ext=mp4]/best"
 
@@ -1440,7 +1453,7 @@ def download_file(
             redirect_to_any_public_host=effective_host_suffixes == DOUYIN_MEDIA_HOST_SUFFIXES,
         ) as response:
             content_length = int(response.headers.get("content-length") or 0)
-            if content_length > max_bytes:
+            if max_bytes and content_length > max_bytes:
                 raise RuntimeError(link_too_large_message(content_length, max_bytes))
             on_progress and on_progress(VideoSourceProgress(
                 stage="downloading",
@@ -1456,7 +1469,7 @@ def download_file(
                     if not chunk:
                         break
                     downloaded += len(chunk)
-                    if downloaded > max_bytes:
+                    if max_bytes and downloaded > max_bytes:
                         raise RuntimeError(link_too_large_message(None, max_bytes))
                     output.write(chunk)
                     percent = min(99, round(downloaded / content_length * 100)) if content_length else None
@@ -1944,8 +1957,7 @@ def download_yt_dlp_media(
             "--no-playlist",
             "--no-part",
             "--force-overwrites",
-            "--max-filesize",
-            str(max_bytes),
+            *(["--max-filesize", str(max_bytes)] if max_bytes else []),
             "-f",
             yt_dlp_format_for(url),
             "--merge-output-format",
@@ -1999,12 +2011,12 @@ def download_yt_dlp_media(
             key=lambda item: (item.suffix.lower() != ".mp4", -item.stat().st_size),
         )
         if not candidates:
-            if too_large:
+            if too_large and max_bytes:
                 raise RuntimeError(link_too_large_message(int(too_large.group(1)), max_bytes))
             raise RuntimeError("yt-dlp 没有写出视频文件")
         produced = candidates[0]
         size_bytes = produced.stat().st_size
-        if size_bytes > max_bytes:
+        if max_bytes and size_bytes > max_bytes:
             raise RuntimeError(link_too_large_message(size_bytes, max_bytes))
         if is_bilibili_url(url):
             downloaded_seconds = _probe_duration_seconds(produced)
@@ -2270,15 +2282,29 @@ def _check_limits_before_download(
     resolved: ResolvedVideo,
     *,
     duration_limit_seconds: float | None,
+    video_dir: Path | None = None,
 ) -> None:
     """Refuse a link whose video is known to be over a limit before fetching it.
 
     The size and length come from the platform; finding out after a long
-    download, or after waiting in the transcription queue, wasted both.
+    download, or after waiting in the transcription queue, wasted both. With no
+    size limit set, the disk is the limit: a download that would leave less than
+    ``DISK_HEADROOM_BYTES`` free is refused before it starts.
     """
+    size = resolved.estimated_size_bytes
     limit_bytes = max_video_bytes()
-    if resolved.estimated_size_bytes and resolved.estimated_size_bytes > limit_bytes:
-        raise RuntimeError(link_too_large_message(resolved.estimated_size_bytes, limit_bytes, estimated=True))
+    if size and limit_bytes and size > limit_bytes:
+        raise RuntimeError(link_too_large_message(size, limit_bytes, estimated=True))
+    if size and video_dir is not None:
+        try:
+            probe = Path(video_dir)
+            while not probe.exists() and probe != probe.parent:
+                probe = probe.parent
+            free = shutil.disk_usage(probe).free
+        except OSError:
+            free = None
+        if free is not None and size + DISK_HEADROOM_BYTES > free:
+            raise RuntimeError(link_needs_more_disk_message(size, free))
     if (
         duration_limit_seconds
         and resolved.duration_seconds
@@ -2408,7 +2434,9 @@ def download_video_source(
                 size_bytes = file_path.stat().st_size
             elif media_type == "video":
                 caption_label = CAPTION_UNAVAILABLE_LABELS.get(caption_source or "", "字幕")
-                _check_limits_before_download(resolved, duration_limit_seconds=duration_limit_seconds)
+                _check_limits_before_download(
+                    resolved, duration_limit_seconds=duration_limit_seconds, video_dir=video_dir,
+                )
                 try:
                     size_bytes = _download_media(
                         resolved,
