@@ -214,7 +214,7 @@ def preflight_media_file(source_path: str | Path) -> MediaPreflightResult:
     if "audio_stream" in enabled_guards and audio_stream_count == 0:
         raise MediaPreflightError(
             "media_audio_stream_missing",
-            "媒体中没有可转录的音轨，请上传包含系统声音或麦克风声音的音视频文件。",
+            "媒体中没有可转录的音轨，请换一个包含系统声音或麦克风声音的音视频文件。",
             metadata={"format_name": format_name},
         )
     if "audio_decode" in enabled_guards:

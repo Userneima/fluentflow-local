@@ -181,7 +181,7 @@ def run_readiness_checks() -> list[ReadinessCheck]:
         ok=ytdlp,
         required=False,
         detail=("视频链接解析可用" if ytdlp
-                else "未安装 yt-dlp：视频链接功能不可用；上传本地文件不受影响。"),
+                else "未安装 yt-dlp：视频链接功能不可用；本机文件不受影响。"),
     ))
 
     bundle = local_frontend_index_path()

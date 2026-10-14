@@ -189,7 +189,7 @@ class LocalTaskDetailPolicy:
         if any(token in error_text for token in ("not found", "404", "归属")):
             return "刷新本机任务列表；如果仍找不到，请重新提交。"
         if job.get("source_type") == "video_link":
-            return "重新粘贴链接再试；如果仍失败，改用本地视频上传。"
+            return "重新粘贴链接再试；如果仍失败，改用本机上的视频文件。"
         return "在本机重新提交任务；如果连续失败，请查看本机日志。"
 
     @staticmethod

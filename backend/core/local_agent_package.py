@@ -44,7 +44,7 @@ def _local_extra_next_actions(job: dict[str, Any], diagnosis: dict[str, Any]) ->
             "action": "retry_task",
             "method": "POST",
             "path": f"/agent/v1/tasks/{task_id}/retry",
-            "reason": "本机仍保留原始文件，可直接重新处理，无需再次上传。",
+            "reason": "本机仍保留原始文件，可直接重新处理，不用重新选文件。",
         }]
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     note_settled = str(result.get("summary_status") or "") not in {"pending", "running"}

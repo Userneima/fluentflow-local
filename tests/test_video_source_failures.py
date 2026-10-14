@@ -70,7 +70,7 @@ def test_a_youtube_link_that_cannot_be_fetched_is_explained_in_chinese_with_a_wa
     detail, next_action = _what_the_user_reads(caught.value)
     assert _has_chinese(detail) and "ERROR" not in detail, "the card never shows yt-dlp's own line"
     assert "链接" in detail, "it says the link is the thing that failed"
-    assert "上传" in next_action or "上传" in detail, "uploading the file is always a way forward"
+    assert "本机" in next_action or "本机" in detail, "using the file on this machine is always a way forward"
     assert len(calls) == 1, "a permanent refusal is not retried"
     failed = caught.value.resolution_trace[0]
     assert failed["provider"] == "yt-dlp" and failed["status"] == "failed"
@@ -117,7 +117,7 @@ def test_a_site_nobody_supports_is_named_as_such_and_never_reaches_the_tool(monk
     detail, next_action = _what_the_user_reads(caught.value)
     assert diagnose_error(caught.value)["code"] == "unsupported_video_source"
     assert _has_chinese(detail) and "支持" in detail
-    assert "上传" in next_action
+    assert "本机" in next_action
     assert calls == []
     assert caught.value.resolution_trace == [
         {"provider": "source-policy", "status": "failed", "reason": "unsupported_source"}
@@ -134,7 +134,7 @@ def test_a_bilibili_link_that_is_refused_is_told_to_log_in(monkeypatch):
 
     detail, _ = _what_the_user_reads(caught.value)
     assert _has_chinese(detail)
-    assert "B 站" in detail and "登录" in detail and "上传" in detail
+    assert "B 站" in detail and "登录" in detail and "本机" in detail
     assert caught.value.resolution_trace[0]["reason"] == "forbidden"
 
 

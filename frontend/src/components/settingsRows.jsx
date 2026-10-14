@@ -190,7 +190,7 @@ export const DefaultSourceRow = ({state}) => {
         },
         {
             value: 'upload',
-            label: lang === 'zh' ? '本地上传' : 'Local files',
+            label: lang === 'zh' ? '本机文件' : 'Local files',
             description: lang === 'zh' ? '这台电脑上的录像。' : 'Recordings on this computer.',
         },
     ];

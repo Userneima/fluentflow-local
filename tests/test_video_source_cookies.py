@@ -65,7 +65,7 @@ def test_a_douyin_link_the_resolver_cannot_read_is_explained_without_login_talk(
         vs.resolve_video("https://www.douyin.com/video/1", cookies_from_browser="chrome")
 
     message = str(caught.value)
-    assert "上传" in message
+    assert "本机" in message
     assert "登录" not in message
 
 

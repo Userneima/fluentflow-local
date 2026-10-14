@@ -25,19 +25,19 @@ def _diag(
 
 
 _LINK_SOURCE_FAILURES = (
-    ("链接视频过大", "video_link_too_large", "链接视频过大", "先下载到本机，压缩或拆分后再上传。"),
-    ("视频时长过长", "media_too_long", "视频时长超过限制", "先下载到本机，拆分后再上传；或在设置里调整时长上限。"),
+    ("链接视频过大", "video_link_too_large", "链接视频过大", "先下载到本机，用「本机文件」处理。"),
+    ("视频时长过长", "media_too_long", "视频时长超过限制", "先下载到本机，用「本机文件」处理；或调高 .env 里的时长上限。"),
     ("图文作品没有可转写的音视频", "douyin_image_post", "抖音图文作品", "换一个视频链接。"),
-    ("抖音没有给出可下载的视频", "douyin_no_media", "抖音没有可下载的视频", "在抖音里打开确认；能播放的话，下载到本机后上传。"),
-    ("只能拿到试看片段", "bilibili_preview_only", "B 站会员内容只有试看片段", "用有权限账号的浏览器登录态，或下载完整视频后上传。"),
-    ("这个 B 站链接", "bilibili_link_failed", "B 站链接无法下载", "按提示处理，或上传本地视频。"),
-    ("B 站拒绝了", "bilibili_link_failed", "B 站拒绝下载", "稍后重试，或上传本地视频。"),
-    ("B 站暂时限制了请求", "platform_rate_limited", "平台请求过于频繁", "过几分钟再试，或上传本地视频。"),
-    ("暂时无法解析这个 B 站链接", "bilibili_link_failed", "B 站链接无法解析", "在 B 站里打开确认，或上传本地视频。"),
-    ("这个 YouTube 链接", "youtube_link_failed", "YouTube 视频无法获取", "按提示处理，或上传视频文件。"),
-    ("YouTube 要求验证", "youtube_bot_check", "YouTube 机器人验证", "在设置里选择已登录 YouTube 的浏览器，或上传视频文件。"),
-    ("登录：系统不允许 FluentFlow 读取这个浏览器的数据", "browser_login_unreadable", "读不到浏览器登录", "允许完全磁盘访问权限，或下载到本机后上传。"),
-    ("抖音视频解析成功，但下载没有成功", "douyin_download_failed", "抖音视频下载失败", "稍后再提交一次，或下载到本机后上传。"),
+    ("抖音没有给出可下载的视频", "douyin_no_media", "抖音没有可下载的视频", "在抖音里打开确认；能播放的话，下载到本机后用「本机文件」处理。"),
+    ("只能拿到试看片段", "bilibili_preview_only", "B 站会员内容只有试看片段", "用有权限账号的浏览器登录态，或下载完整视频后用「本机文件」处理。"),
+    ("这个 B 站链接", "bilibili_link_failed", "B 站链接无法下载", "按提示处理，或改用本机上的视频文件。"),
+    ("B 站拒绝了", "bilibili_link_failed", "B 站拒绝下载", "稍后重试，或改用本机上的视频文件。"),
+    ("B 站暂时限制了请求", "platform_rate_limited", "平台请求过于频繁", "过几分钟再试，或改用本机上的视频文件。"),
+    ("暂时无法解析这个 B 站链接", "bilibili_link_failed", "B 站链接无法解析", "在 B 站里打开确认，或改用本机上的视频文件。"),
+    ("这个 YouTube 链接", "youtube_link_failed", "YouTube 视频无法获取", "按提示处理，或改用本机上的视频文件。"),
+    ("YouTube 要求验证", "youtube_bot_check", "YouTube 机器人验证", "在设置里选择已登录 YouTube 的浏览器，或改用本机上的视频文件。"),
+    ("登录：系统不允许 FluentFlow 读取这个浏览器的数据", "browser_login_unreadable", "读不到浏览器登录", "允许完全磁盘访问权限，或下载到本机后用「本机文件」处理。"),
+    ("抖音视频解析成功，但下载没有成功", "douyin_download_failed", "抖音视频下载失败", "稍后再提交一次，或下载到本机后用「本机文件」处理。"),
 )
 
 
@@ -231,7 +231,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "video_parser_config_missing",
             "视频解析组件缺失",
             "本机缺少视频链接解析组件。",
-            "安装项目依赖后重启 FluentFlow，或暂时上传本地视频。",
+            "安装项目依赖后重启 FluentFlow，或暂时改用本机上的视频文件。",
             retryable=False,
         )
     if "目前只支持抖音、bilibili、youtube 或视频直链" in lowered:
@@ -239,7 +239,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "unsupported_video_source",
             "暂不支持这个视频来源",
             "当前链接不属于 FluentFlow 已支持的视频来源。",
-            "改用支持的视频链接，或上传本地视频。",
+            "改用支持的视频链接，或改用本机上的视频文件。",
             retryable=False,
         )
     # Link failures whose own sentence already says what happened and what to
@@ -254,7 +254,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "抖音拒绝了不带登录的请求",
             "抖音要求先在浏览器里访问过抖音（需要新的 cookies），这次请求被拒绝了。",
             "在浏览器里打开 douyin.com（登录更好），在设置里选这个浏览器的登录态后再提交；"
-            "或把视频下载到本机后上传。",
+            "或把视频下载到本机后用「本机文件」处理。",
             retryable=False,
         )
     if any(
@@ -265,7 +265,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "video_source_address_refused",
             "视频地址不在允许范围",
             "这个视频的下载地址用了 FluentFlow 不访问的端口或域名，重试也是同样结果。",
-            "把视频下载到本机后上传。",
+            "把视频下载到本机后用「本机文件」处理。",
             retryable=False,
         )
     if "必须解析到公网地址" in raw or "不能访问本机、内网或云元数据服务" in raw:
@@ -273,7 +273,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "unsafe_video_source_url",
             "视频链接无法安全访问",
             "这个地址指向不可安全请求的位置。",
-            "改用可公开访问的视频链接，或直接上传本地文件。",
+            "改用可公开访问的视频链接，或直接用本机上的文件。",
             retryable=False,
         )
     if any(
@@ -310,14 +310,14 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "youtube_media_restricted",
             "YouTube 原视频下载受限",
             "YouTube 字幕不可用，同时原视频下载被客户端校验拦住。",
-            "上传本地视频或字幕文件，或配置高级本地下载环境后重试。",
+            "改用本机上的视频或字幕文件，或配置高级本地下载环境后重试。",
         )
     if any(token in lowered for token in ("no captions", "no subtitles")) or "没有可用字幕" in raw:
         return _diag(
             "youtube_no_captions",
             "YouTube 没有可用字幕",
             "这个视频没有获取到可用字幕。",
-            "上传本地视频、音频或字幕文件。",
+            "改用本机上的视频、音频或字幕文件。",
         )
     if (
         "http error 403" in lowered
@@ -329,7 +329,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "platform_forbidden",
             "平台拒绝下载",
             "视频平台拒绝了这个链接的下载请求。",
-            "稍后重试、在设置里开启浏览器登录态（cookies），或上传本地视频。",
+            "稍后重试、在设置里开启浏览器登录态（cookies），或改用本机上的视频文件。",
         )
     if any(
         token in lowered
@@ -346,7 +346,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "platform_rate_limited",
             "平台请求过于频繁",
             "视频平台暂时限制了请求。",
-            "稍后重试，或直接上传本地视频/字幕文件。",
+            "稍后重试，或直接用本机上的视频或字幕文件。",
         )
     # Before the download-timeout rule, which matches any "timeout": a
     # transcription that stopped making progress has nothing to do with
@@ -363,7 +363,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "video_download_timeout",
             "视频下载超时",
             "视频下载时间过长，可能是文件较大或当前网络较慢。",
-            "稍后重试，或上传本地视频。",
+            "稍后重试，或改用本机上的视频文件。",
         )
     if "抖音的登录信息过期了" in raw:
         return _diag(
@@ -377,7 +377,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "video_link_parse_failed",
             "链接暂时无法解析",
             "暂时无法自动解析这个视频链接。",
-            "换一个分享链接，或直接上传视频文件。",
+            "换一个分享链接，或直接选本机上的视频文件。",
         )
     if "没有识别到视频链接" in raw:
         return _diag(
@@ -429,7 +429,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
     media_failures = (
         ("媒体文件为空", "media_file_empty", "媒体文件为空", "重新选择原始媒体文件后提交。"),
         ("媒体内容与文件扩展名不一致", "media_extension_mismatch", "媒体格式与扩展名不一致", "使用原始文件或正确的扩展名后重新提交。"),
-        ("没有可转录的音轨", "media_audio_stream_missing", "没有可转录的音轨", "上传包含系统声音或麦克风声音的音视频文件。"),
+        ("没有可转录的音轨", "media_audio_stream_missing", "没有可转录的音轨", "换一个包含系统声音或麦克风声音的音视频文件。"),
     )
     for token, code, title, action in media_failures:
         if token in raw:
@@ -458,8 +458,8 @@ def diagnose_error(error: Any) -> dict[str, Any]:
         return _diag(
             "source_file_missing",
             "原始文件已不存在",
-            raw if "已按保留策略清理" in raw else "后台任务找不到原始文件，文件可能已被清理。",
-            "重新上传原始文件后再处理。",
+            raw if "已按保留策略清理" in raw else "找不到原始文件，可能被移动或删除了。",
+            "重新选择原文件后再处理。",
             retryable=False,
         )
     if "queued processing request failed" in lowered:
@@ -513,7 +513,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "video_download_failed",
             "视频下载失败",
             raw,
-            "稍后重试、配置浏览器 cookies，或上传本地视频。",
+            "稍后重试、配置浏览器 cookies，或改用本机上的视频文件。",
         )
     return _diag(
         "unknown_error",

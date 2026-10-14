@@ -134,7 +134,7 @@ def unavailable_reason() -> str | None:
     way in.
     """
     if sys.platform != "darwin":
-        return "只有 macOS 能调起系统的文件选择框。用上面的「本地上传」照样可以处理，只是剪后文件不会自动存到原文件旁边。"
+        return "只有 macOS 能调起系统的文件选择框。用「本机文件」照样可以处理，只是剪后文件不会自动存到原文件旁边。"
     if not osascript_path():
         return "这台机器上找不到 osascript，没法调起系统的文件选择框。"
     return None

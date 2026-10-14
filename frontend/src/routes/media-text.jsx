@@ -749,7 +749,7 @@ const MediaText = () => {
                                             onClick={() => setSourceMode(item)}
                                             className={`h-10 rounded-[14px] px-4 text-sm font-extrabold transition ${sourceMode === item ? 'bg-white text-[#111111] shadow-sm dark:bg-white/[0.16] dark:text-white' : 'text-[#777] hover:text-[#111111] dark:text-white/55 dark:hover:text-white'}`}
                                         >
-                                            {item === 'link' ? (lang === 'zh' ? '链接' : 'Link') : (lang === 'zh' ? '本地上传' : 'Upload')}
+                                            {item === 'link' ? (lang === 'zh' ? '链接' : 'Link') : (lang === 'zh' ? '本机文件' : 'Local file')}
                                         </button>
                                     ))}
                                 </div>

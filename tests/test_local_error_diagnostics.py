@@ -3,8 +3,8 @@ from backend.core.local_error_diagnostics import diagnose_error
 
 def test_local_error_diagnostics_cover_local_workflow_failures():
     cases = [
-        ("媒体中没有可转录的音轨", "media_audio_stream_missing", "上传包含"),
-        ("Queued source file is missing", "source_file_missing", "重新上传"),
+        ("媒体中没有可转录的音轨", "media_audio_stream_missing", "包含系统声音"),
+        ("Queued source file is missing", "source_file_missing", "重新选择原文件"),
         ("HTTP Error 403: Forbidden", "platform_forbidden", "cookies"),
         ("AI summarization returned empty result", "empty_ai_note", "重生笔记"),
         ("lark-cli is not logged in", "lark_cli_login_required", "重新登录"),

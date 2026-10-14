@@ -38,7 +38,7 @@ describe('link failures the service names precisely', () => {
         const diag = diagnoseTaskError(message, 'zh', link);
         expect(diag.detail).toBe(message);
         expect(diag.retryable).toBe(false);
-        expect(diag.nextAction).toMatch(/本地上传/);
+        expect(diag.nextAction).toMatch(/本机文件/);
         expect(diag.nextAction).not.toMatch(/压缩/);
         // An older wording, on a link task.
         expect(diagnoseTaskError('Downloaded video is too large', 'zh', link).code).toBe('video_link_too_large');

@@ -130,7 +130,7 @@ def test_off_macos_it_says_so_and_leaves_the_upload_alone(monkeypatch):
     reason = fc.unavailable_reason()
 
     assert reason and "macOS" in reason
-    assert "本地上传" in reason, "the ordinary way in has to be named"
+    assert "本机文件" in reason, "the ordinary way in has to be named"
     with pytest.raises(fc.FileChooserError):
         fc.choose_media_files(runner=_runner(stdout="/a/b.mov\n"))
 

@@ -48,7 +48,7 @@ describe('a timeout', () => {
     it('blames the download only when the material came from a video link', () => {
         const link = diagnoseTaskError('Read timeout', 'zh', {sourceType: 'video_link'});
         expect(link.code).toBe('video_download_timeout');
-        expect(link.nextAction).toContain('上传本地视频');
+        expect(link.nextAction).toContain('本机上的视频文件');
     });
 
     it('does not tell someone who uploaded a file to upload the file', () => {
@@ -56,7 +56,7 @@ describe('a timeout', () => {
             const diag = diagnoseTaskError('Read timeout', 'zh', {sourceType});
             expect(diag.code).toBe('processing_timeout');
             expect(diag.detail).not.toContain('下载');
-            expect(diag.nextAction).not.toContain('上传');
+            expect(diag.nextAction).not.toContain('本机上的视频');
         }
     });
 

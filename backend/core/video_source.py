@@ -356,14 +356,14 @@ def link_too_large_message(size_bytes: float | None, limit_bytes: int, *, estima
     size_text = f"{'约 ' if estimated else ''}{_megabytes(size_bytes)} MB" if size_bytes else "超过上限"
     return (
         f"链接视频过大：这个视频{size_text}，链接下载的上限是 {_megabytes(limit_bytes)} MB。"
-        "请先下载到本机，压缩或拆分后再上传。"
+        "请先下载到本机，用「本机文件」处理。"
     )
 
 
 def link_too_long_message(duration_seconds: float, limit_seconds: float) -> str:
     return (
         f"视频时长过长：约 {duration_seconds / 60:.1f} 分钟，当前限制为 {limit_seconds / 60:.1f} 分钟。"
-        "请先下载到本机，拆分后再上传。"
+        "请先下载到本机，用「本机文件」处理。"
     )
 
 
@@ -1229,9 +1229,9 @@ def _cookie_store_unreadable(detail: str | None) -> bool:
 DOUYIN_IMAGE_POST_MESSAGE = "图文作品没有可转写的音视频：这个抖音链接是图文作品（图片加配乐）。请换一个视频链接。"
 DOUYIN_NO_MEDIA_MESSAGE = (
     "抖音没有给出可下载的视频：可能是图文作品（图文作品没有可转写的音视频）、视频已删除或设为私密。"
-    "请在抖音里打开确认；能播放的话，把视频下载到本机后上传。"
+    "请在抖音里打开确认；能播放的话，把视频下载到本机后用「本机文件」处理。"
 )
-GENERIC_UNRESOLVED_MESSAGE = "暂时无法自动解析这个视频链接，请上传视频文件"
+GENERIC_UNRESOLVED_MESSAGE = "暂时无法自动解析这个视频链接，请改用本机上的视频文件"
 _BILIBILI_LOGIN_REASONS = frozenset({"login_required", "forbidden", "premium_only"})
 
 
@@ -1243,7 +1243,7 @@ def _unreadable_login_message(browser: str, site: str) -> str:
     return (
         f"读不到 {_browser_label(browser)} 里的{site}登录：系统不允许 FluentFlow 读取这个浏览器的数据。"
         "可以在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里允许启动 FluentFlow 的程序，"
-        "或者先把视频下载到本机再上传。"
+        "或者先把视频下载到本机，用「本机文件」处理。"
     )
 
 
@@ -1254,41 +1254,41 @@ def _bilibili_failure_message(reason: str, *, login_browser: str, cookie_use: Co
             return _unreadable_login_message(login_browser, " B 站")
         return (
             "这个 B 站链接需要登录后才能下载。请在设置里选择已登录 B 站的浏览器（浏览器登录态），"
-            "或改为上传本地视频。"
+            "或改用本机上的视频文件。"
         )
     if reason in {"premium_only", "login_required"}:
         return (
             "这个 B 站链接是会员或付费内容，当前登录的账号没有观看权限。"
-            "请在浏览器里换有权限的账号登录，或上传本地视频。"
+            "请在浏览器里换有权限的账号登录，或改用本机上的视频文件。"
         )
     if reason == "forbidden":
-        return "B 站拒绝了这个链接的下载请求（403）。请稍后重试，或上传本地视频。"
+        return "B 站拒绝了这个链接的下载请求（403）。请稍后重试，或改用本机上的视频文件。"
     if reason in {"removed", "geo_blocked"}:
-        return "这个 B 站链接的视频已删除、不存在或有地区限制。请在 B 站里打开确认，或上传本地视频。"
+        return "这个 B 站链接的视频已删除、不存在或有地区限制。请在 B 站里打开确认，或改用本机上的视频文件。"
     if reason == "rate_limited":
-        return "B 站暂时限制了请求（请求过于频繁）。请过几分钟再试，或上传本地视频。"
-    return "暂时无法解析这个 B 站链接，B 站没有返回可下载的视频。请在 B 站里打开确认，或上传本地视频。"
+        return "B 站暂时限制了请求（请求过于频繁）。请过几分钟再试，或改用本机上的视频文件。"
+    return "暂时无法解析这个 B 站链接，B 站没有返回可下载的视频。请在 B 站里打开确认，或改用本机上的视频文件。"
 
 
 _YOUTUBE_MESSAGES = {
     "bot_check": (
         "YouTube 要求验证「不是机器人」，拒绝了这台电脑对这个链接的请求。"
-        "可以在设置里选择已登录 YouTube 的浏览器后重试，或上传视频文件。"
+        "可以在设置里选择已登录 YouTube 的浏览器后重试，或改用本机上的视频文件。"
     ),
     "age_restricted": (
         "这个 YouTube 链接有年龄限制，需要已登录、满 18 岁的账号才能获取。"
-        "请在设置里选择已登录 YouTube 的浏览器，或上传视频文件。"
+        "请在设置里选择已登录 YouTube 的浏览器，或改用本机上的视频文件。"
     ),
-    "private": "这个 YouTube 链接是私享视频，只有获得授权的账号能看。请上传视频文件。",
-    "members_only": "这个 YouTube 链接是频道会员专享视频。请用有会员的账号在浏览器登录，或上传视频文件。",
-    "geo_blocked": "这个 YouTube 链接在当前地区不可观看。请上传视频文件。",
-    "removed": "这个 YouTube 链接的视频已删除或不可用。请确认链接，或上传视频文件。",
+    "private": "这个 YouTube 链接是私享视频，只有获得授权的账号能看。请改用本机上的视频文件。",
+    "members_only": "这个 YouTube 链接是频道会员专享视频。请用有会员的账号在浏览器登录，或改用本机上的视频文件。",
+    "geo_blocked": "这个 YouTube 链接在当前地区不可观看。请改用本机上的视频文件。",
+    "removed": "这个 YouTube 链接的视频已删除或不可用。请确认链接，或改用本机上的视频文件。",
     "login_required": (
-        "这个 YouTube 链接需要登录后才能获取。请在设置里选择已登录 YouTube 的浏览器，或上传视频文件。"
+        "这个 YouTube 链接需要登录后才能获取。请在设置里选择已登录 YouTube 的浏览器，或改用本机上的视频文件。"
     ),
     "forbidden": (
         "视频下载失败：403，平台拒绝了这个链接的下载请求。"
-        "请稍后重试、在设置里开启浏览器登录态（cookies），或上传视频文件"
+        "请稍后重试、在设置里开启浏览器登录态（cookies），或改用本机上的视频文件"
     ),
 }
 
@@ -1901,7 +1901,7 @@ def bilibili_preview_message(downloaded_seconds: float | None, full_seconds: flo
         lengths = f"（拿到约 {downloaded_seconds / 60:.0f} 分钟，完整约 {full_seconds / 60:.0f} 分钟）"
     return (
         f"这个 B 站视频是会员/付费内容，只能拿到试看片段{lengths}，没有继续处理。"
-        "请在设置里选择已登录有权限账号的浏览器后重试，或把完整视频下载到本机后上传。"
+        "请在设置里选择已登录有权限账号的浏览器后重试，或把完整视频下载到本机后用「本机文件」处理。"
     )
 
 
