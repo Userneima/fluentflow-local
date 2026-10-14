@@ -124,7 +124,10 @@ def test_transcript_task_completes_with_local_package(monkeypatch, agent_stack):
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "completed"
-    package = body["package"]
+    # The answer says where things stand; the note itself is in the package.
+    assert body["task"]["note"]["status"] == "completed"
+    assert "package" not in body
+    package = client.get(f"/agent/v1/tasks/{body['task_id']}/package", headers=_HEADERS).json()
     assert package["note"]["markdown"] == "# Agent 笔记"
     assert "usage" not in package and "execution" not in package  # local package
 
@@ -296,7 +299,7 @@ def test_note_regenerate_updates_result(monkeypatch, agent_stack):
     )
     r = TestClient(_app()).post("/agent/v1/tasks/t-r1/note/regenerate", headers=_HEADERS, json={})
     assert r.status_code == 200
-    assert r.json()["package"]["note"]["markdown"] == "# 新笔记"
+    assert r.json()["task"]["note"]["status"] == "completed" and "package" not in r.json()
     stored = job_store.get_job("t-r1", db_path=agent_stack["jobs_db"], client_id=LOCAL_OWNER_ID)
     assert stored["result"]["summary_markdown"] == "# 新笔记"
 
@@ -725,7 +728,7 @@ def test_transcript_task_can_be_submitted_without_holding_the_request(monkeypatc
     assert seen["system_prompt"] == "只列行动项"
     waited = client.post(f"/agent/v1/tasks/{body['task_id']}/wait", headers=_HEADERS, json={})
     assert waited.json()["done"] is True
-    note = waited.json()["package"]["note"]
+    note = waited.json()["task"]["note"]
     assert note["status"] == "completed"
     stored = job_store.get_job(body["task_id"], db_path=agent_stack["jobs_db"])["result"]
     assert stored["prompt_preset"] == "meeting" and stored["prompt_preset_label"] == "会议"

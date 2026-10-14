@@ -153,6 +153,34 @@ def _task_package_response(job: dict[str, Any]) -> dict[str, Any]:
     return package
 
 
+def _task_brief(job: dict[str, Any]) -> dict[str, Any]:
+    """What an answer says about the task: enough to decide the next step.
+
+    Every answer that changes a task used to carry the whole package, about
+    30,000 characters with the note in it, so fixing one note sent it to the
+    agent three times. The package itself is one ``get_task_package`` away.
+    """
+    package = _task_package_response(job)
+    note = package.get("note") or {}
+    task = package.get("task") or {}
+    cut_media_note = package.get("cut_media_note") or {}
+    task_id = task.get("task_id") or job.get("task_id")
+    return {
+        "task_id": task_id,
+        "status": task.get("status"),
+        "title": package.get("title"),
+        "note": {
+            "status": note.get("status"),
+            "chars": note.get("markdown_chars"),
+            "pending": package.get("note_pending"),
+            "written_by": cut_media_note.get("channel"),
+        },
+        "output_folder": package.get("output_folder"),
+        "next_actions": package.get("next_actions") or [],
+        "package_url": f"/agent/v1/tasks/{task_id}/package",
+    }
+
+
 def _job_for_request(request: Request, task_id: str) -> dict[str, Any]:
     job = get_job(task_id, client_id=_local_client_scope(request))
     if not job:
@@ -426,7 +454,7 @@ async def create_agent_task(
             "task_id": task_id_value,
             "status": "completed",
             "package_url": f"/agent/v1/tasks/{task_id_value}/package",
-            "package": _task_package_response(job),
+            "task": _task_brief(job),
         }
 
     # Name this edition in the refusal. An input list alone leaves the caller unable
@@ -519,12 +547,12 @@ async def wait_agent_task(
     while True:
         job = _job_for_request(request, task_id)
         if _task_done(job):
-            package = _task_package_response(job)
+            brief = _task_brief(job)
             return {
                 "ok": True,
                 "done": True,
-                "note_status": (package.get("note") or {}).get("status"),
-                "package": package,
+                "note_status": brief["note"]["status"],
+                "task": brief,
             }
         if time.monotonic() >= deadline:
             return {
@@ -564,7 +592,7 @@ async def retry_agent_task(request: Request, task_id: str) -> dict[str, Any]:
         "task_id": next_task_id,
         "status": job.get("status") or "queued",
         "package_url": f"/agent/v1/tasks/{next_task_id}/package",
-        "package": _task_package_response(job),
+        "task": _task_brief(job),
     }
 
 
@@ -586,7 +614,7 @@ def debreath_agent_task(
     return {
         **accepted,
         "package_url": f"/agent/v1/tasks/{task_id}/package",
-        "package": _task_package_response(_job_for_request(request, task_id)),
+        "task": _task_brief(_job_for_request(request, task_id)),
     }
 
 
@@ -614,7 +642,7 @@ def visual_note_agent_task(
     return {
         **accepted,
         "package_url": f"/agent/v1/tasks/{task_id}/package",
-        "package": _task_package_response(_job_for_request(request, task_id)),
+        "task": _task_brief(_job_for_request(request, task_id)),
     }
 
 
@@ -715,7 +743,7 @@ def save_agent_note(
             "parts": coverage.get("parts") or [],
         },
         "package_url": f"/agent/v1/tasks/{task_id}/package",
-        "package": _task_package_response(updated),
+        "task": _task_brief(updated),
     }
 
 
@@ -878,7 +906,7 @@ async def regenerate_agent_task_note(
                 "previous_note_restorable": True,
                 "visual_note": accepted,
                 "package_url": f"/agent/v1/tasks/{task_id}/package",
-                "package": _task_package_response(_job_for_request(request, task_id)),
+                "task": _task_brief(_job_for_request(request, task_id)),
             }
         frame_note_unavailable = str(described.get("reason") or "") or None
 
@@ -1031,7 +1059,7 @@ async def regenerate_agent_task_note(
         "model": kwargs.get("model"),
         "previous_note_restorable": previous_note_restorable,
         **({"frame_note_unavailable_reason": frame_note_unavailable} if frame_note_unavailable else {}),
-        "package": _task_package_response(updated),
+        "task": _task_brief(updated),
     }
 
 
@@ -1164,4 +1192,4 @@ async def export_agent_task(
         feishu_doc_url=export_record["url"],
         metadata=event_metadata(route=route, target=target, doc_title=resolved_title),
     )
-    return {"ok": True, "task_id": task_id, "export": export_record, "package": _task_package_response(updated)}
+    return {"ok": True, "task_id": task_id, "export": export_record, "task": _task_brief(updated)}

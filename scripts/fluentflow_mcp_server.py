@@ -811,8 +811,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "description": (
             "Wait for a task, note included: a task reads completed once its transcript "
             "is stored, but done stays false (note_pending=true) until the note is "
-            "written, failed or skipped. Returns the package when done, otherwise the "
-            "current state; call again until done."
+            "written, failed or skipped. When done, task says where things stand (note status "
+            "and length, who wrote it, the output folder, next actions); read the note itself "
+            "with get_task_package. Otherwise the current state; call again until done."
         ),
         "inputSchema": {
             "type": "object",

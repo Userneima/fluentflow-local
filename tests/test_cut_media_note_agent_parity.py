@@ -141,7 +141,7 @@ def test_an_agent_can_start_the_note_and_reaches_the_same_entry_as_the_page(
     assert body["media"]["kind"] == vn.MEDIA_CUT
     assert body["subtitle_timeline"]["source"] == "debreath_cut_list_remap"
     assert body["package_url"] == f"/agent/v1/tasks/{TASK}/package"
-    assert "cut_media_note" in body["package"]
+    assert body["task"]["package_url"] == f"/agent/v1/tasks/{TASK}/package"
     assert calls[0]["replace_note"] is True and calls[0]["claimed"] is True
 
 

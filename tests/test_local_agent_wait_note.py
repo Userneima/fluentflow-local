@@ -97,8 +97,8 @@ def test_wait_returns_the_note_once_it_is_written(jobs_db):
 
     assert waited["done"] is True
     assert waited["note_status"] == "completed"
-    assert waited["package"]["note"]["markdown"] == "# 笔记"
-    assert waited["package"]["note_pending"] is False
+    assert waited["task"]["note"]["chars"] == len("# 笔记")
+    assert waited["task"]["note"]["pending"] is False
     task = client.get("/agent/v1/tasks/t-done", headers=_HEADERS).json()["task"]
     assert task["done"] is True and task["note_pending"] is False
 
@@ -113,7 +113,7 @@ def test_a_wait_in_progress_returns_the_note_when_it_lands(jobs_db):
         timer.cancel()
 
     assert waited["done"] is True
-    assert waited["package"]["note"]["markdown"] == "# 笔记"
+    assert waited["task"]["note"]["status"] == "completed"
 
 
 def test_a_failed_note_ends_the_wait_with_the_failure_visible(jobs_db):
