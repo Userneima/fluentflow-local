@@ -46,6 +46,7 @@ cost an hour of re-encoding.
 
 from __future__ import annotations
 
+import bisect
 import logging
 import os
 import re
@@ -763,6 +764,19 @@ def detect_silences(
     return parse_silencedetect(result.stderr or "")
 
 
+def _keeps_between(duration: float, cuts: Sequence[TimeRange], min_keep_seconds: float) -> list[TimeRange]:
+    """What survives ``cuts``: the stretches between them, minus slivers."""
+    keeps: list[TimeRange] = []
+    cursor = 0.0
+    for cut in cuts:
+        if cut.start > cursor:
+            keeps.append(TimeRange(round(cursor, 3), round(min(cut.start, duration), 3)))
+        cursor = max(cursor, cut.end)
+    if cursor < duration:
+        keeps.append(TimeRange(round(cursor, 3), round(duration, 3)))
+    return [keep for keep in keeps if keep.duration > min_keep_seconds]
+
+
 def build_cut_plan(
     duration_seconds: float,
     silences: Sequence[TimeRange],
@@ -791,15 +805,7 @@ def build_cut_plan(
         else:
             cuts.append(TimeRange(start, end))
 
-    keeps: list[TimeRange] = []
-    cursor = 0.0
-    for cut in cuts:
-        if cut.start > cursor:
-            keeps.append(TimeRange(round(cursor, 3), round(min(cut.start, duration), 3)))
-        cursor = max(cursor, cut.end)
-    if cursor < duration:
-        keeps.append(TimeRange(round(cursor, 3), round(duration, 3)))
-    keeps = [keep for keep in keeps if keep.duration > min_keep_seconds]
+    keeps = _keeps_between(duration, cuts, min_keep_seconds)
 
     plan = CutPlan(
         source_duration_seconds=duration,
@@ -907,6 +913,90 @@ def measure_level_separation(
         "narrow_cut_count": len(narrow),
         "separated": not narrow,
     }
+
+
+def measure_every_cut(media: Path | str, plan: CutPlan) -> list[float | None] | None:
+    """Each cut's margin below the louder of the stretches on either side of it.
+
+    One pass over the audio rather than one ffmpeg call per stretch: a 2h28m
+    recording has thousands of cuts, and this measures all of them in about five
+    seconds (2026-10-14). The level is the same mean power ``volumedetect``
+    reports. None when the audio cannot be read here."""
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover - numpy ships with the transcription stack
+        return None
+    rate = 8000
+    try:
+        completed = subprocess.run(
+            [_ffmpeg_path(), "-v", "error", "-i", str(media), "-vn", "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"],
+            capture_output=True, timeout=3600,
+        )
+    except (OSError, subprocess.SubprocessError, SilenceCutError):
+        return None
+    if completed.returncode != 0 or not completed.stdout:
+        return None
+    samples = np.frombuffer(completed.stdout, dtype=np.int16).astype(np.float64)
+    energy = np.concatenate([[0.0], np.cumsum(samples * samples)])
+    total = len(samples)
+
+    def level(span: TimeRange) -> float | None:
+        start, end = min(int(span.start * rate), total), min(int(span.end * rate), total)
+        if end <= start:
+            return None
+        return float(10 * np.log10((energy[end] - energy[start]) / (end - start) / 32768 ** 2 + 1e-12))
+
+    starts = [keep.start for keep in plan.keeps]
+    margins: list[float | None] = []
+    for cut in plan.cuts:
+        index = bisect.bisect_right(starts, cut.start)
+        around = [plan.keeps[i] for i in (index - 1, index) if 0 <= i < len(plan.keeps)]
+        speech = [value for value in (level(span) for span in around) if value is not None]
+        own = level(cut)
+        margins.append(max(speech) - own if speech and own is not None else None)
+    return margins
+
+
+def keep_unsafe_cuts(media: Path | str, plan: CutPlan) -> CutPlan | None:
+    """The plan without the cuts that sit too close to the speech beside them.
+
+    Requirement (owner, 2026-10-14): one uncertain stretch must not cost the
+    whole recording its cut. Before this a spot check of ten stretches finding
+    one narrow margin declined everything: a 2h28m talk was transcribed uncut
+    although, measured one by one, 2101 of its 2902 cuts were clearly silence and
+    801 were not. Now every cut is measured, the doubtful ones stay in the
+    recording, and the rest are removed. None when the audio cannot be measured,
+    so the caller keeps its old, cautious answer."""
+    margins = measure_every_cut(media, plan)
+    if margins is None:
+        return None
+    safe = [cut for cut, margin in zip(plan.cuts, margins) if margin is not None and margin >= MIN_LEVEL_SEPARATION_DB]
+    unsafe = [cut for cut, margin in zip(plan.cuts, margins) if margin is None or margin < MIN_LEVEL_SEPARATION_DB]
+    measured = [margin for margin in margins if margin is not None]
+    pruned = CutPlan(
+        source_duration_seconds=plan.source_duration_seconds,
+        cuts=safe,
+        keeps=_keeps_between(plan.source_duration_seconds, safe, MIN_KEEP_SECONDS),
+        silences_found=plan.silences_found,
+        noise_db=plan.noise_db,
+        min_silence_seconds=plan.min_silence_seconds,
+        padding_seconds=plan.padding_seconds,
+        warnings=[warning for warning in plan.warnings],
+        threshold_choice=plan.threshold_choice,
+    )
+    kept_margins = [margin for margin in measured if margin >= MIN_LEVEL_SEPARATION_DB]
+    pruned.level_separation = {
+        **plan.level_separation,
+        "measured": True,
+        "every_cut_measured": True,
+        "cut_count_before": len(plan.cuts),
+        "unsafe_cuts_kept": len(unsafe),
+        "unsafe_seconds_kept": round(sum(cut.duration for cut in unsafe), 1),
+        "narrowest_db": round(min(kept_margins), 1) if kept_margins else None,
+        "narrow_cut_count": 0,
+        "separated": True,
+    }
+    return pruned
 
 
 # Below this, the fixed threshold is inside the speech rather than under it.
@@ -1277,7 +1367,16 @@ def plan_silence_cuts(
     if check_separation and plan.cuts:
         plan.level_separation = measure_level_separation(source, plan, runner=runner)
         measurement = plan.level_separation
-        if measurement.get("measured") and not measurement["separated"]:
+        pruned = keep_unsafe_cuts(source, plan) if measurement.get("measured") and not measurement["separated"] else None
+        if pruned is not None:
+            separation = pruned.level_separation
+            pruned.warnings.append(
+                f"抽查发现有的地方剪掉的部分和说话声分不开，于是把 {separation['cut_count_before']} 处逐一量过："
+                f"{separation['unsafe_cuts_kept']} 处（共 {separation['unsafe_seconds_kept']:g} 秒）和旁边说话声差不到 "
+                f"{MIN_LEVEL_SEPARATION_DB:g}dB，保留没剪；其余 {len(pruned.cuts)} 处照剪。"
+            )
+            plan = pruned
+        elif measurement.get("measured") and not measurement["separated"]:
             plan.warnings.append(
                 f"抽查的 {measurement['sampled_cuts']} 处里有 {measurement['narrow_cut_count']} 处，"
                 f"剪掉的部分只比紧邻的声音低不到 {MIN_LEVEL_SEPARATION_DB:g}dB"

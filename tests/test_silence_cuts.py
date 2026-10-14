@@ -1889,3 +1889,62 @@ def test_an_even_recording_is_cut_without_the_normalize_pass_and_checks_out(tmp_
     assert report.ok, report.failed_checks
     assert report.frame_rate_choice["normalize"] == "skipped_constant_rate"
     assert abs(report.actual_seconds - plan.kept_seconds) < 0.2
+
+
+# ── one doubtful stretch does not cost the whole recording its cut ──────────
+# Requirement (owner, 2026-10-14): cuts that sit too close to the speech beside
+# them stay in the recording; the clearly silent ones are still removed, and the
+# recording is not left uncut because a spot check found one doubtful stretch.
+
+def _tone_and_gaps(target: Path) -> Path:
+    """Loud speech, real silence, loud speech, real silence, then quiet speech,
+    a fainter stretch the threshold reads as silence, and quiet speech again."""
+    parts = [
+        ("sine=f=300:d=1.5", "11"),    # loud, about -10 dB (the sine source itself is about -21 dB)
+        ("anullsrc=r=16000:cl=mono", None),  # real silence, 1 s
+        ("sine=f=300:d=1.5", "11"),
+        ("anullsrc=r=16000:cl=mono", None),  # real silence again, so the quiet part stands on its own
+        ("sine=f=300:d=1.5", "-5"),    # quiet speech, about -26 dB
+        ("sine=f=300:d=1", "-12"),     # about -33 dB: below -30, but only 7 dB under its neighbours
+        ("sine=f=300:d=1.5", "-5"),
+    ]
+    inputs, chains = [], []
+    for index, (source, gain) in enumerate(parts):
+        spec = source if "anullsrc" not in source else f"{source}:d=1"
+        if "anullsrc" in source:
+            spec = "anullsrc=r=16000:cl=mono"
+            inputs += ["-f", "lavfi", "-t", "1", "-i", spec]
+        else:
+            inputs += ["-f", "lavfi", "-i", f"{source}:sample_rate=16000"]
+        chains.append(f"[{index}:a]" + (f"volume={gain}dB," if gain else "") + f"aformat=sample_rates=16000:channel_layouts=mono[a{index}]")
+    graph = ";".join(chains) + ";" + "".join(f"[a{i}]" for i in range(len(parts))) + f"concat=n={len(parts)}:v=0:a=1[out]"
+    subprocess.run(
+        [shutil.which("ffmpeg"), "-v", "error", "-y", *inputs, "-filter_complex", graph, "-map", "[out]", str(target)],
+        check=True,
+    )
+    return target
+
+
+@needs_ffmpeg
+def test_doubtful_cuts_stay_and_clear_silence_is_still_cut(tmp_path):
+    media = _tone_and_gaps(tmp_path / "talk.wav")
+
+    plan = sc.plan_silence_cuts(media, noise_db=-30, min_silence_seconds=0.25)
+
+    assert len(plan.cuts) == 2, plan.as_dict()
+    assert all(cut.end <= 5.0 for cut in plan.cuts), "both real silences are cut; the faint stretch at 6.5-7.5 s is kept"
+    assert plan.level_separation["separated"] is True, "nothing left in the plan is doubtful"
+    assert plan.level_separation["unsafe_cuts_kept"] == 1
+    assert any("保留没剪" in warning for warning in plan.warnings)
+
+
+def test_without_a_per_cut_measurement_the_old_caution_stands(tmp_path, monkeypatch):
+    """When the audio cannot be measured cut by cut, the spot check's verdict
+    stands and the recording is left uncut, as before."""
+    plan = sc.CutPlan(
+        source_duration_seconds=10.0, cuts=[TimeRange(2.0, 3.0)], keeps=[TimeRange(0.0, 2.0), TimeRange(3.0, 10.0)],
+        silences_found=1, noise_db=-30.0, min_silence_seconds=0.25, padding_seconds=0.1,
+    )
+    monkeypatch.setattr(sc, "measure_every_cut", lambda media, plan: None)
+
+    assert sc.keep_unsafe_cuts(tmp_path / "x.wav", plan) is None
