@@ -122,8 +122,9 @@ const Editor = () => {
         addLarkExport,
         runtimeConfig,
         diarizationStatus,
+        ingestJobs,
     } = useApp();
-    const {processVideoSSE, fetchJobSourceFile, fetchJobArtifactFile, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
+    const {processVideoSSE, retryJob, fetchJobSourceFile, fetchJobArtifactFile, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
     const {loadSettings, saveSettings} = useSettings();
     const [exporting, setExporting] = useState(false);
     const [regenerating, setRegenerating] = useState(false);
@@ -1213,13 +1214,22 @@ const Editor = () => {
                 resultJobOptions,
             );
         };
-        if(matchedLocalSourceFile) runRetranscribe(matchedLocalSourceFile);
-        else if(result?.task_id && result?.source_file_available) {
+        // The backend still has the recording (its own copy, or the original where
+        // it sits): run it again from there. Fetching it into the browser and
+        // posting it back, as before, moved the whole file twice and stored a
+        // second copy, for a file that never had to leave the disk.
+        if(result?.task_id && result?.source_file_available) {
             try {
-                const sourceFile = await fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions);
-                runRetranscribe(sourceFile);
+                const data = await retryJob(result.task_id, resultJobOptions);
+                if (data?.job) ingestJobs([data.job]);
+                showToast(lang === 'zh'
+                    ? '已重新排队转录，用的是本机上的原文件。完成后在处理记录里打开新的结果，这一条保留不动。'
+                    : 'Queued again from the file on this machine. Open the new result from the records when it is done; this one stays as it is.');
+                return;
             } catch (err) {
-                if (result?.artifacts?.playback_audio) {
+                if (matchedLocalSourceFile) {
+                    runRetranscribe(matchedLocalSourceFile);
+                } else if (result?.artifacts?.playback_audio) {
                     try {
                         const audioFile = await fetchPlaybackAudioForRetranscribe();
                         runRetranscribe(audioFile);
@@ -1232,6 +1242,8 @@ const Editor = () => {
                     retranscribeInputRef.current?.click();
                 }
             }
+        } else if(matchedLocalSourceFile) {
+            runRetranscribe(matchedLocalSourceFile);
         } else if(result?.task_id && result?.artifacts?.playback_audio) {
             try {
                 const audioFile = await fetchPlaybackAudioForRetranscribe();

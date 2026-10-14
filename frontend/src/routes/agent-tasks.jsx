@@ -747,8 +747,8 @@ const AgentTasks = () => {
     // Read the shared task list + mutations from AppProvider; this page no
     // longer keeps a private jobs state, warm cache, or writes the cache
     // (plan Stage 3b).
-    const {currentJob, setCurrentJob, setLastResult, addToHistory, removeFromHistory, runtimeConfig, tasks: jobs, ingestJobs, markCancelled, revertCancelled, restoreTask, abortPendingUpload} = useApp();
-    const {getJob, cancelJob, deleteJob, retryJob, createVideoSourceJob, fetchJobSourceFile, fetchJobArtifactFile, enqueueProcessFiles} = useApi();
+    const {currentJob, setCurrentJob, setLastResult, addToHistory, removeFromHistory, tasks: jobs, ingestJobs, markCancelled, revertCancelled, restoreTask, abortPendingUpload} = useApp();
+    const {getJob, cancelJob, deleteJob, retryJob, createVideoSourceJob, fetchJobArtifactFile} = useApi();
     const {loadSettings} = useSettings();
     const location = useLocation();
     const navigate = useNavigate();
@@ -895,15 +895,10 @@ const AgentTasks = () => {
         ingestJobs(normalized);
     };
 
-    const retryStoredSourceJob = async (job, options) => {
+    const retryStoredSourceJob = async (job) => {
         const taskId = taskIdForJob(job);
         const localOptions = isLocalJob(job) ? {sttProvider: 'local'} : {};
-        if (runtimeConfig?.jobRetryFromStoredSource) {
-            return await retryJob(taskId, localOptions);
-        }
-        const filename = job?.source_filename || job?.result?.filename || 'source';
-        const sourceFile = await fetchJobSourceFile(taskId, filename, localOptions);
-        return await enqueueProcessFiles([sourceFile], options);
+        return await retryJob(taskId, localOptions);
     };
 
     const retryTerminalJob = async (job) => {
@@ -929,7 +924,7 @@ const AgentTasks = () => {
                 return;
             }
             if (sourceKind === 'media_file') {
-                const response = await retryStoredSourceJob(job, options);
+                const response = await retryStoredSourceJob(job);
                 const nextJobs = response?.job
                     ? [response.job]
                     : (Array.isArray(response?.queued) ? response.queued : []);
