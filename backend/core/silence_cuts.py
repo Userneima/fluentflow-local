@@ -925,6 +925,13 @@ def measure_level_separation(
 BELOW_USUAL_SPEECH_DB = 15.0
 SPEECH_MIN_SECONDS = 1.0
 
+# A stretch shorter than this that the threshold already reads as silence is cut
+# whatever its margins: it cannot hold a phrase anyone would miss, at most half
+# a syllable. The faint voice the margins protect, such as a question from the
+# back of a room, lasts seconds. Found 2026-10-14: the 20 stretches still kept in
+# the 2h28m talk were 0.06-0.27 s of the owner's typing and far-off voices.
+ALWAYS_CUT_BELOW_SECONDS = 0.3
+
 
 def measure_every_cut(media: Path | str, plan: CutPlan) -> list[tuple[float | None, float | None]] | None:
     """For each cut: its margin below the louder of the stretches on either side
@@ -990,15 +997,17 @@ def keep_unsafe_cuts(media: Path | str, plan: CutPlan) -> CutPlan | None:
     if margins is None:
         return None
 
-    def is_silence(pair: tuple[float | None, float | None]) -> bool:
+    def is_silence(cut: TimeRange, pair: tuple[float | None, float | None]) -> bool:
         local, below_usual = pair
-        return (local is not None and local >= MIN_LEVEL_SEPARATION_DB) or (
-            below_usual is not None and below_usual >= BELOW_USUAL_SPEECH_DB
+        return (
+            cut.duration < ALWAYS_CUT_BELOW_SECONDS
+            or (local is not None and local >= MIN_LEVEL_SEPARATION_DB)
+            or (below_usual is not None and below_usual >= BELOW_USUAL_SPEECH_DB)
         )
 
-    safe = [cut for cut, pair in zip(plan.cuts, margins) if is_silence(pair)]
-    unsafe = [cut for cut, pair in zip(plan.cuts, margins) if not is_silence(pair)]
-    measured = [pair[0] for pair, cut in zip(margins, plan.cuts) if pair[0] is not None and is_silence(pair)]
+    safe = [cut for cut, pair in zip(plan.cuts, margins) if is_silence(cut, pair)]
+    unsafe = [cut for cut, pair in zip(plan.cuts, margins) if not is_silence(cut, pair)]
+    measured = [pair[0] for pair, cut in zip(margins, plan.cuts) if pair[0] is not None and is_silence(cut, pair)]
     pruned = CutPlan(
         source_duration_seconds=plan.source_duration_seconds,
         cuts=safe,
@@ -1398,9 +1407,9 @@ def plan_silence_cuts(
             separation = pruned.level_separation
             pruned.warnings.append(
                 f"抽查发现有的地方剪掉的部分和说话声分不开，于是把 {separation['cut_count_before']} 处逐一量过："
-                f"{separation['unsafe_cuts_kept']} 处（共 {separation['unsafe_seconds_kept']:g} 秒）既不比旁边说话轻 "
-                f"{MIN_LEVEL_SEPARATION_DB:g}dB，也不比整场正常讲话轻 {BELOW_USUAL_SPEECH_DB:g}dB，保留没剪；"
-                f"其余 {len(pruned.cuts)} 处照剪。"
+                f"{separation['unsafe_cuts_kept']} 处（共 {separation['unsafe_seconds_kept']:g} 秒）长于 "
+                f"{ALWAYS_CUT_BELOW_SECONDS:g} 秒，又既不比旁边说话轻 {MIN_LEVEL_SEPARATION_DB:g}dB、"
+                f"也不比整场正常讲话轻 {BELOW_USUAL_SPEECH_DB:g}dB，保留没剪；其余 {len(pruned.cuts)} 处照剪。"
             )
             plan = pruned
         elif measurement.get("measured") and not measurement["separated"]:

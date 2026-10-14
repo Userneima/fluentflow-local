@@ -1963,3 +1963,21 @@ def test_without_a_per_cut_measurement_the_old_caution_stands(tmp_path, monkeypa
     monkeypatch.setattr(sc, "measure_every_cut", lambda media, plan: None)
 
     assert sc.keep_unsafe_cuts(tmp_path / "x.wav", plan) is None
+
+
+def test_a_very_short_quiet_stretch_is_cut_whatever_its_margins(tmp_path, monkeypatch):
+    """Requirement (owner, 2026-10-14): a stretch too short to hold a phrase
+    (typing, a far-off voice for a moment) is cut even when its margins are
+    narrow; a longer one with the same margins stays."""
+    short, long = sc.TimeRange(2.0, 2.2), sc.TimeRange(5.0, 6.0)
+    plan = sc.CutPlan(
+        source_duration_seconds=10.0, cuts=[short, long],
+        keeps=[sc.TimeRange(0.0, 2.0), sc.TimeRange(2.2, 5.0), sc.TimeRange(6.0, 10.0)],
+        silences_found=2, noise_db=-30.0, min_silence_seconds=0.25, padding_seconds=0.1,
+    )
+    monkeypatch.setattr(sc, "measure_every_cut", lambda media, plan: [(3.0, 12.0), (3.0, 12.0)])
+
+    pruned = sc.keep_unsafe_cuts(tmp_path / "x.wav", plan)
+
+    assert pruned.cuts == [short]
+    assert pruned.level_separation["unsafe_cuts_kept"] == 1
