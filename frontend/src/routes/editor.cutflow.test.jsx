@@ -41,6 +41,7 @@ vi.mock('../app/shared.jsx', async () => {
             processVideoSSE: async () => ({}),
             fetchJobSourceFile: async () => { throw new Error('no source'); },
             fetchJobArtifactFile: (...args) => artifactFetch(...args),
+            downloadJobMedia: actual.downloadJobMedia,
             recordEvent: () => {},
             getJob: async () => ({}),
             saveTranscriptEdit: async () => ({}),
@@ -120,23 +121,24 @@ describe('the editor shows the cut-flow record', () => {
         expect(asked).toEqual([]);
     });
 
-    it('offers the cut file itself, and asks for the right artifact', async () => {
+    it('offers the cut file itself, streamed from its address under its own name', async () => {
         lastResult = cutResult();
-        const asked = [];
-        artifactFetch = async (taskId, kind, filename) => {
-            asked.push({taskId, kind, filename});
-            return new File(['x'], filename || kind, {type: 'video/mp4'});
-        };
+        const fetchedWhole = [];
+        artifactFetch = async (...args) => { fetchedWhole.push(args); return new File(['x'], 'x'); };
+        const handed = [];
+        HTMLAnchorElement.prototype.click.mockImplementation(function () {
+            handed.push({href: this.getAttribute('href'), download: this.download});
+        });
         mount();
 
         const button = await screen.findByRole('button', {name: /下载剪后文件/});
-        // What this is about is the fetch the button causes.
-        asked.length = 0;
         button.click();
-        await waitFor(() => expect(asked.length).toBe(1));
-        expect(asked[0].kind).toBe('debreath_media');
+        await waitFor(() => expect(handed.length).toBe(1));
+        expect(handed[0].href).toMatch(/\/jobs\/t1\/artifacts\/debreath_media$/);
         // Handed over under a filename, not under the path it is stored at.
-        expect(asked[0].filename).toBe('lecture_debreath.mp4');
+        expect(handed[0].download).toBe('lecture_debreath.mp4');
+        // The browser saves it from the address; the page never holds the file.
+        expect(fetchedWhole).toEqual([]);
     });
 
     it('says the cut file is unreadable rather than letting the recording stand in', async () => {

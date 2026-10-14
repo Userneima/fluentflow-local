@@ -87,6 +87,25 @@ export const apiFetch = (input, init={}) => {
     }
     return fetch(input, {...init, credentials: init.credentials || 'include', headers});
 };
+// A task's media saved by the browser straight from the service's address
+// (``kind`` is an artifact kind, or 'source' for the recording). One byte is
+// asked for first so a missing file is reported here. Reading it into a Blob
+// first held a recording of several gigabytes in the tab before saving.
+export const downloadJobMedia = async (taskId, kind, filename) => {
+    const id = encodeURIComponent(taskId);
+    const url = kind === 'source'
+        ? `${API_BASE}/jobs/${id}/source`
+        : `${API_BASE}/jobs/${id}/artifacts/${encodeURIComponent(kind)}`;
+    const probe = await apiFetch(url, {headers: {Range: 'bytes=0-0'}});
+    if(!probe.ok) throw new Error(kind === 'source' ? 'Source file not found' : 'Artifact not found');
+    try { await probe.body?.cancel?.(); } catch (_) { /* nothing left to read */ }
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename || kind;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+};
 export const apiErrorMessage = (payload, fallback='Request failed') => {
     const detail = payload?.detail;
     if (typeof detail === 'string') return detail;
@@ -743,7 +762,7 @@ const createApi = () => {
         return r.ok && Array.isArray(data?.models) ? data.models : [];
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getPreferences, savePreferences, noteStyle, getProviderModels, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobMedia, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getPreferences, savePreferences, noteStyle, getProviderModels, checkHealth};
 };
 
 export const useSettings = () => {

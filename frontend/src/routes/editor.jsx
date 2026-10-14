@@ -124,7 +124,7 @@ const Editor = () => {
         diarizationStatus,
         ingestJobs,
     } = useApp();
-    const {processVideoSSE, retryJob, fetchJobSourceFile, fetchJobArtifactFile, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
+    const {processVideoSSE, retryJob, fetchJobArtifactFile, downloadJobMedia, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
     const {loadSettings, saveSettings} = useSettings();
     const [exporting, setExporting] = useState(false);
     const [regenerating, setRegenerating] = useState(false);
@@ -1317,10 +1317,12 @@ const Editor = () => {
         if (!canDownloadSourceVideo || downloading) return;
         setDownloading('source_video');
         try {
-            const file = matchedLocalSourceFile && isLikelyVideoFile(matchedLocalSourceFile)
-                ? matchedLocalSourceFile
-                : await fetchJobSourceFile(result.task_id, result.filename || `${resultDownloadName}.mp4`, resultJobOptions);
-            downloadBrowserFile(file, result.filename || `${resultDownloadName}.mp4`);
+            const name = result.filename || `${resultDownloadName}.mp4`;
+            if (matchedLocalSourceFile && isLikelyVideoFile(matchedLocalSourceFile)) {
+                downloadBrowserFile(matchedLocalSourceFile, name);
+            } else {
+                await downloadJobMedia(result.task_id, 'source', name);
+            }
             recordDownload('source_video_downloaded', 'video');
             showToast(t('dl.success'));
         } catch (err) {
@@ -1338,8 +1340,7 @@ const Editor = () => {
         const name = String(artifact.filename || '').split('/').pop()
             || `${resultDownloadName || result.filename || 'media'}_debreath.mp4`;
         try {
-            const file = await fetchJobArtifactFile(result.task_id, 'debreath_media', name, resultJobOptions);
-            downloadBrowserFile(file, name);
+            await downloadJobMedia(result.task_id, 'debreath_media', name);
             recordDownload('cut_media_downloaded', 'video');
             showToast(t('dl.success'));
         } catch (err) {

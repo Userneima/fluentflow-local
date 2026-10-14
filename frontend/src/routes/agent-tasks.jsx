@@ -14,7 +14,6 @@ import {
 } from 'lucide-react';
 import {fmtDurationCompact, progressMessageOf} from '../lib/format.js';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
-import {downloadBrowserFile} from './editor-helpers.js';
 import {
     fmtElapsed,
     fmtBytes,
@@ -748,7 +747,7 @@ const AgentTasks = () => {
     // longer keeps a private jobs state, warm cache, or writes the cache
     // (plan Stage 3b).
     const {currentJob, setCurrentJob, setLastResult, addToHistory, removeFromHistory, tasks: jobs, ingestJobs, markCancelled, revertCancelled, restoreTask, abortPendingUpload} = useApp();
-    const {getJob, cancelJob, deleteJob, retryJob, createVideoSourceJob, fetchJobArtifactFile} = useApi();
+    const {getJob, cancelJob, deleteJob, retryJob, createVideoSourceJob, downloadJobMedia} = useApi();
     const {loadSettings} = useSettings();
     const location = useLocation();
     const navigate = useNavigate();
@@ -964,8 +963,7 @@ const AgentTasks = () => {
         const name = String(artifact.filename || '').split('/').pop() || `${taskId}_debreath.mp4`;
         setDownloadingTaskId(taskId);
         try {
-            const file = await fetchJobArtifactFile(taskId, 'debreath_media', name, {sttProvider: 'local'});
-            downloadBrowserFile(file, name);
+            await downloadJobMedia(taskId, 'debreath_media', name);
         } catch (error) {
             window.alert(error?.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable'));
         } finally {
