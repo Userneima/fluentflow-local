@@ -828,7 +828,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "get_task_package",
-        "description": "Read the stable Agent Task Package for a FluentFlow task.",
+        "description": (
+            "Read the Agent Task Package for a FluentFlow task: status, the note, where every output "
+            "is, and what happened. The transcript is described (chars, preview, file path), not "
+            "included; to write a note use get_agent_note_material, which hands it over in parts."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}, "client_id": {"type": "string"}},

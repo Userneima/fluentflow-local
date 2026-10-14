@@ -29,7 +29,7 @@ from backend.core.title_display import display_title_for_user
 from backend.core.note_diagnosis import build_note_generation_diagnosis
 
 
-AGENT_TASK_PACKAGE_VERSION = "1"
+AGENT_TASK_PACKAGE_VERSION = "2"
 
 
 @dataclass(frozen=True)
@@ -495,15 +495,18 @@ def build_agent_task_package(
             "file_size_mb": job.get("source_file_size_mb"),
             "video_source": video_source or None,
         },
+        # What the transcript is and where it lives, not the transcript itself.
+        # The full text and the line-by-line segments ran to half a million
+        # characters for a two-hour recording, and an agent's host takes about
+        # 25,000 tokens per tool result. Writing a note gets its transcript from
+        # the note material in parts; anything else reads the file at ``file``.
         "transcript": {
             "available": bool(transcript_text or raw_segments or display_segments),
-            "text": transcript_text,
+            "chars": len(transcript_text),
             "preview": _text(result.get("transcript_text_preview") or transcript_text[:300]),
-            "raw_segments": raw_segments,
-            "display_segments": display_segments,
-            "corrected_text": corrected_transcript_text,
-            "corrected_segments": corrected_segments,
-            "corrections": transcript_corrections if isinstance(transcript_corrections, list) else [],
+            "file": (artifacts.get("transcript_txt") or {}).get("local_path"),
+            "corrected_chars": len(corrected_transcript_text),
+            "correction_count": len(transcript_corrections) if isinstance(transcript_corrections, list) else 0,
             "correction": correction_meta,
             "note_input_source": result.get("note_generation_transcript_source") or "transcript_text",
             "raw_segment_count": len(raw_segments),

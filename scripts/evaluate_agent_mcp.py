@@ -99,7 +99,7 @@ def _mock_package(task_id: str, *, failed: bool, source_type: str = "video_link"
     )
     return {
         "ok": True,
-        "agent_task_package_version": "1",
+        "agent_task_package_version": "2",
         "task": {"task_id": task_id, "status": status, "stage": "failed" if failed else "done"},
         "source": {
             "type": source_type,
@@ -296,7 +296,7 @@ def _summarize_package(package: dict[str, Any]) -> dict[str, Any]:
         "task_status": task.get("status"),
         "task_stage": task.get("stage"),
         "source_type": source.get("type"),
-        "transcript_available": bool(transcript.get("available") or transcript.get("text")),
+        "transcript_available": bool(transcript.get("available")),
         "note_status": note.get("status"),
         "diagnosis": _summarize_diagnosis(note.get("diagnosis") if isinstance(note.get("diagnosis"), dict) else {}),
         "artifact_keys": sorted(str(key) for key in artifacts.keys()),

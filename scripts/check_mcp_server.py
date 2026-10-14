@@ -138,8 +138,8 @@ def run_check(*, api_base: str, client_id: str, access_token: str | None, backen
             package = client.call_tool("get_task_package", {"task_id": task_id, "api_base": api_base, "client_id": client_id})
             diagnosis = client.call_tool("diagnose_task", {"task_id": task_id, "api_base": api_base, "client_id": client_id})
             transcript = package.get("transcript") if isinstance(package.get("transcript"), dict) else {}
-            if "smoke test transcript" not in str(transcript.get("text") or ""):
-                raise McpCheckError("Agent Task Package did not include the submitted transcript text")
+            if "smoke test transcript" not in str(transcript.get("preview") or ""):
+                raise McpCheckError("Agent Task Package did not include the submitted transcript")
             payload["backend_e2e"] = {
                 "task_id": task_id,
                 "status": package.get("task", {}).get("status") if isinstance(package.get("task"), dict) else None,

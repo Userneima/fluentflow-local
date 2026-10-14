@@ -32,7 +32,7 @@ def _job(**overrides) -> dict:
 def test_local_package_has_no_cloud_sections():
     package = build_agent_task_package(_job())
 
-    assert package["agent_task_package_version"] == "1"
+    assert package["agent_task_package_version"] == "2"
     assert "usage" not in package  # no quota concepts locally
     assert "execution" not in package  # no desktop-sync concepts locally
     assert package["task"]["task_id"] == "t-1"
@@ -65,3 +65,25 @@ def test_failed_task_without_source_has_no_retry(monkeypatch):
         _job(status="failed", result={"task_id": "t-1", "transcript_text": ""})
     )
     assert all(action["action"] != "retry_task" for action in package["next_actions"])
+
+
+def test_a_long_recordings_package_fits_one_tool_result():
+    """Requirement (2026-10-14): an agent reads the package in one tool call
+    (about 25,000 tokens), so it says what the transcript is and where it lives
+    instead of carrying it; the note itself stays in."""
+    import json
+
+    line = "这一句讲的是最小二乘法的推导过程和它的前提条件。"
+    segments = [{"start": float(i), "end": float(i) + 0.9, "text": line} for i in range(3000)]
+    transcript = "\n".join(line for _ in range(3000))
+    package = build_agent_task_package(_job(result={
+        **_job()["result"],
+        "transcript_text": transcript,
+        "raw_segments": segments,
+        "display_segments": segments,
+    }))
+
+    assert len(json.dumps(package, ensure_ascii=False)) < 20_000
+    assert package["transcript"]["available"] is True
+    assert package["transcript"]["chars"] == len(transcript)
+    assert package["note"]["markdown"].startswith("# 笔记")
