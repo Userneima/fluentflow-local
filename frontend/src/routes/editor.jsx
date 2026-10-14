@@ -1267,14 +1267,6 @@ const Editor = () => {
             }
         } else if(matchedLocalSourceFile) {
             runRetranscribe(matchedLocalSourceFile);
-        } else if(result?.task_id && result?.artifacts?.playback_audio) {
-            try {
-                const audioFile = await fetchPlaybackAudioForRetranscribe();
-                runRetranscribe(audioFile);
-            } catch (err) {
-                showToast(err.message || t('edit.retranscribeUnavailableTitle'), false);
-                retranscribeInputRef.current?.click();
-            }
         } else retranscribeInputRef.current?.click();
     };
 
