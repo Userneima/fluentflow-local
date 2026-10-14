@@ -42,6 +42,8 @@ import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
 const transcriptExts = /\.(srt|vtt|txt|md)$/i;
+// local_folder_intake.MAX_FILES_PER_FOLDER on the backend, which takes no more per request.
+const LOCAL_PATHS_PER_BATCH = 30;
 
 const platformItems = [
     {label: '抖音', tone: 'bg-[#111111] text-white', icon: 'douyin'},
@@ -319,19 +321,28 @@ const MediaText = () => {
     // into the store, and the cut version written beside the original. Shared by
     // the picker and by a drop whose file was found on disk, because from here on
     // the two are the same thing — a path.
-    const queueLocalPaths = async (paths) => {
+    const queueLocalPaths = async (chosen) => {
+        // At most this many at a time, the same as a folder; the backend holds the
+        // same number. Past it the rest are named here rather than dropped quietly.
+        const taken = chosen.slice(0, LOCAL_PATHS_PER_BATCH);
+        const left = chosen.length - taken.length;
         // Every task queued here spends one call of whichever model writes the
         // note. One file is the ordinary flow; thirty at once is a different
         // order of magnitude of someone's allowance, so it is confirmed, and the
         // confirmation names the writer.
-        if (paths.length > 1) {
+        if (chosen.length > 1) {
             const clause = noteWriterBatchClause(noteWriter, lang);
+            const tail = left
+                ? (lang === 'zh'
+                    ? `\n（一次最多 ${LOCAL_PATHS_PER_BATCH} 个，这次处理前 ${taken.length} 个，剩下 ${left} 个之后再选一次）`
+                    : `\n(At most ${LOCAL_PATHS_PER_BATCH} at a time: the first ${taken.length} now, choose the other ${left} afterwards.)`)
+                : '';
             const confirmText = lang === 'zh'
-                ? `选了 ${paths.length} 个文件。每个都会自动去气口、转写${clause}。继续吗？`
-                : `${paths.length} files selected. Each one is cut and transcribed${clause}. Continue?`;
+                ? `选了 ${chosen.length} 个文件。每个都会自动去气口、转写${clause}。继续吗？${tail}`
+                : `${chosen.length} files selected. Each one is cut and transcribed${clause}. Continue?${tail}`;
             if (!window.confirm(confirmText)) return null;
         }
-        return processLocalPaths(paths, buildSubmitOptions(loadSettings()));
+        return processLocalPaths(taken, buildSubmitOptions(loadSettings()));
     };
 
     // A drop, taken as far as this machine can take it.

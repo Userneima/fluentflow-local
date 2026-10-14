@@ -1617,7 +1617,16 @@ async def queue_process_local_files(request: Request, payload: dict = Body(...))
             index=index,
             total=len(resolved),
         ))
-    return {"ok": True, "queued": [_with_queue_place(item) for item in queued], "count": len(queued)}
+    # Paths past the limit are not queued; said here so a caller that sent more
+    # (an agent, an older page) learns which ones, instead of losing them quietly.
+    skipped = [str(raw) for raw in raw_paths[local_folder_intake.MAX_FILES_PER_FOLDER:]]
+    return {
+        "ok": True,
+        "queued": [_with_queue_place(item) for item in queued],
+        "count": len(queued),
+        "skipped_paths": skipped,
+        "limit": local_folder_intake.MAX_FILES_PER_FOLDER,
+    }
 
 
 @router.post("/queue/process-folder")

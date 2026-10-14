@@ -168,3 +168,19 @@ def test_the_typed_title_names_a_single_picked_file(client, recording):
 
     job = job_store.get_job(response.json()["queued"][0]["task_id"])
     assert job["metadata"]["display_title"] == "周一例会"
+
+
+def test_paths_past_the_limit_are_named_not_dropped_quietly(client, recording):
+    """Requirement (2026-10-14): a caller that sends more paths than one batch
+    takes learns which ones were not queued."""
+    paths = []
+    for index in range(32):
+        path = recording.parent / f"part-{index:02d}.mp4"
+        path.write_bytes(b"recording")
+        paths.append(str(path))
+
+    response = client.post("/queue/process-local-files", json={"paths": paths})
+
+    body = response.json()
+    assert body["count"] == body["limit"] == 30
+    assert body["skipped_paths"] == paths[30:]
