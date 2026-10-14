@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -132,3 +133,53 @@ def test_main_always_exits_zero(monkeypatch, capsys):
 def test_stamp_lives_in_fluentflow_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path))
     assert upd.stamp_path() == tmp_path / upd.STAMP_NAME
+
+
+def test_a_failed_upgrade_is_tried_once_through_the_mirror(tmp_path, pip_calls, monkeypatch):
+    """Requirement (2026-10-14): a user who never set a mirror still gets the
+    upgrade when pypi.org cannot be reached."""
+    calls, outcome = pip_calls
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    results = iter([SimpleNamespace(returncode=1, stdout="", stderr="ERROR: connection timed out\n"),
+                    SimpleNamespace(returncode=0, stdout="", stderr="")])
+    monkeypatch.setattr(upd.subprocess, "run", lambda cmd, **kw: (calls.append({"cmd": cmd, **kw}), next(results))[1])
+    stamp = tmp_path / "yt_dlp_last_update"
+
+    upd.update(today=TODAY, stamp=stamp)
+
+    assert len(calls) == 2 and upd.MIRROR_INDEX_URL in calls[1]["cmd"]
+    assert stamp.read_text(encoding="utf-8") == TODAY.isoformat()
+
+
+def test_a_configured_mirror_is_not_second_guessed(tmp_path, pip_calls, monkeypatch):
+    calls, outcome = pip_calls
+    monkeypatch.setenv("PIP_INDEX_URL", "https://mirror.example/simple")
+    outcome["result"] = SimpleNamespace(returncode=1, stdout="", stderr="ERROR: nope\n")
+
+    upd.update(today=TODAY, stamp=tmp_path / "s")
+
+    assert len(calls) == 1
+
+
+def test_a_second_launch_skips_while_the_first_is_upgrading(tmp_path, pip_calls):
+    """Requirement: two launches never run pip on the same package at once."""
+    calls, _ = pip_calls
+    stamp = tmp_path / "yt_dlp_last_update"
+    assert upd.acquire_lock(stamp.with_name(upd.LOCK_NAME))
+
+    line = upd.update(today=TODAY, stamp=stamp)
+
+    assert calls == [] and "跳过" in line
+
+
+def test_a_lock_left_by_a_dead_run_does_not_block_forever(tmp_path, pip_calls):
+    calls, _ = pip_calls
+    stamp = tmp_path / "yt_dlp_last_update"
+    lock = stamp.with_name(upd.LOCK_NAME)
+    lock.write_text("123")
+    old = lock.stat().st_mtime - upd.LOCK_STALE_SECONDS - 10
+    os.utime(lock, (old, old))
+
+    upd.update(today=TODAY, stamp=stamp)
+
+    assert len(calls) == 1 and not lock.exists()

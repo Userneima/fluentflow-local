@@ -1,4 +1,4 @@
-# FluentFlow Local launcher (Windows).
+﻿# FluentFlow Local launcher (Windows).
 #
 # Double-click FluentFlowLocal.cmd. This console window is the local service:
 # press Ctrl+C or close it to stop FluentFlow Local. It deliberately starts
@@ -7,7 +7,20 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = if ($env:FLUENTFLOW_REPO) { $env:FLUENTFLOW_REPO } else { Split-Path -Parent (Split-Path -Parent $ScriptDir) }
-$Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } else { "8000" }
+# Port: the FLUENTFLOW_LOCAL_PORT environment variable first, then the same line
+# in the repository's .env, else 8000 -- the order the macOS launcher and the
+# backend use, so the launcher probes the port the service actually listens on.
+function Get-EnvFilePort([string]$RepoDir) {
+    $EnvFile = Join-Path $RepoDir ".env"
+    if (-not (Test-Path $EnvFile)) { return $null }
+    $Line = Get-Content $EnvFile -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^\s*(export\s+)?FLUENTFLOW_LOCAL_PORT\s*=' } | Select-Object -Last 1
+    if (-not $Line) { return $null }
+    $Value = (($Line -split '=', 2)[1] -split '\s#')[0].Trim().Trim('"').Trim("'")
+    if ($Value -match '^\d+$') { return $Value }
+    return $null
+}
+$Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } elseif (Get-EnvFilePort $Repo) { Get-EnvFilePort $Repo } else { "8000" }
 $AppUrl = "http://127.0.0.1:$Port/"
 $LocalAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\\Local" }
 $LogDir = Join-Path $LocalAppData "FluentFlow\\Logs"
@@ -17,7 +30,7 @@ function Fail([string]$Message) {
     Write-Host ""
     Write-Host "x $Message" -ForegroundColor Red
     Write-Host ""
-    Read-Host "Press Enter to close" | Out-Null
+    Read-Host "按回车键关闭" | Out-Null
     exit 1
 }
 
@@ -117,11 +130,11 @@ if ($health) {
         }
         Write-Host "Old process stopped. Starting a fresh one."
     } else {
-        Fail "Port $Port is already serving a different application. Stop that application or set FLUENTFLOW_LOCAL_PORT to another port."
+        Fail "端口 $Port 上运行的是别的程序。请先退出它，或设置 FLUENTFLOW_LOCAL_PORT 换一个端口。"
     }
 }
 if (Test-PortListening) {
-    Fail "Port $Port is occupied, but it is not FluentFlow Local. Stop that application or set FLUENTFLOW_LOCAL_PORT to another port."
+    Fail "端口 $Port 被占用，占用的不是 FluentFlow Local。请先退出那个程序，或设置 FLUENTFLOW_LOCAL_PORT 换一个端口。"
 }
 
 $PythonCandidates = @(
@@ -159,7 +172,7 @@ try {
         -RedirectStandardOutput (Join-Path $LogDir "yt-dlp-update.log") `
         -RedirectStandardError (Join-Path $LogDir "yt-dlp-update.err.log") | Out-Null
 } catch {
-    Write-Host "Could not start the yt-dlp update check: $_" -ForegroundColor Yellow
+    Write-Host "没能启动 yt-dlp 更新检查：$_" -ForegroundColor Yellow
 }
 
 Set-Location $Repo
@@ -178,12 +191,16 @@ Start-Job -ScriptBlock {
 } -ArgumentList $Port, $AppUrl, $LogFile | Out-Null
 
 Write-Host ""
-Write-Host "FluentFlow Local is starting: $AppUrl"
-Write-Host "Log file: $LogFile"
-Write-Host "To stop: press Ctrl+C in this window, or close the window."
+Write-Host "FluentFlow Local 正在启动：$AppUrl"
+Write-Host "日志文件：$LogFile"
+Write-Host "停止：在这个窗口按 Ctrl+C，或直接关掉窗口。"
 Write-Host ""
 
 # Let python-dotenv in backend.local_main parse .env; PowerShell must not
 # source it because dotenv files may contain comments, spaces, or non-shell syntax.
+# uvicorn logs to stderr. Under "Stop", Windows PowerShell 5.1 turns the first
+# stderr line of a native command piped through 2>&1 into a terminating error,
+# so the service would die on its own startup banner.
+$ErrorActionPreference = "Continue"
 & $Python -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port 2>&1 | Tee-Object -FilePath $LogFile -Append
 exit $LASTEXITCODE

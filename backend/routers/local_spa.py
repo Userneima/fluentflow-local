@@ -68,7 +68,7 @@ def create_local_spa_router(index_path: Optional[Path] = None) -> APIRouter:
                 status_code=503,
                 detail=(
                     "本地前端还没有构建：请在项目目录运行 "
-                    "npm run build:frontend:local 后刷新页面。"
+                    "npm run build:frontend 后刷新页面。"
                 ),
             )
         return FileResponse(str(resolved_index), headers={"Cache-Control": "no-cache"})

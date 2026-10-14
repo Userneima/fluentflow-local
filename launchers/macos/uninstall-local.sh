@@ -24,7 +24,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PORT="${FLUENTFLOW_LOCAL_PORT:-8000}"
+# 端口和启动器一样：环境变量优先，其次是仓库 .env 里的同名行，都没有就是 8000。
+env_port() {
+	local env_file="${REPO}/.env" line
+	[[ -f "$env_file" ]] || return 0
+	line="$(grep -E '^[[:space:]]*(export[[:space:]]+)?FLUENTFLOW_LOCAL_PORT[[:space:]]*=' "$env_file" 2>/dev/null | tail -n 1 || true)"
+	[[ -n "$line" ]] || return 0
+	line="${line#*=}"
+	line="$(printf '%s' "$line" | sed -E "s/^[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//")"
+	[[ "$line" =~ ^[0-9]+$ ]] && printf '%s' "$line"
+}
+PORT="${FLUENTFLOW_LOCAL_PORT:-$(env_port)}"
+PORT="${PORT:-8000}"
 
 REMOVE_MODELS=0
 REMOVE_DATA=0
