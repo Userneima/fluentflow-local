@@ -114,3 +114,27 @@ def test_list_tasks_finds_a_note_by_the_title_shown_in_a_screenshot(monkeypatch)
     assert [t["task_id"] for t in found] == ["t1"]
     assert found[0]["note_title"] == "科学与科学研究的结构：什么是科学"
     assert len(la.list_agent_tasks(SimpleNamespace(), query="")["tasks"]) == 2
+
+
+def test_a_draft_part_is_the_same_stretch_as_the_agents_part(job_store, monkeypatch, tmp_path):  # noqa: F811
+    """Requirement (2026-10-14): part N in draft_note_part, in recorded feedback
+    and in get_agent_note_material is one stretch of the recording."""
+    import backend.core.agent_note as an
+    from backend.core import claude_vision, visual_note_channel
+    from test_visual_note_job import _fake_extractor
+
+    monkeypatch.setattr(an, "AGENT_PART_CHARS", 20)
+    seen = []
+
+    def write(text, frames, **kwargs):
+        seen.append(text)
+        return claude_vision.VisualNoteDraft(markdown="## 节\n\n" + "内容" * 200, basis_note="", model="fake")
+
+    monkeypatch.setattr(visual_note_channel, "resolve_channel", lambda *_a, **_k: visual_note_channel.Channel(
+        name="fake", label="fake", model="fake", unavailable_reason=None, write=write))
+
+    material = an.material(TASK, part=2, client_id="anonymous", keyframe_extractor=_fake_extractor(tmp_path))
+    drafted = nf.draft_part(TASK, rules="写法", part=2, client_id="anonymous")
+
+    assert drafted["total_parts"] == material["total_parts"] > 1
+    assert seen == [material["transcript"]]

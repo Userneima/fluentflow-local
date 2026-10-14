@@ -141,7 +141,12 @@ def draft_part(task_id: str, *, rules: str, part: int = 1, client_id: str | None
     if not channel.available:
         raise NoteFeedbackError(f"{channel.unavailable_reason}。没有可用的模型时，由你（agent）按候选写法自己写这一部分。")
     media, transcript, _timeline, _segments = vn._require_eligible(task_id, job, api_key=None, channel=channel)
-    parts = claude_vision.transcript_parts(transcript)
+    # Split the way the agent's material is split: the agent names a part by the
+    # number get_agent_note_material gave it, and feedback freezes that part's
+    # transcript, so part 3 here has to be the same stretch as part 3 there.
+    from backend.core import agent_note
+
+    parts = agent_note._parts(transcript)
     if not 1 <= part <= len(parts):
         raise NoteFeedbackError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")
     chosen = parts[part - 1]
