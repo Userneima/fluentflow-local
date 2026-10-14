@@ -6,10 +6,13 @@ import os
 
 
 def max_upload_mb() -> float:
+    """0 means no limit, the default. The 2GB default was a hosted-era guard for
+    a shared server; here it only refused a long recording that the browser had
+    to copy in. Set FLUENTFLOW_MAX_UPLOAD_MB to cap it."""
     try:
-        return max(float(os.environ.get("FLUENTFLOW_MAX_UPLOAD_MB", "2048")), 1.0)
+        return max(float(os.environ.get("FLUENTFLOW_MAX_UPLOAD_MB", "0")), 0.0)
     except ValueError:
-        return 2048.0
+        return 0.0
 
 
 def max_transcript_upload_mb() -> float:
@@ -21,10 +24,11 @@ def max_transcript_upload_mb() -> float:
 
 
 def max_queue_files() -> int:
+    """Files per web upload: 30, the same as choosing files or a folder by path."""
     try:
-        return max(int(os.environ.get("FLUENTFLOW_MAX_QUEUE_FILES", "5")), 1)
+        return max(int(os.environ.get("FLUENTFLOW_MAX_QUEUE_FILES", "30")), 1)
     except ValueError:
-        return 5
+        return 30
 
 
 def max_media_duration_seconds() -> float:

@@ -40,7 +40,7 @@ router = APIRouter()
 def _limits() -> dict[str, Any]:
     duration = max_media_duration_seconds()
     return {
-        "max_upload_mb": max_upload_mb(),
+        "max_upload_mb": max_upload_mb() or None,
         "max_queue_files": max_queue_files(),
         "max_media_duration_seconds": duration or None,
     }
