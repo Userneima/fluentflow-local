@@ -22,6 +22,8 @@ current workflow. If the task is for Hosted, switch to the independent
 
 Known problems found in review and not yet fixed are listed in `docs/known_issues.md`. Read it before working in an area it covers; remove an entry when you fix it.
 
+Why things are the way they are is in `docs/decisions.md`: one entry per decision (done, dropped, parked or narrowed), with the options weighed, the evidence and the commits. Check it before changing something already decided. When you fix, drop, park or narrow an item, append an entry there and, if users notice the change, a line in `docs/changelog.md`; never delete a decision entry, write a new one that supersedes it.
+
 ## Validation
 
 Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests. Do not push, deploy, tag, or change a release version unless explicitly requested.
