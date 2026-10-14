@@ -98,7 +98,7 @@ READ_THROUGH_INSTRUCTION = (
 )
 
 
-_SERVED_FRAME = re.compile(r"\(/jobs/[^)\s]*?[?&]file=(note_\d+\.jpg)\)")
+_SERVED_FRAME = re.compile(r"\(/jobs/[^)\s]*?[?&]file=(note_\d+(?:_crop_[0-9a-f]{8})?\.jpg)\)")
 
 
 class AgentNoteError(vn.VisualNoteError):
@@ -418,6 +418,7 @@ def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, m
     )
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     frames = (_stored_frames(task_id, result) or []) if media.has_video else []
+    joined, frames = vn.apply_crops(joined, task_id, frames)
     cited = vn.cited_frames(joined, frames)
     markdown = vn._rewrite_image_targets(joined, task_id, frames)
     artifact = write_text_artifact(task_id, VISUAL_NOTE_KIND, VISUAL_NOTE_ARTIFACT_FILENAME, markdown.rstrip() + "\n")

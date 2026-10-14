@@ -215,13 +215,16 @@ const DOCX_IMAGE_MAX_HEIGHT = 640;
 // How large a screenshot is drawn in the Word file: the page width it always
 // had, at the picture's own proportions. A portrait frame is limited by height
 // instead, so one phone-recording screenshot does not run over a whole page.
+// A picture narrower than the page width (a screenshot cropped to one window)
+// keeps its own size: stretched, its text goes soft for nothing.
 // Without a known size it keeps the 16:9 box every landscape video frame fits.
 export const docxImageSize = (natural) => {
     const width = Number(natural?.width) || 0;
     const height = Number(natural?.height) || 0;
     if (!(width > 0 && height > 0)) return {width: DOCX_IMAGE_WIDTH, height: 270};
-    const scaledHeight = Math.round(DOCX_IMAGE_WIDTH * height / width);
-    if (scaledHeight <= DOCX_IMAGE_MAX_HEIGHT) return {width: DOCX_IMAGE_WIDTH, height: scaledHeight};
+    const drawnWidth = Math.min(width, DOCX_IMAGE_WIDTH);
+    const scaledHeight = Math.round(drawnWidth * height / width);
+    if (scaledHeight <= DOCX_IMAGE_MAX_HEIGHT) return {width: drawnWidth, height: scaledHeight};
     return {width: Math.max(1, Math.round(DOCX_IMAGE_MAX_HEIGHT * width / height)), height: DOCX_IMAGE_MAX_HEIGHT};
 };
 

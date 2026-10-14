@@ -728,6 +728,102 @@ def _frame_record(task_id: str, frame: FrameInput) -> dict[str, Any]:
     }
 
 
+# A screenshot cited with a region: ``![图注](note_0003.jpg#crop=x0,y0,x1,y1)``,
+# the region in fractions of the picture's width and height.
+_CROP_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s#]+)#crop=([^)\s]*)\)")
+# The file a crop is saved as, beside the frame it was cut from.
+_CROP_NAME_RE = re.compile(r"^(note_\d+)_crop_[0-9a-f]{8}\.jpg$")
+# A region narrower or shorter than this is a sliver nobody can read; one that
+# keeps nearly all of the picture is the picture.
+_CROP_MIN_SIDE = 0.1
+_CROP_MAX_AREA = 0.95
+
+
+def _crop_box(spec: str) -> tuple[float, float, float, float] | None:
+    try:
+        x0, y0, x1, y1 = (float(value) for value in spec.split(","))
+    except ValueError:
+        return None
+    if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
+        return None
+    if x1 - x0 < _CROP_MIN_SIDE or y1 - y0 < _CROP_MIN_SIDE:
+        return None
+    if (x1 - x0) * (y1 - y0) > _CROP_MAX_AREA:
+        return None
+    return x0, y0, x1, y1
+
+
+def _crop_frame(task_id: str, frame: FrameInput, box: tuple[float, float, float, float]) -> FrameInput | None:
+    """The region of ``frame`` saved as its own picture, or ``None`` when it cannot be."""
+    import hashlib
+
+    digest = hashlib.sha1(f"{frame.filename}:{box}".encode()).hexdigest()[:8]
+    name = f"{Path(frame.filename).stem}_crop_{digest}.jpg"
+    target = _frame_artifact_path(task_id, name)
+    if not target.is_file():
+        try:
+            from PIL import Image
+
+            with Image.open(frame.path) as picture:
+                width, height = picture.size
+                region = picture.convert("RGB").crop((
+                    round(box[0] * width), round(box[1] * height),
+                    round(box[2] * width), round(box[3] * height),
+                ))
+                region.save(target, quality=92)
+        except (ImportError, OSError, ValueError):
+            logger.warning("could not crop %s for %s", frame.filename, task_id, exc_info=True)
+            return None
+    return FrameInput(filename=name, path=target, timestamp_seconds=frame.timestamp_seconds, source=frame.source)
+
+
+def apply_crops(markdown: str, task_id: str, frames: list[FrameInput]) -> tuple[str, list[FrameInput]]:
+    """Turn the note's cropped citations into pictures of just those regions.
+
+    The writer looks at the whole screen and names the part a reader needs (one
+    window, one table); the saved note shows only that part, so a screenshot
+    reads at the size it is printed. Returns the note with each region replaced
+    by its own picture, and the frames with those pictures added. A region that
+    is not a usable one keeps the whole screenshot.
+
+    Crops cut earlier (a note handed back for an edit links them by name) are
+    found again on disk, so they stay cited frames the next time it is saved.
+    """
+    by_name = {frame.filename: frame for frame in frames}
+    added: list[FrameInput] = []
+
+    def remember(frame: FrameInput) -> None:
+        if frame.filename not in by_name:
+            by_name[frame.filename] = frame
+            added.append(frame)
+
+    def replace_crop(match: re.Match[str]) -> str:
+        alt, target, spec = match.group(1), match.group(2), match.group(3)
+        frame = by_name.get(Path(target.split("?")[0]).name)
+        box = _crop_box(spec)
+        cropped = _crop_frame(task_id, frame, box) if frame is not None and box is not None else None
+        if cropped is None:
+            return f"![{alt}]({target})"
+        remember(cropped)
+        return f"![{alt}]({cropped.filename})"
+
+    markdown = _CROP_RE.sub(replace_crop, markdown or "")
+    for match in _IMAGE_RE.finditer(markdown):
+        name = Path(str(match.group(1)).split("?")[0]).name
+        crop = _CROP_NAME_RE.match(name)
+        if name in by_name or not crop:
+            continue
+        path = _frame_artifact_path(task_id, name)
+        base = by_name.get(f"{crop.group(1)}.jpg")
+        if path.is_file():
+            remember(FrameInput(
+                filename=name, path=path,
+                timestamp_seconds=base.timestamp_seconds if base else None,
+                source=base.source if base else None,
+            ))
+    return markdown, [*frames, *added]
+
+
 def cited_frames(markdown: str, frames: list[FrameInput]) -> list[FrameInput]:
     """Which sent frames the note actually references.
 
@@ -1010,8 +1106,9 @@ def _run_visual_note(
             drafts.append(part_draft)
             coverage_parts.append({"part": part.index, **part_coverage})
         draft = _joined_draft(drafts, parts, title=note_title(job))
-        cited = cited_frames(draft.markdown, frames)
-        markdown = _rewrite_image_targets(draft.markdown, task_id, frames)
+        cropped, frames_with_crops = apply_crops(draft.markdown, task_id, frames)
+        cited = cited_frames(cropped, frames_with_crops)
+        markdown = _rewrite_image_targets(cropped, task_id, frames_with_crops)
         artifact = write_text_artifact(
             task_id, VISUAL_NOTE_KIND, VISUAL_NOTE_ARTIFACT_FILENAME, markdown.rstrip() + "\n"
         )

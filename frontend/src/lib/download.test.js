@@ -319,6 +319,12 @@ describe('screenshots in a Word export', () => {
         expect(download.imagePixelSize(new Uint8Array([1, 2, 3]))).toBeNull();
     });
 
+    // 2026-10-14: a screenshot cropped to one window is smaller than the page;
+    // it keeps its own size instead of being stretched soft.
+    it('draws a picture narrower than the page at its own size', () => {
+        expect(download.docxImageSize({width: 300, height: 120})).toEqual({width: 300, height: 120});
+    });
+
     it('falls back to the 16:9 box when the size cannot be read', () => {
         expect(download.docxImageSize(null)).toEqual({width: 480, height: 270});
     });

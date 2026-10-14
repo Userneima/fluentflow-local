@@ -84,7 +84,7 @@ def draft_with_rules(
         label=label,
         markdown=draft.markdown,
         model=draft.model,
-        cited=[frame.filename for frame in vn.cited_frames(draft.markdown, frames)],
+        cited=[frame.filename for frame in vn.cited_frames(*vn.apply_crops(draft.markdown, task_id, frames))],
         usage=dict(draft.usage),
     )
 
