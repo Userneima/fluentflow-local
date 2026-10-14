@@ -22,6 +22,18 @@ describe('reconcileTaskList', () => {
         expect(reconcileTaskList({})).toEqual([]);
     });
 
+    // 2026-10-14: a task deleted from another browser came back from this
+    // browser's cache as a finished task. The backend's whole list wins.
+    it('drops a cached task the backend no longer has once its whole list is in', () => {
+        const list = reconcileTaskList({
+            fetched: [makeJob('t1')],
+            cached: [makeJob('t1'), makeJob('gone')],
+            optimistic: [makeJob('just-sent')],
+            fetchedIsComplete: true,
+        });
+        expect(ids(list).sort()).toEqual(['just-sent', 't1']);
+    });
+
     // fbc37ca: a deleted record reappeared because it still lived in a cache the
     // delete handler forgot to purge. A tombstone must win over every source.
     it('drops a tombstoned id even when cached and fetched still contain it', () => {

@@ -155,9 +155,17 @@ export const reconcileTaskList = ({
     tombstones = [],
     cancelled = [],
     accountId = 'local',
+    // True when ``fetched`` is the backend's whole list (``/jobs`` returns every
+    // task). A cached task missing from it was deleted, from another browser or
+    // by clearing the data folder, and must not come back as a finished ghost.
+    fetchedIsComplete = false,
 } = {}) => {
     const dropped = toIdSet(tombstones);
     const cancelledIds = toIdSet(cancelled);
+    if (fetchedIsComplete) {
+        const known = toIdSet(fetched.map(taskKeyForJob));
+        cached = cached.filter((job) => known.has(taskKeyForJob(job)));
+    }
     // Optimistic records go first so a local record the backend has not
     // persisted yet is retained at equal freshness; mergeCachedJobs still lets a
     // fresher backend row (newer updated_at) win over a stale optimistic one.

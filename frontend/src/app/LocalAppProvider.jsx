@@ -147,7 +147,7 @@ export const LocalAppProvider = ({children}) => {
             .then((data) => {
                 if (!active) return;
                 const fetched = Array.isArray(data?.jobs) ? data.jobs : [];
-                const next = reconcileTaskList({fetched, cached, accountId: LOCAL_SCOPE});
+                const next = reconcileTaskList({fetched, cached, accountId: LOCAL_SCOPE, fetchedIsComplete: true});
                 setTasks(next);
                 const running = next.find((job) => [TASK_STATE_RUNNING, TASK_STATE_QUEUED].includes(normalizeTaskState(job)));
                 if (running) setCurrentJob(jobToCurrentJob(running));
