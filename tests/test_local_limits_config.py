@@ -14,7 +14,7 @@ def test_local_limits_use_safe_defaults(monkeypatch):
 
     assert max_upload_mb() == 2048.0
     assert max_queue_files() == 5
-    assert max_media_duration_seconds() == 14400.0
+    assert max_media_duration_seconds() == 0.0
     assert max_transcript_upload_mb() == 64.0
 
 
@@ -40,3 +40,19 @@ def test_local_limits_recover_from_invalid_or_unsafe_values(monkeypatch):
     assert max_queue_files() == 1
     assert max_media_duration_seconds() == 0.0
     assert max_transcript_upload_mb() == 64.0
+
+
+def test_long_recording_is_not_rejected_by_default(monkeypatch):
+    """Requirement (2026-10-14): Local has no duration limit unless the user sets
+    one; a five-hour recording of their own is processed, not refused."""
+    from backend.core.media_job import _duration_limit_error
+    from backend.routers.local_processing import _effective_duration_limit
+
+    monkeypatch.delenv("FLUENTFLOW_MAX_MEDIA_DURATION_SECONDS", raising=False)
+    limit = _effective_duration_limit()
+    assert limit is None
+    assert _duration_limit_error(5 * 3600, "lecture.mp4", limit) is None
+
+    monkeypatch.setenv("FLUENTFLOW_MAX_MEDIA_DURATION_SECONDS", "14400")
+    limit = _effective_duration_limit()
+    assert _duration_limit_error(5 * 3600, "lecture.mp4", limit) is not None

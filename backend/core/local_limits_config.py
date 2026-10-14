@@ -28,10 +28,13 @@ def max_queue_files() -> int:
 
 
 def max_media_duration_seconds() -> float:
+    """0 means no limit, the default: the recording is the user's own and is
+    processed on their own machine, so its length is theirs to decide. Set
+    FLUENTFLOW_MAX_MEDIA_DURATION_SECONDS to cap it."""
     try:
         return max(
-            float(os.environ.get("FLUENTFLOW_MAX_MEDIA_DURATION_SECONDS", "14400")),
+            float(os.environ.get("FLUENTFLOW_MAX_MEDIA_DURATION_SECONDS", "0")),
             0.0,
         )
     except ValueError:
-        return 14400.0
+        return 0.0
