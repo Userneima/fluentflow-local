@@ -777,8 +777,8 @@ const MediaText = () => {
                                             anything. */}
                                         <span className="mt-3 max-w-[46ch] text-[13px] font-semibold leading-relaxed text-[#8a8a8a] dark:text-white/45">
                                             {lang === 'zh'
-                                                ? '剪掉气口后的视频会存回原片旁边，原片不动。拖进来的文件如果认不出位置，就只能留在应用里，到时候会说明。'
-                                                : 'The de-breathed video is saved next to the original, which is left untouched. A dropped file this machine cannot place stays in the app instead, and says so.'}
+                                                ? '处理完，原片旁边会多一个同名文件夹，剪后的视频、PDF 笔记、转录稿和字幕都在里面，原片不动。拖进来的文件如果认不出位置，就只能留在应用里，到时候会说明。'
+                                                : 'When it is done, a folder named after the recording appears next to it with the de-breathed video, the PDF note, the transcript and subtitles; the original is left untouched. A dropped file this machine cannot place stays in the app instead, and says so.'}
                                         </span>
                                     </button>
                                 )}
@@ -838,8 +838,8 @@ const MediaText = () => {
                             <SvgIcon name="info" className="mt-0.5 size-4 shrink-0"/>
                             <p>
                                 {lang === 'zh'
-                                    ? '这份是拷进应用里处理的——拖进来的文件不带它在硬盘上的位置，所以剪后文件不会出现在原片旁边，只能从处理记录里下载。想让它落回原文件夹，点上面那块区域重新选一次。'
-                                    : 'This one was copied into the app to be processed — a dropped file does not carry where it lives, so the cut version cannot land beside the original and has to be downloaded from the processing records. To have it land in your folder, click the area above and pick it again.'}
+                                    ? '这份是拷进应用里处理的——拖进来的文件不带它在硬盘上的位置，所以原片旁边不会有产出文件夹，结果只能从处理记录里看和下载。想让它们落回原文件夹，点上面那块区域重新选一次。'
+                                    : 'This one was copied into the app to be processed — a dropped file does not carry where it lives, so no output folder appears next to the original and the results are only in the processing records. To have them land in your folder, click the area above and pick it again.'}
                             </p>
                             </div>
                         )}

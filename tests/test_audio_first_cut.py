@@ -140,4 +140,4 @@ def test_the_cut_video_still_lands_beside_the_recording(tmp_path, artifacts, mon
 
     assert final.path.suffix == ".mp4"
     assert final.state.get("delivered") is True, final.state
-    assert (folder / "lecture_debreath.mp4").is_file()
+    assert (folder / "lecture" / "lecture_去气口.mp4").is_file()

@@ -72,7 +72,7 @@ const MediaPreparation = ({prep, lang}) => {
         lines.push(isZh
             ? `剪掉 ${cuts} 处，删掉 ${fmtElapsed(removed)}，剩 ${fmtElapsed(kept)}；转写和笔记都基于这份剪后文件。`
             : `${cuts} cuts, ${fmtElapsed(removed)} removed, ${fmtElapsed(kept)} left; the transcript and note both come from that file.`);
-        if (prep.delivered_path) {
+        if (prep.delivered_path && !prep.output_folder) {
             lines.push((isZh ? '剪后文件：' : 'Cut file: ') + prep.delivered_path);
         }
     } else {
@@ -80,6 +80,11 @@ const MediaPreparation = ({prep, lang}) => {
             ? '没有找到可剪的空白，素材保持原样。'
             : 'Nothing quiet enough to remove; the material is unchanged.');
     }
+    // Every output of a recording from the user's folder sits in one folder beside it.
+    if (prep.output_folder) {
+        lines.push((isZh ? '产出都在这个文件夹：' : 'All outputs are in: ') + prep.output_folder);
+    }
+    if (prep.output_folder_error) lines.push(prep.output_folder_error);
     if (prep.render_verified === false) {
         lines.push(isZh
             ? '剪出来的文件没通过自检，文件保留了但没有用于后面的步骤。'

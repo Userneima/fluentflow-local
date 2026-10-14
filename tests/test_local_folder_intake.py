@@ -186,28 +186,35 @@ def _fake_engine(monkeypatch, *, separated: bool = True, ok: bool = True):
 
 
 def test_a_folder_recording_gets_its_cut_file_delivered_beside_it(folder, monkeypatch):
+    """Requirement (2026-10-14): the cut goes into a folder named after the
+    recording, beside it; the original is only read and stays where it is."""
     _fake_engine(monkeypatch)
     source = folder / "0811-morning.mov"
 
     prepared = flow.preprocess_media(TASK, source)
 
-    delivered = folder / "0811-morning_debreath.mp4"
+    delivered = folder / "0811-morning" / "0811-morning_去气口.mp4"
     assert prepared.state["delivered"] is True
     assert prepared.state["delivered_path"] == str(delivered)
+    assert prepared.state["output_folder"] == str(folder / "0811-morning")
     assert delivered.read_bytes() == b"the cut version"
     assert source.read_bytes() == b"recording one", "the original is only read"
 
 
-def test_delivery_never_replaces_a_file_already_there(folder, monkeypatch):
+def test_delivery_never_replaces_another_tasks_folder(folder, monkeypatch):
+    """Requirement (2026-10-14): processing the same recording again does not
+    overwrite the earlier results; the new task gets the next free folder and
+    deleting either is the user's call."""
     _fake_engine(monkeypatch)
-    existing = folder / "0811-morning_debreath.mp4"
-    existing.write_bytes(b"an earlier cut the user may be using")
+    earlier = folder / "0811-morning"
+    earlier.mkdir()
+    (earlier / "0811-morning_去气口.mp4").write_bytes(b"an earlier cut the user may be using")
 
     prepared = flow.preprocess_media(TASK, folder / "0811-morning.mov")
 
-    assert existing.read_bytes() == b"an earlier cut the user may be using"
-    assert prepared.state["delivered_name"] == "0811-morning_debreath (2).mp4"
-    assert (folder / "0811-morning_debreath (2).mp4").read_bytes() == b"the cut version"
+    assert (earlier / "0811-morning_去气口.mp4").read_bytes() == b"an earlier cut the user may be using"
+    assert prepared.state["delivered_path"] == str(folder / "0811-morning (2)" / "0811-morning_去气口.mp4")
+    assert (folder / "0811-morning (2)" / "0811-morning_去气口.mp4").read_bytes() == b"the cut version"
 
 
 def test_an_upload_gets_no_delivery_because_there_is_nowhere_to_deliver(tmp_path, monkeypatch):

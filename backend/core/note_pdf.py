@@ -27,7 +27,7 @@ import markdown
 
 from backend.core import visual_note_job as vn
 
-_FRAME_REF = re.compile(r"\]\(([^)\s]*?(note_\d+\.jpg)[^)\s]*)\)")
+_IMAGE_REF = re.compile(r"(!\[[^\]]*\]\()([^)\s]+)(\))")
 _UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\r\n]+')
 
 _CSS = """@page{size:A4;margin:18mm 18mm 20mm}
@@ -104,14 +104,25 @@ def _markdown_for_print(text: str) -> str:
 
 
 def printable_html(task_id: str, note_markdown: str, title: str) -> str:
-    """The note as a standalone page whose screenshots load from this machine."""
+    """The note as a standalone page whose screenshots load from this machine.
+
+    Every image reference that resolves to one of the task's screenshots is
+    pointed at the file. Matching only the frame note's ``note_NNNN.jpg`` names
+    left a text note's screenshots (named after the source or the timestamp) as
+    server URLs that a file page cannot load, so they printed as blanks."""
+    from backend.core.output_folder import frame_file
 
     def local(match: re.Match[str]) -> str:
-        path = Path(str(vn._frame_artifact_path(task_id, match.group(2))))
-        return f"]({path.as_uri()})" if path.is_file() else match.group(0)
+        src = match.group(2)
+        path = frame_file(task_id, src)
+        if path is None:
+            fallback = re.search(r"(note_\d+\.jpg)", src)
+            candidate = Path(str(vn._frame_artifact_path(task_id, fallback.group(1)))) if fallback else None
+            path = candidate if candidate is not None and candidate.is_file() else None
+        return f"{match.group(1)}{path.as_uri()}{match.group(3)}" if path is not None else match.group(0)
 
     body = markdown.markdown(
-        _markdown_for_print(_FRAME_REF.sub(local, note_markdown)), extensions=["tables", "fenced_code", "sane_lists"]
+        _markdown_for_print(_IMAGE_REF.sub(local, note_markdown)), extensions=["tables", "fenced_code", "sane_lists"]
     )
     return (
         f'<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>{html.escape(title)}</title>'
@@ -119,7 +130,10 @@ def printable_html(task_id: str, note_markdown: str, title: str) -> str:
     )
 
 
-def export_pdf(task_id: str, *, client_id: str | None = None, output_dir: str | None = None) -> dict[str, Any]:
+def export_pdf(
+    task_id: str, *, client_id: str | None = None, output_dir: str | None = None, filename: str | None = None,
+) -> dict[str, Any]:
+    """``filename`` (without extension) names the file; otherwise the note's title does."""
     job = vn.get_job(task_id, client_id=client_id)
     if not job:
         raise NotePdfError("任务不存在")
@@ -133,7 +147,7 @@ def export_pdf(task_id: str, *, client_id: str | None = None, output_dir: str | 
     title = heading or str(result.get("display_title") or result.get("filename") or task_id).strip()
     directory = Path(output_dir).expanduser() if output_dir else default_output_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    stem = _UNSAFE_NAME.sub("_", title)[:80].strip() or task_id
+    stem = _UNSAFE_NAME.sub("_", filename or title)[:120 if filename else 80].strip() or task_id
     html_path = directory / f"{stem}.html"
     html_path.write_text(printable_html(task_id, note, title), encoding="utf-8")
 

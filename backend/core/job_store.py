@@ -8,7 +8,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from backend.core.runtime_paths import default_job_db_path
 from backend.core.result_schema import LEGACY_SEGMENT_KEYS, normalize_result_for_read, normalize_result_for_storage
@@ -577,6 +577,26 @@ def list_jobs_for_retention(
     return jobs
 
 
+# Called after a task's result is saved with (task_id, result before, result
+# after), outside the database transaction. Used by modules that keep something
+# outside FluentFlow in step with a task (``output_folder``). A listener that
+# raises is logged and does not affect the save.
+_RESULT_LISTENERS: list[Callable[[str, "dict[str, Any] | None", "dict[str, Any] | None"], None]] = []
+
+
+def add_result_listener(listener: Callable[[str, "dict[str, Any] | None", "dict[str, Any] | None"], None]) -> None:
+    if listener not in _RESULT_LISTENERS:
+        _RESULT_LISTENERS.append(listener)
+
+
+def _notify_result_saved(task_id: str, before: Any, after: Any) -> None:
+    for listener in list(_RESULT_LISTENERS):
+        try:
+            listener(task_id, before if isinstance(before, dict) else None, after if isinstance(after, dict) else None)
+        except Exception as exc:  # noqa: BLE001 - a listener never fails a save
+            logger.warning("result listener failed for %s: %s", task_id, exc)
+
+
 def update_job_result(
     task_id: str,
     result: dict[str, Any],
@@ -614,8 +634,12 @@ def update_job_result(
                 "UPDATE jobs SET result_json = ?, summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
                 (_result_json_dumps(result), summary_status, task_id),
             )
+        before = _json_loads(row["result_json"])
         updated = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
-    return _row_to_dict(updated) if updated else None
+    saved = _row_to_dict(updated) if updated else None
+    if saved is not None:
+        _notify_result_saved(task_id, before, saved.get("result"))
+    return saved
 
 
 def finalize_job_result_if_unchanged(
@@ -680,7 +704,10 @@ def finalize_job_result_if_unchanged(
             (task_id_value,),
         ).fetchone()
         conn.commit()
-    return _row_to_dict(updated) if updated else None
+    saved = _row_to_dict(updated) if updated else None
+    if saved is not None:
+        _notify_result_saved(task_id_value, current_result, saved.get("result"))
+    return saved
 
 
 def append_job_result_list_item(

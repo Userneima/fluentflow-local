@@ -109,8 +109,11 @@ def _verify(source_probe: dict[str, Any], output: Path, runner: Runner) -> str |
     return None
 
 
-def compress_beside(source: Path, *, runner: Runner = silence_cuts.run_command) -> dict[str, Any]:
-    """Write ``<name>_压缩.mp4`` beside ``source`` when it is worth it; say what happened."""
+def compress_beside(
+    source: Path, *, runner: Runner = silence_cuts.run_command, target: Path | None = None,
+) -> dict[str, Any]:
+    """Write ``<name>_压缩.mp4`` beside ``source`` (or at ``target``) when it is
+    worth it; say what happened."""
     try:
         probe = _probe(source, runner)
     except Exception as exc:  # noqa: BLE001 - an unreadable file simply is not compressed
@@ -119,7 +122,7 @@ def compress_beside(source: Path, *, runner: Runner = silence_cuts.run_command) 
         return {"compressed": False, "compress_skipped": "码率不高，压缩省不了多少"}
     if not hardware_encoder_available(runner):
         return {"compressed": False, "compress_skipped": "这台电脑没有硬件 HEVC 编码器"}
-    output = target_path(source)
+    output = target or target_path(source)
     command = [
         silence_cuts._ffmpeg_path(), "-nostdin", "-v", "error", "-y", "-i", str(source),
         *encode_args(probe), "-c:a", "copy", "-metadata", f"comment={COMPRESSED_MARK}",

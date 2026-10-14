@@ -14,6 +14,7 @@ desktop-sync side effect.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import functools
 from concurrent.futures import ThreadPoolExecutor
@@ -39,6 +40,7 @@ from backend.core.local_entry_guards import (
 from backend.core import (
     claude_code_note,
     device_profile,
+    output_folder,
     local_file_chooser,
     local_folder_intake,
     local_intake_flow,
@@ -80,6 +82,8 @@ from backend.core.storage_paths import find_source_file
 from backend.core.title_display import display_title_for_user
 from backend.core.note_title import resolve_lark_doc_title
 from backend.core.storage_paths import _artifact_storage_dir
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -600,11 +604,22 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
             ctx.task_id_value, ctx.client_id, on_local_work_done=hand_off,
         )
         await _export_note_written_after_pipeline(ctx)
+        await _deliver_to_output_folder(ctx)
     finally:
         # Always release the chain — including when this job is cancelled, and
         # when the note ended before reaching its hand-off. The remote slot is
         # not released here: the note thread owns it (`_write_note_holding_slot`).
         done.set()
+
+
+async def _deliver_to_output_folder(ctx: MediaJobContext) -> None:
+    """Put the transcript, subtitles, cut list and note (md and PDF) of a
+    recording from the user's own folder into its folder beside it
+    (``output_folder``). The cut video is already there. Never raises."""
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, output_folder.sync, ctx.task_id_value)
+    except Exception as exc:  # noqa: BLE001 - the task's own results stand
+        logger.warning("output folder not filled for %s: %s", ctx.task_id_value, exc)
 
 
 async def _export_note_written_after_pipeline(ctx: MediaJobContext) -> None:

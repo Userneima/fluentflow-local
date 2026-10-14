@@ -46,6 +46,14 @@ INTAKE_SUFFIXES = frozenset(VIDEO_SUFFIXES | AUDIO_SUFFIXES)
 # second pass over the same folder skips it instead of cutting a cut file. Shared
 # with the cut itself, which checks the same marker plus a mark inside the bytes.
 CUT_FILE_MARKER = CUT_FILE_NAME_MARKER
+# What the output folder names its videos (``output_folder``): the cut and the
+# compressed copy. A folder of these is scanned like any other, so they are
+# skipped by name too.
+OUTPUT_FILE_MARKERS = (CUT_FILE_MARKER, "_去气口", COMPRESSED_FILE_MARKER)
+
+
+def is_output_file(path: Path) -> bool:
+    return any(marker in path.stem for marker in OUTPUT_FILE_MARKERS)
 
 # A folder can hold hundreds of recordings, and each one is minutes of CPU plus a
 # Claude call. Beyond this the answer is "say how many there are and let the user
@@ -117,7 +125,7 @@ def list_media(folder: Path, *, limit: int = MAX_FILES_PER_FOLDER) -> FolderList
         if suffix not in INTAKE_SUFFIXES:
             skipped_other += 1
             continue
-        if CUT_FILE_MARKER in entry.stem or COMPRESSED_FILE_MARKER in entry.stem:
+        if is_output_file(entry):
             skipped_cut += 1
             continue
         files.append(entry)
@@ -164,7 +172,7 @@ def resolve_media_file(raw: str | None) -> Path:
         raise FolderIntakeError(
             f"不支持这种文件（{resolved.suffix or '无扩展名'}），这里只处理音视频。"
         )
-    if CUT_FILE_MARKER in resolved.stem:
+    if is_output_file(resolved):
         raise FolderIntakeError(
             f"这看起来是之前剪好的文件（{resolved.name}），选原片就行，不用再剪一遍。"
         )

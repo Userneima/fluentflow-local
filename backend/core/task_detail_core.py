@@ -810,6 +810,11 @@ def _media_preparation(result: dict[str, Any]) -> dict[str, Any] | None:
         "delivery_error": _text(state.get("delivery_error")),
         "compressed_path": _text(state.get("compressed_path")),
         "compress_error": _text(state.get("compress_error")),
+        # The folder beside the original that holds every output of this task.
+        "output_folder": _text((result.get("output_folder") or {}).get("path")) if isinstance(result.get("output_folder"), dict) else "",
+        "output_folder_error": (
+            _text((result.get("output_folder") or {}).get("error")) or _text((result.get("output_folder") or {}).get("pdf_error"))
+        ) if isinstance(result.get("output_folder"), dict) else "",
         "cut_count": plan.get("cut_count"),
         "removed_seconds": plan.get("removed_seconds"),
         "removed_percent": plan.get("removed_percent"),

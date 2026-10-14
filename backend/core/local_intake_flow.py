@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import compress_media, debreath_job, local_folder_intake, silence_cuts, visual_note_channel, visual_note_job
-from backend.core import device_profile
+from backend.core import device_profile, output_folder
 from backend.core.task_watch import TaskWatch
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -88,55 +88,6 @@ def auto_note_enabled() -> bool:
     return _enabled(AUTO_NOTE_ENV)
 
 
-def _deliver_beside_original(source: Path, cut: Path) -> dict[str, Any]:
-    """Put the cut file next to the recording it came from.
-
-    Only for a recording the user pointed at in their own folder — for an upload
-    the "original" is FluentFlow's own copy, and delivering beside it would mean
-    delivering into the store, which is where it already is.
-
-    The task keeps its own artifact as well, so the file stays downloadable from
-    the page and a later cleanup of the store cannot take the user's copy with
-    it. On the same disk the two are one file under two names (a hard link): a
-    long lecture's cut is gigabytes, and storing it twice doubled the disk it
-    took. Deleting either name leaves the other intact, so the task keeps
-    working when the user deletes their copy. Across disks a hard link is not
-    possible and this copies. Never overwrites; ``cut_file_target`` picks the
-    next free name and this records which one it used, because a silently
-    renamed output the user cannot find is the same problem as no output at all.
-    """
-    try:
-        target = local_folder_intake.cut_file_target(source, cut.suffix)
-        linked = _link_or_copy(cut, target)
-    except (OSError, local_folder_intake.FolderIntakeError) as exc:
-        logger.warning("could not deliver the cut file next to %s: %s", source, exc)
-        return {
-            "delivered": False,
-            "delivery_error": f"剪后文件没能存到原文件旁边（{exc}）。任务里那份还在，可以从页面下载。",
-        }
-    return {
-        "delivered": True,
-        "delivered_path": str(target),
-        "delivered_name": target.name,
-        "delivered_as": "hard_link" if linked else "copy",
-    }
-
-
-def _link_or_copy(cut: Path, target: Path) -> bool:
-    """Hard-link ``cut`` at ``target``; copy when that is not possible. True if linked."""
-    try:
-        os.link(cut, target)
-        return True
-    except OSError as exc:
-        # Different filesystems (EXDEV), or one that has no hard links (some
-        # network and FAT/exFAT volumes): the copy is the only way to deliver.
-        if target.exists():
-            raise
-        logger.info("hard link not possible for %s (%s); copying", target, exc)
-    shutil.copyfile(cut, target)
-    return False
-
-
 def preprocess_media(
     task_id: str, source: Path, watch: TaskWatch | None = None, audio_first: bool = False,
 ) -> debreath_job.PreparedCut | None:
@@ -163,18 +114,21 @@ def preprocess_media(
         # The cut video is still rendering; what happens to it once it exists
         # (delivered beside the original) is decided then, off the same rules.
         video = prepared.video
-        finished = _AFTER_RENDER.submit(lambda: _settled(video.result(), path, watch))
+        finished = _AFTER_RENDER.submit(lambda: _settled(video.result(), path, watch, task_id))
         return replace(prepared, video=finished)
-    return _settled(prepared, path, watch)
+    return _settled(prepared, path, watch, task_id)
 
 
 # Waits on a background render and then delivers it; holds no lock of its own.
 _AFTER_RENDER = ThreadPoolExecutor(max_workers=2, thread_name_prefix="debreath-deliver")
 
 
-def _settled(prepared: debreath_job.PreparedCut, path: Path, watch: TaskWatch) -> debreath_job.PreparedCut:
-    """What a finished cut means for the user's folder: the cut beside the
-    original, or, when the cut was declined, a compressed copy."""
+def _settled(
+    prepared: debreath_job.PreparedCut, path: Path, watch: TaskWatch, task_id: str,
+) -> debreath_job.PreparedCut:
+    """What a finished cut means for the user's folder: the cut in the task's
+    output folder beside the original, or, when the cut was declined, a
+    compressed copy there (``output_folder``)."""
     # A recording inside FluentFlow's own storage came from an upload; one outside
     # it is a file in the user's folder, and that is the case with somewhere to
     # deliver to.
@@ -185,7 +139,7 @@ def _settled(prepared: debreath_job.PreparedCut, path: Path, watch: TaskWatch) -
         return debreath_job.PreparedCut(
             path=prepared.path,
             used=prepared.used,
-            state={**prepared.state, **_deliver_beside_original(path, prepared.path)},
+            state={**prepared.state, **output_folder.deliver_media(task_id, path, prepared.path, output_folder.CUT_LABEL)},
             artifacts=prepared.artifacts,
         )
     if not prepared.used and not is_managed_path(path) and not prepared.state.get("already_cut"):
@@ -195,15 +149,23 @@ def _settled(prepared: debreath_job.PreparedCut, path: Path, watch: TaskWatch) -
         return debreath_job.PreparedCut(
             path=prepared.path,
             used=False,
-            state={**prepared.state, **_compress_beside(path, watch)},
+            state={**prepared.state, **_compress_beside(path, watch, task_id)},
             artifacts=prepared.artifacts,
         )
     return prepared
 
 
-def _compress_beside(path: Path, watch: TaskWatch) -> dict[str, Any]:
+def _compress_beside(path: Path, watch: TaskWatch, task_id: str) -> dict[str, Any]:
+    try:
+        folder = output_folder.claim(task_id, path)
+        target = folder / f"{output_folder._stem(path)}_{output_folder.COMPRESSED_LABEL}.mp4"
+    except (OSError, output_folder.OutputFolderError) as exc:
+        logger.warning("no output folder for %s, compressing beside it: %s", path, exc)
+        folder, target = None, None
     with watch.phase(PHASE_COMPRESS, _duration_or_zero(path)):
-        state = compress_media.compress_beside(path, runner=watch.runner)
+        state = compress_media.compress_beside(path, runner=watch.runner, target=target)
+    if folder is not None:
+        state = {**state, "output_folder": str(folder)}
     # compress_beside keeps whatever goes wrong to itself; a cancelled task is
     # not one of its failures to report.
     watch.check()

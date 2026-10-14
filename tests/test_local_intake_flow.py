@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from backend.core import output_folder
+
 import backend.core.debreath_job as dj
 import backend.core.local_intake_flow as flow
 import backend.core.visual_note_job as vn
@@ -846,11 +848,11 @@ def test_the_cut_beside_the_original_takes_no_extra_disk_on_the_same_drive(tmp_p
     file when the user deletes theirs."""
     original, cut = _cut_and_original(tmp_path)
 
-    state = flow._deliver_beside_original(original, cut)
+    state = output_folder.deliver_media("t-link", original, cut, output_folder.CUT_LABEL)
 
     delivered = Path(state["delivered_path"])
     assert state["delivered"] is True and state["delivered_as"] == "hard_link"
-    assert delivered.parent == original.parent
+    assert delivered.parent == original.parent / original.stem
     assert delivered.stat().st_ino == cut.stat().st_ino
     delivered.unlink()
     assert cut.read_bytes() == b"cut-bytes" * 100, "the task's copy survives the user deleting theirs"
@@ -866,9 +868,9 @@ def test_the_cut_is_copied_beside_the_original_when_it_cannot_be_linked(tmp_path
     def cross_device(_src, _dst):
         raise OSError(errno.EXDEV, "Invalid cross-device link")
 
-    monkeypatch.setattr(flow.os, "link", cross_device)
+    monkeypatch.setattr(output_folder.os, "link", cross_device)
 
-    state = flow._deliver_beside_original(original, cut)
+    state = output_folder.deliver_media("t-copy", original, cut, output_folder.CUT_LABEL)
 
     delivered = Path(state["delivered_path"])
     assert state["delivered"] is True and state["delivered_as"] == "copy"

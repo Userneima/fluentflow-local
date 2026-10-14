@@ -279,6 +279,21 @@ def _agent_debreath(result: dict[str, Any], artifacts: dict[str, dict[str, Any]]
     }
 
 
+def _agent_output_folder(result: dict[str, Any]) -> dict[str, Any] | None:
+    record = result.get("output_folder")
+    if not isinstance(record, dict) or not record.get("path"):
+        # The note can be done a moment before the rest is filed; the folder was
+        # already chosen when the cut went in, so name it rather than nothing.
+        cut = result.get("debreath") if isinstance(result.get("debreath"), dict) else {}
+        early = _text(cut.get("output_folder"))
+        return {"path": early, "pdf_path": None, "error": None} if early else None
+    return {
+        "path": _text(record.get("path")),
+        "pdf_path": _text(record.get("pdf_path")) or None,
+        "error": _text(record.get("error")) or _text(record.get("pdf_error")) or None,
+    }
+
+
 def _agent_cut_media_note(result: dict[str, Any], artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """The note written from the de-breathed file, and what it was written from.
 
@@ -531,6 +546,10 @@ def build_agent_task_package(
             "transcription_take": result.get("transcription_audio_take") or "plain",
         },
         "debreath": debreath,
+        # Where every output of a recording from the user's own folder was put
+        # (``output_folder``): the folder, its PDF note, and why it could not be
+        # filled, if it could not. None for uploads and links.
+        "output_folder": _agent_output_folder(result),
         "cut_media_note": cut_media_note,
         "visual": {
             "available": bool(visual_evidence),
