@@ -798,7 +798,7 @@ def apply_note_rule(payload: Optional[dict[str, Any]] = Body(None)) -> dict[str,
 
 @router.get("/note-feedback")
 def list_note_feedback() -> dict[str, Any]:
-    return {"ok": True, "feedback": note_feedback.list_feedback()}
+    return {"ok": True, "feedback": [note_feedback.public_view(item) for item in note_feedback.list_feedback()]}
 
 
 @router.post("/note-feedback")
@@ -811,7 +811,7 @@ def record_note_feedback(request: Request, payload: Optional[dict[str, Any]] = B
         result = _job_for_request(request, task_id).get("result") or {}
         title = str(result.get("display_title") or result.get("filename") or "")
     part = body.get("part")
-    return {"ok": True, "feedback": _feedback_call(
+    return {"ok": True, "feedback": note_feedback.public_view(_feedback_call(
         note_feedback.record_feedback,
         task_id=task_id,
         problem=str(body.get("problem") or ""),
@@ -821,7 +821,7 @@ def record_note_feedback(request: Request, payload: Optional[dict[str, Any]] = B
         part=int(part) if part else None,
         transcript_excerpt=str(body.get("transcript_excerpt") or ""),
         title=title,
-    )}
+    ))}
 
 
 @router.post("/tasks/{task_id}/note-draft")

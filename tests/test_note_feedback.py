@@ -138,3 +138,18 @@ def test_a_draft_part_is_the_same_stretch_as_the_agents_part(job_store, monkeypa
 
     assert drafted["total_parts"] == material["total_parts"] > 1
     assert seen == [material["transcript"]]
+
+
+def test_a_case_is_shown_with_its_transcript_in_a_file_not_inline(job_store):  # noqa: F811
+    """Requirement (2026-10-14): listing cases fits one tool result however many
+    there are; the frozen transcript is one file away for the checker."""
+    item = nf.record_feedback(
+        task_id=TASK, problem="开头多了一节介绍", kind="pattern", criterion="标题下直接是正文",
+    )
+
+    view = nf.public_view(item)
+
+    assert "transcript_excerpt" not in view
+    assert view["transcript_excerpt_chars"] == len(item["transcript_excerpt"])
+    from pathlib import Path
+    assert Path(view["transcript_excerpt_file"]).read_text(encoding="utf-8").strip() == item["transcript_excerpt"]

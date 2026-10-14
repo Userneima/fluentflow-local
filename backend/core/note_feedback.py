@@ -69,6 +69,30 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+# The frozen transcript of each case, one file per feedback id. An answer names
+# the file instead of carrying the text: a part is about 15,000 characters, so a
+# list of a few cases ran past what an agent takes in one tool result.
+EXCERPT_DIR = "feedback_excerpts"
+
+
+def _excerpt_path(item_id: str) -> Path:
+    return _path(EXCERPT_DIR) / f"{item_id}.txt"
+
+
+def public_view(item: dict[str, Any]) -> dict[str, Any]:
+    """A case as an answer shows it: the transcript by its file, not inline."""
+    view = {key: value for key, value in item.items() if key != "transcript_excerpt"}
+    excerpt = _text(item.get("transcript_excerpt"))
+    view["transcript_excerpt_chars"] = len(excerpt)
+    if excerpt and item.get("id"):
+        path = _excerpt_path(str(item["id"]))
+        if not path.is_file():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(excerpt + "\n", encoding="utf-8")
+        view["transcript_excerpt_file"] = str(path)
+    return view
+
+
 def record_feedback(
     *,
     task_id: str,
