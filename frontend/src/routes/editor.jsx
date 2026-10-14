@@ -1236,11 +1236,12 @@ const Editor = () => {
                 resultJobOptions,
             );
         };
-        // The backend still has the recording (its own copy, or the original where
-        // it sits): run it again from there. Fetching it into the browser and
-        // posting it back, as before, moved the whole file twice and stored a
-        // second copy, for a file that never had to leave the disk.
-        if(result?.task_id && result?.source_file_available) {
+        // Run it again from the recording the backend can reach: the original where
+        // it sits for a file chosen on this machine (whose task records no stored
+        // copy), else the backend's own copy. Fetching it into the browser and
+        // posting it back, as before, moved the whole file twice. Only when the
+        // backend cannot reach any recording does a file in the browser go up.
+        if(result?.task_id) {
             try {
                 const data = await retryJob(result.task_id, resultJobOptions);
                 if (data?.job) ingestJobs([data.job]);

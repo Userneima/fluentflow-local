@@ -98,3 +98,40 @@ describe('retranscribing in the editor', () => {
         expect(calls.upload).toBe(0);
     });
 });
+
+describe('retranscribing a recording read in place', () => {
+    beforeEach(() => {
+        calls.retry = [];
+        calls.sourceFetch = 0;
+        calls.upload = 0;
+        calls.ingested = [];
+        URL.createObjectURL = () => 'blob:x';
+        URL.revokeObjectURL = () => {};
+        globalThis.fetch = vi.fn(async () => new Response('x', {status: 206, headers: {'content-type': 'audio/mpeg'}}));
+        // Chosen with the system picker: no stored copy, the original stays where it is.
+        lastResult = {
+            task_id: 't1',
+            filename: 'lecture.mov',
+            transcript_text: 'hello',
+            segments: [{start: 0, end: 3, text: 'hello'}],
+            summary_markdown: 'note',
+            source_file_available: false,
+            artifacts: {playback_audio: {filename: 'lecture_audio.mp3'}},
+        };
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        cleanup();
+    });
+
+    it('asks the backend to re-read the original instead of uploading the playback audio', async () => {
+        render(<MemoryRouter><Editor/></MemoryRouter>);
+
+        (await screen.findByRole('button', {name: /edit\.retranscribe$/})).click();
+        (await screen.findByRole('button', {name: /edit\.retranscribeConfirmAction/})).click();
+
+        await waitFor(() => expect(calls.retry).toEqual(['t1']));
+        expect(calls.upload).toBe(0);
+    });
+});
