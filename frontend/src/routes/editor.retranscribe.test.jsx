@@ -66,6 +66,9 @@ describe('retranscribing in the editor', () => {
         calls.upload = 0;
         calls.ingested = [];
         URL.createObjectURL = () => 'blob:x';
+        // The player reads media straight from the service; one byte is asked for
+        // first to see the file is there.
+        globalThis.fetch = vi.fn(async () => new Response('x', {status: 206, headers: {'content-type': 'video/mp4'}}));
         URL.revokeObjectURL = () => {};
         lastResult = {
             task_id: 't1',
@@ -85,9 +88,6 @@ describe('retranscribing in the editor', () => {
 
     it('runs the recording again from this machine instead of moving it through the browser', async () => {
         render(<MemoryRouter><Editor/></MemoryRouter>);
-        // The player loads the source once to play it; only what retranscribing does counts here.
-        await waitFor(() => expect(calls.sourceFetch).toBe(1));
-        calls.sourceFetch = 0;
 
         (await screen.findByRole('button', {name: /edit\.retranscribe$/})).click();
         (await screen.findByRole('button', {name: /edit\.retranscribeConfirmAction/})).click();

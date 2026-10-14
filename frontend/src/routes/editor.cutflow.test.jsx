@@ -81,6 +81,9 @@ describe('the editor shows the cut-flow record', () => {
         lastResult = null;
         artifactFetch = async (taskId, kind, filename) => new File(['x'], filename || kind, {type: 'video/mp4'});
         URL.createObjectURL = () => 'blob:cut';
+        // The player reads media straight from the service; one byte is asked for
+        // first to see the file is there.
+        globalThis.fetch = vi.fn(async () => new Response('x', {status: 206, headers: {'content-type': 'video/mp4'}}));
         URL.revokeObjectURL = () => {};
         // jsdom treats the download anchor's click as a navigation and warns; the
         // handing-over itself is what this file checks, not the browser's part of it.
@@ -102,6 +105,21 @@ describe('the editor shows the cut-flow record', () => {
         expect(bar.textContent).toMatch(/播放、字幕、笔记都是这一份剪后版本/);
     });
 
+    // 2026-10-14: the player streams from the service instead of fetching the
+    // whole recording into the browser before the first second plays.
+    it('plays the cut file from its address, without fetching it whole', async () => {
+        lastResult = cutResult();
+        const asked = [];
+        artifactFetch = async (...args) => { asked.push(args); return new File(['x'], 'x'); };
+        const {container} = mount();
+
+        await waitFor(() => {
+            const media = container.querySelector('video, audio');
+            expect(media?.getAttribute('src') || '').toMatch(/\/jobs\/t1\/artifacts\/debreath_media$/);
+        });
+        expect(asked).toEqual([]);
+    });
+
     it('offers the cut file itself, and asks for the right artifact', async () => {
         lastResult = cutResult();
         const asked = [];
@@ -112,8 +130,7 @@ describe('the editor shows the cut-flow record', () => {
         mount();
 
         const button = await screen.findByRole('button', {name: /下载剪后文件/});
-        // The player has already fetched the same artifact by now; what this is
-        // about is the fetch the button causes.
+        // What this is about is the fetch the button causes.
         asked.length = 0;
         button.click();
         await waitFor(() => expect(asked.length).toBe(1));

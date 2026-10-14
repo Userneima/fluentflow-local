@@ -395,6 +395,28 @@ const Editor = () => {
         setMediaLoading(false);
     }, [replaceMediaUrl]);
 
+    // The player reads the task's media straight from the service, which answers
+    // range requests, so playback starts at once and only what is played is read.
+    // Fetching the whole file into the browser first meant waiting for, and
+    // holding in memory, a recording of several gigabytes before the first second
+    // played. One byte is asked for first so a missing file still falls through
+    // to the next choice the way a failed fetch did.
+    const openJobMedia = useCallback(async (url, name) => {
+        const probe = await apiFetch(url, {headers: {Range: 'bytes=0-0'}});
+        if (!probe.ok) throw new Error(lang === 'zh' ? '读不到这个文件' : 'File not found');
+        const type = probe.headers.get('content-type') || '';
+        try { await probe.body?.cancel?.(); } catch (_) { /* nothing left to read */ }
+        const kind = type.startsWith('video/') || isLikelyVideoFile(name) ? 'video' : 'audio';
+        return () => {
+            setMediaKind(kind);
+            replaceMediaUrl(url);
+            setMediaError('');
+            setMediaLoading(false);
+        };
+    }, [replaceMediaUrl, lang]);
+    const jobSourceUrl = (taskId) => `${API_BASE}/jobs/${encodeURIComponent(taskId)}/source`;
+    const jobArtifactUrl = (taskId, kind) => `${API_BASE}/jobs/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(kind)}`;
+
     useEffect(() => {
         let cancelled = false;
         const result = resultRef.current;
@@ -424,8 +446,8 @@ const Editor = () => {
         }
         if (preferred?.isCut) {
             setMediaLoading(true);
-            fetchJobArtifactFile(result.task_id, preferred.kind, preferred.filename, resultJobOptions)
-                .then((file) => { if (!cancelled) loadMediaFile(file); })
+            openJobMedia(jobArtifactUrl(result.task_id, preferred.kind), preferred.filename)
+                .then((play) => { if (!cancelled) play(); })
                 .catch((cutErr) => {
                     if (cancelled) return;
                     // No falling back to the recording when the transcript came from
@@ -433,8 +455,8 @@ const Editor = () => {
                     // seek would point at the wrong moment while the page looked
                     // perfectly normal. Say it is unavailable instead.
                     if (!isAutoCutFlow(result) && result.source_file_available) {
-                        fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
-                            .then((file) => { if (!cancelled) loadMediaFile(file); })
+                        openJobMedia(jobSourceUrl(result.task_id), result.filename || 'source')
+                            .then((play) => { if (!cancelled) play(); })
                             .catch((sourceErr) => {
                                 if (!cancelled) {
                                     setMediaError(sourceErr.message || cutErr.message || 'Source file unavailable');
@@ -450,13 +472,13 @@ const Editor = () => {
         }
         if (result.task_id && result.source_file_available) {
             setMediaLoading(true);
-            fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
-                .then((file) => { if (!cancelled) loadMediaFile(file); })
+            openJobMedia(jobSourceUrl(result.task_id), result.filename || 'source')
+                .then((play) => { if (!cancelled) play(); })
                 .catch((sourceErr) => {
                     if (!cancelled && result.artifacts?.playback_audio) {
                         const playbackArtifact = result.artifacts.playback_audio;
-                        fetchJobArtifactFile(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, resultJobOptions)
-                            .then((file) => { if (!cancelled) loadMediaFile(file); })
+                        openJobMedia(jobArtifactUrl(result.task_id, 'playback_audio'), playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`)
+                            .then((play) => { if (!cancelled) play(); })
                             .catch((err) => {
                                 if (!cancelled) {
                                     setMediaError(err.message || sourceErr.message || 'Source file unavailable');
@@ -475,12 +497,12 @@ const Editor = () => {
         const playbackArtifact = result.artifacts?.playback_audio;
         if (result.task_id && playbackArtifact) {
             setMediaLoading(true);
-            fetchJobArtifactFile(result.task_id, 'playback_audio', playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`, resultJobOptions)
-                .then((file) => { if (!cancelled) loadMediaFile(file); })
+            openJobMedia(jobArtifactUrl(result.task_id, 'playback_audio'), playbackArtifact.filename || `${result.filename || 'source'}_audio.mp3`)
+                .then((play) => { if (!cancelled) play(); })
                 .catch((err) => {
                     if (!cancelled && result.source_file_available) {
-                        fetchJobSourceFile(result.task_id, result.filename || 'source', resultJobOptions)
-                            .then((file) => { if (!cancelled) loadMediaFile(file); })
+                        openJobMedia(jobSourceUrl(result.task_id), result.filename || 'source')
+                            .then((play) => { if (!cancelled) play(); })
                             .catch((sourceErr) => {
                                 if (!cancelled) {
                                     setMediaError(sourceErr.message || err.message || 'Audio file unavailable');
@@ -497,7 +519,7 @@ const Editor = () => {
             return () => { cancelled = true; };
         }
         return () => { cancelled = true; };
-    }, [mediaSourceKey, resultJobOptions, replaceMediaUrl, loadMediaFile, fetchJobArtifactFile, fetchJobSourceFile]);
+    }, [mediaSourceKey, replaceMediaUrl, loadMediaFile, openJobMedia]);
 
     const segments = editedSegments;
     const transcript = editedTranscript || result?.transcript_text || '';
