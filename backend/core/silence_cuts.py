@@ -915,8 +915,20 @@ def measure_level_separation(
     }
 
 
-def measure_every_cut(media: Path | str, plan: CutPlan) -> list[float | None] | None:
-    """Each cut's margin below the louder of the stretches on either side of it.
+# A cut is silence when it is this far below how people speak in the whole
+# recording, whatever sits right beside it. Found 2026-10-14 on a 2h28m talk:
+# 801 cuts sat within 10dB of their neighbours only because the neighbours were
+# coughs and far-off voices inside long quiet stretches; the owner listened to
+# samples of them and all were background noise. All 801 were at least 12.2dB
+# below the talk's usual speech level. 15dB rather than 12 leaves room for a real
+# but faint voice, such as a question from far back in the room.
+BELOW_USUAL_SPEECH_DB = 15.0
+SPEECH_MIN_SECONDS = 1.0
+
+
+def measure_every_cut(media: Path | str, plan: CutPlan) -> list[tuple[float | None, float | None]] | None:
+    """For each cut: its margin below the louder of the stretches on either side
+    of it, and its margin below the recording's usual speech level.
 
     One pass over the audio rather than one ffmpeg call per stretch: a 2h28m
     recording has thousands of cuts, and this measures all of them in about five
@@ -947,13 +959,19 @@ def measure_every_cut(media: Path | str, plan: CutPlan) -> list[float | None] | 
         return float(10 * np.log10((energy[end] - energy[start]) / (end - start) / 32768 ** 2 + 1e-12))
 
     starts = [keep.start for keep in plan.keeps]
-    margins: list[float | None] = []
+    # How people speak in this recording: the median level of the kept stretches
+    # long enough to be speech rather than a cough or a click.
+    long_levels = [value for value in (level(keep) for keep in plan.keeps if keep.duration >= SPEECH_MIN_SECONDS) if value is not None]
+    usual = float(np.median(long_levels)) if long_levels else None
+    margins: list[tuple[float | None, float | None]] = []
     for cut in plan.cuts:
         index = bisect.bisect_right(starts, cut.start)
         around = [plan.keeps[i] for i in (index - 1, index) if 0 <= i < len(plan.keeps)]
         speech = [value for value in (level(span) for span in around) if value is not None]
         own = level(cut)
-        margins.append(max(speech) - own if speech and own is not None else None)
+        local = max(speech) - own if speech and own is not None else None
+        below_usual = usual - own if usual is not None and own is not None else None
+        margins.append((local, below_usual))
     return margins
 
 
@@ -964,15 +982,23 @@ def keep_unsafe_cuts(media: Path | str, plan: CutPlan) -> CutPlan | None:
     whole recording its cut. Before this a spot check of ten stretches finding
     one narrow margin declined everything: a 2h28m talk was transcribed uncut
     although, measured one by one, 2101 of its 2902 cuts were clearly silence and
-    801 were not. Now every cut is measured, the doubtful ones stay in the
-    recording, and the rest are removed. None when the audio cannot be measured,
-    so the caller keeps its old, cautious answer."""
+    801 were not. Now every cut is measured: one far enough below its
+    neighbours, or far enough below the recording's usual speech, is removed;
+    the rest stay. None when the audio cannot be measured, so the caller keeps
+    its old, cautious answer."""
     margins = measure_every_cut(media, plan)
     if margins is None:
         return None
-    safe = [cut for cut, margin in zip(plan.cuts, margins) if margin is not None and margin >= MIN_LEVEL_SEPARATION_DB]
-    unsafe = [cut for cut, margin in zip(plan.cuts, margins) if margin is None or margin < MIN_LEVEL_SEPARATION_DB]
-    measured = [margin for margin in margins if margin is not None]
+
+    def is_silence(pair: tuple[float | None, float | None]) -> bool:
+        local, below_usual = pair
+        return (local is not None and local >= MIN_LEVEL_SEPARATION_DB) or (
+            below_usual is not None and below_usual >= BELOW_USUAL_SPEECH_DB
+        )
+
+    safe = [cut for cut, pair in zip(plan.cuts, margins) if is_silence(pair)]
+    unsafe = [cut for cut, pair in zip(plan.cuts, margins) if not is_silence(pair)]
+    measured = [pair[0] for pair, cut in zip(margins, plan.cuts) if pair[0] is not None and is_silence(pair)]
     pruned = CutPlan(
         source_duration_seconds=plan.source_duration_seconds,
         cuts=safe,
@@ -984,7 +1010,7 @@ def keep_unsafe_cuts(media: Path | str, plan: CutPlan) -> CutPlan | None:
         warnings=[warning for warning in plan.warnings],
         threshold_choice=plan.threshold_choice,
     )
-    kept_margins = [margin for margin in measured if margin >= MIN_LEVEL_SEPARATION_DB]
+    kept_margins = measured
     pruned.level_separation = {
         **plan.level_separation,
         "measured": True,
@@ -1372,8 +1398,9 @@ def plan_silence_cuts(
             separation = pruned.level_separation
             pruned.warnings.append(
                 f"抽查发现有的地方剪掉的部分和说话声分不开，于是把 {separation['cut_count_before']} 处逐一量过："
-                f"{separation['unsafe_cuts_kept']} 处（共 {separation['unsafe_seconds_kept']:g} 秒）和旁边说话声差不到 "
-                f"{MIN_LEVEL_SEPARATION_DB:g}dB，保留没剪；其余 {len(pruned.cuts)} 处照剪。"
+                f"{separation['unsafe_cuts_kept']} 处（共 {separation['unsafe_seconds_kept']:g} 秒）既不比旁边说话轻 "
+                f"{MIN_LEVEL_SEPARATION_DB:g}dB，也不比整场正常讲话轻 {BELOW_USUAL_SPEECH_DB:g}dB，保留没剪；"
+                f"其余 {len(pruned.cuts)} 处照剪。"
             )
             plan = pruned
         elif measurement.get("measured") and not measurement["separated"]:

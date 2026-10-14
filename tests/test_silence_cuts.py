@@ -1892,31 +1892,25 @@ def test_an_even_recording_is_cut_without_the_normalize_pass_and_checks_out(tmp_
 
 
 # ── one doubtful stretch does not cost the whole recording its cut ──────────
-# Requirement (owner, 2026-10-14): cuts that sit too close to the speech beside
-# them stay in the recording; the clearly silent ones are still removed, and the
-# recording is not left uncut because a spot check found one doubtful stretch.
+# Requirements (owner, 2026-10-14):
+# - A recording is not left uncut because a spot check found a doubtful stretch;
+#   every cut is judged on its own.
+# - A stretch far below how people speak in the recording is silence even when
+#   a cough or a far-off voice sits right beside it (he listened to such
+#   stretches in a 2h28m talk: all background noise).
+# - A stretch only a little below a real but quiet voice stays.
 
-def _tone_and_gaps(target: Path) -> Path:
-    """Loud speech, real silence, loud speech, real silence, then quiet speech,
-    a fainter stretch the threshold reads as silence, and quiet speech again."""
-    parts = [
-        ("sine=f=300:d=1.5", "11"),    # loud, about -10 dB (the sine source itself is about -21 dB)
-        ("anullsrc=r=16000:cl=mono", None),  # real silence, 1 s
-        ("sine=f=300:d=1.5", "11"),
-        ("anullsrc=r=16000:cl=mono", None),  # real silence again, so the quiet part stands on its own
-        ("sine=f=300:d=1.5", "-5"),    # quiet speech, about -26 dB
-        ("sine=f=300:d=1", "-12"),     # about -33 dB: below -30, but only 7 dB under its neighbours
-        ("sine=f=300:d=1.5", "-5"),
-    ]
+def _segments(target: Path, parts: list[tuple[float, float | None]]) -> Path:
+    """Concatenate tones: (seconds, gain in dB over the sine source's ~-21 dB),
+    or (seconds, None) for digital silence."""
     inputs, chains = [], []
-    for index, (source, gain) in enumerate(parts):
-        spec = source if "anullsrc" not in source else f"{source}:d=1"
-        if "anullsrc" in source:
-            spec = "anullsrc=r=16000:cl=mono"
-            inputs += ["-f", "lavfi", "-t", "1", "-i", spec]
+    for index, (seconds, gain) in enumerate(parts):
+        if gain is None:
+            inputs += ["-f", "lavfi", "-t", f"{seconds}", "-i", "anullsrc=r=16000:cl=mono"]
+            chains.append(f"[{index}:a]aformat=sample_rates=16000:channel_layouts=mono[a{index}]")
         else:
-            inputs += ["-f", "lavfi", "-i", f"{source}:sample_rate=16000"]
-        chains.append(f"[{index}:a]" + (f"volume={gain}dB," if gain else "") + f"aformat=sample_rates=16000:channel_layouts=mono[a{index}]")
+            inputs += ["-f", "lavfi", "-i", f"sine=f=300:d={seconds}:sample_rate=16000"]
+            chains.append(f"[{index}:a]volume={gain}dB,aformat=sample_rates=16000:channel_layouts=mono[a{index}]")
     graph = ";".join(chains) + ";" + "".join(f"[a{i}]" for i in range(len(parts))) + f"concat=n={len(parts)}:v=0:a=1[out]"
     subprocess.run(
         [shutil.which("ffmpeg"), "-v", "error", "-y", *inputs, "-filter_complex", graph, "-map", "[out]", str(target)],
@@ -1926,14 +1920,35 @@ def _tone_and_gaps(target: Path) -> Path:
 
 
 @needs_ffmpeg
-def test_doubtful_cuts_stay_and_clear_silence_is_still_cut(tmp_path):
-    media = _tone_and_gaps(tmp_path / "talk.wav")
+def test_noise_inside_a_long_quiet_stretch_is_cut(tmp_path):
+    # Speech about -10 dB; then a quiet stretch where a short cough (about
+    # -28 dB, half a second) sits between two stretches of room noise (about
+    # -35 dB). Next to the cough the noise is only 7 dB quieter, but it is about
+    # 25 dB below the speech.
+    media = _segments(tmp_path / "talk.wav", [
+        (2.0, 11), (1.5, -14), (0.5, -7), (1.5, -14), (2.0, 11), (1.0, None), (2.0, 11),
+    ])
 
     plan = sc.plan_silence_cuts(media, noise_db=-30, min_silence_seconds=0.25)
 
-    assert len(plan.cuts) == 2, plan.as_dict()
-    assert all(cut.end <= 5.0 for cut in plan.cuts), "both real silences are cut; the faint stretch at 6.5-7.5 s is kept"
-    assert plan.level_separation["separated"] is True, "nothing left in the plan is doubtful"
+    noise_cuts = [cut for cut in plan.cuts if 2.0 <= cut.start < 5.5]
+    assert len(noise_cuts) == 2, plan.as_dict()
+    assert any(cut.start >= 7.5 and cut.end <= 8.6 for cut in plan.cuts), "the real silence is cut too"
+
+
+@needs_ffmpeg
+def test_a_stretch_just_below_a_quiet_voice_stays(tmp_path):
+    # Main voice about -20 dB, a quieter voice about -26 dB, and between the
+    # quiet voice's words a stretch at about -33 dB: 7 dB under the quiet voice,
+    # 10 dB under the usual speech. Too close to speech to cut.
+    media = _segments(tmp_path / "talk.wav", [
+        (1.5, 1), (1.0, None), (1.5, 1), (1.0, None), (1.5, -5), (1.0, -12), (1.5, -5),
+    ])
+
+    plan = sc.plan_silence_cuts(media, noise_db=-30, min_silence_seconds=0.25)
+
+    assert all(cut.end <= 5.1 for cut in plan.cuts), plan.as_dict()
+    assert len(plan.cuts) == 2, "both real silences are still cut"
     assert plan.level_separation["unsafe_cuts_kept"] == 1
     assert any("保留没剪" in warning for warning in plan.warnings)
 
