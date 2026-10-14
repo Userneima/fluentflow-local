@@ -902,6 +902,21 @@ def _site_args(url: str) -> list[str]:
     return []
 
 
+# How long a yt-dlp step waits for the daily upgrade to finish replacing it.
+YT_DLP_UPGRADE_WAIT_SECONDS = 20
+
+
+def _yt_dlp_mid_upgrade(output: str) -> bool:
+    return "No module named yt_dlp" in output or "No module named 'yt_dlp'" in output
+
+
+def _wait_for_upgrade(cancellation_event: threading.Event | None) -> None:
+    deadline = time.monotonic() + YT_DLP_UPGRADE_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        _raise_if_cancelled(cancellation_event)
+        time.sleep(0.5)
+
+
 def _run_yt_dlp_step(
     build_args: Callable[[list[str]], list[str]],
     *,
@@ -929,6 +944,14 @@ def _run_yt_dlp_step(
     if pid_file is not None:
         extra["pid_file"] = pid_file
     result = _run_process(build_args(cookie_args), timeout=timeout, cancellation_event=cancellation_event, **extra)
+    if result.returncode != 0 and _yt_dlp_mid_upgrade(f"{result.stderr or ''} {result.stdout or ''}"):
+        # The daily upgrade replaces yt-dlp's files while it runs; a step that
+        # starts in those seconds finds no module. Wait for it once rather than
+        # telling the user yt-dlp is not installed.
+        _wait_for_upgrade(cancellation_event)
+        if before_retry is not None:
+            before_retry()
+        result = _run_process(build_args(cookie_args), timeout=timeout, cancellation_event=cancellation_event, **extra)
     if (
         cookie_args
         and result.returncode != 0

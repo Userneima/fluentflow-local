@@ -177,3 +177,25 @@ def test_a_cancel_stops_the_grandchild_too():
         listing = subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True).stdout
         survivors = [line for line in listing.splitlines() if "time.sleep(60)" in line and "ps -eo" not in line]
     assert not survivors, survivors
+
+
+def test_a_step_that_starts_mid_upgrade_waits_and_runs_again(tmp_path, monkeypatch):
+    """Requirement (2026-10-14): a link submitted in the seconds the daily
+    upgrade is replacing yt-dlp is not reported as yt-dlp missing."""
+    import subprocess as sp
+
+    runs = []
+
+    def run(args, *, timeout, cancellation_event=None, **_k):
+        runs.append(args)
+        if len(runs) == 1:
+            return sp.CompletedProcess(args, 1, "", "/usr/bin/python: No module named yt_dlp\n")
+        return sp.CompletedProcess(args, 0, '{"id": "x"}', "")
+
+    monkeypatch.setattr(vs, "_run_process", run)
+    monkeypatch.setattr(vs, "YT_DLP_UPGRADE_WAIT_SECONDS", 0)
+
+    result = vs._run_yt_dlp_step(lambda cookies: ["yt-dlp", *cookies], url="https://www.youtube.com/watch?v=a",
+                                 cookies_from_browser=None, cookie_use=None, timeout=10)
+
+    assert result.returncode == 0 and len(runs) == 2
