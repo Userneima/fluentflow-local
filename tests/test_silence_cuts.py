@@ -1993,3 +1993,30 @@ def test_without_a_voice_detector_nothing_is_removed(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "_voice_detector", lambda: None)
 
     assert sc.drop_voiceless_fragments(tmp_path / "x.wav", plan) is plan
+
+
+# ── the speech level is measured where someone is speaking ──────────────────
+# Requirement (2026-10-15): a recording with a short meeting and a long quiet
+# leftover must not have its threshold pulled down by the leftover. The speech
+# level comes from the windows the voice detector hears a voice in.
+
+def test_a_long_quiet_leftover_does_not_lower_the_threshold(monkeypatch):
+    # Whole-file view of the operations meeting: the loud end lands in the leftover.
+    monkeypatch.setattr(sc, "overall_mean_volume_db", lambda media, runner=None: -33.6)
+    monkeypatch.setattr(sc, "loudness_range_db", lambda media, runner=None: (-68.4, -36.0))
+    monkeypatch.setattr(sc, "voiced_speech_level_db", lambda media: -20.0)
+
+    threshold, record = sc.suggest_noise_db("meeting.mov")
+
+    assert threshold == sc.DEFAULT_NOISE_DB
+    assert record["speech_level_db"] == -20.0
+
+
+def test_without_a_voice_measurement_the_whole_file_estimate_stands(monkeypatch):
+    monkeypatch.setattr(sc, "overall_mean_volume_db", lambda media, runner=None: -33.6)
+    monkeypatch.setattr(sc, "loudness_range_db", lambda media, runner=None: (-68.4, -36.0))
+    monkeypatch.setattr(sc, "voiced_speech_level_db", lambda media: None)
+
+    threshold, record = sc.suggest_noise_db("meeting.mov")
+
+    assert threshold == -39.0, "a genuinely faint speaker still lowers the threshold"

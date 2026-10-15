@@ -1320,6 +1320,55 @@ def carries_cut_mark(media: Path | str, runner: CommandRunner = run_command) -> 
     return CUT_FILE_MARK in (tags or "")
 
 
+# Below this much detected voice, the voiced estimate is too thin to trust and
+# the whole-file one stands.
+MIN_VOICED_SECONDS = 30.0
+
+
+def voiced_speech_level_db(media: Path | str, *, window_seconds: float = QUIET_WINDOW_SECONDS) -> float | None:
+    """The speech level measured where the voice detector hears a voice.
+
+    The whole-file estimate takes the loud end of every window, which is the
+    speech only while speech fills most of the file. Found 2026-10-15 on a
+    38-minute operations meeting with 3.4 minutes of talk and half an hour of
+    quiet leftover: the loud end of the whole file landed in the leftover, the
+    speech was taken for -36 dB instead of about -26, the threshold went down to
+    -39 dB, and the leftover's keyboard and far-off voices rose above it often
+    enough that none of it counted as silence. Same percentile, but over voiced
+    windows only, so a speech-filled file measures as before. None when the
+    detector is missing or hears too little.
+    """
+    try:
+        import numpy as np
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+    except Exception:  # noqa: BLE001 - no detector, the whole-file estimate stands
+        return None
+    rate = 16000
+    try:
+        completed = subprocess.run(
+            [_ffmpeg_path(), "-v", "error", "-i", str(media), "-vn", "-ac", "1", "-ar", str(rate), "-f", "f32le", "-"],
+            capture_output=True, timeout=3600,
+        )
+    except (OSError, subprocess.SubprocessError, SilenceCutError):
+        return None
+    if completed.returncode != 0 or not completed.stdout:
+        return None
+    audio = np.frombuffer(completed.stdout, dtype=np.float32)
+    spans = get_speech_timestamps(audio, VadOptions(threshold=0.5, min_speech_duration_ms=250, min_silence_duration_ms=300, speech_pad_ms=0))
+    if sum(span["end"] - span["start"] for span in spans) / rate < MIN_VOICED_SECONDS:
+        return None
+    window = max(1, int(rate * window_seconds))
+    levels: list[float] = []
+    for span in spans:
+        start = span["start"]
+        while start + window <= span["end"]:
+            chunk = audio[start:start + window]
+            power = float(np.mean(chunk * chunk))
+            levels.append(10 * np.log10(power + 1e-12))
+            start += window
+    return _percentile_db(levels, SPEECH_LEVEL_PERCENTILE) if levels else None
+
+
 def suggest_noise_db(
     media: Path | str,
     *,
@@ -1339,6 +1388,10 @@ def suggest_noise_db(
     mean = overall_mean_volume_db(media, runner=runner)
     profile = loudness_range_db(media, runner=runner)
     floor, speech = profile if profile else (None, None)
+    if profile is not None:
+        voiced = voiced_speech_level_db(media)
+        if voiced is not None:
+            speech = voiced
     if floor is not None and speech is not None:
         # The threshold has to sit above this file's gaps and below its speech. Both
         # bounds are measured from the file, and the default is kept whenever it
