@@ -9,7 +9,10 @@ Requirements (owner, 2026-10-14):
    changes afterwards, and only then.
 3. Processing the same recording again never overwrites the earlier folder: the
    new task gets the next free name.
-4. Uploads and link downloads get no folder.
+4. Uploads get no folder. A video downloaded from a link gets one under
+   ~/Movies/FluentFlow/ named after the video, with the downloaded original in
+   it beside the cut and the note (2026-10-15); a second download of the same
+   title gets the next free name; a link served as subtitles only gets none.
 5. A folder that cannot be written does not fail the task; the reason is kept.
 6. A folder scan skips the videos this produces.
 """
@@ -23,7 +26,7 @@ import pytest
 
 from backend.core import job_store, local_folder_intake, note_pdf, output_folder
 from backend.core.result_artifacts import _attach_result_artifacts
-from backend.core.storage_paths import _artifact_storage_dir
+from backend.core.storage_paths import _artifact_storage_dir, _source_storage_dir
 
 
 @pytest.fixture
@@ -236,3 +239,50 @@ def test_a_cut_moved_in_with_the_recording_is_not_replaced(tmp_path, pdfs):
 
     assert (source.parent / "week-8_去气口.mp4").read_bytes() == b"kept"
     assert state["delivered_path"] == str(source.parent / "week-8_去气口 (2).mp4")
+
+
+
+def _link_task(title: str, source_name: str = "source.mp4", note: str = "") -> str:
+    task_id = _task(None, note)
+    stored = _source_storage_dir() / task_id
+    stored.mkdir(parents=True, exist_ok=True)
+    (stored / source_name).write_bytes(b"downloaded video")
+    job = job_store.get_job(task_id)
+    job_store.upsert_job(task_id=task_id, status="completed", metadata={
+        "video_source_url": "https://youtu.be/abc", "display_title": title,
+    })
+    return task_id
+
+
+def test_a_link_download_gets_a_folder_with_its_original(tmp_path, pdfs, monkeypatch):
+    monkeypatch.setenv(output_folder.LINK_ROOT_ENV, str(tmp_path / "FluentFlow"))
+    task = _link_task("产品发布会: 第一场", note="# 笔记\n\n要点。\n")
+
+    output_folder.sync(task)
+
+    folder = tmp_path / "FluentFlow" / "产品发布会_ 第一场"
+    assert (folder / "产品发布会_ 第一场.mp4").read_bytes() == b"downloaded video"
+    assert (folder / "产品发布会_ 第一场_笔记.pdf").is_file()
+    assert (folder / "过程文件" / "产品发布会_ 第一场.txt").is_file()
+    assert job_store.get_job(task)["result"]["output_folder"]["path"] == str(folder)
+
+
+def test_a_second_download_with_the_same_title_gets_its_own_folder(tmp_path, pdfs, monkeypatch):
+    monkeypatch.setenv(output_folder.LINK_ROOT_ENV, str(tmp_path / "FluentFlow"))
+    first, second = _link_task("同名视频"), _link_task("同名视频")
+
+    output_folder.sync(first)
+    output_folder.sync(second)
+    output_folder.sync(first)
+
+    assert (tmp_path / "FluentFlow" / "同名视频" / "同名视频.mp4").is_file()
+    assert (tmp_path / "FluentFlow" / "同名视频 (2)" / "同名视频 (2).mp4").is_file()
+    assert not (tmp_path / "FluentFlow" / "同名视频 (3)").exists()
+
+
+def test_a_link_served_as_subtitles_gets_no_folder(tmp_path, pdfs, monkeypatch):
+    monkeypatch.setenv(output_folder.LINK_ROOT_ENV, str(tmp_path / "FluentFlow"))
+    task = _link_task("只有字幕", source_name="source.srt")
+
+    assert output_folder.sync(task) is None
+    assert not (tmp_path / "FluentFlow" / "只有字幕").exists()
