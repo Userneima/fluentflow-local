@@ -1688,8 +1688,17 @@ def caption_provider(url: str) -> str | None:
     return None
 
 
+CAPTIONS_FIRST_ENV = "FLUENTFLOW_CAPTIONS_FIRST"
+
+
 def captions_first_provider(url: str, cookies_from_browser: str | None = None) -> str | None:
     """The caption source to try before falling back to downloading media.
+
+    Off by default (owner, 2026-10-15): taking the captions instead of the
+    video left a YouTube link with no video at all, so no picture for the note,
+    nothing to cut and no original to keep beside the note. The video is
+    downloaded and transcribed here like any other recording. On with
+    ``FLUENTFLOW_CAPTIONS_FIRST=1`` for whoever only wants the text fast.
 
     Bilibili is gated on having a login: it refuses subtitles to anonymous
     requests ("Subtitles are only available when logged in"), so attempting it
@@ -1697,6 +1706,8 @@ def captions_first_provider(url: str, cookies_from_browser: str | None = None) -
     before the media download we were going to do anyway.
     """
 
+    if (os.environ.get(CAPTIONS_FIRST_ENV) or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None
     provider = caption_provider(url)
     if provider == "bilibili" and not yt_dlp_login_configured(cookies_from_browser):
         return None
