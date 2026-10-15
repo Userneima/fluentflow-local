@@ -229,7 +229,7 @@ def planned_model(
             engine="mlx",
             model_size=local_stt_mlx.resolve_size(requested),
             repo_id=local_stt_mlx.resolve_repo(requested),
-            weights_filename=local_stt_mlx.WEIGHTS_FILENAME,
+            weights_filename=local_stt_mlx.weights_filename(local_stt_mlx.resolve_repo(requested)),
             requested_size=requested,
             note=lane_reason,
         )
