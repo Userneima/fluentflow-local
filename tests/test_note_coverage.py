@@ -359,3 +359,29 @@ def test_with_nothing_to_check_with_the_agent_is_told_the_note_was_not_checked(j
     coverage = vn.visual_note_state(updated["result"])["coverage"]
     assert coverage["missing"] == []
     assert coverage["parts"][0]["checked"] is False
+
+
+def test_a_request_that_never_finishes_does_not_hold_the_note(monkeypatch):
+    """Requirement (2026-10-15): a provider that keeps a coverage request open
+    without ever answering (DeepSeek sends blank lines while it queues) must not
+    keep the note in "checking". Past the deadline the check counts as not run
+    and the note is saved as written."""
+    import threading
+    import time
+
+    from backend.core import note_coverage as nc
+
+    monkeypatch.setattr(nc, "REQUEST_DEADLINE_SECONDS", 0.2)
+    never = threading.Event()
+
+    def stuck(system, user):
+        never.wait(30)
+        return "{}"
+
+    started = time.monotonic()
+    check = nc.check_against_transcript(stuck, "第一句。\n第二句。", "# 笔记\n\n第一句。")
+    elapsed = time.monotonic() - started
+    never.set()
+
+    assert elapsed < 5, "the note is not held for the request"
+    assert check.checked is False and check.failed_requests == 1

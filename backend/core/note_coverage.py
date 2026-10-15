@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -145,12 +146,51 @@ def _json_object(raw: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+# The longest one coverage request may take, start to finish. The client's own
+# timeout only limits the wait between two pieces of the answer, so a provider
+# that keeps a request open by sending blank lines while it queues (DeepSeek
+# does this for non-streaming calls) is waited on for ever: on 2026-10-15 a
+# 38-minute meeting's note sat in "checking" for over an hour and a half with
+# one connection open and nothing arriving. A checklist answer normally takes a
+# minute or two; past this the note is saved as written and the check is
+# recorded as not run.
+REQUEST_DEADLINE_SECONDS = 600.0
+
+
+class CoverageRequestTimeout(TimeoutError):
+    pass
+
+
+def _within_deadline(chat: Chat, system: str, user: str, seconds: float) -> str:
+    """``chat(system, user)``, or ``CoverageRequestTimeout`` after ``seconds``.
+
+    The request runs on a daemon thread that is left behind when it overruns:
+    Python cannot interrupt a blocked socket read, and the note must not wait
+    for it."""
+    outcome: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            outcome["text"] = chat(system, user)
+        except BaseException as exc:  # noqa: BLE001 - handed back to the caller
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run, name="note-coverage-request", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise CoverageRequestTimeout(f"查漏请求 {seconds:g} 秒没有答完")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("text", "")
+
+
 def _ask(chat: Chat, system: str, user: str) -> dict[str, Any] | None:
     """One judgement, asked twice at most: models occasionally answer with
     malformed JSON, and a second try costs less than an unchecked note."""
     for _attempt in range(2):
         try:
-            payload = _json_object(chat(system, user))
+            payload = _json_object(_within_deadline(chat, system, user, REQUEST_DEADLINE_SECONDS))
         except Exception as exc:  # noqa: BLE001 - a failed check leaves the note as written
             logger.warning("note coverage check request failed: %s", exc)
             return None
