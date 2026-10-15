@@ -670,11 +670,16 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
 
         stt_started_at = time.perf_counter()
         stt_watch = _SttWatch(_stale_job_seconds(), stt_started_at)
+        from backend.core.local_intake_flow import survey_first_enabled
+
         stt_process, stt_queue = start_transcription_process(
             out_audio,
             model_size=model_size,
             speed_profile=speed_profile,
             language=language,
+            # The survey-first cut keeps every cut out of transcribed words, so
+            # it needs their times; the original is transcribed then.
+            word_timestamps=not preprocess_state and survey_first_enabled(),
         )
         stt_result = None
         stt_error: str | None = None

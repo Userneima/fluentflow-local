@@ -13,6 +13,10 @@ Requirements (owner, 2026-10-15, 方案/2026-10-15-先转录再定怎么剪):
 6. Every single cut longer than a minute, and gaps in which words were
    transcribed, are listed for confirmation too.
 7. With the new flow on, nothing is cut before transcription.
+9. No cut reaches into a transcribed word, with or without a model.
+10. Filler in the middle (sound checks, a sentence said twice, off-topic
+    talk) is removed too; every removed stretch is listed, whatever their number.
+11. Pauses under three seconds are cut without asking the model.
 8. Each listed cut can be answered "right" or "wrong", and taken back. "Wrong"
    puts that stretch back and renders again without asking the model again;
    the transcript follows.
@@ -245,3 +249,59 @@ def test_a_cut_said_to_be_wrong_is_put_back_and_rendered_again(task, monkeypatch
     assert result["transcript_media"] == "debreath_media"
     assert len(result["source_raw_segments"]) == len(LINES)
     assert state["survey"]["answers"] == {"0": "wrong"} and state["survey"]["review"][0]["restored"] is True
+
+
+def test_no_cut_reaches_into_a_transcribed_word():
+    plan, record = survey_cut.protect_words(_plan(gaps=[(10, 14)]), [(11.0, 11.5), (30.0, 31.0)])
+
+    assert [(c.start, c.end) for c in plan.cuts] == [(10.1, 10.95), (11.55, 13.9)]
+    assert record["words_known"] is True and record["seconds_kept_for_words"] == pytest.approx(0.6, abs=0.01)
+
+
+def test_without_word_times_the_cuts_stand():
+    plan, record = survey_cut.protect_words(_plan(), [])
+
+    assert len(plan.cuts) == 3 and record == {"words_known": False}
+
+
+def test_filler_in_the_middle_is_removed_and_every_removal_is_listed():
+    lines = [(float(t), t + 4.0, f"第{t}秒的正事内容讲得比较长一些") for t in range(0, 240, 5)]
+    remove = ", ".join(f'{{"from": {t}, "to": {t}, "reason": "整句重说"}}' for t in range(10, 80, 10))
+    plan, record = survey_cut.revise_plan(
+        Path("x.mp4"), _plan(240.0, []), _segments(lines),
+        _says(f'{{"keep_gaps": [], "remove": [{remove}]}}'), pictures=_no_pictures,
+    )
+
+    assert [item["kind"] for item in record["review"]] == ["removed_talk"] * 7
+    assert any(c.start <= 10.0 and c.end >= 14.0 for c in plan.cuts)
+    assert not any(c.start < 5.0 < c.end for c in plan.cuts)
+
+
+def test_short_pauses_are_not_shown_to_the_model():
+    seen = {}
+
+    def model(system, user):
+        seen["user"] = user
+        return '{"keep_gaps": [], "remove": []}'
+
+    survey_cut.revise_plan(Path("x.mp4"), _plan(gaps=[(10, 12), (24, 28)]), _segments(), model, pictures=_no_pictures)
+
+    assert "10.1–11.9" not in seen["user"] and "〔空白 #1 · 24.1–27.9 秒" in seen["user"]
+
+
+@needs_ffmpeg
+def test_a_quiet_word_inside_a_gap_survives_the_cut(task, monkeypatch):
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    result = job_store.get_job(task["id"])["result"]
+    result["stt_raw_segments"] = [
+        {"start": 0.5, "end": 9.5, "text": "开场", "words": [{"start": 0.5, "end": 9.5, "word": "开场"}]},
+        {"start": 11.0, "end": 12.0, "text": "对", "words": [{"start": 11.0, "end": 12.0, "word": "对"}]},
+    ]
+    job_store.update_job_result(task["id"], result)
+
+    record = survey_cut.survey_and_cut(task["id"], chat=(_says('{"keep_gaps": [], "remove": []}'), "fake"))
+
+    assert record["word_protection"]["words_known"] is True
+    media = Path(job_store.get_job(task["id"])["result"]["debreath"]["delivered_path"])
+    # The 10-14 gap is cut on both sides of the word only: 1.1 s kept of it.
+    assert silence_cuts.media_duration_seconds(media) == pytest.approx(48.6 + 1.1, abs=1.0)

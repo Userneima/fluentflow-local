@@ -54,6 +54,7 @@ def _transcribe_worker(
         else:
             result = transcribe_audio(
                 Path(audio_path),
+                word_timestamps=bool(options.get("word_timestamps")),
                 **common_kwargs,
             )
         _safe_put(out_queue, {"type": "result", "result": result})
@@ -87,8 +88,13 @@ def start_transcription_process(
     num_workers: int = 1,
     chunk_seconds: float = 0,
     initial_prompt: str | None = None,
+    word_timestamps: bool = False,
 ) -> tuple[BaseProcess, mp.Queue]:
-    """Start STT in a subprocess and return ``(process, queue)``."""
+    """Start STT in a subprocess and return ``(process, queue)``.
+
+    ``word_timestamps`` asks for each word's time as well (slower: 18-40% on
+    the Apple GPU lane, see ``local_stt_mlx``). The survey-first cut needs it
+    to keep every cut out of transcribed words."""
     # Spawning asks for the current directory first. On macOS a long-running
     # backend can lose permission to its own folder (it sits under ~/Documents,
     # which is privacy-protected), and the spawn then dies with a bare
@@ -114,6 +120,7 @@ def start_transcription_process(
                 "num_workers": num_workers,
                 "chunk_seconds": chunk_seconds,
                 "initial_prompt": initial_prompt,
+                "word_timestamps": word_timestamps,
             },
         ),
         daemon=True,

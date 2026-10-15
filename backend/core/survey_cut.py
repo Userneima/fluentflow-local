@@ -45,9 +45,14 @@ from backend.core.storage_cleanup import is_managed_path
 
 logger = logging.getLogger(__name__)
 
-# Gaps shorter than this are breaths and are always cut; the model is not
-# shown them. Longer ones are numbered in the timeline it reads.
-LONG_GAP_SECONDS = 1.5
+# Gaps shorter than this are always cut; the model is not shown them. A pause
+# under three seconds is not worth keeping for anyone to read or watch, and
+# hundreds of numbered short gaps made the answer long and easy to get wrong.
+LONG_GAP_SECONDS = 3.0
+# Cuts are kept this far off every transcribed word.
+WORD_MARGIN_SECONDS = 0.05
+# A piece of a cut left between two words shorter than this is not cut.
+MIN_CUT_PIECE_SECONDS = 0.1
 # Whether the picture moved is measured for gaps at least this long, the
 # longest first, at most ``MAX_PICTURE_CHECKS`` of them (each is a decode).
 PICTURE_CHECK_SECONDS = 3.0
@@ -58,13 +63,15 @@ PICTURE_MOVING = 0.15
 PICTURE_STILL = 0.02
 # A removal must be at least this long, and all of them together may hold at
 # most this share of the transcript's characters.
-MIN_REMOVAL_SECONDS = 3.0
+MIN_REMOVAL_SECONDS = 2.0
 MAX_SPEECH_SHARE_REMOVED = 0.25
 # Margin left around the first and last removed line.
 EDGE_SECONDS = 0.1
 # Reported for confirmation.
 LONG_CUT_SECONDS = 60.0
-MAX_REVIEW_ITEMS = 6
+# Every removed stretch with talk in it is listed; of the rest, at most this
+# many, the riskiest first.
+MAX_OTHER_REVIEW_ITEMS = 5
 REQUEST_DEADLINE_SECONDS = 600.0
 MAX_TRANSCRIPT_CHARS = 120_000
 
@@ -76,11 +83,12 @@ SYSTEM = """你会读到一段录像的时间线：每行开头是秒数，后�
 - 画面一直在变，前后文说明是在演示、操作、写代码、写板书。
 等人入会、切换窗口、找文件、调设备、"能听到吗"之后的空白，照剪。拿不准就剪。
 
-二、哪些有人说话的整段要去掉。只用于正式内容（会议、课程、讲座、访谈）之外的部分：
+二、哪些有人说话的段落要去掉。去掉的每一段都会交给用户确认，所以该去的都列出来：
 - 正式开始前的等待、试音、闲聊；
-- 正式结束（例如说完再见）之后多录的部分；说完再见又补充正事的，以补充的那句为准。
-给出这一段第一句和最后一句开头的秒数；一直到录像结尾，to 填 null；从录像开头算起，from 填 0。
-正式内容里的话一句都不要去掉。拿不准就不列。
+- 正式结束（例如说完再见）之后多录的部分；说完再见又补充正事的，以补充的那句为准；
+- 中间的废话：调设备和确认声音（"能听到吗""我共享一下屏幕"）、被打断后和主题无关的对话、整句重说（同一句话讲了两遍，去掉没讲好的那遍）、和主题无关的闲聊。
+只去整句，不去半句；讲正事时的口头禅、语气词不算废话。
+每一段给出第一句和最后一句开头的秒数；一直到录像结尾，to 填 null；从录像开头算起，from 填 0。
 
 只回一个 JSON 对象：
 {"keep_gaps": [{"id": 编号, "reason": "一句话理由"}], "remove": [{"from": 秒数, "to": 秒数或null, "reason": "一句话理由"}]}"""
@@ -254,8 +262,10 @@ def review_items(
             quoted = "」「".join(words)[:60]
             others.append({"kind": "words_in_gap", "start": cut.start, "end": cut.end,
                            "reason": f"按音量判断是空白，但转录在这里认出了字：「{quoted}」。"})
-    others.sort(key=lambda item: item["end"] - item["start"], reverse=True)
-    items.extend(others[: max(0, MAX_REVIEW_ITEMS - len(items))])
+    # Riskiest first: a long stretch with nothing said is a whole part of the
+    # recording; words in a gap are usually a short aside.
+    others.sort(key=lambda item: (item["kind"] != "long_gap", -(item["end"] - item["start"])))
+    items.extend(others[:MAX_OTHER_REVIEW_ITEMS])
     for item in items:
         item["seconds"] = round(item["end"] - item["start"], 1)
         item["start"], item["end"] = round(item["start"], 1), round(item["end"], 1)
@@ -313,6 +323,58 @@ def revise_plan(
         "removed_seconds": revised.removed_seconds,
     })
     return revised, record
+
+
+def words_of(result: dict[str, Any]) -> list[tuple[float, float]]:
+    """Every transcribed word's time, from whichever segment list carries
+    them. Empty when the transcription did not record word times."""
+    for key in ("stt_raw_segments", "raw_segments", "source_stt_raw_segments", "source_raw_segments"):
+        segments = result.get(key)
+        if not isinstance(segments, list):
+            continue
+        spans = [
+            (_seconds(word.get("start")), _seconds(word.get("end")))
+            for seg in segments if isinstance(seg, dict) and isinstance(seg.get("words"), list)
+            for word in seg["words"] if isinstance(word, dict) and str(word.get("word") or "").strip()
+        ]
+        if spans:
+            return sorted(spans)
+    return []
+
+
+def protect_words(plan: CutPlan, words: list[tuple[float, float]]) -> tuple[CutPlan, dict[str, Any]]:
+    """``plan`` with every cut kept off the transcribed words.
+
+    Loudness cuts quiet speech as if it were a gap. The transcript says where
+    someone spoke, so a cut stops short of each word instead of asking the user
+    afterwards. The words come only from stretches the transcriber's own voice
+    detector passed, so noise rarely turns into a word that blocks a cut."""
+    if not words:
+        return plan, {"words_known": False}
+    pieces: list[TimeRange] = []
+    index = 0
+    for cut in plan.cuts:
+        while index < len(words) and words[index][1] + WORD_MARGIN_SECONDS <= cut.start:
+            index += 1
+        cursor = cut.start
+        probe = index
+        while probe < len(words) and words[probe][0] - WORD_MARGIN_SECONDS < cut.end:
+            start, end = words[probe][0] - WORD_MARGIN_SECONDS, words[probe][1] + WORD_MARGIN_SECONDS
+            if start > cursor:
+                pieces.append(TimeRange(cursor, start))
+            cursor = max(cursor, end)
+            probe += 1
+        if cursor < cut.end:
+            pieces.append(TimeRange(cursor, cut.end))
+    kept = [piece for piece in pieces if piece.duration >= MIN_CUT_PIECE_SECONDS]
+    protected = plan.removed_seconds - sum(piece.duration for piece in kept)
+    cuts = [TimeRange(round(c.start, 3), round(c.end, 3)) for c in kept]
+    revised = replace(
+        plan, cuts=cuts,
+        keeps=silence_cuts._keeps_between(plan.source_duration_seconds, cuts, silence_cuts.MIN_KEEP_SECONDS),
+        warnings=list(plan.warnings),
+    )
+    return revised, {"words_known": True, "seconds_kept_for_words": round(max(protected, 0.0), 2)}
 
 
 def _overlaps(a: TimeRange, start: float, end: float) -> bool:
@@ -399,6 +461,7 @@ def survey_and_cut(
     if debreath_job.debreath_state(result).get("used_for_transcription"):
         return None
     segments = _texted(result.get("raw_segments"))
+    words = words_of(result)
     try:
         source = debreath_job.resolve_source(task_id)
     except debreath_job.DebreathError:
@@ -409,6 +472,8 @@ def survey_and_cut(
     final: dict[str, CutPlan] = {}
 
     def revise(media: Path, plan: CutPlan) -> CutPlan:
+        plan, protection = protect_words(plan, words)
+        record["word_protection"] = protection
         if asker is None or not segments:
             record["skipped"] = "没有可用的模型或转录，只按音量剪。"
             final["plan"] = plan
@@ -532,8 +597,10 @@ def restore(task_id: str, index: int, client_id: str | None = None) -> dict[str,
 
     final: dict[str, CutPlan] = {}
 
+    words = words_of(result)
+
     def revise(media: Path, plan: CutPlan) -> CutPlan:
-        final["plan"] = apply_decisions(plan, kept, removals)
+        final["plan"] = apply_decisions(protect_words(plan, words)[0], kept, removals)
         return final["plan"]
 
     try:
