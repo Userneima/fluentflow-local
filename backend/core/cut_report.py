@@ -42,6 +42,7 @@ SYSTEM = """你会读到 FluentFlow 处理一条录像时做过的每一件事�
 - 零碎、重复、没什么可看的（大量短停顿、说得很轻被保住的零碎字）放后面，并把这组 folded 设为 true（默认折叠）。
 - 每条用一句话（不超过 40 字）说清做了什么、为什么，用大白话，可以借助前后文说明这段在干什么。
 - 用编号引用条目，不要自己写时间点，时间由程序给出。不重要的条目可以不列，没列的会自动放进"其他处理"并折叠。
+- 开头如果给了这位用户以前的判断，他确认过的同类情况不要再标拿不准，他改过的同类情况要按他的意思说明或标出来。
 - 只有你自己也拿不准这样处理对不对的条目，才标 "unsure": true，并在 doubt 里用一句话说清拿不准在哪（例如"画面在变，可能是在演示"）。这些会单独拿出来请他判断，其余的他只看你的说明。有把握的不要标，宁少勿滥。
 - summary 用一两句话概括这次处理的整体情况，不写数字。
 
@@ -223,7 +224,7 @@ def _item(fact: dict[str, Any], text: str | None = None) -> dict[str, Any]:
         "ref": fact["id"], "key": key_of(fact), "kind": fact["kind"], "action": fact["action"],
         "text": (text or fact["default"]).strip(),
     }
-    for key in ("start", "end", "seconds", "count", "said"):
+    for key in ("start", "end", "seconds", "count", "said", "picture", "before", "after"):
         if key in fact:
             item[key] = fact[key]
     return item
@@ -292,7 +293,7 @@ def fallback(all_facts: list[dict[str, Any]]) -> dict[str, Any]:
     return {"summary": "", "sections": _with_judgement(sections, {}, by_id), "organized_by": None}
 
 
-def organize(all_facts: list[dict[str, Any]], chat: tuple[Chat, str] | None) -> dict[str, Any]:
+def organize(all_facts: list[dict[str, Any]], chat: tuple[Chat, str] | None, cases: str = "") -> dict[str, Any]:
     """The report for these facts: organised by ``chat`` when there is one and
     it answers usefully, otherwise by kind."""
     if not all_facts:
@@ -302,7 +303,7 @@ def organize(all_facts: list[dict[str, Any]], chat: tuple[Chat, str] | None) -> 
     from backend.core.note_coverage import _within_deadline
 
     try:
-        text = _within_deadline(chat[0], SYSTEM, "\n".join(_fact_line(f) for f in all_facts), REQUEST_DEADLINE_SECONDS)
+        text = _within_deadline(chat[0], SYSTEM, cases + "\n".join(_fact_line(f) for f in all_facts), REQUEST_DEADLINE_SECONDS)
         match = re.search(r"\{.*\}", text or "", re.S)
         answer = json.loads(match.group(0)) if match else {}
         report = assemble(all_facts, answer if isinstance(answer, dict) else {}, chat[1])
@@ -314,8 +315,10 @@ def organize(all_facts: list[dict[str, Any]], chat: tuple[Chat, str] | None) -> 
     return report
 
 
-def build(record: dict[str, Any], segments: list[dict[str, Any]], chat: tuple[Chat, str] | None) -> dict[str, Any]:
-    return organize(facts(record, segments), chat)
+def build(
+    record: dict[str, Any], segments: list[dict[str, Any]], chat: tuple[Chat, str] | None, cases: str = "",
+) -> dict[str, Any]:
+    return organize(facts(record, segments), chat, cases)
 
 
 __all__ = ["build", "facts", "organize", "assemble", "fallback"]

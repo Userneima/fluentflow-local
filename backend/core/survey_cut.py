@@ -40,7 +40,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import cut_report, cut_timeline, debreath_job, job_store, output_folder, silence_cuts
+from backend.core import cut_cases, cut_report, cut_timeline, debreath_job, job_store, output_folder, silence_cuts
 from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT
 from backend.core.silence_cuts import CutPlan, TimeRange
 from backend.core.storage_cleanup import is_managed_path
@@ -72,7 +72,7 @@ EDGE_SECONDS = 0.1
 REQUEST_DEADLINE_SECONDS = 600.0
 MAX_TRANSCRIPT_CHARS = 120_000
 
-SYSTEM = """你会读到一段录像的时间线：每行开头是秒数，后面是这句话的转录；〔空白 #编号〕是一段没人说话的时间，写着它从几秒到几秒、多长、这段时间画面有没有在变。
+SYSTEM = """开头可能先给你这位用户以前对剪辑的判断，情况相似时照他的判断做。然后你会读到一段录像的时间线：每行开头是秒数，后面是这句话的转录；〔空白 #编号〕是一段没人说话的时间，写着它从几秒到几秒、多长、这段时间画面有没有在变。
 空白默认全部剪掉，这一步要你决定两件事。
 
 一、哪些空白要保留。只有观众在这段时间里需要看画面时才保留：
@@ -234,13 +234,14 @@ def speech_share(segments: list[dict[str, Any]], spans: list[TimeRange]) -> floa
 def revise_plan(
     source: Path, plan: CutPlan, segments: list[dict[str, Any]], ask: Chat, *,
     pictures: Callable[[Path, list[TimeRange]], dict[int, float | None]] = measure_pictures,
+    cases: str = "",
 ) -> tuple[CutPlan, dict[str, Any]]:
     """The plan the model's reading turns ``plan`` into, and what it decided."""
     duration = plan.source_duration_seconds
     gaps = list(plan.cuts)
     measured = pictures(source, gaps)
     timeline, ids = build_timeline(duration, segments, gaps, measured)
-    answer = parse_answer(_ask(ask, timeline))
+    answer = parse_answer(_ask(ask, cases + timeline))
     record: dict[str, Any] = {"long_gaps": len(ids), "pictures_measured": len(measured)}
 
     kept_gaps: list[dict[str, Any]] = []
@@ -590,7 +591,7 @@ def survey_and_cut(
             final["plan"] = plan
             return plan
         try:
-            revised, decided = revise_plan(media, plan, segments, asker[0])
+            revised, decided = revise_plan(media, plan, segments, asker[0], cases=cut_cases.as_text(cut_cases.collect()))
             record.update(decided)
         except Exception as exc:  # noqa: BLE001 - the volume plan stands
             logger.warning("survey for %s not used: %s", task_id, exc)
@@ -626,7 +627,9 @@ def _finish(
     if not state.get("rendered") or plan is None or media is None:
         return False
     result = _onto_cut_clock(result, cut_timeline.kept_ranges(plan.as_dict()))
-    record["report"] = cut_report.build(record, _texted(result.get("source_raw_segments")), chat)
+    record["report"] = cut_report.build(
+        record, _texted(result.get("source_raw_segments")), chat, cut_cases.as_text(cut_cases.collect()),
+    )
     record["report"]["after_seconds"] = round(plan.kept_seconds, 1)
     record["report"]["before_seconds"] = round(plan.source_duration_seconds, 1)
     delivered: dict[str, Any] = {}
@@ -775,6 +778,7 @@ def flip(task_id: str, ref: str, client_id: str | None = None) -> dict[str, Any]
         "key": item.get("key"), "kind": item.get("kind"), "start": _seconds(item["start"]), "end": _seconds(item["end"]),
         "model_said": item.get("action"), "user_said": "kept" if item.get("action") == "removed" else "removed",
         "model_reason": item.get("text"), "at": _now(),
+        **{key: item.get(key) for key in ("picture", "before", "after", "said") if item.get(key)},
     }
     return _turn_around(task_id, client_id, result, survey, item, change)
 
@@ -820,6 +824,7 @@ def verdict(task_id: str, keys: list[str], value: str, client_id: str | None = N
             verdicts[key] = {
                 "verdict": "agree", "kind": item.get("kind"), "model_said": item.get("action"),
                 "start": item.get("start"), "end": item.get("end"), "text": item.get("text"), "at": _now(),
+                **{key: item.get(key) for key in ("picture", "before", "after", "said") if item.get(key)},
             }
     survey["verdicts"] = verdicts
     result["debreath"] = {**debreath_job.debreath_state(result), "survey": survey}
