@@ -27,7 +27,7 @@ def clean_env(monkeypatch, tmp_path):
     monkeypatch.setattr(local_config, "config_path", lambda: tmp_path / "isolated-config.json")
     for name in (
         "FLUENTFLOW_PROCESSING_PRESET", "FLUENTFLOW_RENDER_WORKERS", "FLUENTFLOW_QUEUE_CONCURRENCY",
-        "FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR",
+        "FLUENTFLOW_DEBREATH_HARDWARE_ENCODE",  # the suite turns it off; these tests read the default
         "FLUENTFLOW_DEBREATH_CAP_VIDEO_BITRATE", "FLUENTFLOW_DEBREATH_AUDIO_FIRST",
         "FLUENTFLOW_CPU_USAGE",
     ):
@@ -48,20 +48,30 @@ def test_a_setting_of_its_own_wins_over_the_machine(monkeypatch):
     assert dp.render_workers(_machine(64, 12)) == 2
 
 
-def test_quality_is_the_default_and_changes_nothing(monkeypatch):
-    monkeypatch.setattr(dp, "current", lambda: _machine(16, 8))
+def test_the_hardware_encoder_is_the_default_where_there_is_one(monkeypatch):
+    """Requirement (owner, 2026-10-15): the cut is written by the hardware
+    encoder by default; a machine without one uses the software encoder."""
+    monkeypatch.setattr(dp, "current", lambda: _machine(16, 8, hardware=True))
     assert dp.preset() == dp.PRESET_QUALITY
-    assert not dp.hardware_encode() and not dp.cap_video_bitrate() and not dp.audio_first()
-    assert dp.hardware_bitrate_factor() == 1.0
+    assert dp.hardware_encode() and not dp.cap_video_bitrate() and not dp.audio_first()
+
+    monkeypatch.setattr(dp, "current", lambda: _machine(16, 8, hardware=False))
+    assert not dp.hardware_encode()
 
 
-def test_speed_uses_the_hardware_encoder_only_where_there_is_one(monkeypatch):
+def test_speed_also_transcribes_while_the_video_renders(monkeypatch):
     monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "speed")
     monkeypatch.setattr(dp, "current", lambda: _machine(16, 8, hardware=True))
-    assert dp.hardware_encode() and dp.audio_first() and dp.hardware_bitrate_factor() == 2.0
+    assert dp.hardware_encode() and dp.audio_first()
 
     monkeypatch.setattr(dp, "current", lambda: _machine(16, 8, hardware=False))
     assert not dp.hardware_encode() and not dp.audio_first()
+
+
+def test_save_space_keeps_the_software_encoder_to_cap_the_bitrate(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "size")
+    monkeypatch.setattr(dp, "current", lambda: _machine(16, 8, hardware=True))
+    assert not dp.hardware_encode() and dp.cap_video_bitrate()
 
 
 def test_size_caps_the_video_at_the_source_bitrate(monkeypatch):

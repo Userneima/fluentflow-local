@@ -1657,60 +1657,43 @@ def _with_source_audio_shape(
 
 def hardware_encode_enabled() -> bool:
     """Whether to hand the re-encode to this Mac's media engine
-    (``device_profile.hardware_encode``: its variable, else the speed preset on
-    a machine that has one).
-
-    Measured on 2026-08-23, 60 seconds of a 2560x1440 screen recording under
-    identical load: libx264 at `-preset veryfast -crf 20` took 94 seconds at
-    700-870% CPU; `h264_videotoolbox` took 28 seconds at almost none. Measured
-    2026-10-13 it needs about twice the source's bitrate to keep the text of a
-    low-bitrate recording, and at a high bitrate it made a file six times the
-    software encode's for the same picture.
-    """
+    (``device_profile.hardware_encode``: its variable, else on wherever the
+    machine has one, except under "save space")."""
     return device_profile.hardware_encode()
 
 
-def hardware_bitrate_factor() -> float:
-    """How many times the source's own bitrate the media engine is given
-    (``device_profile.hardware_bitrate_factor``).
-
-    The media engine needs more bits than libx264 for the same text: measured
-    2026-10-13 on a 336 kbps shared-document screen recording, at the source's
-    rate it smeared a highlighted line beyond reading, at twice the rate it read
-    like the software encode, at three times better than it.
-    """
-    return device_profile.hardware_bitrate_factor()
+# The media engine at a constant quality. Measured 2026-10-15 against this
+# module's software encode (crf 18) on three screen recordings: a 630 kbps
+# compressed meeting (168 MB against 335 MB), a 6 Mbps raw meeting (40 MB
+# against 54 MB) and a 204 kbps course (5.3 MB against 6.6 MB); the smallest
+# shared-screen text, and a yellow-highlighted line that the media engine had
+# smeared when it was given the source's own bitrate, read the same in both.
+# A quality level rather than a bitrate is what fixed that: given a bitrate the
+# engine either starves low-bitrate text or spends everything on high-bitrate
+# detail, and given a quality it decides per picture.
+HARDWARE_QUALITY = "50"
 
 
 def _ceiling_margin() -> float:
-    return BITRATE_CEILING_MARGIN * (hardware_bitrate_factor() if hardware_encode_enabled() else 1.0)
+    return BITRATE_CEILING_MARGIN
 
 
 def _with_hardware_video_encoder(
     args: Sequence[str],
-    ceiling_bps: float,
+    ceiling_bps: float = 0.0,
     *,
     fps: float = DEFAULT_RENDER_FPS,
 ) -> list[str]:
-    """Swap the software video encoder for the media engine, when asked and safe.
+    """Swap the software video encoder for the media engine, when it is on.
 
-    The media engine has no `-crf`: quality-targeted encoding is a software idea,
-    and asking videotoolbox for it silently gets a default bitrate instead. A
-    first attempt at 1200k on a source carrying 400 produced a file five times
-    larger than the software one — the encoder spends every bit it is given, on
-    detail the recording never had. So the target is the same measurement the
-    software path caps with: whatever the recording itself carried.
-
-    No trusted measurement means no hardware encode. Guessing a bitrate for a file
-    whose own rate could not be read is how a lecture comes back unreadable, and
-    on a screen recording those pictures are what the note is written from.
-
-    The keyframe interval is set rather than left to the encoder for the same
-    reason the bitrate is: videotoolbox's default spends the whole ceiling on
-    keyframes and delivers a file whose text cannot be read. See
-    ``HARDWARE_KEYFRAME_SECONDS``.
+    HEVC at a constant quality (``HARDWARE_QUALITY``), so nothing here depends
+    on reading the source's bitrate. The keyframe interval is set rather than
+    left to the encoder, whose default of about one every twelve frames costs a
+    screen recording size and sharpness; see ``HARDWARE_KEYFRAME_SECONDS``.
+    ``ceiling_bps`` is accepted for the callers' sake and not used: a cap is the
+    "save space" preset, which stays on the software encoder.
     """
-    if not hardware_encode_enabled() or ceiling_bps <= 0:
+    if not hardware_encode_enabled():
         return list(args)
     software = {"-c:v", "-preset", "-crf"}
     kept: list[str] = []
@@ -1721,12 +1704,11 @@ def _with_hardware_video_encoder(
             continue
         kept.append(args[index])
         index += 1
-    target = int(ceiling_bps * _ceiling_margin())
     rate = float(fps) if fps and float(fps) > 0 else float(DEFAULT_RENDER_FPS)
     keyframe_interval = max(1, round(rate * HARDWARE_KEYFRAME_SECONDS))
     return [
-        "-c:v", "h264_videotoolbox",
-        "-b:v", str(target),
+        "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1",
+        "-q:v", HARDWARE_QUALITY, "-spatial_aq", "1", "-prio_speed", "1",
         "-g", str(keyframe_interval),
         *kept,
     ]
@@ -1797,7 +1779,7 @@ def normalize_to_constant_frame_rate(
     # delivered file — that is still capped by what the source spent.
     # The per-second scan reads the whole packet table; only a cap or the
     # hardware encoder (which takes a bitrate, not a quality) uses its answer.
-    if ceiling > 0 and (cap_video_bitrate() or hardware_encode_enabled()):
+    if ceiling > 0 and cap_video_bitrate():
         peak = peak_window_bitrate_bps(video_second_bytes(source, runner=runner))
         ceiling = max(ceiling, peak)
     headroom = ceiling * NORMALIZE_BITRATE_HEADROOM

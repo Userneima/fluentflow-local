@@ -100,6 +100,14 @@ def isolate_local_auth_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def software_encoder_unless_a_test_asks(monkeypatch):
+    """The cut video defaults to the Mac's hardware encoder wherever there is
+    one, so without this the same test renders differently on a Mac and on CI.
+    Tests about the hardware encoder set the variable themselves."""
+    monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "0")
+
+
+@pytest.fixture(autouse=True)
 def reset_auth_rate_limits():
     """Per-IP auth/webhook budgets live in module state, so without this reset
     one test's registrations or failed logins would throttle the next test

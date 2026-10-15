@@ -81,7 +81,7 @@ def _has_hardware_video_encoder() -> bool:
         listed = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         return False
-    return "h264_videotoolbox" in (listed.stdout or "")
+    return "hevc_videotoolbox" in (listed.stdout or "")
 
 
 @lru_cache(maxsize=1)
@@ -274,22 +274,19 @@ def queue_concurrency() -> int:
 
 
 def hardware_encode() -> bool:
+    """Whether the cut video is written by this Mac's media engine (HEVC at a
+    constant quality) rather than the software encoder.
+
+    The default wherever the machine has one, except under "save space", which
+    holds the video to the source's bitrate and needs the software encoder for
+    that. Decided 2026-10-15 on three recordings (a 630 kbps compressed meeting,
+    a 6 Mbps raw meeting, a 204 kbps course): the hardware encode was smaller in
+    each, with the smallest shared-screen text as sharp, and takes almost no CPU.
+    """
     explicit = _env_flag("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE")
     if explicit is not None:
         return explicit
-    return preset() == PRESET_SPEED and current().hardware_video_encoder
-
-
-def hardware_bitrate_factor() -> float:
-    try:
-        raw = (os.environ.get("FLUENTFLOW_DEBREATH_HARDWARE_BITRATE_FACTOR") or "").strip()
-        if raw:
-            return max(float(raw), 0.1)
-    except ValueError:
-        pass
-    # The speed preset's hardware encode at the source's own rate smeared text
-    # on a low-bitrate recording; twice the rate read like the software encode.
-    return 2.0 if preset() == PRESET_SPEED else 1.0
+    return preset() != PRESET_SIZE and current().hardware_video_encoder
 
 
 def cap_video_bitrate() -> bool:
@@ -333,7 +330,6 @@ __all__ = [
     "parallel_encodes",
     "process_niceness",
     "current",
-    "hardware_bitrate_factor",
     "hardware_encode",
     "preset",
     "queue_concurrency",

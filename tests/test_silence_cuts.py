@@ -900,30 +900,24 @@ def test_an_unreadable_bitrate_is_refused_as_a_ceiling_rather_than_enforced(tmp_
     assert "-maxrate:v" not in args
 
 
-# ── the Mac's media engine, only when asked ─────────────────────────────────
+# ── the Mac's media engine ──────────────────────────────────────────────────
+# Requirements (owner, 2026-10-15): the cut video is written by the Mac's
+# hardware encoder (HEVC at a constant quality) wherever there is one; without
+# one it is written as before by the software encoder; "save space" keeps the
+# software encoder, which can hold the video to the source's bitrate.
 
-def test_hardware_encoding_is_off_unless_asked(tmp_path, fake_tools, monkeypatch):
-    """A shared module does not swap encoders for a caller who never asked: this
-    file is used by the hosted edition too, so it is an opt-in rather than "we are
-    on a Mac, use the Mac encoder"."""
-    monkeypatch.delenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", raising=False)
+def test_without_a_hardware_encoder_the_software_one_writes(tmp_path, fake_tools, monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "0")
     source = tmp_path / "in.mp4"
     source.write_bytes(b"x")
     runner = _SourceProbe(bitrates={("in.mp4", "v:0"): 400000})
 
     args = sc.encode_args_for_source(source, tmp_path / "out.mp4", audio_only=False, runner=runner)
 
-    assert "libx264" in args and "h264_videotoolbox" not in args
+    assert "libx264" in args and "hevc_videotoolbox" not in args
 
 
-@pytest.mark.usefixtures("video_cap")
-def test_the_media_engine_is_aimed_at_what_the_recording_carried(tmp_path, fake_tools, monkeypatch):
-    """The hardware encoder has no crf, so it gets the source's own bitrate.
-
-    Measured the hard way: asking videotoolbox for 1200k on a source carrying
-    about 400 produced a file five times larger than the software one. It spends
-    whatever it is given, on detail the recording never had.
-    """
+def test_the_media_engine_writes_hevc_at_a_constant_quality(tmp_path, fake_tools, monkeypatch):
     monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "1")
     source = tmp_path / "in.mp4"
     source.write_bytes(b"x")
@@ -931,48 +925,27 @@ def test_the_media_engine_is_aimed_at_what_the_recording_carried(tmp_path, fake_
 
     args = sc.encode_args_for_source(source, tmp_path / "out.mp4", audio_only=False, runner=runner)
 
-    assert args[args.index("-c:v") + 1] == "h264_videotoolbox"
-    assert args[args.index("-b:v") + 1] == "380000", "400 kbps, less the same 5% margin"
-    assert "-crf" not in args, "the media engine has no quality target to give"
-    assert args[args.index("-maxrate:v") + 1] == "380000", "and still capped"
+    assert args[args.index("-c:v") + 1] == "hevc_videotoolbox"
+    assert args[args.index("-q:v") + 1] == sc.HARDWARE_QUALITY
+    assert args[args.index("-tag:v") + 1] == "hvc1", "plays in QuickTime and Safari"
+    assert "-crf" not in args and "-b:v" not in args and "-maxrate:v" not in args
 
 
-def test_an_unmeasurable_source_stays_on_software(tmp_path, fake_tools, monkeypatch):
-    """No trusted bitrate means no hardware encode, rather than a guessed one.
-    Guessing for a file whose own rate could not be read is how a lecture comes
-    back unreadable — and the screens in it are what the note gets written from."""
+def test_an_unmeasurable_source_still_gets_the_media_engine(tmp_path, fake_tools, monkeypatch):
+    """A constant quality needs no reading of the source's bitrate."""
     monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "1")
     source = tmp_path / "in.mp4"
     source.write_bytes(b"x")
 
-    unreadable = sc.encode_args_for_source(
-        source, tmp_path / "out.mp4", audio_only=False, runner=_SourceProbe(),
-    )
-    implausible = sc.encode_args_for_source(
-        source, tmp_path / "out.mp4", audio_only=False,
-        runner=_SourceProbe(bitrates={("in.mp4", "v:0"): 1000}),
-    )
+    args = sc.encode_args_for_source(source, tmp_path / "out.mp4", audio_only=False, runner=_SourceProbe())
 
-    assert "libx264" in unreadable
-    assert "libx264" in implausible, "an implausible probe is refused"
+    assert args[args.index("-c:v") + 1] == "hevc_videotoolbox"
 
 
 def test_the_media_engine_is_told_where_to_put_keyframes(tmp_path, fake_tools, monkeypatch):
-    """Left to itself videotoolbox writes one about every twelve frames, and under
-    a bitrate ceiling that costs the picture rather than bytes.
-
-    Measured on 60 seconds of a 1920x1080 60fps screen recording carrying 517
-    kbps, held to its own rate: the default put 301 keyframes in the file and the
-    text in it could not be read at any magnification, because a keyframe is a
-    whole picture paid for out of the ceiling and the ceiling was buying hundreds
-    of bad ones. Five seconds put in 13, matched the source at 3x, and came out
-    37% smaller.
-
-    That size figure is a screen recording's, where a keyframe is nearly all
-    redundant. Two live-action recordings measured the same day came out 8% and
-    3.5% smaller with no visible difference either way, so the setting is right
-    on anything and the large win is a screen recording's specifically.
-    """
+    """Left to itself videotoolbox writes one about every twelve frames, which on
+    a screen recording costs size and sharpness. Five seconds at the rate being
+    written."""
     monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "1")
     source = tmp_path / "in.mp4"
     source.write_bytes(b"x")
@@ -1006,7 +979,7 @@ def test_the_keyframe_interval_follows_the_rate_the_render_writes(tmp_path, fake
         runner=runner,
     )
 
-    encodes = [command for command in runner.commands if "h264_videotoolbox" in command]
+    encodes = [command for command in runner.commands if "hevc_videotoolbox" in command]
     assert encodes, "the hardware encoder was asked for"
     assert all(command[command.index("-g") + 1] == "150" for command in encodes)
 
@@ -1015,7 +988,7 @@ def test_software_encoding_is_left_to_its_own_keyframe_spacing(tmp_path, fake_to
     """x264's default keyint of 250 frames is already in the range this is aiming
     for, and it inserts one at a scene change besides. The setting is there to
     correct videotoolbox, not to override an encoder that had it right."""
-    monkeypatch.delenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", raising=False)
+    monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "0")
     source = tmp_path / "in.mp4"
     source.write_bytes(b"x")
     runner = _SourceProbe(bitrates={("in.mp4", "v:0"): 400000})

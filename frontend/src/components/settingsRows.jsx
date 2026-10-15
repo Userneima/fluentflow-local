@@ -233,7 +233,7 @@ export const ProcessingPresetRow = ({state}) => {
         {
             value: 'speed',
             label: zh ? '速度优先' : 'Speed first',
-            description: zh ? '用这台电脑的硬件编码器，边剪边转录，更快；剪后文件更大。没有硬件编码器时和画质优先一样。' : 'Uses this computer\'s hardware encoder and transcribes while cutting; faster, larger files. Same as picture first without one.',
+            description: zh ? '剪视频的同时就开始转录，整体更快，处理时电脑更忙。' : 'Starts transcribing while the video is still being cut; faster overall, and the computer is busier while it runs.',
         },
         {
             value: 'size',
