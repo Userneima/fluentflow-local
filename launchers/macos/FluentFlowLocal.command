@@ -10,6 +10,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 每次重启都会留下一个已经结束的旧窗口，要一个个手动关。启动时把这些已结束的
+# 旧启动器窗口关掉；还在跑东西的窗口（包括这一个）不动。
+osascript >/dev/null 2>&1 <<'APPLESCRIPT' || true
+tell application "Terminal"
+	repeat with i in (id of every window)
+		set w to window id i
+		if (name of w contains "FluentFlowLocal") and (busy of selected tab of w is false) then close w
+	end repeat
+end tell
+APPLESCRIPT
+
 REPO="${FLUENTFLOW_REPO:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 
 # 端口：shell 环境里的 FLUENTFLOW_LOCAL_PORT 优先，其次是仓库 .env 里的同名行，
