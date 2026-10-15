@@ -20,8 +20,11 @@ when a conversation remembered to.
 - Never overwrites another task's results. A folder records the task it belongs
   to in a hidden marker; a second task on the same recording gets the next free
   name (``<name> (2)``), and deleting either is the user's call.
-- Uploads and link downloads have no folder of the user's to sit beside and are
-  left in FluentFlow.
+- A video downloaded from a link has no folder of the user's to sit beside, so
+  it gets one under ``~/Movies/FluentFlow/`` (``FLUENTFLOW_LINK_OUTPUT_DIR``),
+  named after the video, with the downloaded original in it as well (owner,
+  2026-10-15): ``<title>/<title>.mp4`` next to the cut, the note and
+  ``过程文件``. Uploads are left in FluentFlow.
 - A folder that cannot be written does not fail the task; the reason is kept on
   the task.
 """
@@ -52,6 +55,8 @@ COMPRESSED_LABEL = "压缩"
 NOTE_LABEL = "笔记"
 CUT_LIST_LABEL = "剪辑表"
 RESULT_KEY = "output_folder"
+LINK_ROOT_ENV = "FLUENTFLOW_LINK_OUTPUT_DIR"
+DEFAULT_LINK_ROOT = "~/Movies/FluentFlow"
 MAX_FOLDERS_PER_RECORDING = 99
 
 _UNSAFE = re.compile(r'[\\/:*?"<>|\r\n]+')
@@ -72,6 +77,45 @@ def original_path(job: dict[str, Any] | None) -> Path | None:
         return None
     recorded = str(origin.get("original_path") or "").strip()
     return Path(recorded).expanduser() if recorded else None
+
+
+def link_root() -> Path:
+    return Path(os.environ.get(LINK_ROOT_ENV) or DEFAULT_LINK_ROOT).expanduser()
+
+
+def _is_link_task(job: dict[str, Any] | None) -> bool:
+    metadata = (job or {}).get("metadata")
+    return isinstance(metadata, dict) and bool(str(metadata.get("video_source_url") or "").strip())
+
+
+def _link_original(task_id: str, job: dict[str, Any]) -> Path | None:
+    """For a video downloaded from a link: its folder under ``link_root()``
+    and the downloaded original in it, put there now if it is not yet. The
+    path of that original, which then plays the part of the recording the
+    folder sits around. None when the download is not kept (a link that was
+    served as subtitles only, or a source already cleaned up)."""
+    from backend.core.storage_paths import find_source_file
+
+    downloaded = find_source_file(task_id)
+    if downloaded is None or downloaded.suffix.lower() in {".srt", ".vtt", ".txt", ".json"}:
+        return None
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    title = str(metadata.get("display_title") or metadata.get("raw_title") or job.get("source_filename") or "").strip()
+    stem = _UNSAFE.sub("_", title).strip().strip(".") or f"video-{task_id[:8]}"
+    root = link_root()
+    root.mkdir(parents=True, exist_ok=True)
+    names = [stem] + [f"{stem} ({n})" for n in range(2, MAX_FOLDERS_PER_RECORDING + 1)]
+    folder = next((root / name for name in names if (root / name).is_dir() and _owner(root / name) == task_id), None)
+    if folder is None:
+        folder = next((root / name for name in names if not (root / name).exists()), None)
+        if folder is None:
+            raise OutputFolderError(f"「{stem}」开头的文件夹太多了，先清理一下：{root}")
+        folder.mkdir()
+        _add_owner(folder, task_id, "")
+    original = folder / f"{folder.name}{downloaded.suffix.lower()}"
+    if not original.exists():
+        _link_or_copy(downloaded, original)
+    return original
 
 
 def _stem(source: Path) -> str:
@@ -276,12 +320,17 @@ def sync(task_id: str) -> dict[str, Any] | None:
 
 def _sync_locked(task_id: str) -> dict[str, Any] | None:
     job = job_store.get_job(task_id)
-    source = original_path(job)
-    if job is None or source is None:
+    if job is None:
         return None
+    link = _is_link_task(job) and original_path(job) is None
     result = dict(job.get("result") or {}) if isinstance(job.get("result"), dict) else {}
     try:
+        source = _link_original(task_id, job) if link else original_path(job)
+        if source is None:
+            return None
         record = _sync_files(task_id, source, result)
+        if link:
+            record.update(_deliver_cut(task_id, source, result))
     except Exception as exc:  # noqa: BLE001 - the task is finished whatever this does
         logger.warning("output folder for %s not updated: %s", task_id, exc)
         previous = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
@@ -328,6 +377,18 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any]) -> dict[str,
         record["note_digest"] = digest
     record["updated_at"] = datetime.now(timezone.utc).isoformat()
     return record
+
+
+def _deliver_cut(task_id: str, source: Path, result: dict[str, Any]) -> dict[str, Any]:
+    """A link's cut video, which nothing else puts in the folder (a local
+    recording's is delivered as soon as it is rendered)."""
+    from backend.core import debreath_job
+
+    media = debreath_job.cut_file_on_disk(task_id, result)
+    if media is None:
+        return {}
+    delivered = deliver_media(task_id, source, media, CUT_LABEL)
+    return {"cut_path": delivered.get("delivered_path")} if delivered.get("delivered") else {}
 
 
 def _export_pdf(task_id: str, folder: Path, name: str) -> dict[str, Any]:
