@@ -283,3 +283,14 @@ class TestModelLoadTiming(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_the_default_size_runs_as_turbo_on_apple_silicon():
+    """Owner, 2026-10-16: large-v3-turbo on this lane, 3-4x faster for about
+    the same transcript; the readiness check looks for its own weights file."""
+    from backend.core import local_stt_mlx
+
+    repo = local_stt_mlx.resolve_repo("large-v3")
+    assert repo == "mlx-community/whisper-large-v3-turbo"
+    assert local_stt_mlx.weights_filename(repo) == "weights.safetensors"
+    assert local_stt_mlx.weights_filename("mlx-community/whisper-medium-mlx") == "weights.npz"

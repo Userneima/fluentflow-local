@@ -39,16 +39,30 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 16000
 
 # The product exposes one local model size; these are its MLX equivalents.
+#
+# "large-v3" runs as large-v3-turbo on this lane (owner, 2026-10-16). Measured
+# on a 10-minute stretch of a Chinese talk, twice each: 27 s and 51 s against
+# 107 s and 165 s for large-v3, 3-4x faster; the two transcripts were 95% the
+# same and differed on names and noisy passages, each wrong about as often as
+# the other. The note step corrects misheard words from context either way, so
+# the time is the deciding difference.
 _MLX_REPOS: dict[str, str] = {
     "medium": "mlx-community/whisper-medium-mlx",
-    "large-v3": "mlx-community/whisper-large-v3-mlx",
+    "large-v3": "mlx-community/whisper-large-v3-turbo",
 }
 _DEFAULT_REPO = _MLX_REPOS["large-v3"]
 
-# The file every one of those repos keeps its weights in. The installer and the
-# readiness report look for it to answer "is this model already on the disk",
-# which they cannot do by importing the model without also loading it.
+# The file each repo keeps its weights in. The installer and the readiness
+# report look for it to answer "is this model already on the disk", which they
+# cannot do by importing the model without also loading it.
+_WEIGHTS_FILENAMES: dict[str, str] = {
+    "mlx-community/whisper-large-v3-turbo": "weights.safetensors",
+}
 WEIGHTS_FILENAME = "weights.npz"
+
+
+def weights_filename(repo: str) -> str:
+    return _WEIGHTS_FILENAMES.get(repo, WEIGHTS_FILENAME)
 
 # Keep a little silence on each side of a speech run so word onsets and trailing
 # consonants are not clipped by the cut itself.

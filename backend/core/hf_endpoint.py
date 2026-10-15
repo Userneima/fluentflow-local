@@ -39,7 +39,7 @@ MIRROR_ENDPOINT = "https://hf-mirror.com"
 # A small file that exists in one of the repositories this product downloads.
 # Any of them would do: the point is to make the CDN hand over bytes, not to
 # check this particular repository.
-_PROBE_PATH = "/mlx-community/whisper-large-v3-mlx/resolve/main/config.json"
+_PROBE_PATH = "/mlx-community/whisper-large-v3-turbo/resolve/main/config.json"
 
 _PROBE_TIMEOUT_SECONDS = 8.0
 
