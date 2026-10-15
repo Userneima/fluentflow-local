@@ -23,6 +23,44 @@ tell application "Terminal"
 end tell
 APPLESCRIPT
 
+# 打开页面：Chrome 里已经有这个服务的标签页就复用它（刷新并切到前面），多余的
+# 同址标签页关掉；没有才新开。每次重启都新开一个标签页，旧的要一个个手动关。
+open_app() {
+	if pgrep -xq "Google Chrome"; then
+		local reused
+		reused="$(osascript - "$APP_URL" "http://127.0.0.1:${PORT}" <<'APPLESCRIPT' 2>/dev/null || true
+on run argv
+	set theUrl to item 1 of argv
+	set theOrigin to item 2 of argv
+	set kept to false
+	tell application "Google Chrome"
+		repeat with w in (every window)
+			set n to count of tabs of w
+			repeat with i from n to 1 by -1
+				set t to tab i of w
+				if (URL of t) starts with theOrigin then
+					if kept then
+						close t
+					else
+						reload t
+						set active tab index of w to i
+						set index of w to 1
+						set kept to true
+					end if
+				end if
+			end repeat
+		end repeat
+		if kept then activate
+	end tell
+	return kept
+end run
+APPLESCRIPT
+)"
+		[[ "$reused" == "true" ]] && return 0
+	fi
+	open "$APP_URL"
+}
+
 REPO="${FLUENTFLOW_REPO:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 
 # 端口：shell 环境里的 FLUENTFLOW_LOCAL_PORT 优先，其次是仓库 .env 里的同名行，
@@ -80,7 +118,7 @@ if [[ -n "$health" ]]; then
 		# 浏览器真正会加载的那个地址，而不是只探健康检查。
 		if curl -sf --max-time 5 "$APP_URL" 2>/dev/null | head -c 1 | grep -q .; then
 			echo "FluentFlow Local 已在运行，直接打开浏览器。"
-			open "$APP_URL"
+			open_app
 			exit 0
 		fi
 		echo ""
@@ -160,7 +198,7 @@ cd "$REPO"
 (
 	for _ in $(seq 1 80); do
 		if curl -s --max-time 1 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-			open "$APP_URL"
+			open_app
 			exit 0
 		fi
 		sleep 0.25
