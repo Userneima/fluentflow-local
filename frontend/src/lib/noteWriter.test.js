@@ -32,7 +32,7 @@ describe('who writes the note', () => {
             settings: {aiProvider: 'deepseek', aiModel: 'deepseek-reasoner'},
         });
         expect(writer.kind).toBe('text_model');
-        expect(noteWriterSentence(writer, 'zh')).toBe('当前写笔记的是 DeepSeek（deepseek-reasoner）。');
+        expect(noteWriterSentence(writer, 'zh')).toMatch(/^当前写笔记的是 DeepSeek（deepseek-reasoner）。它看不了画面/);
         expect(noteWriterBatchClause(writer, 'zh')).not.toContain('Claude');
     });
 
@@ -104,5 +104,16 @@ describe('what the prompt button says about who uses the prompt', () => {
         });
         expect(writer.kind).toBe('text_model');
         expect(notePromptScopeSentence(writer, 'zh')).toBe('');
+    });
+});
+
+
+describe('a text model as the writer', () => {
+    it('says up front that it cannot see the picture and that cutting is not affected', () => {
+        const sentence = noteWriterSentence({kind: 'text_model', provider: 'deepseek', model: ''}, 'zh');
+        expect(sentence).toContain('看不了画面');
+        expect(sentence).toContain('不配截图');
+        expect(sentence).toContain('剪辑不受影响');
+        expect(noteWriterSentence({kind: 'claude', viaApiKey: false}, 'zh')).not.toContain('看不了画面');
     });
 });
