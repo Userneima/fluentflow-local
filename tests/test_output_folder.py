@@ -286,3 +286,19 @@ def test_a_link_served_as_subtitles_gets_no_folder(tmp_path, pdfs, monkeypatch):
 
     assert output_folder.sync(task) is None
     assert not (tmp_path / "FluentFlow" / "只有字幕").exists()
+
+
+
+def test_a_link_download_keeps_working_after_fluentflows_copy_is_cleaned_up(tmp_path, pdfs, monkeypatch):
+    from backend.core import debreath_job
+    from backend.core.storage_paths import _source_storage_dir as stored
+
+    monkeypatch.setenv(output_folder.LINK_ROOT_ENV, str(tmp_path / "FluentFlow"))
+    task = _link_task("会被清理的视频")
+    output_folder.sync(task)
+    (stored() / task / "source.mp4").unlink()
+
+    kept = tmp_path / "FluentFlow" / "会被清理的视频" / "会被清理的视频.mp4"
+    assert kept.read_bytes() == b"downloaded video"
+    assert debreath_job.resolve_source(task) == kept
+    assert output_folder.sync(task)["path"] == str(kept.parent)

@@ -94,10 +94,13 @@ def _link_original(task_id: str, job: dict[str, Any]) -> Path | None:
     path of that original, which then plays the part of the recording the
     folder sits around. None when the download is not kept (a link that was
     served as subtitles only, or a source already cleaned up)."""
-    from backend.core.storage_paths import find_source_file
+    from backend.core.storage_paths import find_source_file, in_place_source_path
 
     downloaded = find_source_file(task_id)
-    if downloaded is None or downloaded.suffix.lower() in {".srt", ".vtt", ".txt", ".json"}:
+    if downloaded is None:
+        # FluentFlow's own copy was cleaned up; the one in the folder stays.
+        return in_place_source_path(job)
+    if downloaded.suffix.lower() in {".srt", ".vtt", ".txt", ".json"}:
         return None
     metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     title = str(metadata.get("display_title") or metadata.get("raw_title") or job.get("source_filename") or "").strip()
@@ -115,6 +118,11 @@ def _link_original(task_id: str, job: dict[str, Any]) -> Path | None:
     original = folder / f"{folder.name}{downloaded.suffix.lower()}"
     if not original.exists():
         _link_or_copy(downloaded, original)
+    if str(metadata.get("kept_original_path") or "") != str(original):
+        job_store.upsert_job(
+            task_id=task_id, status=str(job.get("status") or "completed"),
+            metadata={**metadata, "kept_original_path": str(original)},
+        )
     return original
 
 
