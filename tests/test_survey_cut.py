@@ -13,7 +13,9 @@ Requirements (owner, 2026-10-15, 方案/2026-10-15-先转录再定怎么剪):
 6. Every single cut longer than a minute, and gaps in which words were
    transcribed, are listed for confirmation too.
 7. With the new flow on, nothing is cut before transcription.
-9. No cut reaches into a transcribed word, with or without a model.
+9. No cut reaches into speech: a transcribed word that the voice detector also
+   hears. A word's time alone is not enough (the transcriber stretches it over
+   the pause after it). With or without a model.
 10. Filler in the middle (sound checks, a sentence said twice, off-topic
     talk) is removed too; every removed stretch is listed, whatever their number.
 11. Pauses under three seconds are cut without asking the model.
@@ -255,13 +257,34 @@ def test_no_cut_reaches_into_a_transcribed_word():
     plan, record = survey_cut.protect_words(_plan(gaps=[(10, 14)]), [(11.0, 11.5), (30.0, 31.0)])
 
     assert [(c.start, c.end) for c in plan.cuts] == [(10.1, 10.95), (11.55, 13.9)]
-    assert record["words_known"] is True and record["seconds_kept_for_words"] == pytest.approx(0.6, abs=0.01)
+    assert record["seconds_kept_for_words"] == pytest.approx(0.6, abs=0.01)
 
 
 def test_without_word_times_the_cuts_stand():
     plan, record = survey_cut.protect_words(_plan(), [])
 
-    assert len(plan.cuts) == 3 and record == {"words_known": False}
+    assert len(plan.cuts) == 3 and record == {}
+
+
+def test_only_words_the_voice_detector_hears_are_spoken():
+    # A word stretched over 11-13.5; the detector hears a voice in 11-11.4.
+    heard_in = []
+
+    def detector(source, regions):
+        heard_in.extend(regions)
+        return [TimeRange(11.0, 11.4)]
+
+    spoken, record = survey_cut.spoken_words(Path("x.mp4"), _plan(gaps=[(10, 14)]), [(11.0, 13.5), (30.0, 31.0)], detector)
+
+    assert [(r.start, r.end) for r in heard_in] == [(11.0, 13.5)]
+    assert spoken == [(11.0, 11.4)]
+    assert record["words_known"] is True
+
+
+def test_without_a_voice_detector_words_do_not_block_cuts():
+    spoken, record = survey_cut.spoken_words(Path("x.mp4"), _plan(gaps=[(10, 14)]), [(11.0, 12.0)], lambda s, r: None)
+
+    assert spoken == [] and record["voice_unchecked"] is True
 
 
 def test_filler_in_the_middle_is_removed_and_every_removal_is_listed():
@@ -292,6 +315,8 @@ def test_short_pauses_are_not_shown_to_the_model():
 @needs_ffmpeg
 def test_a_quiet_word_inside_a_gap_survives_the_cut(task, monkeypatch):
     monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    # The synthetic gap is digital silence; stand in for a detector hearing the word.
+    monkeypatch.setattr(survey_cut, "voiced_parts", lambda source, regions: regions)
     result = job_store.get_job(task["id"])["result"]
     result["stt_raw_segments"] = [
         {"start": 0.5, "end": 9.5, "text": "开场", "words": [{"start": 0.5, "end": 9.5, "text": "开场", "conf": 0.9}]},

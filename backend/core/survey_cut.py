@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
@@ -344,15 +345,121 @@ def words_of(result: dict[str, Any]) -> list[tuple[float, float]]:
     return []
 
 
-def protect_words(plan: CutPlan, words: list[tuple[float, float]]) -> tuple[CutPlan, dict[str, Any]]:
-    """``plan`` with every cut kept off the transcribed words.
+# How the voice detector reads the stretches where a word overlaps a cut. More
+# sensitive than the fragment cleanup's 0.5: the words in question were cut for
+# being quiet.
+VOICE_THRESHOLD = 0.3
+VOICE_RATE = 16000
+VOICE_CONTEXT_SECONDS = 0.3
+# Voice heard inside a word's overlap with a cut for less than this is a
+# breath or a click at the edge of the word, not the word: tens of
+# milliseconds of it would otherwise keep a whole short gap.
+MIN_SPOKEN_SECONDS = 0.08
 
-    Loudness cuts quiet speech as if it were a gap. The transcript says where
-    someone spoke, so a cut stops short of each word instead of asking the user
-    afterwards. The words come only from stretches the transcriber's own voice
-    detector passed, so noise rarely turns into a word that blocks a cut."""
+
+def _word_regions(plan: CutPlan, words: list[tuple[float, float]]) -> list[TimeRange]:
+    """Where a transcribed word overlaps a cut: the overlap, merged."""
+    regions: list[TimeRange] = []
+    index = 0
+    for cut in plan.cuts:
+        while index < len(words) and words[index][1] <= cut.start:
+            index += 1
+        probe = index
+        while probe < len(words) and words[probe][0] < cut.end:
+            start, end = max(words[probe][0], cut.start), min(words[probe][1], cut.end)
+            if end > start:
+                regions.append(TimeRange(start, end))
+            probe += 1
+    return silence_cuts._merge_ranges(regions)
+
+
+def voiced_parts(source: Path, regions: list[TimeRange]) -> list[TimeRange] | None:
+    """The parts of ``regions`` in which the voice detector hears a voice. One
+    streamed decode of the audio; only the regions are examined. None when the
+    detector or the audio is not available."""
+    try:
+        import numpy as np
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+    except Exception:  # noqa: BLE001 - no detector here
+        return None
+    if not regions:
+        return []
+    options = VadOptions(threshold=VOICE_THRESHOLD, min_speech_duration_ms=silence_cuts.FRAGMENT_MIN_VOICE_MS,
+                         min_silence_duration_ms=100, speech_pad_ms=30)
+    process = subprocess.Popen(
+        [silence_cuts._ffmpeg_path(), "-v", "error", "-i", str(source), "-vn", "-ac", "1",
+         "-ar", str(VOICE_RATE), "-f", "s16le", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    found: list[TimeRange] = []
+    buffer = np.zeros(0, dtype=np.int16)
+    offset = 0  # sample index of buffer[0]
+    pending = sorted(regions, key=lambda r: r.start)
+    block = VOICE_RATE * 2 * 60
+    try:
+        while pending:
+            data = process.stdout.read(block) if process.stdout else b""
+            done = not data
+            if data:
+                buffer = np.concatenate([buffer, np.frombuffer(data[: len(data) // 2 * 2], dtype=np.int16)])
+            end_sample = offset + len(buffer)
+            while pending and (done or (pending[0].end + VOICE_CONTEXT_SECONDS) * VOICE_RATE <= end_sample):
+                region = pending.pop(0)
+                lo = max(int((region.start - VOICE_CONTEXT_SECONDS) * VOICE_RATE), offset)
+                hi = min(int((region.end + VOICE_CONTEXT_SECONDS) * VOICE_RATE), end_sample)
+                if hi <= lo:
+                    continue
+                samples = buffer[lo - offset: hi - offset].astype(np.float32) / 32768.0
+                for speech in get_speech_timestamps(samples, options):
+                    start = max(region.start, (lo + speech["start"]) / VOICE_RATE)
+                    end = min(region.end, (lo + speech["end"]) / VOICE_RATE)
+                    if end > start:
+                        found.append(TimeRange(round(start, 3), round(end, 3)))
+            if done:
+                break
+            keep_from = int(((pending[0].start if pending else 0) - VOICE_CONTEXT_SECONDS) * VOICE_RATE)
+            drop = max(0, min(keep_from, end_sample) - offset)
+            if drop:
+                buffer = buffer[drop:]
+                offset += drop
+    finally:
+        if process.stdout:
+            process.stdout.close()
+        process.kill()
+        process.wait()
+    return silence_cuts._merge_ranges(found)
+
+
+def spoken_words(
+    source: Path, plan: CutPlan, words: list[tuple[float, float]],
+    voiced: Callable[[Path, list[TimeRange]], list[TimeRange] | None] = None,
+) -> tuple[list[tuple[float, float]], dict[str, Any]]:
+    """Where the cuts reach into speech: a transcribed word there, and the
+    voice detector hears it too.
+
+    Measured on an 8-minute meeting (2026-10-15): words overlapped 37.8 s of
+    the loudness cuts, but the detector heard a voice in only 2.1 s of it
+    (6.5 s at a lower threshold). The transcriber stretches a word's time over
+    the pause after it, so word times alone would have kept 122 slivers of
+    silence."""
     if not words:
-        return plan, {"words_known": False}
+        return [], {"words_known": False}
+    regions = _word_regions(plan, words)
+    heard = (voiced or voiced_parts)(source, regions)
+    record: dict[str, Any] = {"words_known": True, "seconds_words_overlap_cuts": round(sum(r.duration for r in regions), 2)}
+    if heard is None:
+        record["voice_unchecked"] = True
+        return [], record
+    return [(r.start, r.end) for r in heard if r.duration >= MIN_SPOKEN_SECONDS], record
+
+
+def protect_words(plan: CutPlan, words: list[tuple[float, float]]) -> tuple[CutPlan, dict[str, Any]]:
+    """``plan`` with every cut kept off ``words`` (spoken word spans, see
+    ``spoken_words``): loudness cuts quiet speech as if it were a gap, and the
+    transcript says where someone spoke, so the cut stops short of it instead
+    of asking the user afterwards."""
+    if not words:
+        return plan, {}
     pieces: list[TimeRange] = []
     index = 0
     for cut in plan.cuts:
@@ -376,7 +483,7 @@ def protect_words(plan: CutPlan, words: list[tuple[float, float]]) -> tuple[CutP
         keeps=silence_cuts._keeps_between(plan.source_duration_seconds, cuts, silence_cuts.MIN_KEEP_SECONDS),
         warnings=list(plan.warnings),
     )
-    return revised, {"words_known": True, "seconds_kept_for_words": round(max(protected, 0.0), 2)}
+    return revised, {"seconds_kept_for_words": round(max(protected, 0.0), 2)}
 
 
 def _overlaps(a: TimeRange, start: float, end: float) -> bool:
@@ -474,8 +581,9 @@ def survey_and_cut(
     final: dict[str, CutPlan] = {}
 
     def revise(media: Path, plan: CutPlan) -> CutPlan:
-        plan, protection = protect_words(plan, words)
-        record["word_protection"] = protection
+        spoken, protection = spoken_words(media, plan, words)
+        plan, kept = protect_words(plan, spoken)
+        record["word_protection"] = {**protection, **kept}
         if asker is None or not segments:
             record["skipped"] = "没有可用的模型或转录，只按音量剪。"
             final["plan"] = plan
@@ -602,7 +710,8 @@ def restore(task_id: str, index: int, client_id: str | None = None) -> dict[str,
     words = words_of(result)
 
     def revise(media: Path, plan: CutPlan) -> CutPlan:
-        final["plan"] = apply_decisions(protect_words(plan, words)[0], kept, removals)
+        spoken, _ = spoken_words(media, plan, words)
+        final["plan"] = apply_decisions(protect_words(plan, spoken)[0], kept, removals)
         return final["plan"]
 
     try:
