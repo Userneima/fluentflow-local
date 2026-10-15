@@ -95,7 +95,7 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
     if short.get("count"):
         out.append({
             "id": "short", "kind": "short_gaps", "action": "removed", "seconds": short.get("seconds") or 0,
-            "default": f"{short['count']} 处 3 秒以下的停顿全部剪掉，共 {_length(short.get('seconds') or 0)}。",
+            "default": "3 秒以下的停顿，全部剪掉。",
             "count": short["count"],
         })
     for n, gap in enumerate(gaps.get("long") or [], start=1):
@@ -147,7 +147,7 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
         seconds = sum(_seconds(s.get("end")) - _seconds(s.get("start")) for s in rest)
         out.append({
             "id": "s_rest", "kind": "quiet_speech", "action": "kept", "seconds": round(seconds, 1),
-            "count": len(rest), "default": f"另有 {len(rest)} 处很轻的说话同样保留，共 {_length(seconds)}。",
+            "count": len(rest), "default": "其余说得很轻的话，同样保留。",
         })
     # A stretch the user changed is listed once, as theirs.
     out = [
@@ -217,7 +217,10 @@ def assemble(all_facts: list[dict[str, Any]], answer: dict[str, Any], organized_
             if ref not in by_id or ref in used:
                 continue
             used.add(ref)
-            items.append(_item(by_id[ref], str(entry.get("text") or "")[:120] or None))
+            # A count over many places is what the product always does; it is
+            # stated as a fact, in the program's words, not argued for.
+            text = str(entry.get("text") or "")[:120] if "start" in by_id[ref] else ""
+            items.append(_item(by_id[ref], text or None))
         if items:
             sections.append({
                 "title": str(section.get("title") or "").strip()[:30] or "处理",

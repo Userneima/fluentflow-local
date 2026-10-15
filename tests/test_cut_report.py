@@ -46,14 +46,15 @@ def test_every_thing_the_cut_did_is_a_fact():
     assert [f["id"] for f in facts] == ["short", "g1", "g2", "r1", "s1"]
     g2 = next(f for f in facts if f["id"] == "g2")
     assert g2["action"] == "kept" and g2["before"] == "我来演示一下这个页面"
-    assert "120 处" in facts[0]["default"]
+    assert facts[0]["count"] == 120 and facts[0]["default"] == "3 秒以下的停顿，全部剪掉。"
     assert next(f for f in facts if f["id"] == "r1")["said"] == "能听到吗能听到"
 
 
 def test_the_model_organises_but_times_are_the_programs_and_nothing_is_lost():
     answer = ('{"summary": "主要去掉了确认声音", "sections": ['
               '{"title": "去掉的说话", "folded": false, "items": [{"ref": "r1", "text": "确认能不能听到，去掉"}, {"ref": "zz", "text": "编的"}]},'
-              '{"title": "保留的画面", "folded": false, "items": [{"ref": "g2", "text": "在演示", "start": 999}]}]}')
+              '{"title": "保留的画面", "folded": false, "items": [{"ref": "g2", "text": "在演示", "start": 999}]},'
+              '{"title": "零碎", "folded": true, "items": [{"ref": "short", "text": "让节奏更紧凑"}]}]}')
 
     report = cut_report.organize(cut_report.facts(RECORD, SEGMENTS), ((lambda s, u: answer), "fake"))
 
@@ -62,8 +63,10 @@ def test_the_model_organises_but_times_are_the_programs_and_nothing_is_lost():
     first = report["sections"][0]["items"][0]
     assert first["text"] == "确认能不能听到，去掉" and first["start"] == 60.0
     assert report["sections"][1]["items"][0]["start"] == 24.0
+    # A count is stated as the program's fact, not in the model's words.
+    assert report["sections"][2]["items"][0]["text"] == "3 秒以下的停顿，全部剪掉。"
     last = report["sections"][-1]
-    assert last["title"] == "其他处理" and last["folded"] is True and sorted(i["ref"] for i in last["items"]) == ["g1", "s1", "short"]
+    assert last["title"] == "其他处理" and last["folded"] is True and sorted(i["ref"] for i in last["items"]) == ["g1", "s1"]
 
 
 @pytest.mark.parametrize("chat", [None, ((lambda s, u: "不是 JSON"), "fake"), ((lambda s, u: (_ for _ in ()).throw(RuntimeError())), "fake")])
