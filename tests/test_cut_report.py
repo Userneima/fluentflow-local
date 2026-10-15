@@ -96,8 +96,8 @@ def test_what_the_user_put_back_is_listed_first_as_theirs():
 def test_only_doubts_and_the_rules_put_items_to_the_user():
     record = {**RECORD, "gaps": {"short": {"count": 1, "seconds": 1.0}, "long": [
         {"start": 5.0, "end": 19.0, "seconds": 14.0, "picture": "画面一直在变", "kept": False, "reason": ""},
-        {"start": 24.0, "end": 100.0, "seconds": 76.0, "picture": "画面静止", "kept": False, "reason": ""},
-        {"start": 110.0, "end": 120.0, "seconds": 10.0, "picture": "画面静止", "kept": False, "reason": ""},
+        {"start": 100.0, "end": 176.0, "seconds": 76.0, "picture": "画面静止", "kept": False, "reason": ""},
+        {"start": 180.0, "end": 190.0, "seconds": 10.0, "picture": "画面静止", "kept": False, "reason": ""},
     ]}}
     answer = ('{"summary": "", "sections": [{"title": "长空白", "folded": false, "items": ['
               '{"ref": "g1", "text": "剪掉", "unsure": true, "doubt": "画面在变，可能是在演示"},'
