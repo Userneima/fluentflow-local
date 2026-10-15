@@ -596,3 +596,15 @@ def test_the_browser_login_preference_round_trips_as_a_name(monkeypatch, tmp_pat
     monkeypatch.setattr(lvs, "get_preference", lambda name: "safari" if name == "video_cookies_browser" else None)
     assert lvs._video_cookies_browser({}) == "safari"
     assert lvs._video_cookies_browser({"cookies_from_browser": "firefox"}) == "firefox"
+
+
+def test_a_youtube_link_is_downloaded_as_video_by_default(monkeypatch):
+    """Owner, 2026-10-15: captions alone left no video, so no picture for the
+    note, nothing to cut and no original to keep. Captions first only when
+    asked for."""
+    from backend.core import video_source
+
+    monkeypatch.delenv(video_source.CAPTIONS_FIRST_ENV, raising=False)
+    assert video_source.captions_first_provider("https://youtu.be/abc") is None
+    monkeypatch.setenv(video_source.CAPTIONS_FIRST_ENV, "1")
+    assert video_source.captions_first_provider("https://youtu.be/abc") == "youtube"
