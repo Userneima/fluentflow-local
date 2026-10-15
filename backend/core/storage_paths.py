@@ -48,10 +48,14 @@ def in_place_source_path(job: dict | None) -> Path | None:
     task was queued; this reads it back and confirms it is still there.
     """
     metadata = (job or {}).get("metadata")
-    origin = metadata.get("folder_intake") if isinstance(metadata, dict) else None
-    if not isinstance(origin, dict):
+    if not isinstance(metadata, dict):
         return None
-    recorded = str(origin.get("original_path") or "").strip()
+    origin = metadata.get("folder_intake")
+    recorded = str(origin.get("original_path") or "").strip() if isinstance(origin, dict) else ""
+    # A video downloaded from a link is kept in its folder under
+    # ~/Movies/FluentFlow (``output_folder``); that copy outlives FluentFlow's
+    # own, which is cleaned up after the retention window.
+    recorded = recorded or str(metadata.get("kept_original_path") or "").strip()
     if not recorded:
         return None
     path = Path(recorded).expanduser()
