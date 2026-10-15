@@ -112,3 +112,14 @@ def test_only_doubts_and_the_rules_put_items_to_the_user():
     assert "1 分" in doubts["g2"]
     assert "r1" in doubts and "g3" not in doubts
     assert all(not s.get("judge") for s in report["sections"][1:])
+
+
+def test_a_gap_cut_together_with_a_removed_stretch_is_listed_once():
+    record = {**RECORD, "gaps": {"short": {}, "long": [
+        {"start": 50.0, "end": 60.2, "seconds": 10.2, "picture": "画面静止", "kept": False, "reason": ""},
+        {"start": 80.0, "end": 90.0, "seconds": 10.0, "picture": "画面静止", "kept": False, "reason": ""},
+    ]}}
+
+    ids = [fact["id"] for fact in cut_report.facts(record, SEGMENTS)]
+
+    assert "r1" in ids and "g2" in ids and "g1" not in ids

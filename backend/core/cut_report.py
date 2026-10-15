@@ -159,6 +159,14 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
             "id": "s_rest", "kind": "quiet_speech", "action": "kept", "seconds": round(seconds, 1),
             "count": len(rest), "default": "其余说得很轻的话，同样保留。",
         })
+    # A gap inside or against a removed stretch went with it: the removal says
+    # it once (the old confirmation list asked about one 12-minute cut twice).
+    removals = [f for f in out if f["kind"] == "removed_talk"]
+    out = [
+        fact for fact in out
+        if fact["kind"] != "long_gap" or fact["action"] != "removed"
+        or not any(fact["start"] <= r["end"] + 0.5 and r["start"] <= fact["end"] + 0.5 for r in removals)
+    ]
     # A stretch the user changed is listed once, as theirs.
     out = [
         fact for fact in out
