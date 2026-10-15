@@ -1981,3 +1981,42 @@ def test_a_very_short_quiet_stretch_is_cut_whatever_its_margins(tmp_path, monkey
 
     assert pruned.cuts == [short]
     assert pruned.level_separation["unsafe_cuts_kept"] == 1
+
+
+# ── stranded clicks between two cuts ────────────────────────────────────────
+# Requirement (owner, 2026-10-15): after the silences are cut, a short sound
+# left between two cuts with no voice in it (a mouse click, a key) is removed,
+# so the result has no run of clicks; one with a voice ("对", even half a word)
+# stays; longer kept pieces and the ends of the recording are never touched.
+
+def _plan_with_fragments() -> "sc.CutPlan":
+    cuts = [sc.TimeRange(2.0, 3.0), sc.TimeRange(3.2, 4.0), sc.TimeRange(4.3, 5.0), sc.TimeRange(6.0, 7.0)]
+    return sc.CutPlan(
+        source_duration_seconds=10.0, cuts=cuts,
+        keeps=sc._keeps_between(10.0, cuts, sc.MIN_KEEP_SECONDS),
+        silences_found=4, noise_db=-30.0, min_silence_seconds=0.25, padding_seconds=0.1,
+    )
+
+
+def test_a_stranded_sound_without_voice_is_removed_and_one_with_voice_stays(tmp_path, monkeypatch):
+    media = tmp_path / "talk.wav"
+    subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-y", "-f", "lavfi", "-t", "10",
+                    "-i", "anullsrc=r=16000:cl=mono", str(media)], check=True)
+    plan = _plan_with_fragments()
+    # 3.0-3.2 s is a click, 4.0-4.3 s holds a word; the detector is told which.
+    calls = iter([False, True])
+
+    cleaned = sc.drop_voiceless_fragments(media, plan, has_voice=lambda samples: next(calls))
+
+    assert sc.TimeRange(2.0, 4.0) in cleaned.cuts, "the click and the silences around it are one cut"
+    assert sc.TimeRange(4.0, 4.3) in cleaned.keeps, "the word stays"
+    assert sc.TimeRange(5.0, 6.0) in cleaned.keeps, "a full second of sound is not judged at all"
+    assert cleaned.keeps[0] == sc.TimeRange(0.0, 2.0) and cleaned.keeps[-1] == sc.TimeRange(7.0, 10.0)
+    assert cleaned.fragment_cleanup == {"stranded": 2, "removed": 1, "removed_seconds": 0.2}
+
+
+def test_without_a_voice_detector_nothing_is_removed(tmp_path, monkeypatch):
+    plan = _plan_with_fragments()
+    monkeypatch.setattr(sc, "_voice_detector", lambda: None)
+
+    assert sc.drop_voiceless_fragments(tmp_path / "x.wav", plan) is plan

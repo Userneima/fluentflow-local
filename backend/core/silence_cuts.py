@@ -300,6 +300,9 @@ class CutPlan:
     level_separation: dict[str, Any] = field(default_factory=dict)
     # Why this threshold, when the caller did not pick it. Empty when they did.
     threshold_choice: dict[str, Any] = field(default_factory=dict)
+    # Short sounds left stranded between two cuts and removed for having no
+    # voice in them (``drop_voiceless_fragments``). Empty when not run.
+    fragment_cleanup: dict[str, Any] = field(default_factory=dict)
 
     @property
     def removed_seconds(self) -> float:
@@ -334,6 +337,7 @@ class CutPlan:
             "warnings": list(self.warnings),
             "level_separation": dict(self.level_separation),
             "threshold_choice": dict(self.threshold_choice) or None,
+            "fragment_cleanup": dict(self.fragment_cleanup) or None,
             "cuts": [cut.as_dict() for cut in self.cuts],
             "keeps": [keep.as_dict() for keep in self.keeps],
         }
@@ -1034,6 +1038,111 @@ def keep_unsafe_cuts(media: Path | str, plan: CutPlan) -> CutPlan | None:
     return pruned
 
 
+# A kept piece shorter than this, with a cut on both sides, is a stranded sound:
+# a mouse click, a key, a cough. In the recording they sat far apart inside long
+# silences; once the silences are cut they arrive in a dense run of clicks
+# (reported 2026-10-15). Such a piece is removed when no voice is found in it.
+STRANDED_FRAGMENT_SECONDS = 0.4
+# How much of the surroundings the voice detector hears with the piece, so a
+# syllable cut off at the edge is still recognised as a voice.
+FRAGMENT_CONTEXT_SECONDS = 0.3
+# Voice this short still counts. The detector's default (100 ms) let a real
+# half-word through as voiceless; at 60 ms it is kept, and in the owner's
+# listening most of the extra pieces this keeps had a voice in them: "the gain
+# of removing them is clearly smaller than what could be lost" (2026-10-15).
+FRAGMENT_MIN_VOICE_MS = 60
+
+
+def _voice_detector() -> Callable[[Any], bool] | None:
+    """A function telling whether a 16 kHz mono float array holds a voice, or
+    None when the detector that ships with the transcription stack is missing."""
+    try:
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+    except Exception:  # noqa: BLE001 - no detector, no cleanup; the cut stands as it is
+        return None
+    options = VadOptions(
+        threshold=0.5, min_speech_duration_ms=FRAGMENT_MIN_VOICE_MS,
+        min_silence_duration_ms=100, speech_pad_ms=0,
+    )
+    return lambda samples: bool(get_speech_timestamps(samples, options))
+
+
+def _merge_ranges(ranges: Sequence[TimeRange]) -> list[TimeRange]:
+    merged: list[TimeRange] = []
+    for span in sorted(ranges, key=lambda item: item.start):
+        if merged and span.start <= merged[-1].end + 0.001:
+            merged[-1] = TimeRange(merged[-1].start, max(merged[-1].end, span.end))
+        else:
+            merged.append(span)
+    return merged
+
+
+def drop_voiceless_fragments(
+    media: Path | str, plan: CutPlan, *, has_voice: Callable[[Any], bool] | None = None,
+) -> CutPlan:
+    """Remove the short sounds stranded between two cuts that hold no voice.
+
+    Requirement (owner, 2026-10-15): after the silences are gone, mouse clicks
+    and typing that sat inside them must not be left behind as a run of clicks;
+    a short spoken word ("对", "嗯") between two silences stays. Judged by the
+    voice detector that ships with transcription, not by loudness: a click is
+    as loud as a word. Returns the plan unchanged when there is nothing to
+    judge or no detector."""
+    cut_starts = {round(cut.start, 3) for cut in plan.cuts}
+    cut_ends = {round(cut.end, 3) for cut in plan.cuts}
+    stranded = [
+        keep for keep in plan.keeps
+        if keep.duration < STRANDED_FRAGMENT_SECONDS
+        and round(keep.start, 3) in cut_ends and round(keep.end, 3) in cut_starts
+    ]
+    if not stranded:
+        return plan
+    detector = has_voice or _voice_detector()
+    if detector is None:
+        return plan
+    try:
+        import numpy as np
+
+        rate = 16000
+        completed = subprocess.run(
+            [_ffmpeg_path(), "-v", "error", "-i", str(media), "-vn", "-ac", "1", "-ar", str(rate), "-f", "f32le", "-"],
+            capture_output=True, timeout=3600,
+        )
+        if completed.returncode != 0 or not completed.stdout:
+            return plan
+        audio = np.frombuffer(completed.stdout, dtype=np.float32)
+    except (OSError, subprocess.SubprocessError, SilenceCutError, ImportError):
+        return plan
+
+    def around(keep: TimeRange) -> Any:
+        start = max(0, int((keep.start - FRAGMENT_CONTEXT_SECONDS) * rate))
+        return audio[start:int((keep.end + FRAGMENT_CONTEXT_SECONDS) * rate)]
+
+    voiceless = [keep for keep in stranded if not detector(around(keep))]
+    if not voiceless:
+        plan.fragment_cleanup = {"stranded": len(stranded), "removed": 0, "removed_seconds": 0.0}
+        return plan
+    cuts = _merge_ranges([*plan.cuts, *voiceless])
+    cleaned = CutPlan(
+        source_duration_seconds=plan.source_duration_seconds,
+        cuts=cuts,
+        keeps=_keeps_between(plan.source_duration_seconds, cuts, MIN_KEEP_SECONDS),
+        silences_found=plan.silences_found,
+        noise_db=plan.noise_db,
+        min_silence_seconds=plan.min_silence_seconds,
+        padding_seconds=plan.padding_seconds,
+        warnings=list(plan.warnings),
+        level_separation=dict(plan.level_separation),
+        threshold_choice=plan.threshold_choice,
+    )
+    cleaned.fragment_cleanup = {
+        "stranded": len(stranded),
+        "removed": len(voiceless),
+        "removed_seconds": round(sum(keep.duration for keep in voiceless), 1),
+    }
+    return cleaned
+
+
 # Below this, the fixed threshold is inside the speech rather than under it.
 # Measured: a WeChat meeting recording averages -31.1dB overall, so the default
 # -30dB judged a great deal of quiet speech to be silence — 1552 cuts, and the spot
@@ -1362,6 +1471,7 @@ def plan_silence_cuts(
     min_silence_seconds: float = DEFAULT_MIN_SILENCE_SECONDS,
     padding_seconds: float = DEFAULT_PADDING_SECONDS,
     check_separation: bool = True,
+    drop_fragments: bool = True,
     runner: CommandRunner = run_command,
 ) -> CutPlan:
     """Probe, detect, and plan in one call. No file is written.
@@ -1420,6 +1530,8 @@ def plan_silence_cuts(
                 f"那几段录得很轻，{noise_db:g}dB 在那里分不开说话和空白。"
                 "先听这几处，或把「最短静音时长」调大只剪长空白"
             )
+    if drop_fragments and plan.cuts:
+        plan = drop_voiceless_fragments(source, plan)
     return plan
 
 
