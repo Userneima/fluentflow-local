@@ -153,11 +153,13 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
     spoken = sorted(record.get("spoken") or [], key=lambda s: _seconds(s.get("end")) - _seconds(s.get("start")), reverse=True)
     for n, span in enumerate(spoken[:MAX_SPOKEN_ITEMS], start=1):
         start, end = _seconds(span.get("start")), _seconds(span.get("end"))
-        said = span.get("said") or _text_within(segments, start, end, 30)
+        # Only the words this stretch saved; the whole line around them read as
+        # if all of it had been quiet.
+        said = span.get("said") or ""
         out.append({
             "id": f"s{n}", "kind": "quiet_speech", "action": "kept", "start": start, "end": end,
             "seconds": round(end - start, 1), "said": said,
-            "default": "这里说得很轻，按音量会被剪掉；转录认出了字，人声检测器也听到了，保留。",
+            "default": "这句里有一小段说得很轻，按音量会被剪掉；转录认出有人在说话，人声检测器也听到了，保留。",
         })
     if len(spoken) > MAX_SPOKEN_ITEMS:
         rest = spoken[MAX_SPOKEN_ITEMS:]

@@ -366,3 +366,25 @@ def test_a_change_can_be_undone_from_the_bin(task, monkeypatch):
     assert "user_change" not in kinds and "removed_talk" in kinds
     with pytest.raises(survey_cut.ReviewError):
         survey_cut.undo_change(task["id"], 0)
+
+
+@needs_ffmpeg
+def test_without_word_times_the_lines_mark_where_someone_spoke(task, monkeypatch):
+    """The transcriber is not asked for word times (it costs 18-40% more time
+    for the same result); the lines are used, and the detector decides."""
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    heard = []
+
+    def detector(source, regions):
+        heard.extend(regions)
+        return [TimeRange(11.0, 11.5)]
+
+    monkeypatch.setattr(survey_cut, "voiced_parts", detector)
+    result = job_store.get_job(task["id"])["result"]
+    result["raw_segments"] = result["display_segments"] = _segments() + [{"start": 10.5, "end": 13.5, "text": "对"}]
+    job_store.update_job_result(task["id"], result)
+
+    record = survey_cut.survey_and_cut(task["id"], chat=(_says('{"keep_gaps": [], "remove": []}'), "fake"))
+
+    assert any(r.start <= 11.0 and r.end >= 11.5 for r in heard)
+    assert record["spoken"] == [{"start": 11.0, "end": 11.5, "said": ""}]

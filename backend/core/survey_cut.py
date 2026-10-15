@@ -325,6 +325,24 @@ def word_texts(result: dict[str, Any]) -> list[tuple[float, float, str]]:
     return []
 
 
+def speech_spans(result: dict[str, Any]) -> list[tuple[float, float]]:
+    """Where the transcript says someone spoke: each word when the transcript
+    has word times, else each line.
+
+    Lines are enough. Measured 2026-10-15 on a 2h28m meeting: with the voice
+    detector deciding inside them, lines kept 165.1 s of quiet speech against
+    160.5 s from word times (all of it included), while asking the transcriber
+    for word times costs 18-40% more transcription time. So it is not asked."""
+    words = words_of(result)
+    if words:
+        return words
+    for key in ("source_raw_segments", "raw_segments"):
+        lines = _texted(result.get(key))
+        if lines:
+            return sorted((_seconds(seg.get("start")), _seconds(seg.get("end"))) for seg in lines)
+    return []
+
+
 def words_of(result: dict[str, Any]) -> list[tuple[float, float]]:
     """Every transcribed word's time, from whichever segment list carries
     them. Empty when the transcription did not record word times."""
@@ -569,7 +587,7 @@ def survey_and_cut(
     if debreath_job.debreath_state(result).get("used_for_transcription"):
         return None
     segments = _texted(result.get("raw_segments"))
-    words = words_of(result)
+    words = speech_spans(result)
     try:
         source = debreath_job.resolve_source(task_id)
     except debreath_job.DebreathError:
@@ -682,7 +700,7 @@ def _rerender(
     job_store.update_job_result(task_id, result, client_id=client_id)
 
     final: dict[str, CutPlan] = {}
-    words = words_of(result)
+    words = speech_spans(result)
 
     def revise(media: Path, plan: CutPlan) -> CutPlan:
         spoken, _ = spoken_words(media, plan, words)
