@@ -712,48 +712,16 @@ def answer(task_id: str, index: int, value: str, client_id: str | None = None) -
     return survey
 
 
-MAX_FEEDBACK_CHARS = 2000
-
-
-def feedback(task_id: str, text: str, ref: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    """Keep what the user says about the processing, about one item of the
-    report (``ref``) or the whole of it."""
-    text = (text or "").strip()[:MAX_FEEDBACK_CHARS]
-    if not text:
-        raise ReviewError("意见是空的")
-    job = job_store.get_job(task_id, client_id=client_id)
-    if not job:
-        raise ReviewError("任务不存在")
-    result = dict(job.get("result") or {})
-    state = debreath_job.debreath_state(result)
-    survey = dict(state.get("survey") or {})
-    if not survey.get("report"):
-        raise ReviewError("这个任务没有处理说明")
-    from datetime import datetime, timezone
-
-    entries = list(survey.get("feedback") or [])
-    entries.append({"ref": ref or None, "text": text, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
-    survey["feedback"] = entries
-    result["debreath"] = {**state, "survey": survey}
-    job_store.update_job_result(task_id, result, client_id=client_id)
-    return {"feedback": entries}
-
-
-def restore(task_id: str, index: int, client_id: str | None = None) -> dict[str, Any]:
-    """Put one listed cut back and render again, with the model's other
-    decisions applied as they were (it is not asked again). The transcript is
-    moved from the original's clock onto the new cut. Blocking."""
-    result, survey = _survey(task_id, client_id)
-    if not 0 <= index < len(survey["review"]):
-        raise ReviewError("没有这一处剪辑")
-    item = survey["review"][index]
+def _rerender(
+    task_id: str, client_id: str | None, result: dict[str, Any], survey: dict[str, Any],
+    kept: list[dict[str, Any]], removals: list[dict[str, Any]], after: Callable[[dict[str, Any]], None],
+) -> dict[str, Any]:
+    """Render the cut again from the original with ``kept`` and ``removals``
+    as the decisions, without asking the model again; the transcript is moved
+    from the original's clock onto the new cut, the report written again.
+    ``after`` updates the survey record once the render succeeded. Blocking."""
     source = debreath_job.resolve_source(task_id)
-    removals = [r for r in survey.get("removed") or [] if not _overlaps(TimeRange(r["start"], r["end"]), item["start"], item["end"])]
-    kept = list(survey.get("kept_gaps") or [])
-    if item.get("kind") != "removed_talk":
-        kept.append({"start": item["start"], "end": item["end"], "reason": "用户说这段不该剪"})
-    survey.update({"removed": removals, "kept_gaps": kept, "restoring": index,
-                   "answers": {**dict(survey.get("answers") or {}), str(index): "wrong"}})
+    survey.update({"removed": removals, "kept_gaps": kept})
     # Back onto the original's clock, so the render remaps from there.
     for key in ("display_segments", "raw_segments", "stt_raw_segments"):
         if isinstance(result.get(f"source_{key}"), list):
@@ -763,7 +731,6 @@ def restore(task_id: str, index: int, client_id: str | None = None) -> dict[str,
     job_store.update_job_result(task_id, result, client_id=client_id)
 
     final: dict[str, CutPlan] = {}
-
     words = words_of(result)
 
     def revise(media: Path, plan: CutPlan) -> CutPlan:
@@ -775,21 +742,102 @@ def restore(task_id: str, index: int, client_id: str | None = None) -> dict[str,
         debreath_job.run_debreath(task_id, client_id=client_id, revise=revise)
     except Exception as exc:
         survey.pop("restoring", None)
+        survey.pop("rerendering", None)
         survey["restore_error"] = f"重新导出没成功：{str(exc)[:200]}"
         _record(task_id, client_id, survey)
         raise
     survey.pop("restoring", None)
+    survey.pop("rerendering", None)
     survey.pop("restore_error", None)
-    for gap in (survey.get("gaps") or {}).get("long") or []:
-        if item.get("kind") != "removed_talk" and _overlaps(TimeRange(_seconds(gap["start"]), _seconds(gap["end"])), item["start"], item["end"]):
-            gap.update({"kept": True, "reason": "你说这段不该剪，已放回。"})
-    item["restored"] = True
+    after(survey)
     _finish(task_id, client_id, source, final.get("plan"), survey, _default_chat())
     return survey
 
 
+def _mark_gaps(survey: dict[str, Any], start: float, end: float, kept: bool, reason: str) -> None:
+    for gap in (survey.get("gaps") or {}).get("long") or []:
+        if _overlaps(TimeRange(_seconds(gap["start"]), _seconds(gap["end"])), start, end):
+            gap.update({"kept": kept, "reason": reason})
+
+
+def restore(task_id: str, index: int, client_id: str | None = None) -> dict[str, Any]:
+    """Put one cut listed for confirmation back and render again."""
+    result, survey = _survey(task_id, client_id)
+    if not 0 <= index < len(survey["review"]):
+        raise ReviewError("没有这一处剪辑")
+    item = survey["review"][index]
+    removals = [r for r in survey.get("removed") or [] if not _overlaps(TimeRange(r["start"], r["end"]), item["start"], item["end"])]
+    kept = list(survey.get("kept_gaps") or [])
+    if item.get("kind") != "removed_talk":
+        kept.append({"start": item["start"], "end": item["end"], "reason": "用户说这段不该剪"})
+    survey.update({"restoring": index, "answers": {**dict(survey.get("answers") or {}), str(index): "wrong"}})
+
+    def after(record: dict[str, Any]) -> None:
+        if item.get("kind") != "removed_talk":
+            _mark_gaps(record, item["start"], item["end"], True, "你说这段不该剪，已放回。")
+        item["restored"] = True
+
+    return _rerender(task_id, client_id, result, survey, kept, removals, after)
+
+
+def _report_item(survey: dict[str, Any], ref: str) -> dict[str, Any] | None:
+    for section in (survey.get("report") or {}).get("sections") or []:
+        for item in section.get("items") or []:
+            if item.get("ref") == ref:
+                return item
+    return None
+
+
+def flip(task_id: str, ref: str, client_id: str | None = None) -> dict[str, Any]:
+    """Turn one decision in the processing report around: what was cut is put
+    back, what was kept is cut. The change is the user's feedback and is kept
+    with what the model had decided (``user_changes``), to measure its
+    judgement and as material for the case library. Blocking."""
+    job = job_store.get_job(task_id, client_id=client_id)
+    if not job:
+        raise ReviewError("任务不存在")
+    result = dict(job.get("result") or {})
+    survey = dict(debreath_job.debreath_state(result).get("survey") or {})
+    item = _report_item(survey, ref)
+    if item is None or item.get("start") is None or item.get("end") is None:
+        raise ReviewError("这一条不能单独改")
+    start, end = _seconds(item["start"]), _seconds(item["end"])
+    removals = [dict(r) for r in survey.get("removed") or []]
+    kept = [dict(k) for k in survey.get("kept_gaps") or []]
+    now_removed = item.get("action") != "removed"
+    if now_removed:
+        kept = [k for k in kept if not _overlaps(TimeRange(_seconds(k["start"]), _seconds(k["end"])), start, end)]
+        if item.get("kind") != "long_gap":
+            removals.append({"start": start, "end": end, "reason": "你说这段应该剪掉。"})
+    else:
+        removals = [r for r in removals if not _overlaps(TimeRange(_seconds(r["start"]), _seconds(r["end"])), start, end)]
+        if item.get("kind") != "removed_talk":
+            kept.append({"start": start, "end": end, "reason": "你说这段不该剪。"})
+    from datetime import datetime, timezone
+
+    change = {
+        "ref": ref, "kind": item.get("kind"), "start": start, "end": end,
+        "model_said": item.get("action"), "user_said": "removed" if now_removed else "kept",
+        "model_reason": item.get("text"), "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    survey["rerendering"] = True
+
+    def after(record: dict[str, Any]) -> None:
+        record["user_changes"] = [*(record.get("user_changes") or []), change]
+        reason = "你说这段应该剪掉。" if now_removed else "你说这段不该剪，已放回。"
+        _mark_gaps(record, start, end, not now_removed, reason)
+        if now_removed:
+            record["spoken"] = [sp for sp in record.get("spoken") or [] if not _overlaps(TimeRange(_seconds(sp["start"]), _seconds(sp["end"])), start, end)]
+            record["refused_removals"] = [
+                r for r in record.get("refused_removals") or []
+                if not _overlaps(TimeRange(_seconds(r["start"]), _seconds(r["end"])), start, end)
+            ]
+
+    return _rerender(task_id, client_id, result, survey, kept, removals, after)
+
+
 __all__ = [
     "answer",
-    "feedback",
+    "flip",
     "restore",
     "ReviewError","survey_and_cut", "revise_plan", "build_timeline", "removal_range", "review_items"]

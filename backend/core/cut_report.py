@@ -35,7 +35,7 @@ OTHER_TITLE = "其他处理"
 SYSTEM = """你会读到 FluentFlow 处理一条录像时做过的每一件事，每行一条，开头的方括号是编号。
 把它们整理成给录像主人看的处理说明：他想知道产品对他的录像做了什么、为什么，哪里可能做错了。
 
-- 分成几组，每组一个短标题；他最可能关心的放前面：去掉的有人说话的内容、因为画面重要而保留的空白、很长的空白。
+- 分成几组，每组一个短标题；他最可能关心的放前面：他自己改过的、去掉的有人说话的内容、因为画面重要而保留的空白、很长的空白。理由里写着"你说……"的是他自己改的，照实说。
 - 零碎、重复、没什么可看的（大量短停顿、说得很轻被保住的零碎字）放后面，并把这组 folded 设为 true（默认折叠）。
 - 每条用一句话（不超过 40 字）说清做了什么、为什么，用大白话，可以借助前后文说明这段在干什么。
 - 用编号引用条目，不要自己写时间点，时间由程序给出。不重要的条目可以不列，没列的会自动放进"其他处理"并折叠。
@@ -124,6 +124,15 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
             "seconds": round(end - start, 1), "said": _text_within(segments, start, end),
             "default": "模型想去掉这段，但要去掉的说话太多，像是误判，没有去掉。",
         })
+    for n, change in enumerate(
+        (c for c in record.get("user_changes") or [] if c.get("kind") == "removed_talk" and c.get("user_said") == "kept"), start=1,
+    ):
+        start, end = _seconds(change.get("start")), _seconds(change.get("end"))
+        out.append({
+            "id": f"u{n}", "kind": "user_change", "action": "kept", "start": start, "end": end,
+            "seconds": round(end - start, 1), "said": _text_within(segments, start, end),
+            "default": "你说这段不该剪，已放回。",
+        })
     spoken = sorted(record.get("spoken") or [], key=lambda s: _seconds(s.get("end")) - _seconds(s.get("start")), reverse=True)
     for n, span in enumerate(spoken[:MAX_SPOKEN_ITEMS], start=1):
         start, end = _seconds(span.get("start")), _seconds(span.get("end"))
@@ -150,7 +159,7 @@ def _fact_line(fact: dict[str, Any]) -> str:
         parts.append(f"原片 {_clock(fact['start'])}–{_clock(fact['end'])}，{_length(fact['seconds'])}")
     kind = {
         "short_gaps": "短停顿汇总", "long_gap": "长空白", "removed_talk": "有人说话的段落",
-        "refused_removal": "没执行的去除", "quiet_speech": "说得很轻的话",
+        "refused_removal": "没执行的去除", "quiet_speech": "说得很轻的话", "user_change": "用户改过的",
     }[fact["kind"]]
     parts.append(kind)
     if fact.get("picture"):
@@ -206,6 +215,7 @@ def assemble(all_facts: list[dict[str, Any]], answer: dict[str, Any], organized_
 def fallback(all_facts: list[dict[str, Any]]) -> dict[str, Any]:
     """Grouped by kind, when no model organised them."""
     groups = [
+        ("你改过的", {"user_change"}, False),
         ("去掉的说话", {"removed_talk"}, False),
         ("因为画面保留的空白", {"long_gap:kept"}, False),
         ("没执行的去除", {"refused_removal"}, False),

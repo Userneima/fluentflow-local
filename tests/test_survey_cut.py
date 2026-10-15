@@ -19,6 +19,9 @@ Requirements (owner, 2026-10-15, 方案/2026-10-15-先转录再定怎么剪):
 10. Filler in the middle (sound checks, a sentence said twice, off-topic
     talk) is removed too; every removed stretch is listed, whatever their number.
 11. Pauses under three seconds are cut without asking the model.
+12. Any timed item of the processing report can be turned around: what was
+    cut is put back, what was kept is cut. The change is recorded next to what
+    the model had decided, and the report says it was the user's.
 8. Each listed cut can be answered "right" or "wrong", and taken back. "Wrong"
    puts that stretch back and renders again without asking the model again;
    the transcript follows.
@@ -335,3 +338,33 @@ def test_a_quiet_word_inside_a_gap_survives_the_cut(task, monkeypatch):
     media = Path(job_store.get_job(task["id"])["result"]["debreath"]["delivered_path"])
     # The 10-14 gap is cut on both sides of the word only: 1.1 s kept of it.
     assert silence_cuts.media_duration_seconds(media) == pytest.approx(48.6 + 1.1, abs=1.0)
+
+
+@needs_ffmpeg
+def test_a_report_item_that_was_cut_is_put_back(task, monkeypatch):
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
+
+    survey_cut.flip(task["id"], "r1")
+
+    state = job_store.get_job(task["id"])["result"]["debreath"]
+    assert silence_cuts.media_duration_seconds(Path(state["delivered_path"])) == pytest.approx(52.4, abs=1.0)
+    change = state["survey"]["user_changes"][0]
+    assert (change["model_said"], change["user_said"]) == ("removed", "kept")
+    refs = [item["ref"] for section in state["survey"]["report"]["sections"] for item in section["items"]]
+    assert "u1" in refs and "r1" not in refs
+
+
+@needs_ffmpeg
+def test_a_report_item_that_was_kept_is_cut(task, monkeypatch):
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
+    kept = [item for section in job_store.get_job(task["id"])["result"]["debreath"]["survey"]["report"]["sections"]
+            for item in section["items"] if item["action"] == "kept"]
+    assert [item["kind"] for item in kept] == ["long_gap"]
+
+    survey_cut.flip(task["id"], kept[0]["ref"])
+
+    state = job_store.get_job(task["id"])["result"]["debreath"]
+    assert silence_cuts.media_duration_seconds(Path(state["delivered_path"])) == pytest.approx(42.8 - 3.8, abs=1.0)
+    assert state["survey"]["user_changes"][0]["user_said"] == "removed"

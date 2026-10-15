@@ -3,8 +3,8 @@
 // Requirements (owner, 2026-10-15): a task whose cut has a processing report
 // offers "看看这条视频处理了什么". Opened, it shows the before/after length, the
 // summary and the groups, folded groups closed until clicked, each item with
-// what was done, in the original's time. An opinion can be left on one item or
-// on the whole, and is sent with the item it is about.
+// what was done, in the original's time. Each timed item can be turned around
+// ("这段不该剪" / "这段应该剪掉"); the cut is then rendered again.
 
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
@@ -50,17 +50,24 @@ describe('CutReport', () => {
         expect(screen.getByText('120 处短停顿全部剪掉')).toBeTruthy();
     });
 
-    it('sends an opinion with the item it is about', async () => {
+    it('turns an item around and says it is rendering again', async () => {
         apiFetch.mockImplementationOnce(() => ok({result: {debreath: {survey: {report: REPORT}}}}));
-        apiFetch.mockImplementationOnce(() => ok({feedback: [{ref: 'r1', text: '不该剪'}]}));
+        apiFetch.mockImplementation(() => ok({ok: true}));
         render(<CutReport job={listJob}/>);
         fireEvent.click(screen.getByText('看看这条视频处理了什么'));
-        await waitFor(() => screen.getByText('有意见'));
-        fireEvent.click(screen.getByText('有意见'));
-        fireEvent.change(screen.getByPlaceholderText(/这一处哪里不对/), {target: {value: '不该剪'}});
-        fireEvent.click(screen.getAllByText('发送')[0]);
-        await waitFor(() => expect(screen.getAllByText('已记下你的意见').length).toBe(1));
-        expect(apiFetch.mock.calls[1][0]).toBe('/api/jobs/t1/cut-report/feedback');
-        expect(JSON.parse(apiFetch.mock.calls[1][1].body)).toEqual({text: '不该剪', ref: 'r1'});
+        await waitFor(() => screen.getByText('这段不该剪'));
+        fireEvent.click(screen.getByText('这段不该剪'));
+        await waitFor(() => expect(screen.getByText(/按你的改动重新导出剪后视频/)).toBeTruthy());
+        expect(apiFetch.mock.calls[1][0]).toBe('/api/jobs/t1/cut-report/r1/flip');
+    });
+
+    it('offers to cut what was kept', async () => {
+        const kept = {...REPORT, sections: [{title: '保留的画面', folded: false, items: [
+            {ref: 'g2', kind: 'long_gap', action: 'kept', start: 24, end: 55, seconds: 31, text: '在演示操作'},
+        ]}]};
+        apiFetch.mockImplementationOnce(() => ok({result: {debreath: {survey: {report: kept}}}}));
+        render(<CutReport job={listJob}/>);
+        fireEvent.click(screen.getByText('看看这条视频处理了什么'));
+        await waitFor(() => expect(screen.getByText('这段应该剪掉')).toBeTruthy());
     });
 });

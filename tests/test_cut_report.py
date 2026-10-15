@@ -8,16 +8,14 @@ Requirements (owner, 2026-10-15):
    the times shown are always the program's, never the model's; whatever the
    model leaves out is still there, in a last folded group.
 3. Without a model, or when it answers nonsense, the facts are grouped by kind.
-4. The user can leave an opinion on one item or on the whole report.
+4. What the user changed is said first, as theirs.
 """
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
-from backend.core import cut_report, job_store, survey_cut
+from backend.core import cut_report
 
 SEGMENTS = [
     {"start": 0.0, "end": 5.0, "text": "大家好我们开始"},
@@ -78,16 +76,12 @@ def test_without_a_useful_model_the_facts_are_grouped_by_kind(chat):
     assert sorted(_ids(report)) == ["g1", "g2", "r1", "s1", "short"]
 
 
-def test_opinions_are_kept_on_one_item_or_the_whole():
-    task_id = f"cr-{uuid.uuid4().hex[:8]}"
-    job_store.upsert_job(task_id=task_id, status="completed", result={
-        "debreath": {"survey": {"report": {"sections": []}}},
-    })
+def test_what_the_user_put_back_is_listed_first_as_theirs():
+    record = {**RECORD, "removed": [], "user_changes": [
+        {"kind": "removed_talk", "start": 60.0, "end": 64.0, "model_said": "removed", "user_said": "kept"},
+    ]}
 
-    survey_cut.feedback(task_id, "这段其实在讲重点", ref="g1")
-    survey_cut.feedback(task_id, "整体剪得有点狠")
-    with pytest.raises(survey_cut.ReviewError):
-        survey_cut.feedback(task_id, "  ")
+    report = cut_report.organize(cut_report.facts(record, SEGMENTS), None)
 
-    entries = job_store.get_job(task_id)["result"]["debreath"]["survey"]["feedback"]
-    assert [(e["ref"], e["text"]) for e in entries] == [("g1", "这段其实在讲重点"), (None, "整体剪得有点狠")]
+    first = report["sections"][0]
+    assert first["title"] == "你改过的" and first["items"][0]["text"] == "你说这段不该剪，已放回。"
