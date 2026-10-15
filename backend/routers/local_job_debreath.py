@@ -31,7 +31,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 
-from backend.core import debreath_job, local_intake_flow, silence_cuts, survey_cut, visual_note_job
+from backend.core import debreath_job, local_intake_flow, original_locator, silence_cuts, survey_cut, visual_note_job
 from backend.core.job_store import get_job
 from backend.core.result_artifacts import TRANSCRIPT_MEDIA_CUT
 from backend.core.request_scope import local_client_scope
@@ -206,9 +206,9 @@ def _accept_rerender(task_id: str, client_id: str | None, background_tasks: Back
     if queue_is_busy():
         raise HTTPException(status_code=409, detail="有任务正在处理中，等队列空下来再改。")
     try:
-        debreath_job.resolve_source(task_id)
+        original_locator.locate(task_id, client_id)
         debreath_job.claim(task_id)
-    except debreath_job.DebreathError as exc:
+    except (debreath_job.DebreathError, original_locator.OriginalMissing) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     debreath_job.release(task_id)
 

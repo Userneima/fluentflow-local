@@ -40,8 +40,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import cut_cases, cut_report, cut_timeline, misheard, debreath_job, job_store, output_folder, silence_cuts
-from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT
+from backend.core import cut_cases, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts
+from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT, resolve_artifact_file
+from backend.core.storage_paths import _artifact_storage_dir
 from backend.core.silence_cuts import CutPlan, TimeRange
 from backend.core.storage_cleanup import is_managed_path
 
@@ -688,8 +689,13 @@ def _rerender(
     """Render the cut again from the original with ``kept`` and ``removals``
     as the decisions, without asking the model again; the transcript is moved
     from the original's clock onto the new cut, the report written again.
-    ``after`` updates the survey record once the render succeeded. Blocking."""
-    source = debreath_job.resolve_source(task_id)
+    ``after`` updates the survey record once the render succeeded. Blocking.
+
+    The decisions the cut on disk was made with are kept aside first; a render
+    that fails, or a service stopped half way (``recover_interrupted``), puts
+    them and the transcript back as they were (owner, 2026-10-15)."""
+    source = original_locator.locate(task_id, client_id)
+    survey["before_rerender"] = {"removed": survey.get("removed") or [], "kept_gaps": survey.get("kept_gaps") or []}
     survey.update({"removed": removals, "kept_gaps": kept})
     # Back onto the original's clock, so the render remaps from there.
     for key in ("display_segments", "raw_segments", "stt_raw_segments"):
@@ -710,15 +716,57 @@ def _rerender(
     try:
         debreath_job.run_debreath(task_id, client_id=client_id, revise=revise)
     except Exception as exc:
-        survey.pop("rerendering", None)
-        survey["restore_error"] = f"重新导出没成功：{str(exc)[:200]}"
-        _record(task_id, client_id, survey)
+        put_back(task_id, client_id, f"重新导出没成功，剪后视频还是原来那份：{str(exc)[:200]}")
         raise
     survey.pop("rerendering", None)
     survey.pop("restore_error", None)
+    survey.pop("before_rerender", None)
     after(survey)
     _finish(task_id, client_id, source, final.get("plan"), survey, _default_chat())
     return survey
+
+
+def put_back(task_id: str, client_id: str | None, message: str) -> bool:
+    """Return a task whose re-render did not finish to the cut it still has:
+    the decisions it was made with, the transcript on its clock, the flags that
+    say it is cut. False when there was nothing to put back."""
+    job = job_store.get_job(task_id, client_id=client_id)
+    if not job:
+        return False
+    result = dict(job.get("result") or {})
+    state = debreath_job.debreath_state(result)
+    survey = dict(state.get("survey") or {})
+    if not survey.get("rerendering") and not survey.get("before_rerender"):
+        return False
+    before = survey.pop("before_rerender", None) or {}
+    survey.update({key: before[key] for key in ("removed", "kept_gaps") if key in before})
+    survey.pop("rerendering", None)
+    survey["restore_error"] = message
+    cut_list = (result.get("artifacts") or {}).get(debreath_job.CUT_LIST_KIND)
+    path = resolve_artifact_file(_artifact_storage_dir() / task_id, (cut_list or {}).get("filename")) if cut_list else None
+    if path is not None and str(result.get("transcript_media") or "") != TRANSCRIPT_MEDIA_CUT:
+        # The cut list on disk is the one the cut on disk was made from: a
+        # re-render writes its own only after it succeeded.
+        plan = json.loads(path.read_text(encoding="utf-8"))
+        result = _onto_cut_clock(result, cut_timeline.kept_ranges(plan))
+    result["debreath"] = {
+        **state, "survey": survey, "status": debreath_job.STATUS_COMPLETED, "stage": "done", "error": None,
+        "used_for_transcription": True, "ran_before_transcription": True,
+    }
+    job_store.update_job_result(task_id, result, client_id=client_id)
+    return True
+
+
+def recover_interrupted() -> int:
+    """At startup: put back every re-render a stopped service left half done."""
+    recovered = 0
+    for job in job_store.list_jobs_by_statuses(("completed",), include_result=True):
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        survey = debreath_job.debreath_state(result).get("survey") or {}
+        if isinstance(survey, dict) and survey.get("rerendering"):
+            if put_back(str(job.get("task_id")), job.get("client_id"), "上次重新导出被打断了（服务重启），剪后视频还是原来那份，可以再点一次。"):
+                recovered += 1
+    return recovered
 
 
 def _mark_gaps(survey: dict[str, Any], start: float, end: float, kept: bool, reason: str) -> None:

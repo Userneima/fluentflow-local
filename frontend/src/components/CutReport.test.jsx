@@ -68,6 +68,17 @@ describe('CutReport', () => {
         expect(screen.getAllByText('在原片里听').length).toBe(2);
     });
 
+    it('plays the stored audio when the original is gone', async () => {
+        opened({report: REPORT});
+        await waitFor(() => screen.getByText('剪得对'));
+        fireEvent.click(screen.getAllByText('在原片里听')[0]);
+        const video = document.querySelector('video');
+        expect(video.getAttribute('src')).toContain('/api/jobs/t1/source#t=');
+        fireEvent.error(video);
+        await waitFor(() => expect(screen.getByText(/原片找不到了/)).toBeTruthy());
+        expect(document.querySelector('video').getAttribute('src')).toContain('/api/jobs/t1/artifacts/playback_audio#t=');
+    });
+
     it('moves an agreed item out of the group, where it can be taken back', async () => {
         opened({report: REPORT});
         await waitFor(() => screen.getByText('剪得对'));

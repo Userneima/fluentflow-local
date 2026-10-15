@@ -75,6 +75,9 @@ const Badge = ({removed}) => (
 // 'read' (Claude's account: listen, or quietly change it).
 const Item = ({item, taskId, mode, busy, onAgree, onFlip}) => {
     const [listening, setListening] = useState(false);
+    // The original moved or deleted: the audio kept with the task still has
+    // every second of it, only without the picture.
+    const [audioOnly, setAudioOnly] = useState(false);
     const [confirming, setConfirming] = useState(false);
     const removed = item.action === 'removed';
     const timed = item.start !== undefined && item.end !== undefined;
@@ -98,13 +101,20 @@ const Item = ({item, taskId, mode, busy, onAgree, onFlip}) => {
                 <p className="mt-1 text-[12px] font-semibold leading-5 text-[#8a5a00] dark:text-[#fdb022]">请你判断：{item.doubt}</p>
             ) : null}
             {listening && timed ? (
-                <video
-                    className="mt-2 max-h-[220px] w-full rounded-[10px] bg-black"
-                    controls
-                    autoPlay
-                    preload="metadata"
-                    src={`${API_BASE}/jobs/${encodeURIComponent(taskId)}/source#t=${Math.max(0, item.start - 3)},${item.end + 1}`}
-                />
+                <>
+                    {audioOnly ? (
+                        <p className="mt-2 text-[12px] font-semibold text-[#8a5a00] dark:text-[#fdb022]">原片找不到了（挪走或删掉了），先放存着的原片声音，没有画面。</p>
+                    ) : null}
+                    <video
+                        key={audioOnly ? 'audio' : 'video'}
+                        className={`mt-2 w-full rounded-[10px] bg-black ${audioOnly ? 'h-12' : 'max-h-[220px]'}`}
+                        controls
+                        autoPlay
+                        preload="metadata"
+                        onError={() => setAudioOnly(true)}
+                        src={`${API_BASE}/jobs/${encodeURIComponent(taskId)}/${audioOnly ? 'artifacts/playback_audio' : 'source'}#t=${Math.max(0, item.start - 3)},${item.end + 1}`}
+                    />
+                </>
             ) : null}
             {timed ? (
                 <div className="mt-2 flex flex-wrap items-center gap-2">

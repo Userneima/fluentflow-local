@@ -302,3 +302,22 @@ def test_a_link_download_keeps_working_after_fluentflows_copy_is_cleaned_up(tmp_
     assert kept.read_bytes() == b"downloaded video"
     assert debreath_job.resolve_source(task) == kept
     assert output_folder.sync(task)["path"] == str(kept.parent)
+
+
+
+def test_a_renamed_folder_is_found_and_a_moved_one_is_not_recreated(tmp_path, pdfs):
+    source = _recording(tmp_path)
+    task = _task(source, note="# 笔记\n")
+    first = output_folder.sync(task)
+    folder = Path(first["path"])
+
+    renamed = folder.with_name("第八周（改过名）")
+    folder.rename(renamed)
+    assert output_folder.sync(task)["path"] == str(renamed)
+
+    moved = tmp_path / "elsewhere"
+    moved.mkdir()
+    renamed.rename(moved / renamed.name)
+    record = output_folder.sync(task)
+    assert "不在原来的位置" in record["error"]
+    assert sorted(p.name for p in source.parent.iterdir()) == [source.name]

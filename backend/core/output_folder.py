@@ -108,7 +108,15 @@ def _link_original(task_id: str, job: dict[str, Any]) -> Path | None:
     root = link_root()
     root.mkdir(parents=True, exist_ok=True)
     names = [stem] + [f"{stem} ({n})" for n in range(2, MAX_FOLDERS_PER_RECORDING + 1)]
-    folder = next((root / name for name in names if (root / name).is_dir() and _owner(root / name) == task_id), None)
+    # Renamed by the user, it is still found by its marker.
+    folder = next((child for child in sorted(root.iterdir()) if child.is_dir() and _owner(child) == task_id), None)
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    previous = (result.get(RESULT_KEY) or {}).get("path") if isinstance(result.get(RESULT_KEY), dict) else None
+    if folder is None and previous:
+        raise OutputFolderError(
+            f"产出文件夹不在原来的位置了（原来在 {previous}），没有再新建一个。"
+            "挪回原处后会继续更新；最新的结果都还在 FluentFlow 里。"
+        )
     if folder is None:
         folder = next((root / name for name in names if not (root / name).exists()), None)
         if folder is None:
@@ -203,8 +211,36 @@ def place(task_id: str, source: Path) -> tuple[Path, str]:
     raise OutputFolderError(f"「{base.name}」开头的文件夹太多了，先清理一下：{source.parent}")
 
 
+def _folder_for(task_id: str, source: Path) -> tuple[Path, str]:
+    """The folder this task already filled, wherever it is now, else a new one
+    (``place``).
+
+    Once a task has a folder the user may rename or move it. Renamed in place
+    it is found again by its marker; moved somewhere unknown it is not
+    recreated beside the recording, which would leave the user two folders
+    for one recording (owner, 2026-10-15)."""
+    job = job_store.get_job(task_id) or {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    previous = str((result.get(RESULT_KEY) or {}).get("path") or "") if isinstance(result.get(RESULT_KEY), dict) else ""
+    if not previous:
+        return place(task_id, source)
+    known = Path(previous)
+    for folder in [known] + [
+        child for parent in dict.fromkeys([known.parent, source.parent]) if parent.is_dir()
+        for child in sorted(parent.iterdir()) if child.is_dir()
+    ]:
+        if folder.is_dir():
+            for task, suffix in _owners(folder):
+                if task == task_id:
+                    return folder, suffix
+    raise OutputFolderError(
+        f"产出文件夹不在原来的位置了（原来在 {previous}），没有再新建一个。"
+        "挪回原处后会继续更新；最新的结果都还在 FluentFlow 里。"
+    )
+
+
 def claim(task_id: str, source: Path) -> Path:
-    return place(task_id, source)[0]
+    return _folder_for(task_id, source)[0]
 
 
 def file_name(source: Path, label: str, suffix: str, extension: str) -> str:
@@ -239,7 +275,7 @@ def deliver_media(task_id: str, source: Path, media: Path, label: str) -> dict[s
     Returns the fields the cut state has always carried (``delivered_path`` and
     so on) plus where the folder is."""
     try:
-        folder, suffix = place(task_id, source)
+        folder, suffix = _folder_for(task_id, source)
         target = folder / file_name(source, label, suffix, media.suffix.lower() or ".mp4")
         how = _link_or_copy(media, target)
     except (OSError, OutputFolderError) as exc:
@@ -348,7 +384,7 @@ def _sync_locked(task_id: str) -> dict[str, Any] | None:
 
 
 def _sync_files(task_id: str, source: Path, result: dict[str, Any]) -> dict[str, Any]:
-    folder, suffix = place(task_id, source)
+    folder, suffix = _folder_for(task_id, source)
     process = folder / PROCESS_DIRNAME
     process.mkdir(exist_ok=True)
     stem = _stem(source)

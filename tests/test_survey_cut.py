@@ -388,3 +388,56 @@ def test_without_word_times_the_lines_mark_where_someone_spoke(task, monkeypatch
 
     assert any(r.start <= 11.0 and r.end >= 11.5 for r in heard)
     assert record["spoken"] == [{"start": 11.0, "end": 11.5, "said": ""}]
+
+
+def _state(task_id):
+    result = job_store.get_job(task_id)["result"]
+    return result, result["debreath"]
+
+
+@needs_ffmpeg
+def test_a_rerender_that_fails_leaves_the_cut_as_it_was(task, monkeypatch):
+    """Owner, 2026-10-15: a failed re-render must not leave the task half way."""
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
+    before, _ = _state(task["id"])
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(survey_cut.debreath_job, "run_debreath", broken)
+    with pytest.raises(RuntimeError):
+        survey_cut.flip(task["id"], "r1")
+
+    result, state = _state(task["id"])
+    assert result["transcript_media"] == "debreath_media" and state["used_for_transcription"] is True
+    assert [s["start"] for s in result["raw_segments"]] == [s["start"] for s in before["raw_segments"]]
+    assert state["survey"]["removed"] == before["debreath"]["survey"]["removed"]
+    assert "disk full" in state["survey"]["restore_error"] and "rerendering" not in state["survey"]
+
+
+@needs_ffmpeg
+def test_a_rerender_stopped_by_a_restart_is_put_back_at_startup(task, monkeypatch):
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
+    before, _ = _state(task["id"])
+
+    # What a service stopped half way through a re-render leaves behind: new
+    # decisions, the transcript back on the original's clock, the old cut.
+    result, state = _state(task["id"])
+    survey = dict(state["survey"])
+    survey.update({"rerendering": True, "removed": [],
+                   "before_rerender": {"removed": survey["removed"], "kept_gaps": survey["kept_gaps"]}})
+    for key in ("display_segments", "raw_segments", "stt_raw_segments"):
+        if isinstance(result.get(f"source_{key}"), list):
+            result[key] = result[f"source_{key}"]
+    result["transcript_media"] = "source"
+    result["debreath"] = {**state, "survey": survey, "used_for_transcription": False}
+    job_store.update_job_result(task["id"], result)
+
+    assert survey_cut.recover_interrupted() >= 1
+
+    result, state = _state(task["id"])
+    assert result["transcript_media"] == "debreath_media"
+    assert [s["start"] for s in result["raw_segments"]] == [s["start"] for s in before["raw_segments"]]
+    assert "打断" in state["survey"]["restore_error"]
