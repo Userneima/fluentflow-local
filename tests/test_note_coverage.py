@@ -60,7 +60,7 @@ def test_a_long_transcript_is_checked_piece_by_piece_with_the_whole_note_each_ti
 
     assert len(seen) > 1
     assert all(note in user for user in seen), "every piece is compared with the whole note"
-    assert "第 0 行" in seen[0] and any("第 399 行" in user for user in seen)
+    assert any("第 0 行" in user for user in seen) and any("第 399 行" in user for user in seen), "every piece is asked, in any order"
     assert check.point_count == len(seen)
 
 
