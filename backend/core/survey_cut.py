@@ -335,7 +335,9 @@ def words_of(result: dict[str, Any]) -> list[tuple[float, float]]:
         spans = [
             (_seconds(word.get("start")), _seconds(word.get("end")))
             for seg in segments if isinstance(seg, dict) and isinstance(seg.get("words"), list)
-            for word in seg["words"] if isinstance(word, dict) and str(word.get("word") or "").strip()
+            # Stored as {"start", "end", "text", "conf"}; "word" is
+            # faster-whisper's own name for the same field.
+            for word in seg["words"] if isinstance(word, dict) and str(word.get("text") or word.get("word") or "").strip()
         ]
         if spans:
             return sorted(spans)

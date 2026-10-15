@@ -294,8 +294,8 @@ def test_a_quiet_word_inside_a_gap_survives_the_cut(task, monkeypatch):
     monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
     result = job_store.get_job(task["id"])["result"]
     result["stt_raw_segments"] = [
-        {"start": 0.5, "end": 9.5, "text": "开场", "words": [{"start": 0.5, "end": 9.5, "word": "开场"}]},
-        {"start": 11.0, "end": 12.0, "text": "对", "words": [{"start": 11.0, "end": 12.0, "word": "对"}]},
+        {"start": 0.5, "end": 9.5, "text": "开场", "words": [{"start": 0.5, "end": 9.5, "text": "开场", "conf": 0.9}]},
+        {"start": 11.0, "end": 12.0, "text": "对", "words": [{"start": 11.0, "end": 12.0, "text": "对", "conf": 0.9}]},
     ]
     job_store.update_job_result(task["id"], result)
 
