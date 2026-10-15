@@ -335,6 +335,8 @@ def test_a_quiet_word_inside_a_gap_survives_the_cut(task, monkeypatch):
     record = survey_cut.survey_and_cut(task["id"], chat=(_says('{"keep_gaps": [], "remove": []}'), "fake"))
 
     assert record["word_protection"]["words_known"] is True
+    # The report quotes only the words saved, not the line around them.
+    assert [span["said"] for span in record["spoken"]] == ["对"]
     media = Path(job_store.get_job(task["id"])["result"]["debreath"]["delivered_path"])
     # The 10-14 gap is cut on both sides of the word only: 1.1 s kept of it.
     assert silence_cuts.media_duration_seconds(media) == pytest.approx(48.6 + 1.1, abs=1.0)

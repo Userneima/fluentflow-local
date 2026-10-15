@@ -347,6 +347,22 @@ def describe_gaps(
     return {"short": {"count": len(short), "seconds": round(sum(g.duration for g in short), 1)}, "long": long}
 
 
+def word_texts(result: dict[str, Any]) -> list[tuple[float, float, str]]:
+    """Every transcribed word with its time and text (see ``words_of``)."""
+    for key in ("stt_raw_segments", "raw_segments", "source_stt_raw_segments", "source_raw_segments"):
+        segments = result.get(key)
+        if not isinstance(segments, list):
+            continue
+        found = [
+            (_seconds(word.get("start")), _seconds(word.get("end")), str(word.get("text") or word.get("word") or "").strip())
+            for seg in segments if isinstance(seg, dict) and isinstance(seg.get("words"), list)
+            for word in seg["words"] if isinstance(word, dict) and str(word.get("text") or word.get("word") or "").strip()
+        ]
+        if found:
+            return sorted(found)
+    return []
+
+
 def words_of(result: dict[str, Any]) -> list[tuple[float, float]]:
     """Every transcribed word's time, from whichever segment list carries
     them. Empty when the transcription did not record word times."""
@@ -605,7 +621,13 @@ def survey_and_cut(
         spoken, protection = spoken_words(media, plan, words)
         plan, kept = protect_words(plan, spoken)
         record["word_protection"] = {**protection, **kept}
-        record["spoken"] = [{"start": round(a, 2), "end": round(b, 2)} for a, b in spoken]
+        texts = word_texts(result)
+        record["spoken"] = [
+            {"start": round(a, 2), "end": round(b, 2),
+             # Only the words this stretch saved, not the whole line around it.
+             "said": "".join(t for ws, we, t in texts if we > a and ws < b)[:30]}
+            for a, b in spoken
+        ]
         if asker is None or not segments:
             record["gaps"] = describe_gaps(list(plan.cuts), {}, {})
             record["skipped"] = "没有可用的模型或转录，只按音量剪。"

@@ -40,7 +40,9 @@ const Item = ({item, taskId, busy, onFlip}) => {
                         原片 {clock(item.start)} – {clock(item.end)}
                     </span>
                 ) : null}
-                <span className="text-[12px] font-semibold tabular-nums text-[#85868c] dark:text-white/55">{length(item.seconds)}</span>
+                <span className="text-[12px] font-semibold tabular-nums text-[#85868c] dark:text-white/55">
+                    {item.count ? `${item.count} 处，共 ` : ''}{length(item.seconds)}
+                </span>
             </div>
             <p className="mt-1 text-[13px] font-semibold leading-5 text-[#2b2c30] dark:text-white/80">{item.text}</p>
             {item.said ? <p className="mt-0.5 text-[12px] leading-5 text-[#85868c] dark:text-white/50">说的是：「{item.said}」</p> : null}

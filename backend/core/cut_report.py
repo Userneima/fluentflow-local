@@ -136,7 +136,7 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
     spoken = sorted(record.get("spoken") or [], key=lambda s: _seconds(s.get("end")) - _seconds(s.get("start")), reverse=True)
     for n, span in enumerate(spoken[:MAX_SPOKEN_ITEMS], start=1):
         start, end = _seconds(span.get("start")), _seconds(span.get("end"))
-        said = _text_within(segments, start, end, 30)
+        said = span.get("said") or _text_within(segments, start, end, 30)
         out.append({
             "id": f"s{n}", "kind": "quiet_speech", "action": "kept", "start": start, "end": end,
             "seconds": round(end - start, 1), "said": said,
