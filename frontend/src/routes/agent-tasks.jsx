@@ -13,6 +13,7 @@ import {
     XCircle,
 } from 'lucide-react';
 import {CutReview} from '../components/CutReview.jsx';
+import {CutReport} from '../components/CutReport.jsx';
 import {fmtDurationCompact, progressMessageOf} from '../lib/format.js';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
 import {
@@ -689,6 +690,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                 </div>
             ) : null}
             <CutReview job={job}/>
+            <CutReport job={job}/>
             <div className="mt-4 grid gap-2 md:grid-cols-3">
                 {metaItems.map((item) => (
                     <div key={item.label} className="min-w-0 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-2 dark:border-white/[0.10] dark:bg-white/[0.04]">

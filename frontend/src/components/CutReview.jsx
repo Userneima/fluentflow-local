@@ -10,7 +10,7 @@ import {API_BASE, apiFetch} from '../app/shared.jsx';
 
 const RESTORE_POLL_MS = 3000;
 
-const clock = (seconds) => {
+export const clock = (seconds) => {
     const total = Math.max(0, Math.round(Number(seconds) || 0));
     const h = Math.floor(total / 3600);
     const m = Math.floor((total % 3600) / 60);
@@ -34,7 +34,7 @@ export const reviewOf = (job) => {
 
 const buttonClass = 'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] border border-[#dedada] bg-white px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]';
 
-const post = async (url, body) => {
+export const post = async (url, body) => {
     const response = await apiFetch(url, {
         method: 'POST',
         headers: body ? {'Content-Type': 'application/json'} : undefined,

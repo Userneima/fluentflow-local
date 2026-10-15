@@ -254,3 +254,17 @@ def restore_cut_review(
 
     background_tasks.add_task(_run)
     return {"ok": True, "task_id": task_id, "accepted": True}
+
+
+@router.post("/jobs/{task_id}/cut-report/feedback")
+def cut_report_feedback(
+    request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """Keep the user's opinion on the processing report, about one item
+    (``ref``) or the whole (``survey_cut.feedback``)."""
+    client_id = local_client_scope(request)
+    body = payload or {}
+    try:
+        return {"ok": True, **survey_cut.feedback(task_id, str(body.get("text") or ""), body.get("ref"), client_id=client_id)}
+    except survey_cut.ReviewError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

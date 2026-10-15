@@ -185,6 +185,11 @@ def test_the_recording_is_cut_once_and_the_transcript_moves_onto_the_cut(task, m
     assert len(result["source_raw_segments"]) == len(LINES)
     assert record["review"][0]["kind"] == "removed_talk"
     assert state["survey"]["review"] == record["review"]
+    report = state["survey"]["report"]
+    assert report["before_seconds"] == pytest.approx(60.0, abs=0.5)
+    assert report["after_seconds"] == pytest.approx(42.8, abs=1.0)
+    refs = [item["ref"] for section in report["sections"] for item in section["items"]]
+    assert "r1" in refs and any(ref.startswith("g") for ref in refs)
 
 
 @needs_ffmpeg

@@ -967,8 +967,11 @@ def _debreath_summary(state: Any) -> dict[str, Any] | None:
         # The few cuts the user is asked to confirm (``survey_cut``), with their
         # answers; the model's other decisions stay in the full result.
         "survey": {
-            key: survey.get(key) for key in ("review", "answers", "restoring", "restore_error")
-        } if survey.get("review") else None,
+            **{key: survey.get(key) for key in ("review", "answers", "restoring", "restore_error")},
+            # The processing report is read with the task itself; the row only
+            # says there is one.
+            "has_report": bool(survey.get("report")),
+        } if survey.get("review") or survey.get("report") else None,
         "status": state.get("status"),
         "stage": state.get("stage"),
         "used_for_transcription": state.get("used_for_transcription"),

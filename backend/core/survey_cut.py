@@ -39,7 +39,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import cut_timeline, debreath_job, job_store, output_folder, silence_cuts
+from backend.core import cut_report, cut_timeline, debreath_job, job_store, output_folder, silence_cuts
 from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT
 from backend.core.silence_cuts import CutPlan, TimeRange
 from backend.core.storage_cleanup import is_managed_path
@@ -287,6 +287,7 @@ def revise_plan(
     record: dict[str, Any] = {"long_gaps": len(ids), "pictures_measured": len(measured)}
 
     kept_gaps: list[dict[str, Any]] = []
+    kept_reasons: dict[int, str] = {}
     for item in answer.get("keep_gaps") or []:
         if not isinstance(item, dict):
             continue
@@ -295,6 +296,7 @@ def revise_plan(
         except (KeyError, TypeError, ValueError):
             continue
         gap = gaps[index]
+        kept_reasons[index] = str(item.get("reason") or "").strip()
         kept_gaps.append({"start": gap.start, "end": gap.end, "reason": str(item.get("reason") or "").strip(),
                           "picture": measured.get(index)})
 
@@ -317,6 +319,7 @@ def revise_plan(
 
     revised = apply_decisions(plan, kept_gaps, removals)
     record.update({
+        "gaps": describe_gaps(gaps, measured, kept_reasons),
         "kept_gaps": kept_gaps,
         "removed": removals,
         "review": review_items(segments, revised.cuts, removals),
@@ -324,6 +327,24 @@ def revise_plan(
         "removed_seconds": revised.removed_seconds,
     })
     return revised, record
+
+
+def describe_gaps(
+    gaps: list[TimeRange], pictures: dict[int, float | None], kept: dict[int, str],
+) -> dict[str, Any]:
+    """Every gap the loudness plan found, for the processing report: the
+    short ones counted together, the long ones one by one with what happened
+    to them."""
+    short = [gap for gap in gaps if gap.duration < LONG_GAP_SECONDS]
+    long = [
+        {
+            "start": round(gap.start, 2), "end": round(gap.end, 2), "seconds": round(gap.duration, 1),
+            "picture": _picture_label(pictures.get(index)) if index in pictures else None,
+            "kept": index in kept, "reason": kept.get(index, ""),
+        }
+        for index, gap in enumerate(gaps) if gap.duration >= LONG_GAP_SECONDS
+    ]
+    return {"short": {"count": len(short), "seconds": round(sum(g.duration for g in short), 1)}, "long": long}
 
 
 def words_of(result: dict[str, Any]) -> list[tuple[float, float]]:
@@ -584,7 +605,9 @@ def survey_and_cut(
         spoken, protection = spoken_words(media, plan, words)
         plan, kept = protect_words(plan, spoken)
         record["word_protection"] = {**protection, **kept}
+        record["spoken"] = [{"start": round(a, 2), "end": round(b, 2)} for a, b in spoken]
         if asker is None or not segments:
+            record["gaps"] = describe_gaps(list(plan.cuts), {}, {})
             record["skipped"] = "没有可用的模型或转录，只按音量剪。"
             final["plan"] = plan
             return plan
@@ -606,14 +629,18 @@ def survey_and_cut(
         _record(task_id, client_id, record)
         return record
 
-    if not _finish(task_id, client_id, source, final.get("plan"), record):
+    if not _finish(task_id, client_id, source, final.get("plan"), record, asker):
         _record(task_id, client_id, record)
     return record
 
 
-def _finish(task_id: str, client_id: str | None, source: Path, plan: CutPlan | None, record: dict[str, Any]) -> bool:
+def _finish(
+    task_id: str, client_id: str | None, source: Path, plan: CutPlan | None, record: dict[str, Any],
+    chat: tuple[Chat, str] | None = None,
+) -> bool:
     """After a render: the transcript onto the cut's clock, the cut into the
-    user's folder, the survey recorded. False when nothing was rendered."""
+    user's folder, the survey and its report (``cut_report``) recorded. False
+    when nothing was rendered."""
     job = job_store.get_job(task_id, client_id=client_id) or {}
     result = dict(job.get("result") or {})
     state = debreath_job.debreath_state(result)
@@ -621,6 +648,9 @@ def _finish(task_id: str, client_id: str | None, source: Path, plan: CutPlan | N
     if not state.get("rendered") or plan is None or media is None:
         return False
     result = _onto_cut_clock(result, cut_timeline.kept_ranges(plan.as_dict()))
+    record["report"] = cut_report.build(record, _texted(result.get("source_raw_segments")), chat)
+    record["report"]["after_seconds"] = round(plan.kept_seconds, 1)
+    record["report"]["before_seconds"] = round(plan.source_duration_seconds, 1)
     delivered: dict[str, Any] = {}
     if not is_managed_path(source):
         delivered = output_folder.deliver_media(task_id, source, media, output_folder.CUT_LABEL)
@@ -682,6 +712,33 @@ def answer(task_id: str, index: int, value: str, client_id: str | None = None) -
     return survey
 
 
+MAX_FEEDBACK_CHARS = 2000
+
+
+def feedback(task_id: str, text: str, ref: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    """Keep what the user says about the processing, about one item of the
+    report (``ref``) or the whole of it."""
+    text = (text or "").strip()[:MAX_FEEDBACK_CHARS]
+    if not text:
+        raise ReviewError("意见是空的")
+    job = job_store.get_job(task_id, client_id=client_id)
+    if not job:
+        raise ReviewError("任务不存在")
+    result = dict(job.get("result") or {})
+    state = debreath_job.debreath_state(result)
+    survey = dict(state.get("survey") or {})
+    if not survey.get("report"):
+        raise ReviewError("这个任务没有处理说明")
+    from datetime import datetime, timezone
+
+    entries = list(survey.get("feedback") or [])
+    entries.append({"ref": ref or None, "text": text, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    survey["feedback"] = entries
+    result["debreath"] = {**state, "survey": survey}
+    job_store.update_job_result(task_id, result, client_id=client_id)
+    return {"feedback": entries}
+
+
 def restore(task_id: str, index: int, client_id: str | None = None) -> dict[str, Any]:
     """Put one listed cut back and render again, with the model's other
     decisions applied as they were (it is not asked again). The transcript is
@@ -723,12 +780,16 @@ def restore(task_id: str, index: int, client_id: str | None = None) -> dict[str,
         raise
     survey.pop("restoring", None)
     survey.pop("restore_error", None)
+    for gap in (survey.get("gaps") or {}).get("long") or []:
+        if item.get("kind") != "removed_talk" and _overlaps(TimeRange(_seconds(gap["start"]), _seconds(gap["end"])), item["start"], item["end"]):
+            gap.update({"kept": True, "reason": "你说这段不该剪，已放回。"})
     item["restored"] = True
-    _finish(task_id, client_id, source, final.get("plan"), survey)
+    _finish(task_id, client_id, source, final.get("plan"), survey, _default_chat())
     return survey
 
 
 __all__ = [
     "answer",
+    "feedback",
     "restore",
     "ReviewError","survey_and_cut", "revise_plan", "build_timeline", "removal_range", "review_items"]
