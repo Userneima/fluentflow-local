@@ -39,12 +39,11 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import compress_media, debreath_job, local_folder_intake, silence_cuts, visual_note_channel, visual_note_job
+from backend.core import compress_media, debreath_job, silence_cuts, visual_note_channel, visual_note_job
 from backend.core import device_profile, output_folder
 from backend.core.task_watch import TaskWatch
 from concurrent.futures import ThreadPoolExecutor

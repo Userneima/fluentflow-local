@@ -30,6 +30,7 @@ import pytest
 import backend.core.debreath_job as dj
 import backend.core.local_folder_intake as fi
 import backend.core.local_intake_flow as flow
+import backend.core.output_folder as output_folder
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.silence_cuts import CutPlan, RenderReport, TimeRange
 
@@ -251,8 +252,8 @@ def test_a_delivery_that_cannot_be_written_is_reported_not_raised(folder, monkey
     def refuse(*_a, **_k):
         raise OSError("Read-only file system")
 
-    monkeypatch.setattr(flow.os, "link", refuse)
-    monkeypatch.setattr(flow.shutil, "copyfile", refuse)
+    monkeypatch.setattr(output_folder.os, "link", refuse)
+    monkeypatch.setattr(output_folder.shutil, "copyfile", refuse)
 
     prepared = flow.preprocess_media(TASK, folder / "0811-morning.mov")
 
