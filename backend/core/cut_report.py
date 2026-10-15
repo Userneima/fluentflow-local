@@ -21,6 +21,8 @@ import logging
 import re
 from typing import Any, Callable
 
+from backend.core import misheard
+
 logger = logging.getLogger(__name__)
 
 Chat = Callable[[str, str], str]
@@ -40,6 +42,7 @@ SYSTEM = """你会读到 FluentFlow 处理一条录像时做过的每一件事�
 
 - 分成几组，每组一个短标题；他最可能关心的放前面：他自己改过的、去掉的有人说话的内容、因为画面重要而保留的空白、很长的空白。理由里写着"你说……"的是他自己改的，照实说。
 - 零碎、重复、没什么可看的（大量短停顿、说得很轻被保住的零碎字）放后面，并把这组 folded 设为 true（默认折叠）。
+- 理由里写着转录"听成了外语""外语字幕"的，多半是没人讲话时的噪音被转录误认，照"这段没人讲话，只有杂音"说，不要复述那些句子。
 - 每条用一句话（不超过 40 字）说清做了什么、为什么，用大白话，可以借助前后文说明这段在干什么。
 - 用编号引用条目，不要自己写时间点，时间由程序给出。不重要的条目可以不列，没列的会自动放进"其他处理"并折叠。
 - 开头如果给了这位用户以前的判断，他确认过的同类情况不要再标拿不准，他改过的同类情况要按他的意思说明或标出来。
@@ -85,11 +88,15 @@ def _line_after(segments: list[dict[str, Any]], at: float) -> str:
 
 
 def _text_within(segments: list[dict[str, Any]], start: float, end: float, limit: int = 80) -> str:
+    """What was said in this stretch, without the lines the transcriber most
+    likely heard out of noise (``misheard``): quoting them as "说的是" showed
+    the user sentences nobody said."""
+    foreign = misheard.tagger(segments)
     words = [
         str(seg.get("text") or "").strip() for seg in segments
         if _seconds(seg.get("end")) > start and _seconds(seg.get("start")) < end
     ]
-    return " ".join(w for w in words if w)[:limit]
+    return " ".join(w for w in words if w and not foreign(w))[:limit]
 
 
 def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[str, Any]]:

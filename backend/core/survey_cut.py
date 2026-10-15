@@ -40,7 +40,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import cut_cases, cut_report, cut_timeline, debreath_job, job_store, output_folder, silence_cuts
+from backend.core import cut_cases, cut_report, cut_timeline, misheard, debreath_job, job_store, output_folder, silence_cuts
 from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT
 from backend.core.silence_cuts import CutPlan, TimeRange
 from backend.core.storage_cleanup import is_managed_path
@@ -86,6 +86,8 @@ SYSTEM = """开头可能先给你这位用户以前对剪辑的判断，情况�
 - 中间的废话：调设备和确认声音（"能听到吗""我共享一下屏幕"）、被打断后和主题无关的对话、整句重说（同一句话讲了两遍，去掉没讲好的那遍）、和主题无关的闲聊。
 只去整句，不去半句；讲正事时的口头禅、语气词不算废话。
 每一段给出第一句和最后一句开头的秒数；一直到录像结尾，to 填 null；从录像开头算起，from 填 0。
+
+带〔和全片语言不同，多半是噪音被听成的话〕的行，通常是没人在讲话时（放音乐、现场嘈杂、拍照）转录凭空写出的句子，不是有人在说。判断这段时把它当作没人讲话；写理由时说这段在发生什么（例如"拍照间隙没人讲话，只有现场杂音"），不要复述这些句子，也不要说成"外语字幕"。
 
 只回一个 JSON 对象：
 {"keep_gaps": [{"id": 编号, "reason": "一句话理由"}], "remove": [{"from": 秒数, "to": 秒数或null, "reason": "一句话理由"}]}"""
@@ -160,8 +162,11 @@ def build_timeline(
 ) -> tuple[str, dict[int, int]]:
     """The text the model reads, and gap id → index in ``gaps``."""
     rows: list[tuple[float, str]] = []
+    foreign = misheard.tagger(segments)
     for seg in segments:
-        rows.append((_seconds(seg.get("start")), f"[{_seconds(seg.get('start')):.1f}] {str(seg.get('text')).strip()}"))
+        text = str(seg.get("text")).strip()
+        tag = " 〔和全片语言不同，多半是噪音被听成的话〕" if foreign(text) else ""
+        rows.append((_seconds(seg.get("start")), f"[{_seconds(seg.get('start')):.1f}] {text}{tag}"))
     ids: dict[int, int] = {}
     for index, gap in enumerate(gaps):
         if gap.duration < LONG_GAP_SECONDS:
