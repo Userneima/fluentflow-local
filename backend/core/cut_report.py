@@ -124,14 +124,14 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
             "seconds": round(end - start, 1), "said": _text_within(segments, start, end),
             "default": "模型想去掉这段，但要去掉的说话太多，像是误判，没有去掉。",
         })
-    for n, change in enumerate(
-        (c for c in record.get("user_changes") or [] if c.get("kind") == "removed_talk" and c.get("user_said") == "kept"), start=1,
-    ):
+    changes = [c for c in record.get("user_changes") or [] if not c.get("undone_at")]
+    for n, change in enumerate(changes, start=1):
         start, end = _seconds(change.get("start")), _seconds(change.get("end"))
+        kept = change.get("user_said") == "kept"
         out.append({
-            "id": f"u{n}", "kind": "user_change", "action": "kept", "start": start, "end": end,
+            "id": f"u{n}", "kind": "user_change", "action": "kept" if kept else "removed", "start": start, "end": end,
             "seconds": round(end - start, 1), "said": _text_within(segments, start, end),
-            "default": "你说这段不该剪，已放回。",
+            "default": "你说这段不该剪，已放回。" if kept else "你说这段应该剪掉，已剪掉。",
         })
     spoken = sorted(record.get("spoken") or [], key=lambda s: _seconds(s.get("end")) - _seconds(s.get("start")), reverse=True)
     for n, span in enumerate(spoken[:MAX_SPOKEN_ITEMS], start=1):
@@ -149,6 +149,12 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
             "id": "s_rest", "kind": "quiet_speech", "action": "kept", "seconds": round(seconds, 1),
             "count": len(rest), "default": f"另有 {len(rest)} 处很轻的说话同样保留，共 {_length(seconds)}。",
         })
+    # A stretch the user changed is listed once, as theirs.
+    out = [
+        fact for fact in out
+        if fact["kind"] == "user_change" or "start" not in fact
+        or not any(min(fact["end"], _seconds(c.get("end"))) - max(fact["start"], _seconds(c.get("start"))) > 0.01 for c in changes)
+    ]
     return out
 
 
@@ -174,8 +180,19 @@ def _fact_line(fact: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def key_of(fact: dict[str, Any]) -> str:
+    """What identifies an item across re-renders: its kind and time (ids are
+    renumbered every time the report is written), or its id for a count."""
+    if "start" in fact:
+        return f"{fact['kind']}@{fact['start']:.2f}-{fact['end']:.2f}"
+    return fact["id"]
+
+
 def _item(fact: dict[str, Any], text: str | None = None) -> dict[str, Any]:
-    item = {"ref": fact["id"], "kind": fact["kind"], "action": fact["action"], "text": (text or fact["default"]).strip()}
+    item = {
+        "ref": fact["id"], "key": key_of(fact), "kind": fact["kind"], "action": fact["action"],
+        "text": (text or fact["default"]).strip(),
+    }
     for key in ("start", "end", "seconds", "count", "said"):
         if key in fact:
             item[key] = fact[key]

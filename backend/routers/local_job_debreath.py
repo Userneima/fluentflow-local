@@ -269,3 +269,28 @@ def flip_cut_report_item(
     kept becomes cut (``survey_cut.flip``)."""
     client_id = local_client_scope(request)
     return _accept_rerender(task_id, client_id, background_tasks, lambda: survey_cut.flip(task_id, ref, client_id=client_id))
+
+
+@router.post("/jobs/{task_id}/cut-report/verdict")
+def cut_report_verdict(
+    request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """Record that the user agrees with items of the report as they are, or
+    take it back (``survey_cut.verdict``). Nothing is rendered."""
+    client_id = local_client_scope(request)
+    body = payload or {}
+    keys = [str(key) for key in body.get("keys") or [] if key]
+    try:
+        return {"ok": True, **survey_cut.verdict(task_id, keys, str(body.get("verdict") or ""), client_id=client_id)}
+    except survey_cut.ReviewError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{task_id}/cut-report/changes/{index}/undo")
+def undo_cut_report_change(
+    request: Request, task_id: str, index: int, background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    """Undo one of the user's earlier changes from the report's bin
+    (``survey_cut.undo_change``)."""
+    client_id = local_client_scope(request)
+    return _accept_rerender(task_id, client_id, background_tasks, lambda: survey_cut.undo_change(task_id, index, client_id=client_id))

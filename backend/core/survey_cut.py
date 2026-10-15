@@ -810,19 +810,12 @@ def _report_item(survey: dict[str, Any], ref: str) -> dict[str, Any] | None:
     return None
 
 
-def flip(task_id: str, ref: str, client_id: str | None = None) -> dict[str, Any]:
-    """Turn one decision in the processing report around: what was cut is put
-    back, what was kept is cut. The change is the user's feedback and is kept
-    with what the model had decided (``user_changes``), to measure its
-    judgement and as material for the case library. Blocking."""
-    job = job_store.get_job(task_id, client_id=client_id)
-    if not job:
-        raise ReviewError("任务不存在")
-    result = dict(job.get("result") or {})
-    survey = dict(debreath_job.debreath_state(result).get("survey") or {})
-    item = _report_item(survey, ref)
-    if item is None or item.get("start") is None or item.get("end") is None:
-        raise ReviewError("这一条不能单独改")
+def _turn_around(
+    task_id: str, client_id: str | None, result: dict[str, Any], survey: dict[str, Any],
+    item: dict[str, Any], change: dict[str, Any] | None, *, undoing: int | None = None,
+) -> dict[str, Any]:
+    """Render again with ``item``'s decision turned around: what it says was
+    cut is put back, what it says was kept is cut."""
     start, end = _seconds(item["start"]), _seconds(item["end"])
     removals = [dict(r) for r in survey.get("removed") or []]
     kept = [dict(k) for k in survey.get("kept_gaps") or []]
@@ -830,36 +823,115 @@ def flip(task_id: str, ref: str, client_id: str | None = None) -> dict[str, Any]
     if now_removed:
         kept = [k for k in kept if not _overlaps(TimeRange(_seconds(k["start"]), _seconds(k["end"])), start, end)]
         if item.get("kind") != "long_gap":
-            removals.append({"start": start, "end": end, "reason": "你说这段应该剪掉。"})
+            removals.append({"start": start, "end": end, "reason": item.get("reason") or "你说这段应该剪掉。"})
     else:
         removals = [r for r in removals if not _overlaps(TimeRange(_seconds(r["start"]), _seconds(r["end"])), start, end)]
-        if item.get("kind") != "removed_talk":
+        if item.get("kind") not in ("removed_talk", "quiet_speech"):
             kept.append({"start": start, "end": end, "reason": "你说这段不该剪。"})
-    from datetime import datetime, timezone
-
-    change = {
-        "ref": ref, "kind": item.get("kind"), "start": start, "end": end,
-        "model_said": item.get("action"), "user_said": "removed" if now_removed else "kept",
-        "model_reason": item.get("text"), "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
     survey["rerendering"] = True
 
     def after(record: dict[str, Any]) -> None:
-        record["user_changes"] = [*(record.get("user_changes") or []), change]
-        reason = "你说这段应该剪掉。" if now_removed else "你说这段不该剪，已放回。"
-        _mark_gaps(record, start, end, not now_removed, reason)
-        if now_removed:
-            record["spoken"] = [sp for sp in record.get("spoken") or [] if not _overlaps(TimeRange(_seconds(sp["start"]), _seconds(sp["end"])), start, end)]
-            record["refused_removals"] = [
-                r for r in record.get("refused_removals") or []
-                if not _overlaps(TimeRange(_seconds(r["start"]), _seconds(r["end"])), start, end)
-            ]
+        changes = list(record.get("user_changes") or [])
+        if change is not None:
+            changes.append(change)
+        if undoing is not None and 0 <= undoing < len(changes):
+            changes[undoing] = {**changes[undoing], "undone_at": _now()}
+        record["user_changes"] = changes
+        if undoing is not None:
+            _mark_gaps(record, start, end, not now_removed, item.get("reason") or "")
+        else:
+            _mark_gaps(record, start, end, not now_removed, "你说这段应该剪掉。" if now_removed else "你说这段不该剪，已放回。")
 
     return _rerender(task_id, client_id, result, survey, kept, removals, after)
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _task_survey(task_id: str, client_id: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    job = job_store.get_job(task_id, client_id=client_id)
+    if not job:
+        raise ReviewError("任务不存在")
+    result = dict(job.get("result") or {})
+    survey = dict(debreath_job.debreath_state(result).get("survey") or {})
+    if not survey.get("report"):
+        raise ReviewError("这个任务没有处理说明")
+    return result, survey
+
+
+def flip(task_id: str, ref: str, client_id: str | None = None) -> dict[str, Any]:
+    """Turn one decision in the processing report around: what was cut is put
+    back, what was kept is cut. The change is the user's feedback and is kept
+    with what the model had decided (``user_changes``, the report's bin, where
+    it can be undone later), to measure its judgement and as material for the
+    case library. Blocking."""
+    result, survey = _task_survey(task_id, client_id)
+    item = _report_item(survey, ref)
+    if item is None or item.get("start") is None or item.get("end") is None:
+        raise ReviewError("这一条不能单独改")
+    change = {
+        "key": item.get("key"), "kind": item.get("kind"), "start": _seconds(item["start"]), "end": _seconds(item["end"]),
+        "model_said": item.get("action"), "user_said": "kept" if item.get("action") == "removed" else "removed",
+        "model_reason": item.get("text"), "at": _now(),
+    }
+    return _turn_around(task_id, client_id, result, survey, item, change)
+
+
+def undo_change(task_id: str, index: int, client_id: str | None = None) -> dict[str, Any]:
+    """Undo one of the user's earlier changes (from the report's bin): the
+    model's decision for that stretch is applied again and the cut rendered
+    again. Blocking."""
+    result, survey = _task_survey(task_id, client_id)
+    changes = survey.get("user_changes") or []
+    if not 0 <= index < len(changes) or changes[index].get("undone_at"):
+        raise ReviewError("没有这次改动，或者已经撤销过了")
+    change = changes[index]
+    item = {
+        "kind": change.get("kind"), "start": change["start"], "end": change["end"],
+        "action": change.get("user_said"), "reason": change.get("model_reason"),
+    }
+    return _turn_around(task_id, client_id, result, survey, item, None, undoing=index)
+
+
+VERDICTS = {"agree", "pending"}
+
+
+def verdict(task_id: str, keys: list[str], value: str, client_id: str | None = None) -> dict[str, Any]:
+    """Record that the user agrees with these items of the report as they
+    are ("剪得对" / "确实该保留"), or take that back (``pending``). An item
+    nobody answered counts as not looked at."""
+    if value not in VERDICTS or not keys:
+        raise ReviewError("回答只能是认可或撤回")
+    result, survey = _task_survey(task_id, client_id)
+    items = {
+        item.get("key"): item
+        for section in survey["report"].get("sections") or [] for item in section.get("items") or []
+    }
+    verdicts = dict(survey.get("verdicts") or {})
+    for key in keys:
+        item = items.get(key)
+        if item is None:
+            continue
+        if value == "pending":
+            verdicts.pop(key, None)
+        else:
+            verdicts[key] = {
+                "verdict": "agree", "kind": item.get("kind"), "model_said": item.get("action"),
+                "start": item.get("start"), "end": item.get("end"), "text": item.get("text"), "at": _now(),
+            }
+    survey["verdicts"] = verdicts
+    result["debreath"] = {**debreath_job.debreath_state(result), "survey": survey}
+    job_store.update_job_result(task_id, result, client_id=client_id)
+    return {"verdicts": verdicts}
 
 
 __all__ = [
     "answer",
     "flip",
+    "undo_change",
+    "verdict",
     "restore",
     "ReviewError","survey_and_cut", "revise_plan", "build_timeline", "removal_range", "review_items"]

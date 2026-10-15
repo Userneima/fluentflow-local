@@ -22,6 +22,11 @@ Requirements (owner, 2026-10-15, 方案/2026-10-15-先转录再定怎么剪):
 12. Any timed item of the processing report can be turned around: what was
     cut is put back, what was kept is cut. The change is recorded next to what
     the model had decided, and the report says it was the user's.
+13. Each item of the report can be agreed with as it is ("剪得对" / "确实该保留"),
+    one by one or a whole group, and taken back; the agreement survives the
+    report being written again. An item nobody answered is not looked at.
+14. Every change the user made stays in the report's bin and can be undone
+    later: the model's decision is applied again and the cut rendered again.
 8. Each listed cut can be answered "right" or "wrong", and taken back. "Wrong"
    puts that stretch back and renders again without asking the model again;
    the transcript follows.
@@ -370,3 +375,41 @@ def test_a_report_item_that_was_kept_is_cut(task, monkeypatch):
     state = job_store.get_job(task["id"])["result"]["debreath"]
     assert silence_cuts.media_duration_seconds(Path(state["delivered_path"])) == pytest.approx(42.8 - 3.8, abs=1.0)
     assert state["survey"]["user_changes"][0]["user_said"] == "removed"
+
+
+def _report_items(task_id):
+    survey = job_store.get_job(task_id)["result"]["debreath"]["survey"]
+    return [item for section in survey["report"]["sections"] for item in section["items"]]
+
+
+@needs_ffmpeg
+def test_agreement_is_kept_by_item_and_survives_a_rerender(task, monkeypatch):
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
+    gaps = [item for item in _report_items(task["id"]) if item["kind"] == "long_gap" and item["action"] == "removed"]
+
+    survey_cut.verdict(task["id"], [item["key"] for item in gaps], "agree")
+    survey_cut.flip(task["id"], "r1")
+
+    verdicts = job_store.get_job(task["id"])["result"]["debreath"]["survey"]["verdicts"]
+    keys_now = {item["key"] for item in _report_items(task["id"])}
+    assert set(verdicts) == {item["key"] for item in gaps} and set(verdicts) <= keys_now
+    survey_cut.verdict(task["id"], [gaps[0]["key"]], "pending")
+    assert len(job_store.get_job(task["id"])["result"]["debreath"]["survey"]["verdicts"]) == len(gaps) - 1
+
+
+@needs_ffmpeg
+def test_a_change_can_be_undone_from_the_bin(task, monkeypatch):
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
+    survey_cut.flip(task["id"], "r1")
+
+    survey_cut.undo_change(task["id"], 0)
+
+    state = job_store.get_job(task["id"])["result"]["debreath"]
+    assert silence_cuts.media_duration_seconds(Path(state["delivered_path"])) == pytest.approx(42.8, abs=1.0)
+    assert state["survey"]["user_changes"][0]["undone_at"]
+    kinds = [item["kind"] for item in _report_items(task["id"])]
+    assert "user_change" not in kinds and "removed_talk" in kinds
+    with pytest.raises(survey_cut.ReviewError):
+        survey_cut.undo_change(task["id"], 0)
