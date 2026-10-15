@@ -29,6 +29,14 @@ import pytest
 from backend.core import debreath_job, local_intake_flow, silence_cuts
 from backend.core.task_watch import TaskCancelled, TaskWatch
 
+
+@pytest.fixture(autouse=True)
+def _cut_before_transcription(monkeypatch):
+    """These cover cutting before transcription, the flow used when
+    ``FLUENTFLOW_SURVEY_FIRST`` is off."""
+    monkeypatch.setenv("FLUENTFLOW_SURVEY_FIRST", "0")
+
+
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
 
 

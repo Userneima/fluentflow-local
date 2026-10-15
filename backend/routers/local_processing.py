@@ -41,6 +41,7 @@ from backend.core import (
     claude_code_note,
     device_profile,
     output_folder,
+    survey_cut,
     tail_trim,
     local_file_chooser,
     local_folder_intake,
@@ -615,11 +616,16 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
 
 
 async def _trim_recorded_tail(ctx: MediaJobContext) -> None:
-    """Cut off what was recorded after the content ended (``tail_trim``),
-    before the note is written so the note leaves it out too. Never raises."""
+    """Cut the recording now that its transcript exists (``survey_cut``: a
+    model reads the whole timeline, then one render), or, when it was cut
+    before transcription, cut off what was recorded after the content ended
+    (``tail_trim``). Before the note, so the note reads the cut. Never raises."""
+    work = (
+        survey_cut.survey_and_cut if local_intake_flow.survey_first_enabled() else tail_trim.trim_tail
+    )
     try:
         await asyncio.get_running_loop().run_in_executor(
-            None, functools.partial(tail_trim.trim_tail, ctx.task_id_value, ctx.client_id),
+            None, functools.partial(work, ctx.task_id_value, ctx.client_id),
         )
     except Exception as exc:  # noqa: BLE001 - the task's own results stand
         logger.warning("tail trim skipped for %s: %s", ctx.task_id_value, exc)

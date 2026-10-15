@@ -42,6 +42,14 @@ from backend.core.result_artifacts import (
 )
 from backend.core.silence_cuts import CutPlan, RenderReport, SilenceCutError, TimeRange
 
+
+@pytest.fixture(autouse=True)
+def _cut_before_transcription(monkeypatch):
+    """These cover cutting before transcription, the flow used when
+    ``FLUENTFLOW_SURVEY_FIRST`` is off."""
+    monkeypatch.setenv("FLUENTFLOW_SURVEY_FIRST", "0")
+
+
 TASK = "task-local-intake"
 
 

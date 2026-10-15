@@ -23,6 +23,14 @@ import pytest
 import backend.core.compress_media as cm
 from backend.core import debreath_job, local_folder_intake, local_intake_flow
 
+
+@pytest.fixture(autouse=True)
+def _cut_before_transcription(monkeypatch):
+    """These cover cutting before transcription, the flow used when
+    ``FLUENTFLOW_SURVEY_FIRST`` is off."""
+    monkeypatch.setenv("FLUENTFLOW_SURVEY_FIRST", "0")
+
+
 SOURCE = {"has_video": True, "has_audio": True, "width": 2940, "height": 1718, "bps": 6_000_000, "fps": 60, "duration": 3110.3}
 
 

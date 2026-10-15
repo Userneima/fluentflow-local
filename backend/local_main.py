@@ -301,6 +301,9 @@ async def lifespan(app: FastAPI):
     # mid-encode leaves a completed task saying its de-breath is still running —
     # and the route refuses that state, which would make the entry dead for good.
     stranded_renders = recover_stranded_renders()
+    from backend.core.survey_cut import recover_interrupted
+
+    recover_interrupted()
     if stranded_renders:
         logger.info("Startup recovery cleared %s stranded de-breath renders", stranded_renders)
     # Same shape, same reason: the visual-note slot is process memory, and the

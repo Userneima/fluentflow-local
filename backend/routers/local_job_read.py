@@ -19,7 +19,7 @@ from backend.core.result_artifacts import (
     artifact_search_dirs,
     resolve_artifact_file,
 )
-from backend.core.storage_paths import _artifact_storage_dir, find_source_file
+from backend.core.storage_paths import _artifact_storage_dir, find_source_file, in_place_source_path
 from backend.core.visual_note_job import (
     VISUAL_NOTE_ARTIFACT_FILENAME,
     VISUAL_NOTE_ARTIFACT_SUFFIXES,
@@ -67,9 +67,19 @@ async def stream_job_events(request: Request, task_id: str, since: int = 0) -> S
 def download_job_source(request: Request, task_id: str) -> FileResponse:
     if not get_job(task_id, client_id=_local_client_scope(request)):
         raise HTTPException(status_code=404, detail="Source file not found")
-    source = find_source_file(task_id)
+    # A recording read where it sits (folder intake, agent, file dialog) is not
+    # in FluentFlow's store; the page plays it to let the user hear a cut.
+    # A player asks for many ranges, so the file where it is recorded is served
+    # as it is; only a missing one is looked for (``original_locator``), and
+    # the page falls back to the stored audio when there is none.
+    source = find_source_file(task_id) or in_place_source_path(get_job(task_id, client_id=_local_client_scope(request)))
     if not source:
-        raise HTTPException(status_code=404, detail="Source file not found")
+        from backend.core import original_locator
+
+        try:
+            source = original_locator.locate(task_id, _local_client_scope(request))
+        except original_locator.OriginalMissing as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     return FileResponse(path=str(source), filename=source.name)
 
 

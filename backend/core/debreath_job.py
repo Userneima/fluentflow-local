@@ -736,8 +736,13 @@ def _run_debreath(
     allow_concurrent_render: bool = False,
     claimed: bool = False,
     runner: Callable[..., Any] = silence_cuts.run_command,
+    revise: Callable[[Path, CutPlan], CutPlan] | None = None,
 ) -> dict[str, Any]:
     """Plan, store the cut list, optionally render, and record the outcome.
+
+    ``revise`` gets the volume-based plan before anything is rendered and
+    returns the plan to render instead (``survey_cut``: a model that has read
+    the whole transcript keeps some gaps and removes stretches of leftover).
 
     Runs to completion in the calling thread; callers that serve HTTP should hand
     it to a background task. Every transition is persisted, so a job poll shows
@@ -777,6 +782,9 @@ def _run_debreath(
             padding_seconds=padding_seconds,
             runner=runner,
         )
+        if revise is not None:
+            _store(task_id, client_id=client_id, state={"stage": "reviewing"})
+            plan = revise(source, plan)
 
         def plan_outputs() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
             """Write the cut list and the subtitles remapped onto it.
