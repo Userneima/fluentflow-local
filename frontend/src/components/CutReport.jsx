@@ -1,17 +1,40 @@
 import {useEffect, useState} from 'react';
-import {Check, CheckCircle2, ChevronDown, ChevronRight, FileSearch, LoaderCircle, Play, RotateCcw, Scissors, Undo2} from 'lucide-react';
+import {AlertCircle, Check, CheckCircle2, ChevronDown, ChevronRight, FileSearch, LoaderCircle, Play, RotateCcw, Scissors, Undo2} from 'lucide-react';
 import {API_BASE, apiFetch} from '../app/shared.jsx';
-import {clock, post} from './CutReview.jsx';
 
 // What the cut did to this recording, organised for reading (cut_report on the
 // backend): groups, what is open and what is folded, one sentence per item.
 // Times are the original recording's and always the program's.
 //
-// Every click is feedback (owner, 2026-10-15). "剪得对" / "确实该保留" agree
-// with an item as it is, one by one or a whole group, at once and with 撤回;
-// an item nobody answered counts as not looked at. "这段不该剪" / "这段应该剪掉"
-// change the video, so they ask first. Every change lands in the bin at the
-// bottom, where it can be undone later.
+// The user is asked only about the first group, 需要你判断 (owner, 2026-10-15):
+// what Claude was unsure of, with why, and what the rules always ask. There
+// "剪得对" / "确实该保留" is recorded at once and the item leaves the group for a
+// folded 你已确认的, where it can be taken back; "这段不该剪" / "这段应该剪掉"
+// change the video, so they ask first. Every other item is Claude's account,
+// with a quiet way to change it. Every change lands in the bin at the bottom.
+
+export const clock = (seconds) => {
+    const total = Math.max(0, Math.round(Number(seconds) || 0));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+};
+
+const post = async (url, body) => {
+    const response = await apiFetch(url, {
+        method: 'POST',
+        headers: body ? {'Content-Type': 'application/json'} : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!response.ok) {
+        let detail = '';
+        try { detail = (await response.json())?.detail || ''; } catch (_) { /* not json */ }
+        throw new Error(detail || `请求失败（${response.status}）`);
+    }
+    return response.json();
+};
 
 const length = (seconds) => {
     const value = Number(seconds) || 0;
@@ -23,11 +46,8 @@ const length = (seconds) => {
     return s ? `${m} 分 ${s} 秒` : `${m} 分钟`;
 };
 
-// A count over many places ("107 处短停顿") cannot be heard or judged one by
-// one, so it is shown without buttons and not counted as something to confirm.
-const answerableItem = (item) => item.kind !== 'user_change' && item.start !== undefined && item.end !== undefined;
-
-export const hasReport = (job) => !!job?.result?.debreath?.survey?.has_report || !!job?.result?.debreath?.survey?.report;
+const surveyOf = (job) => job?.result?.debreath?.survey;
+export const hasReport = (job) => !!surveyOf(job)?.has_report || !!surveyOf(job)?.report;
 
 const smallButton = 'inline-flex h-7 shrink-0 items-center gap-1 rounded-[9px] border border-[#dedada] bg-white px-2.5 text-[12px] font-bold text-[#57585d] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]';
 const linkButton = 'text-[12px] font-extrabold text-[#85868c] underline hover:no-underline disabled:opacity-50 dark:text-white/55';
@@ -51,7 +71,9 @@ const Badge = ({removed}) => (
     </span>
 );
 
-const Item = ({item, taskId, agreed, busy, onAgree, onFlip}) => {
+// mode: 'judge' (asked: agree or change), 'agreed' (answered: take back),
+// 'read' (Claude's account: listen, or quietly change it).
+const Item = ({item, taskId, mode, busy, onAgree, onFlip}) => {
     const [listening, setListening] = useState(false);
     const [confirming, setConfirming] = useState(false);
     const removed = item.action === 'removed';
@@ -72,6 +94,9 @@ const Item = ({item, taskId, agreed, busy, onAgree, onFlip}) => {
             </div>
             <p className="mt-1 text-[13px] font-semibold leading-5 text-[#2b2c30] dark:text-white/80">{item.text}</p>
             {item.said ? <p className="mt-0.5 text-[12px] leading-5 text-[#85868c] dark:text-white/50">说的是：「{item.said}」</p> : null}
+            {mode === 'judge' && item.doubt ? (
+                <p className="mt-1 text-[12px] font-semibold leading-5 text-[#8a5a00] dark:text-[#fdb022]">请你判断：{item.doubt}</p>
+            ) : null}
             {listening && timed ? (
                 <video
                     className="mt-2 max-h-[220px] w-full rounded-[10px] bg-black"
@@ -81,34 +106,38 @@ const Item = ({item, taskId, agreed, busy, onAgree, onFlip}) => {
                     src={`${API_BASE}/jobs/${encodeURIComponent(taskId)}/source#t=${Math.max(0, item.start - 3)},${item.end + 1}`}
                 />
             ) : null}
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-                {timed ? (
+            {timed ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
                     <button type="button" className={smallButton} onClick={() => setListening((on) => !on)}>
                         <Play className="size-3" strokeWidth={2.15}/>
                         {listening ? '收起' : '在原片里听'}
                     </button>
-                ) : null}
-                {!timed ? null : theirs ? (
-                    <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">你改的，要改回去在下面"你改过的地方"里撤销</span>
-                ) : agreed ? (
-                    <span className={okText}>
-                        <CheckCircle2 className="size-3.5" strokeWidth={2.15}/>
-                        {removed ? '已确认剪得对' : '已确认该保留'}
-                        <button type="button" className={`ml-1 ${linkButton}`} disabled={busy} onClick={() => onAgree([item.key], 'pending')}>撤回</button>
-                    </span>
-                ) : (
-                    <>
-                        <button type="button" className={smallButton} disabled={busy} onClick={() => onAgree([item.key], 'agree')}>
-                            <Check className="size-3" strokeWidth={2.15}/>
-                            {removed ? '剪得对' : '确实该保留'}
+                    {mode === 'judge' ? (
+                        <>
+                            <button type="button" className={smallButton} disabled={busy} onClick={() => onAgree([item.key], 'agree')}>
+                                <Check className="size-3" strokeWidth={2.15}/>
+                                {removed ? '剪得对' : '确实该保留'}
+                            </button>
+                            <button type="button" className={smallButton} disabled={busy} onClick={() => setConfirming(true)}>
+                                {removed ? <Undo2 className="size-3" strokeWidth={2.15}/> : <Scissors className="size-3" strokeWidth={2.15}/>}
+                                {removed ? '这段不该剪' : '这段应该剪掉'}
+                            </button>
+                        </>
+                    ) : mode === 'agreed' ? (
+                        <span className={okText}>
+                            <CheckCircle2 className="size-3.5" strokeWidth={2.15}/>
+                            {removed ? '你确认了剪得对' : '你确认了该保留'}
+                            <button type="button" className={`ml-1 ${linkButton}`} disabled={busy} onClick={() => onAgree([item.key], 'pending')}>撤回</button>
+                        </span>
+                    ) : theirs ? (
+                        <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">你改的，要改回去在下面"你改过的地方"里撤销</span>
+                    ) : (
+                        <button type="button" className={linkButton} disabled={busy} onClick={() => setConfirming(true)}>
+                            {removed ? '改成保留' : '改成剪掉'}
                         </button>
-                        <button type="button" className={smallButton} disabled={busy} onClick={() => setConfirming(true)}>
-                            {removed ? <Undo2 className="size-3" strokeWidth={2.15}/> : <Scissors className="size-3" strokeWidth={2.15}/>}
-                            {removed ? '这段不该剪' : '这段应该剪掉'}
-                        </button>
-                    </>
-                )}
-            </div>
+                    )}
+                </div>
+            ) : null}
             {confirming ? (
                 <Confirm
                     label={removed ? '确定放回去' : '确定剪掉'}
@@ -120,11 +149,9 @@ const Item = ({item, taskId, agreed, busy, onAgree, onFlip}) => {
     );
 };
 
-const Section = ({taskId, section, verdicts, busy, onAgree, onFlip}) => {
-    const [open, setOpen] = useState(!section.folded);
+const Section = ({taskId, title, items, folded, mode, busy, onAgree, onFlip, action}) => {
+    const [open, setOpen] = useState(!folded);
     const Chevron = open ? ChevronDown : ChevronRight;
-    const answerable = section.items.filter(answerableItem);
-    const pending = answerable.filter((item) => !verdicts[item.key]);
     return (
         <section>
             <div className="flex flex-wrap items-center gap-2">
@@ -134,34 +161,15 @@ const Section = ({taskId, section, verdicts, busy, onAgree, onFlip}) => {
                     onClick={() => setOpen((value) => !value)}
                 >
                     <Chevron className="size-4 shrink-0 text-[#85868c]" strokeWidth={2.15}/>
-                    {section.title}
-                    <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">{section.items.length} 条</span>
+                    {title}
+                    <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">{items.length} 条</span>
                 </button>
-                {answerable.length ? (pending.length ? (
-                    <button type="button" className={smallButton} disabled={busy} onClick={() => onAgree(pending.map((item) => item.key), 'agree')}>
-                        <Check className="size-3" strokeWidth={2.15}/>
-                        这一组都没问题
-                    </button>
-                ) : (
-                    <span className={okText}>
-                        <CheckCircle2 className="size-3.5" strokeWidth={2.15}/>
-                        这一组已确认
-                        <button type="button" className={`ml-1 ${linkButton}`} disabled={busy} onClick={() => onAgree(answerable.map((item) => item.key), 'pending')}>撤回</button>
-                    </span>
-                )) : null}
+                {action}
             </div>
             {open ? (
                 <ul className="mt-2 grid gap-2">
-                    {section.items.map((item) => (
-                        <Item
-                            key={item.key || item.ref}
-                            taskId={taskId}
-                            item={item}
-                            agreed={!!verdicts[item.key]}
-                            busy={busy}
-                            onAgree={onAgree}
-                            onFlip={onFlip}
-                        />
+                    {items.map((item) => (
+                        <Item key={item.key || item.ref} taskId={taskId} item={item} mode={mode} busy={busy} onAgree={onAgree} onFlip={onFlip}/>
                     ))}
                 </ul>
             ) : null}
@@ -205,7 +213,7 @@ export const CutReport = ({job}) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [saving, setSaving] = useState(false);
-    const rerendering = !!survey?.rerendering || Number.isInteger(survey?.restoring);
+    const rerendering = !!survey?.rerendering;
 
     const load = async () => {
         const response = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}`);
@@ -261,20 +269,29 @@ export const CutReport = ({job}) => {
             setError(exc.message);
         }
     };
+    const flip = (ref) => rerender(`${base}/${encodeURIComponent(ref)}/flip`);
 
     const report = survey?.report;
     const verdicts = survey?.verdicts || {};
     const changes = Array.isArray(survey?.user_changes) ? survey.user_changes : [];
-    const liveChanges = changes.filter((change) => !change.undone_at).length;
-    const items = (report?.sections || []).flatMap((section) => section.items);
-    const answerable = items.filter(answerableItem);
-    const answered = answerable.filter((item) => verdicts[item.key]).length;
+    const sections = report?.sections || [];
+    const judgeItems = sections.filter((section) => section.judge).flatMap((section) => section.items);
+    const waiting = judgeItems.filter((item) => !verdicts[item.key]);
+    const answered = judgeItems.filter((item) => verdicts[item.key]);
     const busy = rerendering || saving;
+    // Before the task is opened, the list row says how many wait.
+    const toJudge = open && report ? waiting.length : Number(surveyOf(job)?.to_judge) || 0;
     return (
         <div className="mt-3">
-            <button type="button" className={smallButton} onClick={toggle}>
-                <FileSearch className="size-3.5" strokeWidth={2.15}/>
-                {open ? '收起处理说明' : '看看这条视频处理了什么'}
+            <button
+                type="button"
+                className={toJudge && !open
+                    ? `${smallButton} border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]`
+                    : smallButton}
+                onClick={toggle}
+            >
+                {toJudge && !open ? <AlertCircle className="size-3.5" strokeWidth={2.15}/> : <FileSearch className="size-3.5" strokeWidth={2.15}/>}
+                {open ? '收起处理说明' : toJudge ? `有 ${toJudge} 处需要你判断` : '看看这条视频处理了什么'}
             </button>
             {open ? (
                 <div className="mt-2 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]">
@@ -285,14 +302,9 @@ export const CutReport = ({job}) => {
                         </p>
                     ) : report ? (
                         <>
-                            <div className="flex flex-wrap items-baseline justify-between gap-2">
-                                <p className="text-[13px] font-extrabold tabular-nums text-[#111111] dark:text-white">
-                                    原片 {clock(report.before_seconds)}，剪后 {clock(report.after_seconds)}
-                                </p>
-                                <p className="text-[12px] font-semibold tabular-nums text-[#85868c] dark:text-white/55">
-                                    已确认 {answered} / {answerable.length} 条{liveChanges ? `，改过 ${liveChanges} 处` : ''}
-                                </p>
-                            </div>
+                            <p className="text-[13px] font-extrabold tabular-nums text-[#111111] dark:text-white">
+                                原片 {clock(report.before_seconds)}，剪后 {clock(report.after_seconds)}
+                            </p>
                             {report.summary ? <p className="mt-1 text-[13px] font-semibold leading-5 text-[#57585d] dark:text-white/70">{report.summary}</p> : null}
                             {rerendering ? (
                                 <p className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-extrabold text-[#57585d] dark:text-white/62">
@@ -302,15 +314,61 @@ export const CutReport = ({job}) => {
                             ) : null}
                             {error ? <p className="mt-2 text-[12px] font-semibold text-red-700 dark:text-red-300">{error}</p> : null}
                             <div className="mt-3 grid gap-3">
-                                {report.sections.map((section) => (
+                                {judgeItems.length ? (
+                                    <div className={`rounded-[12px] border px-2.5 py-2.5 ${waiting.length
+                                        ? 'border-[#f5c86b] bg-[#fffaf0] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.06]'
+                                        : 'border-[#dedada] bg-white/60 dark:border-white/[0.10] dark:bg-white/[0.02]'}`}>
+                                        {waiting.length ? (
+                                            <Section
+                                                taskId={taskId}
+                                                title="需要你判断"
+                                                items={waiting}
+                                                folded={false}
+                                                mode="judge"
+                                                busy={busy}
+                                                onAgree={agree}
+                                                onFlip={flip}
+                                                action={(
+                                                    <button type="button" className={smallButton} disabled={busy} onClick={() => agree(waiting.map((item) => item.key), 'agree')}>
+                                                        <Check className="size-3" strokeWidth={2.15}/>
+                                                        剩下的都没问题
+                                                    </button>
+                                                )}
+                                            />
+                                        ) : (
+                                            <p className={okText}>
+                                                <CheckCircle2 className="size-3.5" strokeWidth={2.15}/>
+                                                需要你判断的都处理完了
+                                            </p>
+                                        )}
+                                        {answered.length ? (
+                                            <div className="mt-2.5">
+                                                <Section
+                                                    key={`agreed-${answered.length}`}
+                                                    taskId={taskId}
+                                                    title="你已确认的"
+                                                    items={answered}
+                                                    folded
+                                                    mode="agreed"
+                                                    busy={busy}
+                                                    onAgree={agree}
+                                                    onFlip={flip}
+                                                />
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+                                {sections.filter((section) => !section.judge).map((section) => (
                                     <Section
                                         key={`${section.title}-${section.items.length}`}
                                         taskId={taskId}
-                                        section={section}
-                                        verdicts={verdicts}
+                                        title={section.title}
+                                        items={section.items}
+                                        folded={section.folded}
+                                        mode="read"
                                         busy={busy}
                                         onAgree={agree}
-                                        onFlip={(ref) => rerender(`${base}/${encodeURIComponent(ref)}/flip`)}
+                                        onFlip={flip}
                                     />
                                 ))}
                             </div>

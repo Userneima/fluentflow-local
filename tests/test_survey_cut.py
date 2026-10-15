@@ -3,21 +3,19 @@
 Requirements (owner, 2026-10-15, 方案/2026-10-15-先转录再定怎么剪):
 1. Gaps are cut, except those the model keeps because the picture matters.
 2. A stretch with talk in it that the model names as outside the content
-   (leftover after the end) is cut too, and listed for the user to confirm in
-   the original recording's time, with the model's reason.
+   (leftover after the end) is cut too, with the model's reason, and put to
+   the user to judge in the processing report.
 3. Removals that would take away more than a quarter of what was said are not
    applied; the gap decisions still are.
 4. Without a model, or when it fails, the loudness plan is cut unchanged.
 5. After the cut the transcript is on the cut file's clock; the original's
    lines are kept beside it. The cut goes into the user's folder.
-6. Every single cut longer than a minute, and gaps in which words were
-   transcribed, are listed for confirmation too.
 7. With the new flow on, nothing is cut before transcription.
 9. No cut reaches into speech: a transcribed word that the voice detector also
    hears. A word's time alone is not enough (the transcriber stretches it over
    the pause after it). With or without a model.
 10. Filler in the middle (sound checks, a sentence said twice, off-topic
-    talk) is removed too; every removed stretch is listed, whatever their number.
+    talk) is removed too, however many stretches there are.
 11. Pauses under three seconds are cut without asking the model.
 12. Any timed item of the processing report can be turned around: what was
     cut is put back, what was kept is cut. The change is recorded next to what
@@ -27,9 +25,6 @@ Requirements (owner, 2026-10-15, 方案/2026-10-15-先转录再定怎么剪):
     report being written again. An item nobody answered is not looked at.
 14. Every change the user made stays in the report's bin and can be undone
     later: the model's decision is applied again and the cut rendered again.
-8. Each listed cut can be answered "right" or "wrong", and taken back. "Wrong"
-   puts that stretch back and renders again without asking the model again;
-   the transcript follows.
 """
 
 from __future__ import annotations
@@ -89,9 +84,9 @@ def test_kept_gap_stays_and_leftover_after_the_end_is_removed():
     assert (24.1, 27.9) not in cut
     assert (10.1, 13.9) in cut and (38.1, 41.9) in cut
     assert plan.cuts[-1].end == 60.0 and plan.cuts[-1].start == pytest.approx(50.4, abs=0.2)
-    review = record["review"]
-    assert [item["kind"] for item in review] == ["removed_talk"]
-    assert review[0]["start"] == pytest.approx(50.4, abs=0.2) and "拜拜" in review[0]["reason"]
+    removed = record["removed"]
+    assert len(removed) == 1
+    assert removed[0]["start"] == pytest.approx(50.4, abs=0.2) and "拜拜" in removed[0]["reason"]
     assert record["kept_gaps"][0]["reason"] == "讲者让大家读表格"
 
 
@@ -123,19 +118,6 @@ def test_the_model_reads_every_line_and_numbered_long_gaps_with_their_picture():
     assert all(line in text for _, _, line in LINES)
     assert "〔空白 #1 · 10.1–13.9 秒" in text and "画面一直在变" in text and "画面静止" in text
     assert text.index("今天我们先过") < text.index("空白 #1") < text.index("接下来大家看")
-
-
-def test_long_cuts_and_words_in_gaps_are_listed_for_confirmation():
-    lines = [(0.5, 9.5, "开场"), (11.0, 12.0, "对对"), (100.0, 110.0, "继续讲正事")]
-    plan, record = survey_cut.revise_plan(
-        Path("x.mp4"), _plan(120.0, [(10, 14), (20, 95)]), _segments(lines),
-        _says('{"keep_gaps": [], "remove": []}'), pictures=_no_pictures,
-    )
-
-    kinds = {item["kind"] for item in record["review"]}
-    assert kinds == {"long_gap", "words_in_gap"}
-    words = next(item for item in record["review"] if item["kind"] == "words_in_gap")
-    assert "对对" in words["reason"]
 
 
 # --- end to end, on a short synthetic recording ---------------------------
@@ -191,13 +173,14 @@ def test_the_recording_is_cut_once_and_the_transcript_moves_onto_the_cut(task, m
     table = next(seg for seg in result["raw_segments"] if seg["text"].startswith("表格里"))
     assert table["start"] == pytest.approx(28.5 - 3.8, abs=0.3)
     assert len(result["source_raw_segments"]) == len(LINES)
-    assert record["review"][0]["kind"] == "removed_talk"
-    assert state["survey"]["review"] == record["review"]
     report = state["survey"]["report"]
     assert report["before_seconds"] == pytest.approx(60.0, abs=0.5)
     assert report["after_seconds"] == pytest.approx(42.8, abs=1.0)
     refs = [item["ref"] for section in report["sections"] for item in section["items"]]
     assert "r1" in refs and any(ref.startswith("g") for ref in refs)
+    # Removed talk is always put to the user.
+    assert report["sections"][0]["title"] == "需要你判断"
+    assert [item["ref"] for item in report["sections"][0]["items"]] == ["r1"]
 
 
 @needs_ffmpeg
@@ -234,36 +217,6 @@ def test_nothing_is_cut_before_transcription_on_the_new_flow(monkeypatch, tmp_pa
 
 TAIL = ('{"keep_gaps": [{"id": 2, "reason": "讲者让大家读表格"}],'
         ' "remove": [{"from": 50.5, "to": null, "reason": "说完拜拜后多录的"}]}')
-
-
-@needs_ffmpeg
-def test_answers_are_recorded_and_can_be_taken_back(task, monkeypatch):
-    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
-    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
-
-    survey_cut.answer(task["id"], 0, "right")
-    assert job_store.get_job(task["id"])["result"]["debreath"]["survey"]["answers"] == {"0": "right"}
-    survey_cut.answer(task["id"], 0, "pending")
-    assert job_store.get_job(task["id"])["result"]["debreath"]["survey"]["answers"] == {}
-    with pytest.raises(survey_cut.ReviewError):
-        survey_cut.answer(task["id"], 5, "right")
-
-
-@needs_ffmpeg
-def test_a_cut_said_to_be_wrong_is_put_back_and_rendered_again(task, monkeypatch):
-    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
-    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
-
-    survey_cut.restore(task["id"], 0)
-
-    result = job_store.get_job(task["id"])["result"]
-    state = result["debreath"]
-    # The leftover is back; the kept gap is still kept, the other two still cut.
-    assert silence_cuts.media_duration_seconds(Path(state["delivered_path"])) == pytest.approx(52.4, abs=1.0)
-    assert "嗯" in [seg["text"] for seg in result["raw_segments"]]
-    assert result["transcript_media"] == "debreath_media"
-    assert len(result["source_raw_segments"]) == len(LINES)
-    assert state["survey"]["answers"] == {"0": "wrong"} and state["survey"]["review"][0]["restored"] is True
 
 
 def test_no_cut_reaches_into_a_transcribed_word():
@@ -308,7 +261,7 @@ def test_filler_in_the_middle_is_removed_and_every_removal_is_listed():
         _says(f'{{"keep_gaps": [], "remove": [{remove}]}}'), pictures=_no_pictures,
     )
 
-    assert [item["kind"] for item in record["review"]] == ["removed_talk"] * 7
+    assert len(record["removed"]) == 7
     assert any(c.start <= 10.0 and c.end >= 14.0 for c in plan.cuts)
     assert not any(c.start < 5.0 < c.end for c in plan.cuts)
 

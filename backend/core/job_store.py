@@ -952,6 +952,16 @@ def _step_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _to_judge(survey: dict[str, Any]) -> int:
+    """Items of the report's judgement group the user has not answered."""
+    verdicts = survey.get("verdicts") if isinstance(survey.get("verdicts"), dict) else {}
+    sections = (survey.get("report") or {}).get("sections") or []
+    return sum(
+        1 for section in sections if isinstance(section, dict) and section.get("judge")
+        for item in section.get("items") or [] if isinstance(item, dict) and item.get("key") not in verdicts
+    )
+
+
 def _debreath_summary(state: Any) -> dict[str, Any] | None:
     """The cut's counts for a list row, without its thousands of ranges.
 
@@ -966,12 +976,13 @@ def _debreath_summary(state: Any) -> dict[str, Any] | None:
     return {
         # The few cuts the user is asked to confirm (``survey_cut``), with their
         # answers; the model's other decisions stay in the full result.
+        # The processing report is read with the task itself; the row says
+        # there is one and how many of its items still wait for the user.
         "survey": {
-            **{key: survey.get(key) for key in ("review", "answers", "restoring", "restore_error")},
-            # The processing report is read with the task itself; the row only
-            # says there is one.
-            "has_report": bool(survey.get("report")),
-        } if survey.get("review") or survey.get("report") else None,
+            "has_report": True,
+            "to_judge": _to_judge(survey),
+            "rerendering": bool(survey.get("rerendering")),
+        } if survey.get("report") else None,
         "status": state.get("status"),
         "stage": state.get("stage"),
         "used_for_transcription": state.get("used_for_transcription"),

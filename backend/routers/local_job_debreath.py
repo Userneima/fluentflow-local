@@ -192,29 +192,6 @@ def start_job_debreath(
     return start_local_debreath(request, task_id, background_tasks, payload)
 
 
-def _review_index(job: dict[str, Any] | None, index: int) -> None:
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-
-@router.post("/jobs/{task_id}/cut-review/{index}")
-def answer_cut_review(
-    request: Request, task_id: str, index: int, payload: Optional[dict[str, Any]] = Body(None),
-) -> dict[str, Any]:
-    """Record the user's answer to one cut listed for confirmation
-    (``survey_cut.answer``): ``right``, or ``pending`` to take it back."""
-    client_id = local_client_scope(request)
-    _review_index(get_job(task_id, client_id=client_id), index)
-    value = str((payload or {}).get("answer") or "")
-    if value == "wrong":
-        raise HTTPException(status_code=400, detail="不该剪的那段用恢复接口放回去")
-    try:
-        survey = survey_cut.answer(task_id, index, value, client_id=client_id)
-    except survey_cut.ReviewError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"ok": True, "survey": survey}
-
-
 def _accept_rerender(task_id: str, client_id: str | None, background_tasks: BackgroundTasks, work) -> dict[str, Any]:
     """Refuse a re-render in this response for the same reasons as any other
     render, else run ``work`` and then write the note again from the new cut."""
@@ -250,15 +227,6 @@ def _accept_rerender(task_id: str, client_id: str | None, background_tasks: Back
 
     background_tasks.add_task(_run)
     return {"ok": True, "task_id": task_id, "accepted": True}
-
-
-@router.post("/jobs/{task_id}/cut-review/{index}/restore")
-def restore_cut_review(
-    request: Request, task_id: str, index: int, background_tasks: BackgroundTasks,
-) -> dict[str, Any]:
-    """Put one listed cut back (``survey_cut.restore``)."""
-    client_id = local_client_scope(request)
-    return _accept_rerender(task_id, client_id, background_tasks, lambda: survey_cut.restore(task_id, index, client_id=client_id))
 
 
 @router.post("/jobs/{task_id}/cut-report/{ref}/flip")

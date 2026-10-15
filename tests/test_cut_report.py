@@ -9,6 +9,9 @@ Requirements (owner, 2026-10-15):
    model leaves out is still there, in a last folded group.
 3. Without a model, or when it answers nonsense, the facts are grouped by kind.
 4. What the user changed is said first, as theirs.
+5. The user is asked to judge only a first group: what the model marked as
+   unsure (with why) and what the rules always ask (removed talk, a single cut
+   of a minute or more, a removal the program refused). The rest is only read.
 """
 
 from __future__ import annotations
@@ -74,7 +77,7 @@ def test_without_a_useful_model_the_facts_are_grouped_by_kind(chat):
     report = cut_report.organize(cut_report.facts(RECORD, SEGMENTS), chat)
 
     titles = [s["title"] for s in report["sections"]]
-    assert titles == ["去掉的说话", "因为画面保留的空白", "剪掉的长空白", "保住的轻声说话", "短停顿"]
+    assert titles == ["需要你判断", "因为画面保留的空白", "剪掉的长空白", "保住的轻声说话", "短停顿"]
     assert [s["folded"] for s in report["sections"]] == [False, False, True, True, True]
     assert sorted(_ids(report)) == ["g1", "g2", "r1", "s1", "short"]
 
@@ -86,5 +89,26 @@ def test_what_the_user_put_back_is_listed_first_as_theirs():
 
     report = cut_report.organize(cut_report.facts(record, SEGMENTS), None)
 
-    first = report["sections"][0]
-    assert first["title"] == "你改过的" and first["items"][0]["text"] == "你说这段不该剪，已放回。"
+    titles = [section["title"] for section in report["sections"]]
+    assert titles[0] == "你改过的" and report["sections"][0]["items"][0]["text"] == "你说这段不该剪，已放回。"
+
+
+def test_only_doubts_and_the_rules_put_items_to_the_user():
+    record = {**RECORD, "gaps": {"short": {"count": 1, "seconds": 1.0}, "long": [
+        {"start": 5.0, "end": 19.0, "seconds": 14.0, "picture": "画面一直在变", "kept": False, "reason": ""},
+        {"start": 24.0, "end": 100.0, "seconds": 76.0, "picture": "画面静止", "kept": False, "reason": ""},
+        {"start": 110.0, "end": 120.0, "seconds": 10.0, "picture": "画面静止", "kept": False, "reason": ""},
+    ]}}
+    answer = ('{"summary": "", "sections": [{"title": "长空白", "folded": false, "items": ['
+              '{"ref": "g1", "text": "剪掉", "unsure": true, "doubt": "画面在变，可能是在演示"},'
+              '{"ref": "g2", "text": "剪掉"}, {"ref": "g3", "text": "剪掉", "unsure": false}]}]}')
+
+    report = cut_report.organize(cut_report.facts(record, SEGMENTS), ((lambda s, u: answer), "fake"))
+
+    judge = report["sections"][0]
+    assert judge["title"] == "需要你判断" and judge["judge"] is True
+    doubts = {item["ref"]: item["doubt"] for item in judge["items"]}
+    assert doubts["g1"] == "画面在变，可能是在演示"
+    assert "1 分" in doubts["g2"]
+    assert "r1" in doubts and "g3" not in doubts
+    assert all(not s.get("judge") for s in report["sections"][1:])

@@ -31,6 +31,9 @@ REQUEST_DEADLINE_SECONDS = 300.0
 MAX_SPOKEN_ITEMS = 30
 CONTEXT_CHARS = 40
 OTHER_TITLE = "其他处理"
+JUDGE_TITLE = "需要你判断"
+# A single cut this long is always put to the user (owner, 2026-10-15).
+LONG_CUT_SECONDS = 60.0
 
 SYSTEM = """你会读到 FluentFlow 处理一条录像时做过的每一件事，每行一条，开头的方括号是编号。
 把它们整理成给录像主人看的处理说明：他想知道产品对他的录像做了什么、为什么，哪里可能做错了。
@@ -39,10 +42,11 @@ SYSTEM = """你会读到 FluentFlow 处理一条录像时做过的每一件事�
 - 零碎、重复、没什么可看的（大量短停顿、说得很轻被保住的零碎字）放后面，并把这组 folded 设为 true（默认折叠）。
 - 每条用一句话（不超过 40 字）说清做了什么、为什么，用大白话，可以借助前后文说明这段在干什么。
 - 用编号引用条目，不要自己写时间点，时间由程序给出。不重要的条目可以不列，没列的会自动放进"其他处理"并折叠。
+- 只有你自己也拿不准这样处理对不对的条目，才标 "unsure": true，并在 doubt 里用一句话说清拿不准在哪（例如"画面在变，可能是在演示"）。这些会单独拿出来请他判断，其余的他只看你的说明。有把握的不要标，宁少勿滥。
 - summary 用一两句话概括这次处理的整体情况，不写数字。
 
 只回一个 JSON 对象：
-{"summary": "…", "sections": [{"title": "…", "folded": false, "items": [{"ref": "编号", "text": "一句话"}]}]}"""
+{"summary": "…", "sections": [{"title": "…", "folded": false, "items": [{"ref": "编号", "text": "一句话", "unsure": false, "doubt": ""}]}]}"""
 
 
 def _clock(seconds: float) -> str:
@@ -105,16 +109,20 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
             default = gap.get("reason") or "这段没人说话，但画面需要看，保留。"
         else:
             default = f"{_length(end - start)}没人说话，剪掉。" + (f"（{picture}）" if picture else "")
-        out.append({
+        fact = {
             "id": f"g{n}", "kind": "long_gap", "action": "kept" if gap.get("kept") else "removed",
             "start": start, "end": end, "seconds": round(end - start, 1), "picture": picture,
             "before": _line_before(segments, start), "after": _line_after(segments, end), "default": default,
-        })
+        }
+        if not gap.get("kept") and end - start >= LONG_CUT_SECONDS:
+            fact["must_confirm"] = f"整段剪掉了 {_length(end - start)}，请你确认这么长没有要看的。"
+        out.append(fact)
     for n, removal in enumerate(record.get("removed") or [], start=1):
         start, end = _seconds(removal.get("start")), _seconds(removal.get("end"))
         out.append({
             "id": f"r{n}", "kind": "removed_talk", "action": "removed", "start": start, "end": end,
             "seconds": round(end - start, 1), "said": _text_within(segments, start, end),
+            "must_confirm": "去掉的是有人说话的内容，请你确认。",
             "default": removal.get("reason") or "这段说的话和正式内容无关，去掉。",
         })
     for n, refused in enumerate(record.get("refused_removals") or [], start=1):
@@ -122,6 +130,7 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
         out.append({
             "id": f"x{n}", "kind": "refused_removal", "action": "kept", "start": start, "end": end,
             "seconds": round(end - start, 1), "said": _text_within(segments, start, end),
+            "must_confirm": "模型想去掉、程序拦下了，请你判断该不该去掉。",
             "default": "模型想去掉这段，但要去掉的说话太多，像是误判，没有去掉。",
         })
     changes = [c for c in record.get("user_changes") or [] if not c.get("undone_at")]
@@ -188,6 +197,27 @@ def key_of(fact: dict[str, Any]) -> str:
     return fact["id"]
 
 
+def _with_judgement(sections: list[dict[str, Any]], doubts: dict[str, str], by_id: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Move what the user is asked to judge into a first group: what the
+    model was unsure of (with why) and what the rules always put to the user.
+    Everything else is only read."""
+    judge: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    for section in sections:
+        rest = []
+        for item in section["items"]:
+            fact = by_id.get(item["ref"]) or {}
+            doubt = doubts.get(item["ref"]) or fact.get("must_confirm")
+            if doubt and "start" in fact and fact.get("kind") != "user_change":
+                judge.append({**item, "doubt": doubt})
+            else:
+                rest.append(item)
+        if rest:
+            kept.append({**section, "items": rest})
+    judge.sort(key=lambda item: item.get("start", 0))
+    return ([{"title": JUDGE_TITLE, "folded": False, "judge": True, "items": judge}] if judge else []) + kept
+
+
 def _item(fact: dict[str, Any], text: str | None = None) -> dict[str, Any]:
     item = {
         "ref": fact["id"], "key": key_of(fact), "kind": fact["kind"], "action": fact["action"],
@@ -205,6 +235,7 @@ def assemble(all_facts: list[dict[str, Any]], answer: dict[str, Any], organized_
     last group."""
     by_id = {fact["id"]: fact for fact in all_facts}
     used: set[str] = set()
+    doubts: dict[str, str] = {}
     sections: list[dict[str, Any]] = []
     for section in answer.get("sections") or []:
         if not isinstance(section, dict):
@@ -217,6 +248,8 @@ def assemble(all_facts: list[dict[str, Any]], answer: dict[str, Any], organized_
             if ref not in by_id or ref in used:
                 continue
             used.add(ref)
+            if entry.get("unsure") is True:
+                doubts[ref] = str(entry.get("doubt") or "").strip()[:120] or "模型拿不准这样处理对不对。"
             # A count over many places is what the product always does; it is
             # stated as a fact, in the program's words, not argued for.
             text = str(entry.get("text") or "")[:120] if "start" in by_id[ref] else ""
@@ -229,7 +262,10 @@ def assemble(all_facts: list[dict[str, Any]], answer: dict[str, Any], organized_
     rest = [fact for fact in all_facts if fact["id"] not in used]
     if rest:
         sections.append({"title": OTHER_TITLE, "folded": True, "items": [_item(fact) for fact in rest]})
-    return {"summary": str(answer.get("summary") or "").strip()[:200], "sections": sections, "organized_by": organized_by}
+    return {
+        "summary": str(answer.get("summary") or "").strip()[:200],
+        "sections": _with_judgement(sections, doubts, by_id), "organized_by": organized_by,
+    }
 
 
 def fallback(all_facts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -252,7 +288,8 @@ def fallback(all_facts: list[dict[str, Any]]) -> dict[str, Any]:
         items = [_item(f) for f in all_facts if key(f) & kinds]
         if items:
             sections.append({"title": title, "folded": folded, "items": items})
-    return {"summary": "", "sections": sections, "organized_by": None}
+    by_id = {fact["id"]: fact for fact in all_facts}
+    return {"summary": "", "sections": _with_judgement(sections, {}, by_id), "organized_by": None}
 
 
 def organize(all_facts: list[dict[str, Any]], chat: tuple[Chat, str] | None) -> dict[str, Any]:
@@ -272,7 +309,7 @@ def organize(all_facts: list[dict[str, Any]], chat: tuple[Chat, str] | None) -> 
     except Exception as exc:  # noqa: BLE001 - the facts are still shown
         logger.warning("cut report not organised: %s", exc)
         return fallback(all_facts)
-    if not any(section["title"] != OTHER_TITLE for section in report["sections"]):
+    if not any(section["title"] not in (OTHER_TITLE, JUDGE_TITLE) for section in report["sections"]):
         return fallback(all_facts)
     return report
 

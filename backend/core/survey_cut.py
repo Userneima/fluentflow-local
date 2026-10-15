@@ -20,10 +20,11 @@ once (``debreath_job``), the transcript is moved onto the cut file's clock
 (``cut_timeline``), and from there the task looks exactly like one that was cut
 first: the note, the subtitles and the user's folder all read the cut file.
 
-The cuts that carry the most risk are listed for the user to confirm after the
-task, in the original recording's time: every removed stretch with talk in it,
-every single cut longer than a minute, and gaps the volume rule cut although
-words were transcribed in them. The edit itself is never shown for editing.
+What was done is shown on the task as a processing report (``cut_report``).
+The user is asked to judge only what the model was unsure of and what the rules
+always put to them (every removed stretch with talk in it, every single cut
+longer than a minute); the rest is read. Any decision can still be turned
+around, and every change can be undone.
 
 Without a model the volume plan is rendered unchanged. A judgement that would
 remove more than a quarter of what was said is not applied at all.
@@ -68,11 +69,6 @@ MIN_REMOVAL_SECONDS = 2.0
 MAX_SPEECH_SHARE_REMOVED = 0.25
 # Margin left around the first and last removed line.
 EDGE_SECONDS = 0.1
-# Reported for confirmation.
-LONG_CUT_SECONDS = 60.0
-# Every removed stretch with talk in it is listed; of the rest, at most this
-# many, the riskiest first.
-MAX_OTHER_REVIEW_ITEMS = 5
 REQUEST_DEADLINE_SECONDS = 600.0
 MAX_TRANSCRIPT_CHARS = 120_000
 
@@ -235,45 +231,6 @@ def speech_share(segments: list[dict[str, Any]], spans: list[TimeRange]) -> floa
     return removed / total if total else 0.0
 
 
-def _clock(seconds: float) -> str:
-    seconds = int(round(seconds))
-    hours, rest = divmod(seconds, 3600)
-    minutes, secs = divmod(rest, 60)
-    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
-
-
-def review_items(
-    segments: list[dict[str, Any]], cuts: list[TimeRange], removals: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """The cuts the user is asked to confirm, in the original's time."""
-    items: list[dict[str, Any]] = [
-        {"kind": "removed_talk", "start": r["start"], "end": r["end"], "reason": r["reason"]} for r in removals
-    ]
-    spans = [TimeRange(r["start"], r["end"]) for r in removals]
-    others: list[dict[str, Any]] = []
-    for cut in cuts:
-        if any(span.start <= cut.start + 0.01 and cut.end <= span.end + 0.01 for span in spans):
-            continue
-        words = [str(seg.get("text")).strip() for seg in segments if _inside(seg, cut, 0.8)]
-        words = [w for w in words if len(w) >= 2]
-        if cut.duration >= LONG_CUT_SECONDS:
-            others.append({"kind": "long_gap", "start": cut.start, "end": cut.end,
-                           "reason": f"这一段 {_clock(cut.duration)} 没人说话，整段剪掉了。"})
-        elif words:
-            quoted = "」「".join(words)[:60]
-            others.append({"kind": "words_in_gap", "start": cut.start, "end": cut.end,
-                           "reason": f"按音量判断是空白，但转录在这里认出了字：「{quoted}」。"})
-    # Riskiest first: a long stretch with nothing said is a whole part of the
-    # recording; words in a gap are usually a short aside.
-    others.sort(key=lambda item: (item["kind"] != "long_gap", -(item["end"] - item["start"])))
-    items.extend(others[:MAX_OTHER_REVIEW_ITEMS])
-    for item in items:
-        item["seconds"] = round(item["end"] - item["start"], 1)
-        item["start"], item["end"] = round(item["start"], 1), round(item["end"], 1)
-    items.sort(key=lambda item: item["start"])
-    return items
-
-
 def revise_plan(
     source: Path, plan: CutPlan, segments: list[dict[str, Any]], ask: Chat, *,
     pictures: Callable[[Path, list[TimeRange]], dict[int, float | None]] = measure_pictures,
@@ -322,7 +279,6 @@ def revise_plan(
         "gaps": describe_gaps(gaps, measured, kept_reasons),
         "kept_gaps": kept_gaps,
         "removed": removals,
-        "review": review_items(segments, revised.cuts, removals),
         "volume_plan_removed_seconds": plan.removed_seconds,
         "removed_seconds": revised.removed_seconds,
     })
@@ -695,43 +651,8 @@ def _record(task_id: str, client_id: str | None, record: dict[str, Any]) -> None
     job_store.update_job_result(task_id, result, client_id=client_id)
 
 
-ANSWERS = {"right", "wrong", "pending"}
-
-
 class ReviewError(RuntimeError):
     """A confirmation that cannot be taken, in the user's words."""
-
-
-def _survey(task_id: str, client_id: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
-    job = job_store.get_job(task_id, client_id=client_id)
-    if not job:
-        raise ReviewError("任务不存在")
-    result = dict(job.get("result") or {})
-    survey = dict(debreath_job.debreath_state(result).get("survey") or {})
-    if not survey.get("review"):
-        raise ReviewError("这个任务没有需要确认的剪辑")
-    return result, survey
-
-
-def answer(task_id: str, index: int, value: str, client_id: str | None = None) -> dict[str, Any]:
-    """Record the user's answer to one listed cut: ``right`` (the cut was
-    right), ``wrong`` (it should not have been cut; ``restore`` does the
-    work) or ``pending`` (answer taken back). Kept to measure the model's
-    judgement and as material for the case library."""
-    if value not in ANSWERS:
-        raise ReviewError("回答只能是剪得对、不该剪或撤回")
-    result, survey = _survey(task_id, client_id)
-    if not 0 <= index < len(survey["review"]):
-        raise ReviewError("没有这一处剪辑")
-    answers = dict(survey.get("answers") or {})
-    if value == "pending":
-        answers.pop(str(index), None)
-    else:
-        answers[str(index)] = value
-    survey["answers"] = answers
-    result["debreath"] = {**debreath_job.debreath_state(result), "survey": survey}
-    job_store.update_job_result(task_id, result, client_id=client_id)
-    return survey
 
 
 def _rerender(
@@ -763,12 +684,10 @@ def _rerender(
     try:
         debreath_job.run_debreath(task_id, client_id=client_id, revise=revise)
     except Exception as exc:
-        survey.pop("restoring", None)
         survey.pop("rerendering", None)
         survey["restore_error"] = f"重新导出没成功：{str(exc)[:200]}"
         _record(task_id, client_id, survey)
         raise
-    survey.pop("restoring", None)
     survey.pop("rerendering", None)
     survey.pop("restore_error", None)
     after(survey)
@@ -780,26 +699,6 @@ def _mark_gaps(survey: dict[str, Any], start: float, end: float, kept: bool, rea
     for gap in (survey.get("gaps") or {}).get("long") or []:
         if _overlaps(TimeRange(_seconds(gap["start"]), _seconds(gap["end"])), start, end):
             gap.update({"kept": kept, "reason": reason})
-
-
-def restore(task_id: str, index: int, client_id: str | None = None) -> dict[str, Any]:
-    """Put one cut listed for confirmation back and render again."""
-    result, survey = _survey(task_id, client_id)
-    if not 0 <= index < len(survey["review"]):
-        raise ReviewError("没有这一处剪辑")
-    item = survey["review"][index]
-    removals = [r for r in survey.get("removed") or [] if not _overlaps(TimeRange(r["start"], r["end"]), item["start"], item["end"])]
-    kept = list(survey.get("kept_gaps") or [])
-    if item.get("kind") != "removed_talk":
-        kept.append({"start": item["start"], "end": item["end"], "reason": "用户说这段不该剪"})
-    survey.update({"restoring": index, "answers": {**dict(survey.get("answers") or {}), str(index): "wrong"}})
-
-    def after(record: dict[str, Any]) -> None:
-        if item.get("kind") != "removed_talk":
-            _mark_gaps(record, item["start"], item["end"], True, "你说这段不该剪，已放回。")
-        item["restored"] = True
-
-    return _rerender(task_id, client_id, result, survey, kept, removals, after)
 
 
 def _report_item(survey: dict[str, Any], ref: str) -> dict[str, Any] | None:
@@ -929,9 +828,12 @@ def verdict(task_id: str, keys: list[str], value: str, client_id: str | None = N
 
 
 __all__ = [
-    "answer",
     "flip",
     "undo_change",
     "verdict",
-    "restore",
-    "ReviewError","survey_and_cut", "revise_plan", "build_timeline", "removal_range", "review_items"]
+    "ReviewError",
+    "survey_and_cut",
+    "revise_plan",
+    "build_timeline",
+    "removal_range",
+]
