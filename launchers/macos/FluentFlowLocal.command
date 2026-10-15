@@ -15,8 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 旧启动器窗口关掉；还在跑东西的窗口（包括这一个）不动。
 osascript >/dev/null 2>&1 <<'APPLESCRIPT' || true
 tell application "Terminal"
-	repeat with i in (id of every window)
-		set w to window id i
+	set ids to id of every window
+	repeat with i in ids
+		set w to window id (contents of i)
 		if (name of w contains "FluentFlowLocal") and (busy of selected tab of w is false) then close w
 	end repeat
 end tell
