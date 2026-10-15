@@ -348,6 +348,7 @@ def _render_seconds(source: Path, plan: Any, runner: Callable[..., Any]) -> floa
     try:
         normalized = (
             silence_cuts.has_video_stream(source, runner=runner)
+            and silence_cuts.normalize_uneven_rate()
             and not silence_cuts.is_constant_frame_rate(source, runner=runner)
         )
     except (SilenceCutError, OSError, subprocess.TimeoutExpired):

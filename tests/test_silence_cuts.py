@@ -1860,8 +1860,34 @@ def test_an_even_recording_is_cut_without_the_normalize_pass_and_checks_out(tmp_
 
     assert normalized == [], "the whole-file encode was skipped"
     assert report.ok, report.failed_checks
-    assert report.frame_rate_choice["normalize"] == "skipped_constant_rate"
+    assert report.frame_rate_choice["normalize"] == "skipped"
     assert abs(report.actual_seconds - plan.kept_seconds) < 0.2
+
+
+def test_an_uneven_recording_is_cut_directly_unless_asked(tmp_path, monkeypatch):
+    """2026-10-16: each batch already makes its frames constant-rate, and two
+    real recordings with wandering frame rates cut directly came out the same
+    as normalized first, in about half the time. The old pass stays behind
+    FLUENTFLOW_NORMALIZE_UNEVEN_RATE."""
+    source = _lavfi(tmp_path / "uneven.mp4", "testsrc2=s=320x240:r=30:d=20")
+    monkeypatch.setattr(sc, "is_constant_frame_rate", lambda *a, **k: False)
+    calls: list[Path] = []
+    real = sc.normalize_to_constant_frame_rate
+
+    def spy(src, out, **kwargs):
+        calls.append(Path(src))
+        return real(src, out, **kwargs)
+
+    monkeypatch.setattr(sc, "normalize_to_constant_frame_rate", spy)
+    plan = sc.plan_silence_cuts(source)
+
+    monkeypatch.delenv(sc.NORMALIZE_ENV, raising=False)
+    report = sc.render_cut_plan(source, plan, tmp_path / "direct.mp4")
+    assert calls == [] and report.ok and report.frame_rate_choice["normalize"] == "skipped"
+
+    monkeypatch.setenv(sc.NORMALIZE_ENV, "1")
+    report = sc.render_cut_plan(source, plan, tmp_path / "normalized.mp4")
+    assert calls == [source] and report.ok and report.frame_rate_choice["normalize"] == "done"
 
 
 # ── one doubtful stretch does not cost the whole recording its cut ──────────
