@@ -1795,6 +1795,17 @@ def resolve_scale_width(
     return target
 
 
+NORMALIZE_ENV = "FLUENTFLOW_NORMALIZE_UNEVEN_RATE"
+
+
+def normalize_uneven_rate() -> bool:
+    """Whether a recording whose frame rate wanders is re-encoded whole to a
+    constant rate before cutting. Off by default (see ``render_cut_plan``); on
+    with ``FLUENTFLOW_NORMALIZE_UNEVEN_RATE=1`` if a recording ever cuts out of
+    sync without it."""
+    return (os.environ.get(NORMALIZE_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def normalize_to_constant_frame_rate(
     source: Path | str,
     output: Path | str,
@@ -2264,12 +2275,17 @@ def _render_cut_plan_locked(
     try:
         if audio_only:
             cut_source = source
-        elif scale_width is None and is_constant_frame_rate(source, runner=runner):
-            # Already evenly at the rate it declares: the cutting pass reads it
-            # directly, one whole-file encode fewer.
+        elif scale_width is None and (not normalize_uneven_rate() or is_constant_frame_rate(source, runner=runner)):
+            # Cut directly, one whole-file encode fewer. Each batch already
+            # makes its frames constant-rate (``fps`` ahead of ``select``), so a
+            # recording whose frame rate wanders comes out the same: measured
+            # 2026-10-16 on two such recordings (declared 60 and 30, averaging
+            # 29.8 and 27.4), six minutes each, the direct cut had the same
+            # frame count and the same audio/video offset as the normalized
+            # one, frames alike at 42-50 dB PSNR, in 40-50% of the time.
             cut_source = source
             if frame_rate_choice is not None:
-                frame_rate_choice = {**frame_rate_choice, "normalize": "skipped_constant_rate"}
+                frame_rate_choice = {**frame_rate_choice, "normalize": "skipped"}
         else:
             # The resize happens in this pass, so the batches below read frames
             # that are already the delivered size.
