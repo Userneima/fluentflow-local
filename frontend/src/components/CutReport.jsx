@@ -76,20 +76,12 @@ const Badge = ({removed}) => (
 const Item = ({item, taskId, mode, busy, onAgree, onFlip}) => {
     const [listening, setListening] = useState(false);
     const [confirming, setConfirming] = useState(false);
-    // What is put to the user starts as one line each; opening one shows its
-    // details and buttons.
-    const [expanded, setExpanded] = useState(mode !== 'judge');
     const removed = item.action === 'removed';
     const timed = item.start !== undefined && item.end !== undefined;
     const theirs = item.kind === 'user_change';
-    const Chevron = expanded ? ChevronDown : ChevronRight;
     return (
         <li className="rounded-[12px] border border-[#ebe8e8] bg-white px-3 py-2.5 dark:border-white/[0.08] dark:bg-white/[0.03]">
-            <div
-                className={`flex flex-wrap items-center gap-2 ${mode === 'judge' ? 'cursor-pointer' : ''}`}
-                onClick={mode === 'judge' ? () => setExpanded((value) => !value) : undefined}
-            >
-                {mode === 'judge' ? <Chevron className="size-3.5 shrink-0 text-[#85868c]" strokeWidth={2.15}/> : null}
+            <div className="flex flex-wrap items-center gap-2">
                 <Badge removed={removed}/>
                 {timed ? (
                     <span className="text-[12px] font-extrabold tabular-nums text-[#111111] dark:text-white">
@@ -100,8 +92,7 @@ const Item = ({item, taskId, mode, busy, onAgree, onFlip}) => {
                     {item.count ? `${item.count} 处，共 ` : ''}{length(item.seconds)}
                 </span>
             </div>
-            <p className={`mt-1 text-[13px] font-semibold leading-5 text-[#2b2c30] dark:text-white/80 ${expanded ? '' : 'line-clamp-1'}`}>{item.text}</p>
-            {!expanded ? null : <>
+            <p className="mt-1 text-[13px] font-semibold leading-5 text-[#2b2c30] dark:text-white/80">{item.text}</p>
             {item.said ? <p className="mt-0.5 text-[12px] leading-5 text-[#85868c] dark:text-white/50">说的是：「{item.said}」</p> : null}
             {mode === 'judge' && item.doubt ? (
                 <p className="mt-1 text-[12px] font-semibold leading-5 text-[#8a5a00] dark:text-[#fdb022]">请你判断：{item.doubt}</p>
@@ -154,7 +145,6 @@ const Item = ({item, taskId, mode, busy, onAgree, onFlip}) => {
                     onNo={() => setConfirming(false)}
                 />
             ) : null}
-            </>}
         </li>
     );
 };

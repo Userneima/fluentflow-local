@@ -53,12 +53,9 @@ describe('CutReport', () => {
         expect(screen.getByText('看看这条视频处理了什么')).toBeTruthy();
     });
 
-    it('asks only in the first group, one line each until opened, with why', async () => {
+    it('asks only in the first group, with why', async () => {
         opened({report: REPORT});
         await waitFor(() => screen.getByText('原片 38:36，剪后 04:12'));
-        expect(screen.queryByText('剪得对')).toBeNull();
-        expect(screen.getByText('说完拜拜之后多录的')).toBeTruthy();
-        fireEvent.click(screen.getByText('原片 13:52 – 38:36'));
         expect(screen.getByText('请你判断：去掉的是有人说话的内容，请你确认。')).toBeTruthy();
         expect(screen.getAllByText('剪得对').length).toBe(1);
         expect(screen.queryByText('确实该保留')).toBeNull();
@@ -70,8 +67,7 @@ describe('CutReport', () => {
 
     it('moves an agreed item out of the group, where it can be taken back', async () => {
         opened({report: REPORT});
-        await waitFor(() => screen.getByText('原片 13:52 – 38:36'));
-        fireEvent.click(screen.getByText('原片 13:52 – 38:36'));
+        await waitFor(() => screen.getByText('剪得对'));
         apiFetch.mockImplementationOnce(() => ok({verdicts: {k1: {verdict: 'agree'}}}));
         fireEvent.click(screen.getByText('剪得对'));
         await waitFor(() => expect(screen.getByText('需要你判断的都处理完了')).toBeTruthy());
@@ -86,8 +82,7 @@ describe('CutReport', () => {
 
     it('asks before changing the video, then renders again', async () => {
         opened({report: REPORT});
-        await waitFor(() => screen.getByText('原片 13:52 – 38:36'));
-        fireEvent.click(screen.getByText('原片 13:52 – 38:36'));
+        await waitFor(() => screen.getByText('剪得对'));
         apiFetch.mockImplementation(() => ok({ok: true}));
         fireEvent.click(screen.getByText('这段不该剪'));
         expect(apiFetch.mock.calls.length).toBe(1);
