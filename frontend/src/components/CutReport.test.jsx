@@ -59,6 +59,9 @@ describe('CutReport', () => {
         expect(screen.getByText('请你判断：去掉的是有人说话的内容，请你确认。')).toBeTruthy();
         expect(screen.getAllByText('剪得对').length).toBe(1);
         expect(screen.queryByText('确实该保留')).toBeNull();
+        // Every other group starts folded.
+        expect(screen.queryByText('在演示操作')).toBeNull();
+        fireEvent.click(screen.getByText('保留的画面'));
         expect(screen.getByText('改成剪掉')).toBeTruthy();
         fireEvent.click(screen.getByText('短停顿'));
         expect(screen.getByText('3 秒以下的停顿，全部剪掉。')).toBeTruthy();
@@ -93,7 +96,8 @@ describe('CutReport', () => {
 
     it('lets Claude\'s account be changed quietly, after asking', async () => {
         opened({report: REPORT});
-        await waitFor(() => screen.getByText('改成剪掉'));
+        await waitFor(() => screen.getByText('保留的画面'));
+        fireEvent.click(screen.getByText('保留的画面'));
         apiFetch.mockImplementation(() => ok({ok: true}));
         fireEvent.click(screen.getByText('改成剪掉'));
         fireEvent.click(screen.getByText('确定剪掉'));

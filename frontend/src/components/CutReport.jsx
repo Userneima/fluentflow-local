@@ -364,7 +364,9 @@ export const CutReport = ({job}) => {
                                         taskId={taskId}
                                         title={section.title}
                                         items={section.items}
-                                        folded={section.folded}
+                                        // Only the judgement is open by default;
+                                        // Claude's account of the rest is a click away.
+                                        folded
                                         mode="read"
                                         busy={busy}
                                         onAgree={agree}
