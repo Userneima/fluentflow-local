@@ -613,13 +613,17 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
 
 
 async def _deliver_to_output_folder(ctx: MediaJobContext) -> None:
-    """Put the transcript, subtitles, cut list and note (md and PDF) of a
-    recording from the user's own folder into its folder beside it
-    (``output_folder``). The cut video is already there. Never raises."""
+    """Hand the task to ``output_folder`` to put the transcript, subtitles, cut
+    list and note (md and PDF) of a recording from the user's own folder into
+    its folder beside it. The cut video is already there.
+
+    Queued, not awaited: exporting the PDF starts a browser, and the next task
+    in line must not wait for it (on CI a second queued task timed out behind
+    it, 2026-10-15). Never raises."""
     try:
-        await asyncio.get_running_loop().run_in_executor(None, output_folder.sync, ctx.task_id_value)
+        output_folder.schedule_sync(ctx.task_id_value)
     except Exception as exc:  # noqa: BLE001 - the task's own results stand
-        logger.warning("output folder not filled for %s: %s", ctx.task_id_value, exc)
+        logger.warning("output folder not scheduled for %s: %s", ctx.task_id_value, exc)
 
 
 async def _export_note_written_after_pipeline(ctx: MediaJobContext) -> None:

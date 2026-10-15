@@ -355,6 +355,28 @@ def test_a_folder_is_queued_in_place_with_positions_and_full_titles(client, pipe
     assert pipeline["log"] == [f"start:{ids[0]}", f"finish:{ids[0]}", f"start:{ids[1]}", f"finish:{ids[1]}"]
 
 
+def test_filling_the_output_folder_does_not_hold_the_queue(client, pipeline, folder, monkeypatch):
+    """Requirement (2026-10-15): putting a task's outputs in its folder (which
+    exports a PDF through a browser) happens off the queue; the next recording
+    starts as soon as the previous one's processing is done."""
+    from backend.core import output_folder
+
+    started = []
+
+    def slow_sync(task_id):
+        started.append(task_id)
+        time.sleep(3)
+
+    monkeypatch.setattr(output_folder, "sync", slow_sync)
+
+    queued = client.post("/queue/process-folder", json={"path": str(folder)}).json()["queued"]
+    begin = time.monotonic()
+    for q in queued:
+        _wait_until_done(client, q["task_id"], seconds=2.5)
+
+    assert time.monotonic() - begin < 2.5, "the second recording did not wait for the first one's folder"
+
+
 def test_a_folder_that_does_not_exist_is_refused_by_name(client, pipeline, tmp_path):
     missing = tmp_path / "nowhere"
 
