@@ -95,13 +95,14 @@ const baseWriterSentence = (writer, lang = 'zh') => {
     return writer.kind === 'text_model' ? `${sentence}${zh ? '' : ' '}${textModelLimitSentence(lang)}` : sentence;
 };
 
-// Said wherever a text model is the writer (owner, 2026-10-16): it cannot see
-// the picture, so the user knows before the first note what it will lack. The
+// Said wherever a text model is the writer (owner, 2026-10-16): the note it
+// writes is sent the transcript only, so the user knows before the first note
+// what it will lack. The
 // cut does not depend on it: deciding what to cut reads the transcript and the
 // program's own measure of whether the picture moved, never the frames.
 export const textModelLimitSentence = (lang = 'zh') => (lang === 'zh'
-    ? '它看不了画面：笔记只根据说出来的话写，不配截图，画面上没说出口的内容（幻灯片上的字、代码、表格）不会进笔记。剪辑不受影响。'
-    : 'It cannot see the picture: the note is written from what was said only, without screenshots, and what was only shown on screen (slide text, code, tables) is left out. Cutting is not affected.');
+    ? '由它写的笔记只根据说出来的话写，不看画面、不配截图，画面上没说出口的内容（幻灯片上的字、代码、表格）不会进笔记。剪辑不受影响。'
+    : 'Its notes are written from what was said only, without looking at the picture or adding screenshots; what was only shown on screen (slide text, code, tables) is left out. Cutting is not affected.');
 
 // What one queued recording costs, said in the confirm dialogs before a batch.
 export const noteWriterBatchClause = (writer, lang = 'zh') => {
