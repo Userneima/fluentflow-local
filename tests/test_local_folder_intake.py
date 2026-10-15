@@ -34,6 +34,14 @@ import backend.core.output_folder as output_folder
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.silence_cuts import CutPlan, RenderReport, TimeRange
 
+
+@pytest.fixture(autouse=True)
+def _cut_before_transcription(monkeypatch):
+    """These cover cutting before transcription, the flow used when
+    ``FLUENTFLOW_SURVEY_FIRST`` is off."""
+    monkeypatch.setenv("FLUENTFLOW_SURVEY_FIRST", "0")
+
+
 TASK = "task-folder-intake"
 
 

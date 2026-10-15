@@ -31,7 +31,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 
-from backend.core import debreath_job, silence_cuts, visual_note_job
+from backend.core import debreath_job, local_intake_flow, silence_cuts, survey_cut, visual_note_job
 from backend.core.job_store import get_job
 from backend.core.result_artifacts import TRANSCRIPT_MEDIA_CUT
 from backend.core.request_scope import local_client_scope
@@ -190,3 +190,67 @@ def start_job_debreath(
 ) -> dict[str, Any]:
     """Remove the silent gaps from a finished task's source media."""
     return start_local_debreath(request, task_id, background_tasks, payload)
+
+
+def _review_index(job: dict[str, Any] | None, index: int) -> None:
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+
+@router.post("/jobs/{task_id}/cut-review/{index}")
+def answer_cut_review(
+    request: Request, task_id: str, index: int, payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """Record the user's answer to one cut listed for confirmation
+    (``survey_cut.answer``): ``right``, or ``pending`` to take it back."""
+    client_id = local_client_scope(request)
+    _review_index(get_job(task_id, client_id=client_id), index)
+    value = str((payload or {}).get("answer") or "")
+    if value == "wrong":
+        raise HTTPException(status_code=400, detail="不该剪的那段用恢复接口放回去")
+    try:
+        survey = survey_cut.answer(task_id, index, value, client_id=client_id)
+    except survey_cut.ReviewError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "survey": survey}
+
+
+@router.post("/jobs/{task_id}/cut-review/{index}/restore")
+def restore_cut_review(
+    request: Request, task_id: str, index: int, background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    """Put one listed cut back: render the cut again with that stretch kept
+    (``survey_cut.restore``), then write the note again from the new cut.
+    Refused in this response for the same reasons as any other render."""
+    client_id = local_client_scope(request)
+    job = get_job(task_id, client_id=client_id)
+    _review_index(job, index)
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if debreath_job.is_running(result):
+        raise HTTPException(status_code=409, detail="这个任务正在重新导出，等这次导完")
+    if visual_note_job.is_running(result) or str(result.get("summary_status") or "") == "pending":
+        raise HTTPException(status_code=409, detail="笔记正在写，等写完再恢复，免得两边的结果互相覆盖。")
+    if queue_is_busy():
+        raise HTTPException(status_code=409, detail="有任务正在处理中，等队列空下来再恢复。")
+    try:
+        debreath_job.resolve_source(task_id)
+        debreath_job.claim(task_id)
+    except debreath_job.DebreathError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    debreath_job.release(task_id)
+
+    def _run() -> None:
+        try:
+            survey_cut.restore(task_id, index, client_id=client_id)
+        except Exception:  # noqa: BLE001 - recorded on the survey
+            logger.exception("restoring cut %s of %s failed", index, task_id)
+            return
+        latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
+        # The note was written from the earlier cut; it is written again from
+        # this one so the restored stretch is in it.
+        if not latest.get("note_declined") and (latest.get("summary_markdown") or local_intake_flow.note_is_wanted(task_id, client_id)):
+            local_intake_flow.mark_note_running(task_id, client_id)
+            local_intake_flow.write_note(task_id, client_id)
+
+    background_tasks.add_task(_run)
+    return {"ok": True, "task_id": task_id, "accepted": True}

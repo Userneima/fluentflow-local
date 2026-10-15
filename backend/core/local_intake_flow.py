@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 
 CUT_FIRST_ENV = "FLUENTFLOW_LOCAL_CUT_FIRST"
 AUTO_NOTE_ENV = "FLUENTFLOW_LOCAL_AUTO_NOTE"
+SURVEY_FIRST_ENV = "FLUENTFLOW_SURVEY_FIRST"
 
 _OFF = {"0", "false", "no", "off", "disabled"}
 
@@ -73,6 +74,16 @@ def cut_first_enabled() -> bool:
     or somebody working on material they do not want touched, should set.
     """
     return _enabled(CUT_FIRST_ENV)
+
+
+def survey_first_enabled() -> bool:
+    """Whether the recording is transcribed as it is and cut afterwards, from a
+    model's reading of the whole transcript (``survey_cut``), instead of cut by
+    loudness before anything reads it.
+
+    On by default. Off restores cutting first.
+    """
+    return cut_first_enabled() and _enabled(SURVEY_FIRST_ENV)
 
 
 def auto_note_enabled() -> bool:
@@ -103,7 +114,7 @@ def preprocess_media(
     compete for the same CPU. It is worth measuring again once the video encode
     runs on the hardware encoder, which does not.
     """
-    if not cut_first_enabled():
+    if not cut_first_enabled() or survey_first_enabled():
         return None
     path = Path(source)
     watch = watch or TaskWatch()
@@ -426,6 +437,7 @@ __all__ = [
     "auto_note_enabled",
     "auto_note_will_run",
     "cut_first_enabled",
+    "survey_first_enabled",
     "mark_note_running",
     "note_is_wanted",
     "preprocess_media",
