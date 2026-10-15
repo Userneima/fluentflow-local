@@ -23,6 +23,10 @@ const length = (seconds) => {
     return s ? `${m} 分 ${s} 秒` : `${m} 分钟`;
 };
 
+// A count over many places ("107 处短停顿") cannot be heard or judged one by
+// one, so it is shown without buttons and not counted as something to confirm.
+const answerableItem = (item) => item.kind !== 'user_change' && item.start !== undefined && item.end !== undefined;
+
 export const hasReport = (job) => !!job?.result?.debreath?.survey?.has_report || !!job?.result?.debreath?.survey?.report;
 
 const smallButton = 'inline-flex h-7 shrink-0 items-center gap-1 rounded-[9px] border border-[#dedada] bg-white px-2.5 text-[12px] font-bold text-[#57585d] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]';
@@ -84,7 +88,7 @@ const Item = ({item, taskId, agreed, busy, onAgree, onFlip}) => {
                         {listening ? '收起' : '在原片里听'}
                     </button>
                 ) : null}
-                {theirs ? (
+                {!timed ? null : theirs ? (
                     <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">你改的，要改回去在下面"你改过的地方"里撤销</span>
                 ) : agreed ? (
                     <span className={okText}>
@@ -98,12 +102,10 @@ const Item = ({item, taskId, agreed, busy, onAgree, onFlip}) => {
                             <Check className="size-3" strokeWidth={2.15}/>
                             {removed ? '剪得对' : '确实该保留'}
                         </button>
-                        {timed ? (
-                            <button type="button" className={smallButton} disabled={busy} onClick={() => setConfirming(true)}>
-                                {removed ? <Undo2 className="size-3" strokeWidth={2.15}/> : <Scissors className="size-3" strokeWidth={2.15}/>}
-                                {removed ? '这段不该剪' : '这段应该剪掉'}
-                            </button>
-                        ) : null}
+                        <button type="button" className={smallButton} disabled={busy} onClick={() => setConfirming(true)}>
+                            {removed ? <Undo2 className="size-3" strokeWidth={2.15}/> : <Scissors className="size-3" strokeWidth={2.15}/>}
+                            {removed ? '这段不该剪' : '这段应该剪掉'}
+                        </button>
                     </>
                 )}
             </div>
@@ -121,7 +123,7 @@ const Item = ({item, taskId, agreed, busy, onAgree, onFlip}) => {
 const Section = ({taskId, section, verdicts, busy, onAgree, onFlip}) => {
     const [open, setOpen] = useState(!section.folded);
     const Chevron = open ? ChevronDown : ChevronRight;
-    const answerable = section.items.filter((item) => item.kind !== 'user_change');
+    const answerable = section.items.filter(answerableItem);
     const pending = answerable.filter((item) => !verdicts[item.key]);
     return (
         <section>
@@ -265,7 +267,7 @@ export const CutReport = ({job}) => {
     const changes = Array.isArray(survey?.user_changes) ? survey.user_changes : [];
     const liveChanges = changes.filter((change) => !change.undone_at).length;
     const items = (report?.sections || []).flatMap((section) => section.items);
-    const answerable = items.filter((item) => item.kind !== 'user_change');
+    const answerable = items.filter(answerableItem);
     const answered = answerable.filter((item) => verdicts[item.key]).length;
     const busy = rerendering || saving;
     return (

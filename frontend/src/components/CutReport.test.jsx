@@ -49,6 +49,9 @@ describe('CutReport', () => {
         expect(screen.queryByText('120 处短停顿全部剪掉')).toBeNull();
         fireEvent.click(screen.getByText('短停顿'));
         expect(screen.getByText('120 处短停顿全部剪掉')).toBeTruthy();
+        // A count over many places has nothing to listen to or judge one by one.
+        expect(screen.getAllByText('剪得对').length).toBe(1);
+        expect(screen.getAllByText('这一组都没问题').length).toBe(1);
     });
 
     it('agrees with an item at once, and takes it back', async () => {
@@ -61,7 +64,7 @@ describe('CutReport', () => {
         fireEvent.click(screen.getByText('剪得对'));
         await waitFor(() => expect(screen.getByText('已确认剪得对')).toBeTruthy());
         expect(JSON.parse(apiFetch.mock.calls[1][1].body)).toEqual({keys: ['k1'], verdict: 'agree'});
-        expect(screen.getByText('已确认 1 / 2 条')).toBeTruthy();
+        expect(screen.getByText('已确认 1 / 1 条')).toBeTruthy();
         fireEvent.click(screen.getAllByText('撤回')[0]);
         await waitFor(() => expect(screen.getByText('剪得对')).toBeTruthy());
     });
