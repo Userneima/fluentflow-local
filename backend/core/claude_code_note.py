@@ -45,6 +45,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from backend.core import process_tree
 from backend.core.claude_vision import (
     FRAME_ATTACH_MAX,
     image_block,
@@ -215,10 +216,11 @@ def _check_login(clock: float) -> bool | None:
     path = cli_path()
     if path:
         try:
-            done = subprocess.run(
+            done = _run_tracked(
                 [path, "auth", "status", "--json"],
-                capture_output=True, text=True, timeout=LOGIN_CHECK_TIMEOUT_SECONDS,
-                env=_subprocess_env(), stdin=subprocess.DEVNULL,
+                track=False,
+                text=True, encoding="utf-8", errors="replace", timeout=LOGIN_CHECK_TIMEOUT_SECONDS,
+                env=_subprocess_env(),
             )
             raw = done.stdout or ""
             start = raw.find("{")
@@ -406,8 +408,12 @@ _RUNNING: set[subprocess.Popen] = set()
 _RUNNING_LOCK = threading.Lock()
 
 
-def _run_tracked(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-    """``subprocess.run`` for the CLI, registered so shutdown can stop it."""
+def _run_tracked(command: list[str], *, track: bool = True, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    """``subprocess.run`` for the CLI, registered so shutdown can stop it.
+
+    ``track=False`` for a call that is not a note being written (the login
+    check): it still gets the timeout that stops the whole process tree, but is
+    not counted among the note writers shutdown reports stopping."""
     stdin_text = kwargs.pop("input", None)
     timeout = kwargs.pop("timeout", None)
     kwargs.pop("capture_output", None)
@@ -419,13 +425,14 @@ def _run_tracked(command: list[str], **kwargs: Any) -> subprocess.CompletedProce
         stderr=subprocess.PIPE,
         **kwargs,
     )
-    with _RUNNING_LOCK:
-        _RUNNING.add(process)
+    if track:
+        with _RUNNING_LOCK:
+            _RUNNING.add(process)
     try:
         try:
             stdout, stderr = process.communicate(stdin_text, timeout=timeout)
         except subprocess.TimeoutExpired:
-            process.kill()
+            process_tree.kill_tree(process)
             process.communicate()
             raise
         completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
@@ -443,12 +450,16 @@ def stop_running_notes(grace_seconds: float = 3.0) -> int:
         processes = list(_RUNNING)
     for process in processes:
         if process.poll() is None:
-            process.terminate()
+            # Windows has no gentle stop that reaches past claude.cmd to node.
+            if os.name == "nt":
+                process_tree.kill_tree(process)
+            else:
+                process.terminate()
     for process in processes:
         try:
             process.wait(timeout=grace_seconds)
         except subprocess.TimeoutExpired:
-            process.kill()
+            process_tree.kill_tree(process)
     return len(processes)
 
 
@@ -466,6 +477,12 @@ _SUBPROCESS_ENV_NAMES = frozenset({
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
     "SYSTEMROOT", "SystemRoot", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "COMSPEC",
+    # Windows: the home is USERPROFILE (or HOMEDRIVE + HOMEPATH), the scratch
+    # directory TEMP/TMP, and PATHEXT is how a bare ``claude`` finds claude.cmd.
+    # Claude Code there runs its tools in Git Bash, which it finds through
+    # CLAUDE_CODE_GIT_BASH_PATH or the program folders.
+    "TEMP", "TMP", "PATHEXT", "WINDIR", "HOMEDRIVE", "HOMEPATH",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA", "CLAUDE_CODE_GIT_BASH_PATH",
 })
 _SUBPROCESS_ENV_PREFIXES = ("LC_", "XDG_")
 
@@ -600,7 +617,11 @@ def _run_cli_once(
                 command,
                 input=prompt,
                 capture_output=True,
+                # The CLI reads and writes UTF-8. Left to the locale, Windows
+                # sent a Chinese prompt in GBK and read the note back the same way.
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout_seconds(),
                 cwd=scratch,
                 env=_subprocess_env(),

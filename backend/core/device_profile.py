@@ -31,6 +31,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from functools import lru_cache
+from pathlib import PureWindowsPath
 from typing import Any, Iterator, Sequence
 
 PRESET_QUALITY = "quality"
@@ -217,13 +218,29 @@ def parallel_encodes(count: int) -> Iterator[None]:
             _parallel_encodes = previous
 
 
+# How a command's output is read. ffmpeg and ffprobe write UTF-8 everywhere,
+# but text=True alone decodes with the locale's code page, GBK on a Chinese
+# Windows, and a Chinese file name in an error message then raised in the reader
+# instead of being reported. errors="replace" keeps a stray byte from doing the same.
+COMMAND_TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
+
+def is_ffmpeg(program: str) -> bool:
+    """Whether ``program`` is ffmpeg itself, not ffprobe or anything else.
+
+    On Windows it is ``ffmpeg.exe``; comparing the bare name to ``"ffmpeg"``
+    left every Windows encode unlimited and without progress. PureWindowsPath
+    splits on both separators, so this reads either kind of path anywhere."""
+    return PureWindowsPath(str(program)).name.lower() in {"ffmpeg", "ffmpeg.exe"}
+
+
 def limit_ffmpeg_threads(argv: Sequence[str], profile: DeviceProfile | None = None) -> list[str]:
     """``argv`` with each decoder, encoder and filter graph of an ffmpeg command
     held to its share of the thread budget. Commands that are not ffmpeg, and
     every command at full use, come back unchanged."""
     argv = [str(part) for part in argv]
     budget = cpu_thread_budget(profile)
-    if budget is None or not argv or os.path.basename(argv[0]) != "ffmpeg" or "-threads" in argv:
+    if budget is None or not argv or not is_ffmpeg(argv[0]) or "-threads" in argv:
         return argv
     threads = str(max(1, budget // _parallel_encodes))
     out = [argv[0], "-filter_threads", threads, "-filter_complex_threads", threads]
@@ -253,17 +270,28 @@ def lower_priority(pid: int) -> None:
     if niceness <= 0:
         return
     try:
-        if os.name == "nt":
-            import ctypes
-
-            handle = ctypes.windll.kernel32.OpenProcess(0x0200, False, pid)  # PROCESS_SET_INFORMATION
-            if handle:
-                ctypes.windll.kernel32.SetPriorityClass(handle, 0x4000)  # BELOW_NORMAL_PRIORITY_CLASS
-                ctypes.windll.kernel32.CloseHandle(handle)
-        else:
-            os.setpriority(os.PRIO_PROCESS, pid, niceness)
+        _lower_process(pid, niceness)
     except (OSError, AttributeError):
         pass  # the process already ended, or the platform has no such call
+
+
+def _renice(pid: int, niceness: int) -> None:
+    os.setpriority(os.PRIO_PROCESS, pid, niceness)
+
+
+def _below_normal_class(pid: int, niceness: int) -> None:
+    """Windows has priority classes, not niceness; any lowering is one step down."""
+    import ctypes
+
+    handle = ctypes.windll.kernel32.OpenProcess(0x0200, False, pid)  # PROCESS_SET_INFORMATION
+    if handle:
+        ctypes.windll.kernel32.SetPriorityClass(handle, 0x4000)  # BELOW_NORMAL_PRIORITY_CLASS
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
+# Chosen once, so a test can stand in for the call without pretending to be
+# another operating system (setting os.name breaks pathlib for the whole run).
+_lower_process = _below_normal_class if os.name == "nt" else _renice
 
 
 def queue_concurrency() -> int:
@@ -318,6 +346,7 @@ def summary() -> dict[str, Any]:
 
 
 __all__ = [
+    "COMMAND_TEXT",
     "DeviceProfile",
     "PRESETS",
     "CPU_USAGES",
@@ -325,6 +354,7 @@ __all__ = [
     "cap_video_bitrate",
     "cpu_thread_budget",
     "cpu_usage",
+    "is_ffmpeg",
     "limit_ffmpeg_threads",
     "lower_priority",
     "parallel_encodes",

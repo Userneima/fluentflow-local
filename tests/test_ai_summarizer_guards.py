@@ -8,6 +8,9 @@ result has to say so.
 
 from __future__ import annotations
 
+import itertools
+from types import SimpleNamespace
+
 import pytest
 
 import backend.core.ai_client as ai_client
@@ -81,6 +84,10 @@ def test_a_note_that_runs_past_the_limit_stops_between_stages(no_network, monkey
     monkeypatch.setenv("FLUENTFLOW_NOTE_DEADLINE_SECONDS", "0")
     chat = _FakeChat(revision_reply=DRAFT)
     monkeypatch.setattr(summ, "_chat", chat)
+    # A clock that moves on every reading. Windows' monotonic clock ticks every
+    # 15.6 ms, so a fast fake stage read zero elapsed and stayed inside a 0 s limit.
+    ticks = itertools.count()
+    monkeypatch.setattr(summ, "time", SimpleNamespace(monotonic=lambda: float(next(ticks))))
 
     with pytest.raises(summ.NoteDeadlineExceeded, match="超过了时间上限"):
         summ.summarize_transcript_with_metadata(TRANSCRIPT, note_mode="high_fidelity", provider="deepseek")

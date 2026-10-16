@@ -159,6 +159,7 @@ def test_a_backslash_in_the_prompt_cannot_break_the_script():
     assert '"这个"' not in script
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="a backslash separates folders on Windows, so no folder is named with one")
 def test_a_backslash_in_the_starting_folder_is_escaped_rather_than_dropped(tmp_path):
     folder = tmp_path / "odd\\name"
     folder.mkdir()

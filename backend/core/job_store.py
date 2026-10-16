@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core.runtime_paths import default_job_db_path
+from backend.core.sqlite_connection import sqlite_connection
 from backend.core.result_schema import LEGACY_SEGMENT_KEYS, normalize_result_for_read, normalize_result_for_storage
 from backend.core.title_display import display_title_for_user
 
@@ -120,7 +121,7 @@ def ensure_job_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
     if key in _SCHEMA_READY and path.is_file():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with sqlite_connection(path) as conn:
         conn.executescript(SCHEMA_SQL)
         columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
         if "client_id" not in columns:
@@ -140,7 +141,7 @@ def adopt_jobs_for_owner(owner: str, db_path: Path | str = DEFAULT_DB_PATH) -> i
     path = Path(db_path)
     if not path.exists():
         return 0
-    with sqlite3.connect(path) as conn:
+    with sqlite_connection(path) as conn:
         (count,) = conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE client_id IS NULL OR client_id != ?", (owner,)
         ).fetchone()
@@ -148,9 +149,9 @@ def adopt_jobs_for_owner(owner: str, db_path: Path | str = DEFAULT_DB_PATH) -> i
         return 0
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup = path.with_name(f"{path.stem}.backup-before-owner-merge-{stamp}{path.suffix}")
-    with sqlite3.connect(path) as source, sqlite3.connect(backup) as target:
+    with sqlite_connection(path) as source, sqlite_connection(backup) as target:
         source.backup(target)
-    with sqlite3.connect(path) as conn:
+    with sqlite_connection(path) as conn:
         conn.execute(
             "UPDATE jobs SET client_id = ? WHERE client_id IS NULL OR client_id != ?", (owner, owner)
         )
@@ -167,7 +168,7 @@ def sync_summary_status_column(db_path: Path | str = DEFAULT_DB_PATH) -> int:
     path = Path(db_path)
     if not path.exists():
         return 0
-    with sqlite3.connect(path) as conn:
+    with sqlite_connection(path) as conn:
         cursor = conn.execute(
             """
             UPDATE jobs SET summary_status = json_extract(result_json, '$.summary_status')
@@ -193,7 +194,7 @@ def create_job_if_absent(
         return False
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+    with sqlite_connection(Path(db_path), timeout=10) as conn:
         cursor = conn.execute(
             """
             INSERT INTO jobs (
@@ -229,7 +230,7 @@ def upsert_job(
         try:
             ensure_job_db(db_path)
             now = _now_iso()
-            with sqlite3.connect(Path(db_path), timeout=10) as conn:
+            with sqlite_connection(Path(db_path), timeout=10) as conn:
                 # Read-merge-write under one write lock: two writers merging
                 # metadata from the same snapshot would each drop the other's
                 # keys, and the queue-wait bookkeeping and the progress loop
@@ -290,7 +291,7 @@ def get_job(
     client_id: str | None = None,
 ) -> dict[str, Any] | None:
     ensure_job_db(db_path)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         if client_id is not None:
             row = conn.execute(
@@ -338,7 +339,7 @@ def list_jobs(
     if limit is not None:
         sql += " LIMIT ?"
         params.append(max(1, int(limit or 50)))
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(sql, params).fetchall()
     return [_row_to_dict(row) if include_result else _row_to_summary_dict(row) for row in rows]
@@ -359,7 +360,7 @@ def recent_local_folders(
     can be found.
     """
     ensure_job_db(db_path)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         rows = conn.execute(
             "SELECT metadata_json FROM jobs WHERE metadata_json LIKE '%folder_intake%' "
             "ORDER BY updated_at DESC LIMIT 200"
@@ -392,7 +393,7 @@ def list_jobs_by_statuses(
         return []
     ensure_job_db(db_path)
     placeholders = ",".join("?" for _ in status_values)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"SELECT * FROM jobs WHERE status IN ({placeholders}) ORDER BY updated_at DESC",
@@ -464,7 +465,7 @@ def list_unacknowledged_restart_interruptions(
         sql += " AND client_id = ?"
         params.append(client_id)
     sql += " ORDER BY created_at ASC"
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(sql, params).fetchall()
     return [_row_to_summary_dict(row) for row in rows]
@@ -487,7 +488,7 @@ def acknowledge_restart_interruptions(
     ensure_job_db(db_path)
     now = _now_iso()
     changed: list[str] = []
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         for task_id in ids:
             if client_id is not None:
                 row = conn.execute(
@@ -531,7 +532,7 @@ def list_jobs_for_retention(
     ensure_job_db(db_path)
     where = "WHERE client_id = ?" if client_id is not None else ""
     params: tuple[Any, ...] = (client_id,) if client_id is not None else ()
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"""
@@ -612,7 +613,7 @@ def update_job_metadata(
     if not task_id or not fields:
         return False
     ensure_job_db(db_path)
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+    with sqlite_connection(Path(db_path), timeout=10) as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT metadata_json FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
         if row is None:
@@ -637,7 +638,7 @@ def update_job_result(
         return None
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         if client_id is not None:
             row = conn.execute(
@@ -786,7 +787,7 @@ def finalize_job_result_if_unchanged(
         return None
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+    with sqlite_connection(Path(db_path), timeout=10) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
         if client_id is None:
@@ -850,7 +851,7 @@ def append_job_result_list_item(
         return None
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+    with sqlite_connection(Path(db_path), timeout=10) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
         if client_id is None:
@@ -893,7 +894,7 @@ def cancel_job_steps(
         return 0
     ensure_job_db(db_path)
     now = _now_iso()
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         cursor = conn.execute(
             """
             UPDATE job_steps
@@ -925,7 +926,7 @@ def list_job_steps(
         where.append(f"status IN ({placeholders})")
         params.extend(status_values)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"SELECT * FROM job_steps {where_sql} ORDER BY id ASC LIMIT ?",
@@ -942,7 +943,7 @@ def repair_truncated_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> in
     """
     ensure_job_db(db_path)
     changed = 0
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT task_id, result_json, metadata_json FROM jobs"
@@ -992,7 +993,7 @@ def delete_jobs(
     if client_id is not None:
         where += " AND client_id = ?"
         params.append(client_id)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         rows = conn.execute(f"SELECT task_id FROM jobs WHERE {where}", params).fetchall()
         allowed_ids = [str(row[0]) for row in rows]
         if allowed_ids:

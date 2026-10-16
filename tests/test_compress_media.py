@@ -41,7 +41,7 @@ def _runner(source: Path, copy: dict, *, encode_ok: bool = True):
         cmd = [str(c) for c in command]
         if "-encoders" in cmd:
             return SimpleNamespace(stdout=" V..... hevc_videotoolbox", stderr="", returncode=0)
-        if cmd[0].endswith("ffprobe"):
+        if Path(cmd[0]).stem == "ffprobe":
             info = SOURCE if cmd[-1] == str(source) else copy
             query = " ".join(cmd)
             if "stream=width,height" in query:

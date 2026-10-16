@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from backend.core import process_tree
 from backend.core.title_display import display_title_for_user
 
 logger = logging.getLogger(__name__)
@@ -249,7 +250,7 @@ def _run_process_streaming(
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                _signal_process_group(process, signal.SIGKILL)
+                _signal_process_group(process, _SIGKILL)
                 process.wait()
             finish(1)
             raise VideoSourceCancelled("Video source operation cancelled")
@@ -259,7 +260,7 @@ def _run_process_streaming(
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                _signal_process_group(process, signal.SIGKILL)
+                _signal_process_group(process, _SIGKILL)
                 process.wait()
             finish(1)
             raise subprocess.TimeoutExpired(
@@ -271,6 +272,11 @@ def _run_process_streaming(
             continue
         finish(5)
         return subprocess.CompletedProcess(args, process.returncode, "".join(stdout_lines), "".join(stderr_lines))
+
+
+# Windows has no SIGKILL; there the signal is never sent (see
+# ``_signal_process_group``), it only has to exist for the callers to name.
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
 def _record_pid(pid_file: Path | None, pid: int) -> None:
@@ -285,11 +291,16 @@ def _record_pid(pid_file: Path | None, pid: int) -> None:
 def _signal_process_group(process: subprocess.Popen, sig: int) -> None:
     """Send ``sig`` to the child's whole group, or to the child alone if the
     group is already gone or this platform has no process groups."""
+    if os.name == "nt":
+        # No process groups and no signals to send them; stop the tree the
+        # way Windows offers. There is no gentler first step to take.
+        process_tree.kill_tree(process)
+        return
     try:
         os.killpg(process.pid, sig)
     except (ProcessLookupError, PermissionError, AttributeError, OSError):
         try:
-            if sig == signal.SIGKILL:
+            if sig == _SIGKILL:
                 process.kill()
             else:
                 process.terminate()
@@ -304,7 +315,7 @@ def _stop_process_group(process: subprocess.Popen) -> tuple[str, str]:
     try:
         return process.communicate(timeout=2)
     except subprocess.TimeoutExpired:
-        _signal_process_group(process, signal.SIGKILL)
+        _signal_process_group(process, _SIGKILL)
         return process.communicate()
 
 

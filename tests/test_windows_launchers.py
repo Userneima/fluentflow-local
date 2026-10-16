@@ -35,3 +35,13 @@ def test_the_uninstaller_reads_the_fields_health_has():
     text = (ROOT / "uninstall-local.ps1").read_text(encoding="utf-8-sig")
     assert "$Health.runtime.execution" in text or "$Health.edition" in text
     assert "$Jobs.jobs" in text
+
+
+def test_the_service_starts_in_python_utf8_mode():
+    """Owner's Windows machine, 2026-10-16: without UTF-8 mode every text read
+    that names no encoding used GBK, and ffmpeg's or yt-dlp's UTF-8 output with
+    a Chinese name in it stopped the read waiting for it."""
+    for script in (ROOT / "FluentFlowLocal.ps1", ROOT.parents[1] / "install.ps1"):
+        text = script.read_text(encoding="utf-8-sig")
+        started = text.index("backend.local_main:app", text.index("uvicorn"))
+        assert '$env:PYTHONUTF8 = "1"' in text[:started], script.name

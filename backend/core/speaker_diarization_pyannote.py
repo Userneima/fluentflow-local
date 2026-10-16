@@ -59,8 +59,9 @@ def _referenced_checkpoints_exist(config: Path) -> bool:
     for value in (params.get("segmentation"), params.get("embedding")):
         text = str(value or "").strip()
         # A bare repo id ("pyannote/segmentation-3.0") is fetched at run time and
-        # is not ours to verify; only a path is.
-        if not text or not (text.startswith("/") or text.startswith("~")):
+        # is not ours to verify; only a path is. On Windows that path starts
+        # with a drive ("C:/..."), and checking only for "/" skipped it.
+        if not text or not (text.startswith(("/", "~")) or Path(text).is_absolute()):
             continue
         if not Path(text).expanduser().is_file():
             return False

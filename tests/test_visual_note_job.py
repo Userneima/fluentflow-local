@@ -233,7 +233,7 @@ def test_the_frames_come_out_of_the_cut_file(job_store, tmp_path):
     extractor = _fake_extractor(tmp_path)
     updated = _run(tmp_path, "![幻灯片](note_0001.jpg)\n\n正文。", extractor=extractor)
 
-    assert extractor.seen["video_path"].endswith("debreath/lecture_debreath.mp4")
+    assert Path(extractor.seen["video_path"]).parts[-2:] == ("debreath", "lecture_debreath.mp4")
     media = vn.visual_note_state(updated["result"])["media_source"]
     assert media["kind"] == vn.MEDIA_CUT and media["has_video"] is True
     assert media["artifact_kind"] == dj.MEDIA_KIND

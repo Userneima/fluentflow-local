@@ -23,6 +23,7 @@ on a machine with no Claude Code, no login, and no network.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -582,7 +583,8 @@ def test_other_providers_keys_never_reach_the_claude_program(monkeypatch):
     env = ccn._subprocess_env()
 
     assert not any(value.startswith("secret-") for value in env.values()), env
-    assert env["PATH"] and env["HOME"], "it still has to find the binary and its login"
+    home = "USERPROFILE" if os.name == "nt" else "HOME"
+    assert env["PATH"] and env[home], "it still has to find the binary and its login"
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:7890"
     assert env["LC_ALL"] == "zh_CN.UTF-8"
     assert env["CLAUDE_CONFIG_DIR"] == "/tmp/claude-config"

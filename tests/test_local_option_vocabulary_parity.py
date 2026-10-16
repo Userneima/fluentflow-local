@@ -50,7 +50,7 @@ def _collect_options_keysets() -> dict[str, set[str]]:
     Read straight from the source (not at runtime) so the test needs no ffmpeg,
     no request, and no import side effects -- it is a structural tripwire.
     """
-    tree = ast.parse(_MODULE.read_text())
+    tree = ast.parse(_MODULE.read_text(encoding="utf-8"))
     found: dict[str, set[str]] = {}
 
     def visit(node: ast.AST, enclosing: str | None) -> None:

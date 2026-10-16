@@ -7,6 +7,8 @@ rule of the product. Each choice can still be set directly, and that wins.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from backend.core import device_profile as dp
@@ -160,7 +162,7 @@ def test_full_use_runs_commands_unchanged(monkeypatch, no_saved_choice):
     monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "full")
     assert dp.limit_ffmpeg_threads(FFMPEG_CUT, _machine(16, 10)) == FFMPEG_CUT
     calls = []
-    monkeypatch.setattr(dp.os, "setpriority", lambda *args: calls.append(args))
+    monkeypatch.setattr(dp, "_lower_process", lambda *args: calls.append(args))
     dp.lower_priority(12345)
     assert calls == []
 
@@ -206,11 +208,42 @@ def test_a_lone_ffmpeg_gets_the_whole_budget(monkeypatch, no_saved_choice):
 
 def test_priority_is_lowered_from_the_parent(monkeypatch, no_saved_choice):
     monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "balanced")
-    monkeypatch.setattr(dp.os, "name", "posix")
     calls = []
-    monkeypatch.setattr(dp.os, "setpriority", lambda *args: calls.append(args))
+    monkeypatch.setattr(dp, "_lower_process", lambda *args: calls.append(args))
     dp.lower_priority(12345)
-    assert calls == [(dp.os.PRIO_PROCESS, 12345, dp.process_niceness())]
+    assert calls == [(12345, dp.process_niceness())]
+
+
+def test_unix_lowers_by_niceness(monkeypatch):
+    # raising=False: Windows has neither, and the call is only made elsewhere.
+    calls = []
+    monkeypatch.setattr(dp.os, "PRIO_PROCESS", 0, raising=False)
+    monkeypatch.setattr(dp.os, "setpriority", lambda *args: calls.append(args), raising=False)
+    dp._renice(12345, 10)
+    assert calls == [(dp.os.PRIO_PROCESS, 12345, 10)]
+
+
+def test_each_platform_lowers_its_own_way():
+    expected = dp._below_normal_class if dp.os.name == "nt" else dp._renice
+    assert dp._lower_process is expected
+
+
+@pytest.mark.parametrize("program", [
+    "ffmpeg", "/opt/homebrew/bin/ffmpeg", r"C:\Program Files\ffmpeg\bin\ffmpeg.exe", "FFMPEG.EXE",
+])
+def test_ffmpeg_is_known_by_either_name(program):
+    assert dp.is_ffmpeg(program)
+
+
+@pytest.mark.parametrize("program", ["ffprobe", r"C:\ffmpeg\bin\ffprobe.exe", "/usr/bin/ffmpeg-wrapper"])
+def test_other_programs_are_not_ffmpeg(program):
+    assert not dp.is_ffmpeg(program)
+
+
+def test_a_windows_ffmpeg_is_limited_too(monkeypatch, no_saved_choice):
+    monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "light")
+    command = [r"C:\Program Files\ffmpeg\bin\ffmpeg.exe", *FFMPEG_CUT[1:]]
+    assert "-threads" in dp.limit_ffmpeg_threads(command, _machine(16, 10))
 
 
 def test_no_launcher_uses_preexec_fn():
@@ -228,7 +261,7 @@ def test_a_real_command_runs_lowered(monkeypatch, no_saved_choice):
     monkeypatch.setenv("FLUENTFLOW_CPU_USAGE", "light")
     seen = []
     monkeypatch.setattr(dp, "lower_priority", lambda pid: seen.append(pid))
-    done = silence_cuts.run_command(["/bin/echo", "ok"])
+    done = silence_cuts.run_command([sys.executable, "-c", "print('ok')"])
     assert done.returncode == 0 and done.stdout.strip() == "ok"
     assert len(seen) == 1
 

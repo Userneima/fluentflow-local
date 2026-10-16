@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.core.runtime_paths import default_event_db_path
+from backend.core.sqlite_connection import sqlite_connection
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ def _success_value(success: bool | None) -> int | None:
 def ensure_event_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with sqlite_connection(path) as conn:
         conn.executescript(SCHEMA_SQL)
 
 
@@ -142,7 +143,7 @@ def log_event(
         placeholders = ", ".join(["?"] * len(EVENT_COLUMNS))
         column_sql = ", ".join(EVENT_COLUMNS)
         values = [row[col] for col in EVENT_COLUMNS]
-        with sqlite3.connect(Path(db_path)) as conn:
+        with sqlite_connection(Path(db_path)) as conn:
             conn.execute(
                 f"INSERT INTO events ({column_sql}) VALUES ({placeholders})",
                 values,
@@ -159,7 +160,7 @@ def delete_events_for_tasks(task_ids: list[str] | tuple[str, ...], db_path: Path
         return 0
     ensure_event_db(db_path)
     placeholders = ",".join("?" for _ in ids)
-    with sqlite3.connect(Path(db_path)) as conn:
+    with sqlite_connection(Path(db_path)) as conn:
         cursor = conn.execute(f"DELETE FROM events WHERE task_id IN ({placeholders})", ids)
     return int(cursor.rowcount or 0)
 
@@ -173,7 +174,7 @@ def list_task_events(task_id: str, db_path: Path | str = DEFAULT_DB_PATH) -> lis
     try:
         if not Path(db_path).is_file():
             return []
-        with sqlite3.connect(Path(db_path)) as conn:
+        with sqlite_connection(Path(db_path)) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT event_name, created_at, stage, duration_seconds, success, error_reason "

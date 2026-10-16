@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import stat
+import sys
 import time
 from pathlib import Path
 
@@ -28,15 +29,23 @@ from backend.core import claude_code_note, local_intake_flow, visual_note_channe
 pytestmark = pytest.mark.real_login_check
 
 
+def _program(tmp_path: Path, source: str) -> Path:
+    """A ``claude`` program that runs ``source`` with this Python: a ``.cmd`` on
+    Windows, which cannot run a shell script, and a shell script elsewhere."""
+    script = tmp_path / "fake_claude.py"
+    script.write_text(source, encoding="utf-8")
+    if os.name == "nt":
+        program = tmp_path / "claude.cmd"
+        program.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+        return program
+    program = tmp_path / "claude"
+    program.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+    program.chmod(program.stat().st_mode | stat.S_IEXEC)
+    return program
+
+
 def _fake_claude(tmp_path: Path, body: str, *, delay: float = 0.0) -> Path:
-    script = tmp_path / "claude"
-    script.write_text(
-        "#!/bin/sh\n"
-        f"sleep {delay}\n"
-        f"cat <<'OUT'\n{body}\nOUT\n"
-    )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    return script
+    return _program(tmp_path, f"import sys, time\ntime.sleep({delay})\nprint({body!r})\n")
 
 
 @pytest.fixture(autouse=True)
@@ -100,16 +109,16 @@ def test_a_hanging_program_is_given_up_on(tmp_path, monkeypatch):
 
 def test_the_answer_is_reused_for_a_minute(tmp_path, monkeypatch):
     calls = tmp_path / "calls"
-    script = tmp_path / "claude"
-    script.write_text(f"#!/bin/sh\necho x >> {calls}\necho '{json.dumps({'loggedIn': True})}'\n")
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    _use(monkeypatch, script)
+    _use(monkeypatch, _program(tmp_path, (
+        f"with open({str(calls)!r}, 'a') as f:\n    f.write('x' + chr(10))\n"
+        f"print({json.dumps({'loggedIn': True})!r})\n"
+    )))
 
     assert claude_code_note.login_state(now=1000.0) is True
     assert claude_code_note.login_state(now=1030.0) is True
-    assert len(calls.read_text().splitlines()) == 1
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
     claude_code_note.login_state(now=1000.0 + claude_code_note.LOGIN_CHECK_TTL_SECONDS + 1)
-    assert len(calls.read_text().splitlines()) == 2
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 2
 
 
 def test_asking_on_the_event_loop_never_waits_for_the_program(tmp_path, monkeypatch):
@@ -152,12 +161,14 @@ def test_an_api_key_setup_never_mentions_the_login(tmp_path, monkeypatch):
 
 def test_the_login_check_does_not_hand_other_keys_to_the_program(tmp_path, monkeypatch):
     seen = tmp_path / "env"
-    script = tmp_path / "claude"
-    script.write_text(f"#!/bin/sh\nenv > {seen}\necho '{json.dumps({'loggedIn': True})}'\n")
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    _use(monkeypatch, script)
+    _use(monkeypatch, _program(tmp_path, (
+        "import os\n"
+        f"with open({str(seen)!r}, 'w', encoding='utf-8') as f:\n"
+        "    f.write(repr(dict(os.environ)))\n"
+        f"print({json.dumps({'loggedIn': True})!r})\n"
+    )))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-should-not-leak")
 
     claude_code_note.login_state()
-    assert "sk-should-not-leak" not in seen.read_text()
+    assert "sk-should-not-leak" not in seen.read_text(encoding="utf-8")
     assert os.environ["DEEPSEEK_API_KEY"] == "sk-should-not-leak"

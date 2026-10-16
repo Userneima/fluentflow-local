@@ -346,4 +346,4 @@ def test_link_videos_go_to_the_platforms_own_video_folder(monkeypatch):
     assert output_folder.link_root("darwin").parts[-2:] == ("Movies", "FluentFlow")
     assert output_folder.link_root("win32").parts[-2:] == ("Videos", "FluentFlow")
     monkeypatch.setenv(output_folder.LINK_ROOT_ENV, "/tmp/elsewhere")
-    assert str(output_folder.link_root("win32")) == "/tmp/elsewhere"
+    assert output_folder.link_root("win32") == Path("/tmp/elsewhere")

@@ -61,6 +61,8 @@ if (-not (Test-Healthy)) {
     if (Test-Path $Launcher) {
         Start-Process $Launcher
     } else {
+        # UTF-8 mode, as the desktop launcher starts it (see FluentFlowLocal.ps1).
+        $env:PYTHONUTF8 = "1"
         Start-Process -WindowStyle Hidden -WorkingDirectory $Dir $Python @("-m", "uvicorn", "backend.local_main:app", "--host", "127.0.0.1", "--port", $Port)
     }
     for ($i = 0; $i -lt 90 -and -not (Test-Healthy); $i++) { Start-Sleep -Seconds 1 }

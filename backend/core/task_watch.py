@@ -24,7 +24,6 @@ are run unchanged apart from being cancellable.
 from __future__ import annotations
 
 import itertools
-import os
 import subprocess
 import threading
 import time
@@ -113,7 +112,7 @@ class TaskWatch:
             argv = [argv[0], "-progress", "pipe:1", "-nostats", *argv[1:]]
         key = next(_COMMAND_IDS)
         process = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **device_profile.COMMAND_TEXT,
         )
         device_profile.lower_priority(process.pid)
         stdout_chunks: list[str] = []
@@ -159,7 +158,7 @@ class TaskWatch:
         return subprocess.CompletedProcess(argv, process.returncode, "".join(stdout_chunks), "".join(stderr_chunks))
 
     def _reports_progress(self, argv: list[str]) -> bool:
-        if not self._expected or os.path.basename(argv[0]) != "ffmpeg" or "-progress" in argv:
+        if not self._expected or not device_profile.is_ffmpeg(argv[0]) or "-progress" in argv:
             return False
         # Only an encode reads an input. A query such as ``ffmpeg -encoders``
         # answers on stdout, and reporting progress there swallowed the answer:

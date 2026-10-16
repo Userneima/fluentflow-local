@@ -147,6 +147,12 @@ if (-not $Python) {
 }
 
 Write-Host "== FluentFlow Local startup check =="
+# Python's UTF-8 mode, for everything started from here. Without it every text
+# read that names no encoding uses the code page, GBK on a Chinese Windows:
+# ffmpeg, ffprobe and yt-dlp write UTF-8, and a Chinese file name or video title
+# in their output stopped the read that was waiting for it.
+$env:PYTHONUTF8 = "1"
+
 & $Python (Join-Path $Repo "scripts\\check_local_readiness.py")
 if ($LASTEXITCODE -ne 0) {
     Fail "The environment is not ready. Follow the messages above, then launch again."

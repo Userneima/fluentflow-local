@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -52,7 +53,7 @@ def test_cancelling_stops_the_command_that_is_running():
     def run() -> None:
         started = time.monotonic()
         try:
-            watch.runner(["sleep", "30"])
+            watch.runner([sys.executable, "-c", "import time; time.sleep(30)"])
         except TaskCancelled:
             outcome["cancelled_after"] = time.monotonic() - started
 

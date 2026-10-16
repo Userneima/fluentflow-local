@@ -247,7 +247,7 @@ class SilenceCutError(RuntimeError):
 def run_command(command: Sequence[str], timeout: float = 14400) -> "subprocess.CompletedProcess[str]":
     """Run one command; ffmpeg is held to the CPU share the user chose."""
     argv = device_profile.limit_ffmpeg_threads(command)
-    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **device_profile.COMMAND_TEXT) as process:
         device_profile.lower_priority(process.pid)
         try:
             stdout, stderr = process.communicate(timeout=timeout)
@@ -1989,7 +1989,10 @@ def _render_batch(
         chain = f"fps={fps},select='{expression}',setpts=N/{fps}/TB"
         if scale_width:
             chain += f",scale={scale_width}:-2"
-        command += ["-map", "0:v:0", "-vf", chain]
+        # Newer ffmpeg (7.x) has select report the frame rate as unknown, and
+        # the muxer then guesses one: ffmpeg 7.1 kept 182 of 258 frames, and the
+        # render failed its frame count check. The rate is known; say it.
+        command += ["-map", "0:v:0", "-vf", chain, "-r", str(fps)]
     command += [
         "-filter_complex", _audio_seam_graph(batch, offset), "-map", "[aout]",
         *encode_args, "-y", str(part),
