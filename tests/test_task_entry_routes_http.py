@@ -27,7 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.local_main as local_main
-from backend.core import job_store, media_preflight
+from backend.core import job_store, media_preflight, task_activity
 from backend.core.job_event_hub import JobEventHub
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_request_scope import LOCAL_OWNER_ID
@@ -110,7 +110,10 @@ def _wait_until_done(client: TestClient, task_id: str, seconds: float = 5.0) -> 
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         job = client.get(f"/jobs/{task_id}").json()
-        if job.get("status") in {"completed", "failed", "cancelled"}:
+        # Completed is not finished while the cut and the note that follow the
+        # transcript are still running: they write the task again.
+        stored = job_store.get_job(task_id) or {}
+        if job.get("status") in {"completed", "failed", "cancelled"} and not task_activity.busy_reason(stored):
             return job
         time.sleep(0.02)
     raise AssertionError(f"{task_id} never finished: {client.get(f'/jobs/{task_id}').json()}")
