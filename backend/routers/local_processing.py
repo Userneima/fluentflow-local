@@ -511,7 +511,8 @@ def _write_note_holding_slot(
 
     try:
         local_intake_flow.write_note(
-            task_id, client_id, on_local_work_done=hand_off, planned_ranges=planned_ranges,
+            task_id, client_id, on_local_work_done=hand_off,
+            **({"planned_ranges": planned_ranges} if planned_ranges else {}),
         )
     except NoteAbandoned as exc:
         # The frame note records this itself; the text-note path lets it through.

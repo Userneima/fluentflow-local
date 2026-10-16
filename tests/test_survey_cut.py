@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.core import job_store, local_intake_flow, silence_cuts, survey_cut
+from backend.core import cut_timeline, job_store, local_intake_flow, silence_cuts, survey_cut
 from backend.core.silence_cuts import CutPlan, TimeRange
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
@@ -181,6 +181,29 @@ def test_the_recording_is_cut_once_and_the_transcript_moves_onto_the_cut(task, m
     # Removed talk is always put to the user.
     assert report["sections"][0]["title"] == "需要你判断"
     assert [item["ref"] for item in report["sections"][0]["items"]] == ["r1"]
+
+
+@needs_ffmpeg
+def test_the_plan_is_handed_on_before_the_render_and_a_note_saved_meanwhile_is_kept(task, monkeypatch):
+    """To-do batch three: the note starts from the decided plan while the cut
+    renders; what it saves during the render is still there afterwards."""
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    seen: dict = {}
+
+    def on_plan(ranges):
+        seen["ranges"] = ranges
+        seen["stage"] = job_store.get_job(task["id"])["result"]["debreath"].get("stage")
+        before = job_store.get_job(task["id"])["result"]
+        job_store.save_result_changes(task["id"], before, {**before, "summary_markdown": "# 边剪边写的笔记"})
+
+    survey_cut.survey_and_cut(task["id"], chat=(_says('{"keep_gaps": [], "remove": []}'), "fake"), on_plan=on_plan)
+
+    result = job_store.get_job(task["id"])["result"]
+    assert seen["stage"] == "reviewing"
+    rendered = silence_cuts.media_duration_seconds(Path(result["debreath"]["delivered_path"]))
+    assert cut_timeline.kept_duration_seconds(seen["ranges"]) == pytest.approx(rendered, abs=0.5)
+    assert result["summary_markdown"] == "# 边剪边写的笔记"
+    assert result["transcript_media"] == "debreath_media"
 
 
 @needs_ffmpeg
