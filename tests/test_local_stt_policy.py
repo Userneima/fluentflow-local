@@ -63,3 +63,13 @@ def test_an_old_cloud_engine_request_is_still_run_locally(tmp_path):
     # profile; an old client's or stored job's speed choice is ignored.
     assert ctx.speed_profile == "accurate"
     assert not hasattr(ctx, "remote_stt_policy")
+
+
+def test_the_result_names_the_model_that_ran_not_only_the_setting():
+    """Requirement (Codex run, 2026-10-16): on Apple GPUs the large-v3 setting
+    is served by large-v3-turbo; the page shows what ran."""
+    from backend.core.media_job import _model_used
+
+    assert _model_used("mlx-community/whisper-large-v3-turbo") == "large-v3-turbo"
+    assert _model_used("/models/faster-whisper-large-v3/") == "large-v3"
+    assert _model_used(None) is None

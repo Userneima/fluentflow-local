@@ -318,7 +318,7 @@ NOTE_SCHEMA: dict[str, Any] = {
     "properties": {
         "note_markdown": {
             "type": "string",
-            "description": "完整的学习笔记，Markdown。画面依据用 ![说明](文件名.jpg) 引用。",
+            "description": "完整的笔记，Markdown。画面依据用 ![说明](文件名.jpg) 引用。",
         },
         "basis_note": {
             "type": "string",

@@ -95,6 +95,15 @@ from backend.core.visual_evidence import (
 logger = logging.getLogger(__name__)
 
 
+
+def _model_used(source: Any) -> str | None:
+    """``mlx-community/whisper-large-v3-turbo`` -> ``large-v3-turbo``."""
+    name = str(source or "").rstrip("/").rsplit("/", 1)[-1]
+    for prefix in ("whisper-", "faster-whisper-"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    return name or None
+
 def _stt_realtime_factor(
     stt_elapsed_seconds: float | None,
     duration_seconds: float | None,
@@ -954,8 +963,12 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             "stt_elapsed_seconds": round(stt_elapsed_sec, 1),
             "stt_realtime_factor": stt_realtime_factor,
             "stt_provider": stt_provider_value,
-            "stt_provider_label": stt_provider_label(stt_provider_value),
+            "stt_provider_label": "MLX Whisper" if getattr(tr, "engine", None) == "mlx" else stt_provider_label(stt_provider_value),
             "stt_model": stt_model_for_result,
+            # What actually ran: the setting ``stt_model`` names (large-v3) is
+            # served on Apple GPUs by large-v3-turbo. Shown on the page; the
+            # setting stays as it was, so a retry asks for the same thing.
+            "stt_model_used": _model_used(getattr(tr, "model_source", None)) or stt_model_for_result,
             "stt_speed": speed_profile,
             "stt_language": language,
             "detected_language": tr.language,
