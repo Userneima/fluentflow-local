@@ -36,6 +36,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -56,7 +57,10 @@ NOTE_LABEL = "笔记"
 CUT_LIST_LABEL = "剪辑表"
 RESULT_KEY = "output_folder"
 LINK_ROOT_ENV = "FLUENTFLOW_LINK_OUTPUT_DIR"
+# The user's own video folder: "Movies" on a Mac, "Videos" on Windows and
+# Linux, where a "Movies" folder would be a stray new one (owner, 2026-10-16).
 DEFAULT_LINK_ROOT = "~/Movies/FluentFlow"
+DEFAULT_LINK_ROOT_ELSEWHERE = "~/Videos/FluentFlow"
 MAX_FOLDERS_PER_RECORDING = 99
 
 _UNSAFE = re.compile(r'[\\/:*?"<>|\r\n]+')
@@ -79,8 +83,9 @@ def original_path(job: dict[str, Any] | None) -> Path | None:
     return Path(recorded).expanduser() if recorded else None
 
 
-def link_root() -> Path:
-    return Path(os.environ.get(LINK_ROOT_ENV) or DEFAULT_LINK_ROOT).expanduser()
+def link_root(platform: str | None = None) -> Path:
+    default = DEFAULT_LINK_ROOT if (platform or sys.platform) == "darwin" else DEFAULT_LINK_ROOT_ELSEWHERE
+    return Path(os.environ.get(LINK_ROOT_ENV) or default).expanduser()
 
 
 def _is_link_task(job: dict[str, Any] | None) -> bool:

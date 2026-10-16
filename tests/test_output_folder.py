@@ -337,3 +337,13 @@ def test_a_renamed_folder_is_found_and_a_moved_one_is_not_recreated(tmp_path, pd
     record = output_folder.sync(task)
     assert "不在原来的位置" in record["error"]
     assert sorted(p.name for p in source.parent.iterdir()) == [source.name]
+
+
+def test_link_videos_go_to_the_platforms_own_video_folder(monkeypatch):
+    """Owner, 2026-10-16: on Windows the user's video folder is Videos; a
+    Movies folder there would be a stray new one."""
+    monkeypatch.delenv(output_folder.LINK_ROOT_ENV, raising=False)
+    assert output_folder.link_root("darwin").parts[-2:] == ("Movies", "FluentFlow")
+    assert output_folder.link_root("win32").parts[-2:] == ("Videos", "FluentFlow")
+    monkeypatch.setenv(output_folder.LINK_ROOT_ENV, "/tmp/elsewhere")
+    assert str(output_folder.link_root("win32")) == "/tmp/elsewhere"
