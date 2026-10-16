@@ -26,7 +26,7 @@ Why things are the way they are is in `docs/02-决策记录.md`, grouped by prod
 
 ## Validation
 
-Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests and `python3 -m ruff check backend/ scripts/` (CI runs it; the test suite does not catch unused imports). Do not push, deploy, tag, or change a release version unless explicitly requested.
+Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests and `python3 -m ruff check backend/ scripts/` (CI runs it; the test suite does not catch unused imports). Push finished, checked work to `main` as it is done, without asking; do not deploy, tag, or change a release version unless explicitly requested.
 
 ## Restarting the backend
 
