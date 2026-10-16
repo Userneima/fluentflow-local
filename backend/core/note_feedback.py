@@ -170,7 +170,12 @@ def draft_part(task_id: str, *, rules: str, part: int = 1, client_id: str | None
     # transcript, so part 3 here has to be the same stretch as part 3 there.
     from backend.core import agent_note
 
-    parts = agent_note._parts(transcript)
+    parts = agent_note._parts(transcript, small=agent_note._small_parts(task_id))
+    if parts[0].total == 1 and len(parts[0].text) > claude_vision.MAX_TRANSCRIPT_CHARS:
+        raise NoteFeedbackError(
+            "这段录像整段太长，FluentFlow 的模型一次写不完。先用 get_agent_note_material 带 small_parts=true "
+            "取一次材料（分成小段），再用出问题那一段的 part 调用。"
+        )
     if not 1 <= part <= len(parts):
         raise NoteFeedbackError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")
     chosen = parts[part - 1]

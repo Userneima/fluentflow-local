@@ -680,13 +680,15 @@ def agent_note_material(
     task_id: str,
     payload: Optional[dict[str, Any]] = Body(None),
 ) -> dict[str, Any]:
-    """What the calling agent writes this task's note from: one part's transcript,
-    its frames as paths on this machine, and the note skill with the fixed contract.
+    """What the calling agent writes this task's note from: the transcript (whole,
+    or one small part with ``small_parts``), its frames as paths on this machine,
+    and the note skill with the fixed contract.
 
     The first call for a video extracts the frames (seconds to a minute), so it
     waits for an idle queue the same way the frame note does.
     """
     part = int((payload or {}).get("part") or 1)
+    small_parts = bool((payload or {}).get("small_parts"))
     job = _job_for_request(request, task_id)
     if not agent_note._stored_frames(task_id, job.get("result") or {}) and queue_is_busy():
         raise HTTPException(
@@ -695,7 +697,8 @@ def agent_note_material(
         )
     try:
         return {"ok": True, **agent_note.material(
-            task_id, part=part, client_id=_local_client_scope(request), keyframe_extractor=extract_keyframes,
+            task_id, part=part, small_parts=small_parts, client_id=_local_client_scope(request),
+            keyframe_extractor=extract_keyframes,
         )}
     except visual_note_job.VisualNoteError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

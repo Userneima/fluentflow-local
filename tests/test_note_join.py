@@ -166,11 +166,14 @@ def test_a_note_written_in_parts_is_stored_with_one_title_and_running_numbers(tm
 def test_an_agent_note_saved_in_parts_is_joined_the_same_way(tmp_path, monkeypatch):
     # An agent's parts are sized for its tool results, not for the frame note's requests.
     monkeypatch.setattr(an, "AGENT_PART_CHARS", 20)
-    material = an.material(TASK, client_id="anonymous", keyframe_extractor=_fake_extractor(tmp_path))
+    material = an.material(TASK, small_parts=True, client_id="anonymous", keyframe_extractor=_fake_extractor(tmp_path))
     total = material["total_parts"]
     assert total > 1
 
-    updated = an.save(TASK, part_notes=[_part_note(i) for i in range(1, total + 1)], client_id="anonymous")
+    try:
+        updated = an.save(TASK, part_notes=[_part_note(i) for i in range(1, total + 1)], client_id="anonymous")
+    finally:
+        an._set_small_parts(TASK, False)
 
     note = updated["result"]["summary_markdown"]
     assert note.splitlines()[0] == "# lecture"

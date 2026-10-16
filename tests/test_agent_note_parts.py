@@ -1,8 +1,13 @@
-"""An agent writes a long recording's note part by part.
+"""An agent writes a recording's note: whole by default, part by part when its
+host cannot take the whole transcript in one tool result.
 
-What has to hold, written from the requirement (2026-10-14) rather than the code:
+What has to hold, written from the requirements (2026-10-14, 2026-10-16) rather
+than the code:
 
-- What one call for material returns fits in one tool result of the agent's
+- By default one call returns the whole transcript, and the whole note is saved
+  in one call (owner, 2026-10-16: a note is no strain for an agent; a host's
+  limit on one tool result can be raised).
+- With small_parts, what one call for material returns fits in one tool result of the agent's
   host. Claude Code takes about 25,000 tokens; Chinese runs about one token per
   character (measured on a 60,000-character part: 54,766 tokens), so the whole
   answer stays under 25,000 characters.
@@ -39,8 +44,9 @@ def _long(job_store, *, lines: int = 12):
     ]
 
 
-def _material(tmp_path, part=1):
-    return an.material(TASK, part=part, client_id="anonymous", keyframe_extractor=_fake_extractor(tmp_path))
+def _material(tmp_path, part=1, small=True):
+    return an.material(TASK, part=part, small_parts=small, client_id="anonymous",
+                       keyframe_extractor=_fake_extractor(tmp_path))
 
 
 def _note(index: int) -> str:
@@ -51,8 +57,32 @@ def _note(index: int) -> str:
 def no_parts_from_an_earlier_test():
     """Every test here uses the same task id, and artifacts live for the session."""
     an._drop_store(TASK)
+    an._set_small_parts(TASK, False)
     yield
     an._drop_store(TASK)
+    an._set_small_parts(TASK, False)
+
+
+def test_by_default_the_whole_recording_comes_in_one_call_and_is_saved_in_one(job_store, tmp_path):
+    job_store["result"]["display_segments"] = [
+        {"start": 20.0 + i, "end": 20.8 + i, "text": LINE * 25} for i in range(70)
+    ]
+
+    material = _material(tmp_path, small=False)
+
+    assert material["total_parts"] == 1
+    assert material["transcript"].count(LINE) == 70 * 25
+    saved = an.save(TASK, note_markdown=_note(1) * 40, client_id="anonymous", checker=None)
+    assert "最小二乘法" in saved["result"]["summary_markdown"]
+
+
+def test_asking_for_small_parts_again_switches_back_to_parts(job_store, tmp_path):
+    job_store["result"]["display_segments"] = [
+        {"start": 20.0 + i, "end": 20.8 + i, "text": LINE * 25} for i in range(70)
+    ]
+    assert _material(tmp_path, small=False)["total_parts"] == 1
+    assert _material(tmp_path, small=True)["total_parts"] > 1
+    assert _material(tmp_path, small=False)["total_parts"] == 1
 
 
 @pytest.fixture
@@ -201,4 +231,19 @@ def test_a_part_out_of_range_or_too_short_is_refused(job_store, tmp_path, monkey
         _save(total + 1)
     with pytest.raises(an.AgentNoteError, match="没有替换现有笔记"):
         _save(1, "## 太短\n\n一句。")
+    assert job_store["result"]["summary_markdown"] == "原来的文字笔记"
+
+
+def test_saving_the_whole_note_again_keeps_the_note_from_before_the_agent_restorable(job_store, tmp_path):
+    """Requirement (2026-10-16, found in a real run): an agent that saves its
+    whole note several times (a coverage fill, a fix) leaves the note from
+    before it started as the one to put back, not its own earlier draft."""
+    _material(tmp_path, small=False)
+    first = an.save(TASK, note_markdown=_note(1) * 40, client_id="anonymous", checker=None)
+    assert first["result"]["summary_markdown"] != "原来的文字笔记"
+
+    an.save(TASK, note_markdown=_note(2) * 40, client_id="anonymous", checker=None)
+    an.save(TASK, note_markdown=_note(3) * 40, client_id="anonymous", checker=None)
+    vn.restore_previous_note(TASK, client_id="anonymous")
+
     assert job_store["result"]["summary_markdown"] == "原来的文字笔记"

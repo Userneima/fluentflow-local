@@ -133,9 +133,11 @@ def test_a_draft_part_is_the_same_stretch_as_the_agents_part(job_store, monkeypa
     monkeypatch.setattr(visual_note_channel, "resolve_channel", lambda *_a, **_k: visual_note_channel.Channel(
         name="fake", label="fake", model="fake", unavailable_reason=None, write=write))
 
-    material = an.material(TASK, part=2, client_id="anonymous", keyframe_extractor=_fake_extractor(tmp_path))
+    material = an.material(TASK, part=2, small_parts=True, client_id="anonymous",
+                           keyframe_extractor=_fake_extractor(tmp_path))
     drafted = nf.draft_part(TASK, rules="写法", part=2, client_id="anonymous")
 
+    an._set_small_parts(TASK, False)
     assert drafted["total_parts"] == material["total_parts"] > 1
     assert seen == [material["transcript"]]
 

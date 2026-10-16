@@ -506,18 +506,20 @@ def export_result(
 def get_agent_note_material(
     task_id: str,
     part: int = 1,
+    small_parts: bool = False,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
     """What you write this task's note from, when you write it yourself.
 
-    Returns one part's transcript (with timestamps), the frames for that part as
-    paths on this machine with their moments in the recording, and
-    ``instructions``: the note skill in effect plus the fixed contract. Open the
-    frames you need, write the note following the instructions, then call
-    ``save_agent_note``. A long recording comes in ``total_parts`` parts: fetch,
-    write and save one part at a time (``part``). Costs nothing on the user's side;
-    the first call for a video extracts its frames, which takes up to a minute.
+    Returns the whole transcript (with timestamps), the frames as paths on this
+    machine with their moments in the recording, and ``instructions``: the note
+    skill in effect plus the fixed contract. Open the frames you need, write the
+    whole note, then call ``save_agent_note`` once. When this host cannot take
+    that much in one tool result, ask again with ``small_parts=True``: the
+    recording then comes in ``total_parts`` parts to fetch, write and save one at
+    a time (``part``). Costs nothing on the user's side; the first call for a
+    video extracts its frames, which takes up to a minute.
     """
     refusal = _require_local_edition(normalize_api_base(api_base))
     if refusal is not None:
@@ -527,7 +529,7 @@ def get_agent_note_material(
         f"/agent/v1/tasks/{task_id}/agent-note/material",
         api_base=api_base,
         client_id=client_id,
-        payload={"part": int(part or 1)},
+        payload={"part": int(part or 1), "small_parts": bool(small_parts)},
         timeout=300,
     )
 
@@ -1010,20 +1012,32 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "get_agent_note_material",
+        # Claude Code keeps a tool result up to this size inline instead of
+        # saving it to a file (its ceiling is 500,000 characters; without it,
+        # 50,000). The whole transcript of a 2.6-hour recording came to about
+        # 130,000 characters (2026-10-16).
+        "_meta": {"anthropic/maxResultSizeChars": 500_000},
         "description": (
             "Write a task's note yourself instead of a model FluentFlow is configured to pay for "
-            "(the way to get a note when no Anthropic or text-model key is set). Returns one part's "
-            "timestamped transcript, that part's frames as local file paths with their moments, "
-            "and instructions (the note skill in effect plus the fixed contract). Open the frames "
-            "you need, write the note as instructed, then call save_agent_note. Long recordings "
-            "come in total_parts parts: fetch, write and save one part at a time. The first call for a video "
-            "extracts frames (up to a minute)."
+            "(the way to get a note on the user's own subscription). Returns the whole timestamped "
+            "transcript, the frames as local file paths with their moments, and instructions (the "
+            "note skill in effect plus the fixed contract). Open the frames you need, write the whole "
+            "note, then call save_agent_note once. Do this in a subagent with a fresh context when "
+            "your host has them, so the transcript does not fill the user's conversation: give it the "
+            "task_id and have it fetch, write and save. If the result came back truncated or saved to "
+            "a file because it was too large for one tool result, call again with small_parts=true: "
+            "the recording then comes in total_parts parts to fetch, write and save one at a time. "
+            "The first call for a video extracts frames (up to a minute)."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
-                "part": {"type": "integer", "default": 1, "description": "Which part, from 1 to total_parts."},
+                "part": {"type": "integer", "default": 1, "description": "Which part, from 1 to total_parts (small_parts only)."},
+                "small_parts": {
+                    "type": "boolean", "default": False,
+                    "description": "Hand the recording over in parts of about 15,000 characters, for a host whose tool results are too small for the whole transcript.",
+                },
                 "api_base": {"type": "string"},
             },
             "required": ["task_id"],
