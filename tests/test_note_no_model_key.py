@@ -38,3 +38,15 @@ def test_transcript_only_mode_is_still_called_that():
 def test_the_decision_log_gives_the_same_reason():
     status, _decision, reason, _impact = decision_log_core._note_status(NO_KEY, {"status": "completed"})
     assert status == "skipped" and "Key" in reason and "仅转录" not in reason
+
+
+def test_the_task_list_carries_the_reason_and_where_the_cut_went():
+    from backend.core import job_store
+
+    summary = job_store._result_summary({
+        **NO_KEY,
+        "output_folder": {"path": "D:/视频/FluentFlow/a", "cut_path": "D:/视频/FluentFlow/a/a_去气口.mp4",
+                          "updated_at": "2026-10-16T00:00:00+00:00"},
+    })
+    assert summary["summary_skipped_reason"] == "no_model_key"
+    assert summary["output_folder"] == {"path": "D:/视频/FluentFlow/a", "cut_path": "D:/视频/FluentFlow/a/a_去气口.mp4"}

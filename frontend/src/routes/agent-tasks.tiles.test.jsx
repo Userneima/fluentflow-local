@@ -84,6 +84,14 @@ describe('cutFileDelivery', () => {
         expect(cutFileDelivery(delivered({delivered: true, delivered_name: 'a_debreath.mp4'}), 'zh')).toBeNull();
     });
 
+    it('does not call a link video filed under Videos an upload', () => {
+        const job = {result: {
+            debreath: {status: 'completed', rendered: true, used_for_transcription: true},
+            output_folder: {path: 'D:/视频/FluentFlow/mov_bbb', cut_path: 'D:/视频/FluentFlow/mov_bbb/mov_bbb_去气口.mp4'},
+        }};
+        expect(cutFileDelivery(job, 'zh')).toBeNull();
+    });
+
     it('warns, with the reason, when the copy beside the original failed', () => {
         const notice = cutFileDelivery(delivered({delivered: false, delivery_error: '目标文件夹只读'}), 'zh');
 

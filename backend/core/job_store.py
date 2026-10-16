@@ -1166,6 +1166,9 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         "summary_status": result.get("summary_status"),
         "summary_error": result.get("summary_error"),
         "summary_skipped": result.get("summary_skipped"),
+        # Why it was skipped (no_model_key): the card says "add a key", not
+        # "skipped", for a task that had no model rather than chose none.
+        "summary_skipped_reason": result.get("summary_skipped_reason"),
         "summary_markdown": str(summary_markdown)[:240] if summary_markdown else "",
         # The preview above is cut; the list card shows the note's real length.
         "summary_chars": len(str(summary_markdown).strip()) if summary_markdown else 0,
@@ -1179,6 +1182,10 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         # for a task that had just been cut, because absence read as "never ran".
         # The ranges stay in the artifact; these are the numbers a card shows.
         "debreath": _debreath_summary(result.get("debreath")),
+        # Where the outputs went. A link's cut goes into its folder under the
+        # Videos folder and is recorded here, not on the cut; without it the
+        # card called that cut "uploaded, left in the app".
+        "output_folder": _output_folder_summary(result.get("output_folder")),
         # Which file the transcript and the note belong to. One line each, and the
         # only way a list row can say the note describes the shortened version.
         "transcript_media": result.get("transcript_media"),
@@ -1215,6 +1222,12 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         "prompt_preset_label": result.get("prompt_preset_label"),
         "imported_from_local_history": result.get("imported_from_local_history"),
     }
+
+
+def _output_folder_summary(folder: Any) -> dict[str, Any] | None:
+    if not isinstance(folder, dict):
+        return None
+    return {key: folder.get(key) for key in ("path", "cut_path", "error") if folder.get(key)}
 
 
 def _row_to_summary_dict(row: sqlite3.Row) -> dict[str, Any]:

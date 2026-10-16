@@ -383,6 +383,9 @@ export const cutFileDelivery = (job, lang) => {
     // the one that really has nowhere to deliver to.
     if (state.delivered === undefined || state.delivered === null) {
         if (job?.metadata?.folder_intake) return null;
+        // A link's cut is filed in its folder under Videos, recorded on the
+        // task's output folder rather than on the cut.
+        if (job?.result?.output_folder?.cut_path) return null;
         return {
             tone: 'note',
             text: isZh
