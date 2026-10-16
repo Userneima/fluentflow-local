@@ -553,9 +553,10 @@ def save_agent_note(
     edited note. Cite frames by file name only. A note far too short for its
     transcript is refused and nothing is replaced.
 
-    The saved note is checked against its transcript for knowledge points it
-    never mentions; ``coverage.missing`` lists them by part. When it is not
-    empty, write those points into the note and save again.
+    The first save of a note is checked against its transcript for knowledge
+    points it never mentions; ``coverage.missing`` lists them by part. When it
+    is not empty, write in the ones worth keeping and save again; that save is
+    not checked again.
     """
     refusal = _require_local_edition(normalize_api_base(api_base))
     if refusal is not None:
@@ -1054,10 +1055,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "(the remaining parts, then a read-through). note_markdown without part on such a recording "
             "is a whole edited note. Cite "
             "frames by file name only. A note far too short for its transcript is refused and "
-            "nothing is replaced. Saving also checks each part against its transcript for knowledge "
-            "points the note never mentions (when FluentFlow has a text-model or Anthropic key) and "
-            "returns them in coverage.missing, by part: when it is not empty, write those points "
-            "into that part and save it again."
+            "nothing is replaced. The first save of each part is checked against its transcript for "
+            "knowledge points the note never mentions (when FluentFlow has a model to check with) and "
+            "they come back in coverage.missing, by part: when it is not empty, write in the ones worth "
+            "keeping and save that part again once. A part saved again is not checked again."
         ),
         "inputSchema": {
             "type": "object",

@@ -247,3 +247,40 @@ def test_saving_the_whole_note_again_keeps_the_note_from_before_the_agent_restor
     vn.restore_previous_note(TASK, client_id="anonymous")
 
     assert job_store["result"]["summary_markdown"] == "原来的文字笔记"
+
+
+def test_a_note_is_checked_on_its_first_save_only(job_store, tmp_path):
+    """Owner, 2026-10-16: each note is checked once. A re-check lists other
+    points every time, so the agent's fill drew new gaps, mostly the details
+    of examples, at a model call and minutes each."""
+    _material(tmp_path, small=False)
+    calls = []
+
+    def chat(system, user):
+        calls.append(user)
+        return '{"points": [{"point": "最小二乘法", "covered": true}]}'
+
+    checker = (chat, "fake")
+    first = an.save(TASK, note_markdown=_note(1) * 40, client_id="anonymous", checker=checker)
+    checked = len(calls)
+    assert checked > 0
+    assert vn.visual_note_state(first["result"])["coverage"]["checker"] == "fake"
+
+    again = an.save(TASK, note_markdown=_note(2) * 40, client_id="anonymous", checker=checker)
+
+    assert len(calls) == checked, "the fill is not checked again"
+    assert vn.visual_note_state(again["result"])["coverage"]["parts"][0]["checked"] is False
+
+
+def test_a_part_saved_again_is_not_checked_again(job_store, tmp_path, small_parts):
+    _long(job_store)
+    _material(tmp_path)
+    calls = []
+    checker = (lambda system, user: calls.append(user) or '{"points": []}', "fake")
+
+    an.save_part(TASK, part=1, note_markdown=_note(1), client_id="anonymous", checker=checker)
+    checked = len(calls)
+    answer = an.save_part(TASK, part=1, note_markdown=_note(1) + "补上的一句。", client_id="anonymous", checker=checker)
+
+    assert checked > 0 and len(calls) == checked
+    assert answer["coverage"]["parts"][0]["checked"] is False

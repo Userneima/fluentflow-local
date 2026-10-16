@@ -90,8 +90,8 @@ SAVE_INSTRUCTION = (
     "存过的部分留在 FluentFlow 里，换了对话也能接着写下一部分，全部存齐后才替换任务的笔记。"
     "截图在本机的路径就是 frames 里的 path，打开看过再决定引不引用；引用时只写文件名。"
     "\n\n交回之前，按上面写法里「不漏」一节对照这部分转录逐条查一遍，没写到的写进讲它的那一段。"
-    "交回后 FluentFlow 会再查一遍：返回的 coverage.missing 里列着它认为没写到的知识点，"
-    "非空时把这些补进这一部分，再用同一个 part 保存一次。"
+    "第一次交回后 FluentFlow 会查一遍：返回的 coverage.missing 里列着它认为没写到的知识点，"
+    "非空时把值得写的补进去，再保存一次；补完再存不会再查。"
 )
 
 # Said once the last part is in. Each part only saw its own stretch, so what the
@@ -303,7 +303,7 @@ def save(
                      basis_note=basis_note, model=model)
             for draft, part in zip(part_notes, parts)
         ]
-        coverage = _coverage(cleaned, parts, checker)
+        coverage = _not_again(parts) if kept else _coverage(cleaned, parts, checker)
         updated = _finish(task_id, job, media, parts, cleaned, coverage,
                           basis_note=basis_note, model=model, client_id=client_id, keep_replaced=kept)
         _write_store(task_id, parts, {
@@ -315,7 +315,7 @@ def save(
         raise AgentNoteError("没有收到笔记内容（note_markdown）")
     if len(parts) == 1:
         cleaned = [_cleaned(note_markdown, parts[0], where="这份笔记", basis_note=basis_note, model=model)]
-        coverage = _coverage(cleaned, parts, checker)
+        coverage = _not_again(parts) if kept else _coverage(cleaned, parts, checker)
         updated = _finish(task_id, job, media, parts, cleaned, coverage,
                           basis_note=basis_note, model=model, client_id=client_id, keep_replaced=kept)
         _write_store(task_id, parts, {1: _stored(parts[0], cleaned[0].markdown, coverage["parts"][0])},
@@ -393,8 +393,8 @@ def save_part(
     if joined and joined != _hash(str(result.get("summary_markdown") or "")):
         store = {}
         joined = None
-    coverage = _coverage([draft], [target], checker)
     saved = _valid_parts(store, parts)
+    coverage = _not_again([target]) if part in saved else _coverage([draft], [target], checker)
     saved[part] = _stored(target, draft.markdown, coverage["parts"][0])
     basis_note = basis_note or str(store.get("basis_note") or "")
     model = model or str(store.get("model") or "")
@@ -570,6 +570,16 @@ def _write_store(task_id: str, parts, saved: dict[int, dict[str, Any]], *, joine
 
 def _drop_store(task_id: str) -> None:
     artifact_target_path(task_id, _PARTS_FILENAME).unlink(missing_ok=True)
+
+
+def _not_again(parts) -> dict[str, Any]:
+    """A note checked once is not checked again when the agent saves it after
+    filling what was missing or fixing it (owner, 2026-10-16). Each check lists
+    different points, so every re-check reported new gaps, mostly the details
+    of examples, and every one cost a model call and minutes."""
+    return {"checker": "", "parts": [
+        {"part": part.index, **note_coverage.unchecked("补写或修改后再存，不再重查：每篇只查一遍")} for part in parts
+    ], "missing": []}
 
 
 def _coverage(drafts, parts, checker) -> dict[str, Any]:
