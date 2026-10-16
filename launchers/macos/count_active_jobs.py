@@ -53,11 +53,21 @@ def count_for_scope(base_url: str, client_id: str | None) -> int | None:
     jobs = payload.get("jobs") if isinstance(payload, dict) else None
     if not isinstance(jobs, list):
         return None
-    return sum(
-        1
-        for job in jobs
-        if isinstance(job, dict) and str(job.get("status") or "") in LIVE_STATUSES
-    )
+    return sum(1 for job in jobs if isinstance(job, dict) and is_busy(job))
+
+
+def is_busy(job: dict) -> bool:
+    """A task is marked completed once its transcript is stored; the cut and
+    the note run after that, for many minutes on a long recording. A restart
+    then interrupted both while this counted nothing (2026-10-16, a 58-minute
+    recording's render and note cut off by another session's restart)."""
+    if str(job.get("status") or "") in LIVE_STATUSES:
+        return True
+    if str(job.get("summary_status") or "") == "pending":
+        return True
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    cut = result.get("debreath") if isinstance(result.get("debreath"), dict) else {}
+    return cut.get("status") == "running"
 
 
 def active_job_count(base_url: str) -> int:
