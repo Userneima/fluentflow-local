@@ -83,9 +83,48 @@ def original_path(job: dict[str, Any] | None) -> Path | None:
     return Path(recorded).expanduser() if recorded else None
 
 
+def windows_videos_folder() -> Path | None:
+    """Where this Windows user's Videos folder really is.
+
+    Windows lets the user move it (Properties → Location), and it often lives on
+    another drive: on the owner's machine it is D:/视频, with an empty
+    C:/Users/<name>/Videos left behind that Explorer never shows. Asked of
+    the system (SHGetKnownFolderPath, FOLDERID_Videos); None when it cannot say."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        import uuid
+
+        class _Guid(ctypes.Structure):
+            _fields_ = [("data1", wintypes.DWORD), ("data2", wintypes.WORD),
+                        ("data3", wintypes.WORD), ("data4", ctypes.c_ubyte * 8)]
+
+        raw = uuid.UUID("18989B1D-99B5-455B-841C-AB7C74E4DDFC").bytes_le
+        folder_id = _Guid.from_buffer_copy(raw)
+        path_ptr = ctypes.c_wchar_p()
+        shell32 = ctypes.windll.shell32
+        if shell32.SHGetKnownFolderPath(ctypes.byref(folder_id), 0, None, ctypes.byref(path_ptr)) != 0:
+            return None
+        try:
+            return Path(path_ptr.value) if path_ptr.value else None
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(path_ptr)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
 def link_root(platform: str | None = None) -> Path:
-    default = DEFAULT_LINK_ROOT if (platform or sys.platform) == "darwin" else DEFAULT_LINK_ROOT_ELSEWHERE
-    return Path(os.environ.get(LINK_ROOT_ENV) or default).expanduser()
+    configured = os.environ.get(LINK_ROOT_ENV)
+    if configured:
+        return Path(configured).expanduser()
+    current = platform or sys.platform
+    if current == "darwin":
+        return Path(DEFAULT_LINK_ROOT).expanduser()
+    if current == "win32":
+        videos = windows_videos_folder()
+        if videos is not None:
+            return videos / "FluentFlow"
+    return Path(DEFAULT_LINK_ROOT_ELSEWHERE).expanduser()
 
 
 def _is_link_task(job: dict[str, Any] | None) -> bool:

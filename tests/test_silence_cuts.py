@@ -552,6 +552,45 @@ def test_a_real_audio_recording_loses_its_silence(tmp_path, suffix):
     assert abs(report.actual_seconds - plan.kept_seconds) < 0.3, report.as_dict()
 
 
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="ffmpeg/ffprobe not installed",
+)
+def test_a_video_with_chapters_is_cut(tmp_path):
+    """A 10-second sample video with one chapter failed every cut on
+    2026-10-16: the mp4 muxer wrote the chapters as a third track, and the
+    per-part stream check refused the part."""
+    chapters = tmp_path / "chapters.txt"
+    chapters.write_text(
+        ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=9000\ntitle=Chapter 1\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "clip.mp4"
+    built = subprocess.run(
+        [
+            shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=s=160x90:d=9:r=10",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=9,volume=enable='between(t,3,6)':volume=0",
+            "-i", str(chapters), "-map", "0:v", "-map", "1:a", "-map_metadata", "2", "-map_chapters", "2",
+            "-shortest", "-c:v", "libx264", "-c:a", "aac", "-y", str(source),
+        ],
+        capture_output=True, text=True, timeout=180,
+    )
+    assert built.returncode == 0, built.stderr[-400:]
+    probed = subprocess.run(
+        [shutil.which("ffprobe"), "-v", "error", "-show_chapters", "-of", "csv=p=0", str(source)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert probed.stdout.strip(), "the source carries a chapter"
+
+    plan = sc.plan_silence_cuts(source, min_silence_seconds=0.5)
+    assert plan.cuts, f"no silence found: {plan.warnings}"
+
+    report = sc.render_cut_plan(source, plan, tmp_path / "cut.mp4")
+
+    assert report.ok, report.as_dict()
+
+
 # ── the cut list is the deliverable ─────────────────────────────────────────
 
 def test_the_cut_list_carries_everything_needed_to_re_render_it():

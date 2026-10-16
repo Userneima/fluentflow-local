@@ -20,6 +20,7 @@ Requirements (owner, 2026-10-14):
 from __future__ import annotations
 
 import uuid
+import sys
 from pathlib import Path
 
 import pytest
@@ -343,7 +344,24 @@ def test_link_videos_go_to_the_platforms_own_video_folder(monkeypatch):
     """Owner, 2026-10-16: on Windows the user's video folder is Videos; a
     Movies folder there would be a stray new one."""
     monkeypatch.delenv(output_folder.LINK_ROOT_ENV, raising=False)
+    monkeypatch.setattr(output_folder, "windows_videos_folder", lambda: None)
     assert output_folder.link_root("darwin").parts[-2:] == ("Movies", "FluentFlow")
     assert output_folder.link_root("win32").parts[-2:] == ("Videos", "FluentFlow")
     monkeypatch.setenv(output_folder.LINK_ROOT_ENV, "/tmp/elsewhere")
     assert output_folder.link_root("win32") == Path("/tmp/elsewhere")
+
+
+def test_a_moved_windows_videos_folder_is_followed(monkeypatch, tmp_path):
+    """Owner's Windows machine, 2026-10-16: Videos had been moved to D:/视频, and
+    the empty C:/Users/<name>/Videos left behind is not what Explorer shows."""
+    monkeypatch.delenv(output_folder.LINK_ROOT_ENV, raising=False)
+    moved = tmp_path / "视频"
+    monkeypatch.setattr(output_folder, "windows_videos_folder", lambda: moved)
+    assert output_folder.link_root("win32") == moved / "FluentFlow"
+    assert output_folder.link_root("darwin").parts[-2:] == ("Movies", "FluentFlow")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="asks Windows where the Videos folder is")
+def test_windows_says_where_its_videos_folder_is():
+    found = output_folder.windows_videos_folder()
+    assert found is not None and found.is_absolute()

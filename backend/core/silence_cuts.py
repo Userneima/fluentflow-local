@@ -1995,6 +1995,11 @@ def _render_batch(
         command += ["-map", "0:v:0", "-vf", chain, "-r", str(fps)]
     command += [
         "-filter_complex", _audio_seam_graph(batch, offset), "-map", "[aout]",
+        # Chapters are carried over by default, and the mp4 muxer writes them as
+        # a third (data) track, which failed the stream check below on every
+        # video that had any (a 10-second sample with one chapter, 2026-10-16).
+        # Their times are the original's anyway, not the cut's.
+        "-map_chapters", "-1",
         *encode_args, "-y", str(part),
     ]
     result = runner(command)
