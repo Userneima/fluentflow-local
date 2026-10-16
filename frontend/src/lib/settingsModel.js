@@ -6,7 +6,7 @@ export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries'
 // routed to it for now (DeepSeek change log, 2026-04-24 and 2026-09-10).
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-flash';
 const RETIRED_DEEPSEEK_MODELS = new Set(['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']);
-export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
+export const DEFAULT_OPENAI_MODEL = 'gpt-6-luna';
 export const DEFAULT_QWEN_MODEL = 'qwen-plus';
 export const SUPPORTED_FRONTEND_NOTE_MODES = new Set(['auto', 'direct', 'high_fidelity', 'chapter_coverage']);
 export const NOTE_MODE_OPTIONS = [

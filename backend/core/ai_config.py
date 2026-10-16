@@ -19,7 +19,7 @@ DEFAULT_DEEPSEEK_MODEL: Final[str] = "deepseek-flash"
 RETIRED_DEEPSEEK_MODELS: Final[frozenset[str]] = frozenset({
     "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp",
 })
-DEFAULT_OPENAI_MODEL: Final[str] = "gpt-5.4-mini"
+DEFAULT_OPENAI_MODEL: Final[str] = "gpt-6-luna"
 # Qwen's own name for its current Plus model, so the default moves with it.
 DEFAULT_QWEN_MODEL: Final[str] = "qwen-plus"
 # The Qwen default above is a TEXT model. Frame selection must use a vision
