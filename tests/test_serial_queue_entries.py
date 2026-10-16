@@ -64,6 +64,16 @@ async def _settle() -> None:
         await asyncio.sleep(0.01)
 
 
+async def _until(done, seconds: float = 5.0) -> None:
+    """Wait for what should happen next, up to ``seconds``. After a pipeline the
+    cut and the note step run before the queue moves on, and a slow CI runner
+    took longer than a fixed fifth of a second for them (2026-10-16)."""
+    for _ in range(int(seconds / 0.01)):
+        if done():
+            return
+        await asyncio.sleep(0.01)
+
+
 def test_a_single_upload_a_video_link_and_an_in_place_file_run_one_after_another(
     monkeypatch, tmp_path
 ):
@@ -123,13 +133,14 @@ def test_a_single_upload_a_video_link_and_an_in_place_file_run_one_after_another
         await _settle()
         assert log == [f"start:{first}"], "nothing may start beside the first job"
         gates[first].set()
+        await _until(lambda: len(log) >= 3)
         await _settle()
         assert log == [f"start:{first}", f"finish:{first}", f"start:{second}"]
         gates[second].set()
-        await _settle()
+        await _until(lambda: len(log) >= 5)
         assert log[-2:] == [f"finish:{second}", f"start:{third}"]
         gates[third].set()
-        await _settle()
+        await _until(lambda: len(log) >= 6)
         assert log[-1] == f"finish:{third}"
         return [first, second, third]
 
@@ -174,7 +185,7 @@ def test_a_video_link_downloads_while_the_queue_works_and_waits_only_to_transcri
         await _settle()
         assert log == [f"start:{first}", "download"]
         gate.set()
-        await _settle()
+        await _until(lambda: len(log) >= 5)
         assert log == [f"start:{first}", "download", f"finish:{first}", f"start:{second}", f"finish:{second}"]
 
     asyncio.run(scenario())
