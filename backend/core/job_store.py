@@ -728,7 +728,7 @@ def save_result_changes(
     ensure_job_db(db_path)
     before_read = normalize_result_for_read(before) if isinstance(before, dict) else {}
     after_read = normalize_result_for_read(after)
-    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+    with sqlite_connection(Path(db_path), timeout=10) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
         if client_id is not None:
