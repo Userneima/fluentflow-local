@@ -93,7 +93,25 @@ def test_a_note_written_from_the_frames_later_is_not_recorded_as_transcript_only
     assert ctx.summary_disabled and not ctx.note_deferred_to_visual_note
 
 
+def test_on_the_survey_first_flow_the_text_note_waits_for_the_cut(monkeypatch, events, ids):
+    """Requirement (review, 2026-10-16): the recording is cut after it is
+    transcribed, so a text note written in the pipeline would describe what
+    the cut then removes, at the uncut times, and stand. It is written after
+    the cut, by the note step, like the frame note."""
+    monkeypatch.setattr(local_intake_flow, "auto_note_will_run", lambda: False)
+    monkeypatch.setattr(local_intake_flow, "survey_first_enabled", lambda: True)
+    [task] = ids("after-cut")
+
+    ctx = _ctx(task, monkeypatch)
+    assert ctx.summary_disabled and ctx.note_deferred_to_visual_note
+
+    ctx = _ctx(task, monkeypatch, skip_summary=True)
+    assert ctx.summary_disabled and not ctx.note_deferred_to_visual_note
+
+
 def test_a_task_that_falls_back_to_the_text_note_says_why(monkeypatch, events, ids):
+    # The cut-first flow, where the pipeline writes the text note itself.
+    monkeypatch.setattr(local_intake_flow, "survey_first_enabled", lambda: False)
     monkeypatch.setattr(local_intake_flow, "auto_note_enabled", lambda: True)
     monkeypatch.setattr(local_intake_flow, "auto_note_will_run", lambda: False)
     monkeypatch.setenv("FLUENTFLOW_VISUAL_NOTE_CHANNEL", "subscription")

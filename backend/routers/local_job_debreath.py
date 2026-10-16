@@ -27,6 +27,7 @@ be refused inside a worker nobody is watching, having already answered
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
@@ -192,6 +193,11 @@ def start_job_debreath(
     return start_local_debreath(request, task_id, background_tasks, payload)
 
 
+# Re-renders taken for a task and not finished yet, report and note included.
+_accepted: set[str] = set()
+_accepted_lock = threading.Lock()
+
+
 def _accept_rerender(task_id: str, client_id: str | None, background_tasks: BackgroundTasks, work) -> dict[str, Any]:
     """Refuse a re-render in this response for the same reasons as any other
     render, else run ``work`` and then write the note again from the new cut."""
@@ -205,25 +211,36 @@ def _accept_rerender(task_id: str, client_id: str | None, background_tasks: Back
         raise HTTPException(status_code=409, detail="笔记正在写，等写完再改，免得两边的结果互相覆盖。")
     if queue_is_busy():
         raise HTTPException(status_code=409, detail="有任务正在处理中，等队列空下来再改。")
-    try:
-        original_locator.locate(task_id, client_id)
-        debreath_job.claim(task_id)
-    except (debreath_job.DebreathError, original_locator.OriginalMissing) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    debreath_job.release(task_id)
+    with _accepted_lock:
+        if task_id in _accepted:
+            raise HTTPException(status_code=409, detail="这个任务正在重新导出，等这次导完")
+        try:
+            original_locator.locate(task_id, client_id)
+            debreath_job.claim(task_id)
+        except (debreath_job.DebreathError, original_locator.OriginalMissing) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Held until the work, the report and the note are done, not only the
+        # render: a second click while the report is written would start from
+        # decisions this one is about to replace.
+        _accepted.add(task_id)
 
     def _run() -> None:
         try:
-            work()
-        except Exception:  # noqa: BLE001 - recorded on the survey
-            logger.exception("re-render of %s failed", task_id)
-            return
-        latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
-        # The note was written from the earlier cut; it is written again from
-        # this one so it matches.
-        if not latest.get("note_declined") and (latest.get("summary_markdown") or local_intake_flow.note_is_wanted(task_id, client_id)):
-            local_intake_flow.mark_note_running(task_id, client_id)
-            local_intake_flow.write_note(task_id, client_id)
+            try:
+                work(True)
+            except Exception:  # noqa: BLE001 - recorded on the survey
+                logger.exception("re-render of %s failed", task_id)
+                return
+            latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
+            # The note was written from the earlier cut; it is written again from
+            # this one so it matches.
+            if not latest.get("note_declined") and (latest.get("summary_markdown") or local_intake_flow.note_is_wanted(task_id, client_id)):
+                local_intake_flow.mark_note_running(task_id, client_id)
+                local_intake_flow.write_note(task_id, client_id)
+        finally:
+            debreath_job.release(task_id)
+            with _accepted_lock:
+                _accepted.discard(task_id)
 
     background_tasks.add_task(_run)
     return {"ok": True, "task_id": task_id, "accepted": True}
@@ -236,7 +253,7 @@ def flip_cut_report_item(
     """Turn one decision of the processing report around: cut becomes kept,
     kept becomes cut (``survey_cut.flip``)."""
     client_id = local_client_scope(request)
-    return _accept_rerender(task_id, client_id, background_tasks, lambda: survey_cut.flip(task_id, ref, client_id=client_id))
+    return _accept_rerender(task_id, client_id, background_tasks, lambda claimed: survey_cut.flip(task_id, ref, client_id=client_id, claimed=claimed))
 
 
 @router.post("/jobs/{task_id}/cut-report/verdict")
@@ -261,4 +278,4 @@ def undo_cut_report_change(
     """Undo one of the user's earlier changes from the report's bin
     (``survey_cut.undo_change``)."""
     client_id = local_client_scope(request)
-    return _accept_rerender(task_id, client_id, background_tasks, lambda: survey_cut.undo_change(task_id, index, client_id=client_id))
+    return _accept_rerender(task_id, client_id, background_tasks, lambda claimed: survey_cut.undo_change(task_id, index, client_id=client_id, claimed=claimed))

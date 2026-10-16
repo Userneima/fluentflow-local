@@ -828,6 +828,7 @@ def _local_media_job_context(
     upload and retry entries cannot drift apart."""
     skip_summary = truthy(options.get("skip_summary"))
     visual_note_will_run = local_intake_flow.auto_note_will_run()
+    note_after_cut = visual_note_will_run or local_intake_flow.survey_first_enabled()
     note_fallback_reason = None
     if not skip_summary and local_intake_flow.auto_note_enabled() and not visual_note_will_run:
         note_fallback_reason = _log_visual_note_unavailable(task_id, source_type=source_type, source_filename=source_filename)
@@ -866,8 +867,14 @@ def _local_media_job_context(
         # `will_run` rather than `enabled`: a machine that cannot reach Claude
         # never writes that note, and switching the text one off for it left a
         # fresh install with no note at all.
-        summary_disabled=skip_summary or visual_note_will_run,
-        note_deferred_to_visual_note=visual_note_will_run and not skip_summary,
+        #
+        # The survey-first flow cuts after the transcript, so any note the
+        # pipeline wrote would describe the uncut recording on its clock and
+        # then stand, since the note step skips a task that has one. The note
+        # step after the cut writes it instead, with the text model when
+        # Claude cannot (``local_intake_flow.write_note``).
+        summary_disabled=skip_summary or note_after_cut,
+        note_deferred_to_visual_note=note_after_cut and not skip_summary,
         note_fallback_reason=note_fallback_reason,
         generate_visuals=truthy(options.get("generate_visuals")),
         source_last_modified_ms=None,

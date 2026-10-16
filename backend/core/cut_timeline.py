@@ -160,6 +160,26 @@ def new_time(ranges: Sequence[KeptRange], seconds: float) -> float | None:
     return None
 
 
+def source_time(ranges: Sequence[KeptRange], seconds: float, *, end: bool = False) -> float | None:
+    """Where a moment of the cut file was in the original: ``new_time`` run
+    backwards. A moment on a join belongs to both sides; a line's start is
+    put after the join and its end before it, so the line keeps to the
+    stretch it was said in."""
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if not ranges:
+        return None
+    for span in ranges:
+        span_end = span.new_start + span.duration
+        inside = span.new_start < value <= span_end + _EDGE if end else span.new_start - _EDGE <= value < span_end
+        if inside:
+            return round(span.start + min(max(value - span.new_start, 0.0), span.duration), 3)
+    last = ranges[-1]
+    return last.end if value >= last.new_start else ranges[0].start
+
+
 def _first_kept_at_or_after(ranges: Sequence[KeptRange], seconds: float) -> float | None:
     for span in ranges:
         if span.contains(seconds):
@@ -294,6 +314,7 @@ __all__ = [
     "kept_ranges",
     "new_time",
     "remap_segments",
+    "source_time",
     "timeline_segments",
     "timestamped_transcript",
     "SPEAKER_LABEL_PREAMBLE",

@@ -441,3 +441,86 @@ def test_a_rerender_stopped_by_a_restart_is_put_back_at_startup(task, monkeypatc
     assert result["transcript_media"] == "debreath_media"
     assert [s["start"] for s in result["raw_segments"]] == [s["start"] for s in before["raw_segments"]]
     assert "打断" in state["survey"]["restore_error"]
+
+
+# --- regressions found by the read-only review, 2026-10-16 -------------------
+
+@needs_ffmpeg
+def test_subtitles_edited_on_the_cut_survive_a_rerender(task, monkeypatch):
+    """Edits saved in the editor stay after a report item is turned around:
+    the re-render starts from them, not from the lines as transcribed."""
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
+    result = job_store.get_job(task["id"])["result"]
+    edited = [dict(seg) for seg in result["raw_segments"]]
+    table = next(seg for seg in edited if seg["text"].startswith("表格里"))
+    table["text"] = "表格里第三列是本周新增的用户数"
+    result.update({"raw_segments": edited, "display_segments": edited, "transcript_edited": True})
+    job_store.update_job_result(task["id"], result)
+
+    survey_cut.flip(task["id"], "r1")
+
+    result = job_store.get_job(task["id"])["result"]
+    texts = [seg["text"] for seg in result["raw_segments"]]
+    assert "表格里第三列是本周新增的用户数" in texts
+    assert "表格里第三列是本周新增的数字，比上周多了不少" not in texts
+    assert "嗯" in texts, "the stretch put back is in the subtitles again"
+    line = next(seg for seg in result["raw_segments"] if seg["text"].startswith("表格里"))
+    assert line["start"] == pytest.approx(28.5 - 3.8, abs=0.3)
+    assert result["transcript_edited"] is True
+
+
+@needs_ffmpeg
+def test_putting_back_the_last_cut_finishes_with_the_original_as_the_video(task, monkeypatch):
+    """When every cut is put back there is nothing to render: the task ends
+    with the original as the video, the transcript on its clock, the report
+    written again, and no re-render left showing."""
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    monkeypatch.setattr(survey_cut, "voiced_parts", lambda source, regions: [])
+    answer = '{"keep_gaps": [{"id": 1, "reason": "看表"}, {"id": 2, "reason": "看表"}], "remove": []}'
+    survey_cut.survey_and_cut(task["id"], chat=(_says(answer), "fake"))
+    _, state = _state(task["id"])
+    delivered = Path(state["delivered_path"])
+    removed = [item for item in _report_items(task["id"]) if item["action"] == "removed"]
+    assert [item["kind"] for item in removed] == ["long_gap"]
+
+    survey_cut.flip(task["id"], removed[0]["ref"])
+
+    result, state = _state(task["id"])
+    assert state["status"] == "completed" and state["rendered"] is False
+    assert "rerendering" not in state["survey"] and "before_rerender" not in state["survey"]
+    assert result["transcript_media"] == "source" and result.get("playback_media_kind") is None
+    assert state["used_for_transcription"] is False
+    table = next(seg for seg in result["raw_segments"] if seg["text"].startswith("表格里"))
+    assert table["start"] == pytest.approx(28.5, abs=0.01)
+    report = state["survey"]["report"]
+    assert report["after_seconds"] == report["before_seconds"] == pytest.approx(60.0, abs=0.5)
+    assert not delivered.exists(), "the old cut is not left in the folder as if it were current"
+    assert state["survey"]["user_changes"][0]["user_said"] == "kept"
+
+
+@needs_ffmpeg
+def test_the_corrected_transcript_moves_onto_the_cut_too(task, monkeypatch):
+    """The text note and an agent read the corrected lines first; they are on
+    the cut's clock with the cut stretches gone, like the other lines."""
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    result = job_store.get_job(task["id"])["result"]
+    corrected = [{**seg, "text": seg["text"].replace("表格", "报表")} for seg in result["raw_segments"]]
+    result.update({"corrected_segments": corrected, "corrected_transcript_text": "\n".join(s["text"] for s in corrected)})
+    job_store.update_job_result(task["id"], result)
+
+    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
+
+    result = job_store.get_job(task["id"])["result"]
+    lines = result["corrected_segments"]
+    assert "嗯" not in [seg["text"] for seg in lines]
+    third = next(seg for seg in lines if seg["text"].startswith("报表里"))
+    assert third["start"] == pytest.approx(28.5 - 3.8, abs=0.3)
+    assert "嗯" not in result["corrected_transcript_text"].splitlines()
+    assert "报表里第三列" in result["corrected_transcript_text"]
+    assert len(result["source_corrected_segments"]) == len(LINES)
+
+    survey_cut.flip(task["id"], "r1")
+
+    lines = job_store.get_job(task["id"])["result"]["corrected_segments"]
+    assert "嗯" in [seg["text"] for seg in lines] and all(seg["text"] != "表格里第三列是本周新增的数字，比上周多了不少" for seg in lines)

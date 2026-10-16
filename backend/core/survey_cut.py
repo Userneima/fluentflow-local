@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import cut_cases, cut_judge, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts
-from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT, resolve_artifact_file
+from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT, TRANSCRIPT_MEDIA_SOURCE, resolve_artifact_file
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.core.silence_cuts import CutPlan, TimeRange
 from backend.core.storage_cleanup import is_managed_path
@@ -623,12 +623,23 @@ def _remapped_words(words: Any, ranges: list[cut_timeline.KeptRange]) -> Any:
     return moved
 
 
+# Every timed transcript list a task keeps. The corrected lines are what the
+# text note and an agent read first, so they move with the others.
+SEGMENT_KEYS = ("display_segments", "raw_segments", "stt_raw_segments", "corrected_segments")
+
+
+def _lines_text(segments: Any) -> str:
+    return "\n".join(
+        str(seg.get("text") or "").strip() for seg in segments or [] if isinstance(seg, dict) and str(seg.get("text") or "").strip()
+    )
+
+
 def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]) -> dict[str, Any]:
     """Every timed transcript list moved onto the cut file's clock; the
     original lists kept under ``source_*``."""
-    for key in ("display_segments", "raw_segments", "stt_raw_segments"):
+    for key in SEGMENT_KEYS:
         segments = result.get(key)
-        if not isinstance(segments, list):
+        if not isinstance(segments, list) or (key == "corrected_segments" and not segments):
             continue
         report = cut_timeline.remap_segments(segments, ranges)
         result[f"source_{key}"] = segments
@@ -636,9 +647,9 @@ def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]
             {**seg, "words": _remapped_words(seg.get("words"), ranges)} if "words" in seg else seg
             for seg in report.segments
         ]
-    result["transcript_text"] = "\n".join(
-        str(seg.get("text") or "").strip() for seg in result.get("raw_segments") or [] if str(seg.get("text") or "").strip()
-    )
+    result["transcript_text"] = _lines_text(result.get("raw_segments"))
+    if result.get("corrected_segments"):
+        result["corrected_transcript_text"] = _lines_text(result["corrected_segments"])
     result["transcript_media"] = TRANSCRIPT_MEDIA_CUT
     result["playback_media_kind"] = DEBREATH_MEDIA_KIND
     return result
@@ -720,6 +731,9 @@ def _finish(
     job = job_store.get_job(task_id, client_id=client_id) or {}
     result = dict(job.get("result") or {})
     state = debreath_job.debreath_state(result)
+    if plan is not None and not plan.cuts and state.get("status") == debreath_job.STATUS_COMPLETED:
+        _finish_uncut(task_id, client_id, result, state, plan, record, chat)
+        return True
     media = debreath_job.cut_file_on_disk(task_id, result)
     if not state.get("rendered") or plan is None or media is None:
         return False
@@ -742,6 +756,36 @@ def _finish(
     return True
 
 
+def _finish_uncut(
+    task_id: str, client_id: str | None, result: dict[str, Any], state: dict[str, Any], plan: CutPlan,
+    record: dict[str, Any], chat: tuple[Chat, str] | None,
+) -> None:
+    """Nothing is left to cut (every cut was put back, or there was none): the
+    original is the video to watch and the transcript stays on its clock. A
+    cut delivered earlier is taken out of the user's folder when it is only a
+    second name for the file the task keeps; a copy is left alone."""
+    record["report"] = cut_report.build(
+        record, _texted(result.get("raw_segments")), chat, cut_cases.as_text(cut_cases.collect()),
+    )
+    record["report"]["after_seconds"] = record["report"]["before_seconds"] = round(plan.source_duration_seconds, 1)
+    delivered = Path(str(state.get("delivered_path") or ""))
+    if state.get("delivered_as") == "hard_link" and delivered.name and delivered.is_file():
+        try:
+            delivered.unlink()
+        except OSError as exc:
+            logger.warning("could not take the old cut %s out of the folder: %s", delivered, exc)
+    for key in ("delivered", "delivered_path", "delivered_name", "delivered_as", "media_filename", "render", "render_verified"):
+        state.pop(key, None)
+    result["transcript_media"] = TRANSCRIPT_MEDIA_SOURCE
+    result.pop("playback_media_kind", None)
+    result["debreath"] = {
+        **state, "rendered": False, "used_for_transcription": False, "survey": record,
+    }
+    from backend.core.result_artifacts import _attach_result_artifacts
+
+    job_store.update_job_result(task_id, _attach_result_artifacts(task_id, result), client_id=client_id)
+
+
 def _record(task_id: str, client_id: str | None, record: dict[str, Any]) -> None:
     job = job_store.get_job(task_id, client_id=client_id)
     if not job:
@@ -755,9 +799,57 @@ class ReviewError(RuntimeError):
     """A confirmation that cannot be taken, in the user's words."""
 
 
+def _cut_list_on_disk(task_id: str, result: dict[str, Any]) -> dict[str, Any] | None:
+    """The cut list the cut on disk was made from: a render writes its own
+    only after it succeeded."""
+    cut_list = (result.get("artifacts") or {}).get(debreath_job.CUT_LIST_KIND)
+    path = resolve_artifact_file(_artifact_storage_dir() / task_id, (cut_list or {}).get("filename")) if cut_list else None
+    return json.loads(path.read_text(encoding="utf-8")) if path is not None else None
+
+
+def _back_onto_source(segments: list[Any], ranges: list[cut_timeline.KeptRange]) -> list[dict[str, Any]]:
+    moved = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        start = cut_timeline.source_time(ranges, _seconds(seg.get("start")))
+        end = cut_timeline.source_time(ranges, _seconds(seg.get("end")), end=True)
+        if start is None or end is None:
+            continue
+        line = {**seg, "start": start, "end": max(start, end)}
+        line.pop("words", None)  # the words were timed for the text before the edit
+        moved.append(line)
+    return moved
+
+
+def _keep_edits(task_id: str, result: dict[str, Any]) -> None:
+    """Subtitles the user edited on the cut, put back onto the original's
+    clock as the lines a re-render starts from. Without this the re-render
+    starts from the lines as they were transcribed and the edits are gone
+    while the task still says it was edited. Lines the cut had taken out
+    whole were never in front of the user; they come along as transcribed, so
+    a stretch put back has its words."""
+    if not result.get("transcript_edited") or str(result.get("transcript_media") or "") != TRANSCRIPT_MEDIA_CUT:
+        return
+    plan = _cut_list_on_disk(task_id, result)
+    ranges = cut_timeline.kept_ranges(plan) if plan else []
+    if not ranges:
+        return
+    for key in ("display_segments", "raw_segments"):
+        if not isinstance(result.get(key), list):
+            continue
+        cut_away = [
+            seg for seg in result.get(f"source_{key}") or []
+            if isinstance(seg, dict) and not cut_timeline.remap_segments([seg], ranges).segments
+        ]
+        lines = _back_onto_source(result[key], ranges) + cut_away
+        result[f"source_{key}"] = sorted(lines, key=lambda seg: (_seconds(seg.get("start")), _seconds(seg.get("end"))))
+
+
 def _rerender(
     task_id: str, client_id: str | None, result: dict[str, Any], survey: dict[str, Any],
     kept: list[dict[str, Any]], removals: list[dict[str, Any]], after: Callable[[dict[str, Any]], None],
+    *, claimed: bool = False,
 ) -> dict[str, Any]:
     """Render the cut again from the original with ``kept`` and ``removals``
     as the decisions, without asking the model again; the transcript is moved
@@ -768,13 +860,22 @@ def _rerender(
     that fails, or a service stopped half way (``recover_interrupted``), puts
     them and the transcript back as they were (owner, 2026-10-15)."""
     source = original_locator.locate(task_id, client_id)
-    survey["before_rerender"] = {"removed": survey.get("removed") or [], "kept_gaps": survey.get("kept_gaps") or []}
+    survey["before_rerender"] = {
+        "removed": survey.get("removed") or [], "kept_gaps": survey.get("kept_gaps") or [],
+        "was_cut": str(result.get("transcript_media") or "") == TRANSCRIPT_MEDIA_CUT,
+    }
     survey.update({"removed": removals, "kept_gaps": kept})
-    # Back onto the original's clock, so the render remaps from there.
-    for key in ("display_segments", "raw_segments", "stt_raw_segments"):
-        if isinstance(result.get(f"source_{key}"), list):
-            result[key] = result[f"source_{key}"]
-    result["transcript_media"] = "source"
+    if str(result.get("transcript_media") or "") == TRANSCRIPT_MEDIA_CUT:
+        _keep_edits(task_id, result)
+        # Back onto the original's clock, so the render remaps from there. (A
+        # task with nothing cut is on that clock already.)
+        for key in SEGMENT_KEYS:
+            if isinstance(result.get(f"source_{key}"), list):
+                result[key] = result[f"source_{key}"]
+    result["transcript_text"] = _lines_text(result.get("raw_segments"))
+    if result.get("corrected_segments"):
+        result["corrected_transcript_text"] = _lines_text(result["corrected_segments"])
+    result["transcript_media"] = TRANSCRIPT_MEDIA_SOURCE
     result["debreath"] = {**debreath_job.debreath_state(result), "survey": survey, "used_for_transcription": False}
     job_store.update_job_result(task_id, result, client_id=client_id)
 
@@ -787,7 +888,7 @@ def _rerender(
         return final["plan"]
 
     try:
-        debreath_job.run_debreath(task_id, client_id=client_id, revise=revise)
+        debreath_job.run_debreath(task_id, client_id=client_id, revise=revise, claimed=claimed)
     except Exception as exc:
         put_back(task_id, client_id, f"重新导出没成功，剪后视频还是原来那份：{str(exc)[:200]}")
         raise
@@ -815,12 +916,16 @@ def put_back(task_id: str, client_id: str | None, message: str) -> bool:
     survey.update({key: before[key] for key in ("removed", "kept_gaps") if key in before})
     survey.pop("rerendering", None)
     survey["restore_error"] = message
-    cut_list = (result.get("artifacts") or {}).get(debreath_job.CUT_LIST_KIND)
-    path = resolve_artifact_file(_artifact_storage_dir() / task_id, (cut_list or {}).get("filename")) if cut_list else None
-    if path is not None and str(result.get("transcript_media") or "") != TRANSCRIPT_MEDIA_CUT:
-        # The cut list on disk is the one the cut on disk was made from: a
-        # re-render writes its own only after it succeeded.
-        plan = json.loads(path.read_text(encoding="utf-8"))
+    if not before.get("was_cut", True):
+        # Nothing was cut before either: the transcript is on the original's
+        # clock, as it should stay.
+        result["debreath"] = {
+            **state, "survey": survey, "status": debreath_job.STATUS_COMPLETED, "stage": "done", "error": None,
+        }
+        job_store.update_job_result(task_id, result, client_id=client_id)
+        return True
+    plan = _cut_list_on_disk(task_id, result)
+    if plan is not None and str(result.get("transcript_media") or "") != TRANSCRIPT_MEDIA_CUT:
         result = _onto_cut_clock(result, cut_timeline.kept_ranges(plan))
     result["debreath"] = {
         **state, "survey": survey, "status": debreath_job.STATUS_COMPLETED, "stage": "done", "error": None,
@@ -858,7 +963,7 @@ def _report_item(survey: dict[str, Any], ref: str) -> dict[str, Any] | None:
 
 def _turn_around(
     task_id: str, client_id: str | None, result: dict[str, Any], survey: dict[str, Any],
-    item: dict[str, Any], change: dict[str, Any] | None, *, undoing: int | None = None,
+    item: dict[str, Any], change: dict[str, Any] | None, *, undoing: int | None = None, claimed: bool = False,
 ) -> dict[str, Any]:
     """Render again with ``item``'s decision turned around: what it says was
     cut is put back, what it says was kept is cut."""
@@ -888,7 +993,7 @@ def _turn_around(
         else:
             _mark_gaps(record, start, end, not now_removed, "你说这段应该剪掉。" if now_removed else "你说这段不该剪，已放回。")
 
-    return _rerender(task_id, client_id, result, survey, kept, removals, after)
+    return _rerender(task_id, client_id, result, survey, kept, removals, after, claimed=claimed)
 
 
 def _now() -> str:
@@ -908,7 +1013,7 @@ def _task_survey(task_id: str, client_id: str | None) -> tuple[dict[str, Any], d
     return result, survey
 
 
-def flip(task_id: str, ref: str, client_id: str | None = None) -> dict[str, Any]:
+def flip(task_id: str, ref: str, client_id: str | None = None, *, claimed: bool = False) -> dict[str, Any]:
     """Turn one decision in the processing report around: what was cut is put
     back, what was kept is cut. The change is the user's feedback and is kept
     with what the model had decided (``user_changes``, the report's bin, where
@@ -924,10 +1029,10 @@ def flip(task_id: str, ref: str, client_id: str | None = None) -> dict[str, Any]
         "model_reason": item.get("text"), "at": _now(),
         **{key: item.get(key) for key in ("picture", "before", "after", "said") if item.get(key)},
     }
-    return _turn_around(task_id, client_id, result, survey, item, change)
+    return _turn_around(task_id, client_id, result, survey, item, change, claimed=claimed)
 
 
-def undo_change(task_id: str, index: int, client_id: str | None = None) -> dict[str, Any]:
+def undo_change(task_id: str, index: int, client_id: str | None = None, *, claimed: bool = False) -> dict[str, Any]:
     """Undo one of the user's earlier changes (from the report's bin): the
     model's decision for that stretch is applied again and the cut rendered
     again. Blocking."""
@@ -940,7 +1045,7 @@ def undo_change(task_id: str, index: int, client_id: str | None = None) -> dict[
         "kind": change.get("kind"), "start": change["start"], "end": change["end"],
         "action": change.get("user_said"), "reason": change.get("model_reason"),
     }
-    return _turn_around(task_id, client_id, result, survey, item, None, undoing=index)
+    return _turn_around(task_id, client_id, result, survey, item, None, undoing=index, claimed=claimed)
 
 
 VERDICTS = {"agree", "pending"}
