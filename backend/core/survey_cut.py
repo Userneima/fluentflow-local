@@ -40,7 +40,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import cut_cases, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts
+from backend.core import cut_cases, cut_judge, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts
 from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT, resolve_artifact_file
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.core.silence_cuts import CutPlan, TimeRange
@@ -160,6 +160,7 @@ def measure_pictures(source: Path, gaps: list[TimeRange]) -> dict[int, float | N
 
 def build_timeline(
     duration: float, segments: list[dict[str, Any]], gaps: list[TimeRange], pictures: dict[int, float | None],
+    shots: dict[int, int] | None = None,
 ) -> tuple[str, dict[int, int]]:
     """The text the model reads, and gap id → index in ``gaps``."""
     rows: list[tuple[float, str]] = []
@@ -175,6 +176,8 @@ def build_timeline(
         gap_id = len(ids) + 1
         ids[gap_id] = index
         picture = f" · {_picture_label(pictures.get(index))}" if index in pictures else ""
+        if shots and shots.get(gap_id):
+            picture += f" · 附了 {shots[gap_id]} 张截图"
         rows.append((gap.start, f"〔空白 #{gap_id} · {gap.start:.1f}–{gap.end:.1f} 秒 · 长 {gap.duration:.1f} 秒{picture}〕"))
     rows.sort(key=lambda row: row[0])
     body = "\n".join(text for _, text in rows)
@@ -237,18 +240,78 @@ def speech_share(segments: list[dict[str, Any]], spans: list[TimeRange]) -> floa
     return removed / total if total else 0.0
 
 
+# Screenshots for the long gaps whose picture moved, the longest first: the
+# transcript cannot say whether that was a demonstration or a window being
+# switched (owner's design, 2026-10-16). Two each, a third and two thirds in.
+MAX_SHOT_GAPS = 12
+SHOT_WIDTH = 1280
+SHOTS_NOTE = """
+
+有些空白附了截图（时间线里写着「附了 N 张截图」，截图按「空白 #编号」标好跟在后面）。看截图判断这段画面是不是观众需要看的（讲解中的页面、演示操作、写代码），还是切窗口、找文件、等人、桌面这类不用看的；理由里说你在截图上看到了什么。"""
+
+
+def _grab(source: Path, seconds: float, target: Path) -> bool:
+    result = silence_cuts.run_command([
+        silence_cuts._ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-ss", f"{seconds:.3f}", "-i", str(source),
+        "-frames:v", "1", "-vf", f"scale='min({SHOT_WIDTH},iw)':-2", "-q:v", "4", "-y", str(target),
+    ], timeout=120)
+    return result.returncode == 0 and target.is_file()
+
+
+def gap_screenshots(
+    source: Path, gaps: list[TimeRange], measured: dict[int, float | None], ids: dict[int, int], folder: Path,
+) -> tuple[list[tuple[str, Path]], dict[int, int]]:
+    """Screenshots of the long gaps whose picture moved, labelled for the
+    model, and how many each gap id got."""
+    by_index = {index: gap_id for gap_id, index in ids.items()}
+    candidates = sorted(
+        (index for index, share in measured.items()
+         if index in by_index and share is not None and share > PICTURE_STILL and gaps[index].duration >= PICTURE_CHECK_SECONDS),
+        key=lambda index: gaps[index].duration, reverse=True,
+    )[:MAX_SHOT_GAPS]
+    images: list[tuple[str, Path]] = []
+    counts: dict[int, int] = {}
+    for index in sorted(candidates, key=lambda i: gaps[i].start):
+        gap, gap_id = gaps[index], by_index[index]
+        for n, share in enumerate((1 / 3, 2 / 3), start=1):
+            at = gap.start + gap.duration * share
+            target = folder / f"gap{gap_id}_{n}.jpg"
+            if _grab(source, at, target):
+                images.append((f"空白 #{gap_id} 的截图 {n}（原片 {at:.0f} 秒）", target))
+                counts[gap_id] = counts.get(gap_id, 0) + 1
+    return images, counts
+
+
 def revise_plan(
     source: Path, plan: CutPlan, segments: list[dict[str, Any]], ask: Chat, *,
     pictures: Callable[[Path, list[TimeRange]], dict[int, float | None]] = measure_pictures,
     cases: str = "",
+    look: Callable[[str, str, list[tuple[str, Path]]], str] | None = None,
 ) -> tuple[CutPlan, dict[str, Any]]:
-    """The plan the model's reading turns ``plan`` into, and what it decided."""
+    """The plan the model's reading turns ``plan`` into, and what it decided.
+    ``look`` is the judge's call with pictures, when it can see them: the long
+    gaps whose picture moved are then shown to it."""
     duration = plan.source_duration_seconds
     gaps = list(plan.cuts)
     measured = pictures(source, gaps)
     timeline, ids = build_timeline(duration, segments, gaps, measured)
-    answer = parse_answer(_ask(ask, cases + timeline))
-    record: dict[str, Any] = {"long_gaps": len(ids), "pictures_measured": len(measured)}
+    shots_sent = 0
+    if look is not None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="fluentflow-gap-shots-") as folder:
+            images, counts = gap_screenshots(source, gaps, measured, ids, Path(folder))
+            timeline, ids = build_timeline(duration, segments, gaps, measured, counts)
+            shots_sent = len(images)
+            from backend.core.note_coverage import _within_deadline
+
+            answer = parse_answer(_within_deadline(
+                lambda system, user: look(system, user, images), SYSTEM + (SHOTS_NOTE if images else ""),
+                cases + timeline, REQUEST_DEADLINE_SECONDS,
+            ))
+    else:
+        answer = parse_answer(_ask(ask, cases + timeline))
+    record: dict[str, Any] = {"long_gaps": len(ids), "pictures_measured": len(measured), "screenshots_sent": shots_sent}
 
     kept_gaps: list[dict[str, Any]] = []
     kept_reasons: dict[int, str] = {}
@@ -532,11 +595,17 @@ def _ask(ask: Chat, user: str) -> str:
     return _within_deadline(ask, SYSTEM, user, REQUEST_DEADLINE_SECONDS)
 
 
-def _default_chat() -> tuple[Chat, str] | None:
-    from backend.core import visual_note_job
-    from backend.core.local_config import resolve_secret
+def _judge(chat: tuple[Chat, str] | None = None) -> cut_judge.Judge | None:
+    """The judge (``cut_judge``), or a text-only one around ``chat``."""
+    if chat is not None:
+        return cut_judge.Judge(chat[1], False, lambda system, user, images: chat[0](system, user))
+    return cut_judge.choose()
 
-    return visual_note_job.coverage_checker(resolve_secret(None, "anthropic_api_key"))
+
+def _default_chat() -> tuple[Chat, str] | None:
+    """The judge's text call, for the processing report."""
+    judge = _judge()
+    return (judge.text, judge.name) if judge else None
 
 
 def _remapped_words(words: Any, ranges: list[cut_timeline.KeptRange]) -> Any:
@@ -594,8 +663,9 @@ def survey_and_cut(
     except debreath_job.DebreathError:
         return None
 
-    asker = chat if chat is not None else _default_chat()
-    record: dict[str, Any] = {"judged_by": asker[1] if asker else None}
+    judge = _judge(chat)
+    asker = (judge.text, judge.name) if judge else None
+    record: dict[str, Any] = {"judged_by": judge.name if judge else None}
     final: dict[str, CutPlan] = {}
 
     def revise(media: Path, plan: CutPlan) -> CutPlan:
@@ -615,7 +685,10 @@ def survey_and_cut(
             final["plan"] = plan
             return plan
         try:
-            revised, decided = revise_plan(media, plan, segments, asker[0], cases=cut_cases.as_text(cut_cases.collect()))
+            revised, decided = revise_plan(
+                media, plan, segments, asker[0], cases=cut_cases.as_text(cut_cases.collect()),
+                look=judge.ask if judge and judge.sees_images else None,
+            )
             record.update(decided)
         except Exception as exc:  # noqa: BLE001 - the volume plan stands
             logger.warning("survey for %s not used: %s", task_id, exc)

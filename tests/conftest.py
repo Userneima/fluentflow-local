@@ -152,3 +152,13 @@ def no_real_coverage_checker(monkeypatch, request):
     from backend.core import visual_note_job
 
     monkeypatch.setattr(visual_note_job, "coverage_checker", lambda *_a, **_kw: None)
+
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cut_judge(monkeypatch):
+    """No test reaches a real model through the cut judge: on a machine signed
+    in to Claude it would spend the owner's allowance."""
+    from backend.core import cut_judge
+
+    monkeypatch.setattr(cut_judge, "choose", lambda *args, **kwargs: None)

@@ -185,7 +185,7 @@ def test_the_recording_is_cut_once_and_the_transcript_moves_onto_the_cut(task, m
 
 @needs_ffmpeg
 def test_without_a_model_the_loudness_plan_is_cut_unchanged(task, monkeypatch):
-    monkeypatch.setattr(survey_cut, "_default_chat", lambda: None)
+    monkeypatch.setattr(survey_cut.cut_judge, "choose", lambda *a, **k: None)
 
     record = survey_cut.survey_and_cut(task["id"])
 
