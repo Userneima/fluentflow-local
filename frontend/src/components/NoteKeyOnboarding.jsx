@@ -2,7 +2,6 @@ import {useEffect, useRef, useState} from 'react';
 import SvgIcon from './SvgIcon.jsx';
 import {inputClass, saveButtonClass} from './settingsPrimitives.jsx';
 import {useApi, useSettings} from '../app/shared.jsx';
-import {DEFAULT_DEEPSEEK_MODEL} from '../lib/settingsModel.js';
 import {resolveNoteWriter} from '../lib/noteWriter.js';
 import {NOTE_KEY_DONE, NOTE_KEY_INTRO, noteKeyChoices} from '../lib/noteKeyOnboarding.js';
 
@@ -53,7 +52,7 @@ export const NoteKeyOnboarding = ({
     };
 
     const switchNotesToDeepSeek = () => {
-        const patch = {aiProvider: 'deepseek', aiModel: DEFAULT_DEEPSEEK_MODEL};
+        const patch = {aiProvider: 'deepseek', aiModel: ''};
         const current = loadSettings();
         if ((current.aiProvider || 'deepseek') === 'deepseek') {
             return current;

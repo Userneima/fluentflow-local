@@ -2,10 +2,18 @@ export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashsc
 // Keys an older build could leave in stored settings. elevenLabsApiKey belonged
 // to a cloud transcription engine this app does not have; it is dropped, never sent.
 export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi', 'elevenLabsApiKey'];
-// DeepSeek's current Flash model; the names below were retired or are only
-// routed to it for now (DeepSeek change log, 2026-04-24 and 2026-09-10).
+// What this build would use if the service could not say; the service's own
+// table (backend model_defaults, GET /models/defaults) is what the page shows.
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-flash';
-const RETIRED_DEEPSEEK_MODELS = new Set(['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']);
+// Names that were a default at some point, or were retired. A stored one means
+// the user never picked a model (the page used to write the default in) or
+// picked one that no longer exists: either way the setting follows the
+// default from now on, so a default changed later reaches them (owner,
+// 2026-10-16).
+const DEFAULT_OR_RETIRED_MODELS = new Set([
+    'deepseek-flash', 'deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
+    'gpt-6-luna', 'gpt-5.4-mini', 'qwen-plus',
+]);
 export const DEFAULT_OPENAI_MODEL = 'gpt-6-luna';
 export const DEFAULT_QWEN_MODEL = 'qwen-plus';
 export const SUPPORTED_FRONTEND_NOTE_MODES = new Set(['auto', 'direct', 'high_fidelity', 'chapter_coverage']);
@@ -52,16 +60,13 @@ export const larkExportRouteFromSettings = (settings={}) => (
 
 export const isLocalLarkExportRoute = (route) => normalizeLarkExportRoute(route) === LARK_EXPORT_ROUTE_LOCAL_CLI;
 
+// The model the user picked, or '' to follow the provider's default.
 export const normalizeAiModel = (provider, model) => {
     const p = provider === 'openai' ? 'openai' : (provider === 'qwen' ? 'qwen' : 'deepseek');
     const value = String(model || '').trim();
-    if (p === 'openai') {
-        return value && value.startsWith('gpt-') ? value : DEFAULT_OPENAI_MODEL;
-    }
-    if (p === 'qwen') {
-        return value || DEFAULT_QWEN_MODEL;
-    }
-    return value && !RETIRED_DEEPSEEK_MODELS.has(value) ? value : DEFAULT_DEEPSEEK_MODEL;
+    if (!value || DEFAULT_OR_RETIRED_MODELS.has(value)) return '';
+    if (p === 'openai' && !value.startsWith('gpt-')) return '';
+    return value;
 };
 
 export const sanitizeSettings = (settings={}) => {

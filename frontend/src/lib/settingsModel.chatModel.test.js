@@ -1,19 +1,21 @@
 import {describe, expect, it} from 'vitest';
 import {normalizeAiModel, sanitizeSettings} from './settingsModel.js';
 
-describe('the DeepSeek model the user picks is the one that runs', () => {
-    it('keeps a current model the user picked', () => {
+// Requirements (owner, 2026-10-16): a model the user picked is the one that
+// runs; a user who never picked one follows the default, so a default changed
+// later (a new model, a retired name) reaches them without touching settings.
+describe('the text model setting', () => {
+    it('keeps a model the user picked', () => {
         expect(normalizeAiModel('deepseek', 'deepseek-v4-pro')).toBe('deepseek-v4-pro');
         expect(sanitizeSettings({aiProvider: 'deepseek', aiModel: 'deepseek-v4-pro'}).aiModel).toBe('deepseek-v4-pro');
     });
-    it('falls back to the current Flash model when nothing is chosen', () => {
-        expect(normalizeAiModel('deepseek', '')).toBe('deepseek-flash');
+    it('follows the default when nothing was picked', () => {
+        expect(normalizeAiModel('deepseek', '')).toBe('');
+        expect(sanitizeSettings({aiProvider: 'openai'}).aiModel).toBe('');
     });
-    // DeepSeek retired deepseek-chat and deepseek-reasoner (change log,
-    // 2026-04-24) and only routes the V4 Flash names for now (2026-09-10).
-    it('moves a retired name kept from before onto the current Flash model', () => {
-        for (const retired of ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash']) {
-            expect(sanitizeSettings({aiProvider: 'deepseek', aiModel: retired}).aiModel).toBe('deepseek-flash');
+    it('turns a default the page once wrote in, or a retired name, back into following the default', () => {
+        for (const stored of ['deepseek-reasoner', 'deepseek-chat', 'deepseek-flash', 'gpt-5.4-mini', 'gpt-6-luna', 'qwen-plus']) {
+            expect(sanitizeSettings({aiProvider: 'deepseek', aiModel: stored}).aiModel).toBe('');
         }
     });
 });

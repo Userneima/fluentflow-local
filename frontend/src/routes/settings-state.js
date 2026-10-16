@@ -1,8 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
 import {
-    DEFAULT_DEEPSEEK_MODEL,
-    DEFAULT_OPENAI_MODEL,
-    DEFAULT_QWEN_MODEL,
     effectiveSttProvider,
     LARK_EXPORT_ROUTE_AUTO,
     isLocalLarkExportRoute,
@@ -258,11 +255,8 @@ export const useSettingsPageState = () => {
 
     const aiProvider = settings.aiProvider || 'deepseek';
     const aiModel = normalizeAiModel(aiProvider, settings.aiModel);
-    const aiProviderDefaults = {
-        deepseek: DEFAULT_DEEPSEEK_MODEL,
-        openai: DEFAULT_OPENAI_MODEL,
-        qwen: DEFAULT_QWEN_MODEL,
-    };
+    // Switching provider starts on that provider's default ('' follows it).
+    const aiProviderDefaults = {deepseek: '', openai: '', qwen: ''};
     const activeAiSecretKey = aiProvider === 'openai' ? 'openai_api_key' : (aiProvider === 'qwen' ? 'dashscope_api_key' : 'deepseek_api_key');
     const activeAiConfigured = aiProvider === 'openai'
         ? credentialStatus?.openai_api_key_configured

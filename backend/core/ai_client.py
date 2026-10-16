@@ -44,12 +44,21 @@ def _provider_base_url(provider: str) -> str:
     return (os.environ.get("DEEPSEEK_BASE_URL") or DEEPSEEK_BASE_URL).rstrip("/")
 
 
+_BUILT_IN_DEFAULTS = {"openai": DEFAULT_OPENAI_MODEL, "qwen": DEFAULT_QWEN_MODEL, "deepseek": DEFAULT_DEEPSEEK_MODEL}
+_MODEL_ENV = {"openai": "OPENAI_MODEL", "qwen": "QWEN_MODEL", "deepseek": "DEEPSEEK_MODEL"}
+
+
 def _provider_default_model(provider: str) -> str:
-    if provider == "openai":
-        return (os.environ.get("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL).strip()
-    if provider == "qwen":
-        return _normalize_model(provider, os.environ.get("QWEN_MODEL") or DEFAULT_QWEN_MODEL)
-    return _normalize_model(provider, os.environ.get("DEEPSEEK_MODEL") or DEFAULT_DEEPSEEK_MODEL)
+    """The provider's default: a model named in ``.env``, else the
+    recommended-model table (``model_defaults``), else this build's own."""
+    from backend.core import model_defaults
+
+    key = provider if provider in _BUILT_IN_DEFAULTS else "deepseek"
+    named = (os.environ.get(_MODEL_ENV[key]) or "").strip()
+    chosen = named or model_defaults.default_model(key) or _BUILT_IN_DEFAULTS[key]
+    if key == "deepseek" and chosen in RETIRED_DEEPSEEK_MODELS:
+        return model_defaults.default_model("deepseek") or DEFAULT_DEEPSEEK_MODEL
+    return chosen
 
 
 def _normalize_model(provider: str, model: str | None) -> str:
@@ -63,7 +72,7 @@ def _normalize_model(provider: str, model: str | None) -> str:
     if provider == "deepseek" and value in RETIRED_DEEPSEEK_MODELS:
         # A retired name the provider itself sends to its successor; asking
         # for the successor by name keeps working after the routing ends.
-        return DEFAULT_DEEPSEEK_MODEL
+        return _provider_default_model("deepseek")
     return value or _provider_default_model(provider)
 
 

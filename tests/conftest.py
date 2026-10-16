@@ -42,6 +42,8 @@ RUNTIME_PATH_ENV_VARS = {
 def _isolate_runtime_storage() -> Path:
     root = Path(tempfile.mkdtemp(prefix="fluentflow-test-runtime-"))
     os.environ["FLUENTFLOW_DATA_DIR"] = str(root)
+    # The recommended-model table is not fetched from GitHub in tests.
+    os.environ["FLUENTFLOW_MODEL_TABLE_URL"] = ""
 
     env_file = PROJECT_ROOT / ".env"
     dotenv_keys = set(dotenv_values(env_file)) if env_file.is_file() else set()

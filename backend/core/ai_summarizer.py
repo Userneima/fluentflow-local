@@ -754,7 +754,13 @@ def select_visual_evidence_frames(
         raise ValueError(f"Provider {provider_name} does not support multimodal")
     client = _get_client(provider=provider_name, api_key=api_key)
     # Default to a vision-capable model; the provider's plain default is text-only.
-    m = _normalize_model(provider_name, model or os.environ.get("QWEN_VISION_MODEL") or DEFAULT_QWEN_VISION_MODEL)
+    from backend.core import model_defaults
+
+    m = _normalize_model(
+        provider_name,
+        model or os.environ.get("QWEN_VISION_MODEL") or model_defaults.default_model("qwen", "vision")
+        or DEFAULT_QWEN_VISION_MODEL,
+    )
     selections: list[dict[str, Any]] = []
     for request in visual_requests:
         if len(selections) >= max_total_images:

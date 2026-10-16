@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from backend.core.ai_summarizer import (
-    DEFAULT_DEEPSEEK_MODEL,
     _chat,
     _extract_json_object,
     _get_client,
@@ -188,7 +187,7 @@ def correct_transcript_segments(
 ) -> TranscriptCorrectionResult:
     source_segments = sanitize_raw_segments(segments)
     provider_name = _normalize_provider(provider or "deepseek")
-    model_name = _normalize_model(provider_name, model or DEFAULT_DEEPSEEK_MODEL)
+    model_name = _normalize_model(provider_name, model)
     if not source_segments:
         return TranscriptCorrectionResult(
             status="unavailable",

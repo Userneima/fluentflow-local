@@ -204,6 +204,15 @@ _MODEL_LIST_PROVIDERS = {
 }
 
 
+@router.get("/models/defaults")
+def model_defaults_table() -> dict[str, Any]:
+    """Each provider's default model now, from the recommended-model table
+    (``model_defaults``): what "default" means on the settings page."""
+    from backend.core import model_defaults
+
+    return {"providers": model_defaults.defaults()}
+
+
 @router.get("/credentials/models")
 def list_provider_models(provider: str) -> dict[str, Any]:
     name = (provider or "").strip().lower()

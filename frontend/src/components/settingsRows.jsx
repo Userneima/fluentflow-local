@@ -13,7 +13,6 @@ import {
     LARK_EXPORT_ROUTE_AUTO,
     LARK_EXPORT_ROUTE_LOCAL_CLI,
     LARK_EXPORT_ROUTE_OPENAPI,
-    DEFAULT_DEEPSEEK_MODEL,
     normalizeSourceMode,
     timeAgo,
     useApi,
@@ -477,10 +476,20 @@ const KEY_CONSOLE_URLS = {
 // read with the saved key. The list used to be three names written here, and
 // newer models could not be picked at all.
 export const ProviderModelField = ({provider, value, configured, onChange}) => {
-    const {getProviderModels} = useApi();
+    const {getProviderModels, getModelDefaults} = useApi();
     const [models, setModels] = useState([]);
     const [draft, setDraft] = useState(value || '');
+    // What "default" is now, from the service's recommended-model table. Empty
+    // value = follow it, so a default changed later reaches this user too.
+    const [defaultModel, setDefaultModel] = useState('');
     useEffect(() => { setDraft(value || ''); }, [value]);
+    useEffect(() => {
+        let live = true;
+        if (getModelDefaults) {
+            getModelDefaults().then((table) => { if (live) setDefaultModel(table?.[provider]?.text || ''); }).catch(() => {});
+        }
+        return () => { live = false; };
+    }, [provider, getModelDefaults]);
     useEffect(() => {
         let live = true;
         setModels([]);
@@ -494,10 +503,10 @@ export const ProviderModelField = ({provider, value, configured, onChange}) => {
     // The provider's own list says the saved name is gone (retired, renamed):
     // said here, since the backend quietly writes with the default instead.
     const gone = models.length > 0 && !!value && !models.includes(value);
+    // Clearing the field goes back to following the default.
     const commit = () => {
         const next = draft.trim();
-        if (next && next !== value) onChange(next);
-        if (!next) setDraft(value || '');
+        if (next !== (value || '')) onChange(next);
     };
     return (
         <>
@@ -508,6 +517,9 @@ export const ProviderModelField = ({provider, value, configured, onChange}) => {
                 onChange={(event) => setDraft(event.target.value)}
                 onBlur={commit}
                 onKeyDown={(event) => { if (event.key === 'Enter') commit(); }}
+                placeholder={lang === 'zh'
+                    ? `默认${defaultModel ? `（现在是 ${defaultModel}）` : ''}，FluentFlow 会跟着换新`
+                    : `Default${defaultModel ? ` (now ${defaultModel})` : ''}; FluentFlow keeps it current`}
                 aria-label="model"
             />
             <datalist id={listId}>
@@ -536,7 +548,7 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
         <div className="grid gap-4 px-5 py-4 md:grid-cols-2">
             <div className="space-y-2">
                 <label className={fieldLabelClass}>{t('set.provider')}</label>
-                <select className={inputClass} value={aiProvider} onChange={e=>updateSettingNow({aiProvider:e.target.value, aiModel: aiProviderDefaults[e.target.value] || DEFAULT_DEEPSEEK_MODEL})}>
+                <select className={inputClass} value={aiProvider} onChange={e=>updateSettingNow({aiProvider:e.target.value, aiModel: aiProviderDefaults[e.target.value] || ''})}>
                     <option value="deepseek">DeepSeek</option>
                     <option value="openai">OpenAI</option>
                     <option value="qwen">{lang === 'zh' ? '通义千问（阿里云百炼）' : 'Qwen (Alibaba Cloud Bailian)'}</option>
