@@ -289,8 +289,8 @@ def test_re_cutting_a_natively_cut_task_does_not_write_wrong_subtitles(monkeypat
     }
     monkeypatch.setattr(dj, "get_job", lambda task_id, **_: dict(state) if task_id == TASK else None)
     monkeypatch.setattr(
-        dj, "update_job_result",
-        lambda task_id, result, **_: state.__setitem__("result", result) or dict(state),
+        dj, "save_result_changes",
+        lambda task_id, _before, result, **_: state.__setitem__("result", result) or dict(state),
     )
     monkeypatch.setattr(dj, "find_source_file", lambda _t: source)
 

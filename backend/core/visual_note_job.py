@@ -48,6 +48,7 @@ can be put back. Nothing here replaces anything without the caller having asked
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -64,7 +65,7 @@ from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
-from backend.core.job_store import get_job, list_jobs_by_statuses, update_job_result, upsert_job
+from backend.core.job_store import get_job, list_jobs_by_statuses, save_result_changes, update_job_result, upsert_job
 from backend.core.result_artifacts import (
     DEBREATH_MEDIA_KIND,
     TRANSCRIPT_MEDIA_CUT,
@@ -534,15 +535,18 @@ def _store(task_id: str, *, client_id: str | None, state: dict[str, Any],
     job = get_job(task_id, client_id=client_id)
     if not job:
         raise VisualNoteError("任务不存在")
-    result = dict(job.get("result") or {})
+    before = copy.deepcopy(dict(job.get("result") or {}))
+    result = copy.deepcopy(before)
     result["visual_note"] = {**visual_note_state(result), **state}
     if result_fields:
         result.update(result_fields)
     if rewrite_artifacts:
-        result = _attach_result_artifacts(task_id, result)
+        # The note's own files only: the cut may be finishing beside this.
+        result = _attach_result_artifacts(task_id, result, parts=("summary", "frames"))
     if artifacts:
         result["artifacts"] = {**dict(result.get("artifacts") or {}), **artifacts}
-    updated = update_job_result(task_id, result, client_id=client_id)
+    # Only the note's fields: the cut may be rendering while the note is written.
+    updated = save_result_changes(task_id, before, result, client_id=client_id)
     if not updated:
         raise VisualNoteError("任务不存在")
     return updated

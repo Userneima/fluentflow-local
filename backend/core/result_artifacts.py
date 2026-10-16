@@ -429,9 +429,17 @@ def _attach_enhanced_playback_audio_artifact(
     return next_result
 
 
-def _write_result_artifacts(task_id: str, result: dict[str, Any]) -> dict[str, dict[str, Any]]:
+# What ``_attach_result_artifacts`` rewrites. A step writes the files of what
+# it changed and no others: the cut, finishing while the note is being written,
+# would otherwise rewrite the note file from the copy of the result it read.
+RESULT_ARTIFACT_PARTS = ("transcript", "summary", "frames")
+
+
+def _write_result_artifacts(
+    task_id: str, result: dict[str, Any], parts: tuple[str, ...] = RESULT_ARTIFACT_PARTS,
+) -> dict[str, dict[str, Any]]:
     artifacts: dict[str, dict[str, Any]] = {}
-    transcript = str(result.get("transcript_text") or "").strip()
+    transcript = str(result.get("transcript_text") or "").strip() if "transcript" in parts else ""
     normalized_result = _with_canonical_result_segments(result)
     raw_segments = _canonical_raw_segments(normalized_result)
     display_segments = _canonical_display_segments(normalized_result)
@@ -442,7 +450,7 @@ def _write_result_artifacts(task_id: str, result: dict[str, Any]) -> dict[str, d
             _artifact_filename(result, ".txt"),
             transcript.rstrip() + "\n",
         )
-    if raw_segments:
+    if raw_segments and "transcript" in parts:
         artifacts["transcript_srt"] = _write_text_artifact(
             task_id,
             "transcript_srt",
@@ -472,7 +480,7 @@ def _write_result_artifacts(task_id: str, result: dict[str, Any]) -> dict[str, d
                 _artifact_filename(result, "_bilingual_zh.vtt"),
                 _format_vtt(bilingual),
             )
-    summary = str(result.get("summary_markdown") or "").strip()
+    summary = str(result.get("summary_markdown") or "").strip() if "summary" in parts else ""
     if summary:
         artifacts["summary_md"] = _write_text_artifact(
             task_id,
@@ -480,7 +488,7 @@ def _write_result_artifacts(task_id: str, result: dict[str, Any]) -> dict[str, d
             _artifact_filename(result, "_summary.md"),
             summary.rstrip() + "\n",
         )
-    frame_artifacts = result.get("frame_artifacts")
+    frame_artifacts = result.get("frame_artifacts") if "frames" in parts else None
     if isinstance(frame_artifacts, list):
         for frame_artifact in frame_artifacts:
             if isinstance(frame_artifact, dict) and frame_artifact.get("kind") == "frame":
@@ -489,10 +497,12 @@ def _write_result_artifacts(task_id: str, result: dict[str, Any]) -> dict[str, d
     return artifacts
 
 
-def _attach_result_artifacts(task_id: str, result: dict[str, Any]) -> dict[str, Any]:
+def _attach_result_artifacts(
+    task_id: str, result: dict[str, Any], parts: tuple[str, ...] = RESULT_ARTIFACT_PARTS,
+) -> dict[str, Any]:
     normalized_result = _with_canonical_result_segments(result)
     try:
-        artifacts = _write_result_artifacts(task_id, normalized_result)
+        artifacts = _write_result_artifacts(task_id, normalized_result, parts)
     except Exception as exc:
         logger.warning("Result artifact write failed for %s: %s", task_id, exc)
         return result

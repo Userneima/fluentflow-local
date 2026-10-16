@@ -48,7 +48,7 @@ from backend.core import device_profile, output_folder
 from backend.core.task_watch import TaskWatch
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from backend.core.job_store import get_job, update_job_result, upsert_job
+from backend.core.job_store import get_job, save_result_changes, upsert_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core.storage_cleanup import is_managed_path
 from backend.core.local_config import resolve_secret
@@ -200,9 +200,8 @@ def _patch_result(task_id: str, client_id: str | None, fields: dict[str, Any]) -
     job = get_job(task_id, client_id=client_id)
     if not job:
         return None
-    result = dict(job.get("result") or {})
-    result.update(fields)
-    return update_job_result(task_id, result, client_id=client_id)
+    before = dict(job.get("result") or {})
+    return save_result_changes(task_id, before, {**before, **fields}, client_id=client_id)
 
 
 def auto_note_will_run() -> bool:
@@ -423,12 +422,15 @@ def _write_text_note_instead(
             fields[field] = value
     latest = get_job(task_id, client_id=client_id)
     if latest:
-        next_result = {**dict(latest.get("result") or {}), **fields}
+        before = dict(latest.get("result") or {})
+        next_result = {**before, **fields}
         speaker_payload = next_result.get("speaker_diarization")
         if isinstance(speaker_payload, dict):
             next_result["speaker_diarization"] = {**speaker_payload, "note_input_labeled": bool(speaker_text)}
         # The downloadable note file, as the pipeline writes it.
-        update_job_result(task_id, _attach_result_artifacts(task_id, next_result), client_id=client_id)
+        save_result_changes(
+            task_id, before, _attach_result_artifacts(task_id, next_result, parts=("summary",)), client_id=client_id,
+        )
     upsert_job(task_id=task_id, status="completed", stage="done", summary_status="completed")
 
 __all__ = [

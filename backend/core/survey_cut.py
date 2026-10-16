@@ -32,6 +32,7 @@ remove more than a quarter of what was said is not applied at all.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -730,10 +731,11 @@ def _finish(
     user's folder, the survey and its report (``cut_report``) recorded. False
     when nothing was rendered."""
     job = job_store.get_job(task_id, client_id=client_id) or {}
-    result = dict(job.get("result") or {})
+    before = _snapshot(job)
+    result = copy.deepcopy(before)
     state = debreath_job.debreath_state(result)
     if plan is not None and not plan.cuts and state.get("status") == debreath_job.STATUS_COMPLETED:
-        _finish_uncut(task_id, client_id, result, state, plan, record, chat)
+        _finish_uncut(task_id, client_id, before, result, state, plan, record, chat)
         return True
     media = debreath_job.cut_file_on_disk(task_id, result)
     if not state.get("rendered") or plan is None or media is None:
@@ -752,8 +754,8 @@ def _finish(
     result["debreath"] = {**state, **delivered, "ran_before_transcription": True, "survey": record}
     from backend.core.result_artifacts import _attach_result_artifacts
 
-    result = _attach_result_artifacts(task_id, result)
-    job_store.update_job_result(task_id, result, client_id=client_id)
+    result = _attach_result_artifacts(task_id, result, parts=("transcript",))
+    _save(task_id, client_id, before, result)
     return True
 
 
@@ -774,7 +776,7 @@ def _still_our_cut(task_id: str, result: dict[str, Any], state: dict[str, Any], 
 
 
 def _finish_uncut(
-    task_id: str, client_id: str | None, result: dict[str, Any], state: dict[str, Any], plan: CutPlan,
+    task_id: str, client_id: str | None, before: dict[str, Any], result: dict[str, Any], state: dict[str, Any], plan: CutPlan,
     record: dict[str, Any], chat: tuple[Chat, str] | None,
 ) -> None:
     """Nothing is left to cut (every cut was put back, or there was none): the
@@ -800,16 +802,29 @@ def _finish_uncut(
     }
     from backend.core.result_artifacts import _attach_result_artifacts
 
-    job_store.update_job_result(task_id, _attach_result_artifacts(task_id, result), client_id=client_id)
+    _save(task_id, client_id, before, _attach_result_artifacts(task_id, result, parts=("transcript",)))
 
 
 def _record(task_id: str, client_id: str | None, record: dict[str, Any]) -> None:
     job = job_store.get_job(task_id, client_id=client_id)
     if not job:
         return
-    result = dict(job.get("result") or {})
+    before = _snapshot(job)
+    result = copy.deepcopy(before)
     result["debreath"] = {**debreath_job.debreath_state(result), "survey": record}
-    job_store.update_job_result(task_id, result, client_id=client_id)
+    _save(task_id, client_id, before, result)
+
+
+def _snapshot(job: dict[str, Any] | None) -> dict[str, Any]:
+    """The result as read, kept apart from the copy a step changes, so that
+    ``_save`` writes only what the step changed."""
+    return copy.deepcopy(dict((job or {}).get("result") or {}))
+
+
+def _save(task_id: str, client_id: str | None, before: dict[str, Any], result: dict[str, Any]) -> None:
+    # The note may be written while the cut renders and finishes; only the
+    # fields this step changed are written.
+    job_store.save_result_changes(task_id, before, result, client_id=client_id)
 
 
 class ReviewError(RuntimeError):
@@ -864,7 +879,7 @@ def _keep_edits(task_id: str, result: dict[str, Any]) -> None:
 
 
 def _rerender(
-    task_id: str, client_id: str | None, result: dict[str, Any], survey: dict[str, Any],
+    task_id: str, client_id: str | None, before: dict[str, Any], result: dict[str, Any], survey: dict[str, Any],
     kept: list[dict[str, Any]], removals: list[dict[str, Any]], after: Callable[[dict[str, Any]], None],
     *, claimed: bool = False,
 ) -> dict[str, Any]:
@@ -894,7 +909,7 @@ def _rerender(
         result["corrected_transcript_text"] = _lines_text(result["corrected_segments"])
     result["transcript_media"] = TRANSCRIPT_MEDIA_SOURCE
     result["debreath"] = {**debreath_job.debreath_state(result), "survey": survey, "used_for_transcription": False}
-    job_store.update_job_result(task_id, result, client_id=client_id)
+    _save(task_id, client_id, before, result)
 
     final: dict[str, CutPlan] = {}
     words = speech_spans(result)
@@ -924,7 +939,8 @@ def put_back(task_id: str, client_id: str | None, message: str) -> bool:
     job = job_store.get_job(task_id, client_id=client_id)
     if not job:
         return False
-    result = dict(job.get("result") or {})
+    before_read = _snapshot(job)
+    result = copy.deepcopy(before_read)
     state = debreath_job.debreath_state(result)
     survey = dict(state.get("survey") or {})
     if not survey.get("rerendering") and not survey.get("before_rerender"):
@@ -939,7 +955,7 @@ def put_back(task_id: str, client_id: str | None, message: str) -> bool:
         result["debreath"] = {
             **state, "survey": survey, "status": debreath_job.STATUS_COMPLETED, "stage": "done", "error": None,
         }
-        job_store.update_job_result(task_id, result, client_id=client_id)
+        _save(task_id, client_id, before_read, result)
         return True
     plan = _cut_list_on_disk(task_id, result)
     if plan is not None and str(result.get("transcript_media") or "") != TRANSCRIPT_MEDIA_CUT:
@@ -948,7 +964,7 @@ def put_back(task_id: str, client_id: str | None, message: str) -> bool:
         **state, "survey": survey, "status": debreath_job.STATUS_COMPLETED, "stage": "done", "error": None,
         "used_for_transcription": True, "ran_before_transcription": True,
     }
-    job_store.update_job_result(task_id, result, client_id=client_id)
+    _save(task_id, client_id, before_read, result)
     return True
 
 
@@ -979,7 +995,7 @@ def _report_item(survey: dict[str, Any], ref: str) -> dict[str, Any] | None:
 
 
 def _turn_around(
-    task_id: str, client_id: str | None, result: dict[str, Any], survey: dict[str, Any],
+    task_id: str, client_id: str | None, before: dict[str, Any], result: dict[str, Any], survey: dict[str, Any],
     item: dict[str, Any], change: dict[str, Any] | None, *, undoing: int | None = None, claimed: bool = False,
 ) -> dict[str, Any]:
     """Render again with ``item``'s decision turned around: what it says was
@@ -1010,7 +1026,7 @@ def _turn_around(
         else:
             _mark_gaps(record, start, end, not now_removed, "你说这段应该剪掉。" if now_removed else "你说这段不该剪，已放回。")
 
-    return _rerender(task_id, client_id, result, survey, kept, removals, after, claimed=claimed)
+    return _rerender(task_id, client_id, before, result, survey, kept, removals, after, claimed=claimed)
 
 
 def _now() -> str:
@@ -1019,15 +1035,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _task_survey(task_id: str, client_id: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+def _task_survey(task_id: str, client_id: str | None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """The result as read, a copy to change, and its survey record."""
     job = job_store.get_job(task_id, client_id=client_id)
     if not job:
         raise ReviewError("任务不存在")
-    result = dict(job.get("result") or {})
+    before = _snapshot(job)
+    result = copy.deepcopy(before)
     survey = dict(debreath_job.debreath_state(result).get("survey") or {})
     if not survey.get("report"):
         raise ReviewError("这个任务没有处理说明")
-    return result, survey
+    return before, result, survey
 
 
 def flip(task_id: str, ref: str, client_id: str | None = None, *, claimed: bool = False) -> dict[str, Any]:
@@ -1036,7 +1054,7 @@ def flip(task_id: str, ref: str, client_id: str | None = None, *, claimed: bool 
     with what the model had decided (``user_changes``, the report's bin, where
     it can be undone later), to measure its judgement and as material for the
     case library. Blocking."""
-    result, survey = _task_survey(task_id, client_id)
+    before, result, survey = _task_survey(task_id, client_id)
     item = _report_item(survey, ref)
     if item is None or item.get("start") is None or item.get("end") is None:
         raise ReviewError("这一条不能单独改")
@@ -1046,14 +1064,14 @@ def flip(task_id: str, ref: str, client_id: str | None = None, *, claimed: bool 
         "model_reason": item.get("text"), "at": _now(),
         **{key: item.get(key) for key in ("picture", "before", "after", "said") if item.get(key)},
     }
-    return _turn_around(task_id, client_id, result, survey, item, change, claimed=claimed)
+    return _turn_around(task_id, client_id, before, result, survey, item, change, claimed=claimed)
 
 
 def undo_change(task_id: str, index: int, client_id: str | None = None, *, claimed: bool = False) -> dict[str, Any]:
     """Undo one of the user's earlier changes (from the report's bin): the
     model's decision for that stretch is applied again and the cut rendered
     again. Blocking."""
-    result, survey = _task_survey(task_id, client_id)
+    before, result, survey = _task_survey(task_id, client_id)
     changes = survey.get("user_changes") or []
     if not 0 <= index < len(changes) or changes[index].get("undone_at"):
         raise ReviewError("没有这次改动，或者已经撤销过了")
@@ -1062,7 +1080,7 @@ def undo_change(task_id: str, index: int, client_id: str | None = None, *, claim
         "kind": change.get("kind"), "start": change["start"], "end": change["end"],
         "action": change.get("user_said"), "reason": change.get("model_reason"),
     }
-    return _turn_around(task_id, client_id, result, survey, item, None, undoing=index, claimed=claimed)
+    return _turn_around(task_id, client_id, before, result, survey, item, None, undoing=index, claimed=claimed)
 
 
 VERDICTS = {"agree", "pending"}
@@ -1074,7 +1092,7 @@ def verdict(task_id: str, keys: list[str], value: str, client_id: str | None = N
     nobody answered counts as not looked at."""
     if value not in VERDICTS or not keys:
         raise ReviewError("回答只能是认可或撤回")
-    result, survey = _task_survey(task_id, client_id)
+    before, result, survey = _task_survey(task_id, client_id)
     items = {
         item.get("key"): item
         for section in survey["report"].get("sections") or [] for item in section.get("items") or []
@@ -1094,7 +1112,7 @@ def verdict(task_id: str, keys: list[str], value: str, client_id: str | None = N
             }
     survey["verdicts"] = verdicts
     result["debreath"] = {**debreath_job.debreath_state(result), "survey": survey}
-    job_store.update_job_result(task_id, result, client_id=client_id)
+    _save(task_id, client_id, before, result)
     return {"verdicts": verdicts}
 
 

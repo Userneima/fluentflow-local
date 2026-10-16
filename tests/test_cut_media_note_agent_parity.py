@@ -117,6 +117,7 @@ def agent_job(monkeypatch):
     monkeypatch.setattr(jvn, "get_job", reader)
     monkeypatch.setattr(vn, "get_job", reader)
     monkeypatch.setattr(vn, "update_job_result", writer)
+    monkeypatch.setattr(vn, "save_result_changes", lambda task_id, _before, after, **kw: writer(task_id, after, **kw))
     monkeypatch.setattr(local_agent, "get_job", reader)
     return state
 

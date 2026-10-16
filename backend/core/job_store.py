@@ -671,6 +671,102 @@ def update_job_result(
     return saved
 
 
+_ABSENT = object()
+
+# Fields whose value is a map of independent entries, each owned by whichever
+# step wrote it: the cut writes its video and cut list, the note its note file.
+# A step's change to one entry must not put back another step's older entry.
+_PER_ENTRY_FIELDS = ("artifacts",)
+
+
+def _apply_changes(current: dict[str, Any], before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(current)
+    for key in set(before) | set(after):
+        old, new = before.get(key, _ABSENT), after.get(key, _ABSENT)
+        if old == new:
+            continue
+        if key in _PER_ENTRY_FIELDS and isinstance(new, dict):
+            entries = dict(merged.get(key) or {}) if isinstance(merged.get(key), dict) else {}
+            old_entries = old if isinstance(old, dict) else {}
+            for name in set(old_entries) | set(new):
+                if old_entries.get(name, _ABSENT) == new.get(name, _ABSENT):
+                    continue
+                if name in new:
+                    entries[name] = new[name]
+                else:
+                    entries.pop(name, None)
+            merged[key] = entries
+        elif new is _ABSENT:
+            merged.pop(key, None)
+        else:
+            merged[key] = new
+    return merged
+
+
+def save_result_changes(
+    task_id: str,
+    before: dict[str, Any] | None,
+    after: dict[str, Any],
+    db_path: Path | str = DEFAULT_DB_PATH,
+    client_id: str | None = None,
+    touch_updated_at: bool = True,
+) -> dict[str, Any] | None:
+    """Write only what a step changed: the fields that differ between the
+    result it read (``before``) and the one it built (``after``), onto the
+    result as it is now. Every other field keeps whatever another step wrote in
+    the meantime.
+
+    ``update_job_result`` puts back the whole result the caller read. Two steps
+    of one task running side by side (the cut renders while the note is
+    written) each read, worked for minutes and put back their copy, and the
+    later one erased the earlier one's work; the flow kept them in turn only to
+    avoid that.
+    """
+    if not task_id:
+        return None
+    ensure_job_db(db_path)
+    before_read = normalize_result_for_read(before) if isinstance(before, dict) else {}
+    after_read = normalize_result_for_read(after)
+    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("BEGIN IMMEDIATE")
+        if client_id is not None:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE task_id = ? AND client_id = ?", (task_id, client_id),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
+        if row is None:
+            conn.rollback()
+            return None
+        stored = _json_loads(row["result_json"])
+        current = normalize_result_for_read(stored)
+        merged = _apply_changes(
+            current if isinstance(current, dict) else {},
+            before_read if isinstance(before_read, dict) else {},
+            after_read if isinstance(after_read, dict) else {},
+        )
+        summary_status = merged.get("summary_status") if "summary_status" in after_read else None
+        if not isinstance(summary_status, str) or not summary_status:
+            summary_status = None
+        if touch_updated_at:
+            conn.execute(
+                "UPDATE jobs SET updated_at = ?, result_json = ?, summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
+                (_now_iso(), _result_json_dumps(merged), summary_status, task_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE jobs SET result_json = ?, summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
+                (_result_json_dumps(merged), summary_status, task_id),
+            )
+        updated = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
+        conn.commit()
+    saved = _row_to_dict(updated) if updated else None
+    if saved is not None:
+        _notify_result_saved(task_id, stored, saved.get("result"))
+    return saved
+
+
 def finalize_job_result_if_unchanged(
     task_id: str,
     expected_result: Any,

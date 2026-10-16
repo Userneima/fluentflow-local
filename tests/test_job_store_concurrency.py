@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 import threading
 
+import pytest
+
 from backend.core import history_retention, job_store
 
 
@@ -95,3 +97,95 @@ def test_retention_reads_only_what_it_needs_and_still_expires_a_due_source(tmp_p
     assert expired["transcript_text"] == "字" * 20000, "expiring the source keeps the rest of the result"
     untouched = job_store.get_job("fresh", db_path=db)["result"]
     assert untouched["source_file_available"] is True
+
+
+# ── two steps of one task saving side by side ─────────────────────────────
+#
+# Requirement (owner, 2026-10-16, to-do batch three): the cut renders while the
+# note is written. Each read the task, works for minutes and saves; whichever
+# saves second must not erase what the first one saved.
+
+def _two_steps_read_the_same_result(db):
+    job_store.upsert_job(task_id="t", status="completed", result={
+        "task_id": "t", "transcript_text": "原片的字幕", "summary_status": "pending",
+        "artifacts": {"transcript_txt": {"kind": "transcript_txt", "filename": "a.txt"}},
+    }, db_path=db)
+    read = job_store.get_job("t", db_path=db)["result"]
+    return dict(read), dict(read)
+
+
+def _cut_saves(db, before):
+    after = {
+        **before, "transcript_text": "剪后的字幕", "debreath": {"status": "completed"},
+        "artifacts": {**before["artifacts"], "debreath_media": {"kind": "debreath_media", "filename": "cut.mp4"}},
+    }
+    job_store.save_result_changes("t", before, after, db_path=db)
+
+
+def _note_saves(db, before):
+    after = {
+        **before, "summary_markdown": "# 笔记", "summary_status": "completed", "visual_note": {"status": "completed"},
+        "artifacts": {**before["artifacts"], "visual_note": {"kind": "visual_note", "filename": "note.md"}},
+    }
+    job_store.save_result_changes("t", before, after, db_path=db)
+
+
+@pytest.mark.parametrize("cut_first", [True, False])
+def test_the_cut_and_the_note_saving_from_the_same_read_both_keep_their_work(tmp_path, cut_first):
+    db = tmp_path / "jobs.sqlite"
+    cut_read, note_read = _two_steps_read_the_same_result(db)
+    if cut_first:
+        _cut_saves(db, cut_read)
+        _note_saves(db, note_read)
+    else:
+        _note_saves(db, note_read)
+        _cut_saves(db, cut_read)
+
+    job = job_store.get_job("t", db_path=db)
+    result = job["result"]
+    assert result["transcript_text"] == "剪后的字幕"
+    assert result["debreath"]["status"] == "completed"
+    assert result["summary_markdown"] == "# 笔记"
+    assert result["visual_note"]["status"] == "completed"
+    assert set(result["artifacts"]) == {"transcript_txt", "debreath_media", "visual_note"}
+    assert job["summary_status"] == "completed"
+
+
+def test_a_field_a_step_removed_is_gone_and_one_it_left_alone_is_not_put_back(tmp_path):
+    db = tmp_path / "jobs.sqlite"
+    job_store.upsert_job(task_id="t", status="completed", result={
+        "task_id": "t", "playback_media_kind": "debreath_media", "lark_error": "旧的错误",
+    }, db_path=db)
+    stale = dict(job_store.get_job("t", db_path=db)["result"])
+    # Another step clears the error after this one read.
+    fresh = dict(job_store.get_job("t", db_path=db)["result"])
+    job_store.save_result_changes("t", fresh, {**fresh, "lark_error": None}, db_path=db)
+
+    after = dict(stale)
+    after.pop("playback_media_kind")
+    job_store.save_result_changes("t", stale, after, db_path=db)
+
+    result = job_store.get_job("t", db_path=db)["result"]
+    assert "playback_media_kind" not in result
+    assert result["lark_error"] is None
+
+
+def test_saves_from_many_threads_at_once_all_land(tmp_path):
+    db = tmp_path / "jobs.sqlite"
+    job_store.upsert_job(task_id="t", status="completed", result={"task_id": "t"}, db_path=db)
+    before = dict(job_store.get_job("t", db_path=db)["result"])
+    writers = 12
+    ready = threading.Barrier(writers)
+
+    def write(i: int) -> None:
+        ready.wait()
+        job_store.save_result_changes("t", before, {**before, f"k{i}": i}, db_path=db)
+
+    threads = [threading.Thread(target=write, args=(i,)) for i in range(writers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    result = job_store.get_job("t", db_path=db)["result"]
+    assert {f"k{i}" for i in range(writers)} <= set(result)

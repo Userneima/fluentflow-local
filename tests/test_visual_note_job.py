@@ -133,6 +133,9 @@ def job_store(monkeypatch, tmp_path):
 
     monkeypatch.setattr(vn, "get_job", fake_get_job)
     monkeypatch.setattr(vn, "update_job_result", fake_update)
+    monkeypatch.setattr(
+        vn, "save_result_changes", lambda task_id, _before, after, **kw: fake_update(task_id, after, **kw),
+    )
     return state
 
 

@@ -456,9 +456,8 @@ def _record(task_id: str, record: dict[str, Any]) -> None:
     job = job_store.get_job(task_id)
     if not job:
         return
-    result = dict(job.get("result") or {}) if isinstance(job.get("result"), dict) else {}
-    result[RESULT_KEY] = record
-    job_store.update_job_result(task_id, result, touch_updated_at=False)
+    before = dict(job.get("result") or {}) if isinstance(job.get("result"), dict) else {}
+    job_store.save_result_changes(task_id, before, {**before, RESULT_KEY: record}, touch_updated_at=False)
 
 
 # A note or subtitles that change after the task ended (rewritten, regenerated,

@@ -35,7 +35,7 @@ from typing import Any, Callable
 from backend.core import cut_timeline, device_profile, silence_cuts
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
-from backend.core.job_store import get_job, list_jobs_by_statuses, update_job_result
+from backend.core.job_store import get_job, list_jobs_by_statuses, save_result_changes, update_job_result
 from backend.core.result_artifacts import (
     DEBREATH_ARTIFACT_DIRNAME,
     DEBREATH_ARTIFACT_SUFFIXES,
@@ -203,11 +203,13 @@ def _store(
     job = get_job(task_id, client_id=client_id)
     if not job:
         raise DebreathError("任务不存在")
-    result = dict(job.get("result") or {})
+    before = dict(job.get("result") or {})
+    result = dict(before)
     result["debreath"] = {**debreath_state(result), **state}
     if artifacts:
         result["artifacts"] = {**dict(result.get("artifacts") or {}), **artifacts}
-    updated = update_job_result(task_id, result, client_id=client_id)
+    # Only the cut's own fields: the note may be written while this renders.
+    updated = save_result_changes(task_id, before, result, client_id=client_id)
     if not updated:
         raise DebreathError("任务不存在")
     return updated
