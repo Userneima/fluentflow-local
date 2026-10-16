@@ -6,6 +6,8 @@ Requirements (owner, 2026-10-15):
    follows it.
 3. A different file under the same name is refused, with both lengths.
 4. A missing recording is refused with where it was and what to do.
+5. Once its fingerprint is recorded (when it is first cut), the content decides,
+   not the length (review, 2026-10-16).
 """
 
 from __future__ import annotations
@@ -77,3 +79,38 @@ def test_a_missing_recording_says_where_it_was(tmp_path, lengths):
         original_locator.locate(_task(path), search=lambda name: [])
 
     assert str(path) in str(error.value) and "放回原处" in str(error.value)
+
+
+def test_a_same_named_equally_long_recording_with_other_content_is_refused(tmp_path, lengths):
+    """Review 2026-10-16: length alone let a different recording of the same
+    length through. Once the original's fingerprint is recorded, the content
+    decides."""
+    path = tmp_path / "会议.mp4"
+    path.write_bytes(b"red" * 1000)
+    lengths[str(path)] = 600.0
+    task = _task(path)
+    original_locator.remember(task, path)
+
+    path.write_bytes(b"blu" * 1000)
+    with pytest.raises(original_locator.OriginalMissing):
+        original_locator.locate(task, search=lambda name: [])
+
+    moved = tmp_path / "别处" / "会议.mp4"
+    moved.parent.mkdir()
+    moved.write_bytes(b"red" * 1000)
+    lengths[str(moved)] = 600.0
+    path.unlink()
+    assert original_locator.locate(task, search=lambda name: [moved]) == moved
+
+
+def test_the_fingerprint_is_taken_once(tmp_path, lengths):
+    path = tmp_path / "会议.mp4"
+    path.write_bytes(b"red" * 1000)
+    task = _task(path)
+    original_locator.remember(task, path)
+    first = job_store.get_job(task)["metadata"][original_locator.FINGERPRINT_KEY]
+
+    path.write_bytes(b"other")
+    original_locator.remember(task, path)
+
+    assert job_store.get_job(task)["metadata"][original_locator.FINGERPRINT_KEY] == first

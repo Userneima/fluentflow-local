@@ -524,3 +524,22 @@ def test_the_corrected_transcript_moves_onto_the_cut_too(task, monkeypatch):
 
     lines = job_store.get_job(task["id"])["result"]["corrected_segments"]
     assert "嗯" in [seg["text"] for seg in lines] and all(seg["text"] != "表格里第三列是本周新增的数字，比上周多了不少" for seg in lines)
+
+
+@needs_ffmpeg
+def test_putting_back_every_cut_leaves_a_video_the_user_put_in_its_place(task, monkeypatch):
+    """Review 2026-10-16: the old cut is taken out of the folder only while
+    that path is still the task's own file, not on the record alone."""
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    monkeypatch.setattr(survey_cut, "voiced_parts", lambda source, regions: [])
+    answer = '{"keep_gaps": [{"id": 1, "reason": "看表"}, {"id": 2, "reason": "看表"}], "remove": []}'
+    survey_cut.survey_and_cut(task["id"], chat=(_says(answer), "fake"))
+    _, state = _state(task["id"])
+    delivered = Path(state["delivered_path"])
+    delivered.unlink()
+    delivered.write_bytes(b"the user's own edit")
+    removed = [item for item in _report_items(task["id"]) if item["action"] == "removed"]
+
+    survey_cut.flip(task["id"], removed[0]["ref"])
+
+    assert delivered.read_bytes() == b"the user's own edit"

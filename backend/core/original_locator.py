@@ -8,15 +8,19 @@ drives come and go. So before using the original:
 - it is looked for where it was, then by its file name anywhere Spotlight
   indexes (a recording moved to another folder is found and the task follows
   it);
-- whatever is found must be as long as the recording that was processed: a
-  different file under the same name would have the old decisions cut into it
-  in the wrong places;
+- whatever is found must be the recording that was processed: a different
+  file under the same name would have the old decisions cut into it in the
+  wrong places. Checked by a fingerprint taken when it was first cut (its size
+  and a hash of three slices); a task cut before fingerprints were taken is
+  checked by its length, which a different recording of the same length
+  passes (read-only review, 2026-10-16);
 - when it cannot be found, the user is told where it was and what to do,
   instead of a render that fails half way.
 """
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
@@ -80,6 +84,51 @@ def spotlight(name: str) -> list[Path]:
     return [path for path in paths if path.name == name and path.is_file()][:MAX_CANDIDATES]
 
 
+FINGERPRINT_KEY = "original_fingerprint"
+_SLICE_BYTES = 1 << 20
+
+
+def fingerprint(path: Path) -> str | None:
+    """The file's size and a hash of its first, middle and last megabyte:
+    enough to tell two recordings apart without reading gigabytes."""
+    try:
+        size = path.stat().st_size
+        digest = hashlib.sha256(str(size).encode())
+        with path.open("rb") as handle:
+            for offset in (0, max(0, size // 2 - _SLICE_BYTES // 2), max(0, size - _SLICE_BYTES)):
+                handle.seek(offset)
+                digest.update(handle.read(_SLICE_BYTES))
+    except OSError:
+        return None
+    return f"{size}:{digest.hexdigest()}"
+
+
+def remember(task_id: str, path: Path) -> None:
+    """Record the original's fingerprint the first time it is cut; kept after
+    that, so a later re-render checks against the recording first processed."""
+    job = job_store.get_job(task_id)
+    if not job:
+        return
+    metadata = dict(job.get("metadata") or {}) if isinstance(job.get("metadata"), dict) else {}
+    if metadata.get(FINGERPRINT_KEY):
+        return
+    taken = fingerprint(path)
+    if not taken:
+        return
+    metadata[FINGERPRINT_KEY] = taken
+    job_store.upsert_job(
+        task_id=task_id, status=str(job.get("status") or "completed"), client_id=job.get("client_id"), metadata=metadata,
+    )
+
+
+def _is_the_original(path: Path, job: dict[str, Any], expected: float | None) -> bool:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    recorded = metadata.get(FINGERPRINT_KEY)
+    if recorded:
+        return fingerprint(path) == recorded
+    return _same_length(path, expected)
+
+
 def _same_length(path: Path, expected: float | None) -> bool:
     if expected is None:
         return True
@@ -103,21 +152,21 @@ def locate(task_id: str, client_id: str | None = None, *, search: Callable[[str]
         raise OriginalMissing("任务不存在")
     expected = expected_duration(job)
     stored = find_source_file(task_id)
-    if stored is not None and _same_length(stored, expected):
+    if stored is not None and _is_the_original(stored, job, expected):
         return stored
     field, recorded = _recorded(job)
     if recorded is None:
         raise OriginalMissing("这个任务的原片已经不在本机了（可能过了保留期），没法再从原片重新导出。")
     if recorded.is_file():
-        if _same_length(recorded, expected):
+        if _is_the_original(recorded, job, expected):
             return recorded
         found = _duration(recorded)
         raise OriginalMissing(
-            f"「{recorded.name}」和处理时的不是同一个文件：处理时长 {_clock(expected or 0)}，"
-            f"现在是 {_clock(found or 0)}。把处理时那份放回 {recorded.parent}，再试一次。"
+            f"「{recorded.name}」和处理时的不是同一个文件（处理时长 {_clock(expected or 0)}，"
+            f"现在是 {_clock(found or 0)}）。把处理时那份放回 {recorded.parent}，再试一次。"
         )
     for candidate in search(recorded.name):
-        if _same_length(candidate, expected):
+        if _is_the_original(candidate, job, expected):
             _follow(job, field, candidate)
             return candidate
     raise OriginalMissing(
@@ -137,4 +186,4 @@ def _follow(job: dict[str, Any], field: str, path: Path) -> None:
     )
 
 
-__all__ = ["OriginalMissing", "expected_duration", "locate", "spotlight"]
+__all__ = ["FINGERPRINT_KEY", "OriginalMissing", "expected_duration", "fingerprint", "locate", "remember", "spotlight"]

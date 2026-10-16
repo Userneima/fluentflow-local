@@ -456,8 +456,8 @@ def _record(task_id: str, record: dict[str, Any]) -> None:
     job_store.update_job_result(task_id, result, touch_updated_at=False)
 
 
-# A note that changes after the task ended (rewritten, regenerated, edited and
-# saved) refreshes the folder. One worker, and a task already waiting is not
+# A note or subtitles that change after the task ended (rewritten, regenerated,
+# edited and saved) refresh the folder. One worker, and a task already waiting is not
 # queued twice: an editor saving every few seconds must not stack PDF exports.
 _WORKER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="output-folder")
 _PENDING: set[str] = set()
@@ -478,12 +478,30 @@ def schedule_sync(task_id: str) -> None:
     _WORKER.submit(_run_pending, task_id)
 
 
+def _what_the_folder_holds(result: dict[str, Any] | None) -> tuple[Any, ...]:
+    """Everything the folder carries a copy of: the note, the transcript and
+    subtitles, the cut list. Subtitles saved in the editor used to stay old in
+    the folder because only the note was watched (read-only review, 2026-10-16)."""
+    if not isinstance(result, dict):
+        return ()
+    artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
+    return (
+        str(result.get("summary_markdown") or ""),
+        str(result.get("transcript_text") or ""),
+        # Name and size, not the record's time: that is rewritten with every
+        # save of the task and would refresh the folder for nothing.
+        *(
+            (record.get("filename"), record.get("size_bytes")) if isinstance(record, dict) else None
+            for record in (artifacts.get(kind) for kind in ("transcript_txt", "transcript_srt", "debreath_cut_list"))
+        ),
+    )
+
+
 def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[str, Any] | None) -> None:
-    """Refresh a folder that already exists when the task's note changed."""
+    """Refresh a folder that already exists when what it holds changed."""
     if not isinstance(after, dict) or not isinstance(after.get(RESULT_KEY), dict):
         return
-    previous = (before or {}).get("summary_markdown") if isinstance(before, dict) else None
-    if str(after.get("summary_markdown") or "") != str(previous or ""):
+    if _what_the_folder_holds(after) != _what_the_folder_holds(before):
         schedule_sync(task_id)
 
 

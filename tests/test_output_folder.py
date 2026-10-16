@@ -125,6 +125,22 @@ def test_a_note_saved_later_schedules_a_refresh(tmp_path, pdfs, monkeypatch):
     assert scheduled == [task]
 
 
+def test_subtitles_saved_later_schedule_a_refresh_and_saves_that_change_nothing_do_not(tmp_path, pdfs, monkeypatch):
+    """Review 2026-10-16: subtitles saved in the editor reached the page and
+    the download but not the folder beside the recording."""
+    source = _recording(tmp_path)
+    task = _task(source, note="# 第八周\n\n第一版。\n")
+    output_folder.sync(task)
+    scheduled: list[str] = []
+    monkeypatch.setattr(output_folder, "schedule_sync", scheduled.append)
+
+    job_store.update_job_result(task, {**job_store.get_job(task)["result"], "transcript_text": "改过的字幕"})
+    assert scheduled == [task]
+
+    job_store.update_job_result(task, {**job_store.get_job(task)["result"], "stt_elapsed_seconds": 3})
+    assert scheduled == [task], "a save that leaves the folder's contents alone does not refresh it"
+
+
 def test_a_second_task_on_the_same_recording_gets_its_own_folder(tmp_path, pdfs):
     source = _recording(tmp_path)
     first = _task(source, note="# 第一次\n")

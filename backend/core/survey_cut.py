@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 from dataclasses import replace
@@ -756,6 +757,22 @@ def _finish(
     return True
 
 
+def _still_our_cut(task_id: str, result: dict[str, Any], state: dict[str, Any], delivered: Path) -> bool:
+    """Whether the file at the delivered path is, right now, the same file as
+    the cut the task keeps. The record that it was delivered as a hard link is
+    not enough: the user may since have put another video there (read-only
+    review, 2026-10-16)."""
+    if not delivered.name or not delivered.is_file():
+        return False
+    record = (result.get("artifacts") or {}).get(DEBREATH_MEDIA_KIND) or {}
+    filename = record.get("filename") or state.get("media_filename")
+    kept = resolve_artifact_file(_artifact_storage_dir() / task_id, filename) if filename else None
+    try:
+        return kept is not None and os.path.samefile(kept, delivered)
+    except OSError:
+        return False
+
+
 def _finish_uncut(
     task_id: str, client_id: str | None, result: dict[str, Any], state: dict[str, Any], plan: CutPlan,
     record: dict[str, Any], chat: tuple[Chat, str] | None,
@@ -769,7 +786,7 @@ def _finish_uncut(
     )
     record["report"]["after_seconds"] = record["report"]["before_seconds"] = round(plan.source_duration_seconds, 1)
     delivered = Path(str(state.get("delivered_path") or ""))
-    if state.get("delivered_as") == "hard_link" and delivered.name and delivered.is_file():
+    if _still_our_cut(task_id, result, state, delivered):
         try:
             delivered.unlink()
         except OSError as exc:

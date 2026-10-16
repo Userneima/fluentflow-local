@@ -753,6 +753,10 @@ def _run_debreath(
     than a log line. The slot is released here either way.
     """
     source = resolve_source(task_id)
+    from backend.core import original_locator
+
+    # What a later re-render checks the original against.
+    original_locator.remember(task_id, source)
     if not claimed:
         claim(task_id, allow_concurrent=allow_concurrent_render)
     try:

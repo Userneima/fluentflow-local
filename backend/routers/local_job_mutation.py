@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
+from backend.core import task_activity
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import cancel_job_steps, delete_jobs, get_job, upsert_job
@@ -78,6 +79,9 @@ def _delete_job_for_request(request: Request, task_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.get("status") in _ACTIVE_STATUSES:
         raise HTTPException(status_code=409, detail="Cancel running jobs before deleting them")
+    busy = task_activity.busy_reason(job)
+    if busy:
+        raise HTTPException(status_code=409, detail=busy)
     cleanup_task_all_files(task_id, job.get("metadata"))
     deleted = delete_jobs([task_id], client_id=client_id)
     if not deleted:
