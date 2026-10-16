@@ -31,6 +31,9 @@ _ENV_PROMPT = "FFDIALOG_PROMPT"
 _ENV_START = "FFDIALOG_START"
 _ENV_MULTIPLE = "FFDIALOG_MULTIPLE"
 _ENV_FILTER = "FFDIALOG_FILTER"
+_ENV_PICKER = "FFDIALOG_PICKER"
+_ENV_OK = "FFDIALOG_OK"
+_ENV_NAME = "FFDIALOG_NAME"
 
 _OWNER = r"""
 $ErrorActionPreference = 'Stop'
@@ -57,14 +60,91 @@ if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
 $owner.Close()
 """
 
-_FOLDER = _OWNER + r"""
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = $env:FFDIALOG_PROMPT
-$dialog.ShowNewFolderButton = $false
-if ($env:FFDIALOG_START) { $dialog.SelectedPath = $env:FFDIALOG_START }
-if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
-    [Console]::Out.WriteLine($dialog.SelectedPath)
+# The folder dialog is the Explorer-style one (IFileOpenDialog with
+# FOS_PICKFOLDERS): an address bar, recent places, a path can be pasted. Windows
+# Forms only offers FolderBrowserDialog, a bare tree that has to be clicked open
+# level by level; it stays as the fallback if the type below cannot be built.
+_FOLDER_PICKER_CS = r"""
+using System;
+using System.Runtime.InteropServices;
+public static class FluentFlowFolderPicker {
+    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")] class FileOpenDialog {}
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellItem {
+        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+        void GetParent(out IShellItem ppsi);
+        void GetDisplayName(uint sigdn, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+        void GetAttributes(uint mask, out uint attributes);
+        void Compare(IShellItem psi, uint hint, out int order);
+    }
+    [ComImport, Guid("42f85136-db7e-439c-85f1-e4075d135fc8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IFileDialog {
+        [PreserveSig] int Show(IntPtr parent);
+        void SetFileTypes(uint count, IntPtr specs);
+        void SetFileTypeIndex(uint index);
+        void GetFileTypeIndex(out uint index);
+        void Advise(IntPtr events, out uint cookie);
+        void Unadvise(uint cookie);
+        void SetOptions(uint options);
+        void GetOptions(out uint options);
+        void SetDefaultFolder(IShellItem item);
+        void SetFolder(IShellItem item);
+        void GetFolder(out IShellItem item);
+        void GetCurrentSelection(out IShellItem item);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name);
+        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void GetResult(out IShellItem item);
+    }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern void SHCreateItemFromParsingName(string path, IntPtr pbc, ref Guid riid, out IShellItem item);
+
+    public static string Pick(IntPtr owner, string title, string start, string okLabel, string nameLabel) {
+        IFileDialog dialog = (IFileDialog)new FileOpenDialog();
+        uint options;
+        dialog.GetOptions(out options);
+        dialog.SetOptions(options | 0x20 | 0x40);  // FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM
+        if (!string.IsNullOrEmpty(title)) dialog.SetTitle(title);
+        if (!string.IsNullOrEmpty(okLabel)) dialog.SetOkButtonLabel(okLabel);
+        if (!string.IsNullOrEmpty(nameLabel)) dialog.SetFileNameLabel(nameLabel);
+        if (!string.IsNullOrEmpty(start)) {
+            try {
+                Guid shellItem = typeof(IShellItem).GUID;
+                IShellItem folder;
+                SHCreateItemFromParsingName(start, IntPtr.Zero, ref shellItem, out folder);
+                dialog.SetFolder(folder);
+            } catch (Exception) { }
+        }
+        if (dialog.Show(owner) != 0) return null;  // cancelled
+        IShellItem result;
+        dialog.GetResult(out result);
+        string path;
+        result.GetDisplayName(0x80058000, out path);  // SIGDN_FILESYSPATH
+        return path;
+    }
 }
+"""
+
+_FOLDER = _OWNER + r"""
+$picked = $null
+$modern = $true
+try {
+    Add-Type -TypeDefinition $env:FFDIALOG_PICKER -Language CSharp
+} catch {
+    $modern = $false
+}
+if ($modern) {
+    $picked = [FluentFlowFolderPicker]::Pick($owner.Handle, $env:FFDIALOG_PROMPT, $env:FFDIALOG_START, $env:FFDIALOG_OK, $env:FFDIALOG_NAME)
+} else {
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = $env:FFDIALOG_PROMPT
+    $dialog.ShowNewFolderButton = $false
+    if ($env:FFDIALOG_START) { $dialog.SelectedPath = $env:FFDIALOG_START }
+    if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $picked = $dialog.SelectedPath }
+}
+if ($picked) { [Console]::Out.WriteLine($picked) }
 $owner.Close()
 """
 
@@ -109,7 +189,14 @@ def run_files_dialog(binary: str, *, prompt: str, allow_multiple: bool, start_in
 
 def run_folder_dialog(binary: str, *, prompt: str, start_in: Path | str | None,
                       execute: Any, timeout: int) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, _ENV_PROMPT: prompt, _ENV_START: _start_folder(start_in)}
+    # The pick-folders mode labels its button and field from the process's own
+    # resources, which came out English ("Select Folder") on a Chinese Windows.
+    # They follow the language the page asked in.
+    chinese = any("\u4e00" <= char <= "\u9fff" for char in prompt)
+    env = {**os.environ, _ENV_PROMPT: prompt, _ENV_START: _start_folder(start_in),
+           _ENV_PICKER: _FOLDER_PICKER_CS,
+           _ENV_OK: "选择这个文件夹" if chinese else "Select folder",
+           _ENV_NAME: "文件夹：" if chinese else "Folder:"}
     return _run(execute, command(binary, _FOLDER), env, timeout)
 
 

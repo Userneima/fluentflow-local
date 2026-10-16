@@ -36,7 +36,10 @@ def _transcribe_worker(
             "model_size": options.get("model_size") or DEFAULT_MODEL_SIZE,
             "speed_profile": options.get("speed_profile") or "accurate",
             "language": options.get("language") or "auto",
-            "compute_type": options.get("compute_type") or "int8",
+            # None lets local_stt pick for the device it lands on: float16 on an
+            # NVIDIA GPU, int8 on the CPU. A fixed "int8" here ran every Windows
+            # GPU transcription at the CPU's precision.
+            "compute_type": options.get("compute_type") or None,
             "device": options.get("device") or "auto",
             "cpu_threads": int(options.get("cpu_threads") or 0),
             "num_workers": int(options.get("num_workers") or 1),
@@ -81,7 +84,7 @@ def start_transcription_process(
     model_size: str,
     speed_profile: str,
     language: str,
-    compute_type: str = "int8",
+    compute_type: str | None = None,
     device: str = "auto",
     cpu_threads: int = 0,
     num_workers: int = 1,

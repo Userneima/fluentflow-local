@@ -22,8 +22,8 @@ function Get-EnvFilePort([string]$RepoDir) {
 }
 $Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } elseif (Get-EnvFilePort $Repo) { Get-EnvFilePort $Repo } else { "8000" }
 $AppUrl = "http://127.0.0.1:$Port/"
-$LocalAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\\Local" }
-$LogDir = Join-Path $LocalAppData "FluentFlow\\Logs"
+$LocalAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
+$LogDir = Join-Path $LocalAppData "FluentFlow\Logs"
 $LogFile = Join-Path $LogDir "local.log"
 
 function Fail([string]$Message) {
@@ -89,7 +89,7 @@ function Test-PortListening {
     }
 }
 
-if (-not (Test-Path (Join-Path $Repo "backend\\local_main.py"))) {
+if (-not (Test-Path (Join-Path $Repo "backend\local_main.py"))) {
     Fail "Cannot find the FluentFlow code directory (looked in: $Repo). Set FLUENTFLOW_REPO to the code directory, or run install-local-to-desktop.ps1 again."
 }
 
@@ -138,12 +138,12 @@ if (Test-PortListening) {
 }
 
 $PythonCandidates = @(
-    (Join-Path $Repo "venv\\Scripts\\python.exe"),
-    (Join-Path $Repo ".venv\\Scripts\\python.exe")
+    (Join-Path $Repo "venv\Scripts\python.exe"),
+    (Join-Path $Repo ".venv\Scripts\python.exe")
 )
 $Python = $PythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $Python) {
-    Fail "Python virtual environment was not found. In PowerShell, run:`ncd $Repo`npy -3 -m venv venv`n.\\venv\\Scripts\\python.exe -m pip install -r requirements-local.txt"
+    Fail "没找到 Python 虚拟环境。先在 PowerShell 里运行安装脚本：`npowershell -ExecutionPolicy Bypass -File `"$Repo\launchers\windows\setup-local.ps1`""
 }
 
 Write-Host "== FluentFlow Local startup check =="
@@ -153,18 +153,31 @@ Write-Host "== FluentFlow Local startup check =="
 # in their output stopped the read that was waiting for it.
 $env:PYTHONUTF8 = "1"
 
-& $Python (Join-Path $Repo "scripts\\check_local_readiness.py")
+& $Python (Join-Path $Repo "scripts\check_local_readiness.py")
 if ($LASTEXITCODE -ne 0) {
     Fail "The environment is not ready. Follow the messages above, then launch again."
 }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-# Tee-Object -Append never rotates; past 5 MB the file is moved aside and one
+# The log is UTF-8, written a line at a time and never held open, so it can be
+# read while the service runs. Tee-Object wrote UTF-16 in Windows PowerShell 5.1,
+# beside Add-Content's ANSI lines in the same file, and kept it locked. Past 5 MB,
+# or when it is still one of those UTF-16 logs, it is moved aside and one
 # previous generation is kept.
-if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 5MB)) {
-    Move-Item -Force -Path $LogFile -Destination "$LogFile.1"
+$Utf8 = New-Object System.Text.UTF8Encoding $false
+function Write-LogLine([string]$Line) {
+    [System.IO.File]::AppendAllText($LogFile, $Line + [Environment]::NewLine, $Utf8)
 }
-Add-Content -Path $LogFile -Value "---- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') starting backend.local_main:app on :$Port ----"
+if (Test-Path $LogFile) {
+    # Tee-Object appended UTF-16 without a byte order mark after an ANSI first
+    # line, so the old logs are told apart by the NUL bytes UTF-16 text has.
+    $Head = [byte[]](Get-Content -Path $LogFile -Encoding Byte -TotalCount 4096)
+    $Utf16 = $Head -contains 0
+    if ($Utf16 -or (Get-Item $LogFile).Length -gt 5MB) {
+        Move-Item -Force -Path $LogFile -Destination "$LogFile.1"
+    }
+}
+Write-LogLine "---- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') starting backend.local_main:app on :$Port ----"
 
 # Upgrade yt-dlp at most once per day. Platforms change their pages often and an
 # old yt-dlp fails a whole platform with no way for the user to update it. It
@@ -193,7 +206,7 @@ Start-Job -ScriptBlock {
             Start-Sleep -Milliseconds 250
         }
     }
-    Add-Content -Path $ProbeLog -Value "Service did not listen on port $ProbePort within 20 seconds."
+    [System.IO.File]::AppendAllText($ProbeLog, "Service did not listen on port $ProbePort within 20 seconds." + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding $false))
 } -ArgumentList $Port, $AppUrl, $LogFile | Out-Null
 
 Write-Host ""
@@ -206,7 +219,13 @@ Write-Host ""
 # source it because dotenv files may contain comments, spaces, or non-shell syntax.
 # uvicorn logs to stderr. Under "Stop", Windows PowerShell 5.1 turns the first
 # stderr line of a native command piped through 2>&1 into a terminating error,
-# so the service would die on its own startup banner.
+# so the service would die on its own startup banner. Each line is turned back
+# into its text: a stderr line arrives as an error record, which printed a
+# NativeCommandError trailer under every log line.
 $ErrorActionPreference = "Continue"
-& $Python -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port 2>&1 | Tee-Object -FilePath $LogFile -Append
+& $Python -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port 2>&1 | ForEach-Object {
+    $Line = "$_"
+    Write-Host $Line
+    Write-LogLine $Line
+}
 exit $LASTEXITCODE

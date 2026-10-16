@@ -244,4 +244,6 @@ def test_windows_folder_dialog_returns_the_folder(on_windows):
     outcome = fc.choose_media_folder(runner=_runner(stdout="D:\\录像\r\n", record=seen))
 
     assert outcome.paths == [Path("D:\\录像")]
-    assert "FolderBrowserDialog" in _decoded_script(seen["command"])
+    script = _decoded_script(seen["command"])
+    assert "FluentFlowFolderPicker" in script, "the Explorer-style dialog first"
+    assert "FolderBrowserDialog" in script, "the old tree as the fallback"

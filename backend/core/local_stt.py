@@ -389,7 +389,9 @@ def get_or_load_model_with_stats(
             "model_resolved": resolved,
             "compute_type": effective_compute,
             "device_requested": device,
-            "device_resolved": getattr(_model_cache[key], "device", None),
+            # faster-whisper's model has no readable device; the one chosen here
+            # is what it was loaded on, and without it no record said "GPU".
+            "device_resolved": getattr(_model_cache[key], "device", None) or effective_device,
             "device_fallback_reason": fallback_reason,
             "cpu_threads": cpu_threads,
             "num_workers": num_workers,

@@ -13,7 +13,12 @@ From the requirement (2026-10-14):
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1] / "launchers" / "windows"
 
@@ -45,3 +50,23 @@ def test_the_service_starts_in_python_utf8_mode():
         text = script.read_text(encoding="utf-8-sig")
         started = text.index("backend.local_main:app", text.index("uvicorn"))
         assert '$env:PYTHONUTF8 = "1"' in text[:started], script.name
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="needs Windows PowerShell to parse the scripts")
+def test_every_powershell_script_parses():
+    """CI cannot run these scripts. On a machine that can, PowerShell's own
+    parser catches what reading them does not, such as a quote that ends a
+    string early."""
+    scripts = sorted(ROOT.glob("*.ps1")) + [ROOT.parents[1] / "install.ps1"]
+    check = (
+        "$errors = $null; "
+        "[System.Management.Automation.Language.Parser]::ParseFile($env:FFPARSE_SCRIPT, [ref]$null, [ref]$errors) | Out-Null; "
+        "$errors | ForEach-Object { $_.Message }"
+    )
+    for script in scripts:
+        done = subprocess.run(
+            [shutil.which("powershell"), "-NoProfile", "-NonInteractive", "-Command", check],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+            env={**os.environ, "FFPARSE_SCRIPT": str(script)},
+        )
+        assert done.returncode == 0 and not done.stdout.strip(), f"{script.name}: {done.stdout or done.stderr}"
