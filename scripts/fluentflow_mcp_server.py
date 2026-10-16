@@ -666,14 +666,22 @@ def list_tasks(
 
 # Who writes the note on a media submission, said once for both submit tools.
 _MEDIA_NOTE_FLOW = (
-    "By default the task cuts breath gaps out of the media, transcribes the cut file "
-    "(the original when the cut is declined), then Claude writes the note from the frames "
-    "and the transcript, paid by the user's own Anthropic API key (the local Claude "
-    "subscription only when FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription is set). Without a "
-    "usable Claude, the configured text model writes it from the transcript; with neither, the task stops at the transcript and you write the note yourself with get_agent_note_material and save_agent_note. note_mode, "
-    "prompt_preset and system_prompt only apply when a text model writes the note; Claude's "
-    "frame note ignores them. skip_summary=true stops at the transcript. Speaker separation "
-    "is off unless speaker_diarization=true. Returns at once; follow with wait_task."
+    "By default the task transcribes the original, then a model reads the whole transcript "
+    "(and screenshots of long silent stretches where the picture moves) and decides what to "
+    "cut: breath gaps, waiting before the start, leftover after the end, sound checks, a "
+    "sentence said twice. The cut is rendered once and the transcript moved onto it; "
+    "FluentFlow picks that model itself (Claude, then a picture model set in "
+    "FLUENTFLOW_VISION_*, then the text model). Its processing report, with the cuts the "
+    "user should judge, is on the task page. After the cut, Claude writes the note from "
+    "the frames and the transcript, paid by the user's own Anthropic API key (the local "
+    "Claude subscription only when FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription is set); "
+    "without a usable Claude the configured text model writes it from the cut's transcript. "
+    "To write the note yourself, on your own subscription, pass skip_summary=true, wait for "
+    "done, then use get_agent_note_material and save_agent_note; with no model at all the "
+    "task also stops at the transcript for you to do that. note_mode, prompt_preset and "
+    "system_prompt only apply when a text model writes the note; Claude's frame note "
+    "ignores them. Speaker separation is off unless speaker_diarization=true. Returns at "
+    "once; follow with wait_task."
 )
 _SPEAKER_DIARIZATION_SCHEMA = {
     "type": "boolean",
@@ -812,9 +820,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "wait_task",
         "description": (
-            "Wait for a task, note included: a task reads completed once its transcript "
-            "is stored, but done stays false (note_pending=true) until the note is "
-            "written, failed or skipped. When done, task says where things stand (note status "
+            "Wait for a task, cut and note included: a task reads completed once its transcript "
+            "is stored, but done stays false while the recording is being cut (cut_running=true) "
+            "and until the note is written, failed or skipped (note_pending=true). When done, task says where things stand (note status "
             "and length, who wrote it, the output folder, next actions); read the note itself "
             "with get_task_package. Otherwise the current state; call again until done."
         ),

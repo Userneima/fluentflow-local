@@ -198,3 +198,34 @@ def test_a_task_that_ended_without_a_transcript_is_done(jobs_db, status):
     _store(jobs_db, f"t-{status}", status=status, stage="note", summary_status="pending", result={})
 
     assert _wait(_client(), f"t-{status}", timeout_seconds=0)["done"] is True
+
+
+def test_wait_is_not_done_while_the_recording_is_cut_after_its_transcript(jobs_db, monkeypatch):
+    """Survey-first flow (review of the Codex run, 2026-10-16): the task reads
+    completed once the transcript is stored, then the recording is judged and
+    rendered, then the note is written. A render can go minutes without the
+    task changing; the wait still says not done, the note pending."""
+    _store(jobs_db, "t-cutting", stage="done", summary_status="skipped", result={
+        **_TRANSCRIPT, "summary_markdown": "", "summary_skipped": True, "summary_status": "skipped",
+        "note_deferred_to_visual_note": True,
+        "debreath": {"status": "running", "stage": "rendering"},
+    })
+    # Older than the hand-over bound, as a long render leaves it.
+    monkeypatch.setattr(local_agent, "_seconds_since", lambda stamp: 3600.0)
+    client = _client()
+    waited = _wait(client, "t-cutting", timeout_seconds=0)
+    task = client.get("/agent/v1/tasks/t-cutting", headers=_HEADERS).json()["task"]
+
+    assert waited["done"] is False and waited["note_pending"] is True and waited["cut_running"] is True
+    assert task["done"] is False and task["cut_running"] is True
+
+
+def test_a_transcript_only_task_still_waits_for_its_cut(jobs_db):
+    _store(jobs_db, "t-skip-cutting", stage="done", summary_status="skipped", result={
+        **_TRANSCRIPT, "summary_markdown": "", "summary_skipped": True, "summary_status": "skipped",
+        "note_declined": True, "debreath": {"status": "running", "stage": "reviewing"},
+    })
+
+    waited = _wait(_client(), "t-skip-cutting", timeout_seconds=0)
+
+    assert waited["done"] is False and waited["note_pending"] is False and waited["cut_running"] is True

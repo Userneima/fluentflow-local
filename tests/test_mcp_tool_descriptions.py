@@ -1,7 +1,8 @@
 """The MCP tool descriptions match the flow an agent actually gets.
 
-Requirements: submitting cuts breath gaps and writes the note by itself;
-waiting covers the note; the cut and the cut-media note tools are for redoing
+Requirements: submitting transcribes, has a model decide the cut, cuts and
+writes the note by itself, and says how an agent writes the note on its own
+subscription instead; waiting covers the cut and the note; the cut and the cut-media note tools are for redoing
 a step on an existing task, and re-cutting warns about the timeline.
 """
 
@@ -22,7 +23,14 @@ def test_submitting_says_it_cuts_and_writes_the_note():
 
 def test_waiting_covers_the_note():
     text = _description("wait_task")
-    assert "note" in text and "note_pending" in text
+    assert "note" in text and "note_pending" in text and "cut_running" in text
+
+
+def test_submitting_describes_the_survey_first_flow_and_the_agents_own_note():
+    for name in ("submit_local_media", "submit_video_link"):
+        text = _description(name)
+        assert "transcribes the original" in text and "decides what to cut" in text, name
+        assert "skip_summary=true" in text and "get_agent_note_material" in text, name
 
 
 def test_the_step_tools_are_for_redoing_not_the_normal_path():
