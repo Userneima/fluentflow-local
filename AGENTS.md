@@ -28,6 +28,16 @@ Why things are the way they are is in `docs/02-决策记录.md`, grouped by prod
 
 Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests and `python3 -m ruff check backend/ scripts/` (CI runs it; the test suite does not catch unused imports). Push finished, checked work to `main` as it is done, without asking; do not deploy, tag, or change a release version unless explicitly requested.
 
+## Test records
+
+When a real-run test needs a written record of the process (timings, models
+used, what was checked, problems found), save it under
+`~/Downloads/FluentFlow测试记录/<YYYY-MM-DD-HHMMSS>-<topic>/` (owner,
+2026-10-16). FluentFlow's own outputs stay where the product puts them: the
+folder beside a recording from the user's disk, with the transcript and
+subtitles in its `过程文件`. Link the record and that output folder in the
+reply.
+
 ## Restarting the backend
 
 Queued and running tasks live in the backend process. Restarting it marks every
