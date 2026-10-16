@@ -617,6 +617,57 @@ export const AnthropicKeyField = ({state}) => {
     );
 };
 
+// Optional: a picture model behind an OpenAI-compatible endpoint (Kimi, MiMo, a
+// relay). When Claude is not there, it judges the cut from screenshots of the
+// long silent stretches (backend cut_judge). Address and model are shown back;
+// only the key is hidden.
+export const VisionModelField = ({state}) => {
+    const {lang} = useI18n();
+    const {
+        credentialStatus, credentialConfigured, secretDraft, setSecretDraft, saveSecret,
+        secretSaving, secretFeedback, secretInputPlaceholder,
+    } = state;
+    const keyConfigured = credentialConfigured(credentialStatus, 'vision_api_key');
+    const shown = {
+        vision_base_url: credentialStatus?.vision_base_url || '',
+        vision_model: credentialStatus?.vision_model || '',
+    };
+    const field = (name, label, placeholder, type = 'text') => (
+        <div className="space-y-1">
+            <span className="text-xs text-on-surface-variant">{label}</span>
+            <div className="flex gap-2">
+                <input
+                    className={inputClass}
+                    type={type}
+                    placeholder={name === 'vision_api_key' ? secretInputPlaceholder(keyConfigured) : (shown[name] || placeholder)}
+                    value={secretDraft[name] || ''}
+                    onChange={e=>setSecretDraft(d=>({...d, [name]: e.target.value}))}
+                />
+                <button type="button" disabled={secretSaving || !secretDraft[name]} onClick={()=>saveSecret(name)} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
+            </div>
+            <SecretFeedback feedback={secretFeedback} keyName={name} lang={lang}/>
+        </div>
+    );
+    const ready = keyConfigured && shown.vision_base_url && shown.vision_model;
+    return (
+        <div className="space-y-2">
+            <label className={fieldLabelClass}>{lang === 'zh' ? '看图模型（可选）' : 'Picture model (optional)'}</label>
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+                {lang === 'zh'
+                    ? '没有 Claude 时，判断剪哪里改由它看长空白的截图，而不是只看转录稿。填兼容 OpenAI 接口的服务，三项都填才生效，比如月之暗面：地址 https://api.moonshot.cn/v1，模型 kimi-k2.6。'
+                    : 'Without Claude, this model judges the cut from screenshots of long silent stretches instead of the transcript alone. Any OpenAI-compatible service; all three fields are needed, e.g. Moonshot: https://api.moonshot.cn/v1 with kimi-k2.6.'}
+                {' '}
+                {ready
+                    ? (lang === 'zh' ? `现在用的是 ${shown.vision_model}。` : `Now using ${shown.vision_model}.`)
+                    : (lang === 'zh' ? '还没配好。' : 'Not set up yet.')}
+            </p>
+            {field('vision_base_url', lang === 'zh' ? '地址' : 'Address', 'https://api.moonshot.cn/v1')}
+            {field('vision_api_key', 'Key', '', 'password')}
+            {field('vision_model', lang === 'zh' ? '模型名' : 'Model', 'kimi-k2.6')}
+        </div>
+    );
+};
+
 export const FeishuAppCredentialRows = ({state}) => {
     const {lang} = useI18n();
     const {credentialStatus, secretDraft, setSecretDraft, saveSecret, secretSaving, secretFeedback, secretStatusText} = state;

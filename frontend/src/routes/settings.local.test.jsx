@@ -228,6 +228,21 @@ describe('local settings page', () => {
         await screen.findByText('给笔记自动配图');
     });
 
+    // Requirement (to-do, 2026-10-16): the picture model that judges the cut
+    // without Claude is set up here, not only in .env, and says which one is used.
+    it('offers the picture model and says which model it uses once all three are in', async () => {
+        credentials = {vision_api_key_configured: true, vision_base_url: 'https://api.moonshot.cn/v1', vision_model: 'kimi-k2.6'};
+        render(<Settings/>);
+        await screen.findByText('看图模型（可选）');
+        await waitFor(() => expect(screen.getByText(/现在用的是 kimi-k2.6/)).toBeTruthy());
+    });
+
+    it('says the picture model is not set up while a field is missing', async () => {
+        credentials = {vision_api_key_configured: false, vision_base_url: 'https://api.moonshot.cn/v1', vision_model: ''};
+        render(<Settings/>);
+        await waitFor(() => expect(screen.getByText(/还没配好/)).toBeTruthy());
+    });
+
     it('carries no hosted account surface', () => {
         render(<Settings/>);
         expect(screen.queryByText('设备与云端')).toBeNull();

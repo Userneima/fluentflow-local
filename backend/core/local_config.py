@@ -30,6 +30,13 @@ LOCAL_SENSITIVE_FIELDS = {
     # Only the optional pyannote backend uses it, to fetch its models from
     # Hugging Face when they are not staged locally.
     "pyannote_auth_token",
+    # A picture model behind an OpenAI-compatible endpoint (Kimi, MiMo, a
+    # relay) that judges the cut from screenshots when Claude is not there
+    # (``cut_judge``). The address and model are not secret but are kept with
+    # the key, so the three are saved and read in one place.
+    "vision_base_url",
+    "vision_api_key",
+    "vision_model",
 }
 
 LOCAL_ENV_FALLBACKS = {
@@ -41,6 +48,9 @@ LOCAL_ENV_FALLBACKS = {
     "lark_app_id": "LARK_APP_ID",
     "lark_app_secret": "LARK_APP_SECRET",
     "pyannote_auth_token": "PYANNOTE_AUTH_TOKEN",
+    "vision_base_url": "FLUENTFLOW_VISION_BASE_URL",
+    "vision_api_key": "FLUENTFLOW_VISION_API_KEY",
+    "vision_model": "FLUENTFLOW_VISION_MODEL",
 }
 
 SECRET_ALIASES = {
@@ -262,6 +272,11 @@ def credential_status(path: Path | str | None = None) -> dict[str, Any]:
         "lark_app_id_configured": bool(get_sensitive_setting("lark_app_id", path)),
         "lark_app_secret_configured": bool(get_sensitive_setting("lark_app_secret", path)),
         "pyannote_auth_token_configured": bool(get_sensitive_setting("pyannote_auth_token", path)),
+        "vision_api_key_configured": bool(get_sensitive_setting("vision_api_key", path)),
+        # Shown as they are: an address and a model name are not secrets, and
+        # the page has to say which model will look at the pictures.
+        "vision_base_url": get_sensitive_setting("vision_base_url", path) or "",
+        "vision_model": get_sensitive_setting("vision_model", path) or "",
         "storage": "backend_local_file",
     }
 

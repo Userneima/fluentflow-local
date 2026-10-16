@@ -3,6 +3,7 @@ import {Section} from '../components/settingsPrimitives.jsx';
 import {
     AdvancedKeysFold,
     AnthropicKeyField,
+    VisionModelField,
     AutoExportRow,
     AutoIllustrateRow,
     CpuUsageRow,
@@ -116,6 +117,7 @@ const Settings = () => {
                     />
                     <div className="grid gap-3 px-5 py-4">
                         <AnthropicKeyField state={state}/>
+                        <VisionModelField state={state}/>
                         {!claudeWritesNote && <AutoIllustrateRow state={state}/>}
                     </div>
                 </div>

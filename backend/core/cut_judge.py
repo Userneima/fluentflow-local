@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -98,9 +97,12 @@ def _api_key(api_key: str | None) -> Ask:
 
 
 def vision_endpoint() -> tuple[str, str, str] | None:
-    base = (os.environ.get(VISION_BASE_URL_ENV) or "").strip()
-    key = (os.environ.get(VISION_API_KEY_ENV) or "").strip()
-    model = (os.environ.get(VISION_MODEL_ENV) or "").strip()
+    """The picture model the user set up, in the settings page or ``.env``."""
+    from backend.core.local_config import get_sensitive_setting
+
+    base, key, model = (
+        (get_sensitive_setting(name) or "").strip() for name in ("vision_base_url", "vision_api_key", "vision_model")
+    )
     return (base, key, model) if base and key and model else None
 
 

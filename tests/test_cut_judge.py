@@ -105,3 +105,22 @@ def test_a_text_only_judge_gets_the_timeline_only():
                                        pictures=lambda src, gaps: {0: 0.6})
 
     assert "看截图判断" not in seen["system"] and record["screenshots_sent"] == 0
+
+
+def test_a_picture_model_saved_in_the_settings_page_is_used(monkeypatch, tmp_path):
+    """Requirement (to-do, 2026-10-16): the picture model can be set up in the
+    settings page, not only in .env; the address and model are shown back."""
+    from backend.core import local_config
+
+    for name in (cut_judge.VISION_BASE_URL_ENV, cut_judge.VISION_API_KEY_ENV, cut_judge.VISION_MODEL_ENV):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(local_config, "load_project_env", lambda: None)
+    monkeypatch.setenv("FLUENTFLOW_CONFIG_PATH", str(tmp_path / "config.json"))
+    local_config.save_sensitive_settings({
+        "vision_base_url": "https://api.moonshot.cn/v1", "vision_api_key": "sk-test", "vision_model": "kimi-k2.6",
+    })
+
+    assert cut_judge.vision_endpoint() == ("https://api.moonshot.cn/v1", "sk-test", "kimi-k2.6")
+    status = local_config.credential_status()
+    assert status["vision_api_key_configured"] is True
+    assert status["vision_model"] == "kimi-k2.6" and "sk-test" not in str(status)
