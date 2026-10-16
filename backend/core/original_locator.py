@@ -115,10 +115,7 @@ def remember(task_id: str, path: Path) -> None:
     taken = fingerprint(path)
     if not taken:
         return
-    metadata[FINGERPRINT_KEY] = taken
-    job_store.upsert_job(
-        task_id=task_id, status=str(job.get("status") or "completed"), client_id=job.get("client_id"), metadata=metadata,
-    )
+    job_store.update_job_metadata(task_id, {FINGERPRINT_KEY: taken})
 
 
 def _is_the_original(path: Path, job: dict[str, Any], expected: float | None) -> bool:
@@ -177,13 +174,10 @@ def locate(task_id: str, client_id: str | None = None, *, search: Callable[[str]
 def _follow(job: dict[str, Any], field: str, path: Path) -> None:
     metadata = dict(job.get("metadata") or {}) if isinstance(job.get("metadata"), dict) else {}
     if field == "folder_intake":
-        metadata["folder_intake"] = {**dict(metadata.get("folder_intake") or {}), "original_path": str(path)}
+        fields = {"folder_intake": {**dict(metadata.get("folder_intake") or {}), "original_path": str(path)}}
     else:
-        metadata["kept_original_path"] = str(path)
-    job_store.upsert_job(
-        task_id=str(job["task_id"]), status=str(job.get("status") or "completed"),
-        client_id=job.get("client_id"), metadata=metadata,
-    )
+        fields = {"kept_original_path": str(path)}
+    job_store.update_job_metadata(str(job["task_id"]), fields)
 
 
 __all__ = ["FINGERPRINT_KEY", "OriginalMissing", "expected_duration", "fingerprint", "locate", "remember", "spotlight"]

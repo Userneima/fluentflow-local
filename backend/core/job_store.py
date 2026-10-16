@@ -597,6 +597,35 @@ def _notify_result_saved(task_id: str, before: Any, after: Any) -> None:
             logger.warning("result listener failed for %s: %s", task_id, exc)
 
 
+def update_job_metadata(
+    task_id: str,
+    fields: dict[str, Any],
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> bool:
+    """Merge ``fields`` into a task's metadata and touch nothing else.
+
+    ``upsert_job`` writes the status too, so a caller that read the task a
+    moment ago and only meant to add a metadata key put back the status it had
+    read, over whatever a step had set since (found 2026-10-16: recording the
+    original's fingerprint turned a task just marked failed back to completed).
+    """
+    if not task_id or not fields:
+        return False
+    ensure_job_db(db_path)
+    with sqlite3.connect(Path(db_path), timeout=10) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT metadata_json FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
+        if row is None:
+            return False
+        existing = _json_loads(row[0])
+        merged = {**(existing if isinstance(existing, dict) else {}), **fields}
+        conn.execute(
+            "UPDATE jobs SET metadata_json = ? WHERE task_id = ?",
+            (json.dumps(merged, ensure_ascii=False), task_id),
+        )
+    return True
+
+
 def update_job_result(
     task_id: str,
     result: dict[str, Any],

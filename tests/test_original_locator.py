@@ -114,3 +114,21 @@ def test_the_fingerprint_is_taken_once(tmp_path, lengths):
     original_locator.remember(task, path)
 
     assert job_store.get_job(task)["metadata"][original_locator.FINGERPRINT_KEY] == first
+
+
+def test_recording_the_fingerprint_leaves_the_task_status_alone(tmp_path, lengths):
+    """Found 2026-10-16 on CI: recording the fingerprint from a task read a
+    moment earlier put back the status it had read, over a status set since."""
+    path = tmp_path / "会议.mp4"
+    path.write_bytes(b"red" * 1000)
+    task = _task(path)
+    stale = job_store.get_job(task)
+    job_store.upsert_job(task_id=task, status="failed")
+
+    original_locator.remember(task, path)
+    original_locator._follow(stale, "folder_intake", path)
+
+    job = job_store.get_job(task)
+    assert job["status"] == "failed"
+    assert job["metadata"][original_locator.FINGERPRINT_KEY]
+    assert job["metadata"]["folder_intake"]["original_path"] == str(path)
