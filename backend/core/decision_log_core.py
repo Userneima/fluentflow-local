@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from backend.core.note_diagnosis import NO_MODEL_KEY_NEXT, NO_MODEL_KEY_TITLE, skipped_for_no_model_key
+
 DECISION_LOG_VERSION = "1"
 
 
@@ -145,6 +147,8 @@ def _note_status(result: dict[str, Any], job: dict[str, Any]) -> tuple[str, str,
     error = _text(result.get("summary_error") or job.get("error_reason"))
     if summary:
         return "completed", "笔记已生成", "当前结果包含可用的 AI 笔记。", "打开结果页复查或导出。"
+    if skipped_for_no_model_key(result):
+        return "skipped", "跳过 AI 笔记", NO_MODEL_KEY_TITLE + "。", NO_MODEL_KEY_NEXT
     if result.get("summary_skipped") or status == "skipped":
         return "skipped", "跳过 AI 笔记", "本次开启了仅转录模式。", "保留字幕和转录，需要笔记时可重新生成。"
     if status == "failed" or error:

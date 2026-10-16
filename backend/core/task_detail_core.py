@@ -15,6 +15,7 @@ from backend.core.result_schema import (
     canonical_display_segments,
     canonical_raw_segments,
 )
+from backend.core.note_diagnosis import NO_MODEL_KEY_TITLE, skipped_for_no_model_key
 from backend.core.title_display import display_title_for_user
 
 TASK_DETAIL_VERSION = "1"
@@ -477,6 +478,8 @@ def _detail_for(
             return "已生成可阅读字幕段落。"
         return "正在整理字幕段落。"
     if step_id == "note_generation":
+        if skipped_for_no_model_key(result):
+            return NO_MODEL_KEY_TITLE + "。"
         if result.get("summary_skipped") or result.get("summary_status") == "skipped":
             return "本次开启了仅转录模式，已跳过 AI 笔记。"
         if status == "failed":

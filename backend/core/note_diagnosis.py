@@ -8,6 +8,17 @@ from typing import Any
 from backend.core.result_schema import canonical_display_segments, canonical_raw_segments
 
 
+
+# A note skipped because no model is set up at all (no Claude, no text-model
+# key). Not the transcript-only mode the user chose, and said differently.
+NO_MODEL_KEY = "no_model_key"
+NO_MODEL_KEY_TITLE = "还没有填写模型 Key，这次只出了转录稿"
+NO_MODEL_KEY_NEXT = "在「设置」里填好 Key 后点「重生笔记」，或者把笔记交给你的 agent 来写。"
+
+
+def skipped_for_no_model_key(result: dict[str, Any]) -> bool:
+    return result.get("summary_skipped_reason") == NO_MODEL_KEY
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -58,6 +69,17 @@ def build_note_generation_diagnosis(
             "title": "还没有可用于生成笔记的转录",
             "detail": "需要先完成转录，AI 才能生成笔记。",
             "next_action": "先等待或重新提交转录任务。",
+        }
+    if skipped_for_no_model_key(result):
+        return {
+            **base,
+            "status": "skipped",
+            "code": NO_MODEL_KEY,
+            "severity": "neutral",
+            "title": NO_MODEL_KEY_TITLE,
+            "detail": "转录和字幕都已保留。",
+            "next_action": NO_MODEL_KEY_NEXT,
+            "retryable": True,
         }
     if result.get("summary_skipped") or status == "skipped":
         return {
