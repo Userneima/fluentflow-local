@@ -21,6 +21,7 @@ import threading
 import shutil
 import time
 import logging
+import re
 
 
 from backend.core.audio_handler import (
@@ -97,8 +98,9 @@ logger = logging.getLogger(__name__)
 
 
 def _model_used(source: Any) -> str | None:
-    """``mlx-community/whisper-large-v3-turbo`` -> ``large-v3-turbo``."""
-    name = str(source or "").rstrip("/").rsplit("/", 1)[-1]
+    """``mlx-community/whisper-large-v3-turbo`` -> ``large-v3-turbo``; a local
+    model folder (``.../models/large-v3``, with backslashes on Windows) -> its name."""
+    name = re.split(r"[\\/]", str(source or "").rstrip("/\\"))[-1]
     for prefix in ("whisper-", "faster-whisper-"):
         if name.startswith(prefix):
             name = name[len(prefix):]
@@ -968,7 +970,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             # What actually ran: the setting ``stt_model`` names (large-v3) is
             # served on Apple GPUs by large-v3-turbo. Shown on the page; the
             # setting stays as it was, so a retry asks for the same thing.
-            "stt_model_used": _model_used(getattr(tr, "model_source", None)) or stt_model_for_result,
+            "stt_model_used": _model_used(getattr(tr, "model_name", None)) or stt_model_for_result,
             "stt_speed": speed_profile,
             "stt_language": language,
             "detected_language": tr.language,

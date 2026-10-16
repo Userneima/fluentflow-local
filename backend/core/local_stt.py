@@ -138,10 +138,8 @@ def _cuda_is_usable() -> tuple[bool, str | None]:
     runtime = configure_windows_gpu_runtime()
     if runtime.supported_platform and not runtime.ready:
         return False, (
-            "Windows NVIDIA runtime is missing "
-            f"({', '.join(runtime.missing_dlls)}); using CPU. Run "
-            f"{runtime.install_hint} in the FluentFlow virtual environment to "
-            "enable GPU transcription."
+            f"缺少 NVIDIA 显卡转录需要的运行库（{', '.join(runtime.missing_dlls)}），改用 CPU。"
+            f"要用显卡，在项目目录运行：{runtime.install_hint}"
         )
     try:
         import ctranslate2
@@ -149,7 +147,7 @@ def _cuda_is_usable() -> tuple[bool, str | None]:
         if ctranslate2.get_cuda_device_count() > 0:
             return True, None
     except Exception as exc:  # noqa: BLE001 - any failure here means "no GPU"
-        return False, f"CUDA support is not available in this build ({exc}); using CPU."
+        return False, f"这个转录引擎用不了 NVIDIA 显卡（{exc}），改用 CPU。"
     return False, None
 
 
@@ -160,6 +158,11 @@ def _resolve_stt_device(device: str) -> tuple[str, str | None]:
         return requested, None
     usable, reason = _cuda_is_usable()
     return ("cuda" if usable else "cpu"), reason
+
+
+def resolve_stt_device() -> tuple[str, str | None]:
+    """The device a faster-whisper run started now would use, and why not the GPU."""
+    return _resolve_stt_device("auto")
 
 
 def _compute_type_for(device: str) -> str:
@@ -362,7 +365,7 @@ def get_or_load_model_with_stats(
                     or not _is_cuda_runtime_error(exc)
                 ):
                     raise
-                fallback_reason = f"GPU runtime could not start ({exc}); using CPU."
+                fallback_reason = f"显卡转录没能启动（{exc}），改用 CPU。"
                 logger.warning(fallback_reason)
                 effective_device = "cpu"
                 effective_compute = compute_type or _compute_type_for(effective_device)
@@ -428,6 +431,9 @@ class TranscriptionResult:
     model_cache_hit: bool | None = None
     model_load_seconds: float | None = None
     model_source: str | None = None
+    # The weights that ran: a name (large-v3), a local folder named after one,
+    # or an MLX repo. ``model_source`` only says which kind of reference it was.
+    model_name: str | None = None
     compute_type: str | None = None
     device_requested: str | None = None
     device_resolved: str | None = None
@@ -917,6 +923,7 @@ def transcribe_audio(
         model_cache_hit=model_stats.get("model_cache_hit"),
         model_load_seconds=model_stats.get("model_load_seconds"),
         model_source=model_stats.get("model_source"),
+        model_name=model_stats.get("model_resolved"),
         compute_type=model_stats.get("compute_type"),
         device_requested=model_stats.get("device_requested"),
         device_resolved=model_stats.get("device_resolved"),
@@ -999,6 +1006,7 @@ def _transcribe_with_mlx(
         model_cache_hit=stats.get("model_load_seconds") == 0.0,
         model_load_seconds=stats.get("model_load_seconds"),
         model_source=stats.get("mlx_repo"),
+        model_name=stats.get("mlx_repo"),
         compute_type="float16",
         device_requested="mlx",
         device_resolved="gpu",
@@ -1081,6 +1089,7 @@ def transcribe_audio_chunked(
                 model_cache_hit=model_stats.get("model_cache_hit"),
                 model_load_seconds=model_stats.get("model_load_seconds"),
                 model_source=model_stats.get("model_source"),
+                model_name=model_stats.get("model_resolved"),
                 compute_type=model_stats.get("compute_type"),
                 device_requested=model_stats.get("device_requested"),
                 device_resolved=model_stats.get("device_resolved"),
@@ -1158,6 +1167,7 @@ def transcribe_audio_chunked(
         model_cache_hit=model_stats.get("model_cache_hit"),
         model_load_seconds=model_stats.get("model_load_seconds"),
         model_source=model_stats.get("model_source"),
+        model_name=model_stats.get("model_resolved"),
         compute_type=model_stats.get("compute_type"),
         device_requested=model_stats.get("device_requested"),
         device_resolved=model_stats.get("device_resolved"),

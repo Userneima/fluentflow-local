@@ -938,6 +938,18 @@ export const noteGenerationDiagnosis = (result={}, lang='zh') => {
             nextAction: zh ? '先等待或重新提交转录任务。' : 'Wait for transcription or submit the task again.',
         };
     }
+    if(result?.summary_skipped_reason === 'no_model_key') {
+        return {
+            ...base,
+            status: 'skipped',
+            code: 'no_model_key',
+            severity: 'neutral',
+            title: zh ? '还没有填写模型 Key，这次只出了转录稿' : 'No model key yet, so this is a transcript without a note',
+            detail: zh ? '转录和字幕都已保留。' : 'The transcript and subtitles are kept.',
+            nextAction: zh ? '在「设置」里填好 Key 后点「重生笔记」，或者把笔记交给你的 agent 来写。' : 'Add a key in Settings and click Regenerate note, or have your agent write the note.',
+            canRegenerate: true,
+        };
+    }
     if(result?.summary_skipped || status === 'skipped') {
         return {
             ...base,

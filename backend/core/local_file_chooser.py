@@ -17,8 +17,10 @@ someone chooses, and the process returns POSIX paths.
 
 Boundaries, because this makes a window appear on somebody's screen:
 
-- **macOS only, local edition only.** Elsewhere it reports that it is unavailable
-  and the caller falls back to the ordinary upload. There is no hosted route.
+- **macOS and Windows, local edition only.** Windows shows its own dialogs
+  through PowerShell (``local_file_chooser_windows``). Elsewhere it reports that
+  it is unavailable and the caller falls back to the ordinary upload. There is
+  no hosted route.
 - **It times out.** A dialog nobody answers must not hold a worker or a request
   forever, so it is killed and reported as cancelled.
 - **Cancel is a normal answer**, not an error to show.
@@ -33,6 +35,9 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from backend.core import local_file_chooser_windows
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +138,12 @@ def unavailable_reason() -> str | None:
     available either way — this is a convenience that knows the path, not the only
     way in.
     """
+    if sys.platform == "win32":
+        if not local_file_chooser_windows.powershell_path():
+            return "这台电脑上找不到 PowerShell，没法调起系统的文件选择框。"
+        return None
     if sys.platform != "darwin":
-        return "只有 macOS 能调起系统的文件选择框。用「本机文件」照样可以处理，只是剪后文件不会自动存到原文件旁边。"
+        return "只有 macOS 和 Windows 能调起系统的文件选择框。用「本机文件」照样可以处理，只是剪后文件不会自动存到原文件旁边。"
     if not osascript_path():
         return "这台机器上找不到 osascript，没法调起系统的文件选择框。"
     return None
@@ -186,6 +195,11 @@ def choose_media_files(
     reason = unavailable_reason()
     if reason:
         raise FileChooserError(reason)
+    if sys.platform == "win32":
+        return _windows_choice(lambda binary, execute, timeout: local_file_chooser_windows.run_files_dialog(
+            binary, prompt=prompt, allow_multiple=allow_multiple, start_in=start_in,
+            execute=execute, timeout=timeout,
+        ), runner)
     binary = osascript_path()
     fields = {
         # A quote in the prompt reads fine as an apostrophe; a path has to match
@@ -215,6 +229,10 @@ def choose_media_folder(
     reason = unavailable_reason()
     if reason:
         raise FileChooserError(reason)
+    if sys.platform == "win32":
+        return _windows_choice(lambda binary, execute, timeout: local_file_chooser_windows.run_folder_dialog(
+            binary, prompt=prompt, start_in=start_in, execute=execute, timeout=timeout,
+        ), runner)
     binary = osascript_path()
     fields = {
         # A quote in the prompt reads fine as an apostrophe; a path has to match
@@ -223,6 +241,35 @@ def choose_media_folder(
         "location": _location_clause(start_in),
     }
     return _run_dialog(binary, (_FOLDER_VIA_FINDER, _FOLDER_PLAIN), fields, runner)
+
+
+def _windows_choice(show: Any, runner: object) -> ChooserResult:
+    """Put a Windows dialog up through ``show`` and read what came back: the
+    same three outcomes as on macOS (chosen, cancelled, timed out)."""
+    execute = runner if runner is not None else subprocess.run
+    binary = local_file_chooser_windows.powershell_path()
+    try:
+        completed = show(binary, execute, timeout_seconds())
+    except subprocess.TimeoutExpired:
+        logger.info("file chooser timed out after %ss", timeout_seconds())
+        return ChooserResult(paths=[], cancelled=True)
+    except OSError as exc:
+        raise FileChooserError(f"打不开系统的文件选择框：{exc}") from exc
+    if getattr(completed, "returncode", 0) != 0:
+        stderr = (getattr(completed, "stderr", "") or "").strip()
+        raise FileChooserError(f"系统的文件选择框返回了错误：{stderr[:200] or '未知原因'}")
+    return _chosen_paths(completed)
+
+
+def _chosen_paths(completed: object) -> ChooserResult:
+    paths = [
+        Path(line.strip())
+        for line in (getattr(completed, "stdout", "") or "").splitlines()
+        if line.strip()
+    ]
+    if not paths:
+        return ChooserResult(paths=[], cancelled=True)
+    return ChooserResult(paths=paths)
 
 
 def _run_dialog(
@@ -262,14 +309,7 @@ def _run_dialog(
                 continue
             raise FileChooserError(f"系统的文件选择框返回了错误：{stderr[:200] or '未知原因'}")
 
-        paths = [
-            Path(line.strip())
-            for line in (getattr(completed, "stdout", "") or "").splitlines()
-            if line.strip()
-        ]
-        if not paths:
-            return ChooserResult(paths=[], cancelled=True)
-        return ChooserResult(paths=paths)
+        return _chosen_paths(completed)
     raise FileChooserError(f"系统的文件选择框返回了错误：{last_error[:200] or '未知原因'}")
 
 

@@ -13,7 +13,8 @@ because each of these is a way a user could be left stuck or confused:
 - a dialog nobody answers is killed rather than holding a request open;
 - a chosen file still goes through the same validation as a typed path, and an
   unusable choice is reported per file instead of failing the whole thing;
-- on anything other than macOS it says so and the ordinary upload stays.
+- Windows gets its own dialog, through PowerShell;
+- on anything else it says so and the ordinary upload stays.
 
 Every test injects the runner, so no window opens on anybody's screen.
 """
@@ -124,12 +125,12 @@ def test_a_nonsense_timeout_falls_back_to_the_default(monkeypatch):
 
 # ── where it is not available ──────────────────────────────────────────────
 
-def test_off_macos_it_says_so_and_leaves_the_upload_alone(monkeypatch):
-    monkeypatch.setattr(fc.sys, "platform", "win32")
+def test_off_macos_and_windows_it_says_so_and_leaves_the_upload_alone(monkeypatch):
+    monkeypatch.setattr(fc.sys, "platform", "linux")
 
     reason = fc.unavailable_reason()
 
-    assert reason and "macOS" in reason
+    assert reason and "macOS" in reason and "Windows" in reason
     assert "本机文件" in reason, "the ordinary way in has to be named"
     with pytest.raises(fc.FileChooserError):
         fc.choose_media_files(runner=_runner(stdout="/a/b.mov\n"))
@@ -167,3 +168,80 @@ def test_a_backslash_in_the_starting_folder_is_escaped_rather_than_dropped(tmp_p
     clause = fc._location_clause(folder)
 
     assert "odd\\\\name" in clause, "the path must still match the disk after AppleScript unescapes it"
+
+
+# ── Windows ────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def on_windows(monkeypatch):
+    monkeypatch.setattr(fc.sys, "platform", "win32")
+    monkeypatch.setattr(fc.local_file_chooser_windows, "powershell_path", lambda: r"C:\Windows\powershell.exe")
+
+
+def _decoded_script(command):
+    import base64
+
+    return base64.b64decode(command[command.index("-EncodedCommand") + 1]).decode("utf-16-le")
+
+
+def test_windows_has_a_dialog(on_windows):
+    assert fc.unavailable_reason() is None
+
+
+def test_windows_without_powershell_says_what_is_missing(on_windows, monkeypatch):
+    monkeypatch.setattr(fc.local_file_chooser_windows, "powershell_path", lambda: None)
+    assert "PowerShell" in (fc.unavailable_reason() or "")
+
+
+def test_windows_chosen_files_come_back_as_paths(on_windows):
+    seen: dict = {}
+    first, second = r"C:\录像\周会 1.mp4", r"D:\b.mov"
+    outcome = fc.choose_media_files(runner=_runner(stdout=f"{first}\r\n{second}\r\n", record=seen))
+
+    assert outcome.paths == [Path(first), Path(second)]
+    assert "-STA" in seen["command"] and "OpenFileDialog" in _decoded_script(seen["command"])
+
+
+def test_windows_cancel_is_a_normal_answer(on_windows):
+    outcome = fc.choose_media_files(runner=_runner(stdout=""))
+    assert outcome.cancelled is True and outcome.paths == []
+
+
+def test_windows_a_forgotten_dialog_is_given_up_on(on_windows):
+    def hangs(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
+
+    assert fc.choose_media_files(runner=hangs).cancelled is True
+
+
+def test_windows_a_failed_dialog_says_why(on_windows):
+    with pytest.raises(fc.FileChooserError, match="boom"):
+        fc.choose_media_files(runner=_runner(returncode=1, stderr="boom"))
+
+
+def test_windows_what_the_user_supplies_never_enters_the_script(on_windows, tmp_path):
+    """A quote or a backslash in the prompt or the folder must not change the
+    script; both travel in environment variables."""
+    seen: dict = {}
+
+    def run(command, **kwargs):
+        seen["command"], seen["env"] = list(command), kwargs["env"]
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    folder = tmp_path / "it's"
+    folder.mkdir()
+    fc.choose_media_files(prompt='选 "这个"', start_in=folder, runner=run)
+
+    script = _decoded_script(seen["command"])
+    assert "这个" not in script and str(folder) not in script
+    assert seen["env"]["FFDIALOG_PROMPT"] == '选 "这个"'
+    assert seen["env"]["FFDIALOG_START"] == str(folder)
+    assert "*.mp4" in seen["env"]["FFDIALOG_FILTER"]
+
+
+def test_windows_folder_dialog_returns_the_folder(on_windows):
+    seen: dict = {}
+    outcome = fc.choose_media_folder(runner=_runner(stdout="D:\\录像\r\n", record=seen))
+
+    assert outcome.paths == [Path("D:\\录像")]
+    assert "FolderBrowserDialog" in _decoded_script(seen["command"])

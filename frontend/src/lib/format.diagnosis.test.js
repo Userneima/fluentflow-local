@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {diagnoseTaskError, friendlyTaskError, larkExportToastText, taskErrorContextForJob} from './format.js';
+import {diagnoseTaskError, friendlyTaskError, larkExportToastText, noteGenerationDiagnosis, taskErrorContextForJob} from './format.js';
 
 // Written from what a person using FluentFlow Local should read, not from the
 // rule table. This edition has no accounts and no hosted quota: every failure
@@ -180,5 +180,20 @@ describe('an old Douyin fallback failure', () => {
         expect(diag.code).not.toBe('douyin_fallback_not_allowed');
         expect(diag.settingsTarget).toBe('');
         expect(diag.retryable).toBe(true);
+    });
+});
+
+describe('noteGenerationDiagnosis without any model key', () => {
+    it('is a neutral skip that says to add a key, not a failure to retry', () => {
+        const diag = noteGenerationDiagnosis({
+            transcript_text: '大家好',
+            summary_status: 'skipped',
+            summary_skipped: true,
+            summary_skipped_reason: 'no_model_key',
+        }, 'zh');
+        expect(diag.status).toBe('skipped');
+        expect(diag.severity).toBe('neutral');
+        expect(diag.code).toBe('no_model_key');
+        expect(diag.nextAction).toContain('Key');
     });
 });

@@ -93,7 +93,7 @@ def _transcription_checks() -> list[ReadinessCheck]:
     before a user waits on them.
     """
     try:
-        from backend.core.local_stt import resolve_local_stt_engine
+        from backend.core.local_stt import resolve_local_stt_engine, resolve_stt_device
         from backend.core.local_stt_assets import is_downloaded, planned_model
     except Exception as exc:  # noqa: BLE001 - the faster-whisper check above already said so
         return [ReadinessCheck(
@@ -107,10 +107,18 @@ def _transcription_checks() -> list[ReadinessCheck]:
     lane, lane_reason = resolve_local_stt_engine()
     if lane == "mlx":
         engine_detail = "Apple 芯片加速（mlx-whisper）"
-    elif lane_reason:
-        engine_detail = f"CPU（faster-whisper）：{lane_reason}"
     else:
-        engine_detail = "faster-whisper"
+        # The device, not the missing MLX lane, is what decides the speed here:
+        # a Windows machine with an NVIDIA card used to read "CPU" because MLX
+        # is macOS-only, while its transcription ran on the GPU.
+        device, device_reason = resolve_stt_device()
+        if device.startswith("cuda"):
+            engine_detail = "NVIDIA 显卡加速（faster-whisper）"
+        else:
+            reasons = [reason for reason in (
+                lane_reason if sys.platform == "darwin" else None, device_reason,
+            ) if reason]
+            engine_detail = "CPU（faster-whisper）" + (f"：{'；'.join(reasons)}" if reasons else "")
     checks.append(ReadinessCheck(name="stt-engine", ok=True, required=False, detail=engine_detail))
 
     try:
@@ -208,11 +216,10 @@ def run_readiness_checks() -> list[ReadinessCheck]:
             ok=gpu_runtime.ready,
             required=False,
             detail=(
-                "NVIDIA GPU transcription runtime is ready in this project environment."
+                "NVIDIA 显卡转录需要的运行库已装好。"
                 if gpu_runtime.ready
-                else "NVIDIA GPU runtime DLLs are missing "
-                f"({', '.join(gpu_runtime.missing_dlls)}). Transcription will use the CPU; "
-                f"run {gpu_runtime.install_hint} to enable GPU transcription."
+                else f"缺少 NVIDIA 显卡转录需要的运行库（{', '.join(gpu_runtime.missing_dlls)}），"
+                f"转录会用 CPU，慢一些。要用显卡，在项目目录运行：{gpu_runtime.install_hint}"
             ),
         ))
 

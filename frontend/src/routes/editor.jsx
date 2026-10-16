@@ -2014,7 +2014,7 @@ const Editor = () => {
                                     <div className="hide-scrollbar min-h-0 flex-1 overflow-y-auto p-6 text-[#111111] dark:text-white">
                                     {result.summary_skipped ? (
                                         <>
-                                            <p className="text-sm italic text-[#666] dark:text-white/60">{t('edit.summarySkipped')}</p>
+                                            <p className="text-sm italic text-[#666] dark:text-white/60">{t(result.summary_skipped_reason === 'no_model_key' ? 'edit.summaryNoKey' : 'edit.summarySkipped')}</p>
                                             <AgentNotePrompt result={result} lang={lang}/>
                                         </>
                                     ) : result.summary_status === 'failed' || result.summary_error ? (

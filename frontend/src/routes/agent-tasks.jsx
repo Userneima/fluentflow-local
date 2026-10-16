@@ -400,6 +400,11 @@ export const debreathTile = (job, lang) => {
     // nothing", which is why the list payload carries this block at all: without it
     // a freshly cut task reported "未剪" on this very card.
     if (!state || typeof state !== 'object') {
+        // A task still running has not reached the cut yet: the recording is
+        // transcribed whole first, so a fresh task read "older task" until then.
+        if (!['completed', 'failed', 'cancelled'].includes(job?.status)) {
+            return {value: isZh ? '转录完再剪' : 'After transcription'};
+        }
         return {value: isZh ? '未剪（旧任务）' : 'Not cut (older task)'};
     }
     const plan = state.plan || {};
@@ -456,6 +461,7 @@ export const noteTileValue = (job, lang) => {
             : base;
     }
     if (result.summary_status === 'failed' || result.summary_error) return isZh ? '没生成' : 'Not written';
+    if (result.summary_skipped_reason === 'no_model_key') return isZh ? '没填 Key，只出转录稿' : 'No key: transcript only';
     if (result.summary_skipped) return isZh ? '已跳过' : 'Skipped';
     if (result.summary_status === 'pending') return isZh ? '正在写…' : 'Being written…';
     return isZh ? '等处理' : 'Pending';

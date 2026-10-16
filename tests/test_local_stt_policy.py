@@ -72,4 +72,6 @@ def test_the_result_names_the_model_that_ran_not_only_the_setting():
 
     assert _model_used("mlx-community/whisper-large-v3-turbo") == "large-v3-turbo"
     assert _model_used("/models/faster-whisper-large-v3/") == "large-v3"
+    assert _model_used(r"C:\models\large-v3") == "large-v3"
+    assert _model_used("large-v3") == "large-v3"
     assert _model_used(None) is None

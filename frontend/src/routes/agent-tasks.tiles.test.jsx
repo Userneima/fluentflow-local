@@ -12,8 +12,13 @@ import {cutFileDelivery, debreathTile} from './agent-tasks.jsx';
 const job = (debreath) => ({result: {debreath}});
 
 describe('debreathTile', () => {
+    it('says a running task is cut after its transcription, not that it is old', () => {
+        expect(debreathTile({status: 'processing', result: {}}, 'zh').value).toBe('转录完再剪');
+        expect(debreathTile({status: 'queued', result: {}}, 'zh').value).toBe('转录完再剪');
+    });
+
     it('separates a task that was never cut from one that found nothing', () => {
-        expect(debreathTile({result: {}}, 'zh').value).toBe('未剪（旧任务）');
+        expect(debreathTile({status: 'completed', result: {}}, 'zh').value).toBe('未剪（旧任务）');
         expect(debreathTile(job({status: 'completed', plan: {cut_count: 0}}), 'zh').value)
             .toBe('没有可剪的空白');
     });

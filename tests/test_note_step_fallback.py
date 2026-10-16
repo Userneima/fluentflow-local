@@ -76,7 +76,7 @@ def test_it_falls_back_to_the_text_note_and_says_why(owed_task, claude_unreachab
     assert event["metadata"]["fallback"] == "text_note"
 
 
-def test_without_a_text_key_it_fails_with_a_reason_instead_of_staying_silent(owed_task, claude_unreachable, monkeypatch):
+def test_without_a_text_key_it_is_skipped_with_a_reason_instead_of_staying_silent(owed_task, claude_unreachable, monkeypatch):
     import backend.core.local_entry_guards as guards
 
     monkeypatch.setattr(guards, "local_ai_kwargs", lambda **_kw: {"provider": "deepseek"})
@@ -84,8 +84,12 @@ def test_without_a_text_key_it_fails_with_a_reason_instead_of_staying_silent(owe
     local_intake_flow.write_note(owed_task, None)
 
     result = job_store.get_job(owed_task)["result"]
-    assert result["summary_status"] == "failed"
-    assert "登录" in result["summary_error"] and "Key" in result["summary_error"]
+    # No model at all is a setup the product offers, not a failure to retry.
+    assert result["summary_status"] == "skipped" and result["summary_skipped"] is True
+    assert result["summary_skipped_reason"] == "no_model_key"
+    assert "登录" in result["summary_skipped_message"] and "Key" in result["summary_skipped_message"]
+    assert not result.get("summary_error")
+    assert job_store.get_job(owed_task)["summary_status"] == "skipped"
 
 
 def test_a_task_that_asked_for_a_transcript_only_is_still_left_alone(claude_unreachable):

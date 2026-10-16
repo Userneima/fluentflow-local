@@ -377,12 +377,17 @@ def _write_text_note_instead(
     if on_local_work_done is not None:
         on_local_work_done()  # nothing below uses this machine
     if not kwargs.get("api_key"):
+        # No model at all is a setup the product offers ("转录照常进行，笔记可以交给
+        # 你的 agent 来写"), not a failure: recorded as skipped, with the reason, so
+        # the page says what to do instead of "failed, try again", which cannot help.
         _patch_result(task_id, client_id, {
-            "summary_status": "failed",
-            "summary_error": f"{reason}另外也没有可用的文本模型 Key，所以这次没有笔记。",
-            "summary_skipped": False,
+            "summary_status": "skipped",
+            "summary_skipped": True,
+            "summary_skipped_reason": "no_model_key",
+            "summary_skipped_message": f"{reason}也没有填文本模型的 Key，所以这次只出了转录稿。",
+            "summary_error": None,
         })
-        upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed")
+        upsert_job(task_id=task_id, status="completed", stage="done", summary_status="skipped")
         return
     # Same input as the pipeline's note stage: the corrected transcript when
     # there is one, written as speaker-prefixed lines when two or more people
