@@ -93,6 +93,9 @@ class CookieUse:
 
     sent: bool = False
     unreadable: bool = False
+    # Connected without the system proxy, after the site refused the proxied
+    # request; later steps of the same link connect the same way.
+    direct: bool = False
     notes: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -947,6 +950,9 @@ def _run_yt_dlp_step(
     stopped letting other programs read Chrome's data), so every link on every
     platform failed while the same link worked without a login. The retry is
     noted in ``cookie_use`` and later steps skip the login altogether.
+
+    Likewise a site in China that refuses a request sent through the system
+    proxy is asked once more directly, and later steps connect directly too.
     """
     use = cookie_use if cookie_use is not None else CookieUse()
     cookie_args = [] if use.unreadable else _yt_dlp_cookies_args(cookies_from_browser, url)
@@ -954,7 +960,11 @@ def _run_yt_dlp_step(
     extra: dict[str, Any] = {"on_output_line": on_output_line} if on_output_line is not None else {}
     if pid_file is not None:
         extra["pid_file"] = pid_file
-    result = _run_process(build_args(cookie_args), timeout=timeout, cancellation_event=cancellation_event, **extra)
+
+    def build(cookies: list[str]) -> list[str]:
+        return _without_proxy(build_args(cookies)) if use.direct else build_args(cookies)
+
+    result = _run_process(build(cookie_args), timeout=timeout, cancellation_event=cancellation_event, **extra)
     if result.returncode != 0 and _yt_dlp_mid_upgrade(f"{result.stderr or ''} {result.stdout or ''}"):
         # The daily upgrade replaces yt-dlp's files while it runs; a step that
         # starts in those seconds finds no module. Wait for it once rather than
@@ -962,7 +972,7 @@ def _run_yt_dlp_step(
         _wait_for_upgrade(cancellation_event)
         if before_retry is not None:
             before_retry()
-        result = _run_process(build_args(cookie_args), timeout=timeout, cancellation_event=cancellation_event, **extra)
+        result = _run_process(build(cookie_args), timeout=timeout, cancellation_event=cancellation_event, **extra)
     if (
         cookie_args
         and result.returncode != 0
@@ -983,8 +993,53 @@ def _run_yt_dlp_step(
         use.sent = False
         if before_retry is not None:
             before_retry()
-        result = _run_process(build_args([]), timeout=timeout, cancellation_event=cancellation_event, **extra)
+        cookie_args = []
+        result = _run_process(build([]), timeout=timeout, cancellation_event=cancellation_event, **extra)
+    if (
+        not use.direct
+        and result.returncode != 0
+        and _refused_through_proxy(f"{result.stderr or ''} {result.stdout or ''}", url)
+    ):
+        # Found on a Windows machine whose VPN client is the system proxy:
+        # Bilibili answered HTTP 412 to every proxied request and worked at once
+        # without the proxy. A site in China refusing a request that went out
+        # through a proxy is asked again directly, once.
+        logger.warning("%s refused the proxied request; retrying without the proxy", url)
+        use.direct = True
+        use.notes.append({
+            "provider": "system-proxy",
+            "status": "bypassed",
+            "reason": "refused_through_proxy",
+            "detail": "经代理访问被网站拒绝（HTTP 412），已改为不走代理直连",
+        })
+        if before_retry is not None:
+            before_retry()
+        result = _run_process(build(cookie_args), timeout=timeout, cancellation_event=cancellation_event, **extra)
     return result
+
+
+def _system_proxy_configured() -> bool:
+    """Whether requests go out through a proxy: the environment, or on Windows
+    the system setting (urllib reads the registry there)."""
+    import urllib.request
+
+    proxies = urllib.request.getproxies()
+    return bool(proxies.get("https") or proxies.get("http") or proxies.get("all"))
+
+
+def _refused_through_proxy(output: str, url: str) -> bool:
+    return (
+        (is_bilibili_url(url) or is_douyin_url(url))
+        and "HTTP Error 412" in output
+        and _system_proxy_configured()
+    )
+
+
+def _without_proxy(argv: list[str]) -> list[str]:
+    """``argv`` with yt-dlp told to connect directly (``--proxy ""``)."""
+    if len(argv) >= 3 and argv[1:3] == ["-m", "yt_dlp"]:
+        return [*argv[:3], "--proxy", "", *argv[3:]]
+    return [argv[0], "--proxy", "", *argv[1:]]
 
 
 def run_yt_dlp(
