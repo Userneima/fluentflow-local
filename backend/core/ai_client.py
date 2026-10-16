@@ -4,8 +4,9 @@ no circular import back to ai_summarizer."""
 
 from __future__ import annotations
 
-import os
 import base64
+import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,8 @@ from backend.core.ai_config import (
     SUPPORTED_PROVIDERS,
 )
 
+
+logger = logging.getLogger(__name__)
 
 def _normalize_provider(provider: str | None) -> str:
     p = (provider or os.environ.get("AI_PROVIDER") or "deepseek").strip().lower()
@@ -121,6 +124,53 @@ def _provider_of(client: OpenAI) -> str:
     return "unknown"
 
 
+# Models a provider turned away on this run, and what was used instead, so the
+# next call goes straight to the replacement.
+_REPLACED: dict[tuple[str, str], str] = {}
+_GONE_WORDS = ("model not exist", "model_not_found", "does not exist", "not found", "no such model", "invalid model")
+
+
+def _model_gone(exc: Exception) -> bool:
+    """Whether the provider refused the request because it has no such model:
+    a name it retired or renamed. Other refusals (key, balance, limits) are not."""
+    status = getattr(exc, "status_code", None)
+    text = str(exc).lower()
+    return status in (400, 404) and "model" in text and any(word in text for word in _GONE_WORDS)
+
+
+def _listed_models(client: OpenAI) -> set[str] | None:
+    try:
+        return {str(getattr(model, "id", "")) for model in client.models.list()}
+    except Exception:  # noqa: BLE001 - the list only narrows the choice
+        return None
+
+
+def _create(client: OpenAI, model: str, *, may_replace: bool = True, **kwargs: Any) -> tuple[Any, str]:
+    """Send the request; when the provider no longer has ``model``, send it
+    again with the provider's current default (owner, 2026-10-16: a provider
+    retired deepseek-reasoner and nothing here noticed for months). The model
+    the user picked stays in their settings; the settings page says it is gone.
+    Returns the response and the model that answered."""
+    provider = _provider_of(client)
+    model = _REPLACED.get((provider, model), model)
+    try:
+        return client.chat.completions.create(model=model, **kwargs), model
+    except Exception as exc:
+        if not _model_gone(exc):
+            raise
+        # The defaults are text models: a request with pictures is not moved onto one.
+        fallback = _provider_default_model(provider) if may_replace and provider in SUPPORTED_PROVIDERS else ""
+        listed = _listed_models(client)
+        if not fallback or fallback == model or (listed is not None and fallback not in listed):
+            raise RuntimeError(
+                f"模型 {model} 已不在服务商的可用列表里，请在设置页换一个模型。"
+                + (f"现在可用的有：{'、'.join(sorted(listed)[:8])}" if listed else "")
+            ) from exc
+        logger.warning("model %s is gone at %s; using %s", model, provider, fallback)
+        _REPLACED[(provider, model)] = fallback
+        return client.chat.completions.create(model=fallback, **kwargs), fallback
+
+
 def _chat(
     client: OpenAI,
     model: str,
@@ -129,8 +179,8 @@ def _chat(
     *,
     temperature: float = 0.3,
 ) -> str:
-    resp = client.chat.completions.create(
-        model=model,
+    resp, model = _create(
+        client, model,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -168,8 +218,8 @@ def _vision_chat(
             "type": "image_url",
             "image_url": {"url": data_url},
         })
-    resp = client.chat.completions.create(
-        model=model,
+    resp, model = _create(
+        client, model, may_replace=False,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": content},

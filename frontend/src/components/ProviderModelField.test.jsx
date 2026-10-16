@@ -11,6 +11,7 @@ const getProviderModels = vi.fn();
 vi.mock('../app/shared.jsx', async (importOriginal) => ({
     ...(await importOriginal()),
     useApi: () => ({getProviderModels}),
+    useI18n: () => ({t: (key) => key, lang: 'zh'}),
 }));
 
 const {ProviderModelField} = await import('./settingsRows.jsx');
@@ -35,5 +36,18 @@ describe('ProviderModelField', () => {
         rerender(<ProviderModelField provider="openai" value="" configured onChange={() => {}}/>);
         await waitFor(() => expect(container.querySelectorAll('datalist option')).toHaveLength(2));
         expect(getProviderModels).toHaveBeenCalledWith('openai');
+    });
+});
+
+
+describe('a saved model the provider no longer lists', () => {
+    it('is named as gone once the list is in, and not before', async () => {
+        getProviderModels.mockResolvedValue(['deepseek-flash', 'deepseek-v4-pro']);
+        render(<ProviderModelField provider="deepseek" value="deepseek-v3-old" configured onChange={() => {}}/>);
+        await waitFor(() => expect(screen.getByText(/deepseek-v3-old 已不在/)).toBeTruthy());
+        cleanup();
+        getProviderModels.mockResolvedValue([]);
+        render(<ProviderModelField provider="deepseek" value="deepseek-v3-old" configured onChange={() => {}}/>);
+        expect(screen.queryByText(/已不在/)).toBeNull();
     });
 });

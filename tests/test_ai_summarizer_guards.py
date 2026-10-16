@@ -9,6 +9,7 @@ result has to say so.
 from __future__ import annotations
 
 import itertools
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -274,3 +275,71 @@ def test_a_note_that_runs_out_of_time_before_any_draft_still_fails(no_network, m
 
     with pytest.raises(summ.NoteDeadlineExceeded):
         summ.summarize_transcript_with_metadata(TRANSCRIPT, note_mode="high_fidelity", provider="deepseek")
+
+
+# ── a model the provider no longer has ──────────────────────────────────────
+
+class _Gone(Exception):
+    status_code = 400
+
+
+class _FakeClient:
+    """A provider that has dropped one model name."""
+
+    base_url = "https://api.deepseek.com"
+
+    def __init__(self, gone: str, listed: set[str]):
+        self.calls: list[str] = []
+        outer = self
+
+        class _Completions:
+            def create(self, *, model, **kwargs):
+                outer.calls.append(model)
+                if model == gone:
+                    raise _Gone("Error code: 400 - Model Not Exist")
+                return types.SimpleNamespace(
+                    choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="好"))], usage=None,
+                )
+
+        self.chat = types.SimpleNamespace(completions=_Completions())
+        self.models = types.SimpleNamespace(list=lambda: [types.SimpleNamespace(id=name) for name in listed])
+
+
+def test_a_model_the_provider_dropped_is_replaced_by_its_current_default(monkeypatch):
+    """Owner, 2026-10-16: DeepSeek retired deepseek-reasoner and nothing here
+    noticed. A note asked of a model the provider no longer has is written by
+    the provider's current default instead of failing, and the next call goes
+    there straight away."""
+    monkeypatch.setattr(ai_client, "_REPLACED", {})
+    client = _FakeClient("deepseek-v3-old", {"deepseek-flash", "deepseek-v4-pro"})
+
+    assert ai_client._chat(client, "deepseek-v3-old", "系统", "用户") == "好"
+    assert client.calls == ["deepseek-v3-old", "deepseek-flash"]
+    ai_client._chat(client, "deepseek-v3-old", "系统", "用户")
+    assert client.calls[-1] == "deepseek-flash" and len(client.calls) == 3
+
+
+def test_when_the_default_is_gone_too_the_user_is_told_what_is_available(monkeypatch):
+    monkeypatch.setattr(ai_client, "_REPLACED", {})
+    client = _FakeClient("deepseek-flash", {"deepseek-v5"})
+
+    with pytest.raises(RuntimeError) as error:
+        ai_client._chat(client, "deepseek-flash", "系统", "用户")
+
+    assert "deepseek-flash" in str(error.value) and "deepseek-v5" in str(error.value)
+
+
+def test_other_refusals_are_not_taken_for_a_missing_model(monkeypatch):
+    monkeypatch.setattr(ai_client, "_REPLACED", {})
+
+    class _NoMoney(Exception):
+        status_code = 402
+
+    client = _FakeClient("never", set())
+
+    def broke(**kwargs):
+        raise _NoMoney("Insufficient Balance")
+
+    client.chat.completions.create = broke
+    with pytest.raises(_NoMoney):
+        ai_client._chat(client, "deepseek-flash", "系统", "用户")

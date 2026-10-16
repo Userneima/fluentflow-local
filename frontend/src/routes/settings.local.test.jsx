@@ -60,7 +60,7 @@ const noteStyle = {
     previewTasks: async () => ({tasks: []}),
 };
 
-const getProviderModels = async () => ['gpt-9-mini', 'gpt-9'];
+const getProviderModels = async (provider) => (provider === 'deepseek' ? ['deepseek-flash', 'deepseek-v4-pro'] : ['gpt-9-mini', 'gpt-9']);
 
 const {default: Settings} = await import('./settings.jsx');
 
@@ -241,6 +241,15 @@ describe('local settings page', () => {
         credentials = {vision_api_key_configured: false, vision_base_url: 'https://api.moonshot.cn/v1', vision_model: ''};
         render(<Settings/>);
         await waitFor(() => expect(screen.getByText(/还没配好/)).toBeTruthy());
+    });
+
+    // Owner, 2026-10-16: a provider retired the model a user had saved and
+    // nothing said so. The settings page says it once the provider's list is in.
+    it('says when the saved model is no longer in the provider list', async () => {
+        credentials = {deepseek_api_key_configured: true};
+        stored = {aiProvider: 'deepseek', aiModel: 'deepseek-v3-old'};
+        render(<Settings/>);
+        await waitFor(() => expect(screen.getByText(/deepseek-v3-old 已不在这家服务商现在的模型列表里/)).toBeTruthy());
     });
 
     it('carries no hosted account surface', () => {

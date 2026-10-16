@@ -489,7 +489,11 @@ export const ProviderModelField = ({provider, value, configured, onChange}) => {
         }
         return () => { live = false; };
     }, [provider, configured, getProviderModels]);
+    const {lang} = useI18n();
     const listId = `provider-models-${provider}`;
+    // The provider's own list says the saved name is gone (retired, renamed):
+    // said here, since the backend quietly writes with the default instead.
+    const gone = models.length > 0 && !!value && !models.includes(value);
     const commit = () => {
         const next = draft.trim();
         if (next && next !== value) onChange(next);
@@ -509,6 +513,13 @@ export const ProviderModelField = ({provider, value, configured, onChange}) => {
             <datalist id={listId}>
                 {models.map((model) => <option key={model} value={model}/>)}
             </datalist>
+            {gone && (
+                <p className="mt-1 text-xs leading-relaxed text-error">
+                    {lang === 'zh'
+                        ? `${value} 已不在这家服务商现在的模型列表里，写笔记时会自动改用它现在的默认模型。想用别的就从下拉里换一个。`
+                        : `${value} is no longer in this provider's model list; notes will use its current default. Pick another from the list to change that.`}
+                </p>
+            )}
         </>
     );
 };

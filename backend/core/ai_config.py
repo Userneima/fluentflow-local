@@ -24,9 +24,11 @@ DEFAULT_OPENAI_MODEL: Final[str] = "gpt-5.4-mini"
 DEFAULT_QWEN_MODEL: Final[str] = "qwen-plus"
 # The Qwen default above is a TEXT model. Frame selection must use a vision
 # (multimodal) Qwen model, or images sent to a text model fail and the whole
-# visual-evidence step reports "unavailable". qwen-vl-plus is the cheaper vision
-# tier; override with QWEN_VISION_MODEL (e.g. qwen-vl-max) if needed.
-DEFAULT_QWEN_VISION_MODEL: Final[str] = "qwen-vl-plus"
+# visual-evidence step reports "unavailable". Bailian lists qwen3.7-plus under
+# its picture-understanding models (model list, 2026-10-16); qwen-vl-plus was
+# reported in its 2026-10-10 batch of retired models. Override with
+# QWEN_VISION_MODEL.
+DEFAULT_QWEN_VISION_MODEL: Final[str] = "qwen3.7-plus"
 DEFAULT_MODEL: Final[str] = DEFAULT_DEEPSEEK_MODEL
 SUPPORTED_PROVIDERS: Final[set[str]] = {"deepseek", "openai", "qwen"}
 SUPPORTED_NOTE_MODES: Final[set[str]] = {"auto", "direct", "fast", "high_fidelity", "chapter_coverage"}
