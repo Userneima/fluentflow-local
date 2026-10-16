@@ -29,10 +29,10 @@ describe('who writes the note', () => {
         const writer = resolveNoteWriter({
             runtimeConfig: {writesItsOwnNote: true},
             credentialStatus: {visual_note_available: false, deepseek_api_key_configured: true},
-            settings: {aiProvider: 'deepseek', aiModel: 'deepseek-reasoner'},
+            settings: {aiProvider: 'deepseek', aiModel: 'deepseek-flash'},
         });
         expect(writer.kind).toBe('text_model');
-        expect(noteWriterSentence(writer, 'zh')).toMatch(/^当前写笔记的是 DeepSeek（deepseek-reasoner）。由它写的笔记只根据说出来的话写/);
+        expect(noteWriterSentence(writer, 'zh')).toMatch(/^当前写笔记的是 DeepSeek（deepseek-flash）。由它写的笔记只根据说出来的话写/);
         expect(noteWriterBatchClause(writer, 'zh')).not.toContain('Claude');
     });
 

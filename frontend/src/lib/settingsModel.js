@@ -2,7 +2,10 @@ export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashsc
 // Keys an older build could leave in stored settings. elevenLabsApiKey belonged
 // to a cloud transcription engine this app does not have; it is dropped, never sent.
 export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi', 'elevenLabsApiKey'];
-export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-reasoner';
+// DeepSeek's current Flash model; the names below were retired or are only
+// routed to it for now (DeepSeek change log, 2026-04-24 and 2026-09-10).
+export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-flash';
+const RETIRED_DEEPSEEK_MODELS = new Set(['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']);
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
 export const DEFAULT_QWEN_MODEL = 'qwen-plus';
 export const SUPPORTED_FRONTEND_NOTE_MODES = new Set(['auto', 'direct', 'high_fidelity', 'chapter_coverage']);
@@ -58,7 +61,7 @@ export const normalizeAiModel = (provider, model) => {
     if (p === 'qwen') {
         return value || DEFAULT_QWEN_MODEL;
     }
-    return value || DEFAULT_DEEPSEEK_MODEL;
+    return value && !RETIRED_DEEPSEEK_MODELS.has(value) ? value : DEFAULT_DEEPSEEK_MODEL;
 };
 
 export const sanitizeSettings = (settings={}) => {

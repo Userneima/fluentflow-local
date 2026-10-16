@@ -270,6 +270,7 @@ def write_note(
     client_id: str | None,
     *,
     on_local_work_done: Callable[[], None] | None = None,
+    planned_ranges: list[Any] | None = None,
 ) -> None:
     """Write the task's note from the file the transcript came from.
 
@@ -296,6 +297,7 @@ def write_note(
             keyframe_extractor=extract_keyframes,
             on_local_work_done=on_local_work_done,
             trigger="auto",
+            **({"planned_ranges": planned_ranges} if planned_ranges else {}),
         )
         upsert_job(task_id=task_id, status="completed", stage="done", summary_status="completed")
     except visual_note_job.VisualNoteError as exc:

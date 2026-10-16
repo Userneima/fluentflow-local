@@ -176,6 +176,11 @@ class CutMedia:
     has_video: bool
     unchanged: bool
     render_verified: bool | None = None
+    # Set when the note is written while the cut is still rendering: ``path``
+    # is then the original, and these are the stretches the cut will keep, on
+    # both clocks. Pictures are taken from the original at the moment each one
+    # will have in the cut, and the note reads exactly as if written from it.
+    planned_ranges: tuple[cut_timeline.KeptRange, ...] = ()
 
     @property
     def kind(self) -> str:
@@ -189,6 +194,7 @@ class CutMedia:
             "unchanged": self.unchanged,
             "render_verified": self.render_verified,
             "artifact_kind": None if self.unchanged else DEBREATH_MEDIA_KIND,
+            **({"pictures_from_original": True} if self.planned_ranges else {}),
         }
 
 
@@ -249,6 +255,29 @@ def cut_media(task_id: str, result: dict[str, Any]) -> CutMedia | None:
         has_video=path.suffix.lower() in VIDEO_SUFFIXES,
         unchanged=False,
         render_verified=state.get("render_verified"),
+    )
+
+
+def planned_cut_media(task_id: str, ranges: list[cut_timeline.KeptRange]) -> CutMedia | None:
+    """The original, read as the cut that is being rendered from ``ranges``.
+
+    The cut's stretches are known once the model has decided what to cut; the
+    file takes minutes more to render. The note does not wait for it: its
+    transcript is moved onto the cut's clock by the same ranges the render
+    uses, and its pictures are taken from the original at the matching moments
+    (to-do batch three, 2026-10-16)."""
+    if not ranges:
+        return None
+    source = find_source_file(task_id) or in_place_source_path(get_job(task_id))
+    if not source or not Path(source).is_file():
+        return None
+    source = Path(source)
+    return CutMedia(
+        path=source,
+        filename=source.name,
+        has_video=source.suffix.lower() in VIDEO_SUFFIXES,
+        unchanged=False,
+        planned_ranges=tuple(ranges),
     )
 
 
@@ -349,6 +378,11 @@ def _transcript_for_media(
             "shortened_segments": 0,
             "chars": sum(len(str(item.get("text") or "")) for item in segments),
         }, segments
+    if media.planned_ranges:
+        report = cut_timeline.remap_segments(segments, list(media.planned_ranges))
+        if not report.segments:
+            raise VisualNoteError("按剪辑表重算之后，字幕没有剩下可用的内容，笔记未生成。")
+        return cut_timeline.timestamped_transcript(report.segments), report.as_dict(), report.segments
     if media.unchanged:
         text = cut_timeline.timestamped_transcript(segments)
         return text, {
@@ -376,6 +410,7 @@ def describe(
     *,
     api_key: str | None = None,
     channel: Channel | None = None,
+    planned_ranges: list[cut_timeline.KeptRange] | None = None,
 ) -> dict[str, Any]:
     """What would happen if this ran, without spending anything.
 
@@ -432,9 +467,12 @@ def describe(
         payload["reason"] = f"只有已完成的任务能重写笔记，这个任务现在是 {status or '未知状态'}"
         return payload
 
-    media = cut_media(task_id, result)
+    media = planned_cut_media(task_id, planned_ranges) if planned_ranges else cut_media(task_id, result)
     if media is None:
-        payload["reason"] = _cut_media_reason(task_id, result)
+        payload["reason"] = (
+            _missing_recording_reason(task_id, "笔记要从原片截图") if planned_ranges
+            else _cut_media_reason(task_id, result)
+        )
         return payload
     payload["media"] = media.as_dict()
     payload["source_filename"] = Path(media.filename).name
@@ -498,14 +536,15 @@ def describe(
 
 
 def _require_eligible(
-    task_id: str, job: dict[str, Any], *, api_key: str | None, channel: Channel
+    task_id: str, job: dict[str, Any], *, api_key: str | None, channel: Channel,
+    planned_ranges: list[cut_timeline.KeptRange] | None = None,
 ) -> tuple[CutMedia, str, dict[str, Any], list[dict[str, Any]]]:
     """Refuse before anything is spent, and hand back what the run needs.
 
     The media and the remapped transcript come from here rather than being looked
     up again inside the run, so the run reads exactly what the preview described.
     """
-    preview = describe(task_id, job, api_key=api_key, channel=channel)
+    preview = describe(task_id, job, api_key=api_key, channel=channel, planned_ranges=planned_ranges)
     if not preview["eligible"]:
         raise VisualNoteError(
             str(preview["reason"]),
@@ -514,7 +553,7 @@ def _require_eligible(
             actionable=not channel.available,
         )
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
-    media = cut_media(task_id, result)
+    media = planned_cut_media(task_id, planned_ranges) if planned_ranges else cut_media(task_id, result)
     if media is None:  # pragma: no cover - describe already refused this
         raise VisualNoteError(_cut_media_reason(task_id, result))
     transcript, timeline, segments = _transcript_for_media(task_id, result, media)
@@ -585,6 +624,80 @@ def _promotion(
     return fields, replaced
 
 
+# A time as the transcript sent to the model writes it: ``[mm:ss]`` or
+# ``[h:mm:ss]``. Only this form is moved: a bare "10:30" in a note is as likely
+# a meeting's clock time as a moment in the recording.
+_CITED_TIME_RE = re.compile(r"\[(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]")
+
+
+def _clock_text(seconds: float, *, hours: bool) -> str:
+    total = int(round(seconds))
+    h, rest = divmod(total, 3600)
+    m, sec = divmod(rest, 60)
+    return f"[{h}:{m:02d}:{sec:02d}]" if hours or h else f"[{m:02d}:{sec:02d}]"
+
+
+def _times_back_onto_original(markdown: str, ranges: list[cut_timeline.KeptRange]) -> str:
+    def move(match: re.Match[str]) -> str:
+        h, m, sec = match.group(1), match.group(2), match.group(3)
+        at = int(h or 0) * 3600 + int(m) * 60 + int(sec)
+        moved = cut_timeline.source_time(ranges, at)
+        return match.group(0) if moved is None else _clock_text(moved, hours=h is not None)
+
+    return _CITED_TIME_RE.sub(move, markdown)
+
+
+def put_back_onto_original(task_id: str, ranges: list[cut_timeline.KeptRange], *, client_id: str | None = None) -> bool:
+    """A note written while the cut rendered, for a cut that then did not come
+    out: the task stays on the original, so the note's pictures and the times
+    it cites go back onto the original's clock. The pictures themselves were
+    taken from the original and stand. False when there was nothing to move."""
+    job = get_job(task_id, client_id=client_id)
+    result = dict((job or {}).get("result") or {})
+    state = visual_note_state(result)
+    media = state.get("media_source") if isinstance(state.get("media_source"), dict) else {}
+    if not job or not media.get("pictures_from_original") or not ranges:
+        return False
+    if str(result.get("transcript_media") or "") == TRANSCRIPT_MEDIA_CUT:
+        return False
+
+    def frames_back(records: Any) -> Any:
+        if not isinstance(records, list):
+            return records
+        moved = []
+        for record in records:
+            if isinstance(record, dict) and record.get("timestamp_seconds") is not None:
+                record = {**record, "timestamp_seconds": cut_timeline.source_time(ranges, record["timestamp_seconds"])}
+            moved.append(record)
+        return moved
+
+    note_state: dict[str, Any] = {
+        "media_source": {
+            **media, "kind": MEDIA_SOURCE_UNCHANGED, "unchanged": True, "artifact_kind": None,
+            "cut_not_rendered": True,
+        },
+        "frames_sent": frames_back(state.get("frames_sent")),
+        "frames_cited": frames_back(state.get("frames_cited")),
+    }
+    fields: dict[str, Any] = {}
+    artifacts: dict[str, dict[str, Any]] | None = None
+    if state.get("markdown"):
+        note_state["markdown"] = _times_back_onto_original(str(state["markdown"]), ranges)
+        artifacts = {VISUAL_NOTE_KIND: write_text_artifact(
+            task_id, VISUAL_NOTE_KIND, VISUAL_NOTE_ARTIFACT_FILENAME, note_state["markdown"].rstrip() + "\n",
+        )}
+    if state.get("promoted") and result.get("summary_markdown"):
+        fields = {
+            "summary_markdown": _times_back_onto_original(str(result["summary_markdown"]), ranges),
+            "summary_written_from": frame_note_written_from(MEDIA_SOURCE_UNCHANGED),
+        }
+    _store(
+        task_id, client_id=client_id, state=note_state, artifacts=artifacts,
+        result_fields=fields or None, rewrite_artifacts=bool(fields),
+    )
+    return True
+
+
 def record_replaced_note(result: dict[str, Any], *, replaced_by: str) -> dict[str, Any]:
     """The ``visual_note`` block after another writer replaced the task's note.
 
@@ -638,8 +751,15 @@ def collect_frames(
     *,
     keyframe_extractor: Callable[..., Any],
     segments: list[dict[str, Any]] | None = None,
+    ranges: list[cut_timeline.KeptRange] | None = None,
 ) -> list[FrameInput]:
     """Sample frames where the picture changes, and register them as artifacts.
+
+    ``ranges``: ``source`` is the original and the note is written on the clock
+    of the cut these ranges describe. The cue times are moved back onto the
+    original to look there, every frame found is moved onto the cut's clock,
+    and a frame from a stretch the cut removes is dropped: the cut never shows
+    it.
 
     The extraction policy is injected rather than imported, the way ``media_job``
     takes one: the local edition's policy and the hosted one are different
@@ -666,7 +786,7 @@ def collect_frames(
             # moves the looks this pass was already going to take onto the moments
             # somebody was speaking, and costs nothing extra.
             segments=None,
-            anchor_seconds=_cue_seconds(segments),
+            anchor_seconds=_anchor_seconds(segments, ranges),
             scene_threshold=0.3,
             # Everything distinct the recording has, not one request's worth. A
             # channel that can open files decides for itself which of these are
@@ -684,6 +804,8 @@ def collect_frames(
             frame for frame in extraction.frames
             if isinstance(frame, dict) and frame.get("path") and frame.get("low_information") is not True
         ]
+        if ranges:
+            usable = _frames_onto_cut_clock(usable, ranges)
         for index, frame in enumerate(usable[: claude_vision.FRAME_INDEX_CAP], start=1):
             filename = f"{_FRAME_PREFIX}_{index:04d}.jpg"
             _write_file_artifact(task_id, "frame", f"frames/{filename}", str(frame["path"]))
@@ -713,6 +835,25 @@ def collect_frames(
     # cannot attach more than twenty and still has to choose, and an index is the
     # better answer than the mechanical thinning it does today.
     return frames
+
+
+def _anchor_seconds(segments: list[dict[str, Any]] | None, ranges: list[cut_timeline.KeptRange] | None) -> list[float]:
+    cues = _cue_seconds(segments)
+    if not ranges:
+        return cues
+    moved = (cut_timeline.source_time(ranges, seconds) for seconds in cues)
+    return [seconds for seconds in moved if seconds is not None]
+
+
+def _frames_onto_cut_clock(frames: list[dict[str, Any]], ranges: list[cut_timeline.KeptRange]) -> list[dict[str, Any]]:
+    """Frames taken from the original, each at the moment it has in the cut;
+    those from a removed stretch, or with no time to place them by, dropped."""
+    placed = []
+    for frame in frames:
+        moment = cut_timeline.new_time(ranges, frame.get("timestamp_seconds"))
+        if moment is not None:
+            placed.append({**frame, "timestamp_seconds": moment, "source_timestamp_seconds": frame.get("timestamp_seconds")})
+    return sorted(placed, key=lambda frame: frame["timestamp_seconds"])
 
 
 def _frame_artifact_path(task_id: str, filename: str) -> Path:
@@ -993,8 +1134,12 @@ def _run_visual_note(
     note_skill: note_skills.NoteSkill | None = None,
     checker: tuple[note_coverage.Chat, str] | None = None,
     reviser: note_coverage.Chat | None = None,
+    planned_ranges: list[cut_timeline.KeptRange] | None = None,
 ) -> dict[str, Any]:
     """Read the cut file, ask Claude to write from it, record what it read.
+
+    ``planned_ranges``: the cut is still rendering; read the original as the
+    cut these ranges describe (``planned_cut_media``).
 
     Each part is checked for missing knowledge points once written, and what is
     missing is written back in before the parts are joined (``_covered_draft``).
@@ -1026,7 +1171,7 @@ def _run_visual_note(
     active = channel or visual_note_channel.resolve_channel(api_key)
     write = writer if writer is not None else active.write
     media, transcript, timeline, segments = _require_eligible(
-        task_id, job, api_key=api_key, channel=active
+        task_id, job, api_key=api_key, channel=active, planned_ranges=planned_ranges,
     )
     if not claimed:
         claim(task_id)
@@ -1056,6 +1201,7 @@ def _run_visual_note(
                 task_id, media.path,
                 keyframe_extractor=keyframe_extractor,
                 segments=segments,
+                **({"ranges": list(media.planned_ranges)} if media.planned_ranges else {}),
             )
             if media.has_video
             else []

@@ -10,7 +10,15 @@ from typing import Final
 DEEPSEEK_BASE_URL: Final[str] = "https://api.deepseek.com"
 OPENAI_BASE_URL: Final[str] = "https://api.openai.com/v1"
 QWEN_BASE_URL: Final[str] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DEFAULT_DEEPSEEK_MODEL: Final[str] = "deepseek-reasoner"
+# DeepSeek's name for its current Flash model (V4.1 Flash on 2026-09-10),
+# thinking on by default. deepseek-chat and deepseek-reasoner were to be
+# discontinued on 2026-07-24 (DeepSeek's change log, 2026-04-24), and the
+# deepseek-v4-flash names are only "temporarily routed" to V4.1 Flash; a name
+# kept from any of them is sent as this one (``RETIRED_DEEPSEEK_MODELS``).
+DEFAULT_DEEPSEEK_MODEL: Final[str] = "deepseek-flash"
+RETIRED_DEEPSEEK_MODELS: Final[frozenset[str]] = frozenset({
+    "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp",
+})
 DEFAULT_OPENAI_MODEL: Final[str] = "gpt-5.4-mini"
 # Qwen's own name for its current Plus model, so the default moves with it.
 DEFAULT_QWEN_MODEL: Final[str] = "qwen-plus"

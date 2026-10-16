@@ -485,6 +485,7 @@ def _write_note_holding_slot(
     client_id: Optional[str],
     release_queue: Any,
     abandoned: threading.Event,
+    planned_ranges: Any = None,
 ) -> None:
     """Write the note on this thread, holding a remote slot from the hand-off on.
 
@@ -509,7 +510,9 @@ def _write_note_holding_slot(
             raise NoteAbandoned("任务已取消，笔记没有写。")
 
     try:
-        local_intake_flow.write_note(task_id, client_id, on_local_work_done=hand_off)
+        local_intake_flow.write_note(
+            task_id, client_id, on_local_work_done=hand_off, planned_ranges=planned_ranges,
+        )
     except NoteAbandoned as exc:
         # The frame note records this itself; the text-note path lets it through.
         local_intake_flow._patch_result(task_id, client_id, {
@@ -527,6 +530,7 @@ async def _write_note_after_transcript(
     client_id: Optional[str],
     *,
     on_local_work_done: Any = None,
+    planned_ranges: Any = None,
 ) -> None:
     """The last step of the flow: the note, from the file the transcript came from.
 
@@ -548,7 +552,9 @@ async def _write_note_after_transcript(
     abandoned = threading.Event()
     future = asyncio.get_running_loop().run_in_executor(
         _NOTE_EXECUTOR,
-        functools.partial(_write_note_holding_slot, task_id, client_id, on_local_work_done, abandoned),
+        functools.partial(
+            _write_note_holding_slot, task_id, client_id, on_local_work_done, abandoned, planned_ranges,
+        ),
     )
     try:
         await future
@@ -602,10 +608,13 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
 
     try:
         await _run_pipeline(ctx)
-        await _trim_recorded_tail(ctx)
-        await _write_note_after_transcript(
-            ctx.task_id_value, ctx.client_id, on_local_work_done=hand_off,
-        )
+        if _note_can_start_before_the_cut(ctx):
+            await _cut_and_note_side_by_side(ctx, hand_off)
+        else:
+            await _trim_recorded_tail(ctx)
+            await _write_note_after_transcript(
+                ctx.task_id_value, ctx.client_id, on_local_work_done=hand_off,
+            )
         await _export_note_written_after_pipeline(ctx)
         await _deliver_to_output_folder(ctx)
     finally:
@@ -615,18 +624,101 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
         done.set()
 
 
-async def _trim_recorded_tail(ctx: MediaJobContext) -> None:
+def _note_can_start_before_the_cut(ctx: MediaJobContext) -> bool:
+    """Whether the note may be written while the cut renders: the cut is
+    decided from the transcript (``survey_cut``), and the note will be the
+    picture note, which can read the original as the cut (``planned_cut_media``).
+    The text note that stands in without Claude reads the transcript as stored,
+    so it waits for the cut."""
+    if not local_intake_flow.survey_first_enabled():
+        return False
+    try:
+        if not local_intake_flow.note_is_wanted(ctx.task_id_value, ctx.client_id):
+            return False
+        return visual_note_channel.resolve_channel(resolve_secret(None, "anthropic_api_key")).available
+    except Exception as exc:  # noqa: BLE001 - in turn is always safe
+        logger.warning("could not tell whether the note can start early for %s: %s", ctx.task_id_value, exc)
+        return False
+
+
+async def _cut_and_note_side_by_side(ctx: MediaJobContext, hand_off: Any) -> None:
+    """Cut and note at the same time (to-do batch three, 2026-10-16).
+
+    The model decides what to cut from the transcript; from that moment the
+    note is written from the original read as the cut, while the cut renders.
+    The note's few minutes of local work (finding its pictures) overlap the
+    render; its long wait on Claude costs this machine nothing. The queue moves
+    on once the render is done and the note's pictures are on disk.
+
+    When nothing is to be cut, or the plan never came (the cut failed before
+    it), the note waits for the cut and reads what it left, as before."""
+    loop = asyncio.get_running_loop()
+    planned: dict[str, Any] = {}
+    plan_known = asyncio.Event()
+    pictures_taken = asyncio.Event()
+
+    def on_plan(ranges: Any) -> None:
+        planned["ranges"] = ranges
+        loop.call_soon_threadsafe(plan_known.set)
+
+    def note_local_work_done() -> None:
+        loop.call_soon_threadsafe(pictures_taken.set)
+
+    cut = asyncio.ensure_future(_trim_recorded_tail(ctx, on_plan=on_plan))
+    note: Optional[asyncio.Future] = None
+    try:
+        plan_wait = asyncio.ensure_future(plan_known.wait())
+        await asyncio.wait({cut, plan_wait}, return_when=asyncio.FIRST_COMPLETED)
+        plan_wait.cancel()
+        if not planned.get("ranges"):
+            await cut
+            await _write_note_after_transcript(
+                ctx.task_id_value, ctx.client_id, on_local_work_done=hand_off,
+            )
+            return
+        note = asyncio.ensure_future(_write_note_after_transcript(
+            ctx.task_id_value, ctx.client_id,
+            on_local_work_done=note_local_work_done, planned_ranges=planned["ranges"],
+        ))
+        await cut
+        pictures_wait = asyncio.ensure_future(pictures_taken.wait())
+        await asyncio.wait({note, pictures_wait}, return_when=asyncio.FIRST_COMPLETED)
+        pictures_wait.cancel()
+        hand_off()
+        await note
+        # The cut did not come out after all: the task stays on the original,
+        # and so does the note written for the cut.
+        await loop.run_in_executor(None, functools.partial(
+            _note_back_onto_original_if_uncut, ctx.task_id_value, ctx.client_id, planned["ranges"],
+        ))
+    except asyncio.CancelledError:
+        for step in (cut, note):
+            if step is not None and not step.done():
+                step.cancel()
+        raise
+
+
+def _note_back_onto_original_if_uncut(task_id: str, client_id: Optional[str], ranges: Any) -> None:
+    try:
+        visual_note_job.put_back_onto_original(task_id, ranges, client_id=client_id)
+    except Exception as exc:  # noqa: BLE001 - the note itself is the user's
+        logger.warning("could not move the note of %s back onto the original: %s", task_id, exc)
+
+
+async def _trim_recorded_tail(ctx: MediaJobContext, *, on_plan: Any = None) -> None:
     """Cut the recording now that its transcript exists (``survey_cut``: a
     model reads the whole timeline, then one render), or, when it was cut
     before transcription, cut off what was recorded after the content ended
-    (``tail_trim``). Before the note, so the note reads the cut. Never raises."""
-    work = (
-        survey_cut.survey_and_cut if local_intake_flow.survey_first_enabled() else tail_trim.trim_tail
-    )
+    (``tail_trim``). Never raises.
+
+    ``on_plan`` (survey path only) gets the stretches the cut keeps as soon as
+    they are decided, so the note can start while the cut renders."""
+    if local_intake_flow.survey_first_enabled():
+        work = functools.partial(survey_cut.survey_and_cut, ctx.task_id_value, ctx.client_id, on_plan=on_plan)
+    else:
+        work = functools.partial(tail_trim.trim_tail, ctx.task_id_value, ctx.client_id)
     try:
-        await asyncio.get_running_loop().run_in_executor(
-            None, functools.partial(work, ctx.task_id_value, ctx.client_id),
-        )
+        await asyncio.get_running_loop().run_in_executor(None, work)
     except Exception as exc:  # noqa: BLE001 - the task's own results stand
         logger.warning("tail trim skipped for %s: %s", ctx.task_id_value, exc)
 

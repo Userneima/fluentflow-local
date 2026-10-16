@@ -659,10 +659,15 @@ def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]
 
 def survey_and_cut(
     task_id: str, client_id: str | None = None, *, chat: tuple[Chat, str] | None = None,
+    on_plan: Callable[[list[cut_timeline.KeptRange]], None] | None = None,
 ) -> dict[str, Any] | None:
     """Judge the recording from its transcript, cut it once, and move the
     transcript onto the cut. Returns what was recorded, or None when there was
-    nothing to do. Never raises: the transcript of the original stands."""
+    nothing to do. Never raises: the transcript of the original stands.
+
+    ``on_plan`` gets the stretches the cut will keep as soon as they are
+    decided, before the render, when there is something to cut: the note is
+    written from them while the cut renders (to-do batch three)."""
     job = job_store.get_job(task_id, client_id=client_id)
     result = dict((job or {}).get("result") or {})
     if not job or str(result.get("transcript_media") or "") == TRANSCRIPT_MEDIA_CUT:
@@ -696,6 +701,7 @@ def survey_and_cut(
             record["gaps"] = describe_gaps(list(plan.cuts), {}, {})
             record["skipped"] = "没有可用的模型或转录，只按音量剪。"
             final["plan"] = plan
+            _tell_plan(plan)
             return plan
         try:
             revised, decided = revise_plan(
@@ -708,7 +714,16 @@ def survey_and_cut(
             record["error"] = str(exc)[:300]
             revised = plan
         final["plan"] = revised
+        _tell_plan(revised)
         return revised
+
+    def _tell_plan(plan: CutPlan) -> None:
+        if on_plan is None or not plan.cuts:
+            return
+        try:
+            on_plan(cut_timeline.kept_ranges(plan.as_dict()))
+        except Exception as exc:  # noqa: BLE001 - the cut goes on regardless
+            logger.warning("could not hand the plan of %s on: %s", task_id, exc)
 
     try:
         debreath_job.run_debreath(task_id, client_id=client_id, revise=revise)

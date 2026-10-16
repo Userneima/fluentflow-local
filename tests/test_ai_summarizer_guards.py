@@ -136,9 +136,17 @@ def test_a_short_transcript_reports_no_truncation(no_network, monkeypatch):
 # ── the client honours the model the user chose, and does not wait forever ──
 
 def test_the_model_the_user_picked_is_the_model_called():
-    assert ai_client._normalize_model("deepseek", "deepseek-chat") == "deepseek-chat"
-    assert ai_client._normalize_model("deepseek", "deepseek-reasoner") == "deepseek-reasoner"
-    assert ai_client._normalize_model("deepseek", "") == ai_client._provider_default_model("deepseek")
+    assert ai_client._normalize_model("deepseek", "deepseek-v4-pro") == "deepseek-v4-pro"
+    assert ai_client._normalize_model("deepseek", "") == ai_client._provider_default_model("deepseek") == "deepseek-flash"
+
+
+def test_a_retired_deepseek_name_is_sent_as_the_current_flash_model():
+    """DeepSeek retired deepseek-chat and deepseek-reasoner (change log,
+    2026-04-24) and routes the V4 Flash names to V4.1 Flash only for now
+    (2026-09-10); a name kept from before must keep working."""
+    for retired in ("deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"):
+        assert ai_client._normalize_model("deepseek", retired) == "deepseek-flash"
+    assert ai_client._normalize_model("openai", "deepseek-chat") == "deepseek-chat", "only DeepSeek's own names"
 
 
 def test_every_request_has_a_timeout_and_one_retry(monkeypatch):

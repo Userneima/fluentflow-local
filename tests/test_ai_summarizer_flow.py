@@ -62,14 +62,14 @@ def recorded_provider(monkeypatch):
 
 def test_a_short_transcript_gets_a_note_with_its_sections_and_a_record_of_how(recorded_provider):
     result = summ.summarize_transcript_with_metadata(
-        TRANSCRIPT, provider="deepseek", model="deepseek-reasoner", api_key="sk-test", note_mode="auto"
+        TRANSCRIPT, provider="deepseek", model="deepseek-v4-pro", api_key="sk-test", note_mode="auto"
     )
 
     for heading in ("## 一、开场", "## 二、核心方法", "## 三、结尾"):
         assert heading in result.markdown
     assert recorded_provider["provider"] == "deepseek"
     assert recorded_provider["api_key"] == "sk-test"
-    assert set(recorded_provider["models"]) == {"deepseek-reasoner"}, "the model the user picked is the one called"
+    assert set(recorded_provider["models"]) == {"deepseek-v4-pro"}, "the model the user picked is the one called"
     assert result.requested_mode == "auto"
     assert result.resolved_mode == "direct", "a transcript this short is written in one call"
     assert result.coverage["checked"] is True, "and the note is then checked against it"

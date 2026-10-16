@@ -19,6 +19,7 @@ from backend.core.ai_config import (
     OPENAI_BASE_URL,
     QWEN_BASE_URL,
     DEFAULT_DEEPSEEK_MODEL,
+    RETIRED_DEEPSEEK_MODELS,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_QWEN_MODEL,
     SUPPORTED_PROVIDERS,
@@ -56,6 +57,10 @@ def _normalize_model(provider: str, model: str | None) -> str:
     for the other one without being told.
     """
     value = (model or "").strip()
+    if provider == "deepseek" and value in RETIRED_DEEPSEEK_MODELS:
+        # A retired name the provider itself sends to its successor; asking
+        # for the successor by name keeps working after the routing ends.
+        return DEFAULT_DEEPSEEK_MODEL
     return value or _provider_default_model(provider)
 
 
