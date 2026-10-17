@@ -242,7 +242,11 @@ def test_the_agent_writes_the_report_and_it_survives_a_change(api, tmp_path, no_
             {"ref": "g2", "text": "讲者让大家读表格，留着。", "unsure": True, "doubt": "不确定表格要看多久"},
         ]},
     ]}
-    assert api.post(f"/agent/v1/tasks/{task['id']}/agent-cut/report", headers=_HEADERS, json=report).status_code == 200
+    sent = api.post(f"/agent/v1/tasks/{task['id']}/agent-cut/report", headers=_HEADERS, json=report)
+    assert sent.status_code == 200
+    # The count the agent tells the user includes what the rules always ask
+    # (the removed talk), not only what the agent was unsure of.
+    assert sent.json()["to_judge"] == 2
 
     shown = _result(task["id"])["debreath"]["survey"]["report"]
     assert shown["summary"] == "开头结尾都干净了。" and shown["organized_by"] == "agent"

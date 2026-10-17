@@ -1176,7 +1176,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "to the user one by one. A wrong gap id is refused, so you can fix it and send again. The "
             "answer lists what was done as numbered facts with report_instructions: organise them and "
             "call save_agent_cut_report. Then tell the user the cut is done and how many places need "
-            "their look on the task page in FluentFlow; do not ask them in chat (they need the video)."
+            "their look (save_agent_cut_report's to_judge) on the task page in FluentFlow; do not ask them "
+            "in chat (they need the video)."
         ),
         "inputSchema": {
             "type": "object",
@@ -1196,7 +1197,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "Send the processing report for the cut you judged: the facts save_agent_cut listed, organised "
             "as its report_instructions say (summary, and sections of items that cite facts by ref; mark "
             "unsure with a doubt only where you are not sure). It is shown on the task page and kept when "
-            "the user changes a cut later."
+            "the user changes a cut later. The answer's to_judge is how many places the page asks the user "
+            "to judge (yours plus the ones FluentFlow always asks about, such as removed talk): tell the user "
+            "that number, not your own count."
         ),
         "inputSchema": {
             "type": "object",

@@ -312,9 +312,10 @@ def decide(task_id: str, client_id: str | None, answer: Any, model: str = "") ->
         "next": (
             "FluentFlow is cutting with your decision now (it waits for its queue). Organise the facts "
             "above into the processing report as report_instructions say and call save_agent_cut_report "
-            "with that JSON. Then tell the user the cut is done and how many places need their look, and "
-            "point them to the task's page in FluentFlow to judge them there; do not ask them in chat, "
-            "they need the video to judge."
+            "with that JSON. Its answer says how many places the user is asked to judge (to_judge, "
+            "including the ones FluentFlow always asks about). Then tell the user the cut is done and that "
+            "number, and point them to the task's page in FluentFlow to judge them there; do not ask them "
+            "in chat, they need the video to judge."
         ),
     }
 
@@ -356,7 +357,15 @@ def save_report(task_id: str, client_id: str | None, answer: Any) -> dict[str, A
             result["debreath"] = {**debreath, "survey": survey}
 
     _save(task_id, client_id, saved)
-    return {"task_id": task_id, "saved": True}
+    # What the page will ask the user: the agent's doubts and what the rules
+    # always ask (removed talk, long cuts). The agent tells the user this
+    # number; it cannot count the rules' items itself.
+    shown = cut_report.from_keyed(facts, keyed, str(state.get("judged_by") or "agent"))
+    judge = next((section["items"] for section in shown["sections"] if section.get("judge")), [])
+    return {
+        "task_id": task_id, "saved": True, "to_judge": len(judge),
+        "to_judge_items": [f"{item.get('text')}（{item.get('doubt')}）" for item in judge],
+    }
 
 
 # --- who is still there ------------------------------------------------------
