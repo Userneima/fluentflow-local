@@ -30,6 +30,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
+from backend.core.task_watch import TaskWatch
 from backend.core.job_store import delete_jobs, get_job, list_jobs_by_statuses, list_jobs_for_retention, recent_local_folders, update_job_result, upsert_job
 from backend.core.history_retention import enforce_history_retention
 from backend.core.local_entry_guards import (
@@ -604,10 +605,16 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
     side on this machine was measured slower than running them in turn.
     """
     loop = asyncio.get_running_loop()
+    compressing: list[asyncio.Future] = []
 
     def hand_off() -> None:
-        # Called from the note's worker thread, once its frames are on disk.
-        loop.call_soon_threadsafe(done.set)
+        # Called once the note's frames are on disk (from its worker thread) or
+        # the cut is rendered. The compressed copy of a high-bitrate original
+        # is local work too, so it runs first and the queue moves on after it.
+        def start() -> None:
+            if not compressing:
+                compressing.append(asyncio.ensure_future(_compress_then_release(ctx, done)))
+        loop.call_soon_threadsafe(start)
 
     try:
         await _run_pipeline(ctx)
@@ -618,8 +625,19 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
             await continue_after_agent(ctx.task_id_value, ctx.client_id, ctx)
             return
         await _cut_then_note(ctx, hand_off)
+        if not compressing:
+            # No note took the hand-off (none wanted, or it stopped early).
+            hand_off()
+            await asyncio.sleep(0)
+        if compressing:
+            # Delivered after the copy exists, so the folder lists it.
+            await compressing[0]
         await _export_note_written_after_pipeline(ctx)
         await _deliver_to_output_folder(ctx)
+    except asyncio.CancelledError:
+        for step in compressing:
+            step.cancel()
+        raise
     finally:
         # Always release the chain — including when this job is cancelled, and
         # when the note ended before reaching its hand-off. The remote slot is
@@ -712,6 +730,23 @@ async def resume_agent_cuts() -> int:
         if await JOB_EVENTS.start(task_id, functools.partial(continue_after_agent, task_id, client_id)):
             resumed += 1
     return resumed
+
+
+async def _compress_then_release(ctx: MediaJobContext, done: asyncio.Event) -> None:
+    """Make the uncut compressed copy (``local_intake_flow.compress_original``),
+    then hand the queue on. Cancelled with its task, it stops the encode."""
+    watch = TaskWatch()
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, functools.partial(local_intake_flow.compress_original, ctx.task_id_value, ctx.client_id, watch),
+        )
+    except asyncio.CancelledError:
+        watch.cancel()
+        raise
+    except Exception as exc:  # noqa: BLE001 - the task's own results stand
+        logger.warning("compressed copy skipped for %s: %s", ctx.task_id_value, exc)
+    finally:
+        done.set()
 
 
 def _note_can_start_before_the_cut(ctx: MediaJobContext) -> bool:

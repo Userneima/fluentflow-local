@@ -165,20 +165,55 @@ def _settled(
     return prepared
 
 
-def _compress_beside(path: Path, watch: TaskWatch, task_id: str) -> dict[str, Any]:
+def _compress_beside(path: Path, watch: TaskWatch, task_id: str, *, phase: str = "") -> dict[str, Any]:
     try:
         folder, suffix = output_folder.place(task_id, path)
         target = folder / output_folder.file_name(path, output_folder.COMPRESSED_LABEL, suffix, ".mp4")
     except (OSError, output_folder.OutputFolderError) as exc:
         logger.warning("no output folder for %s, compressing beside it: %s", path, exc)
         folder, target = None, None
-    with watch.phase(PHASE_COMPRESS, _duration_or_zero(path)):
+    with watch.phase(phase or PHASE_COMPRESS, _duration_or_zero(path)):
         state = compress_media.compress_beside(path, runner=watch.runner, target=target)
     if folder is not None:
         state = {**state, "output_folder": str(folder)}
     # compress_beside keeps whatever goes wrong to itself; a cancelled task is
     # not one of its failures to report.
     watch.check()
+    return state
+
+
+def compress_original(task_id: str, client_id: str | None, watch: TaskWatch | None = None) -> dict[str, Any] | None:
+    """A compressed copy of a high-bitrate recording, uncut, in its output folder.
+
+    Owner, 2026-10-18: a recording above ``compress_media.MIN_SOURCE_BPS`` also
+    gets a smaller copy of the whole thing, beside the cut one, at the picture
+    quality the cut is already made at. The cut leaves out what the model
+    judged empty; this keeps everything, small enough to keep instead of the
+    original. FluentFlow still never touches the original.
+
+    Blocking; runs once the cut is rendered and before the machine is handed to
+    the next recording. Returns what was recorded, or None when it does not
+    apply (an upload, an audio recording, a copy made already). Never raises.
+    """
+    job = get_job(task_id, client_id=client_id)
+    result = dict((job or {}).get("result") or {})
+    if not job or result.get("compressed_copy") or debreath_job.debreath_state(result).get("compressed"):
+        return None
+    try:
+        source = debreath_job.resolve_source(task_id)
+    except debreath_job.DebreathError:
+        return None
+    if is_managed_path(source) or source.suffix.lower() not in visual_note_job.VIDEO_SUFFIXES:
+        return None
+    watch = watch or TaskWatch()
+    try:
+        state = _compress_beside(source, watch, task_id, phase=PHASE_COMPRESS_UNCUT)
+    except Exception as exc:  # noqa: BLE001 - the task's own results stand
+        if watch.cancelled.is_set():
+            return None
+        logger.warning("compressed copy of %s not made: %s", source, exc)
+        state = {"compressed": False, "compress_error": f"压缩版没做成（{exc}），原文件不受影响。"}
+    save_result_changes(task_id, result, {**result, "compressed_copy": state}, client_id=client_id)
     return state
 
 
@@ -190,6 +225,7 @@ def _duration_or_zero(path: Path) -> float:
 
 
 PHASE_COMPRESS = "剪不动气口，另存一份压缩版"
+PHASE_COMPRESS_UNCUT = "另存一份没剪气口的压缩版"
 
 
 def _now() -> str:
