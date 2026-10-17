@@ -120,6 +120,14 @@ _TRANSIENT_MARKERS = (
 )
 TRANSIENT_RETRY_DELAY_SECONDS = 10.0
 
+# A request that failed on authentication while the program still says it is
+# logged in: what the user saw on 2026-10-17 after closing the laptop and going
+# offline mid-note. Told to log in again, though the login was fine all along.
+_OFFLINE_MESSAGE = (
+    "连不上 Claude，可能是网络断了，或者登录凭证一时没刷新成功。"
+    "本机 Claude 仍是登录状态，不用重新登录；联网后点重写笔记即可。"
+)
+
 _LOGIN_MESSAGE = (
     "这台机器上的 Claude 还没有登录，或者登录已经过期。"
     "打开终端运行 `claude` 并按提示用你的 Claude 账号登录一次，然后回到这里重试。"
@@ -154,7 +162,7 @@ LOGIN_CHECK_TIMEOUT_SECONDS = 15.0
 _login_cache: tuple[float, bool | None] | None = None
 
 
-def login_state(*, now: float | None = None) -> bool | None:
+def login_state(*, now: float | None = None, fresh: bool = False) -> bool | None:
     """Whether the ``claude`` program says it is logged in.
 
     ``True``/``False`` from ``claude auth status``; ``None`` when that could not be
@@ -167,8 +175,12 @@ def login_state(*, now: float | None = None) -> bool | None:
     discovered only after the recording had been transcribed. Worse, the start of
     the task had already decided the visual note would run and skipped the text
     note it falls back to, so those tasks ended with no note of any kind.
+
+    ``fresh`` asks the program now, past the cache; only off the event loop.
     """
     clock = time.monotonic() if now is None else now
+    if fresh and not _on_event_loop():
+        return _check_login(clock)
     if _login_cache is not None and clock - _login_cache[0] < LOGIN_CHECK_TTL_SECONDS:
         return _login_cache[1]
     if _on_event_loop():
@@ -503,8 +515,21 @@ class _TransientFailure(ClaudeVisionError):
 
 
 def _friendly_failure(text: str) -> ClaudeVisionError:
+    error = _classified_failure(text)
+    # What Claude actually said, for the event log: the sentence shown to the
+    # user is a translation, and a wrong translation could not be traced back.
+    error.raw_error = (text or "").strip()[:500]
+    return error
+
+
+def _classified_failure(text: str) -> ClaudeVisionError:
     lowered = (text or "").lower()
     if any(marker in lowered for marker in _LOGIN_MARKERS):
+        # An authentication failure is a login problem only if the program
+        # agrees it is logged out. Offline, refreshing the session fails the
+        # same way while the login itself is fine.
+        if login_state(fresh=True) is True:
+            return _TransientFailure(_OFFLINE_MESSAGE)
         return ClaudeVisionError(_LOGIN_MESSAGE, actionable=True)
     if any(marker in lowered for marker in _LIMIT_MARKERS):
         return ClaudeVisionError(

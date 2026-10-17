@@ -540,6 +540,62 @@ def test_an_expired_oauth_session_is_told_to_log_in(frames):
     assert len(calls) == 1, "logging in again is the fix; retrying is not"
 
 
+# Requirement (2026-10-17): the laptop was closed and went offline while a note
+# was being written; the page told the user to log in to Claude again, though
+# the login had been fine all along. An authentication failure counts as a
+# login problem only when the program agrees it is logged out.
+
+def test_an_auth_failure_while_still_logged_in_does_not_send_the_user_to_log_in(frames, monkeypatch):
+    monkeypatch.setattr(ccn, "TRANSIENT_RETRY_DELAY_SECONDS", 0)
+    monkeypatch.setattr(ccn, "login_state", lambda **_kw: True)
+    expired = json.dumps({
+        "type": "result", "is_error": True,
+        "result": "Failed to authenticate: OAuth session expired and could not be refreshed",
+    })
+    run, calls = _sequence(expired, expired)
+
+    with pytest.raises(ClaudeVisionError) as caught:
+        ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+
+    message = str(caught.value)
+    assert "不用重新登录" in message and "重写笔记" in message
+    assert "运行 `claude`" not in message
+    assert len(calls) == 2, "a dropped connection is worth one more try"
+
+
+def test_an_auth_failure_that_passes_on_the_second_try_writes_the_note(frames, monkeypatch):
+    monkeypatch.setattr(ccn, "TRANSIENT_RETRY_DELAY_SECONDS", 0)
+    monkeypatch.setattr(ccn, "login_state", lambda **_kw: True)
+    expired = json.dumps({"type": "result", "is_error": True, "result": "Failed to authenticate"})
+    run, _calls = _sequence(expired, _reply())
+
+    assert "最小二乘法" in ccn.write_visual_note("[00:00] 讲课", frames, runner=run).markdown
+
+
+def test_an_auth_failure_on_a_logged_out_machine_still_says_log_in(frames, monkeypatch):
+    # Not known when the note started; logged out when asked after the failure.
+    monkeypatch.setattr(ccn, "login_state", lambda **kw: False if kw.get("fresh") else None)
+    run, calls = _recorder(json.dumps({"type": "result", "is_error": True, "result": "Failed to authenticate"}))
+
+    with pytest.raises(ClaudeVisionError) as caught:
+        ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+
+    assert caught.value.actionable is True and "登录" in str(caught.value)
+    assert len(calls) == 1
+
+
+def test_what_claude_actually_said_is_kept_under_the_translation(frames, monkeypatch):
+    # Not known when the note started; logged out when asked after the failure.
+    monkeypatch.setattr(ccn, "login_state", lambda **kw: False if kw.get("fresh") else None)
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed"
+    run, _calls = _recorder(json.dumps({"type": "result", "is_error": True, "result": said}))
+
+    with pytest.raises(ClaudeVisionError) as caught:
+        ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+
+    assert caught.value.raw_error == said
+
+
 def test_shutdown_stops_a_note_writer_that_is_still_running():
     import sys
     import threading

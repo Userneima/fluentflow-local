@@ -1167,3 +1167,16 @@ def test_a_skill_preview_writes_both_versions_and_changes_nothing(job_store, tmp
     assert "旧规则" in old.markdown and "新规则" in new.markdown
     assert json.dumps(job_store["result"], sort_keys=True, ensure_ascii=False) == before_result
     assert sorted(p.name for p in artifact_target_path(TASK, "frames/x").parent.glob("*.jpg")) == frame_files
+
+
+def test_a_failed_note_event_records_what_the_model_program_said():
+    inner = cv.ClaudeVisionError("翻译后的话")
+    inner.raw_error = "Failed to authenticate"
+    try:
+        try:
+            raise inner
+        except cv.ClaudeVisionError as exc:
+            raise vn.VisualNoteError(str(exc)) from exc
+    except vn.VisualNoteError as outer:
+        assert vn._raw_error(outer) == "Failed to authenticate"
+    assert vn._raw_error(None) is None

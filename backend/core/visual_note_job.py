@@ -1526,6 +1526,16 @@ def run_visual_note(
                          local_done=local_done.get("at"), error=error)
 
 
+def _raw_error(error: BaseException | None) -> str | None:
+    """What the model's program said, under the sentence the user was shown."""
+    while error is not None:
+        raw = getattr(error, "raw_error", None)
+        if raw:
+            return str(raw)
+        error = error.__cause__
+    return None
+
+
 def _log_visual_note(
     task_id: str,
     client_id: str | None,
@@ -1561,6 +1571,7 @@ def _log_visual_note(
             frames_seconds=round(local_done - started, 3) if local_done else None,
             frames_sent=len(state.get("frames_sent") or []) or None,
             frames_cited=len(state.get("frames_cited") or []) or None,
+            raw_error=_raw_error(error),
             transcript_chars=state.get("transcript_chars"),
             input_tokens=usage.get("input_tokens"),
             output_tokens=usage.get("output_tokens"),
