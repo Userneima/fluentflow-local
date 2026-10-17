@@ -32,7 +32,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 
-from backend.core import debreath_job, local_intake_flow, original_locator, silence_cuts, survey_cut, visual_note_job
+from backend.core import agent_cut, debreath_job, local_intake_flow, original_locator, silence_cuts, survey_cut, visual_note_job
 from backend.core.job_store import get_job
 from backend.core.result_artifacts import TRANSCRIPT_MEDIA_CUT
 from backend.core.request_scope import local_client_scope
@@ -279,3 +279,15 @@ def undo_cut_report_change(
     (``survey_cut.undo_change``)."""
     client_id = local_client_scope(request)
     return _accept_rerender(task_id, client_id, background_tasks, lambda claimed: survey_cut.undo_change(task_id, index, client_id=client_id, claimed=claimed))
+
+
+@router.post("/jobs/{task_id}/agent-cut/self-judge")
+def agent_cut_self_judge(request: Request, task_id: str) -> dict[str, Any]:
+    """Stop waiting for the user's agent: FluentFlow judges the cut itself
+    (``agent_cut``). The waiting task picks this up within seconds."""
+    client_id = local_client_scope(request)
+    if not get_job(task_id, client_id=client_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if not agent_cut.give_up(task_id, client_id, "你在网页上选了让 FluentFlow 自己判断"):
+        raise HTTPException(status_code=409, detail="这个任务已经不在等 agent 判断了。")
+    return {"ok": True}

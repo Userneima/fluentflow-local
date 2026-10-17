@@ -175,6 +175,17 @@ def adapt_threshold(
         return noise_db, {}
 
 
+def volume_plan(source: Path, runner: Callable[..., Any] = silence_cuts.run_command) -> CutPlan:
+    """The loudness plan ``run_debreath`` starts from with its default
+    settings, without storing or rendering anything: what a judge outside this
+    process (the user's agent, ``agent_cut``) is shown before the cut."""
+    noise_db, _ = adapt_threshold(source, silence_cuts.DEFAULT_NOISE_DB, runner=runner)
+    return silence_cuts.plan_silence_cuts(
+        source, noise_db=noise_db, min_silence_seconds=silence_cuts.DEFAULT_MIN_SILENCE_SECONDS,
+        padding_seconds=silence_cuts.DEFAULT_PADDING_SECONDS, runner=runner,
+    )
+
+
 def _transcript_filename(source: Path) -> str:
     return f"{ARTIFACT_DIRNAME}/{source.stem}_debreath.srt"
 

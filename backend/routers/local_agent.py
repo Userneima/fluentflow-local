@@ -41,7 +41,7 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import agent_note, debreath_job, local_folder_intake, note_feedback, note_pdf, note_skills, visual_note_job
+from backend.core import agent_cut, agent_note, debreath_job, local_folder_intake, note_feedback, note_pdf, note_skills, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_request_scope import (
@@ -366,6 +366,11 @@ async def create_agent_task(
     client_id = _local_client_scope(request)
     local_path = str(payload.get("path") or payload.get("local_path") or "").strip()
 
+    try:
+        cut_judge = agent_cut.normalized_choice(options.get("cut_judge") or "auto")
+    except agent_cut.AgentCutError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     if local_path and input_type in {"", "local_path", "local_file", "local_media"}:
         # A recording that stays where it is. This exists because every other entry
         # required the file to come to FluentFlow — as an upload, a link, or a
@@ -396,7 +401,7 @@ async def create_agent_task(
             options=options_for_path,
             duration_limit_seconds=duration_limit,
             route=_ROUTE,
-            origin={"chosen_with": "agent_api", "folder": str(source.parent)},
+            origin={"chosen_with": "agent_api", "folder": str(source.parent), "cut_judge": cut_judge},
         )
         task_id_value = queued.get("task_id")
         return {
@@ -419,7 +424,7 @@ async def create_agent_task(
             raw_options=link_options,
             client_id=client_id,
             route=_ROUTE,
-            extra_metadata={"agent_input_type": "video_link"},
+            extra_metadata={"agent_input_type": "video_link", "cut_judge": cut_judge},
             allow_duplicate=allow_duplicate_requested(payload),
         )
         task_id_value = job["task_id"]
@@ -529,6 +534,7 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             "note_pending": _note_pending(job),
             "cut_running": _cut_running(job),
             "done": _task_done(job),
+            "agent_cut": _agent_cut_brief(job),
         },
         "package_url": f"/agent/v1/tasks/{task_id}/package",
     }
@@ -561,6 +567,15 @@ async def wait_agent_task(
     deadline = time.monotonic() + timeout_seconds
     while True:
         job = _job_for_request(request, task_id)
+        if agent_cut.is_waiting(job.get("result")):
+            # FluentFlow is waiting for the caller: waiting on it back would
+            # hold both until the time limit gives the judgement away.
+            return {
+                "ok": True,
+                "done": False,
+                "agent_cut": _agent_cut_brief(job),
+                "package_url": f"/agent/v1/tasks/{task_id}/package",
+            }
         if _task_done(job):
             brief = _task_brief(job)
             return {
@@ -584,6 +599,70 @@ async def wait_agent_task(
                 "package_url": f"/agent/v1/tasks/{task_id}/package",
             }
         await asyncio.sleep(poll_interval)
+
+
+AGENT_CUT_NEXT = (
+    "FluentFlow is waiting for you to judge where to cut this recording. Call get_agent_cut_material, "
+    "judge, and send the decision with save_agent_cut. If you do not, FluentFlow judges it itself once "
+    "the time limit passes."
+)
+
+
+def _agent_cut_brief(job: dict[str, Any]) -> Optional[dict[str, Any]]:
+    brief = agent_cut.summary(job.get("result"))
+    if brief and brief.get("status") == agent_cut.WAITING:
+        brief["next"] = AGENT_CUT_NEXT
+    return brief
+
+
+def _agent_cut_call(action, *args, **kwargs):
+    try:
+        return action(*args, **kwargs)
+    except agent_cut.AgentCutError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"读不出 JSON：{exc}") from exc
+
+
+@router.get("/tasks/{task_id}/agent-cut/material")
+def agent_cut_material(request: Request, task_id: str) -> dict[str, Any]:
+    """What the calling agent judges this task's cut from: the instructions
+    FluentFlow's own judge gets, the user's earlier cut decisions, the
+    timeline, and screenshots as paths on this machine."""
+    _job_for_request(request, task_id)
+    return {"ok": True, **_agent_cut_call(agent_cut.material, task_id, _local_client_scope(request))}
+
+
+@router.post("/tasks/{task_id}/agent-cut")
+def save_agent_cut(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    """The calling agent's decision: which long gaps to keep and which stretches
+    with talk to remove, in the model's answer format. The cut follows in the
+    queue; the answer lists the facts for the processing report."""
+    body = payload or {}
+    _job_for_request(request, task_id)
+    answer = body.get("answer") if body.get("answer") is not None else {
+        "keep_gaps": body.get("keep_gaps") or [], "remove": body.get("remove") or [],
+    }
+    return {"ok": True, **_agent_cut_call(
+        agent_cut.decide, task_id, _local_client_scope(request), answer, str(body.get("model") or ""),
+    )}
+
+
+@router.post("/tasks/{task_id}/agent-cut/report")
+def save_agent_cut_report(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    """The calling agent's processing report for the cut it judged."""
+    body = payload or {}
+    _job_for_request(request, task_id)
+    answer = body.get("report") if body.get("report") is not None else body
+    return {"ok": True, **_agent_cut_call(agent_cut.save_report, task_id, _local_client_scope(request), answer)}
+
+
+@router.post("/agent-cut/heartbeat")
+def agent_cut_heartbeat(request: Request, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    """An agent's MCP process reporting that its conversation is still open,
+    for the tasks it submitted or is judging. Answers which to keep reporting."""
+    ids = [str(item) for item in (payload or {}).get("task_ids") or [] if item]
+    return {"ok": True, "watching": agent_cut.beat(ids, _local_client_scope(request))}
 
 
 @router.get("/tasks/{task_id}/diagnosis")

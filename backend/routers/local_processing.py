@@ -20,6 +20,7 @@ import functools
 from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -29,7 +30,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
-from backend.core.job_store import delete_jobs, get_job, list_jobs_for_retention, recent_local_folders, update_job_result, upsert_job
+from backend.core.job_store import delete_jobs, get_job, list_jobs_by_statuses, list_jobs_for_retention, recent_local_folders, update_job_result, upsert_job
 from backend.core.history_retention import enforce_history_retention
 from backend.core.local_entry_guards import (
     claim_task_id,
@@ -38,6 +39,7 @@ from backend.core.local_entry_guards import (
     run_worker_with_terminal_state,
 )
 from backend.core import (
+    agent_cut,
     claude_code_note,
     device_profile,
     output_folder,
@@ -609,13 +611,13 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
 
     try:
         await _run_pipeline(ctx)
-        if _note_can_start_before_the_cut(ctx):
-            await _cut_and_note_side_by_side(ctx, hand_off)
-        else:
-            await _trim_recorded_tail(ctx)
-            await _write_note_after_transcript(
-                ctx.task_id_value, ctx.client_id, on_local_work_done=hand_off,
-            )
+        if await _agent_judges_cut(ctx):
+            # The queue moves on while the user's agent judges; this task
+            # takes a new place in line once it has a decision.
+            done.set()
+            await continue_after_agent(ctx.task_id_value, ctx.client_id, ctx)
+            return
+        await _cut_then_note(ctx, hand_off)
         await _export_note_written_after_pipeline(ctx)
         await _deliver_to_output_folder(ctx)
     finally:
@@ -623,6 +625,93 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
         # when the note ended before reaching its hand-off. The remote slot is
         # not released here: the note thread owns it (`_write_note_holding_slot`).
         done.set()
+
+
+async def _cut_then_note(ctx: Any, hand_off: Any, **cut: Any) -> None:
+    """Cut the transcribed recording and write its note: side by side when
+    the note can start from the plan, else one after the other. ``cut`` goes
+    to ``survey_cut.survey_and_cut`` (a decision made by the user's agent)."""
+    if _note_can_start_before_the_cut(ctx):
+        await _cut_and_note_side_by_side(ctx, hand_off, **cut)
+    else:
+        await _trim_recorded_tail(ctx, **cut)
+        await _write_note_after_transcript(
+            ctx.task_id_value, ctx.client_id, on_local_work_done=hand_off,
+        )
+
+
+async def _agent_judges_cut(ctx: MediaJobContext) -> bool:
+    """Whether this task waits for the user's agent to judge the cut
+    (``agent_cut``); if so, its material is measured now, in the queue.
+    Never raises: a failure here cuts the task as usual."""
+    loop = asyncio.get_running_loop()
+    try:
+        if not await loop.run_in_executor(None, agent_cut.should_wait, ctx.task_id_value, ctx.client_id):
+            return False
+        return await loop.run_in_executor(None, agent_cut.prepare, ctx.task_id_value, ctx.client_id)
+    except Exception as exc:  # noqa: BLE001 - FluentFlow judges instead
+        logger.warning("could not prepare %s for the agent's judgement: %s", ctx.task_id_value, exc)
+        return False
+
+
+AGENT_CUT_POLL_SECONDS = 3.0
+
+
+async def _take_queue_turn(task_id: str, client_id: Optional[str]) -> asyncio.Event:
+    """A new place at the end of the line for a task already running (its
+    runner is alive under this task id, so the jobs behind it wait for it);
+    returns once it is this task's turn. Set the event to move the line on."""
+    previous = _queue_tail_barrier()
+    done = asyncio.Event()
+    _queue_tail_record(task_id, done)
+    if previous is not None:
+        await _await_predecessor(previous, task_id, client_id)
+    return done
+
+
+async def continue_after_agent(task_id: str, client_id: Optional[str], ctx: Any = None) -> None:
+    """Wait for the agent's decision (or for the agent to be given up on),
+    then cut, write the note and deliver, in the queue. ``ctx`` is the
+    pipeline's context; without it (resumed after a restart) the note is not
+    exported to Feishu automatically."""
+    loop = asyncio.get_running_loop()
+    while True:
+        state = await loop.run_in_executor(None, agent_cut.check, task_id, client_id)
+        if state is not None:
+            break
+        await asyncio.sleep(AGENT_CUT_POLL_SECONDS)
+    if state.get("status") == agent_cut.DECIDED:
+        cut = {"decide": agent_cut.decider(state), "judged_by": state.get("judged_by")}
+    else:
+        cut = {"extra": {"agent_fallback": state.get("fallback_reason") or "agent 没有交回决定"}}
+    turn = await _take_queue_turn(task_id, client_id)
+    try:
+        step = ctx if ctx is not None else types.SimpleNamespace(task_id_value=task_id, client_id=client_id)
+        await _cut_then_note(step, lambda: loop.call_soon_threadsafe(turn.set), **cut)
+        await loop.run_in_executor(None, agent_cut.finished, task_id, client_id)
+        if ctx is not None:
+            await _export_note_written_after_pipeline(ctx)
+        try:
+            output_folder.schedule_sync(task_id)
+        except Exception as exc:  # noqa: BLE001 - the task's own results stand
+            logger.warning("output folder not scheduled for %s: %s", task_id, exc)
+    finally:
+        turn.set()
+
+
+async def resume_agent_cuts() -> int:
+    """At startup: every task a restart left waiting for its agent, or
+    between the agent's decision and its cut, goes on waiting or is cut."""
+    resumed = 0
+    for job in list_jobs_by_statuses(("completed",), include_result=True):
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        state = agent_cut.state_of(result)
+        if state.get("status") not in (agent_cut.WAITING, agent_cut.DECIDED, agent_cut.FALLBACK) or state.get("finished_at"):
+            continue
+        task_id, client_id = str(job.get("task_id")), job.get("client_id")
+        if await JOB_EVENTS.start(task_id, functools.partial(continue_after_agent, task_id, client_id)):
+            resumed += 1
+    return resumed
 
 
 def _note_can_start_before_the_cut(ctx: MediaJobContext) -> bool:
@@ -642,7 +731,7 @@ def _note_can_start_before_the_cut(ctx: MediaJobContext) -> bool:
         return False
 
 
-async def _cut_and_note_side_by_side(ctx: MediaJobContext, hand_off: Any) -> None:
+async def _cut_and_note_side_by_side(ctx: MediaJobContext, hand_off: Any, **decision: Any) -> None:
     """Cut and note at the same time (to-do batch three, 2026-10-16).
 
     The model decides what to cut from the transcript; from that moment the
@@ -665,7 +754,7 @@ async def _cut_and_note_side_by_side(ctx: MediaJobContext, hand_off: Any) -> Non
     def note_local_work_done() -> None:
         loop.call_soon_threadsafe(pictures_taken.set)
 
-    cut = asyncio.ensure_future(_trim_recorded_tail(ctx, on_plan=on_plan))
+    cut = asyncio.ensure_future(_trim_recorded_tail(ctx, on_plan=on_plan, **decision))
     note: Optional[asyncio.Future] = None
     try:
         plan_wait = asyncio.ensure_future(plan_known.wait())
@@ -706,7 +795,7 @@ def _note_back_onto_original_if_uncut(task_id: str, client_id: Optional[str], ra
         logger.warning("could not move the note of %s back onto the original: %s", task_id, exc)
 
 
-async def _trim_recorded_tail(ctx: MediaJobContext, *, on_plan: Any = None) -> None:
+async def _trim_recorded_tail(ctx: MediaJobContext, *, on_plan: Any = None, **cut: Any) -> None:
     """Cut the recording now that its transcript exists (``survey_cut``: a
     model reads the whole timeline, then one render), or, when it was cut
     before transcription, cut off what was recorded after the content ended
@@ -715,7 +804,7 @@ async def _trim_recorded_tail(ctx: MediaJobContext, *, on_plan: Any = None) -> N
     ``on_plan`` (survey path only) gets the stretches the cut keeps as soon as
     they are decided, so the note can start while the cut renders."""
     if local_intake_flow.survey_first_enabled():
-        work = functools.partial(survey_cut.survey_and_cut, ctx.task_id_value, ctx.client_id, on_plan=on_plan)
+        work = functools.partial(survey_cut.survey_and_cut, ctx.task_id_value, ctx.client_id, on_plan=on_plan, **cut)
     else:
         work = functools.partial(tail_trim.trim_tail, ctx.task_id_value, ctx.client_id)
     try:

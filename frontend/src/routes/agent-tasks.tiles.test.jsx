@@ -12,6 +12,10 @@ import {cutFileDelivery, debreathTile} from './agent-tasks.jsx';
 const job = (debreath) => ({result: {debreath}});
 
 describe('debreathTile', () => {
+    it('says the cut waits for the agent to judge it', () => {
+        expect(debreathTile({status: 'completed', result: {agent_cut: {status: 'waiting'}}}, 'zh').value).toBe('等你的 agent 判断');
+    });
+
     it('says a running task is cut after its transcription, not that it is old', () => {
         expect(debreathTile({status: 'processing', result: {}}, 'zh').value).toBe('转录完再剪');
         expect(debreathTile({status: 'queued', result: {}}, 'zh').value).toBe('转录完再剪');

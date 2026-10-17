@@ -38,7 +38,7 @@ import logging
 import os
 import re
 import subprocess
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -284,37 +284,47 @@ def gap_screenshots(
     return images, counts
 
 
-def revise_plan(
-    source: Path, plan: CutPlan, segments: list[dict[str, Any]], ask: Chat, *,
-    pictures: Callable[[Path, list[TimeRange]], dict[int, float | None]] = measure_pictures,
-    cases: str = "",
-    look: Callable[[str, str, list[tuple[str, Path]]], str] | None = None,
-) -> tuple[CutPlan, dict[str, Any]]:
-    """The plan the model's reading turns ``plan`` into, and what it decided.
-    ``look`` is the judge's call with pictures, when it can see them: the long
-    gaps whose picture moved are then shown to it."""
+@dataclass
+class Material:
+    """What the judge reads: the timeline, and the long gaps it numbers."""
+
+    timeline: str
+    gaps: list[TimeRange]
+    ids: dict[int, int]
+    measured: dict[int, float | None]
+    images: list[tuple[str, Path]] = field(default_factory=list)
+
+
+def prepare_material(
+    source: Path, plan: CutPlan, segments: list[dict[str, Any]], *,
+    pictures: Callable[[Path, list[TimeRange]], dict[int, float | None]] | None = None,
+    shots_folder: Path | None = None,
+) -> Material:
+    """The timeline for ``plan``'s gaps, with screenshots of the long gaps
+    whose picture moved when ``shots_folder`` is given. The same material for
+    every judge: FluentFlow's model and the user's own agent."""
     duration = plan.source_duration_seconds
     gaps = list(plan.cuts)
-    measured = pictures(source, gaps)
+    measured = (pictures or measure_pictures)(source, gaps)
     timeline, ids = build_timeline(duration, segments, gaps, measured)
-    shots_sent = 0
-    if look is not None:
-        import tempfile
+    images: list[tuple[str, Path]] = []
+    if shots_folder is not None:
+        images, counts = gap_screenshots(source, gaps, measured, ids, shots_folder)
+        timeline, ids = build_timeline(duration, segments, gaps, measured, counts)
+    return Material(timeline, gaps, ids, measured, images)
 
-        with tempfile.TemporaryDirectory(prefix="fluentflow-gap-shots-") as folder:
-            images, counts = gap_screenshots(source, gaps, measured, ids, Path(folder))
-            timeline, ids = build_timeline(duration, segments, gaps, measured, counts)
-            shots_sent = len(images)
-            from backend.core.note_coverage import _within_deadline
 
-            answer = parse_answer(_within_deadline(
-                lambda system, user: look(system, user, images), SYSTEM + (SHOTS_NOTE if images else ""),
-                cases + timeline, REQUEST_DEADLINE_SECONDS,
-            ))
-    else:
-        answer = parse_answer(_ask(ask, cases + timeline))
-    record: dict[str, Any] = {"long_gaps": len(ids), "pictures_measured": len(measured), "screenshots_sent": shots_sent}
-
+def apply_answer(
+    answer: dict[str, Any], plan: CutPlan, segments: list[dict[str, Any]], material: Material,
+) -> tuple[CutPlan, dict[str, Any]]:
+    """The plan a judge's answer turns ``plan`` into, and what was decided.
+    The same rules for every judge: gap ids are only those in the timeline,
+    each removal is whole lines, and removals that together take more than
+    ``MAX_SPEECH_SHARE_REMOVED`` of what was said are not applied (they are
+    put to the user in the report instead)."""
+    duration = plan.source_duration_seconds
+    gaps, ids, measured = material.gaps, material.ids, material.measured
+    record: dict[str, Any] = {}
     kept_gaps: list[dict[str, Any]] = []
     kept_reasons: dict[int, str] = {}
     for item in answer.get("keep_gaps") or []:
@@ -340,8 +350,8 @@ def revise_plan(
     share = speech_share(segments, spans)
     if share > MAX_SPEECH_SHARE_REMOVED:
         record["removal_refused"] = (
-            f"模型要去掉的几段里有全部说话的 {share:.0%}，超过 {MAX_SPEECH_SHARE_REMOVED:.0%}，"
-            "不像只是开头结尾多录的部分，没有去掉。"
+            f"要去掉的几段里有全部说话的 {share:.0%}，超过 {MAX_SPEECH_SHARE_REMOVED:.0%}，"
+            "不像只是开头结尾多录的部分，没有去掉，逐段放进「需要你判断」。"
         )
         record["refused_removals"] = removals
         removals, spans = [], []
@@ -355,6 +365,36 @@ def revise_plan(
         "removed_seconds": revised.removed_seconds,
     })
     return revised, record
+
+
+def revise_plan(
+    source: Path, plan: CutPlan, segments: list[dict[str, Any]], ask: Chat, *,
+    pictures: Callable[[Path, list[TimeRange]], dict[int, float | None]] | None = None,
+    cases: str = "",
+    look: Callable[[str, str, list[tuple[str, Path]]], str] | None = None,
+) -> tuple[CutPlan, dict[str, Any]]:
+    """The plan the model's reading turns ``plan`` into, and what it decided.
+    ``look`` is the judge's call with pictures, when it can see them: the long
+    gaps whose picture moved are then shown to it."""
+    if look is not None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="fluentflow-gap-shots-") as folder:
+            material = prepare_material(source, plan, segments, pictures=pictures, shots_folder=Path(folder))
+            from backend.core.note_coverage import _within_deadline
+
+            answer = parse_answer(_within_deadline(
+                lambda system, user: look(system, user, material.images), SYSTEM + (SHOTS_NOTE if material.images else ""),
+                cases + material.timeline, REQUEST_DEADLINE_SECONDS,
+            ))
+    else:
+        material = prepare_material(source, plan, segments, pictures=pictures)
+        answer = parse_answer(_ask(ask, cases + material.timeline))
+    revised, record = apply_answer(answer, plan, segments, material)
+    return revised, {
+        "long_gaps": len(material.ids), "pictures_measured": len(material.measured),
+        "screenshots_sent": len(material.images), **record,
+    }
 
 
 def describe_gaps(
@@ -657,9 +697,13 @@ def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]
     return result
 
 
+Decide = Callable[[Path, CutPlan, list[dict[str, Any]]], tuple[CutPlan, dict[str, Any]]]
+
+
 def survey_and_cut(
     task_id: str, client_id: str | None = None, *, chat: tuple[Chat, str] | None = None,
     on_plan: Callable[[list[cut_timeline.KeptRange]], None] | None = None,
+    decide: Decide | None = None, judged_by: str | None = None, extra: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Judge the recording from its transcript, cut it once, and move the
     transcript onto the cut. Returns what was recorded, or None when there was
@@ -667,7 +711,12 @@ def survey_and_cut(
 
     ``on_plan`` gets the stretches the cut will keep as soon as they are
     decided, before the render, when there is something to cut: the note is
-    written from them while the cut renders (to-do batch three)."""
+    written from them while the cut renders (to-do batch three).
+
+    ``decide`` stands in for the model when the judgement was made elsewhere
+    (the user's own agent, ``agent_cut``): it gets the loudness plan with the
+    spoken words already protected and returns the plan to render and what was
+    decided. ``judged_by`` names that judge; ``extra`` goes into the record."""
     job = job_store.get_job(task_id, client_id=client_id)
     result = dict((job or {}).get("result") or {})
     if not job or str(result.get("transcript_media") or "") == TRANSCRIPT_MEDIA_CUT:
@@ -681,9 +730,9 @@ def survey_and_cut(
     except debreath_job.DebreathError:
         return None
 
-    judge = _judge(chat)
+    judge = None if decide is not None else _judge(chat)
     asker = (judge.text, judge.name) if judge else None
-    record: dict[str, Any] = {"judged_by": judge.name if judge else None}
+    record: dict[str, Any] = {"judged_by": judged_by if decide is not None else (judge.name if judge else None), **(extra or {})}
     final: dict[str, CutPlan] = {}
 
     def revise(media: Path, plan: CutPlan) -> CutPlan:
@@ -697,6 +746,17 @@ def survey_and_cut(
              "said": "".join(t for ws, we, t in texts if we > a and ws < b)[:30]}
             for a, b in spoken
         ]
+        if decide is not None:
+            try:
+                revised, decided = decide(media, plan, segments)
+                record.update(decided)
+            except Exception as exc:  # noqa: BLE001 - the volume plan stands
+                logger.warning("decision for %s not applied: %s", task_id, exc)
+                record["error"] = str(exc)[:300]
+                revised = plan
+            final["plan"] = revised
+            _tell_plan(revised)
+            return revised
         if asker is None or not segments:
             record["gaps"] = describe_gaps(list(plan.cuts), {}, {})
             record["skipped"] = "没有可用的模型或转录，只按音量剪。"
@@ -756,9 +816,7 @@ def _finish(
     if not state.get("rendered") or plan is None or media is None:
         return False
     result = _onto_cut_clock(result, cut_timeline.kept_ranges(plan.as_dict()))
-    record["report"] = cut_report.build(
-        record, _texted(result.get("source_raw_segments")), chat, cut_cases.as_text(cut_cases.collect()),
-    )
+    record["report"] = build_report(record, _texted(result.get("source_raw_segments")), chat, result)
     record["report"]["after_seconds"] = round(plan.kept_seconds, 1)
     record["report"]["before_seconds"] = round(plan.source_duration_seconds, 1)
     delivered: dict[str, Any] = {}
@@ -772,6 +830,32 @@ def _finish(
     result = _attach_result_artifacts(task_id, result, parts=("transcript",))
     _save(task_id, client_id, before, result)
     return True
+
+
+def judged_by_agent(record: dict[str, Any]) -> bool:
+    return str(record.get("judged_by") or "").startswith("agent")
+
+
+def build_report(
+    record: dict[str, Any], segments: list[dict[str, Any]], chat: tuple[Chat, str] | None,
+    result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The processing report, organised by whoever judged the cut: the user's
+    agent organises its own (``agent_cut``; kept by item key, so it survives
+    the report being written again after a change), FluentFlow's model its
+    own. A cut the agent judged is never organised by FluentFlow's model:
+    until the agent's arrives the facts are grouped by kind."""
+    if result is not None and not record.get("agent_report"):
+        sent = (result.get("agent_cut") or {}).get("report") if isinstance(result.get("agent_cut"), dict) else None
+        if isinstance(sent, dict):
+            record["agent_report"] = sent
+    all_facts = cut_report.facts(record, segments)
+    agent = record.get("agent_report")
+    if isinstance(agent, dict) and agent.get("sections") and all_facts:
+        return cut_report.from_keyed(all_facts, agent, str(record.get("judged_by") or "agent"))
+    if judged_by_agent(record):
+        chat = None
+    return cut_report.organize(all_facts, chat, cut_cases.as_text(cut_cases.collect()))
 
 
 def _still_our_cut(task_id: str, result: dict[str, Any], state: dict[str, Any], delivered: Path) -> bool:
@@ -798,9 +882,7 @@ def _finish_uncut(
     original is the video to watch and the transcript stays on its clock. A
     cut delivered earlier is taken out of the user's folder when it is only a
     second name for the file the task keeps; a copy is left alone."""
-    record["report"] = cut_report.build(
-        record, _texted(result.get("raw_segments")), chat, cut_cases.as_text(cut_cases.collect()),
-    )
+    record["report"] = build_report(record, _texted(result.get("raw_segments")), chat, result)
     record["report"]["after_seconds"] = record["report"]["before_seconds"] = round(plan.source_duration_seconds, 1)
     delivered = Path(str(state.get("delivered_path") or ""))
     if _still_our_cut(task_id, result, state, delivered):

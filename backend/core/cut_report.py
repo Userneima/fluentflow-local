@@ -138,8 +138,8 @@ def facts(record: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[s
         out.append({
             "id": f"x{n}", "kind": "refused_removal", "action": "kept", "start": start, "end": end,
             "seconds": round(end - start, 1), "said": _text_within(segments, start, end),
-            "must_confirm": "模型想去掉、程序拦下了，请你判断该不该去掉。",
-            "default": "模型想去掉这段，但要去掉的说话太多，像是误判，没有去掉。",
+            "must_confirm": "判断时想去掉这段，但要去掉的说话加起来太多，程序拦下了，请你判断该不该去掉。",
+            "default": "要去掉的说话加起来太多，像是误判，这段先没去掉。",
         })
     changes = [c for c in record.get("user_changes") or [] if not c.get("undone_at")]
     for n, change in enumerate(changes, start=1):
@@ -339,3 +339,40 @@ def build(
 
 
 __all__ = ["build", "facts", "organize", "assemble", "fallback"]
+
+
+def fact_lines(all_facts: list[dict[str, Any]]) -> str:
+    """The facts as the organiser reads them, one numbered line each."""
+    return "\n".join(_fact_line(f) for f in all_facts)
+
+
+def keyed(answer: dict[str, Any], all_facts: list[dict[str, Any]]) -> dict[str, Any]:
+    """An organisation written against these facts' ids, held by each item's
+    key instead, so it still applies after the report is written again (ids
+    are renumbered, keys are not). Unknown ids are dropped."""
+    by_id = {fact["id"]: fact for fact in all_facts}
+    sections = []
+    for section in answer.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        items = []
+        for entry in section.get("items") or []:
+            if isinstance(entry, dict) and str(entry.get("ref") or "") in by_id:
+                items.append({**entry, "ref": key_of(by_id[str(entry["ref"])])})
+        sections.append({**section, "items": items})
+    return {"summary": answer.get("summary") or "", "sections": sections}
+
+
+def from_keyed(all_facts: list[dict[str, Any]], answer: dict[str, Any], organized_by: str) -> dict[str, Any]:
+    """The report for these facts, organised as ``answer`` (from ``keyed``)
+    says. Items whose fact is gone are dropped; facts it never saw are folded
+    into the last group, as with a model's organisation."""
+    ids = {key_of(fact): fact["id"] for fact in all_facts}
+    sections = [
+        {**section, "items": [
+            {**entry, "ref": ids[entry["ref"]]} for entry in section.get("items") or []
+            if isinstance(entry, dict) and entry.get("ref") in ids
+        ]}
+        for section in answer.get("sections") or [] if isinstance(section, dict)
+    ]
+    return assemble(all_facts, {**answer, "sections": sections}, organized_by)

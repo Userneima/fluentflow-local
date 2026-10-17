@@ -13,6 +13,7 @@ import {
     XCircle,
 } from 'lucide-react';
 import {CutReport} from '../components/CutReport.jsx';
+import AgentCutWait from '../components/AgentCutWait.jsx';
 import {fmtDurationCompact, progressMessageOf} from '../lib/format.js';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
 import {
@@ -399,6 +400,9 @@ export const cutFileDelivery = (job, lang) => {
 export const debreathTile = (job, lang) => {
     const isZh = lang === 'zh';
     const state = job?.result?.debreath;
+    if (job?.result?.agent_cut?.status === 'waiting') {
+        return {value: isZh ? '等你的 agent 判断' : 'Waiting for your agent'};
+    }
     // Absence means never cut. It has to stay distinguishable from "cut and found
     // nothing", which is why the list payload carries this block at all: without it
     // a freshly cut task reported "未剪" on this very card.
@@ -697,6 +701,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                     )}
                 </div>
             ) : null}
+            <AgentCutWait job={job}/>
             <CutReport job={job}/>
             <div className="mt-4 grid gap-2 md:grid-cols-3">
                 {metaItems.map((item) => (
@@ -725,7 +730,7 @@ const cardRenderKey = (job) => {
         job?.error_reason, job?.source_filename, job?.source_file_size_mb, job?.source_duration_seconds,
         !!job?.result, result.summary_chars, result.summary_status, result.summary_error, result.summary_skipped,
         result.summary_written_from, String(result.summary_markdown || '').length,
-        result.note_written_by, result.note_fallback_reason,
+        result.note_written_by, result.note_fallback_reason, result.agent_cut?.status, result.agent_cut?.fallback_reason,
         !!result.artifacts?.debreath_media,
         debreath.status, debreath.delivered, debreath.delivery_error, debreath.used_for_transcription,
         debreath.already_cut, debreath.not_worth_rendering, debreath.render_verified, debreath.rendered,

@@ -304,6 +304,13 @@ async def lifespan(app: FastAPI):
     from backend.core.survey_cut import recover_interrupted
 
     recover_interrupted()
+    # Tasks a restart left waiting for the user's agent to judge their cut
+    # go on waiting (or are cut, when the decision had come).
+    from backend.routers.local_processing import resume_agent_cuts
+
+    waiting = await resume_agent_cuts()
+    if waiting:
+        logger.info("Startup resumed %s tasks waiting for the agent's cut", waiting)
     if stranded_renders:
         logger.info("Startup recovery cleared %s stranded de-breath renders", stranded_renders)
     # Same shape, same reason: the visual-note slot is process memory, and the

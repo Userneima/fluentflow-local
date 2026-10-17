@@ -5,6 +5,8 @@ import os
 import inspect
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -168,6 +170,79 @@ def _options(**values: Any) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value not in (None, "")}
 
 
+# Which tasks this conversation is responsible for, reported to FluentFlow
+# every half minute while this process lives. Every agent conversation starts
+# its own MCP process and the process ends with the conversation, so when the
+# reports stop, a task waiting for this agent to judge its cut stops waiting
+# (``backend/core/agent_cut.py``).
+HEARTBEAT_SECONDS = 30.0
+_watched: dict[str, tuple[str | None, str | None]] = {}
+_watch_lock = threading.Lock()
+_heart: threading.Thread | None = None
+# Only a real MCP process (``main``) reports; imported for tests it does not.
+_heartbeat_enabled = False
+
+
+def _watch(task_id: Any, api_base: str | None, client_id: str | None) -> None:
+    global _heart
+    if not task_id:
+        return
+    with _watch_lock:
+        _watched[str(task_id)] = (api_base, client_id)
+        if _heartbeat_enabled and (_heart is None or not _heart.is_alive()):
+            _heart = threading.Thread(target=_heartbeat_loop, name="fluentflow-heartbeat", daemon=True)
+            _heart.start()
+
+
+def _heartbeat_once() -> None:
+    with _watch_lock:
+        groups: dict[tuple[str | None, str | None], list[str]] = {}
+        for task_id, where in _watched.items():
+            groups.setdefault(where, []).append(task_id)
+    for (api_base, client_id), ids in groups.items():
+        answer = _agent_request(
+            "POST", "/agent/v1/agent-cut/heartbeat", api_base=api_base, client_id=client_id,
+            payload={"task_ids": ids}, timeout=10,
+        )
+        if not isinstance(answer, dict) or answer.get("ok") is False or not isinstance(answer.get("watching"), list):
+            continue  # FluentFlow not answering (restarting): keep them all
+        keep = {str(item) for item in answer["watching"]}
+        with _watch_lock:
+            for task_id in ids:
+                if task_id not in keep:
+                    _watched.pop(task_id, None)
+
+
+def _heartbeat_loop() -> None:
+    while True:
+        try:
+            _heartbeat_once()
+        except Exception:  # noqa: BLE001 - a missed beat is retried
+            pass
+        with _watch_lock:
+            if not _watched:
+                return
+        time.sleep(HEARTBEAT_SECONDS)
+
+
+def _watching(answer: dict[str, Any], task_id: Any, api_base: str | None, client_id: str | None) -> dict[str, Any]:
+    if isinstance(answer, dict) and answer.get("ok") is not False:
+        _watch(task_id or answer.get("task_id"), api_base, client_id)
+    return answer
+
+
+_CUT_JUDGE_SCHEMA = {
+    "type": "string",
+    "enum": ["auto", "agent", "fluentflow"],
+    "default": "auto",
+    "description": (
+        "Who decides what to cut. auto: FluentFlow's own model when it has one, otherwise the task "
+        "waits after transcription for you to judge (get_agent_cut_material, save_agent_cut). "
+        "agent: always you. fluentflow: always FluentFlow (only the loudness when it has no model)."
+    ),
+}
+
+
 def submit_local_media(
     path: str,
     title: str | None = None,
@@ -177,6 +252,7 @@ def submit_local_media(
     stt_model: str | None = None,
     speaker_diarization: bool | None = None,
     system_prompt: str | None = None,
+    cut_judge: str = "auto",
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -190,7 +266,7 @@ def submit_local_media(
     refusal = _require_local_edition(normalize_api_base(api_base))
     if refusal is not None:
         return refusal
-    return _agent_request(
+    return _watching(_agent_request(
         "POST",
         "/agent/v1/tasks",
         api_base=api_base,
@@ -200,6 +276,7 @@ def submit_local_media(
             "input_type": "local_path",
             "title": title,
             "options": _options(
+                cut_judge=cut_judge,
                 skip_summary="true" if skip_summary else "false",
                 note_mode=note_mode,
                 prompt_preset=prompt_preset,
@@ -209,7 +286,7 @@ def submit_local_media(
                 speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
             ),
         },
-    )
+    ), None, api_base, client_id)
 
 
 def submit_video_link(
@@ -222,6 +299,7 @@ def submit_video_link(
     allow_duplicate: bool = False,
     speaker_diarization: bool | None = None,
     system_prompt: str | None = None,
+    cut_judge: str = "auto",
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -231,7 +309,7 @@ def submit_video_link(
     ``duplicate_of_active: true``; one already completed is refused (409,
     ``duplicate_link``) unless ``allow_duplicate`` is true.
     """
-    return _agent_request(
+    return _watching(_agent_request(
         "POST",
         "/agent/v1/tasks",
         api_base=api_base,
@@ -242,6 +320,7 @@ def submit_video_link(
             "title": title,
             "allow_duplicate": bool(allow_duplicate),
             "options": _options(
+                cut_judge=cut_judge,
                 stt_provider=stt_provider,
                 skip_summary="true" if skip_summary else "false",
                 note_mode=note_mode,
@@ -251,7 +330,7 @@ def submit_video_link(
             ),
         },
         timeout=30,
-    )
+    ), None, api_base, client_id)
 
 
 def submit_transcript(
@@ -297,7 +376,8 @@ def get_task(
     client_id: str | None = None,
 ) -> dict[str, Any]:
     """Read lightweight task status from FluentFlow."""
-    return _agent_request("GET", f"/agent/v1/tasks/{task_id}", api_base=api_base, client_id=client_id)
+    return _watching(_agent_request("GET", f"/agent/v1/tasks/{task_id}", api_base=api_base, client_id=client_id),
+                     task_id, api_base, client_id)
 
 
 def wait_task(
@@ -312,14 +392,14 @@ def wait_task(
     ``done`` stays false while a completed task's note is still being written
     (``note_pending``); the server decides, this only relays.
     """
-    return _agent_request(
+    return _watching(_agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/wait",
         api_base=api_base,
         client_id=client_id,
         payload={"timeout_seconds": timeout_seconds, "poll_interval_seconds": poll_interval_seconds},
         timeout=max(5, min(float(timeout_seconds or 30) + 10, 75)),
-    )
+    ), task_id, api_base, client_id)
 
 
 def get_task_package(
@@ -592,6 +672,51 @@ def get_agent_note_part(
     )
 
 
+def get_agent_cut_material(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    """What you judge this task's cut from, when it waits for you."""
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _watching(_agent_request(
+        "GET", f"/agent/v1/tasks/{task_id}/agent-cut/material", api_base=api_base, client_id=client_id,
+    ), task_id, api_base, client_id)
+
+
+def save_agent_cut(
+    task_id: str,
+    keep_gaps: list[dict[str, Any]] | None = None,
+    remove: list[dict[str, Any]] | None = None,
+    model: str = "",
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Your decision on what to cut; FluentFlow cuts with it."""
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _watching(_agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/agent-cut", api_base=api_base, client_id=client_id,
+        payload={"keep_gaps": keep_gaps or [], "remove": remove or [], "model": model},
+    ), task_id, api_base, client_id)
+
+
+def save_agent_cut_report(
+    task_id: str,
+    summary: str = "",
+    sections: list[dict[str, Any]] | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    """Your processing report for the cut you judged."""
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/agent-cut/report", api_base=api_base, client_id=client_id,
+        payload={"report": {"summary": summary, "sections": sections or []}},
+    )
+
+
 def get_note_skill(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
     """The note-writing rules in effect, and every rule added from the user's feedback."""
     return _agent_request("GET", "/agent/v1/note-skill", api_base=api_base, client_id=client_id)
@@ -679,6 +804,10 @@ _MEDIA_NOTE_FLOW = (
     "the frames and the transcript, paid by the user's own Anthropic API key (the local "
     "Claude subscription only when FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription is set); "
     "without a usable Claude the configured text model writes it from the cut's transcript. "
+    "Who decides the cut is cut_judge: by default FluentFlow's own model, and when it has none "
+    "the task stops after transcription and waits for you (wait_task then returns agent_cut "
+    "with status waiting): call get_agent_cut_material, judge, save_agent_cut, then "
+    "save_agent_cut_report. "
     "To write the note yourself, on your own subscription, pass skip_summary=true, wait for "
     "done, then use get_agent_note_material and save_agent_note; with no model at all the "
     "task also stops at the transcript for you to do that. note_mode, prompt_preset and "
@@ -708,6 +837,9 @@ TOOL_FUNCTIONS = {
     "regenerate_note": regenerate_note,
     "debreath_task": debreath_task,
     "write_note_from_cut_media": write_note_from_cut_media,
+    "get_agent_cut_material": get_agent_cut_material,
+    "save_agent_cut": save_agent_cut,
+    "save_agent_cut_report": save_agent_cut_report,
     "get_agent_note_material": get_agent_note_material,
     "save_agent_note": save_agent_note,
     "get_agent_note_part": get_agent_note_part,
@@ -746,6 +878,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "prompt_preset": {"type": "string", "description": "A label recorded with the note. " + _TEXT_MODEL_ONLY},
                 "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
                 "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
+                "cut_judge": _CUT_JUDGE_SCHEMA,
                 "allow_duplicate": {
                     "type": "boolean",
                     "default": False,
@@ -803,6 +936,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
                 "stt_model": {"type": "string"},
                 "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
+                "cut_judge": _CUT_JUDGE_SCHEMA,
                 "api_base": {"type": "string"},
             },
             "required": ["path"],
@@ -827,7 +961,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "is stored, but done stays false while the recording is being cut (cut_running=true) "
             "and until the note is written, failed or skipped (note_pending=true). When done, task says where things stand (note status "
             "and length, who wrote it, the output folder, next actions); read the note itself "
-            "with get_task_package. Otherwise the current state; call again until done."
+            "with get_task_package. Otherwise the current state; call again until done. When the "
+            "task is waiting for you to judge its cut it returns at once with agent_cut (status "
+            "waiting, next): judge it with get_agent_cut_material and save_agent_cut, then wait again."
         ),
         "inputSchema": {
             "type": "object",
@@ -1009,6 +1145,68 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "api_base": {"type": "string"},
             },
             "required": ["task_id"],
+        },
+    },
+    {
+        "name": "get_agent_cut_material",
+        "_meta": {"anthropic/maxResultSizeChars": 500_000},
+        "description": (
+            "When a task waits for you to judge its cut (wait_task or get_task shows agent_cut.status "
+            "waiting): the same material FluentFlow's own model gets. instructions (what to keep, what "
+            "to remove, the JSON to answer with), cases (the user's earlier cut decisions), timeline "
+            "(timestamped transcript with numbered long gaps and whether the picture moved), shots "
+            "(screenshots of the long gaps whose picture moved, as local paths; open them before deciding "
+            "those gaps). Then call save_agent_cut. If you do not answer within decide_within_seconds, or "
+            "this conversation closes, FluentFlow judges the cut itself."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "save_agent_cut",
+        "description": (
+            "Send your decision on a task's cut, as the instructions of get_agent_cut_material ask: "
+            "keep_gaps (gap ids from the timeline, each with a reason) and remove (stretches with talk, "
+            "from/to in seconds as the timeline gives them, to null for the end, each with a reason). "
+            "FluentFlow applies the same rules as to its own model: spoken words are never cut, and "
+            "removals that together take more than a quarter of what was said are not applied but put "
+            "to the user one by one. A wrong gap id is refused, so you can fix it and send again. The "
+            "answer lists what was done as numbered facts with report_instructions: organise them and "
+            "call save_agent_cut_report. Then tell the user the cut is done and how many places need "
+            "their look on the task page in FluentFlow; do not ask them in chat (they need the video)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "keep_gaps": {"type": "array", "items": {"type": "object"}},
+                "remove": {"type": "array", "items": {"type": "object"}},
+                "model": {"type": "string", "description": "Which model judged, recorded with the cut."},
+                "api_base": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "save_agent_cut_report",
+        "description": (
+            "Send the processing report for the cut you judged: the facts save_agent_cut listed, organised "
+            "as its report_instructions say (summary, and sections of items that cite facts by ref; mark "
+            "unsure with a doubt only where you are not sure). It is shown on the task page and kept when "
+            "the user changes a cut later."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "summary": {"type": "string"},
+                "sections": {"type": "array", "items": {"type": "object"}},
+                "api_base": {"type": "string"},
+            },
+            "required": ["task_id", "sections"],
         },
     },
     {
@@ -1312,6 +1510,8 @@ def run_stdio() -> None:
 
 
 def main() -> int:
+    global _heartbeat_enabled
+    _heartbeat_enabled = True
     run_stdio()
     return 0
 

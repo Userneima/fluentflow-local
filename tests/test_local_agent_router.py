@@ -228,7 +228,7 @@ def test_video_link_task_starts_and_stays_out_of_video_sources_list(monkeypatch,
     assert r.status_code == 200
     assert r.json()["task_id"] == "agent-vid-1"
     assert submitted["route"] == "/agent/v1/tasks"
-    assert submitted["extra_metadata"] == {"agent_input_type": "video_link"}
+    assert submitted["extra_metadata"] == {"agent_input_type": "video_link", "cut_judge": "auto"}
 
     # Agent-submitted jobs are not mixed into the manual video-sources list.
     listed = client.get("/video-sources/jobs", headers=_HEADERS)

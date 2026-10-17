@@ -1088,6 +1088,12 @@ def _to_judge(survey: dict[str, Any]) -> int:
     )
 
 
+def _agent_cut_summary(state: Any) -> dict[str, Any] | None:
+    if not isinstance(state, dict) or not state.get("status"):
+        return None
+    return {key: state.get(key) for key in ("status", "since", "fallback_reason", "judged_by") if state.get(key)}
+
+
 def _debreath_summary(state: Any) -> dict[str, Any] | None:
     """The cut's counts for a list row, without its thousands of ranges.
 
@@ -1182,6 +1188,9 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         # for a task that had just been cut, because absence read as "never ran".
         # The ranges stay in the artifact; these are the numbers a card shows.
         "debreath": _debreath_summary(result.get("debreath")),
+        # Waiting for the user's agent to judge the cut, or why it stopped
+        # waiting (``agent_cut``): the card and the task page say so.
+        "agent_cut": _agent_cut_summary(result.get("agent_cut")),
         # Where the outputs went. A link's cut goes into its folder under the
         # Videos folder and is recorded here, not on the cut; without it the
         # card called that cut "uploaded, left in the app".
