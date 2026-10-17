@@ -1031,9 +1031,12 @@ def coverage_checker(api_key: str | None = None) -> tuple[note_coverage.Chat, st
     from backend.core import ai_summarizer, claude_text
     from backend.core.local_entry_guards import local_ai_kwargs
 
-    chat = ai_summarizer.text_model_chat(**local_ai_kwargs())
+    settings = local_ai_kwargs()
+    chat = ai_summarizer.text_model_chat(**settings)
     if chat is not None:
-        return chat, "text_model"
+        # Which model, not only "a text model": an agent told its note was
+        # checked could not say who checked it or who paid (2026-10-16).
+        return chat, f"text_model:{ai_summarizer.text_model_name(**settings)}"
     return claude_text.claude_chat(api_key)
 
 

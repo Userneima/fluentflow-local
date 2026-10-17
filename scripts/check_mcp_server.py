@@ -86,12 +86,17 @@ class McpStdioClient:
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = self.request("tools/call", {"name": name, "arguments": arguments})
+        content = result.get("content") if isinstance(result.get("content"), list) else []
+        text = next((part.get("text") for part in content if isinstance(part, dict) and part.get("type") == "text"), None)
+        try:
+            payload = json.loads(text) if isinstance(text, str) else None
+        except json.JSONDecodeError:
+            payload = None
         if result.get("isError"):
-            raise McpCheckError(f"Tool {name} returned error: {result.get('structuredContent') or result}")
-        structured = result.get("structuredContent")
-        if not isinstance(structured, dict):
-            raise McpCheckError(f"Tool {name} returned no structured content: {result}")
-        return structured
+            raise McpCheckError(f"Tool {name} returned error: {payload or result}")
+        if not isinstance(payload, dict):
+            raise McpCheckError(f"Tool {name} returned no JSON object: {result}")
+        return payload
 
 
 def run_check(*, api_base: str, client_id: str, access_token: str | None, backend_e2e: bool) -> dict[str, Any]:

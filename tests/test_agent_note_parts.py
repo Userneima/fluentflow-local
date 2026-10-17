@@ -284,3 +284,4 @@ def test_a_part_saved_again_is_not_checked_again(job_store, tmp_path, small_part
 
     assert checked > 0 and len(calls) == checked
     assert answer["coverage"]["parts"][0]["checked"] is False
+

@@ -268,6 +268,16 @@ def text_model_chat(
     return _text_checker(client, _normalize_model(provider_name, model))
 
 
+def text_model_name(*, provider: str | None = None, model: str | None = None, **_unused: Any) -> str:
+    """``provider/model`` of the configured text model, as ``text_model_chat``
+    resolves it. Accepts ``local_ai_kwargs()`` as is."""
+    try:
+        provider_name = _normalize_provider(provider)
+        return f"{provider_name}/{_normalize_model(provider_name, model)}"
+    except Exception:  # noqa: BLE001 - a name is a label, never a reason to fail
+        return str(provider or "")
+
+
 def _compose_note_system_prompt(
     system_prompt: str | None,
     *,

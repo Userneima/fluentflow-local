@@ -740,6 +740,7 @@ def save_agent_note(
                 # asks the agent to write those points in and save the part again.
                 "coverage": {
                     "checked": any(part.get("checked") for part in saved["coverage"]["parts"]),
+                    "checked_by": saved["coverage"].get("checker") or None,
                     "missing": saved["coverage"]["missing"],
                     "parts": saved["coverage"]["parts"],
                 },
@@ -770,6 +771,9 @@ def save_agent_note(
         # those points in and save again.
         "coverage": {
             "checked": any(part.get("checked") for part in coverage.get("parts") or []),
+            # Who ran the check: ``text_model:<provider>/<model>``, or the Claude
+            # channel. Empty when nothing checked.
+            "checked_by": coverage.get("checker") or None,
             "missing": coverage.get("missing") or [],
             "parts": coverage.get("parts") or [],
         },

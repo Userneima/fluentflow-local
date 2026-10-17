@@ -1219,7 +1219,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 
 
 def _result(payload: Any) -> dict[str, Any]:
-    return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], "structuredContent": payload}
+    # The JSON once, as text. No tool declares an outputSchema, so
+    # structuredContent is optional, and sending it too doubled every answer:
+    # Codex showed both copies and cut the note material off at its display
+    # limit (2026-10-16), so it wrote the note in two parts it did not need.
+    return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
 
 
 def _call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:

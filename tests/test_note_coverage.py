@@ -298,8 +298,11 @@ def test_the_check_prefers_the_text_model_and_falls_back_to_claude(monkeypatch):
     text = lambda s, u: "text"  # noqa: E731
     claude = (lambda s, u: "claude", "anthropic_api_key")
     monkeypatch.setattr(ai_summarizer, "text_model_chat", lambda **_k: text)
+    monkeypatch.setattr(ai_summarizer, "text_model_name", lambda **_k: "deepseek/deepseek-flash")
     monkeypatch.setattr(claude_text, "claude_chat", lambda *_a, **_k: claude)
-    assert vn.coverage_checker() == (text, "text_model")
+    # Named down to the model (2026-10-16): an agent told its note was checked
+    # could not say which model checked it, so nobody knew what it cost.
+    assert vn.coverage_checker() == (text, "text_model:deepseek/deepseek-flash")
 
     monkeypatch.setattr(ai_summarizer, "text_model_chat", lambda **_k: None)
     assert vn.coverage_checker() == claude
@@ -337,7 +340,7 @@ def test_the_save_route_hands_the_missing_points_back(job_store, tmp_path, monke
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "local-secret-token")
     an.material(TASK, client_id="anonymous", keyframe_extractor=_fake_extractor(tmp_path))
     monkeypatch.setattr(vn, "coverage_checker", lambda *_a, **_k: (
-        lambda s, u: _points_reply(("幻灯片上的公式", False)), "text_model",
+        lambda s, u: _points_reply(("幻灯片上的公式", False)), "text_model:deepseek/deepseek-flash",
     ))
 
     response = TestClient(create_local_app()).post(
@@ -348,6 +351,7 @@ def test_the_save_route_hands_the_missing_points_back(job_store, tmp_path, monke
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["coverage"]["checked"] is True
+    assert body["coverage"]["checked_by"] == "text_model:deepseek/deepseek-flash"
     assert [item["point"] for item in body["coverage"]["missing"]] == ["幻灯片上的公式"]
 
 
