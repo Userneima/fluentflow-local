@@ -2017,6 +2017,24 @@ def _render_batch(
     return part
 
 
+def _concat_listing(parts: Sequence[Path], batches: Sequence[Sequence[TimeRange]]) -> str:
+    """The concat list, each part held to the length its kept ranges add up to.
+
+    Every part comes back a little longer than its ranges: the audio encoder pads
+    the last block (32 ms at 32 kHz). Concatenated as they were, those few
+    milliseconds added up part after part, 1.35 s over a 32-minute cut and 2.6 s
+    over a three-hour one (2026-10-17), and the subtitles and the note's pictures,
+    which are placed by the cut list, ran ahead of the picture and the sound.
+    ``duration`` starts the next part where the cut list says it starts;
+    ``outpoint`` drops what the encoder added past it.
+    """
+    lines = []
+    for part, batch in zip(parts, batches):
+        length = sum(keep.duration for keep in batch)
+        lines.append(f"file '{part}'\noutpoint {length:.6f}\nduration {length:.6f}\n")
+    return "".join(lines)
+
+
 def render_keeps(
     media: Path | str,
     keeps: Sequence[TimeRange],
@@ -2107,7 +2125,7 @@ def render_keeps(
                 failed.result()  # re-raises the batch's own error, not a CancelledError
             parts = [future.result() for future in futures]
         listing = stage / "parts.txt"
-        listing.write_text("".join(f"file '{part}'\n" for part in parts), encoding="utf-8")
+        listing.write_text(_concat_listing(parts, batches), encoding="utf-8")
         concat = [
             _ffmpeg_path(), "-hide_banner", "-loglevel", "error",
             "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy",
@@ -2156,9 +2174,10 @@ def verify_render(
     Every threshold is relative to the input, not an absolute number picked in
     advance. Two of thirteen recordings shipped with 1.09s of audio/video skew of
     their own, so demanding 0.5s of the output demanded better than the source and
-    rejected faithful renders. Concatenation loses about a frame of metadata per
-    part, so 198 parts drift several seconds — harmless, and an absolute limit
-    rejected a 107ms-skew render for it. The failure actually worth catching is
+    rejected faithful renders. Each part is held to its cut-list length when
+    the parts are joined (``_concat_listing``), so the length no longer drifts
+    with the number of parts; an absolute skew limit still rejected a 107ms-skew
+    render once. The failure actually worth catching is
     the slow-motion case, where the frames cover a fraction of the container.
     """
     out = Path(output)
