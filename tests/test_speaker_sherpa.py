@@ -327,7 +327,10 @@ def test_a_fallback_is_recorded_in_the_result_and_the_task_goes_on(monkeypatch):
         stages, "diarization_status",
         lambda: {"available": True, "backend": "sherpa-onnx", "fallback_reason": "没装 pyannote，改用 sherpa-onnx。"},
     )
-    monkeypatch.setattr(stages, "diarize_audio", lambda path: [SpeakerTurn(0.0, 1.0, "SPEAKER_00")])
+    async def child(_path, *, budget_seconds):
+        return [SpeakerTurn(0.0, 1.0, "SPEAKER_00")]
+
+    monkeypatch.setattr(stages, "diarize_in_child", child)
 
     class _Loop:
         async def run_in_executor(self, _executor, func):

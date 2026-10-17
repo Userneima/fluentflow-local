@@ -16,16 +16,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
+from backend.core.diarization_process import diarize_in_child
 from backend.core.speaker_diarization import (
     assign_speakers_to_segments,
     diarization_status,
-    diarize_audio,
 )
 from backend.core.transcript_cleaner import clean_repeated_transcript
 
@@ -36,38 +35,23 @@ def _text_len(value: str | None) -> int:
     return len(value or "")
 
 
-_DIARIZATION_EXECUTOR: ThreadPoolExecutor | None = None
-
-
-def _diarization_executor() -> ThreadPoolExecutor:
-    """A pool of its own for diarization, because a timed-out run leaks a thread.
-
-    `asyncio.wait_for` stops waiting; it cannot stop the thread, which stays
-    inside the diarizer for the life of the process. On the shared
-    default executor those leaked threads accumulate until nothing else can run
-    — every ffmpeg call, transcription and summarizer call in the pipeline goes
-    through `run_in_executor` — which is the same silent hang the timeout exists
-    to prevent, arrived at more slowly. One worker is deliberate: a second
-    diarization queues behind a stuck one and then hits its own budget, which
-    degrades to "no speaker labels" instead of blocking the pipeline.
-    """
-    global _DIARIZATION_EXECUTOR
-    if _DIARIZATION_EXECUTOR is None:
-        _DIARIZATION_EXECUTOR = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="diarization"
-        )
-    return _DIARIZATION_EXECUTOR
+# Measured 2026-10-17 on this Mac (sherpa-onnx, 4 threads), clips of one
+# interview: 5, 10, 20 and 40 minutes took 0.10, 0.11, 0.13 and 0.14 of their
+# length; the whole 3.5 hours took 0.12 and 0.14 inside the service. A 20-minute
+# meeting on a busy machine took 0.62. The limit leaves room for that and still
+# stops a run that goes on for hours.
+DIARIZATION_BUDGET_PER_AUDIO_SECOND = 0.75
+DIARIZATION_MIN_BUDGET_SECONDS = 900.0
 
 
 def _diarization_timeout_seconds(duration_seconds: float | None) -> float:
-    """Budget for one diarization run: generous per audio minute, still bounded.
+    """Limit for one speaker-separation run, from the recording's length.
 
-    Diarizing a long recording legitimately takes minutes on CPU, so the floor
-    is high enough not to cut real work short. The cap is what keeps a stalled
-    model download from holding a task forever.
+    No fixed ceiling: the earlier 45-minute cap would stop a five-hour
+    recording that was running at the normal pace.
     """
     audio_seconds = float(duration_seconds or 0.0)
-    return min(2700.0, max(600.0, audio_seconds * 2.0))
+    return max(DIARIZATION_MIN_BUDGET_SECONDS, audio_seconds * DIARIZATION_BUDGET_PER_AUDIO_SECOND)
 
 
 async def label_speakers(
@@ -122,18 +106,19 @@ async def label_speakers(
     elif ctx.diarization_requested:
         started_at = time.perf_counter()
         budget = _diarization_timeout_seconds(duration_sec)
+        # Recorded at the start too: a run that never ended left no trace of
+        # which task it belonged to (2026-10-17).
+        log_event(
+            event_name="speaker_diarization_started",
+            success=True,
+            metadata=event_metadata(route="/process", budget_seconds=round(budget)),
+            **common,
+        )
         try:
-            # Bounded on purpose. A 2026-09-03 run of the previous backend
-            # sat in a model download for over an hour with the task stuck
-            # at "stt" and no error anywhere. Speaker labels are optional,
-            # so give them a budget and move on without them when it is
-            # spent; the executor thread is left to finish on its own.
-            turns = await asyncio.wait_for(
-                ctx.loop.run_in_executor(
-                    _diarization_executor(), lambda: diarize_audio(audio_path)
-                ),
-                timeout=budget,
-            )
+            # Bounded on purpose, and in a child process so a spent budget or a
+            # cancelled task really stops it (``diarization_process``). Speaker
+            # labels are optional: past the budget the task goes on without them.
+            turns = await diarize_in_child(audio_path, budget_seconds=budget)
             segments_payload = assign_speakers_to_segments(segments_payload, turns)
             speaker_payload.update({
                 "applied": True,
@@ -151,7 +136,7 @@ async def label_speakers(
             )
         except asyncio.TimeoutError:
             error_reason = (
-                f"说话人区分超过 {int(budget)} 秒预算，已跳过。"
+                f"说话人区分超过 {int(budget) // 60} 分钟上限，已停止并跳过，转录稿和笔记照常出，只是不标谁在说话。"
             )
             speaker_payload.update({"applied": False, "error_reason": error_reason})
             logger.warning(

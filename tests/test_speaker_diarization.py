@@ -116,18 +116,6 @@ def test_note_prompt_carries_attribution_rule_only_when_labeled() -> None:
     assert "不要根据对话里的称呼" in labeled
 
 
-def test_diarization_budget_scales_with_audio_and_stays_bounded() -> None:
-    from backend.core.media_job_stages import _diarization_timeout_seconds
-
-    # A short clip still gets a floor: model loading is slower than the audio.
-    assert _diarization_timeout_seconds(None) == 600.0
-    assert _diarization_timeout_seconds(120) == 600.0
-    # A long recording gets room to actually finish.
-    assert _diarization_timeout_seconds(1229) == 2458.0
-    # And a stalled model download cannot hold a task forever.
-    assert _diarization_timeout_seconds(9000) == 2700.0
-
-
 def test_status_reports_local_models_and_needs_no_token(monkeypatch, tmp_path) -> None:
     from backend.core import speaker_diarization_pyannote as sd
 
@@ -250,16 +238,6 @@ def test_torch_compat_serialises_overlapping_loads() -> None:
         assert seen == []
     worker.join(5)
     assert seen == ["1"]
-
-
-def test_diarization_runs_off_the_shared_executor() -> None:
-    """A timed-out run leaks its thread; it must not be one the pipeline needs."""
-    from backend.core.media_job_stages import _diarization_executor
-
-    executor = _diarization_executor()
-
-    assert executor is _diarization_executor()
-    assert executor._max_workers == 1
 
 
 def test_by_path_task_resolves_its_source_where_it_sits(monkeypatch, tmp_path) -> None:

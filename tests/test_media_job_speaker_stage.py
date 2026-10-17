@@ -64,8 +64,17 @@ def events(monkeypatch):
     return seen
 
 
+def _child(result=None, error=None):
+    """Stands in for ``diarize_in_child``: the separation as the child returns it."""
+    async def run(_path, *, budget_seconds):
+        if error is not None:
+            raise error
+        return result if result is not None else []
+    return run
+
+
 def test_a_local_run_relabels_the_segments(events, monkeypatch):
-    monkeypatch.setattr(stages, "diarize_audio", lambda path: [_Turn("A"), _Turn("B")])
+    monkeypatch.setattr(stages, "diarize_in_child", _child([_Turn("A"), _Turn("B")]))
     monkeypatch.setattr(
         stages, "assign_speakers_to_segments",
         lambda segs, turns: [{"speaker": "A"}, {"speaker": "B"}],
@@ -79,20 +88,17 @@ def test_a_local_run_relabels_the_segments(events, monkeypatch):
 
 def test_a_local_run_that_overruns_its_budget_is_skipped_not_raised(events, monkeypatch):
     """A stalled diarization run must not hold the task forever."""
-    monkeypatch.setattr(stages, "_diarization_timeout_seconds", lambda _d: 0.01)
-    monkeypatch.setattr(stages, "diarize_audio", lambda path: [])
+    monkeypatch.setattr(stages, "_diarization_timeout_seconds", lambda _d: 600.0)
+    monkeypatch.setattr(stages, "diarize_in_child", _child(error=asyncio.TimeoutError()))
     original = [{"text": "hi"}]
-    segments, payload = _run(_ctx(loop=_Loop(hang=True)), segments=original)
+    segments, payload = _run(_ctx(), segments=original)
     assert payload["applied"] is False
-    assert "预算" in payload["error_reason"]
+    assert "10 分钟上限" in payload["error_reason"] and "照常出" in payload["error_reason"]
     assert segments == original
 
 
 def test_a_local_run_that_blows_up_is_skipped_not_raised(events, monkeypatch):
-    def _explode(_path):
-        raise RuntimeError("no model on disk")
-
-    monkeypatch.setattr(stages, "diarize_audio", _explode)
+    monkeypatch.setattr(stages, "diarize_in_child", _child(error=RuntimeError("no model on disk")))
     original = [{"text": "hi"}]
     segments, payload = _run(_ctx(), segments=original)
     assert payload["applied"] is False
@@ -101,10 +107,7 @@ def test_a_local_run_that_blows_up_is_skipped_not_raised(events, monkeypatch):
 
 
 def test_a_task_that_did_not_ask_for_labels_runs_nothing(events, monkeypatch):
-    def _never(_path):
-        raise AssertionError("diarization ran without being asked")
-
-    monkeypatch.setattr(stages, "diarize_audio", _never)
+    monkeypatch.setattr(stages, "diarize_in_child", _child(error=AssertionError("diarization ran without being asked")))
     _, payload = _run(_ctx(diarization_requested=False), segments=[{"text": "hi"}])
     assert payload["requested"] is False
     assert payload["applied"] is False
@@ -125,25 +128,29 @@ def test_one_speaker_is_not_worth_labelling(events):
 
 def test_a_local_run_reports_the_local_models_availability(events, monkeypatch):
     monkeypatch.setattr(stages, "diarization_status", lambda: {"available": False})
-    monkeypatch.setattr(stages, "diarize_audio", lambda path: [])
+    monkeypatch.setattr(stages, "diarize_in_child", _child([]))
     monkeypatch.setattr(stages, "assign_speakers_to_segments", lambda segs, turns: segs)
     _, payload = _run(_ctx(), segments=[{"text": "hi"}])
     assert payload["available"] is False
 
 
-def test_the_budget_scales_with_the_audio_and_stays_bounded():
-    assert stages._diarization_timeout_seconds(None) == 600.0
-    assert stages._diarization_timeout_seconds(1229) == 2458.0
-    assert stages._diarization_timeout_seconds(9000) == 2700.0
+def test_the_limit_grows_with_the_recording_and_leaves_room_for_a_busy_machine():
+    # A short clip still gets a floor: loading the models is slower than the audio.
+    assert stages._diarization_timeout_seconds(None) == 900.0
+    assert stages._diarization_timeout_seconds(120) == 900.0
+    # The slowest run measured, a 20-minute meeting on a busy machine (0.62x), fits.
+    assert stages._diarization_timeout_seconds(1229) > 0.62 * 1229
+    # A five-hour recording at the measured pace (about 0.14x) is not cut off.
+    assert stages._diarization_timeout_seconds(5 * 3600) > 0.14 * 5 * 3600 * 2
+    # A run of many hours on a 3.5-hour recording is.
+    assert stages._diarization_timeout_seconds(12878) < 4 * 3600
 
 
 def test_asking_on_a_machine_without_diarization_is_a_skip_not_a_failure(events, monkeypatch):
     monkeypatch.setattr(stages, "diarization_status", lambda: {"available": False})
 
-    def must_not_run(path):
-        raise AssertionError("nothing to run on a machine without the packages")
-
-    monkeypatch.setattr(stages, "diarize_audio", must_not_run)
+    monkeypatch.setattr(stages, "diarize_in_child",
+                        _child(error=AssertionError("nothing to run on a machine without the packages")))
     segments, payload = _run(_ctx(), segments=[{"text": "hi"}])
 
     assert payload["applied"] is False
