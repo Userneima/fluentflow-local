@@ -51,6 +51,13 @@ SMALL_SPEAKER_SECONDS = 8.0
 # to 0.49 against each other. Folding every small speaker regardless swallowed
 # both real interjections.
 MERGE_MIN_SIMILARITY = 0.5
+# A speaker of any size is folded into a bigger one whose voice is at least this
+# similar. Measured 2026-10-18 at threshold 1.0: a two-person supervision talk
+# came out with a third "person" of 10 s whose voice scored 0.79 against one of
+# the two; distinct people scored 0.03 to 0.49 against each other in that talk
+# and a six-person meeting, and 0.55 between the two voices of an interview.
+# Above all of those, so no distinct person measured so far would be merged.
+MERGE_ANY_MIN_SIMILARITY = 0.6
 # How much audio of one speaker goes into the voice average used to place the
 # small ones. Their longest turns are enough to characterise a voice, and
 # re-embedding a speaker's whole hour would double the work for nothing.
@@ -209,13 +216,13 @@ def diarize_with_sherpa(audio_path: str | Path) -> list[SpeakerTurn]:
         SpeakerTurn(start=float(item.start), end=float(item.end), speaker=f"SPEAKER_{int(item.speaker):02d}")
         for item in result
     ]
-    if not small_speakers(turns):
+    if len({turn.speaker for turn in turns}) < 2:
         return turns
     extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
         sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding_model), num_threads=threads)
     )
     embeddings = speaker_embeddings(extractor, samples, turns)
-    return merge_small_speakers(turns, embeddings)
+    return merge_similar_speakers(merge_small_speakers(turns, embeddings), embeddings)
 
 
 def speaking_seconds(turns: Iterable[SpeakerTurn]) -> dict[str, float]:
@@ -311,6 +318,37 @@ def merge_small_speakers(
         best = max(established, key=lambda other: _cosine(embeddings[speaker], embeddings[other]))
         if _cosine(embeddings[speaker], embeddings[best]) >= min_similarity:
             target[speaker] = best
+    return [
+        SpeakerTurn(start=turn.start, end=turn.end, speaker=target.get(turn.speaker, turn.speaker))
+        for turn in turns
+    ]
+
+
+def merge_similar_speakers(
+    turns: Sequence[SpeakerTurn],
+    embeddings: Mapping[str, Any],
+    min_similarity: float = MERGE_ANY_MIN_SIMILARITY,
+) -> list[SpeakerTurn]:
+    """Fold a speaker into a bigger one whose voice is at least
+    ``min_similarity`` alike, whatever its size.
+
+    ``merge_small_speakers`` only looks at speakers with under 8 s; a stray
+    piece of one person that ran longer stayed a person of its own (a 10 s
+    "third speaker" in a two-person talk, 2026-10-18). Biggest first, so a
+    piece always lands on the main body of that voice, never the other way.
+    """
+    totals = speaking_seconds(turns)
+    order = sorted((speaker for speaker in totals if speaker in embeddings), key=lambda s: -totals[s])
+    kept: list[str] = []
+    target: dict[str, str] = {}
+    for speaker in order:
+        best = max(kept, key=lambda other: _cosine(embeddings[speaker], embeddings[other]), default=None)
+        if best is not None and _cosine(embeddings[speaker], embeddings[best]) >= min_similarity:
+            target[speaker] = best
+        else:
+            kept.append(speaker)
+    if not target:
+        return list(turns)
     return [
         SpeakerTurn(start=turn.start, end=turn.end, speaker=target.get(turn.speaker, turn.speaker))
         for turn in turns

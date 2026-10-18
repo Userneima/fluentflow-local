@@ -268,6 +268,34 @@ def test_nothing_is_merged_when_every_speaker_is_small():
     assert sd.merge_small_speakers(turns, embeddings) == turns
 
 
+# Requirement (2026-10-18): a two-person talk is two people. A piece of one
+# voice that ran past 8 s came out as a third person (similarity 0.79 to one of
+# them); distinct people measured 0.03 to 0.55 against each other.
+
+def test_a_longer_piece_of_one_voice_joins_that_voice():
+    turns = _turns((0, 200, "A"), (200, 320, "B"), (320, 330, "C"))
+    # cosine(C, B) is about 0.79, cosine(C, A) about 0.24
+    embeddings = {"A": np.array([1.0, 0.0, 0.0]), "B": np.array([0.0, 1.0, 0.0]),
+                  "C": np.array([0.24, 0.79, 0.56])}
+
+    assert [t.speaker for t in sd.merge_similar_speakers(turns, embeddings)] == ["A", "B", "B"]
+
+
+def test_two_people_whose_voices_are_somewhat_alike_stay_two():
+    # The interview's two voices scored 0.55 against each other.
+    turns = _turns((0, 600, "A"), (600, 700, "B"))
+    embeddings = {"A": np.array([1.0, 0.0]), "B": np.array([0.55, 0.835])}
+
+    assert sd.merge_similar_speakers(turns, embeddings) == turns
+
+
+def test_the_main_body_of_a_voice_is_never_folded_into_its_piece():
+    turns = _turns((0, 10, "piece"), (10, 300, "main"))
+    embeddings = {"piece": np.array([0.9, 0.436]), "main": np.array([1.0, 0.0])}
+
+    assert {t.speaker for t in sd.merge_similar_speakers(turns, embeddings)} == {"main"}
+
+
 def test_a_small_speaker_without_an_embedding_stays():
     turns = _turns((0, 30, "A"), (30, 31, "S"))
 
