@@ -67,8 +67,11 @@ export const useDismissable = (open, onClose, options = {}) => {
         };
         const onPointerDown = (event) => {
             if (!closeOnOutsideClick) return;
-            const node = outsideOf?.current || containerRef.current;
-            if (node && !node.contains(event.target)) onCloseRef.current?.();
+            // Inside is the wider element *and* the popup itself. A popup drawn
+            // in a portal is not inside its trigger's wrapper, and pressing in
+            // it (to select its text, 2026-10-18) used to close it.
+            const inside = [outsideOf?.current, containerRef.current].filter(Boolean);
+            if (inside.length && !inside.some((node) => node.contains(event.target))) onCloseRef.current?.();
         };
         container?.addEventListener('keydown', onKeyDown);
         document.addEventListener('keydown', onKeyDown);

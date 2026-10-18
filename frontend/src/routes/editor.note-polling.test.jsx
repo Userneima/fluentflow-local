@@ -486,6 +486,12 @@ describe('what the note panel says', () => {
         const panel = screen.getByTestId('note-explanation-panel');
         expect(panel.textContent).toMatch(/只有转录稿/);
         expect(panel.textContent).toMatch(/本机 Claude 的登录已过期。/);
+        // Pressing its text to select or copy it keeps it open (2026-10-18);
+        // pressing elsewhere closes it.
+        fireEvent.mouseDown(panel.querySelector('dd'));
+        expect(screen.getByTestId('note-explanation-panel')).toBeTruthy();
+        fireEvent.mouseDown(document.body);
+        expect(screen.queryByTestId('note-explanation-panel')).toBeNull();
     });
 
     it('says nothing of the kind for a note Claude wrote', async () => {

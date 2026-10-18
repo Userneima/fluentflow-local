@@ -143,7 +143,7 @@ export const noteWasTextFallback = (result) => (
 // 2026-10-18); now it is asked for.
 //
 // {attention, rows: [{label, value}], why, fixes: [string], agentPrompt}
-export const noteExplanation = (result, lang = 'zh') => {
+export const noteExplanation = (result, lang = 'zh', connection = {}) => {
     const zh = lang === 'zh';
     const from = String(result?.summary_written_from || '');
     const visual = result?.visual_note && typeof result.visual_note === 'object' ? result.visual_note : {};
@@ -186,7 +186,7 @@ export const noteExplanation = (result, lang = 'zh') => {
             ? ['在「设置 → 笔记」填好 Anthropic API Key，再点「重生笔记」。', '或者把下面这句发给你的 agent（Claude Code、Codex 等），用它的订阅结合画面重写。']
             : ['Add an Anthropic API key under Settings → Notes, then click Regenerate note.', 'Or send this to your agent (Claude Code, Codex, ...) to rewrite it from the frames on its own subscription.'])
             : [],
-        agentPrompt: fallback ? agentNotePrompt(result, lang) : '',
+        agentPrompt: fallback ? agentNotePrompt(result, lang, connection) : '',
     };
 };
 
@@ -220,10 +220,34 @@ export const notePendingSentence = (writer, result = null, lang = 'zh') => {
 
 // The sentence a person pastes into their agent to have it write this task's
 // note (agent_note on the backend: material in, note back, nothing to set up).
-export const agentNotePrompt = (result, lang = 'zh') => {
+//
+// It works whether or not the agent is connected yet (owner, 2026-10-18: the
+// way to a note on the user's own subscription is a sentence they send to their
+// agent, which then connects to FluentFlow itself). ``connection`` is what the
+// running service says about itself (runtime-config: repoRoot, pythonExecutable):
+// with it the sentence carries the exact MCP server to register. No token: the
+// server reads it from the repository's .env, so nothing secret goes to the
+// agent or its model provider.
+export const agentNotePrompt = (result, lang = 'zh', connection = {}) => {
+    const zh = lang === 'zh';
     const taskId = String(result?.task_id || '');
     const title = String(result?.display_title || result?.filename || '').trim();
-    return lang === 'zh'
+    const write = zh
         ? `用 FluentFlow 给任务${title ? `「${title}」` : ''}写笔记（任务 ID：${taskId}）：先用 get_agent_note_material 取材料，按里面的要求写，写好用 save_agent_note 交回。`
         : `Use FluentFlow to write the note for task${title ? ` "${title}"` : ''} (task ID: ${taskId}): get the material with get_agent_note_material, write it as instructed, and hand it back with save_agent_note.`;
+    const server = mcpServerCommand(connection);
+    if (!server) return write;
+    return zh
+        ? `${write}\n如果你还没有 FluentFlow 的这些工具，先把它接入成 MCP 服务，名字叫 fluentflow，命令是 ${server.command}，参数是 ${server.script}，不用填令牌。接好后告诉我新开一个对话，再把这段话发给你。`
+        : `${write}\nIf you do not have these FluentFlow tools yet, first add it as an MCP server named fluentflow, command ${server.command}, argument ${server.script}; no token is needed. Then ask me to start a new conversation and send you this again.`;
+};
+
+// The MCP server of this FluentFlow, from the service's own paths. A Windows
+// root keeps its backslashes so the path reads as the user's Explorer shows it.
+export const mcpServerCommand = ({repoRoot = '', pythonExecutable = ''} = {}) => {
+    const root = String(repoRoot || '').replace(/[\\/]+$/, '');
+    const command = String(pythonExecutable || '').trim();
+    if (!root || !command) return null;
+    const separator = root.includes('\\') && !root.includes('/') ? '\\' : '/';
+    return {command, script: [root, 'scripts', 'fluentflow_mcp_server.py'].join(separator)};
 };

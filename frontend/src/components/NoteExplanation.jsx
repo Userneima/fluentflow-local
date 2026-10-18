@@ -4,6 +4,7 @@ import {Link} from 'react-router-dom';
 import SvgIcon from './SvgIcon.jsx';
 import {useDismissable} from '../lib/useDismissable.js';
 import {noteExplanation} from '../lib/noteWriter.js';
+import {useApp} from '../app/AppContext.jsx';
 
 // 笔记说明: who wrote the note and from what, asked for instead of shown. The
 // paragraph it replaces sat above every fallback note and took a third of a
@@ -18,7 +19,8 @@ const NoteExplanation = ({result, lang}) => {
     const buttonRef = useRef(null);
     const panelRef = useDismissable(open, () => setOpen(false), {closeOnOutsideClick: true, outsideOf: wrapperRef});
     const [position, setPosition] = useState(null);
-    const explanation = noteExplanation(result, lang);
+    const {runtimeConfig} = useApp() || {};
+    const explanation = noteExplanation(result, lang, runtimeConfig || {});
 
     // The note panel clips what overflows it (overflow: hidden) and the editor
     // inside it stacks over its toolbar, so the panel is drawn on the page
@@ -105,7 +107,7 @@ const NoteExplanation = ({result, lang}) => {
                             </ol>
                             {explanation.agentPrompt && (
                                 <div className="flex items-start gap-2 rounded-[10px] bg-[#f6f5f5] p-2 dark:bg-white/[0.06]">
-                                    <p className="flex-1 break-all text-[11px] text-[#555] dark:text-white/60">{explanation.agentPrompt}</p>
+                                    <p className="flex-1 select-text whitespace-pre-line break-all text-[11px] text-[#555] dark:text-white/60">{explanation.agentPrompt}</p>
                                     <button type="button" onClick={copyPrompt} className="shrink-0 rounded-[8px] border border-[#e4e0e0] bg-white px-2 py-1 text-[11px] font-bold text-[#111111] hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white">
                                         {copied ? (zh ? '已复制' : 'Copied') : (zh ? '复制' : 'Copy')}
                                     </button>
