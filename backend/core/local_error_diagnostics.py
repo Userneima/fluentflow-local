@@ -365,6 +365,19 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "视频下载时间过长，可能是文件较大或当前网络较慢。",
             "稍后重试，或改用本机上的视频文件。",
         )
+    # The connection dropped halfway, already tried again three times. The raw
+    # "[SSL: UNEXPECTED_EOF_WHILE_READING]" went to the page as it was (2026-10-18).
+    if any(token in lowered for token in (
+        "unexpected_eof", "eof occurred in violation of protocol", "connection reset",
+        "connection aborted", "remote end closed connection", "remotedisconnected",
+        "connectionreseterror", "winerror 10054", "ssl:", "incompleteread",
+    )):
+        return _diag(
+            "network_connection_dropped",
+            "网络连接中断",
+            "连接在传输中途被断开了，连着试了三次都没成功。多半是网络不稳，或代理、加速器在中途断开了连接。",
+            "过一会儿再提交一次；开着代理或加速器的话，可以先关掉再试。",
+        )
     if "抖音的登录信息过期了" in raw:
         return _diag(
             "douyin_login_expired",

@@ -6,12 +6,14 @@ import hashlib
 import html
 import ipaddress
 import json
+import http.client
 import logging
 import os
 import re
 import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -616,7 +618,31 @@ def open_public_http_url(
     opener = urllib.request.build_opener(
         PublicHTTPRedirectHandler(allowed_host_suffixes, any_public_host=redirect_to_any_public_host)
     )
-    return opener.open(request_or_url, timeout=timeout)
+    for attempt in range(1, _CONNECTION_ATTEMPTS + 1):
+        try:
+            return opener.open(request_or_url, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - re-raised unless it is a dropped connection
+            if attempt == _CONNECTION_ATTEMPTS or not _connection_dropped(exc):
+                raise
+            logger.info("connection to %s dropped (%s); trying again", _url_host(url), exc)
+            time.sleep(_CONNECTION_RETRY_SECONDS * attempt)
+    raise AssertionError("unreachable")
+
+
+# A connection the network dropped halfway (seen 2026-10-18 on a Windows machine
+# behind a proxy: "[SSL: UNEXPECTED_EOF_WHILE_READING]" on a Douyin link that
+# resolved three times out of three right after) is tried again. An answer from
+# the server, even an error, is not: asking again gets the same answer.
+_CONNECTION_ATTEMPTS = 3
+_CONNECTION_RETRY_SECONDS = 1.0
+
+
+def _connection_dropped(error: BaseException) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return False
+    reason = getattr(error, "reason", error)
+    return isinstance(reason, (ssl.SSLError, ConnectionError, http.client.RemoteDisconnected,
+                               http.client.IncompleteRead))
 
 
 def sanitize_filename_part(value: str) -> str:
