@@ -20,7 +20,7 @@ import {NOTE_KEY_ONBOARDING_DISMISSED} from '../lib/noteKeyOnboarding.js';
 let credentials = {};
 let checkResult = {ok: true, reason: 'ok', message: 'Key 可以用。'};
 const saveCredentials = vi.fn(async (patch) => {
-    if ('deepseek_api_key' in patch) credentials = {...credentials, deepseek_api_key_configured: !!patch.deepseek_api_key};
+    for (const [name, value] of Object.entries(patch)) credentials = {...credentials, [`${name}_configured`]: !!value};
     return credentials;
 });
 const checkCredential = vi.fn(async () => checkResult);
@@ -65,11 +65,12 @@ const mount = () => render(
     </MemoryRouter>,
 );
 
-const INTRO = /相当于这个模型服务的账号密码/;
+const INTRO = /笔记可以交给你自己的 agent/;
 const NO_NOTE = /还没有填写模型 Key/;
 
-const enterKey = (value) => {
-    fireEvent.change(screen.getByLabelText('DeepSeek 的 API Key'), {target: {value}});
+const enterKey = (value, provider = 'DeepSeek') => {
+    if (provider === 'DeepSeek') fireEvent.click(screen.getByRole('radio', {name: /^DeepSeek/}));
+    fireEvent.change(screen.getByLabelText(`${provider} 的 API Key`), {target: {value}});
     fireEvent.click(screen.getByRole('button', {name: '检查并保存'}));
 };
 
@@ -89,8 +90,13 @@ describe('the first-run note setup on the start page', () => {
     it('opens on first visit when nothing can write a note', async () => {
         mount();
         expect(await screen.findByText(INTRO)).toBeTruthy();
-        expect(screen.getByRole('radio', {name: /DeepSeek（推荐先用这个）/})).toBeTruthy();
-        expect(screen.getByRole('radio', {name: /Anthropic/})).toBeTruthy();
+        // The person's own agent first; among keys Qwen is recommended and picked.
+        const card = screen.getByTestId('note-key-onboarding');
+        expect(card.textContent.indexOf('交给你自己的 agent')).toBeLessThan(card.textContent.indexOf('通义千问'));
+        expect(screen.getByRole('radio', {name: /通义千问（阿里云百炼）（推荐）/}).getAttribute('aria-checked')).toBe('true');
+        for (const name of [/^DeepSeek/, /Kimi/, /MiMo/, /Anthropic/]) {
+            expect(screen.getByRole('radio', {name})).toBeTruthy();
+        }
     });
 
     it('does not open when a key is already saved', async () => {
@@ -138,6 +144,18 @@ describe('the first-run note setup on the start page', () => {
         expect(saveCredentials).toHaveBeenLastCalledWith({deepseek_api_key: ''});
         expect(screen.getByTestId('note-key-onboarding')).toBeTruthy();
         expect(screen.queryByText(/Key 已经保存/)).toBeNull();
+    });
+
+    it('makes the provider whose key was saved the note writer', async () => {
+        localStorage.setItem('fluentflow_settings', JSON.stringify({aiProvider: 'deepseek'}));
+        mount();
+        await screen.findByText(INTRO);
+        enterKey('sk-qwen', '通义千问（阿里云百炼）');
+
+        expect(await screen.findByText('好了，处理完的录像会自动写笔记。')).toBeTruthy();
+        expect(saveCredentials).toHaveBeenCalledWith({dashscope_api_key: 'sk-qwen'});
+        expect(checkCredential).toHaveBeenCalledWith('qwen');
+        expect(JSON.parse(localStorage.getItem('fluentflow_settings')).aiProvider).toBe('qwen');
     });
 
     it('makes DeepSeek the note writer when another text model was picked', async () => {

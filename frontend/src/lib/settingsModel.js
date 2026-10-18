@@ -1,3 +1,5 @@
+import {normalizeTextProvider} from './textProviders.js';
+
 export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashscopeApiKey', 'qwenApiKey', 'larkAppId', 'larkAppSecret'];
 // Keys an older build could leave in stored settings. elevenLabsApiKey belonged
 // to a cloud transcription engine this app does not have; it is dropped, never sent.
@@ -12,7 +14,7 @@ export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-flash';
 // 2026-10-16).
 const DEFAULT_OR_RETIRED_MODELS = new Set([
     'deepseek-flash', 'deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
-    'gpt-6-luna', 'gpt-5.4-mini', 'qwen-plus',
+    'gpt-6-luna', 'gpt-5.4-mini', 'qwen-plus', 'kimi-k2.6', 'mimo-v2.6-pro',
 ]);
 export const DEFAULT_OPENAI_MODEL = 'gpt-6-luna';
 export const DEFAULT_QWEN_MODEL = 'qwen-plus';
@@ -62,7 +64,7 @@ export const isLocalLarkExportRoute = (route) => normalizeLarkExportRoute(route)
 
 // The model the user picked, or '' to follow the provider's default.
 export const normalizeAiModel = (provider, model) => {
-    const p = provider === 'openai' ? 'openai' : (provider === 'qwen' ? 'qwen' : 'deepseek');
+    const p = normalizeTextProvider(provider);
     const value = String(model || '').trim();
     if (!value || DEFAULT_OR_RETIRED_MODELS.has(value)) return '';
     if (p === 'openai' && !value.startsWith('gpt-')) return '';
@@ -73,7 +75,7 @@ export const sanitizeSettings = (settings={}) => {
     const next = {...settings};
     SENSITIVE_SETTING_KEYS.forEach((key) => delete next[key]);
     LEGACY_REMOVED_SETTING_KEYS.forEach((key) => delete next[key]);
-    const provider = next.aiProvider === 'openai' ? 'openai' : (next.aiProvider === 'qwen' ? 'qwen' : 'deepseek');
+    const provider = normalizeTextProvider(next.aiProvider);
     next.aiProvider = provider;
     next.aiModel = normalizeAiModel(provider, next.aiModel);
     if (!SUPPORTED_FRONTEND_NOTE_MODES.has(next.noteMode)) {

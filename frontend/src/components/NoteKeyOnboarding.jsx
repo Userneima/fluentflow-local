@@ -3,7 +3,7 @@ import SvgIcon from './SvgIcon.jsx';
 import {inputClass, saveButtonClass} from './settingsPrimitives.jsx';
 import {useApi, useSettings} from '../app/shared.jsx';
 import {resolveNoteWriter} from '../lib/noteWriter.js';
-import {NOTE_KEY_DONE, NOTE_KEY_INTRO, noteKeyChoices} from '../lib/noteKeyOnboarding.js';
+import {NOTE_KEY_DONE, NOTE_KEY_INTRO, agentSetupPrompt, noteKeyChoices} from '../lib/noteKeyOnboarding.js';
 
 // The first-run note setup (see lib/noteKeyOnboarding.js for when it opens).
 //
@@ -11,7 +11,7 @@ import {NOTE_KEY_DONE, NOTE_KEY_INTRO, noteKeyChoices} from '../lib/noteKeyOnboa
 //   onClose             — closing by hand; the caller records the dismissal
 //   onStatusChange      — the fresh /credentials/status after a save, so the
 //                         page's banner and writer sentence follow at once
-//   onUseTextProvider   — switches the stored text model to DeepSeek; the
+//   onUseTextProvider   — switches the stored text model to the chosen one; the
 //                         settings page passes its own updater so its state
 //                         does not overwrite the change later
 //   closeDelayMs        — how long the success line stays before closing
@@ -32,6 +32,8 @@ export const NoteKeyOnboarding = ({
     // {tone: 'ok' | 'warn' | 'error', text}
     const [feedback, setFeedback] = useState(null);
     const [done, setDone] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const agentPrompt = agentSetupPrompt(runtimeConfig || {});
     const closeTimer = useRef(null);
     useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
     const canPaste = typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function';
@@ -51,10 +53,21 @@ export const NoteKeyOnboarding = ({
         }
     };
 
-    const switchNotesToDeepSeek = () => {
-        const patch = {aiProvider: 'deepseek', aiModel: ''};
+    const copyAgentPrompt = async () => {
+        try {
+            await navigator.clipboard.writeText(agentPrompt);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch (_) {
+            setCopied(false);
+        }
+    };
+
+    // A text-model key just saved is the one notes are written with from now on.
+    const switchNotesTo = (provider) => {
+        const patch = {aiProvider: provider, aiModel: ''};
         const current = loadSettings();
-        if ((current.aiProvider || 'deepseek') === 'deepseek') {
+        if ((current.aiProvider || 'deepseek') === provider) {
             return current;
         }
         if (onUseTextProvider) onUseTextProvider(patch);
@@ -80,9 +93,9 @@ export const NoteKeyOnboarding = ({
                 // are on; take it back out.
                 await saveCredentials({[choice.secretKey]: ''}).catch(() => {});
             }
-            const settings = result?.reason === 'invalid_key' || choice.id !== 'deepseek'
+            const settings = result?.reason === 'invalid_key' || !choice.textProvider
                 ? loadSettings()
-                : switchNotesToDeepSeek();
+                : switchNotesTo(choice.id);
             const status = await getCredentialsStatus().catch(() => null);
             if (status) onStatusChange?.(status);
             if (result?.ok) {
@@ -141,7 +154,19 @@ export const NoteKeyOnboarding = ({
                 <p role="status" className={`mt-4 text-sm font-extrabold ${toneClass.ok}`}>{NOTE_KEY_DONE}</p>
             ) : (
                 <>
-                    <div role="radiogroup" aria-label="选一个写笔记的模型" className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div data-testid="note-onboarding-agent" className="mt-4 space-y-2 rounded-[16px] border border-[#dfe7ff] bg-[#f5f8ff] p-4 dark:border-white/[0.12] dark:bg-white/[0.05]">
+                        <p className="text-sm font-extrabold">推荐：交给你自己的 agent 写</p>
+                        <p className="text-xs leading-relaxed text-on-surface-variant">
+                            在 Claude Code、Codex、WorkBuddy 这类 agent 里用 FluentFlow，它用你已有的订阅结合画面写笔记，不用申请 Key。把下面这段发给它，它会自己接上 FluentFlow：
+                        </p>
+                        <p className="select-all whitespace-pre-line break-all rounded-[10px] bg-white px-3 py-2 text-[12px] leading-relaxed dark:bg-white/[0.06]">{agentPrompt}</p>
+                        <button type="button" onClick={copyAgentPrompt} className={saveButtonClass}>
+                            {copied ? '已复制，去发给你的 agent' : '复制这段话'}
+                        </button>
+                    </div>
+
+                    <p className="mt-5 text-sm font-extrabold">或者填一个模型的 Key，让 FluentFlow 自己写</p>
+                    <div role="radiogroup" aria-label="选一个写笔记的模型" className="mt-3 grid gap-3 md:grid-cols-2">
                         {choices.map((item) => {
                             const selected = item.id === choice.id;
                             return (
@@ -162,7 +187,9 @@ export const NoteKeyOnboarding = ({
                                     </button>
                                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
                                         <a className="font-semibold text-primary underline" href={item.keyUrl} target="_blank" rel="noreferrer">去申请 Key</a>
-                                        <a className="font-semibold text-primary underline" href={item.pricingUrl} target="_blank" rel="noreferrer">官方价格</a>
+                                        {item.pricingUrl && (
+                                            <a className="font-semibold text-primary underline" href={item.pricingUrl} target="_blank" rel="noreferrer">官方价格</a>
+                                        )}
                                     </div>
                                 </div>
                             );
@@ -177,8 +204,8 @@ export const NoteKeyOnboarding = ({
                             className={`${inputClass} min-w-[220px] flex-1`}
                             type="password"
                             autoComplete="off"
-                            aria-label={`${choice.id === 'anthropic' ? 'Anthropic' : 'DeepSeek'} 的 API Key`}
-                            placeholder={`粘贴 ${choice.id === 'anthropic' ? 'Anthropic' : 'DeepSeek'} 的 API Key`}
+                            aria-label={`${choice.label} 的 API Key`}
+                            placeholder={`粘贴 ${choice.label} 的 API Key`}
                             value={draft}
                             onChange={(event) => setDraft(event.target.value)}
                             onKeyDown={(event) => { if (event.key === 'Enter') checkAndSave(); }}

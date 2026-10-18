@@ -17,6 +17,7 @@ import {
     anyModelKeyConfigured,
     dismissNoteKeyOnboarding,
     noteKeyChoices,
+    agentSetupPrompt,
     noteKeyOnboardingDismissed,
     shouldAutoOpenNoteKeyOnboarding,
 } from './noteKeyOnboarding.js';
@@ -52,21 +53,25 @@ describe('when the note setup opens by itself', () => {
 });
 
 describe('what the note setup says', () => {
-    it('explains what an API Key is and who pays', () => {
+    it("offers the person's own agent and their own key, and says who pays", () => {
+        expect(NOTE_KEY_INTRO).toContain('agent');
         expect(NOTE_KEY_INTRO).toContain('API Key');
-        expect(NOTE_KEY_INTRO).toContain('账号密码');
         expect(NOTE_KEY_INTRO).toContain('自己的账户');
     });
 
-    it('puts DeepSeek first as the recommendation', () => {
-        const [first] = noteKeyChoices({writesItsOwnNote: true});
-        expect(first.id).toBe('deepseek');
-        expect(first.title).toContain('推荐');
+    // Owner, 2026-10-18: most users in China cannot get an Anthropic key.
+    it('puts Qwen first as the recommended key, then DeepSeek, Kimi and MiMo', () => {
+        const choices = noteKeyChoices({writesItsOwnNote: false});
+        expect(choices.map((c) => c.id)).toEqual(['qwen', 'deepseek', 'kimi', 'mimo']);
+        expect(choices[0].title).toContain('推荐');
+        expect(choices.slice(1).some((c) => c.title.includes('推荐'))).toBe(false);
     });
 
-    it('offers Claude only when this build writes notes from the frames', () => {
-        expect(noteKeyChoices({writesItsOwnNote: false}).map((c) => c.id)).toEqual(['deepseek']);
-        expect(noteKeyChoices({writesItsOwnNote: true}).map((c) => c.id)).toEqual(['deepseek', 'anthropic']);
+    it('offers Claude only when this build writes notes from the frames, last, and says it is hard to get', () => {
+        const ids = noteKeyChoices({writesItsOwnNote: true}).map((c) => c.id);
+        expect(ids[ids.length - 1]).toBe('anthropic');
+        expect(noteKeyChoices({writesItsOwnNote: true}).find((c) => c.id === 'anthropic').what).toContain('较难申请');
+        expect(noteKeyChoices({writesItsOwnNote: false}).map((c) => c.id)).not.toContain('anthropic');
     });
 
     it('says it is billed by usage and points to the official prices, with no figure we cannot back up', () => {
@@ -78,13 +83,26 @@ describe('what the note setup says', () => {
         expect(noteKeyChoices()[0].cost).toContain('按用量计费');
     });
 
-    it('links to the provider pages only', () => {
-        const links = noteKeyChoices({writesItsOwnNote: true}).flatMap((c) => [c.keyUrl, c.pricingUrl]);
-        expect(links).toEqual([
+    it("links to each provider's own key page, and to prices only where checked", () => {
+        const choices = noteKeyChoices({writesItsOwnNote: true});
+        expect(choices.map((c) => c.keyUrl)).toEqual([
+            'https://bailian.console.aliyun.com/',
             'https://platform.deepseek.com/api_keys',
-            'https://api-docs.deepseek.com/quick_start/pricing',
+            'https://platform.moonshot.cn/console/api-keys',
+            'https://platform.xiaomimimo.com/#/console/api-keys',
             'https://console.anthropic.com/settings/keys',
+        ]);
+        expect(choices.map((c) => c.pricingUrl).filter(Boolean)).toEqual([
+            'https://api-docs.deepseek.com/quick_start/pricing',
             'https://www.anthropic.com/pricing',
         ]);
+    });
+
+    it("hands the agent this machine's server to connect, with no token", () => {
+        const prompt = agentSetupPrompt({repoRoot: '/Users/me/fluentflow-local', pythonExecutable: '/usr/bin/python3'});
+        expect(prompt).toContain('/Users/me/fluentflow-local/scripts/fluentflow_mcp_server.py');
+        expect(prompt).toContain('get_agent_note_material');
+        expect(prompt).not.toMatch(/ACCESS_TOKEN|token=/i);
+        expect(agentSetupPrompt({})).toContain('Agent 接入');
     });
 });

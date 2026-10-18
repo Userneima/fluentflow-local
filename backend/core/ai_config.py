@@ -30,7 +30,8 @@ DEFAULT_QWEN_MODEL: Final[str] = "qwen-plus"
 # QWEN_VISION_MODEL.
 DEFAULT_QWEN_VISION_MODEL: Final[str] = "qwen3.7-plus"
 DEFAULT_MODEL: Final[str] = DEFAULT_DEEPSEEK_MODEL
-SUPPORTED_PROVIDERS: Final[set[str]] = {"deepseek", "openai", "qwen"}
+# The providers themselves, with addresses and keys: backend/core/text_providers.py.
+SUPPORTED_PROVIDERS: Final[set[str]] = {"deepseek", "openai", "qwen", "kimi", "mimo"}
 SUPPORTED_NOTE_MODES: Final[set[str]] = {"auto", "direct", "fast", "high_fidelity", "chapter_coverage"}
 CHAPTER_COVERAGE_VERSION: Final[str] = "1"
 DIRECT_MODE_MAX_CHARS: Final[int] = 20_000

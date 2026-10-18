@@ -1,3 +1,4 @@
+import {TEXT_PROVIDERS, normalizeTextProvider, textProvider, textProviderKeyConfigured} from '../lib/textProviders.js';
 import {useEffect, useRef, useState} from 'react';
 import {
     effectiveSttProvider,
@@ -253,14 +254,12 @@ export const useSettingsPageState = () => {
         }
     };
 
-    const aiProvider = settings.aiProvider || 'deepseek';
+    const aiProvider = normalizeTextProvider(settings.aiProvider);
     const aiModel = normalizeAiModel(aiProvider, settings.aiModel);
     // Switching provider starts on that provider's default ('' follows it).
-    const aiProviderDefaults = {deepseek: '', openai: '', qwen: ''};
-    const activeAiSecretKey = aiProvider === 'openai' ? 'openai_api_key' : (aiProvider === 'qwen' ? 'dashscope_api_key' : 'deepseek_api_key');
-    const activeAiConfigured = aiProvider === 'openai'
-        ? credentialStatus?.openai_api_key_configured
-        : (aiProvider === 'qwen' ? credentialConfigured(credentialStatus, 'dashscope_api_key') : credentialStatus?.deepseek_api_key_configured);
+    const aiProviderDefaults = Object.fromEntries(TEXT_PROVIDERS.map((item) => [item.id, '']));
+    const activeAiSecretKey = textProvider(aiProvider).secretKey;
+    const activeAiConfigured = textProviderKeyConfigured(credentialStatus, aiProvider);
     const sttProvider = effectiveSttProvider(settings, runtimeConfig);
     const larkExportRoute = larkExportRouteFromSettings(settings);
     const larkRouteHint = isLocalLarkExportRoute(larkExportRoute)

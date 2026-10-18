@@ -1,3 +1,4 @@
+import {TEXT_PROVIDERS, textProvider, textProviderLabel} from '../lib/textProviders.js';
 import {useEffect, useState} from 'react';
 import SvgIcon from './SvgIcon.jsx';
 import {
@@ -464,13 +465,6 @@ export const AdvancedKeysFold = ({description, children}) => {
     );
 };
 
-// Where each provider hands out keys, so a first-time user is not left searching.
-const KEY_CONSOLE_URLS = {
-    deepseek: 'https://platform.deepseek.com/api_keys',
-    openai: 'https://platform.openai.com/api-keys',
-    qwen: 'https://bailian.console.aliyun.com/',
-};
-
 // The model a text provider writes with. Free text, so a model released after
 // this build can be used; the suggestions are the provider's own current list,
 // read with the saved key. The list used to be three names written here, and
@@ -549,9 +543,11 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
             <div className="space-y-2">
                 <label className={fieldLabelClass}>{t('set.provider')}</label>
                 <select className={inputClass} value={aiProvider} onChange={e=>updateSettingNow({aiProvider:e.target.value, aiModel: aiProviderDefaults[e.target.value] || ''})}>
-                    <option value="deepseek">DeepSeek</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="qwen">{lang === 'zh' ? '通义千问（阿里云百炼）' : 'Qwen (Alibaba Cloud Bailian)'}</option>
+                    {TEXT_PROVIDERS.map((item) => (
+                        <option key={item.id} value={item.id}>
+                            {lang === 'zh' ? item.labelZh : item.labelEn}{item.recommended ? (lang === 'zh' ? '（推荐）' : ' (recommended)') : ''}
+                        </option>
+                    ))}
                 </select>
             </div>
             <div className="space-y-2">
@@ -559,11 +555,11 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
                 <ProviderModelField provider={aiProvider} value={aiModel} configured={activeAiConfigured} onChange={(model)=>updateSettingNow({aiModel: model})}/>
             </div>
             <div className="space-y-2 md:col-span-2">
-                <label className={fieldLabelClass}>{aiProvider === 'openai' ? t('set.openaiKey') : (aiProvider === 'qwen' ? t('set.dashscopeKey') : t('set.deepseekKey'))}</label>
+                <label className={fieldLabelClass}>{`${textProviderLabel(aiProvider, lang)} API Key`}</label>
                 <p className="text-xs leading-relaxed text-on-surface-variant">
                     {secretRetentionText(activeAiConfigured)}
                     {' '}
-                    <a className="font-semibold text-primary underline" href={KEY_CONSOLE_URLS[aiProvider] || KEY_CONSOLE_URLS.deepseek} target="_blank" rel="noreferrer">
+                    <a className="font-semibold text-primary underline" href={textProvider(aiProvider).consoleUrl} target="_blank" rel="noreferrer">
                         {lang === 'zh' ? '去创建 Key' : 'Create a key'}
                     </a>
                 </p>

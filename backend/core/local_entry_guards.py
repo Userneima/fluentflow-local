@@ -36,6 +36,7 @@ from fastapi import HTTPException, UploadFile
 from backend.core.event_context import new_task_id
 from backend.core.event_logger import log_event
 from backend.core.job_store import create_job_if_absent, get_job, upsert_job
+from backend.core import text_providers
 from backend.core.local_config import resolve_secret
 from backend.core.local_error_diagnostics import diagnose_error
 
@@ -125,10 +126,11 @@ async def read_upload_bounded(upload: UploadFile, limit_mb: float) -> bytearray:
     return content
 
 
-_PROVIDER_KEY_NAMES = (
-    ("deepseek", "deepseek_api_key"),
-    ("openai", "openai_api_key"),
-    ("qwen", "qwen_api_key"),
+# Each provider and the stored key that is its own, in the order a key is
+# looked for when none was chosen (``text_providers.KEY_LOOKUP_ORDER``).
+_PROVIDER_KEY_NAMES = tuple(
+    (provider_id, text_providers.PROVIDERS[provider_id].key_settings[0])
+    for provider_id in text_providers.KEY_LOOKUP_ORDER
 )
 
 
@@ -150,15 +152,13 @@ def local_ai_kwargs(
     provider's own environment variable — or fails with its own clear
     "key not configured" message — instead of receiving another provider's
     credential. With no provider selected, the first provider that has a key
-    (deepseek → openai → qwen, matching the product default order) is used.
+    (``text_providers.KEY_LOOKUP_ORDER``) is used.
     """
-    form_values = {
-        "deepseek_api_key": deepseek_api_key,
-        "openai_api_key": openai_api_key,
-        "qwen_api_key": qwen_api_key,
-    }
+    # A key typed into an upload form, by provider; every other key comes
+    # from the local credential store (the dashscope/qwen names are aliases).
+    form_values = {"deepseek": deepseek_api_key, "openai": openai_api_key, "qwen": qwen_api_key}
     resolved = {
-        provider: resolve_secret(form_values[key_name], key_name)
+        provider: resolve_secret(form_values.get(provider), key_name)
         for provider, key_name in _PROVIDER_KEY_NAMES
     }
     provider_name = (ai_provider or "").strip().lower()

@@ -1,9 +1,22 @@
 {
-  "updated": "2026-10-16",
+  "updated": "2026-10-18",
   "note": "Each provider's default: the cheapest model that is good enough to write notes, by the provider's own name that follows its newest model where one exists. FluentFlow reads this file from GitHub once a day, so a change here reaches every user without a new release. Check each provider's official model and pricing pages before changing it.",
   "providers": {
-    "deepseek": {"text": "deepseek-flash"},
-    "openai": {"text": "gpt-6-luna"},
-    "qwen": {"text": "qwen-plus", "vision": "qwen3.7-plus"}
+    "deepseek": {
+      "text": "deepseek-flash"
+    },
+    "openai": {
+      "text": "gpt-6-luna"
+    },
+    "qwen": {
+      "text": "qwen-plus",
+      "vision": "qwen3.7-plus"
+    },
+    "kimi": {
+      "text": "kimi-k2.6"
+    },
+    "mimo": {
+      "text": "mimo-v2.6-pro"
+    }
   }
 }

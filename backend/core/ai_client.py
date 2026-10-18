@@ -15,15 +15,10 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from backend.core.ai_usage import record_token_usage
+from backend.core import text_providers
 from backend.core.ai_config import (
-    DEEPSEEK_BASE_URL,
-    OPENAI_BASE_URL,
-    QWEN_BASE_URL,
     DEFAULT_DEEPSEEK_MODEL,
     RETIRED_DEEPSEEK_MODELS,
-    DEFAULT_OPENAI_MODEL,
-    DEFAULT_QWEN_MODEL,
-    SUPPORTED_PROVIDERS,
 )
 
 
@@ -31,21 +26,15 @@ logger = logging.getLogger(__name__)
 
 def _normalize_provider(provider: str | None) -> str:
     p = (provider or os.environ.get("AI_PROVIDER") or "deepseek").strip().lower()
-    if p not in SUPPORTED_PROVIDERS:
+    if p not in text_providers.PROVIDERS:
         raise ValueError(f"Unsupported AI provider: {provider}")
     return p
 
 
 def _provider_base_url(provider: str) -> str:
-    if provider == "openai":
-        return (os.environ.get("OPENAI_BASE_URL") or OPENAI_BASE_URL).rstrip("/")
-    if provider == "qwen":
-        return (os.environ.get("QWEN_BASE_URL") or QWEN_BASE_URL).rstrip("/")
-    return (os.environ.get("DEEPSEEK_BASE_URL") or DEEPSEEK_BASE_URL).rstrip("/")
+    return text_providers.base_url(text_providers.get(provider) or text_providers.PROVIDERS["deepseek"])
 
 
-_BUILT_IN_DEFAULTS = {"openai": DEFAULT_OPENAI_MODEL, "qwen": DEFAULT_QWEN_MODEL, "deepseek": DEFAULT_DEEPSEEK_MODEL}
-_MODEL_ENV = {"openai": "OPENAI_MODEL", "qwen": "QWEN_MODEL", "deepseek": "DEEPSEEK_MODEL"}
 
 
 def _provider_default_model(provider: str) -> str:
@@ -53,9 +42,10 @@ def _provider_default_model(provider: str) -> str:
     recommended-model table (``model_defaults``), else this build's own."""
     from backend.core import model_defaults
 
-    key = provider if provider in _BUILT_IN_DEFAULTS else "deepseek"
-    named = (os.environ.get(_MODEL_ENV[key]) or "").strip()
-    chosen = named or model_defaults.default_model(key) or _BUILT_IN_DEFAULTS[key]
+    entry = text_providers.get(provider) or text_providers.PROVIDERS["deepseek"]
+    key = entry.id
+    named = (os.environ.get(entry.model_env) or "").strip()
+    chosen = named or model_defaults.default_model(key) or entry.default_model
     if key == "deepseek" and chosen in RETIRED_DEEPSEEK_MODELS:
         return model_defaults.default_model("deepseek") or DEFAULT_DEEPSEEK_MODEL
     return chosen
@@ -78,15 +68,9 @@ def _normalize_model(provider: str, model: str | None) -> str:
 
 def _provider_api_key(provider: str, api_key: str | None = None) -> str:
     load_dotenv()
-    if provider == "openai":
-        env_name = "OPENAI_API_KEY"
-        env_names = (env_name,)
-    elif provider == "qwen":
-        env_name = "DASHSCOPE_API_KEY"
-        env_names = ("DASHSCOPE_API_KEY", "QWEN_API_KEY")
-    else:
-        env_name = "DEEPSEEK_API_KEY"
-        env_names = (env_name,)
+    entry = text_providers.get(provider) or text_providers.PROVIDERS["deepseek"]
+    env_names = entry.key_envs
+    env_name = env_names[0]
     env_key = next(
         ((os.environ.get(name) or "").strip() for name in env_names if (os.environ.get(name) or "").strip()),
         "",
@@ -123,14 +107,17 @@ def _provider_of(client: OpenAI) -> str:
     call sites in ai_summarizer just to label token usage.
     """
 
-    base = str(getattr(client, "base_url", "") or "")
+    base = str(getattr(client, "base_url", "") or "").rstrip("/")
+    if not base:
+        return "unknown"
+    for entry in text_providers.PROVIDERS.values():
+        if base == text_providers.base_url(entry) or base == entry.base_url.rstrip("/"):
+            return entry.id
     if "dashscope" in base:
         return "qwen"
     if "deepseek" in base:
         return "deepseek"
-    if base:
-        return "openai"
-    return "unknown"
+    return "openai"
 
 
 # Models a provider turned away on this run, and what was used instead, so the
@@ -168,7 +155,7 @@ def _create(client: OpenAI, model: str, *, may_replace: bool = True, **kwargs: A
         if not _model_gone(exc):
             raise
         # The defaults are text models: a request with pictures is not moved onto one.
-        fallback = _provider_default_model(provider) if may_replace and provider in SUPPORTED_PROVIDERS else ""
+        fallback = _provider_default_model(provider) if may_replace and provider in text_providers.PROVIDERS else ""
         listed = _listed_models(client)
         if not fallback or fallback == model or (listed is not None and fallback not in listed):
             raise RuntimeError(

@@ -84,9 +84,9 @@ describe('local settings page', () => {
         localStorage.setItem('fluentflow_note_key_onboarding_dismissed', '1');
         render(<Settings/>);
         fireEvent.click(screen.getByRole('button', {name: /第一次填 Key/}));
-        expect(screen.getByText(/相当于这个模型服务的账号密码/)).toBeTruthy();
+        expect(screen.getByText(/笔记可以交给你自己的 agent/)).toBeTruthy();
         fireEvent.click(screen.getByRole('button', {name: /以后再说/}));
-        expect(screen.queryByText(/相当于这个模型服务的账号密码/)).toBeNull();
+        expect(screen.queryByText(/笔记可以交给你自己的 agent/)).toBeNull();
     });
 
     it('renders the sections this edition has', () => {
@@ -104,7 +104,7 @@ describe('local settings page', () => {
         render(<Settings/>);
         const headings = screen.getAllByRole('heading', {level: 2}).map((node) => node.textContent);
         expect(headings[0]).toBe('笔记');
-        expect(screen.getByText('set.deepseekKey')).toBeTruthy();
+        expect(screen.getByText('DeepSeek API Key')).toBeTruthy();
     });
 
     // Requirement (2026-10-12): transcription always runs at the accurate
@@ -197,8 +197,26 @@ describe('local settings page', () => {
     it('calls Qwen by one name', () => {
         stored = {aiProvider: 'qwen'};
         render(<Settings/>);
-        expect(screen.getByRole('option', {name: '通义千问（阿里云百炼）'})).toBeTruthy();
+        expect(screen.getByRole('option', {name: '通义千问（阿里云百炼）（推荐）'})).toBeTruthy();
         expect(screen.queryByRole('option', {name: 'Qwen'})).toBeNull();
+    });
+
+    // Owner, 2026-10-18: Qwen first and recommended, and Kimi and MiMo offered
+    // beside DeepSeek, for users who cannot get an Anthropic key.
+    it('offers Qwen first, then DeepSeek, Kimi, MiMo and OpenAI', () => {
+        render(<Settings/>);
+        const names = screen.getAllByRole('option').map((node) => node.textContent);
+        const providers = names.filter((name) => /通义|DeepSeek|Kimi|MiMo|OpenAI/.test(name));
+        expect(providers.slice(0, 5)).toEqual([
+            '通义千问（阿里云百炼）（推荐）', 'DeepSeek', 'Kimi（月之暗面）', '小米 MiMo', 'OpenAI',
+        ]);
+    });
+
+    it('asks for the key of the chosen provider, with its console', () => {
+        stored = {aiProvider: 'kimi'};
+        render(<Settings/>);
+        expect(screen.getByText('Kimi（月之暗面） API Key')).toBeTruthy();
+        expect(screen.getByRole('link', {name: '去创建 Key'}).getAttribute('href')).toBe('https://platform.moonshot.cn/console/api-keys');
     });
 
     // Requirement: auto-illustrate and the Qwen key are hidden only when they

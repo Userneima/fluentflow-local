@@ -20,6 +20,7 @@ from backend.core.local_config import (
     save_sensitive_settings,
 )
 from backend.core import claude_code_note, claude_vision, local_intake_flow, visual_note_channel
+from backend.core import text_providers
 from backend.core.ai_client import _provider_base_url
 from backend.core.local_limits_config import (
     max_media_duration_seconds,
@@ -108,8 +109,13 @@ def update_credentials(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 # The key is read from what was saved, never taken in this request's body.
 _KEY_CHECK_TIMEOUT = httpx.Timeout(15.0, connect=8.0)
 _KEY_CHECK_PROVIDERS = {
-    "deepseek": ("deepseek_api_key", "DEEPSEEK_API_KEY", "DeepSeek"),
     "anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY", "Anthropic"),
+    # Every text provider: DeepSeek by its balance, the others by listing
+    # their models, which costs nothing and is refused for a wrong key.
+    **{
+        entry.id: (entry.key_settings[0], entry.key_envs[0], entry.label)
+        for entry in text_providers.PROVIDERS.values()
+    },
 }
 
 # Replaced in tests; the real one sends the request.
@@ -139,6 +145,19 @@ def _check_deepseek_key(key: str) -> dict[str, Any]:
         data = {}
     if isinstance(data, dict) and data.get("is_available") is False:
         return _key_check_result(False, "no_balance", "Key 是对的，但这个 DeepSeek 账户余额不足。充值后就能写笔记。")
+    return _key_check_result(True, "ok", "Key 可以用。")
+
+
+def _check_listing_key(provider: str, label: str, key: str) -> dict[str, Any]:
+    response = _http_request(
+        "GET", f"{_provider_base_url(provider)}/models",
+        headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+        timeout=_KEY_CHECK_TIMEOUT,
+    )
+    if response.status_code in (401, 403):
+        return _key_check_result(False, "invalid_key", f"这个 Key 不对，{label} 不认它。请回到申请页重新复制一遍，注意别多带空格。")
+    if response.status_code != 200:
+        return _key_check_result(False, "provider_error", f"{label} 返回了错误（{response.status_code}），稍后再试。")
     return _key_check_result(True, "ok", "Key 可以用。")
 
 
@@ -179,7 +198,7 @@ def _check_anthropic_key(key: str) -> dict[str, Any]:
 def check_credential(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     provider = str(payload.get("provider") or "").strip().lower()
     if provider not in _KEY_CHECK_PROVIDERS:
-        raise HTTPException(status_code=400, detail="provider must be deepseek or anthropic")
+        raise HTTPException(status_code=400, detail=f"provider must be one of {', '.join(_KEY_CHECK_PROVIDERS)}")
     secret_name, env_name, label = _KEY_CHECK_PROVIDERS[provider]
     key = resolve_secret(None, secret_name) or (os.environ.get(env_name) or "").strip()
     if not key:
@@ -187,7 +206,9 @@ def check_credential(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     try:
         if provider == "deepseek":
             return _check_deepseek_key(key)
-        return _check_anthropic_key(key)
+        if provider == "anthropic":
+            return _check_anthropic_key(key)
+        return _check_listing_key(provider, label, key)
     except httpx.TimeoutException:
         return _key_check_result(False, "network", f"连 {label} 的服务器超时了，检查一下网络后再试。")
     except httpx.HTTPError:
@@ -198,9 +219,8 @@ def check_credential(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 # Read from the provider's own list with the saved key, so a model released
 # after this build is still offered; the field also takes any name typed in.
 _MODEL_LIST_PROVIDERS = {
-    "deepseek": (("deepseek_api_key",), "DEEPSEEK_API_KEY", lambda name: True),
-    "openai": (("openai_api_key",), "OPENAI_API_KEY", lambda name: name.startswith(("gpt-", "o"))),
-    "qwen": (("dashscope_api_key", "qwen_api_key"), "DASHSCOPE_API_KEY", lambda name: name.startswith("qwen")),
+    entry.id: (entry.key_settings, entry.key_envs[0], entry.lists_model)
+    for entry in text_providers.PROVIDERS.values()
 }
 
 
@@ -217,7 +237,7 @@ def model_defaults_table() -> dict[str, Any]:
 def list_provider_models(provider: str) -> dict[str, Any]:
     name = (provider or "").strip().lower()
     if name not in _MODEL_LIST_PROVIDERS:
-        raise HTTPException(status_code=400, detail="provider must be deepseek, openai or qwen")
+        raise HTTPException(status_code=400, detail=f"provider must be one of {', '.join(_MODEL_LIST_PROVIDERS)}")
     secret_names, env_name, wanted = _MODEL_LIST_PROVIDERS[name]
     key = next((value for value in (resolve_secret(None, secret) for secret in secret_names) if value), None)
     key = key or (os.environ.get(env_name) or "").strip()

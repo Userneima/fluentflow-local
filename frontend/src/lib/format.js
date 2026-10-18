@@ -185,6 +185,9 @@ const PROVIDER_NAMES = {
     openai: {zh: 'OpenAI', en: 'OpenAI'},
     qwen: {zh: '通义千问（阿里云百炼）', en: 'Qwen (Alibaba Cloud Bailian)'},
     dashscope: {zh: '通义千问（阿里云百炼）', en: 'Qwen (Alibaba Cloud Bailian)'},
+    kimi: {zh: 'Kimi（月之暗面）', en: 'Kimi (Moonshot AI)'},
+    moonshot: {zh: 'Kimi（月之暗面）', en: 'Kimi (Moonshot AI)'},
+    mimo: {zh: '小米 MiMo', en: 'Xiaomi MiMo'},
     anthropic: {zh: 'Anthropic', en: 'Anthropic'},
     claude: {zh: 'Anthropic', en: 'Anthropic'},
 };
@@ -198,7 +201,7 @@ const providerFromError = (raw, context={}) => {
     const explicit = normalizeProviderKey(context?.provider);
     if (explicit) return explicit;
     const lower = String(raw || '').toLowerCase();
-    for (const key of ['deepseek', 'openai', 'dashscope', 'qwen', 'anthropic', 'claude']) {
+    for (const key of ['deepseek', 'openai', 'dashscope', 'qwen', 'kimi', 'moonshot', 'mimo', 'anthropic', 'claude']) {
         if (lower.includes(key)) return key;
     }
     if (lower.includes('百炼') || lower.includes('通义')) return 'qwen';
