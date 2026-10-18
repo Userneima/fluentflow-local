@@ -94,3 +94,14 @@ def test_the_report_names_what_is_missing():
     result = ns.score(chat, sheet, "笔记", "转录", checker="fake")
     text = ns.report_markdown("周会", "现有笔记", result)
     assert "核心覆盖 0%" in text and "云泓负责权限清单" in text and "判卷：fake" in text
+
+
+def test_the_checker_gets_the_correction_document():
+    seen = []
+
+    def chat(system, user):
+        seen.append(user)
+        return '{"errors": []}'
+
+    ns.errors(chat, "笔记", "转录", corrections="- 魏鑫：常听成魏星")
+    assert "校正文档" in seen[0] and "魏鑫" in seen[0]

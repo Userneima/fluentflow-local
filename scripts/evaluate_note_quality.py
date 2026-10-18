@@ -150,8 +150,13 @@ def _score(args) -> int:
             print(f"{folder.name}: no note", file=sys.stderr)
             continue
         sheet = note_scoring.parse_sheet((folder / "考题.md").read_text(encoding="utf-8"))
+        # The series' correction document, if the recording's folder has one
+        # (a copy named 校正文档.md in the test folder), so names it fixes are
+        # not counted as made up.
+        corrections_file = folder / "校正文档.md"
+        corrections = corrections_file.read_text(encoding="utf-8") if corrections_file.is_file() else ""
         result = note_scoring.score(chat, sheet, note, (folder / "转录稿.txt").read_text(encoding="utf-8"),
-                                    checker=checker)
+                                    checker=checker, corrections=corrections)
         out = folder / "评分"
         out.mkdir(exist_ok=True)
         stem = f"{date.today().isoformat()}-{args.label}"

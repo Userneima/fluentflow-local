@@ -148,14 +148,18 @@ def _windows(transcript: str) -> list[str]:
     return windows
 
 
-def errors(chat: Chat, note: str, transcript: str) -> dict[str, Any]:
+def errors(chat: Chat, note: str, transcript: str, *, corrections: str = "") -> dict[str, Any]:
     found: list[dict[str, Any]] = []
     seen: set[str] = set()
     windows = _windows(transcript)
     failed = 0
     for index, window in enumerate(windows, start=1):
         label = f"（转录稿第 {index}/{len(windows)} 段）" if len(windows) > 1 else ""
-        answer = _ask(chat, ERROR_SYSTEM, f"--- 转录稿{label} ---\n\n{window}\n\n--- 笔记 ---\n\n{note}")
+        known = (
+            f"--- 用户的校正文档（转录里这些听法，按这里的写法是对的，不算错） ---\n\n{corrections}\n\n"
+            if corrections.strip() else ""
+        )
+        answer = _ask(chat, ERROR_SYSTEM, f"{known}--- 转录稿{label} ---\n\n{window}\n\n--- 笔记 ---\n\n{note}")
         if answer is None:
             failed += 1
             continue
@@ -199,13 +203,13 @@ def questions(chat: Chat, note: str, asked: list[str]) -> dict[str, Any]:
     return {"score": score, "items": items}
 
 
-def score(chat: Chat, sheet: Sheet, note: str, transcript: str, *, checker: str = "") -> dict[str, Any]:
+def score(chat: Chat, sheet: Sheet, note: str, transcript: str, *, checker: str = "", corrections: str = "") -> dict[str, Any]:
     return {
         "checker": checker,
         "note_chars": len(note),
         "coverage_core": coverage(chat, note, sheet.core),
         "coverage_detail": coverage(chat, note, sheet.detail),
-        "errors": errors(chat, note, transcript),
+        "errors": errors(chat, note, transcript, corrections=corrections),
         "questions": questions(chat, note, sheet.questions),
     }
 
