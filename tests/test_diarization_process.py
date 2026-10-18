@@ -20,6 +20,20 @@ from backend.core.diarization_process import diarize_in_child
 
 
 def _alive(pid: int) -> bool:
+    if os.name == "nt":
+        # os.kill(pid, 0) is no liveness check on Windows: it raised nothing for
+        # a child that had already exited (2026-10-18). Ask for its exit code.
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except OSError:

@@ -404,7 +404,27 @@ _TRAILING_URL_PUNCTUATION = ".,;:!?)]}>\"'"
 
 
 def trim_url(value: str) -> str:
-    return value.strip().rstrip(_TRAILING_URL_PUNCTUATION + ")）]】“”‘’。，")
+    return _short_link_id_only(value.strip().rstrip(_TRAILING_URL_PUNCTUATION + ")）]】“”‘’。，"))
+
+
+# A short link's path is one id. Share text can glue the app's share code onto
+# it with no space ("https://v.douyin.com/j0V--oroiqw/11/08:0pmD@h.bNZMw:/",
+# 2026-10-18), and the resolver answered that whole string with HTTP 500.
+_SINGLE_ID_SHORT_HOSTS = ("v.douyin.com", "b23.tv", "bili2233.cn", "youtu.be")
+
+
+def _short_link_id_only(url: str) -> str:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return url
+    if (parsed.hostname or "").lower() not in _SINGLE_ID_SHORT_HOSTS:
+        return url
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if len(segments) <= 1:
+        return url
+    # The id keeps the slash it was shared with (Douyin's links end in one).
+    return f"{parsed.scheme}://{parsed.netloc}/{segments[0]}/"
 
 
 def extract_urls(input_text: str) -> list[str]:

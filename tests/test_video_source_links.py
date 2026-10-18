@@ -298,6 +298,13 @@ def test_failures_that_a_retry_cannot_fix_do_not_suggest_one(raw):
     ("【标题】 b23.tv/abc123", "https://b23.tv/abc123"),
     ("https://bili2233.cn/xyz。", "https://bili2233.cn/xyz"),
     ("店铺 https://shop.example.com/a 视频 https://www.bilibili.com/video/BV1x", "https://www.bilibili.com/video/BV1x"),
+    # The share code glued onto the link with no space (2026-10-18): the
+    # resolver answered the whole string with HTTP 500.
+    ("面试互联网大厂必备的三种思维 # 大学生# 找工作... https://v.douyin.com/j0V--oroiqw/11/08:0pmD@h.bNZMw:/",
+     "https://v.douyin.com/j0V--oroiqw/"),
+    ("https://b23.tv/abc123/xyz:/", "https://b23.tv/abc123/"),
+    # Full page links keep their path.
+    ("https://www.bilibili.com/video/BV1GJ411x7h7/?p=2", "https://www.bilibili.com/video/BV1GJ411x7h7/?p=2"),
 ])
 def test_the_link_is_found_whole_and_alone(text, expected):
     assert vs.extract_first_url(text) == expected
