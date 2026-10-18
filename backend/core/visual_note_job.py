@@ -1236,6 +1236,9 @@ def _run_visual_note(
             found = claude_text.claude_chat(api_key)
             reviser = found[0] if found else None
         check_chat, checker_name = checker if checker else (None, "")
+        from backend.core import correction_notes
+
+        rules = correction_notes.rules_for(task_id, skill.rules, client_id)
         drafts = []
         coverage_parts = []
         for part in parts:
@@ -1246,7 +1249,7 @@ def _run_visual_note(
                     client_id=client_id,
                     state={"stage": f"writing {part.index}/{part.total}"},
                 )
-            part_draft = _checked_draft(write, part, part_frames, api_key=api_key, rules=skill.rules)
+            part_draft = _checked_draft(write, part, part_frames, api_key=api_key, rules=rules)
             if check_chat is not None:
                 _store(
                     task_id,
@@ -1254,7 +1257,7 @@ def _run_visual_note(
                     state={"stage": "checking" if len(parts) == 1 else f"checking {part.index}/{part.total}"},
                 )
             part_draft, part_coverage = _covered_draft(
-                part_draft, part, checker=check_chat, reviser=reviser, rules=skill.rules,
+                part_draft, part, checker=check_chat, reviser=reviser, rules=rules,
             )
             drafts.append(part_draft)
             coverage_parts.append({"part": part.index, **part_coverage})

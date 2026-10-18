@@ -431,6 +431,15 @@ def _write_text_note_instead(
     transcript = str(result.get("corrected_transcript_text") or result.get("transcript_text") or "")
     segments = result.get("corrected_segments") or result.get("raw_segments") or []
     speaker_text = build_speaker_annotated_transcript(segments if isinstance(segments, list) else [])
+    from backend.core import correction_notes
+
+    corrections = correction_notes.as_section(correction_notes.for_task(task_id, client_id))
+    if corrections:
+        # The series' correction document rides with the user's own prompt,
+        # or with the default one when they kept it.
+        from backend.core.ai_prompts import FLUENTFLOW_SYSTEM_PROMPT
+
+        kwargs = {**kwargs, "system_prompt": (kwargs.get("system_prompt") or FLUENTFLOW_SYSTEM_PROMPT) + corrections}
     try:
         summary = summarize_transcript_with_metadata(
             speaker_text or transcript, speaker_labeled=bool(speaker_text), **kwargs

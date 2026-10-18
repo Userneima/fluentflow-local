@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import claude_vision, cut_timeline, note_coverage, note_skills, visual_note_check
+from backend.core import claude_vision, correction_notes, cut_timeline, note_coverage, note_skills, visual_note_check
 from backend.core import visual_note_job as vn
 from backend.core.claude_vision import FrameInput
 from backend.core.result_artifacts import (
@@ -244,7 +244,8 @@ def material(
         "total_parts": chosen.total,
         "starts_at": chosen.starts_at,
         "ends_at": chosen.ends_at,
-        "instructions": claude_vision.system_prompt(skill.rules) + claude_vision.part_instruction(chosen)
+        "instructions": claude_vision.system_prompt(correction_notes.rules_for(task_id, skill.rules, client_id))
+        + claude_vision.part_instruction(chosen)
         + SAVE_INSTRUCTION,
         "transcript": chosen.text,
         "frames": [
