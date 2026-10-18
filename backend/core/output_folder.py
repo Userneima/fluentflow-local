@@ -6,8 +6,9 @@ gets a folder named after it, next to it; the original is not moved:
     <name>/
         <name>_去气口.mp4      the cut video, or <name>_压缩.mp4 when the cut was declined
         <name>_笔记.pdf
+        <name>_笔记.md          the same note, best read in Obsidian (owner, 2026-10-18)
         过程文件/
-            <name>_笔记.md, 截图/   the note and the screenshots it shows
+            截图/                  the screenshots the note shows
             <name>.txt, <name>.srt  transcript and subtitles
             <name>_剪辑表.json      where the gaps were cut
 
@@ -50,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 MARKER_NAME = ".fluentflow-task"
 PROCESS_DIRNAME = "过程文件"
+# Said wherever the folder is named to the user, so an agent passes it on.
+MD_HINT = "笔记的 md 版推荐用 Obsidian 打开，截图和格式都能直接显示。"
 SHOTS_DIRNAME = "截图"
 CUT_LABEL = "去气口"
 COMPRESSED_LABEL = "压缩"
@@ -376,16 +379,18 @@ def frame_file(task_id: str, src: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def _note_for_folder(task_id: str, note: str, shots: Path) -> tuple[str, list[Path]]:
-    """The note with each screenshot pointing at ``<shots dir>/<file>``, and the files to copy."""
+def _note_for_folder(task_id: str, note: str, shots: Path, *, relative_to: Path | None = None) -> tuple[str, list[Path]]:
+    """The note with each screenshot pointing at the shots dir as seen from
+    where the note sits (``relative_to``), and the files to copy."""
     files: list[Path] = []
+    prefix = shots.relative_to(relative_to).as_posix() if relative_to is not None else shots.name
 
     def local(match: re.Match[str]) -> str:
         path = frame_file(task_id, match.group(2))
         if path is None:
             return match.group(0)
         files.append(path)
-        return f"{match.group(1)}{shots.name}/{path.name}{match.group(3)}"
+        return f"{match.group(1)}{prefix}/{path.name}{match.group(3)}"
 
     return _IMAGE.sub(local, note), files
 
@@ -447,14 +452,22 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any]) -> dict[str,
     if note:
         # Per task when tasks share a folder: two notes' note_0001.jpg are different pictures.
         shots = process / f"{SHOTS_DIRNAME}{suffix}"
-        text, files = _note_for_folder(task_id, note, shots)
+        # The markdown note sits beside the PDF, not in 过程文件: read in
+        # Obsidian it shows its screenshots and is the copy people open
+        # (owner, 2026-10-18). Its pictures stay in 过程文件.
+        text, files = _note_for_folder(task_id, note, shots, relative_to=folder)
         if files:
             shots.mkdir(exist_ok=True)
             for path in files:
                 target = shots / path.name
                 if not target.exists():
                     shutil.copyfile(path, target)
-        changed = _write_if_changed(process / f"{stem}_{NOTE_LABEL}{suffix}.md", text.rstrip() + "\n")
+        md = folder / f"{stem}_{NOTE_LABEL}{suffix}.md"
+        changed = _write_if_changed(md, text.rstrip() + "\n")
+        # The copy an earlier version kept in 过程文件 would now be a stale twin.
+        (process / md.name).unlink(missing_ok=True)
+        record["md_path"] = str(md)
+        record["md_hint"] = MD_HINT
         pdf = folder / f"{stem}_{NOTE_LABEL}{suffix}.pdf"
         digest = hashlib.sha256(note.encode("utf-8")).hexdigest()
         previous = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
@@ -485,7 +498,7 @@ def _export_pdf(task_id: str, folder: Path, name: str) -> dict[str, Any]:
     try:
         exported = note_pdf.export_pdf(task_id, output_dir=str(folder), filename=name)
     except Exception as exc:  # noqa: BLE001 - the markdown note is already there
-        return {"pdf_path": None, "pdf_error": f"PDF 没生成（{exc}）。笔记的 md 版本在「{PROCESS_DIRNAME}」里。"}
+        return {"pdf_path": None, "pdf_error": f"PDF 没生成（{exc}）。笔记的 md 版本就在同一个文件夹里。"}
     if exported.get("pdf_path"):
         return {"pdf_path": exported["pdf_path"], "pdf_error": None}
     return {"pdf_path": None, "pdf_error": exported.get("reason") or "PDF 没生成。"}

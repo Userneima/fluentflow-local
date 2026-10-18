@@ -92,8 +92,12 @@ def test_everything_lands_in_one_folder_beside_the_recording(tmp_path, pdfs):
     assert (process / "week-8.txt").read_text(encoding="utf-8").startswith("第一句")
     assert (process / "week-8.srt").is_file()
     assert (process / "week-8_剪辑表.json").is_file()
-    note = (process / "week-8_笔记.md").read_text(encoding="utf-8")
-    assert "](截图/ts_0130_1.jpg)" in note, "the markdown shows its screenshot from beside it"
+    # The markdown note sits beside the PDF (owner, 2026-10-18) and shows its
+    # screenshots from 过程文件; no copy is left inside 过程文件.
+    note = (folder / "week-8_笔记.md").read_text(encoding="utf-8")
+    assert "](过程文件/截图/ts_0130_1.jpg)" in note, "the markdown shows its screenshot from beside the PDF"
+    assert not (process / "week-8_笔记.md").exists()
+    assert record["md_path"] == str(folder / "week-8_笔记.md") and "Obsidian" in record["md_hint"]
     assert (process / "截图" / "ts_0130_1.jpg").read_bytes() == b"jpeg"
     assert source.read_bytes() == b"original" and source.parent == tmp_path / "lectures"
     assert job_store.get_job(task)["result"]["output_folder"]["path"] == str(folder)
@@ -110,7 +114,7 @@ def test_the_note_is_refreshed_when_it_changes_and_only_then(tmp_path, pdfs):
     output_folder.sync(task)
 
     assert len(pdfs) == 2
-    md = source.parent / "week-8" / "过程文件" / "week-8_笔记.md"
+    md = source.parent / "week-8" / "week-8_笔记.md"
     assert "改过的版本" in md.read_text(encoding="utf-8")
 
 
@@ -151,8 +155,8 @@ def test_a_second_task_on_the_same_recording_gets_its_own_folder(tmp_path, pdfs)
     output_folder.sync(second)
     output_folder.sync(first)
 
-    assert "第一次" in (source.parent / "week-8" / "过程文件" / "week-8_笔记.md").read_text(encoding="utf-8")
-    assert "第二次" in (source.parent / "week-8 (2)" / "过程文件" / "week-8_笔记.md").read_text(encoding="utf-8")
+    assert "第一次" in (source.parent / "week-8" / "week-8_笔记.md").read_text(encoding="utf-8")
+    assert "第二次" in (source.parent / "week-8 (2)" / "week-8_笔记.md").read_text(encoding="utf-8")
     assert not (source.parent / "week-8 (3)").exists(), "a task keeps finding its own folder"
 
 
@@ -221,7 +225,7 @@ def test_a_recording_moved_into_its_folder_gets_no_folder_inside_it(tmp_path, pd
     assert record["path"] == str(source.parent)
     assert not (source.parent / "week-8").exists(), "no folder nested inside it"
     assert (source.parent / "week-8_笔记.pdf").is_file()
-    assert "](截图/ts_0130_1.jpg)" in (source.parent / "过程文件" / "week-8_笔记.md").read_text(encoding="utf-8")
+    assert "](过程文件/截图/ts_0130_1.jpg)" in (source.parent / "week-8_笔记.md").read_text(encoding="utf-8")
 
 
 def test_a_second_task_in_that_folder_overwrites_nothing(tmp_path, pdfs):
@@ -237,8 +241,8 @@ def test_a_second_task_in_that_folder_overwrites_nothing(tmp_path, pdfs):
     output_folder.sync(first)
 
     process = source.parent / "过程文件"
-    assert "第一次" in (process / "week-8_笔记.md").read_text(encoding="utf-8")
-    assert "截图 (2)/ts_0130_1.jpg" in (process / "week-8_笔记 (2).md").read_text(encoding="utf-8")
+    assert "第一次" in (source.parent / "week-8_笔记.md").read_text(encoding="utf-8")
+    assert "过程文件/截图 (2)/ts_0130_1.jpg" in (source.parent / "week-8_笔记 (2).md").read_text(encoding="utf-8")
     assert (source.parent / "week-8_笔记 (2).pdf").is_file()
     assert (process / "week-8 (2).txt").is_file() and (process / "week-8.txt").is_file()
     assert not (source.parent / "week-8").exists()

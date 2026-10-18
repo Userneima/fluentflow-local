@@ -287,9 +287,15 @@ def _agent_output_folder(result: dict[str, Any]) -> dict[str, Any] | None:
         cut = result.get("debreath") if isinstance(result.get("debreath"), dict) else {}
         early = _text(cut.get("output_folder"))
         return {"path": early, "pdf_path": None, "error": None} if early else None
+    from backend.core.output_folder import MD_HINT
+
+    md_path = _text(record.get("md_path")) or None
     return {
         "path": _text(record.get("path")),
         "pdf_path": _text(record.get("pdf_path")) or None,
+        "md_path": md_path,
+        # For the agent to pass on when it names the folder (owner, 2026-10-18).
+        "md_hint": MD_HINT if md_path else None,
         "error": _text(record.get("error")) or _text(record.get("pdf_error")) or None,
     }
 
