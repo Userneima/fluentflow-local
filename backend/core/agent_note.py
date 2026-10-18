@@ -456,6 +456,10 @@ def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, m
     joined = joined_markdown if joined_markdown is not None else (
         vn._joined_draft(cleaned, parts, title=vn.note_title(job)).markdown
     )
+    # The task as it is now, not as it was before the coverage check: an edit
+    # saved during the check is the note this one replaces, and stays
+    # restorable (audit, 2026-10-18).
+    job = vn.get_job(task_id, client_id=client_id) or job
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     frames = (_stored_frames(task_id, result) or []) if media.has_video else []
     joined, frames = vn.apply_crops(joined, task_id, frames)
@@ -493,6 +497,8 @@ def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, m
         "usage": {},
         "coverage": coverage,
         "promoted": True,
+        "switch_back_edited": None,
+        "switch_back_written_from": None,
         "replaced_note": replaced,
         "finished_at": vn._now(),
         "error": None,

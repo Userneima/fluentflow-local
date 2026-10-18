@@ -761,6 +761,7 @@ const Editor = () => {
                 transcript_text: transcript,
                 segments,
                 edit_records: filterVisibleEditRecords(nextEditRecords, segments),
+                base_version: current.transcript_version,
             }, resultJobOptions)
                 .then((data) => {
                     if (seq !== transcriptSaveSeqRef.current) return;
@@ -775,8 +776,12 @@ const Editor = () => {
                         ));
                     }
                 })
-                .catch(() => {
+                .catch((err) => {
                     if (seq !== transcriptSaveSeqRef.current) return;
+                    if (err?.stale) {
+                        reloadAfterStaleSave(current.task_id, err.message, () => setTranscriptUnsaved(false));
+                        return;
+                    }
                     setTranscriptSaveStatus('failed');
                 });
         }, 800);
@@ -794,6 +799,7 @@ const Editor = () => {
         const timer = setTimeout(() => {
             saveSummaryEdit(result.task_id, {
                 summary_markdown: summaryDraft,
+                base_version: result.note_version,
             }, resultJobOptions)
                 .then((data) => {
                     if (seq !== summarySaveSeqRef.current) return;
@@ -807,8 +813,12 @@ const Editor = () => {
                         ));
                     }
                 })
-                .catch(() => {
+                .catch((err) => {
                     if (seq !== summarySaveSeqRef.current) return;
+                    if (err?.stale) {
+                        reloadAfterStaleSave(result.task_id, err.message, () => setSummaryUnsaved(false));
+                        return;
+                    }
                     setSummarySaveStatus('failed');
                 });
         }, 800);
@@ -835,6 +845,17 @@ const Editor = () => {
             setToast(null);
         }, 3000);
     }, []);
+    // The server refused a save made on an older copy (the note or subtitles
+    // changed in Obsidian, by an agent or in another tab): load what the task
+    // holds now and say so, rather than sending the old copy again.
+    const reloadAfterStaleSave = useCallback((taskId, message, clearUnsaved) => {
+        const done = (job) => {
+            if (job?.result) setLastResult(job.result);
+            clearUnsaved();
+            showToast(message || '内容在别处被改过，已换成最新的版本。', false);
+        };
+        getJob(taskId, resultJobOptionsRef.current).then(done).catch(() => done(null));
+    }, [getJob, setLastResult, showToast]);
     const buildAiOptions = (settings) => ({
         aiProvider: settings.aiProvider||'deepseek',
         aiModel: settings.aiModel||null,

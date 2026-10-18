@@ -343,6 +343,22 @@ def deliver_media(task_id: str, source: Path, media: Path, label: str) -> dict[s
     }
 
 
+def _refresh_copy(source: Path, target: Path, previous: dict[str, Any]) -> None:
+    """Copy ``source`` over ``target`` when they differ. A target changed in
+    the folder since the last sync (the user fixed a subtitle there) is kept
+    beside it under its own name first, never silently replaced (audit,
+    2026-10-18). Edits are made in FluentFlow's editor; these are copies."""
+    try:
+        if target.is_file() and target.read_bytes() == source.read_bytes():
+            return
+        if target.is_file() and target.stat().st_mtime > _last_written_at(previous) + 1.0 and previous:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            target.replace(target.with_name(f"{target.stem}_我的修改-{stamp}{target.suffix}"))
+    except OSError:
+        pass
+    shutil.copyfile(source, target)
+
+
 def _write_if_changed(target: Path, text: str) -> bool:
     try:
         if target.read_text(encoding="utf-8") == text:
@@ -442,13 +458,14 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any], note_changed
     stem = _stem(source)
     artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
 
+    previous_record = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
     for kind, extension in (("transcript_txt", ".txt"), ("transcript_srt", ".srt")):
         path = _artifact_file(task_id, artifacts.get(kind))
         if path is not None:
-            shutil.copyfile(path, process / f"{stem}{suffix}{extension}")
+            _refresh_copy(path, process / f"{stem}{suffix}{extension}", previous_record)
     cut_list = _artifact_file(task_id, artifacts.get("debreath_cut_list"))
     if cut_list is not None:
-        shutil.copyfile(cut_list, process / f"{stem}_{CUT_LIST_LABEL}{suffix}.json")
+        _refresh_copy(cut_list, process / f"{stem}_{CUT_LIST_LABEL}{suffix}.json", previous_record)
 
     record: dict[str, Any] = {"path": str(folder), "error": None}
     note = str(result.get("summary_markdown") or "").strip()
@@ -692,12 +709,40 @@ def _what_the_folder_holds(result: dict[str, Any] | None) -> tuple[Any, ...]:
     )
 
 
+# A note or subtitles edited a few seconds apart (the page saves after every
+# pause in typing) refresh the folder once, this long after the last change:
+# each refresh exports the PDF in a browser (audit, 2026-10-18).
+SYNC_QUIET_SECONDS = 60.0
+_QUIET_TIMERS: dict[str, threading.Timer] = {}
+_QUIET_LOCK = threading.Lock()
+
+
+def schedule_sync_when_quiet(task_id: str) -> None:
+    """Sync once nothing has changed for ``SYNC_QUIET_SECONDS``; each new
+    change starts the wait again."""
+    def fire() -> None:
+        with _QUIET_LOCK:
+            if _QUIET_TIMERS.get(task_id) is timer:
+                _QUIET_TIMERS.pop(task_id, None)
+        schedule_sync(task_id)
+
+    timer = threading.Timer(SYNC_QUIET_SECONDS, fire)
+    timer.daemon = True
+    with _QUIET_LOCK:
+        previous = _QUIET_TIMERS.get(task_id)
+        if previous is not None:
+            previous.cancel()
+        _QUIET_TIMERS[task_id] = timer
+    timer.start()
+
+
 def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[str, Any] | None) -> None:
-    """Refresh a folder that already exists when what it holds changed."""
+    """Refresh a folder that already exists when what it holds changed, once
+    the changes have stopped coming."""
     if not isinstance(after, dict) or not isinstance(after.get(RESULT_KEY), dict):
         return
     if _what_the_folder_holds(after) != _what_the_folder_holds(before):
-        schedule_sync(task_id)
+        schedule_sync_when_quiet(task_id)
 
 
 job_store.add_result_listener(_on_result_saved)

@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
+from backend.core import visual_note_job
 from backend.core.ai_summarizer import summarize_transcript_with_metadata
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 from backend.core.event_context import event_metadata
@@ -28,7 +29,7 @@ from backend.core.job_lifecycle import (
     result_for_summary_success,
     result_for_transcript_only,
 )
-from backend.core.job_store import finalize_job_result_if_unchanged, get_job, upsert_job
+from backend.core.job_store import NOTE_BASIS_FIELDS, finalize_note_if_unchanged, get_job, upsert_job
 from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import (
     claim_task_id,
@@ -106,6 +107,15 @@ def _cleanup_payload(cleanup_result: Any) -> dict[str, Any]:
     }
 
 
+def _what_the_note_rests_on(result: Any) -> tuple[Any, ...]:
+    """What a rewrite started from and must still find (``NOTE_BASIS_FIELDS``):
+    anything else in the task may move during the model call (audit,
+    2026-10-18: any write at all refused a rewrite already paid for)."""
+    if not isinstance(result, dict):
+        return tuple(None for _ in NOTE_BASIS_FIELDS)
+    return tuple(result.get(key) for key in NOTE_BASIS_FIELDS)
+
+
 @router.post("/regenerate-summary")
 async def regenerate_summary(
     request: Request,
@@ -168,7 +178,7 @@ async def regenerate_summary(
         if existing_job:
             latest_job = get_job(task_id_value, client_id=client_id)
             latest_result = deepcopy(latest_job.get("result")) if latest_job else None
-            if latest_result != initial_result:
+            if _what_the_note_rests_on(latest_result) != _what_the_note_rests_on(initial_result):
                 raise HTTPException(
                     status_code=409,
                     detail="笔记在生成期间已被修改，本次生成结果未覆盖你的编辑。",
@@ -209,6 +219,10 @@ async def regenerate_summary(
             "audio_duration_seconds": source_duration_seconds or 0,
             "source": source_type,
         }
+        if existing:
+            # The note this replaces stays restorable, as an agent's rewrite
+            # keeps it (audit, 2026-10-18: a hand-edited note was lost here).
+            result["visual_note"] = visual_note_job.record_replaced_note(result, replaced_by="text_regeneration")
         result.update({
             **payload,
             "summary_skipped": False,
@@ -218,15 +232,10 @@ async def regenerate_summary(
         if isinstance(result.get("chapter_coverage"), dict):
             payload["chapter_coverage"] = result["chapter_coverage"]
         if existing_job:
-            updated = finalize_job_result_if_unchanged(
-                task_id=task_id_value,
-                expected_result=initial_result,
-                result=result,
-                status="completed",
-                client_id=client_id,
-                stage="done",
-                progress=100,
-                summary_status="completed",
+            # Refused only when the note or its transcript moved meanwhile.
+            updated = finalize_note_if_unchanged(
+                task_id_value, initial_result, result, status="completed", client_id=client_id,
+                stage="done", progress=100, summary_status="completed",
             )
             if updated is None:
                 raise HTTPException(

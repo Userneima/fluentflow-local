@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from backend.core.runtime_paths import default_job_db_path
 from backend.core.sqlite_connection import sqlite_connection
-from backend.core.result_schema import LEGACY_SEGMENT_KEYS, normalize_result_for_read, normalize_result_for_storage
+from backend.core.result_schema import content_versions, LEGACY_SEGMENT_KEYS, normalize_result_for_read, normalize_result_for_storage
 from backend.core.title_display import display_title_for_user
 
 logger = logging.getLogger(__name__)
@@ -768,6 +768,77 @@ def save_result_changes(
     return saved
 
 
+# What a rewritten note rests on: the note it replaces and the transcript it
+# was written from. Anything else may change while the model writes.
+NOTE_BASIS_FIELDS = ("summary_markdown", "transcript_text")
+
+
+def finalize_note_if_unchanged(
+    task_id: str,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    status: str,
+    stage: str,
+    progress: float | None,
+    summary_status: str,
+    error_reason: str | None = None,
+    basis: tuple[str, ...] = NOTE_BASIS_FIELDS,
+    db_path: Path | str = DEFAULT_DB_PATH,
+    client_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Write a rewritten note only while what it rests on (``basis``) is as
+    it was in ``before``; write only the fields that changed, onto the task as
+    it is now. None when the basis moved (an edit made meanwhile wins) or the
+    task is gone or cancelled.
+
+    ``finalize_job_result_if_unchanged`` compared the whole result: a cut's
+    progress or an export result written during a minutes-long model call
+    refused a note already paid for (audit, 2026-10-18)."""
+    task_id_value = str(task_id or "").strip()
+    if not task_id_value:
+        return None
+    ensure_job_db(db_path)
+    before_read = normalize_result_for_read(before) if isinstance(before, dict) else {}
+    after_read = normalize_result_for_read(after)
+    with sqlite_connection(Path(db_path), timeout=10) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("BEGIN IMMEDIATE")
+        if client_id is None:
+            row = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id_value,)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE task_id = ? AND client_id = ?", (task_id_value, client_id),
+            ).fetchone()
+        stored = _json_loads(row["result_json"]) if row else None
+        current = normalize_result_for_read(stored) if row else None
+        current = current if isinstance(current, dict) else {}
+        if (
+            row is None
+            or row["status"] == "cancelled"
+            or any(current.get(key) != before_read.get(key) for key in basis)
+        ):
+            conn.rollback()
+            return None
+        merged = _apply_changes(current, before_read, after_read if isinstance(after_read, dict) else {})
+        conn.execute(
+            """
+            UPDATE jobs
+            SET updated_at = ?, status = ?, stage = ?, progress = COALESCE(?, progress),
+                summary_status = ?, error_reason = ?, result_json = ?
+            WHERE task_id = ?
+            """,
+            (_now_iso(), status, stage, progress, summary_status, error_reason,
+             _result_json_dumps(merged), task_id_value),
+        )
+        updated = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id_value,)).fetchone()
+        conn.commit()
+    saved = _row_to_dict(updated) if updated else None
+    if saved is not None:
+        _notify_result_saved(task_id_value, stored, saved.get("result"))
+    return saved
+
+
 def finalize_job_result_if_unchanged(
     task_id: str,
     expected_result: Any,
@@ -1051,6 +1122,10 @@ def _progress_message(status: Any, stage: Any, metadata: Any) -> str | None:
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     metadata = _json_loads(row["metadata_json"])
+    result = normalize_result_for_read(_json_loads(row["result_json"]))
+    if isinstance(result, dict):
+        # Which note and subtitles this read saw; a save names it back.
+        result.update(content_versions(result))
     return {
         "task_id": row["task_id"],
         "created_at": row["created_at"],
@@ -1064,7 +1139,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "source_file_size_mb": row["source_file_size_mb"],
         "summary_status": _note_status(row["summary_status"]),
         "error_reason": row["error_reason"],
-        "result": normalize_result_for_read(_json_loads(row["result_json"])),
+        "result": result,
         "metadata": metadata,
         "progress_message": _progress_message(row["status"], row["stage"], metadata),
     }

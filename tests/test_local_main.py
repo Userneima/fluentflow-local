@@ -345,8 +345,8 @@ def scoped_stack(monkeypatch, tmp_path):
         functools.partial(job_store.cancel_job_steps, db_path=jobs_db),
     )
     monkeypatch.setattr(
-        local_job_edit, "update_job_result",
-        functools.partial(job_store.update_job_result, db_path=jobs_db),
+        local_job_edit, "save_result_changes",
+        functools.partial(job_store.save_result_changes, db_path=jobs_db),
         raising=False,
     )
     monkeypatch.setattr(local_job_mutation, "log_event", lambda **values: None)

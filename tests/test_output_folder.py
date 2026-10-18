@@ -123,7 +123,7 @@ def test_a_note_saved_later_schedules_a_refresh(tmp_path, pdfs, monkeypatch):
     task = _task(source, note="# 第八周\n\n第一版。\n")
     output_folder.sync(task)
     scheduled: list[str] = []
-    monkeypatch.setattr(output_folder, "schedule_sync", scheduled.append)
+    monkeypatch.setattr(output_folder, "schedule_sync_when_quiet", scheduled.append)
 
     job_store.update_job_result(task, {**job_store.get_job(task)["result"], "summary_markdown": "# 第八周\n\n编辑器里改的。\n"})
 
@@ -137,7 +137,7 @@ def test_subtitles_saved_later_schedule_a_refresh_and_saves_that_change_nothing_
     task = _task(source, note="# 第八周\n\n第一版。\n")
     output_folder.sync(task)
     scheduled: list[str] = []
-    monkeypatch.setattr(output_folder, "schedule_sync", scheduled.append)
+    monkeypatch.setattr(output_folder, "schedule_sync_when_quiet", scheduled.append)
 
     job_store.update_job_result(task, {**job_store.get_job(task)["result"], "transcript_text": "改过的字幕"})
     assert scheduled == [task]

@@ -31,7 +31,7 @@ from fastapi.responses import StreamingResponse
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.task_watch import TaskWatch
-from backend.core.job_store import delete_jobs, get_job, list_jobs_by_statuses, list_jobs_for_retention, recent_local_folders, update_job_result, upsert_job
+from backend.core.job_store import delete_jobs, get_job, list_jobs_by_statuses, list_jobs_for_retention, recent_local_folders, save_result_changes, update_job_result, upsert_job
 from backend.core.history_retention import enforce_history_retention
 from backend.core.local_entry_guards import (
     claim_task_id,
@@ -124,8 +124,24 @@ def _auto_export_local_lark(**values: object) -> dict:
         response = export_markdown_to_lark(title, str(values["summary_markdown"]), task_id=str(values["task_id"]), artifact_root=_artifact_storage_dir(), **kwargs)
     return {"doc_title": title, "export_target": target, "response": response}
 
+
+_SOURCE_EXPIRY_FIELDS = ("source_file_available", "source_file_storage", "source_retention_status", "source_retention_cleaned_at")
+
+
+def _record_source_expiry(task_id: str, result: dict, client_id: Optional[str] = None, touch_updated_at: bool = False):
+    """Write only the expiry fields onto the task as it is now; the result
+    handed in was read when the sweep began (audit, 2026-10-18)."""
+    job = get_job(task_id, client_id=client_id)
+    if not job:
+        return None
+    current = dict(job.get("result") or {})
+    fields = {key: result.get(key) for key in _SOURCE_EXPIRY_FIELDS if key in result}
+    return save_result_changes(task_id, current, {**current, **fields}, client_id=client_id,
+                               touch_updated_at=touch_updated_at)
+
+
 def _enforce_local_history_retention(client_id: str | None) -> dict:
-    return enforce_history_retention(client_id, source_days=source_retention_days(), list_jobs=list_jobs_for_retention, update_result=update_job_result, load_job=get_job)
+    return enforce_history_retention(client_id, source_days=source_retention_days(), list_jobs=list_jobs_for_retention, update_result=_record_source_expiry, load_job=get_job)
 
 
 def _positive_float(value: object) -> float | None:

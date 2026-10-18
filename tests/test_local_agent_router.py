@@ -51,8 +51,8 @@ def agent_stack(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         local_agent,
-        "finalize_job_result_if_unchanged",
-        functools.partial(job_store.finalize_job_result_if_unchanged, db_path=jobs_db),
+        "finalize_note_if_unchanged",
+        functools.partial(job_store.finalize_note_if_unchanged, db_path=jobs_db),
     )
     monkeypatch.setattr(
         guards, "create_job_if_absent",

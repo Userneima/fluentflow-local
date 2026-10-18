@@ -1313,6 +1313,9 @@ def _run_visual_note(
             # ``usage``: the text call does not report them.
             "coverage": {"checker": checker_name, "parts": coverage_parts},
             "promoted": bool(replace_note),
+            # A freshly written note is the generated one again.
+            "switch_back_edited": None,
+            "switch_back_written_from": None,
             "finished_at": _now(),
             "error": None,
         }
@@ -1369,12 +1372,24 @@ def restore_previous_note(task_id: str, *, client_id: str | None = None) -> dict
     previous = str(replaced.get("previous_markdown") or "")
     if not previous.strip():
         raise VisualNoteError("没有可以恢复的上一版笔记")
+    switch_back: dict[str, Any] = {}
+    current = str(result.get("summary_markdown") or "")
+    if current.strip() and current != str(state.get("markdown") or "") and current != previous:
+        # The note being put aside is not the one this flow wrote (it was
+        # edited by hand, or written another way): it becomes the note to
+        # switch back to, so restoring never loses it (audit, 2026-10-18).
+        switch_back = {
+            "markdown": current,
+            "switch_back_edited": bool(result.get("summary_edited")),
+            "switch_back_written_from": result.get("summary_written_from"),
+        }
     return _store(
         task_id,
         client_id=client_id,
         state={
             "promoted": False,
             "replaced_note": {**replaced, "restored_at": _now()},
+            **switch_back,
         },
         result_fields={
             "summary_markdown": previous,
@@ -1409,6 +1424,11 @@ def use_generated_note(task_id: str, *, client_id: str | None = None) -> dict[st
         raise VisualNoteError("这个任务还没有根据剪后版本写好的笔记")
     media_source = state.get("media_source") if isinstance(state.get("media_source"), dict) else {}
     fields, replaced = _promotion(result, markdown, media_kind=media_source.get("kind"))
+    if state.get("switch_back_edited") is not None:
+        # The note switched back to is the one a restore put aside, edits and all.
+        fields["summary_edited"] = bool(state.get("switch_back_edited"))
+        if state.get("switch_back_written_from"):
+            fields["summary_written_from"] = state.get("switch_back_written_from")
     previous_record = state.get("replaced_note") if isinstance(state.get("replaced_note"), dict) else {}
     if not str(replaced.get("previous_markdown") or "").strip():
         # Nothing to keep this time round, so the earlier record is the one worth

@@ -30,7 +30,8 @@ from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import (
     append_job_result_list_item,
-    finalize_job_result_if_unchanged,
+    NOTE_BASIS_FIELDS,
+    finalize_note_if_unchanged,
     get_job,
     list_jobs,
     upsert_job,
@@ -203,8 +204,14 @@ def _job_for_request(request: Request, task_id: str) -> dict[str, Any]:
 
 
 def _result_changed(task_id: str, client_id: Optional[str], initial_result: Any) -> bool:
+    """Whether the note or the transcript it rests on moved since
+    ``initial_result``; other fields may change during a rewrite."""
     latest = get_job(task_id, client_id=client_id)
-    return latest is None or deepcopy(latest.get("result")) != initial_result
+    if latest is None:
+        return True
+    now = latest.get("result") if isinstance(latest.get("result"), dict) else {}
+    then = initial_result if isinstance(initial_result, dict) else {}
+    return any(now.get(key) != then.get(key) for key in NOTE_BASIS_FIELDS)
 
 
 def _bounded_finite_float(
@@ -907,6 +914,7 @@ def apply_note_rule(payload: Optional[dict[str, Any]] = Body(None)) -> dict[str,
         feedback_ids=[str(i) for i in ids] if isinstance(ids, list) else [],
         rounds=int(body.get("rounds") or 0),
         evidence=str(body.get("evidence") or ""),
+        base_version=str(body.get("base_version") or "") or None,
     )}
 
 
@@ -1073,10 +1081,10 @@ async def regenerate_agent_task_note(
             "summary_error": detail,
             "summary_skipped": False,
         })
-        updated = finalize_job_result_if_unchanged(
-            task_id=task_id,
-            expected_result=initial_result,
-            result=result,
+        updated = finalize_note_if_unchanged(
+            task_id,
+            initial_result,
+            result,
             status=str(job.get("status") or "completed"),
             client_id=client_id,
             stage=str(job.get("stage") or "done"),
@@ -1133,10 +1141,10 @@ async def regenerate_agent_task_note(
     })
     result = bind_chapter_coverage_time_ranges(result)
     result = _attach_result_artifacts(task_id, result)
-    updated = finalize_job_result_if_unchanged(
-        task_id=task_id,
-        expected_result=initial_result,
-        result=result,
+    updated = finalize_note_if_unchanged(
+        task_id,
+        initial_result,
+        result,
         status="completed",
         client_id=client_id,
         stage="done",

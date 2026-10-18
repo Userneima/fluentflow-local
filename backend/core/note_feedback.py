@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +48,11 @@ def _now() -> str:
 
 def _path(name: str) -> Path:
     return note_skills.user_skill_dir() / name
+
+
+# Record and rule writes read a list, add to it and write it back; two agents
+# doing that at once lost one entry (audit, 2026-10-18).
+_LOCK = threading.RLock()
 
 
 def _read(name: str) -> list[dict[str, Any]]:
@@ -129,9 +135,10 @@ def record_feedback(
         "transcript_excerpt": _text(transcript_excerpt),
         "rule_id": None,
     }
-    items = _read(FEEDBACK_FILE)
-    items.append(item)
-    _write(FEEDBACK_FILE, items)
+    with _LOCK:
+        items = _read(FEEDBACK_FILE)
+        items.append(item)
+        _write(FEEDBACK_FILE, items)
     return item
 
 
@@ -199,8 +206,13 @@ def apply_rule(
     feedback_ids: list[str],
     rounds: int,
     evidence: str,
+    base_version: str | None = None,
 ) -> dict[str, Any]:
     """Write a verified rule into the user's skill and say where it came from.
+
+    ``base_version`` is the skill version the agent read and merged into; when
+    the skill changed since (the user edited it, another agent added a rule),
+    the write is refused instead of replacing that change.
 
     ``skill_text`` is the whole new skill (the agent merges the rule where it
     belongs instead of appending, so rules do not pile up as an afterthought
@@ -215,7 +227,17 @@ def apply_rule(
     missing = [fid for fid in feedback_ids if fid not in known]
     if not feedback_ids or missing:
         raise NoteFeedbackError(f"规则要对应已记录的反馈（feedback_ids），找不到：{', '.join(missing) or '没有给'}")
+    with _LOCK:
+        return _apply_rule_locked(skill_text, rule, feedback_ids, rounds, evidence, base_version)
+
+
+def _apply_rule_locked(skill_text, rule, feedback_ids, rounds, evidence, base_version):
     before = note_skills.load_note_skill()
+    if base_version and base_version != before.version:
+        raise NoteFeedbackError(
+            "笔记规则在你读取之后被改过（用户自己改了，或别的 agent 加了规则）。"
+            "先用 get_note_skill 读最新的规则，把这条规则合进去，再带上新的版本号提交。"
+        )
     after = note_skills.save_user_skill(skill_text)
     entry = {
         "id": uuid.uuid4().hex[:12],

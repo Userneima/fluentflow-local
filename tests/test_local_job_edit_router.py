@@ -18,10 +18,10 @@ def _client() -> TestClient:
 
 def _patch_common(monkeypatch, job):
     monkeypatch.setattr(local_job_edit, "get_job", lambda task_id, client_id=None: job)
-    monkeypatch.setattr(local_job_edit, "_attach_result_artifacts", lambda task_id, result: result)
+    monkeypatch.setattr(local_job_edit, "_attach_result_artifacts", lambda task_id, result, **_k: result)
     monkeypatch.setattr(
-        local_job_edit, "update_job_result",
-        lambda task_id, result, client_id=None: {"task_id": task_id, "result": result, "client_id": client_id},
+        local_job_edit, "save_result_changes",
+        lambda task_id, _before, result, client_id=None: {"task_id": task_id, "result": result, "client_id": client_id},
     )
 
 
@@ -59,10 +59,10 @@ def test_transcript_edit_persists_scoped(monkeypatch):
     monkeypatch.setattr(local_job_edit, "_canonical_display_segments", lambda result: [])
     monkeypatch.setattr(local_job_edit, "_write_edited_transcript_backup", lambda task_id, result: Path("/tmp/edited.txt"))
     monkeypatch.setattr(local_job_edit, "_write_transcript_edit_records_backup", lambda task_id, result, records: Path("/tmp/rec.json"))
-    monkeypatch.setattr(local_job_edit, "_attach_result_artifacts", lambda task_id, result: result)
+    monkeypatch.setattr(local_job_edit, "_attach_result_artifacts", lambda task_id, result, **_k: result)
     monkeypatch.setattr(
-        local_job_edit, "update_job_result",
-        lambda task_id, result, client_id=None: {"task_id": task_id, "result": result},
+        local_job_edit, "save_result_changes",
+        lambda task_id, _before, result, client_id=None: {"task_id": task_id, "result": result},
     )
 
     r = _client().patch("/jobs/t1/transcript", headers=_HEADERS, json={"transcript_text": "hello world"})

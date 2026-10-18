@@ -26,6 +26,8 @@ Recordings that were not cut (the original was transcribed) are left alone.
 
 from __future__ import annotations
 
+import copy
+
 import json
 import logging
 import os
@@ -170,7 +172,11 @@ def trim_tail(task_id: str, client_id: str | None = None, *, chat: tuple[Chat, s
     recorded on the task, or None when there was nothing to judge. Never raises:
     the task's own results stand."""
     job = job_store.get_job(task_id, client_id=client_id)
-    result = dict((job or {}).get("result") or {})
+    # Kept apart so the write below changes only what this step changed: it
+    # runs a model call and ffmpeg in between, and a transcript edit saved
+    # meanwhile used to be reverted (audit, 2026-10-18).
+    before = copy.deepcopy(dict((job or {}).get("result") or {}))
+    result = copy.deepcopy(before)
     cut = dict(result.get("debreath") or {})
     segments = result.get("raw_segments") if isinstance(result.get("raw_segments"), list) else []
     if not job or not cut.get("used_for_transcription") or not segments:
@@ -219,7 +225,7 @@ def trim_tail(task_id: str, client_id: str | None = None, *, chat: tuple[Chat, s
         from backend.core.result_artifacts import _attach_result_artifacts
 
         result = _attach_result_artifacts(task_id, result)
-    job_store.update_job_result(task_id, result, client_id=client_id)
+    job_store.save_result_changes(task_id, before, result, client_id=client_id)
     return record
 
 

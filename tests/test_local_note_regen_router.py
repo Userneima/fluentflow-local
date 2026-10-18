@@ -56,24 +56,21 @@ def _install_store(monkeypatch):
         jobs[task_id] = {"task_id": task_id, **values}
         return True
 
-    def fake_finalize(task_id, expected_result, result, **values):
-        job = scoped_get(task_id, client_id=values.get("client_id"))
-        if (
-            job is None
-            or job.get("status") == "cancelled"
-            or job.get("result") != expected_result
-        ):
+    def fake_finalize_note(task_id, before, after, *, client_id=None, **values):
+        """Like job_store.finalize_note_if_unchanged: refused when the note or
+        transcript moved since ``before``; otherwise writes the changed fields
+        onto the task as it is now."""
+        job = scoped_get(task_id, client_id=client_id)
+        if job is None or job.get("status") == "cancelled":
             return None
-        jobs[task_id] = {
-            **job,
-            "client_id": values.get("client_id") or job.get("client_id"),
-            "status": values["status"],
-            "stage": values["stage"],
-            "progress": values["progress"],
-            "summary_status": values["summary_status"],
-            "error_reason": values.get("error_reason"),
-            "result": result,
-        }
+        current = dict(job.get("result") or {})
+        if any(current.get(k) != (before or {}).get(k) for k in ("summary_markdown", "transcript_text")):
+            return None
+        for key in set(before or {}) | set(after):
+            if (before or {}).get(key) != after.get(key):
+                current[key] = after.get(key)
+        jobs[task_id] = {**job, "client_id": client_id or job.get("client_id"), "result": current, "status": values["status"], "stage": values["stage"],
+                         "progress": values["progress"], "summary_status": values["summary_status"]}
         return jobs[task_id]
 
     monkeypatch.setattr(local_note_regen, "upsert_job", fake_upsert)
@@ -82,9 +79,7 @@ def _install_store(monkeypatch):
     )
     monkeypatch.setattr(guards, "get_job", scoped_get)
     monkeypatch.setattr(guards, "create_job_if_absent", fake_create)
-    monkeypatch.setattr(
-        local_note_regen, "finalize_job_result_if_unchanged", fake_finalize
-    )
+    monkeypatch.setattr(local_note_regen, "finalize_note_if_unchanged", fake_finalize_note)
     monkeypatch.setattr(local_note_regen, "log_event", lambda **values: events.append(values))
     monkeypatch.setattr(
         local_note_regen, "_attach_result_artifacts", lambda task_id, result: result

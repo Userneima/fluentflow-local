@@ -664,6 +664,14 @@ const createApi = () => {
         if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
         return data;
     };
+    // A save the server refused because the task moved on since this page
+    // loaded it (409): the caller reloads instead of retrying the old copy.
+    const saveError = (status, data) => {
+        const detail = data?.detail;
+        const error = new Error((detail && typeof detail === 'object' ? detail.message : detail) || `HTTP ${status}`);
+        error.stale = status === 409;
+        return error;
+    };
     const saveTranscriptEdit = async (taskId, payload={}, options={}) => {
         const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/transcript`, {
             method: "PATCH",
@@ -671,7 +679,7 @@ const createApi = () => {
             body: JSON.stringify(payload),
         });
         const data = await r.json().catch(()=>({}));
-        if(!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        if(!r.ok) throw saveError(r.status, data);
         return data;
     };
     const saveSummaryEdit = async (taskId, payload={}, options={}) => {
@@ -681,7 +689,7 @@ const createApi = () => {
             body: JSON.stringify(payload),
         });
         const data = await r.json().catch(()=>({}));
-        if(!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        if(!r.ok) throw saveError(r.status, data);
         return data;
     };
     const translateJobSegments = async (taskId, payload={}, options={}) => {

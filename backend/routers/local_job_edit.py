@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from backend.core.job_store import get_job, update_job_result
+from backend.core.job_store import get_job, save_result_changes
 from backend.core.local_request_scope import request_client_id
 from backend.core.result_artifacts import (
     _attach_result_artifacts,
@@ -31,6 +31,20 @@ def _local_client_scope(request: Request) -> Optional[str]:
     return request_client_id(request) or "anonymous"
 
 
+STALE_NOTE = "笔记在别处被改过（Obsidian、agent 或另一个页面），已换成最新的版本；你刚才这几秒的修改没有保存，请在新版本上再改一次。"
+STALE_TRANSCRIPT = "字幕在别处被改过（重新剪辑、另一个页面或 agent），已换成最新的版本；你刚才这几秒的修改没有保存，请在新版本上再改一次。"
+
+
+def _refuse_if_moved_on(result: dict[str, Any], payload: dict[str, Any], key: str, message: str) -> None:
+    """Refuse a save made on an older copy than the task holds now.
+
+    ``base_version`` is the version the page or agent started from (sent with
+    every read of the task); a save without one is taken as before."""
+    base = payload.get("base_version")
+    if isinstance(base, str) and base and base != result.get(key):
+        raise HTTPException(status_code=409, detail={"code": "stale", "message": message})
+
+
 @router.patch("/jobs/{task_id}/transcript")
 def update_job_transcript(
     request: Request,
@@ -41,7 +55,9 @@ def update_job_transcript(
     job = get_job(task_id, client_id=client_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    result = dict(job.get("result") or {})
+    before = dict(job.get("result") or {})
+    _refuse_if_moved_on(before, payload, "transcript_version", STALE_TRANSCRIPT)
+    result = dict(before)
     transcript = payload.get("transcript_text")
     if not isinstance(transcript, str):
         raise HTTPException(status_code=400, detail="transcript_text is required")
@@ -81,8 +97,9 @@ def update_job_transcript(
         "edited_transcript_saved_at": edited_at,
         "transcript_edit_records_path": str(edit_records_path),
     })
-    result = _attach_result_artifacts(task_id, result)
-    updated = update_job_result(task_id, result, client_id=client_id)
+    result = _attach_result_artifacts(task_id, result, parts=("transcript",))
+    # Only the fields this save changed: the note or the cut may move meanwhile.
+    updated = save_result_changes(task_id, before, result, client_id=client_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"ok": True, "job": updated, "result": updated.get("result")}
@@ -98,7 +115,9 @@ def update_job_summary(
     job = get_job(task_id, client_id=client_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    result = dict(job.get("result") or {})
+    before = dict(job.get("result") or {})
+    _refuse_if_moved_on(before, payload, "note_version", STALE_NOTE)
+    result = dict(before)
     summary = payload.get("summary_markdown")
     if not isinstance(summary, str):
         raise HTTPException(status_code=400, detail="summary_markdown is required")
@@ -121,8 +140,10 @@ def update_job_summary(
         "summary_edited": True,
         "summary_edited_at": edited_at,
     })
-    result = _attach_result_artifacts(task_id, result)
-    updated = update_job_result(task_id, result, client_id=client_id)
+    # The note's own file only; rewriting the transcript files on every pause
+    # in typing was work for nothing.
+    result = _attach_result_artifacts(task_id, result, parts=("summary",))
+    updated = save_result_changes(task_id, before, result, client_id=client_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"ok": True, "job": updated, "result": updated.get("result")}

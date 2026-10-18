@@ -161,7 +161,35 @@ def normalize_result_for_storage(result: dict[str, Any] | None) -> dict[str, Any
             next_result["subtitle_mode"] = "source_only"
     else:
         next_result.pop("display_segments", None)
+    # Derived on every read of one task (``content_versions``), never stored.
+    for key in VERSION_KEYS:
+        next_result.pop(key, None)
     return next_result
+
+
+# Which version of the note and of the subtitles a page or agent is editing.
+# A save names the version it started from and is refused when the task has
+# moved on since: the page used to send its whole old copy back over an edit
+# made in Obsidian, by an agent or in another tab (audit, 2026-10-18).
+VERSION_KEYS = ("note_version", "transcript_version")
+
+
+def content_versions(result: Any) -> dict[str, str]:
+    import hashlib
+    import json
+
+    if not isinstance(result, dict):
+        return {}
+    note = str(result.get("summary_markdown") or "")
+    lines = [
+        [segment.get("start"), segment.get("end"), segment.get("text"), segment.get("speaker"), segment.get("text_zh")]
+        for segment in canonical_display_segments(result)
+    ]
+    transcript = json.dumps([lines, str(result.get("transcript_text") or "")], ensure_ascii=False, sort_keys=True)
+    return {
+        "note_version": hashlib.sha256(note.encode("utf-8")).hexdigest()[:16],
+        "transcript_version": hashlib.sha256(transcript.encode("utf-8")).hexdigest()[:16],
+    }
 
 
 def normalize_result_for_read(result: Any) -> Any:

@@ -196,3 +196,19 @@ def test_a_stale_copy_saved_over_a_newer_note_can_be_found_again(tmp_path, pdfs)
     output_folder.sync(task)
 
     assert "agent 写的回答" in md.with_name("访谈_笔记_上一版.md").read_text(encoding="utf-8")
+
+
+def test_a_burst_of_saves_refreshes_the_folder_once_after_it_stops(monkeypatch):
+    """The page saves after every pause in typing; each folder refresh exports
+    the PDF, so a burst of saves is one refresh, after the last one."""
+    synced: list[str] = []
+    monkeypatch.setattr(output_folder, "schedule_sync", synced.append)
+    monkeypatch.setattr(output_folder, "SYNC_QUIET_SECONDS", 0.3)
+
+    for _ in range(5):
+        output_folder.schedule_sync_when_quiet("t-burst")
+        time.sleep(0.1)
+    assert synced == [], "nothing while the saves keep coming"
+    time.sleep(0.6)
+
+    assert synced == ["t-burst"]

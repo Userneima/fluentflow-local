@@ -766,6 +766,7 @@ def apply_note_rule(
     feedback_ids: list[str],
     rounds: int,
     evidence: str,
+    base_version: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -773,7 +774,7 @@ def apply_note_rule(
     return _agent_request(
         "POST", "/agent/v1/note-skill/rules", api_base=api_base, client_id=client_id,
         payload={"skill_text": skill_text, "rule": rule, "feedback_ids": list(feedback_ids),
-                 "rounds": int(rounds), "evidence": evidence},
+                 "rounds": int(rounds), "evidence": evidence, "base_version": base_version},
     )
 
 
@@ -1379,6 +1380,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "feedback_ids": {"type": "array", "items": {"type": "string"}},
                 "rounds": {"type": "integer"},
                 "evidence": {"type": "string"},
+                "base_version": {
+                    "type": "string",
+                    "description": "The skill version get_note_skill returned, the one you merged the rule into. "
+                                   "The write is refused if the skill changed since; read it again and merge.",
+                },
                 "api_base": {"type": "string"},
             },
             "required": ["skill_text", "rule", "feedback_ids", "rounds", "evidence"],
