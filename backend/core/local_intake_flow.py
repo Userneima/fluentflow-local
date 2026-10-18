@@ -372,7 +372,7 @@ def _write_text_note_instead(
 
     Never raises, for the same reason ``write_note`` does not.
     """
-    from backend.core.ai_summarizer import summarize_transcript_with_metadata
+    from backend.core.ai_summarizer import summarize_transcript_with_metadata, text_model_name
     from backend.core.event_context import event_metadata
     from backend.core.event_logger import log_event
     from backend.core.local_entry_guards import local_ai_kwargs
@@ -455,6 +455,9 @@ def _write_text_note_instead(
         "note_written_by": "text_fallback",
         "summary_written_from": "text_fallback",
         "note_fallback_reason": reason,
+        # Which text model, for the editor's 笔记说明: "a text model" alone
+        # did not say whose.
+        "note_text_model": text_model_name(**kwargs),
         "deadline_hit": bool(getattr(summary, "deadline_hit", False)),
         "prompt_preset": _option("prompt_preset"),
         "prompt_preset_label": _option("prompt_preset_label"),

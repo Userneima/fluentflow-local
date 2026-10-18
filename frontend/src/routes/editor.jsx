@@ -55,11 +55,12 @@ import {useApp} from '../app/AppContext.jsx';
 import {larkExportToastText} from '../lib/format.js';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import {usePromptEditing} from '../lib/usePromptEditing.js';
-import {noteFallbackSentence, notePendingSentence, notePromptScopeSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
+import {notePendingSentence, notePromptScopeSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
 import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
 import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
+import NoteExplanation from '../components/NoteExplanation.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
 import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
 import {
@@ -963,7 +964,6 @@ const Editor = () => {
     }, [notePolling, pollTaskId, getJob, setLastResult, showToast]);
 
     // Said above the note when the text model wrote it in place of Claude.
-    const noteFallbackText = noteFallbackSentence(result, lang);
     const savedLarkUrl = result?.lark_response?.url || null;
     const autoExportError = !savedLarkUrl && result?.lark_error ? String(result.lark_error) : '';
 
@@ -1960,6 +1960,7 @@ const Editor = () => {
                                                     : (lang === 'zh' ? '显示截图' : 'Show screenshots')}
                                             </button>
                                         )}
+                                        {summary && <NoteExplanation result={result} lang={lang}/>}
                                         <DropdownMenu
                                             trigger={
                                                 <button disabled={!summary || !!downloading} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]">
@@ -1991,11 +1992,6 @@ const Editor = () => {
                                         />
                                     </div>
                                 </div>
-                                {noteFallbackText && (
-                                    <p data-testid="note-fallback" className="mx-5 mt-3 shrink-0 rounded-[12px] border border-[#f5c86b] bg-[#fffaf0] px-3 py-2 text-xs font-semibold leading-relaxed text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]">
-                                        {noteFallbackText}
-                                    </p>
-                                )}
                                 {hasEditableSummary ? (
                                     <>
                                         <RichNoteEditor

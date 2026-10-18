@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {notePromptScopeSentence, noteWriterBatchClause, noteWriterSentence, resolveNoteWriter} from './noteWriter.js';
+import {noteExplanation, notePromptScopeSentence, noteWriterBatchClause, noteWriterSentence, resolveNoteWriter} from './noteWriter.js';
 
 // Requirement: every screen names the same writer, and it is the one the
 // backend will actually use (local_intake_flow.auto_note_will_run).
@@ -115,5 +115,47 @@ describe('a text model as the writer', () => {
         expect(sentence).toContain('不配截图');
         expect(sentence).toContain('剪辑不受影响');
         expect(noteWriterSentence({kind: 'claude', viaApiKey: false}, 'zh')).not.toContain('不看画面');
+    });
+});
+
+describe('noteExplanation', () => {
+    it('says a text-model stand-in was written from the transcript only, why, and how to get the frame note', () => {
+        const explained = noteExplanation({
+            task_id: 't1',
+            display_title: '面试',
+            summary_written_from: 'text_fallback',
+            note_written_by: 'text_fallback',
+            note_text_model: 'deepseek/deepseek-flash',
+            note_fallback_reason: '还没有配置 Anthropic 的 API Key。',
+        }, 'zh');
+        expect(explained.attention).toBe(true);
+        expect(explained.rows[0].value).toBe('文本模型（deepseek/deepseek-flash）');
+        expect(explained.rows[1].value).toMatch(/只有转录稿/);
+        expect(explained.why).toBe('还没有配置 Anthropic 的 API Key。');
+        expect(explained.fixes).toHaveLength(2);
+        expect(explained.agentPrompt).toMatch(/get_agent_note_material/);
+    });
+
+    it('names Claude, the frames cited and the version for a frame note, and asks nothing of the reader', () => {
+        const explained = noteExplanation({
+            summary_written_from: 'debreath_media_note',
+            visual_note: {channel_label: '本机已登录的 Claude 订阅', model: 'opus', frames_cited: [{}, {}, {}]},
+        }, 'zh');
+        expect(explained.attention).toBe(false);
+        expect(explained.rows.map((row) => row.value)).toEqual([
+            '本机已登录的 Claude 订阅（opus）', '转录稿和画面，引用了 3 张截图', '剪掉空白后的版本',
+        ]);
+        expect(explained.fixes).toEqual([]);
+    });
+
+    it('names the agent for a note the agent saved', () => {
+        const explained = noteExplanation({summary_written_from: 'agent_note', visual_note: {channel: 'agent', model: 'agent', media_source: {}}}, 'zh');
+        expect(explained.rows[0].value).toBe('你的 agent');
+    });
+});
+
+describe('noteExplanation of what the backend records', () => {
+    it('names the agent from summary_written_from alone', () => {
+        expect(noteExplanation({summary_written_from: 'agent_note'}, 'zh').rows[0].value).toBe('你的 agent');
     });
 });

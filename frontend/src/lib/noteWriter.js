@@ -137,14 +137,67 @@ export const noteWasTextFallback = (result) => (
     result?.note_written_by === 'text_fallback' || result?.summary_written_from === 'text_fallback'
 );
 
-// Said above the note in the editor and on the task card. Empty for any other note.
+// What the editor's 笔记说明 shows: who wrote this note, from what, and — when
+// it is not the note the person expected — why, and how to get that one. Was a
+// paragraph above the note that took a third of a small window (owner,
+// 2026-10-18); now it is asked for.
+//
+// {attention, rows: [{label, value}], why, fixes: [string], agentPrompt}
+export const noteExplanation = (result, lang = 'zh') => {
+    const zh = lang === 'zh';
+    const from = String(result?.summary_written_from || '');
+    const visual = result?.visual_note && typeof result.visual_note === 'object' ? result.visual_note : {};
+    const fallback = noteWasTextFallback(result);
+    const textModel = String(result?.note_text_model || '').trim();
+    const cited = Array.isArray(visual.frames_cited) ? visual.frames_cited.length : 0;
+    const byAgent = from === 'agent_note' || visual.channel === 'agent';
+    const byFrames = from === 'debreath_media_note' || from === 'source_media_note' || (byAgent && visual.media_source);
+
+    let writer;
+    if (byAgent) {
+        const model = String(visual.model || '').trim();
+        writer = zh ? `你的 agent${model && model !== 'agent' ? `（${model}）` : ''}` : `Your agent${model && model !== 'agent' ? ` (${model})` : ''}`;
+    } else if (byFrames) {
+        const label = String(visual.channel_label || 'Claude');
+        writer = visual.model ? `${label}（${visual.model}）` : label;
+    } else {
+        const name = textModel || (zh ? '文本模型' : 'the text model');
+        writer = textModel ? (zh ? `文本模型（${name}）` : `Text model (${name})`) : (zh ? '文本模型' : 'Text model');
+    }
+
+    let basis;
+    if (byFrames && cited) basis = zh ? `转录稿和画面，引用了 ${cited} 张截图` : `Transcript and frames, ${cited} screenshot(s) cited`;
+    else if (byFrames) basis = zh ? '转录稿和画面，没有截图值得放进笔记' : 'Transcript and frames; no screenshot worth citing';
+    else basis = zh ? '只有转录稿：没有看画面，也没有截图' : 'The transcript only: no frames, no screenshots';
+
+    const rows = [
+        {label: zh ? '谁写的' : 'Written by', value: writer},
+        {label: zh ? '根据什么' : 'From', value: basis},
+    ];
+    if (from === 'debreath_media_note') rows.push({label: zh ? '哪个版本' : 'Version', value: zh ? '剪掉空白后的版本' : 'The cut version'});
+    if (from === 'source_media_note') rows.push({label: zh ? '哪个版本' : 'Version', value: zh ? '原片' : 'The original'});
+
+    const reason = String(result?.note_fallback_reason || '').trim();
+    return {
+        attention: fallback,
+        rows,
+        why: fallback ? (reason || (zh ? '这次没连上 Claude。' : 'Claude could not be reached this time.')) : '',
+        fixes: fallback ? (zh
+            ? ['在「设置 → 笔记」填好 Anthropic API Key，再点「重生笔记」。', '或者把下面这句发给你的 agent（Claude Code、Codex 等），用它的订阅结合画面重写。']
+            : ['Add an Anthropic API key under Settings → Notes, then click Regenerate note.', 'Or send this to your agent (Claude Code, Codex, ...) to rewrite it from the frames on its own subscription.'])
+            : [],
+        agentPrompt: fallback ? agentNotePrompt(result, lang) : '',
+    };
+};
+
+// Said on the task card: one short line. The reason and what to do about it
+// are in the editor's 笔记说明 (owner, 2026-10-18: the full paragraph took too
+// much room). Empty for any other note.
 export const noteFallbackSentence = (result, lang = 'zh') => {
     if (!noteWasTextFallback(result)) return '';
-    const reason = String(result?.note_fallback_reason || '').trim();
-    if (lang === 'zh') {
-        return `没连上 Claude，这篇改由文本模型只照转录稿写，没有看画面、没有截图，质量可能差一些。${reason ? `原因：${reason}` : ''}`;
-    }
-    return `Claude could not be reached, so the text model wrote this note from the transcript only, without the frames or screenshots; it may be lower quality.${reason ? ` Reason: ${reason}` : ''}`;
+    return lang === 'zh'
+        ? '文本模型代写，没看画面；原因见编辑器里的「笔记说明」'
+        : 'Written by the text model without the frames; see About this note in the editor';
 };
 
 // What the editor says while the note is still being written. Only Claude,

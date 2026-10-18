@@ -466,7 +466,7 @@ describe('what the note panel says', () => {
         expect(screen.getByText('edit.summarySkipped')).toBeTruthy();
     });
 
-    it('says when the text model wrote the note instead, and why', async () => {
+    it('marks a note the text model wrote instead, and says why when asked', async () => {
         const fallback = task({
             summary_status: 'completed',
             summary_markdown: '# text note',
@@ -477,8 +477,15 @@ describe('what the note panel says', () => {
         answerPolls(jobWith(fallback));
         mount(fallback);
         await advance(0);
-        expect(screen.getByTestId('note-fallback').textContent)
-            .toBe('没连上 Claude，这篇改由文本模型只照转录稿写，没有看画面、没有截图，质量可能差一些。原因：本机 Claude 的登录已过期。');
+        // Not a paragraph above the note any more (owner, 2026-10-18): a button
+        // that stands out, and the reason behind it.
+        expect(screen.queryByTestId('note-explanation-panel')).toBeNull();
+        const button = screen.getByTestId('note-explanation-button');
+        expect(screen.getByTestId('note-explanation-dot')).toBeTruthy();
+        fireEvent.click(button);
+        const panel = screen.getByTestId('note-explanation-panel');
+        expect(panel.textContent).toMatch(/只有转录稿/);
+        expect(panel.textContent).toMatch(/本机 Claude 的登录已过期。/);
     });
 
     it('says nothing of the kind for a note Claude wrote', async () => {
@@ -486,7 +493,10 @@ describe('what the note panel says', () => {
         answerPolls(jobWith(claude));
         mount(claude);
         await advance(0);
-        expect(screen.queryByTestId('note-fallback')).toBeNull();
+        const button = screen.getByTestId('note-explanation-button');
+        expect(screen.queryByTestId('note-explanation-dot')).toBeNull();
+        fireEvent.click(button);
+        expect(screen.getByTestId('note-explanation-panel').textContent).not.toMatch(/为什么不是 Claude/);
     });
 
     it('shows the fallback notice once a polled note turns out to be one', async () => {
@@ -498,7 +508,8 @@ describe('what the note panel says', () => {
         })));
         mount(task());
         await advance(5000);
-        expect(screen.getByTestId('note-fallback').textContent).toMatch(/原因：结合画面的笔记现在写不了。/);
+        fireEvent.click(screen.getByTestId('note-explanation-button'));
+        expect(screen.getByTestId('note-explanation-panel').textContent).toMatch(/结合画面的笔记现在写不了。/);
     });
 });
 

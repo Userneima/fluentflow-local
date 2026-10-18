@@ -71,6 +71,7 @@ def test_it_falls_back_to_the_text_note_and_says_why(owed_task, claude_unreachab
     assert job["result"]["summary_markdown"].startswith("# 三件事")
     assert job["result"]["summary_status"] == "completed"
     assert "登录" in job["result"]["note_fallback_reason"]
+    assert job["result"]["note_text_model"].startswith("deepseek/"), "which text model wrote it is recorded"
     assert handed_off == [True], "the queue is released before waiting on the text model"
     [event] = [e for e in claude_unreachable if e["event_name"] == "visual_note_unavailable"]
     assert event["metadata"]["fallback"] == "text_note"

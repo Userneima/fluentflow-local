@@ -218,6 +218,6 @@ describe('a task whose note the text model wrote instead', () => {
             },
         }];
         mount();
-        expect(await screen.findByText('没连上 Claude，这篇改由文本模型只照转录稿写，没有看画面、没有截图，质量可能差一些。原因：本机 Claude 的登录已过期。')).toBeTruthy();
+        expect(await screen.findByText('文本模型代写，没看画面；原因见编辑器里的「笔记说明」')).toBeTruthy();
     });
 });
