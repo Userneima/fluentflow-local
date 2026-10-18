@@ -121,6 +121,48 @@ def _compare_skills(args) -> int:
     return 0 if blocks else 1
 
 
+def _score(args) -> int:
+    """Score each recording's note under the test folder against its sheet;
+    the report goes into that recording's 评分 folder."""
+    from datetime import date
+
+    from backend.core import job_store, note_scoring
+    from backend.core.claude_text import claude_chat
+    from backend.core.local_config import resolve_secret
+
+    found = claude_chat(resolve_secret(None, "anthropic_api_key"))
+    if found is None:
+        print("no model to judge with (Claude not reachable)", file=sys.stderr)
+        return 2
+    chat, checker = found
+    root = args.score.expanduser().resolve()
+    rows = []
+    for folder in sorted(path for path in root.iterdir() if (path / "考题.md").is_file()):
+        if args.only and not any(word in folder.name for word in args.only):
+            continue
+        note_file = folder / args.note_file if args.note_file else None
+        if note_file is not None and note_file.is_file():
+            note = note_file.read_text(encoding="utf-8")
+        else:
+            task_id = re.search(r"任务\s+(\S+)", (folder / "来源.txt").read_text(encoding="utf-8")).group(1)
+            note = str(((job_store.get_job(task_id) or {}).get("result") or {}).get("summary_markdown") or "")
+        if not note.strip():
+            print(f"{folder.name}: no note", file=sys.stderr)
+            continue
+        sheet = note_scoring.parse_sheet((folder / "考题.md").read_text(encoding="utf-8"))
+        result = note_scoring.score(chat, sheet, note, (folder / "转录稿.txt").read_text(encoding="utf-8"),
+                                    checker=checker)
+        out = folder / "评分"
+        out.mkdir(exist_ok=True)
+        stem = f"{date.today().isoformat()}-{args.label}"
+        (out / f"{stem}.json").write_text(json.dumps(result, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        (out / f"{stem}.md").write_text(note_scoring.report_markdown(folder.name, args.label, result), encoding="utf-8")
+        rows.append({"recording": folder.name, "summary": note_scoring.summary_line(result), "report": str(out / f"{stem}.md")})
+        print(f"{folder.name}: {note_scoring.summary_line(result)}", flush=True)
+    print(json.dumps({"status": "ok", "scored": rows}, ensure_ascii=False, indent=2))
+    return 0 if rows else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -128,12 +170,20 @@ def main() -> int:
         help="Write each --task's note with two note skills (file path or git:REV:PATH) and put them side by side",
     )
     parser.add_argument("--task", action="append", default=[], help="Task id for --compare-skills (repeatable)")
+    parser.add_argument("--score", type=Path, default=None,
+                        help="Test folder (e.g. ~/Documents/FluentFlow 笔记考题): score each recording's note against its 考题.md")
+    parser.add_argument("--label", default="现有笔记", help="Name of the version being scored, used in the report file name")
+    parser.add_argument("--note-file", default=None, help="Score this file inside each recording folder instead of the task's note")
+    parser.add_argument("--only", action="append", default=[], help="Only recordings whose folder name contains this (repeatable)")
     parser.add_argument("--input", action="append", type=Path, default=[], help="Result/job JSON file or a directory of JSON files")
     parser.add_argument("--input-dir", type=Path, default=None, help="Directory of result/job JSON files")
     parser.add_argument("--review", type=Path, default=None, help="Optional JSON review payload")
     parser.add_argument("--output-dir", type=Path, default=Path("reports/note_quality_eval"), help="Report output directory")
     parser.add_argument("--stdout", action="store_true", help="Print the Markdown report instead of only writing files")
     args = parser.parse_args()
+
+    if args.score:
+        return _score(args)
 
     if args.compare_skills:
         if not args.task:
