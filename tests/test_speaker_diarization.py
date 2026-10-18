@@ -113,7 +113,11 @@ def test_note_prompt_carries_attribution_rule_only_when_labeled() -> None:
 
     assert "说话人 A" not in plain
     assert "说话人 A" in labeled
-    assert "不要根据对话里的称呼" in labeled
+    # Owner, 2026-10-18: a real name only on clear evidence (self-introduction,
+    # the name on screen, an answered call, the correction document; two
+    # agreeing), the number kept beside it; a name merely mentioned is not
+    # evidence; when unsure, the number.
+    assert "证据明确" in labeled and "不算证据" in labeled and "拿不准" in labeled
 
 
 def test_status_reports_local_models_and_needs_no_token(monkeypatch, tmp_path) -> None:
