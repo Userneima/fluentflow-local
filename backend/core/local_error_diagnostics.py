@@ -222,6 +222,24 @@ def diagnose_error(error: Any) -> dict[str, Any]:
         )
     lowered = raw.lower()
 
+    # Codes and raw system or tool output that used to reach the user as is
+    # (2026-10-18 review of every failure message on record).
+    if raw == "user_cancelled":
+        return _diag("user_cancelled", "已取消", "这个任务是你取消的。", "需要的话点「再处理一次」。")
+    if raw == "client_disconnect":
+        return _diag(
+            "client_disconnect", "上传中断了",
+            "网页在文件传完之前被关掉或刷新了，FluentFlow 没收到完整的文件。",
+            "重新提交一次，传完之前别关网页；本机文件可以用「本机文件」直接选，不用上传。",
+        )
+    if "render batch failed" in lowered or ("error while" in lowered and "ffmpeg" in lowered):
+        return _diag(
+            "render_failed", "导出剪后视频时出错了",
+            "导出这一步出错了，原片没有动，剪辑判断和转录稿都还在。"
+            + ("出错的是这台 Mac 的硬件编码器。" if "videotoolbox" in lowered else ""),
+            "让 FluentFlow 再导出一次（处理说明里点任意一处改判，或让你的 agent 用 debreath_task 重新剪）；连续失败的话把这条任务的报错发给维护者。",
+        )
+
     feishu = _feishu_diagnosis(raw, lowered)
     if feishu is not None:
         return feishu
@@ -527,6 +545,14 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "视频下载失败",
             raw,
             "稍后重试、配置浏览器 cookies，或改用本机上的视频文件。",
+        )
+    if "operation not permitted" in lowered or "permission denied" in lowered:
+        where = re.search(r"['\"](/[^'\"]+)['\"]", raw)
+        place = f"（{where.group(1)}）" if where else ""
+        return _diag(
+            "file_permission", "没有权限读写这个文件",
+            f"macOS 的隐私设置挡住了 FluentFlow 读写这个位置{place}，常见于「下载」「桌面」、外接硬盘和别的 App 的文件夹。",
+            "在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里允许启动 FluentFlow 的程序，或把文件挪到「影片」「文稿」里再提交。",
         )
     return _diag(
         "unknown_error",

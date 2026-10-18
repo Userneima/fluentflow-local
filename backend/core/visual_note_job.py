@@ -301,7 +301,7 @@ def _cut_media_reason(task_id: str, result: dict[str, Any]) -> str:
     state = debreath_job.debreath_state(result)
     status = state.get("status")
     if not state:
-        return "还没有去掉气口的版本。先在媒体那一栏跑一次「去气口」，笔记会根据剪好的文件来写。"
+        return "这条录像还没有去气口（剪掉空白）后的版本。在任务列表里点「再处理一次」，或让你的 agent 用 debreath_task 剪一次，笔记会根据剪好的文件来写。"
     if status == debreath_job.STATUS_RUNNING:
         return "去气口还在进行，等剪后的文件出来再写笔记。"
     if status == debreath_job.STATUS_FAILED:
@@ -313,8 +313,8 @@ def _cut_media_reason(task_id: str, result: dict[str, Any]) -> str:
     if not state.get("rendered") and plan.get("cut_count") == 0:
         return _missing_recording_reason(task_id, "去气口没找到可剪的空白，笔记要读原录音")
     if not state.get("rendered"):
-        return "上一次只生成了剪辑表，还没有剪后的文件。回到「去气口」点「剪掉空白并生成成品」。"
-    return "剪后的文件已经不在本机了（可能已过保留期）。重新跑一次「去气口」就能再写笔记。"
+        return "上一次只生成了剪辑表，还没有剪出成品。在任务列表里点「再处理一次」，或让你的 agent 用 debreath_task 把成品剪出来。"
+    return "剪后的文件已经不在本机了（可能已过保留期）。在任务列表里点「再处理一次」，或让你的 agent 用 debreath_task 再剪一次，就能再写笔记。"
 
 
 def _cut_list_payload(task_id: str, result: dict[str, Any]) -> dict[str, Any] | None:
@@ -396,7 +396,7 @@ def _transcript_for_media(
     payload = _cut_list_payload(task_id, result)
     if payload is None:
         raise VisualNoteError(
-            "找不到这次去气口的剪辑表，没法把字幕时间点对到剪后的文件上。重新跑一次「去气口」即可。"
+            "找不到这次去气口的剪辑表，没法把字幕时间点对到剪后的文件上。在任务列表里点「再处理一次」，或让你的 agent 用 debreath_task 重新剪一次。"
         )
     report = cut_timeline.remap_segments(segments, cut_timeline.kept_ranges(payload))
     if not report.segments:

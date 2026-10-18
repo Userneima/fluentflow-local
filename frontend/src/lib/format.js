@@ -412,6 +412,35 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
     if(feishu) return pick(feishu);
 
     const patterns = [
+        // Codes and raw system output that used to show as they are (2026-10-18).
+        [
+            raw === 'user_cancelled',
+            taskErrorDiagnosis({
+                code: 'user_cancelled', titleZh: '已取消', titleEn: 'Cancelled',
+                detailZh: '这个任务是你取消的。', detailEn: 'You cancelled this task.',
+                nextZh: '需要的话点「再处理一次」。', nextEn: 'Run it again if you need it.',
+            }),
+        ],
+        [
+            raw === 'client_disconnect',
+            taskErrorDiagnosis({
+                code: 'client_disconnect', titleZh: '上传中断了', titleEn: 'Upload interrupted',
+                detailZh: '网页在文件传完之前被关掉或刷新了，FluentFlow 没收到完整的文件。',
+                detailEn: 'The page was closed or reloaded before the file finished uploading.',
+                nextZh: '重新提交一次，传完之前别关网页；本机文件可以用「本机文件」直接选，不用上传。',
+                nextEn: 'Submit again and keep the page open; for a file on this machine use "Local file" instead of uploading.',
+            }),
+        ],
+        [
+            lower.includes('operation not permitted') || lower.includes('permission denied'),
+            taskErrorDiagnosis({
+                code: 'file_permission', titleZh: '没有权限读写这个文件', titleEn: 'No permission to read or write this file',
+                detailZh: 'macOS 的隐私设置挡住了 FluentFlow 读写这个位置，常见于「下载」「桌面」、外接硬盘和别的 App 的文件夹。',
+                detailEn: "macOS privacy settings kept FluentFlow from this location (often Downloads, Desktop, external drives or another app's folder).",
+                nextZh: '在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里允许启动 FluentFlow 的程序，或把文件挪到「影片」「文稿」里再提交。',
+                nextEn: 'Allow the program that starts FluentFlow under System Settings → Privacy & Security → Full Disk Access, or move the file to Movies or Documents.',
+            }),
+        ],
         [
             lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('network error') || lower.includes('load failed') || lower.includes('err_connection_refused') || lower.includes('econnrefused'),
             taskErrorDiagnosis({

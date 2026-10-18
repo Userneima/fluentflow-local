@@ -906,7 +906,8 @@ def _run_debreath(
         _store(
             task_id,
             client_id=client_id,
-            state={"status": STATUS_FAILED, "stage": "done", "error": str(exc), "finished_at": _now()},
+            state={"status": STATUS_FAILED, "stage": "done", "error": _user_words(exc), "error_detail": str(exc)[:1000],
+                   "finished_at": _now()},
         )
         raise DebreathError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - the job must not be left "running"
@@ -917,13 +918,24 @@ def _run_debreath(
             state={
                 "status": STATUS_FAILED,
                 "stage": "done",
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": _user_words(exc),
+                "error_detail": f"{type(exc).__name__}: {exc}"[:1000],
                 "finished_at": _now(),
             },
         )
         raise
     finally:
         release(task_id)
+
+
+def _user_words(exc: Exception) -> str:
+    """What the page and the agent show; the raw text stays in ``error_detail``."""
+    from backend.core.local_error_diagnostics import diagnose_error
+
+    diagnosis = diagnose_error(exc)
+    if diagnosis.get("code") == "render_failed":
+        return f"{diagnosis['detail']}{diagnosis['next_action']}"
+    return str(exc)
 
 
 def recover_stranded_renders() -> int:

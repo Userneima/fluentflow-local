@@ -42,3 +42,17 @@ describe('removing the breath gaps shows how far it got', () => {
         expect(jobProgressLabel(job, t)).toBe('进行中');
     });
 });
+
+// Requirement (2026-10-18): codes and raw system errors are not shown as they are.
+import {diagnoseTaskError as diagnoseFailure} from './format.js';
+import {describe as describeFailures, expect as expectFailures, it as itFailure} from 'vitest';
+describeFailures('a raw failure on the page', () => {
+    itFailure('comes out in Chinese with a next step', () => {
+        for (const raw of ['user_cancelled', 'client_disconnect', "[Errno 1] Operation not permitted: '/x/a.mp4'"]) {
+            const found = diagnoseFailure(raw, 'zh');
+            expectFailures(found.detail).toMatch(/[一-鿿]/);
+            expectFailures(found.nextAction).toMatch(/[一-鿿]/);
+            expectFailures(found.detail + found.nextAction).not.toMatch(/Errno|_cancelled|client_disconnect/);
+        }
+    });
+});
