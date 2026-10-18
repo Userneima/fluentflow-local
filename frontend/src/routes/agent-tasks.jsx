@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import {CutReport} from '../components/CutReport.jsx';
 import AgentCutWait from '../components/AgentCutWait.jsx';
+import OutputFolderLine from '../components/OutputFolderLine.jsx';
 import {fmtDurationCompact, progressMessageOf} from '../lib/format.js';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
 import {
@@ -701,6 +702,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                     )}
                 </div>
             ) : null}
+            <OutputFolderLine taskId={taskId} result={job?.result} lang={lang} className="mt-3"/>
             <AgentCutWait job={job}/>
             <CutReport job={job}/>
             <div className="mt-4 grid gap-2 md:grid-cols-3">

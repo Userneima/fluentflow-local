@@ -61,6 +61,7 @@ import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
 import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
+import OutputFolderLine from '../components/OutputFolderLine.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
 import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
 import {
@@ -1483,6 +1484,7 @@ const Editor = () => {
                                 {sttElapsedLabel}
                             </p>
                         )}
+                        <OutputFolderLine taskId={activeTaskId} result={result} lang={lang} className="mt-1"/>
                         {/* The record of the step the upload ran on itself. It is
                             here rather than beside the player because it explains the
                             whole page: the media, the subtitles and the note are one

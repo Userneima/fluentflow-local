@@ -49,6 +49,7 @@ from backend.core import (
     local_file_chooser,
     local_folder_intake,
     local_intake_flow,
+    open_folder,
     visual_note_channel,
     visual_note_job,
 )
@@ -1732,6 +1733,28 @@ def locate_dropped_media(request: Request, payload: dict = Body(None)) -> dict:
         "folder": str(resolved.parent),
         "name": resolved.name,
     }
+
+
+@router.post("/jobs/{task_id}/output-folder/open")
+def open_task_output_folder(task_id: str, request: Request) -> dict:
+    """Show the task's output folder in Explorer or Finder.
+
+    It opens a window on somebody's screen, so only for a request from this
+    machine; and only the folder the task recorded, never a path from the request.
+    """
+    if not request_is_localhost(request):
+        raise HTTPException(status_code=403, detail="只有本机能打开文件夹。")
+    job = get_job(task_id, client_id=local_client_scope(request))
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    folder = open_folder.task_output_folder(job.get("result"))
+    if folder is None:
+        raise HTTPException(status_code=409, detail="这个任务没有放进你文件夹里的产出。")
+    try:
+        open_folder.open_folder(folder)
+    except open_folder.OpenFolderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "path": str(folder)}
 
 
 @router.post("/local/choose-media")
