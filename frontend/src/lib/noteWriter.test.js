@@ -131,9 +131,11 @@ describe('noteExplanation', () => {
         expect(explained.attention).toBe(true);
         expect(explained.rows[0].value).toBe('文本模型（deepseek/deepseek-flash）');
         expect(explained.rows[1].value).toMatch(/只有转录稿/);
-        expect(explained.why).toBe('还没有配置 Anthropic 的 API Key。');
-        expect(explained.fixes).toHaveLength(2);
+        // Said as what happened, not as instructions for a key (owner, 2026-10-18).
+        expect(explained.why).toMatch(/没有配 Claude/);
+        expect(explained.why).not.toMatch(/填入/);
         expect(explained.agentPrompt).toMatch(/get_agent_note_material/);
+        expect(explained.keyOption).toMatch(/Anthropic API Key/);
     });
 
     it('names Claude, the frames cited and the version for a frame note, and asks nothing of the reader', () => {
@@ -145,7 +147,8 @@ describe('noteExplanation', () => {
         expect(explained.rows.map((row) => row.value)).toEqual([
             '本机已登录的 Claude 订阅（opus）', '转录稿和画面，引用了 3 张截图', '剪掉空白后的版本',
         ]);
-        expect(explained.fixes).toEqual([]);
+        expect(explained.agentPrompt).toBe('');
+        expect(explained.keyOption).toBe('');
     });
 
     it('names the agent for a note the agent saved', () => {
@@ -157,5 +160,12 @@ describe('noteExplanation', () => {
 describe('noteExplanation of what the backend records', () => {
     it('names the agent from summary_written_from alone', () => {
         expect(noteExplanation({summary_written_from: 'agent_note'}, 'zh').rows[0].value).toBe('你的 agent');
+    });
+});
+
+describe('noteExplanation of other reasons', () => {
+    it('shows an expired login as it was given', () => {
+        const explained = noteExplanation({summary_written_from: 'text_fallback', note_fallback_reason: '本机 Claude 的登录已过期。'}, 'zh');
+        expect(explained.why).toBe('本机 Claude 的登录已过期。');
     });
 });

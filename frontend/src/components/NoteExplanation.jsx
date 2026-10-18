@@ -101,22 +101,30 @@ const NoteExplanation = ({result, lang}) => {
                         <div className="mt-3 space-y-2 border-t border-[#f0eded] pt-3 text-xs leading-relaxed dark:border-white/[0.08]">
                             <p className="font-bold text-[#8a5a00] dark:text-[#fdb022]">{zh ? '为什么不是 Claude 结合画面写的' : 'Why Claude did not write it from the frames'}</p>
                             <p className="text-[#444] dark:text-white/70">{explanation.why}</p>
-                            <p className="pt-1 font-bold text-[#111111] dark:text-white">{zh ? '想换成结合画面的笔记' : 'To get a note from the frames'}</p>
-                            <ol className="list-decimal space-y-1 pl-4 text-[#444] dark:text-white/70">
-                                {explanation.fixes.map((fix) => <li key={fix}>{fix}</li>)}
-                            </ol>
                             {explanation.agentPrompt && (
-                                <div className="flex items-start gap-2 rounded-[10px] bg-[#f6f5f5] p-2 dark:bg-white/[0.06]">
-                                    <p className="flex-1 select-text whitespace-pre-line break-all text-[11px] text-[#555] dark:text-white/60">{explanation.agentPrompt}</p>
-                                    <button type="button" onClick={copyPrompt} className="shrink-0 rounded-[8px] border border-[#e4e0e0] bg-white px-2 py-1 text-[11px] font-bold text-[#111111] hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white">
-                                        {copied ? (zh ? '已复制' : 'Copied') : (zh ? '复制' : 'Copy')}
+                                <div data-testid="note-explanation-agent" className="space-y-2 rounded-[12px] border border-[#dfe7ff] bg-[#f5f8ff] p-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
+                                    <p className="font-bold text-[#111111] dark:text-white">
+                                        {zh ? '推荐：交给你自己的 agent 结合画面重写' : 'Recommended: have your own agent rewrite it from the frames'}
+                                    </p>
+                                    <p className="text-[#444] dark:text-white/70">
+                                        {zh
+                                            ? '把下面这段发给 Claude Code、Codex、WorkBuddy 等，它用你已有的订阅来写，不用申请 Key；没接入过 FluentFlow 也能照着自己接上。'
+                                            : 'Send this to Claude Code, Codex, WorkBuddy or similar. It writes on the subscription you already have, no key needed, and connects to FluentFlow itself if it has not yet.'}
+                                    </p>
+                                    <p className="max-h-40 select-text overflow-y-auto whitespace-pre-line break-all rounded-[8px] bg-white p-2 text-[11px] text-[#555] dark:bg-white/[0.06] dark:text-white/60">{explanation.agentPrompt}</p>
+                                    <button type="button" onClick={copyPrompt} className="inline-flex h-8 w-full items-center justify-center rounded-[10px] bg-[#111111] text-xs font-bold text-white transition hover:bg-black dark:bg-white dark:text-[#111111]">
+                                        {copied ? (zh ? '已复制，去发给你的 agent' : 'Copied — send it to your agent') : (zh ? '复制这段话' : 'Copy')}
                                     </button>
                                 </div>
                             )}
-                            <Link to="/settings#notes" onClick={() => setOpen(false)} className="inline-flex items-center gap-1 pt-1 font-bold text-[#111111] underline underline-offset-2 dark:text-white">
-                                {zh ? '去设置填 Key' : 'Open Settings'}
-                                <SvgIcon name="open_in_new" className="text-xs"/>
-                            </Link>
+                            {explanation.keyOption && (
+                                <p className="text-[11px] text-[#888] dark:text-white/50">
+                                    {explanation.keyOption}{' '}
+                                    <Link to="/settings#notes" onClick={() => setOpen(false)} className="font-semibold underline underline-offset-2">
+                                        {zh ? '去设置' : 'Settings'}
+                                    </Link>
+                                </p>
+                            )}
                         </div>
                     )}
                 </div>,

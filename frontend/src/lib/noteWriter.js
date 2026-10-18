@@ -177,17 +177,35 @@ export const noteExplanation = (result, lang = 'zh', connection = {}) => {
     if (from === 'debreath_media_note') rows.push({label: zh ? '哪个版本' : 'Version', value: zh ? '剪掉空白后的版本' : 'The cut version'});
     if (from === 'source_media_note') rows.push({label: zh ? '哪个版本' : 'Version', value: zh ? '原片' : 'The original'});
 
-    const reason = String(result?.note_fallback_reason || '').trim();
     return {
         attention: fallback,
         rows,
-        why: fallback ? (reason || (zh ? '这次没连上 Claude。' : 'Claude could not be reached this time.')) : '',
-        fixes: fallback ? (zh
-            ? ['在「设置 → 笔记」填好 Anthropic API Key，再点「重生笔记」。', '或者把下面这句发给你的 agent（Claude Code、Codex 等），用它的订阅结合画面重写。']
-            : ['Add an Anthropic API key under Settings → Notes, then click Regenerate note.', 'Or send this to your agent (Claude Code, Codex, ...) to rewrite it from the frames on its own subscription.'])
-            : [],
+        why: fallback ? fallbackWhy(result, lang) : '',
+        // Your own agent first (owner, 2026-10-18): it is the way to a frame
+        // note on a subscription the person already pays for, and an Anthropic
+        // key is hard to get for most users in China. The key stays, second.
         agentPrompt: fallback ? agentNotePrompt(result, lang, connection) : '',
+        keyOption: fallback ? (zh
+            ? '也可以在「设置 → 笔记」填 Anthropic API Key，让 FluentFlow 自己结合画面写（国内账号一般较难申请）。'
+            : 'Or add an Anthropic API key under Settings → Notes so FluentFlow writes it from the frames itself.')
+            : '',
     };
+};
+
+// Why the text model stood in, said plainly. The backend's reason for a missing
+// key is a set of instructions for configuring one; here that is only the
+// second option, so it is said as what happened. Any other reason (an expired
+// login, a failed call) is shown as it was given.
+const fallbackWhy = (result, lang) => {
+    const zh = lang === 'zh';
+    const reason = String(result?.note_fallback_reason || '').trim();
+    if (!reason) return zh ? '这次没连上 Claude。' : 'Claude could not be reached this time.';
+    if (/Anthropic/.test(reason) && /API Key/i.test(reason) && /(还没有配置|没有配置|not configured|no .*key)/i.test(reason)) {
+        return zh
+            ? 'FluentFlow 自己写结合画面的笔记要用 Claude，这台电脑上没有配 Claude，所以先由文本模型照转录稿代写了。'
+            : 'FluentFlow writes notes from the frames with Claude, and none is set up on this machine, so the text model wrote this one from the transcript.';
+    }
+    return reason;
 };
 
 // Said on the task card: one short line. The reason and what to do about it

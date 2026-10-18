@@ -486,6 +486,10 @@ describe('what the note panel says', () => {
         const panel = screen.getByTestId('note-explanation-panel');
         expect(panel.textContent).toMatch(/只有转录稿/);
         expect(panel.textContent).toMatch(/本机 Claude 的登录已过期。/);
+        // The person's own agent is the first thing offered, the key second.
+        const text = panel.textContent;
+        expect(text.indexOf('交给你自己的 agent')).toBeGreaterThan(-1);
+        expect(text.indexOf('交给你自己的 agent')).toBeLessThan(text.indexOf('Anthropic API Key'));
         // Pressing its text to select or copy it keeps it open (2026-10-18);
         // pressing elsewhere closes it.
         fireEvent.mouseDown(panel.querySelector('dd'));
