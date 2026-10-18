@@ -884,6 +884,21 @@ def append_job_result_list_item(
     return _row_to_dict(updated) if updated else None
 
 
+def list_output_folder_notes(db_path: Path | str = DEFAULT_DB_PATH) -> list[tuple[str, str, float, str]]:
+    """``(task_id, md_path, md_mtime, updated_at)`` of every task whose note
+    sits in an output folder, read from the record only (no results loaded)."""
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path), timeout=10) as conn:
+        rows = conn.execute(
+            "SELECT task_id, json_extract(result_json, '$.output_folder.md_path'),"
+            " json_extract(result_json, '$.output_folder.md_mtime'),"
+            " json_extract(result_json, '$.output_folder.updated_at')"
+            " FROM jobs WHERE json_valid(result_json)"
+            " AND json_extract(result_json, '$.output_folder.md_path') IS NOT NULL"
+        ).fetchall()
+    return [(str(t), str(p), float(m or 0.0), str(u or "")) for t, p, m, u in rows]
+
+
 def cancel_job_steps(
     task_id: str,
     *,

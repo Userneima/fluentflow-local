@@ -421,7 +421,7 @@ def _sync_locked(task_id: str) -> dict[str, Any] | None:
         source = _link_original(task_id, job) if link else original_path(job)
         if source is None:
             return None
-        record = _sync_files(task_id, source, result)
+        record = _sync_files(task_id, source, result, note_changed_at=_timestamp(job.get("updated_at")))
         if link:
             record.update(_deliver_cut(task_id, source, result))
     except Exception as exc:  # noqa: BLE001 - the task is finished whatever this does
@@ -432,7 +432,7 @@ def _sync_locked(task_id: str) -> dict[str, Any] | None:
     return record
 
 
-def _sync_files(task_id: str, source: Path, result: dict[str, Any]) -> dict[str, Any]:
+def _sync_files(task_id: str, source: Path, result: dict[str, Any], note_changed_at: float = 0.0) -> dict[str, Any]:
     folder, suffix = _folder_for(task_id, source)
     process = folder / PROCESS_DIRNAME
     process.mkdir(exist_ok=True)
@@ -463,14 +463,24 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any]) -> dict[str,
                 if not target.exists():
                     shutil.copyfile(path, target)
         md = folder / f"{stem}_{NOTE_LABEL}{suffix}.md"
+        previous = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
+        # The md may have been edited where it sits (in Obsidian) since it was
+        # written: take that in before anything writes over or removes it.
+        taken = _take_in_edits(task_id, md, process / md.name, text.rstrip() + "\n", result, previous,
+                               prefixes=(shots.relative_to(folder).as_posix(), shots.name),
+                               note_changed_at=note_changed_at)
+        if taken is not None:
+            result, note, record["md_taken_in"] = taken
+            text, files = _note_for_folder(task_id, note, shots, relative_to=folder)
         changed = _write_if_changed(md, text.rstrip() + "\n")
         # The copy an earlier version kept in 过程文件 would now be a stale twin.
         (process / md.name).unlink(missing_ok=True)
         record["md_path"] = str(md)
         record["md_hint"] = MD_HINT
+        record["md_written_digest"] = _digest(text.rstrip() + "\n")
+        record["md_mtime"] = md.stat().st_mtime
         pdf = folder / f"{stem}_{NOTE_LABEL}{suffix}.pdf"
         digest = hashlib.sha256(note.encode("utf-8")).hexdigest()
-        previous = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
         if changed or not pdf.is_file() or previous.get("note_digest") != digest:
             record.update(_export_pdf(task_id, folder, f"{stem}_{NOTE_LABEL}{suffix}"))
         else:
@@ -478,6 +488,118 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any]) -> dict[str,
         record["note_digest"] = digest
     record["updated_at"] = datetime.now(timezone.utc).isoformat()
     return record
+
+
+# ── the md edited where it sits ─────────────────────────────────────────────
+#
+# Owner, 2026-10-18: the md beside the PDF is opened and edited in Obsidian,
+# with questions written into it while watching. Whichever side changed last is
+# the note; an empty file never replaces a note; when both changed since the
+# last sync, the one that loses is kept beside the md as a copy, never dropped.
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _stored_form(task_id: str, text: str, prefixes: tuple[str, ...]) -> str:
+    """The note as the task keeps it: each screenshot the folder copy points at
+    (``过程文件/截图/note_0001.jpg``) back to the task's own picture."""
+    def back(match: re.Match[str]) -> str:
+        target = match.group(2)
+        for prefix in prefixes:
+            if prefix and target.startswith(prefix + "/"):
+                name = target[len(prefix) + 1:]
+                if frame_file(task_id, name) is not None:
+                    return f"{match.group(1)}/jobs/{task_id}/artifacts/frame?file={name}{match.group(3)}"
+        return match.group(0)
+
+    return _IMAGE.sub(back, text)
+
+
+def _keep_beside(md: Path, text: str, label: str) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    copy = md.with_name(f"{md.stem}_{label}-{stamp}.md")
+    copy.write_text(text, encoding="utf-8")
+    return copy
+
+
+def _timestamp(raw: Any) -> float:
+    try:
+        return datetime.fromisoformat(str(raw)).timestamp() if raw else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _last_written_at(previous: dict[str, Any]) -> float:
+    """When FluentFlow last wrote the md: recorded since 2026-10-18, else the
+    time of the last sync."""
+    return float(previous.get("md_mtime") or 0.0) or _timestamp(previous.get("updated_at"))
+
+
+def _take_in_edits(
+    task_id: str, md: Path, legacy: Path, would_write: str, result: dict[str, Any], previous: dict[str, Any],
+    *, prefixes: tuple[str, ...], note_changed_at: float = 0.0,
+) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
+    """An edit of the md (or of the copy an earlier version kept in 过程文件),
+    taken into the task as its note. Returns the result and note after taking
+    it in and what happened, or None when there is nothing to take in."""
+    written = previous.get("md_written_digest")
+    note = str(result.get("summary_markdown") or "").strip()
+    note_moved = bool(previous.get("note_digest")) and previous.get("note_digest") != _digest_note(note)
+    for path in (md, legacy):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if text == would_write or (written and _digest(text) == written):
+            continue
+        mtime = path.stat().st_mtime
+        if mtime <= _last_written_at(previous) + 1.0:
+            # Not touched since FluentFlow wrote it: a note that moved on
+            # since then simply replaces it.
+            continue
+        if not text.strip():
+            return None
+        happened: dict[str, Any] = {"from": str(path), "at": datetime.now(timezone.utc).isoformat()}
+        if note_moved and note_changed_at > mtime:
+            # Both changed and the task's note is newer: it stays the note,
+            # and the edit is kept beside the md.
+            happened.update({"kept": "task", "copy": str(_keep_beside(md, text, "Obsidian修改"))})
+            logger.info("md edit of %s older than the task's note; kept beside it", task_id)
+            return result, note, happened
+        if note_moved:
+            happened["copy"] = str(_keep_beside(md, would_write, "FluentFlow版本"))
+        stored = _stored_form(task_id, text, prefixes).strip()
+        after = _with_note(task_id, result, stored)
+        job_store.save_result_changes(task_id, result, after)
+        happened["kept"] = "file"
+        return after, stored, happened
+    return None
+
+
+def _digest_note(note: str) -> str:
+    return hashlib.sha256(note.encode("utf-8")).hexdigest()
+
+
+def _with_note(task_id: str, result: dict[str, Any], note: str) -> dict[str, Any]:
+    """``result`` with ``note`` as its note, recorded as the user's edit (the
+    same fields the page's editor writes)."""
+    from backend.core.result_artifacts import _attach_result_artifacts
+
+    after = dict(result)
+    if not after.get("summary_edited") and not after.get("summary_original_markdown"):
+        after["summary_original_markdown"] = str(result.get("summary_markdown") or "")
+    after.update({
+        "summary_markdown": note,
+        "summary_skipped": False,
+        "summary_status": "completed",
+        "summary_error": None,
+        "summary_edited": True,
+        "summary_edited_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "summary_edited_in": "obsidian",
+    })
+    return _attach_result_artifacts(task_id, after, parts=("summary",))
 
 
 def _deliver_cut(task_id: str, source: Path, result: dict[str, Any]) -> dict[str, Any]:
@@ -562,6 +684,46 @@ def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[st
 
 
 job_store.add_result_listener(_on_result_saved)
+
+# How often the folders are looked at for an md saved elsewhere (Obsidian).
+EDIT_CHECK_SECONDS = 30.0
+_watch_started = False
+
+
+def edited_notes() -> list[str]:
+    """Tasks whose md was saved after FluentFlow last wrote it."""
+    found = []
+    for task_id, md_path, md_mtime, updated_at in job_store.list_output_folder_notes():
+        try:
+            mtime = Path(md_path).stat().st_mtime
+        except OSError:
+            continue
+        if mtime > (md_mtime or _timestamp(updated_at)) + 1.0:
+            found.append(task_id)
+    return found
+
+
+def start_edit_watch() -> None:
+    """Every ``EDIT_CHECK_SECONDS``, sync each task whose md was edited, so an
+    edit in Obsidian reaches the task (and its PDF) without waiting for the
+    note to change in FluentFlow. Started once, at service start."""
+    global _watch_started
+    if _watch_started:
+        return
+    _watch_started = True
+
+    def loop() -> None:
+        import time
+
+        while True:
+            time.sleep(EDIT_CHECK_SECONDS)
+            try:
+                for task_id in edited_notes():
+                    schedule_sync(task_id)
+            except Exception as exc:  # noqa: BLE001 - the next look tries again
+                logger.warning("looking for edited notes failed: %s", exc)
+
+    threading.Thread(target=loop, name="output-folder-edits", daemon=True).start()
 
 
 __all__ = [

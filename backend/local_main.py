@@ -318,6 +318,10 @@ async def lifespan(app: FastAPI):
     stranded_notes = recover_stranded_notes()
     if stranded_notes:
         logger.info("Startup recovery cleared %s stranded visual notes", stranded_notes)
+    # An md note edited in Obsidian comes back into its task.
+    from backend.core import output_folder
+
+    output_folder.start_edit_watch()
     yield
     if resume is not None and not resume.done():
         resume.cancel()
