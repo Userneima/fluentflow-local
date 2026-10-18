@@ -153,11 +153,46 @@ def test_the_old_md_in_process_files_is_taken_in_before_it_is_removed(tmp_path, 
     assert "在旧位置改的" in md.read_text(encoding="utf-8")
 
 
-def test_a_saved_md_is_noticed_without_a_note_change(tmp_path, pdfs):
+def test_a_saved_md_is_noticed_once_it_has_been_left_alone(tmp_path, pdfs):
+    """Obsidian saves every few keystrokes; each take-in exports the PDF, so an
+    md is taken in once nobody has touched it for a minute, not on each save."""
     task, md = _task(tmp_path, NOTE)
     output_folder.sync(task)
     assert task not in output_folder.edited_notes()
 
     _edit(md, md.read_text(encoding="utf-8") + "\n一个疑问？\n")
+    saved_at = md.stat().st_mtime
 
-    assert task in output_folder.edited_notes()
+    assert task not in output_folder.edited_notes(now=saved_at + 10), "still being typed"
+    assert task in output_folder.edited_notes(now=saved_at + output_folder.EDIT_SETTLE_SECONDS + 1)
+
+
+def test_the_version_an_edit_replaces_is_kept_as_the_previous_one(tmp_path, pdfs):
+    task, md = _task(tmp_path, NOTE)
+    output_folder.sync(task)
+    _edit(md, md.read_text(encoding="utf-8") + "\n第一次改。\n")
+    output_folder.sync(task)
+    _edit(md, md.read_text(encoding="utf-8") + "\n第二次改。\n", at=time.time() + 30)
+
+    output_folder.sync(task)
+
+    previous = md.with_name("访谈_笔记_上一版.md")
+    assert "第一次改" in previous.read_text(encoding="utf-8") and "第二次改" not in previous.read_text(encoding="utf-8")
+    assert len(list(md.parent.glob("访谈_笔记_上一版*.md"))) == 1, "one copy, overwritten each time"
+
+
+def test_a_stale_copy_saved_over_a_newer_note_can_be_found_again(tmp_path, pdfs):
+    """Obsidian holds the old note while the task's note changes (an agent writes
+    an answer into it); a keystroke saves the old copy over the new md. The
+    newer note must still be there to find."""
+    task, md = _task(tmp_path, NOTE)
+    output_folder.sync(task)
+    stale = md.read_text(encoding="utf-8")
+    job_store.update_job_result(task, {**_note(task), "summary_markdown": _note(task)["summary_markdown"] + "\n> [!note]- 补充\n> agent 写的回答。\n"})
+    output_folder.sync(task)
+    assert "agent 写的回答" in md.read_text(encoding="utf-8")
+
+    _edit(md, stale + "\n用户在旧副本里打的字。\n", at=time.time() + 30)
+    output_folder.sync(task)
+
+    assert "agent 写的回答" in md.with_name("访谈_笔记_上一版.md").read_text(encoding="utf-8")

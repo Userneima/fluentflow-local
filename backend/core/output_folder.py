@@ -52,7 +52,10 @@ logger = logging.getLogger(__name__)
 MARKER_NAME = ".fluentflow-task"
 PROCESS_DIRNAME = "过程文件"
 # Said wherever the folder is named to the user, so an agent passes it on.
-MD_HINT = "笔记的 md 版推荐用 Obsidian 打开，截图和格式都能直接显示。"
+MD_HINT = (
+    "笔记的 md 版推荐用 Obsidian 打开，截图和格式都能直接显示。在 Obsidian 里改它，停下一分钟后会自动收回 FluentFlow，"
+    "PDF 跟着更新，被替换的那一版存在旁边的「笔记_上一版.md」。在 Obsidian 里粘贴的图片，网页和 PDF 里看不到。"
+)
 SHOTS_DIRNAME = "截图"
 CUT_LABEL = "去气口"
 COMPRESSED_LABEL = "压缩"
@@ -524,6 +527,15 @@ def _keep_beside(md: Path, text: str, label: str) -> Path:
     return copy
 
 
+PREVIOUS_LABEL = "上一版"
+
+
+def _keep_previous(md: Path, text: str) -> Path:
+    copy = md.with_name(f"{md.stem}_{PREVIOUS_LABEL}.md")
+    copy.write_text(text, encoding="utf-8")
+    return copy
+
+
 def _timestamp(raw: Any) -> float:
     try:
         return datetime.fromisoformat(str(raw)).timestamp() if raw else 0.0
@@ -570,6 +582,11 @@ def _take_in_edits(
             return result, note, happened
         if note_moved:
             happened["copy"] = str(_keep_beside(md, would_write, "FluentFlow版本"))
+        # The version the edit replaces, one copy kept and overwritten each
+        # time: an editor holding a stale copy (open in Obsidian while the
+        # task's note changed) can save it over a newer note, and this is
+        # where that newer note is found again.
+        happened["previous"] = str(_keep_previous(md, would_write))
         stored = _stored_form(task_id, text, prefixes).strip()
         after = _with_note(task_id, result, stored)
         job_store.save_result_changes(task_id, result, after)
@@ -687,18 +704,25 @@ job_store.add_result_listener(_on_result_saved)
 
 # How often the folders are looked at for an md saved elsewhere (Obsidian).
 EDIT_CHECK_SECONDS = 30.0
+# Obsidian saves every few keystrokes; an md is taken in once it has been
+# left alone this long, not after every save (each take-in exports the PDF).
+EDIT_SETTLE_SECONDS = 60.0
 _watch_started = False
 
 
-def edited_notes() -> list[str]:
-    """Tasks whose md was saved after FluentFlow last wrote it."""
+def edited_notes(now: float | None = None) -> list[str]:
+    """Tasks whose md was saved after FluentFlow last wrote it and has been
+    left alone for ``EDIT_SETTLE_SECONDS`` since."""
+    import time
+
+    clock = time.time() if now is None else now
     found = []
     for task_id, md_path, md_mtime, updated_at in job_store.list_output_folder_notes():
         try:
             mtime = Path(md_path).stat().st_mtime
         except OSError:
             continue
-        if mtime > (md_mtime or _timestamp(updated_at)) + 1.0:
+        if mtime > (md_mtime or _timestamp(updated_at)) + 1.0 and clock - mtime >= EDIT_SETTLE_SECONDS:
             found.append(task_id)
     return found
 
