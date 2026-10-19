@@ -1079,6 +1079,27 @@ def note_title(job: dict[str, Any] | None) -> str:
     ) or display_title_for_user(job.get("source_filename"))
 
 
+def with_known_people(part, drafts):
+    """The part, told whom the parts before it named and what they called them.
+
+    A three-hour interview names its guest in the opening minute and never
+    again; written alone, the later parts called her 「受访者」 while the first
+    called her by name (2026-10-19). Earlier lines win where two parts list the
+    same name, so a later part cannot rename someone.
+    """
+    known: dict[str, str] = {}
+    for draft in drafts:
+        for line in (getattr(draft, "people", "") or "").splitlines():
+            line = line.strip().lstrip("-• ").strip()
+            if not line:
+                continue
+            name = re.split(r"[：:]", line, maxsplit=1)[0].strip()
+            known.setdefault(name, line)
+    if not known:
+        return part
+    return replace(part, known_people="\n".join(known.values()))
+
+
 def _joined_draft(drafts, parts, *, title: str = ""):
     """One note out of the parts, without paying a model to staple them together.
 
@@ -1242,6 +1263,7 @@ def _run_visual_note(
         drafts = []
         coverage_parts = []
         for part in parts:
+            part = with_known_people(part, drafts)
             part_frames = claude_vision.frames_for_part(frames, part)
             if len(parts) > 1:
                 _store(

@@ -760,6 +760,7 @@ def write_visual_note(
     return VisualNoteDraft(
         markdown=markdown,
         basis_note=basis,
+        people=str(parsed.get("people") or "").strip(),
         model=_model_that_wrote(payload) or chosen_model,
         frames_sent=picked,
         # Everything attached was in the model's context, provably, because this

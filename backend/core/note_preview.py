@@ -75,10 +75,12 @@ def draft_with_rules(
     frames = _existing_frames(task_id, result) if media.has_video else []
     write = writer if writer is not None else channel.write
     parts = claude_vision.transcript_parts(transcript)
-    drafts = [
-        vn._checked_draft(write, part, claude_vision.frames_for_part(frames, part), api_key=api_key, rules=rules)
-        for part in parts
-    ]
+    drafts = []
+    for part in parts:
+        part = vn.with_known_people(part, drafts)
+        drafts.append(
+            vn._checked_draft(write, part, claude_vision.frames_for_part(frames, part), api_key=api_key, rules=rules)
+        )
     draft = vn._joined_draft(drafts, parts, title=vn.note_title(job))
     return SkillDraft(
         label=label,

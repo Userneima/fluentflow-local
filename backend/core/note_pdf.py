@@ -72,6 +72,11 @@ def _browser() -> str | None:
 
 
 _LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s")
+# Obsidian's callout, 「> [!question] 标题」: the reader's own questions and the
+# answers added later. Python-Markdown would print 「[!question]」 as text.
+_CALLOUT = re.compile(r"^(\s*>\s*)\[!(\w+)\][+-]?\s*(.*)$")
+_CALLOUT_LABELS = {"question": "问题", "note": "补充", "info": "补充", "tip": "提示",
+                   "quote": "引用", "warning": "注意", "summary": "小结"}
 
 
 def _markdown_for_print(text: str) -> str:
@@ -92,6 +97,13 @@ def _markdown_for_print(text: str) -> str:
         if fenced:
             out.append(line)
             continue
+        callout = _CALLOUT.match(line)
+        if callout:
+            prefix, kind, heading = callout.groups()
+            label = _CALLOUT_LABELS.get(kind.lower(), kind)
+            heading = "" if heading.strip() == label else heading
+            # Two trailing spaces: the body under the heading starts a new line.
+            line = f"{prefix}**{label}**" + (f"　{heading}" if heading else "") + "  "
         item = _LIST_ITEM.match(line)
         if item:
             indent = item.group(1).replace("\t", "    ")

@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.core import note_skills
+from backend.core.cut_timeline import SPEAKER_LABEL_PREAMBLE
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,11 @@ class TranscriptPart:
     total: int
     starts_at: str = ""
     ends_at: str = ""
+    # Who the earlier parts named, and what they called them, as the earlier
+    # drafts reported it. Filled in just before this part is written: parts are
+    # written in order, and a guest named in the opening minutes is not named
+    # again two hours later, so a later part on its own calls her 「受访者」.
+    known_people: str = ""
 
     @property
     def only_part(self) -> bool:
@@ -181,11 +187,20 @@ def transcript_parts(transcript: str, *, max_chars: int | None = None) -> list[T
     text = (transcript or "").strip()
     if not text:
         return []
-    if len(text) <= max_chars:
+    # The rule for speaker labels sits in front of the whole transcript. Split
+    # as text it would reach the first part only, and the later parts would
+    # meet 「说话人 A」 lines with no word on what to do with them.
+    preamble = ""
+    if text.startswith(SPEAKER_LABEL_PREAMBLE.strip()):
+        preamble = SPEAKER_LABEL_PREAMBLE
+        text = text[len(SPEAKER_LABEL_PREAMBLE.strip()):].strip()
+    if len(text) + len(preamble) <= max_chars:
+        text = preamble + text
         return [TranscriptPart(text=text, index=1, total=1,
                                starts_at=_first_stamp(text), ends_at=_last_stamp(text))]
     chunks: list[str] = []
     remaining = text
+    max_chars = max(1, max_chars - len(preamble))
     while remaining:
         if len(remaining) <= max_chars:
             chunks.append(remaining)
@@ -198,7 +213,7 @@ def transcript_parts(transcript: str, *, max_chars: int | None = None) -> list[T
     total = len(chunks)
     return [
         TranscriptPart(
-            text=chunk,
+            text=preamble + chunk,
             index=position,
             total=total,
             starts_at=_first_stamp(chunk),
@@ -281,6 +296,12 @@ def part_instruction(part: TranscriptPart) -> str:
         "不要提「上一部分」或「接下来」——这些会和别的部分重复。\n"
         "- 从二级标题开始写，不要写一级标题：整篇的标题由合并时统一给。\n"
         "- 这一部分开头可能接着上一部分的话说到一半，照常写你看到的内容，不用解释缺了前文。"
+        + (
+            "\n- 前面几部分已经认出的人和笔记里对他们的称呼如下。这一部分说到同一个人，用同一个称呼，"
+            "不另换「受访者」「嘉宾」「讲者」这类统称：\n" + part.known_people.strip()
+            if part.known_people.strip()
+            else ""
+        )
     )
 
 
@@ -324,8 +345,12 @@ NOTE_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "一两句话说明这份笔记的依据：哪些部分靠画面、哪些只有字幕、有没有看不清或没信息的截图。",
         },
+        "people": {
+            "type": "string",
+            "description": "笔记里写到的说话人，一行一个：「笔记里的称呼：身份，以及转录稿里的标号（有的话）」，比如「小王：主持人，说话人 A」。没有可写的就留空。",
+        },
     },
-    "required": ["note_markdown", "basis_note"],
+    "required": ["note_markdown", "basis_note", "people"],
     "additionalProperties": False,
 }
 
@@ -384,6 +409,9 @@ class VisualNoteDraft:
     markdown: str
     basis_note: str
     model: str
+    # The people this draft wrote about and what it called them, one per line,
+    # as the model reported it. Handed to the next part (``known_people``).
+    people: str = ""
     frames_sent: list[FrameInput] = field(default_factory=list)
     # Which of them the model actually opened, when the channel can tell. The
     # key channel attaches its pictures, so everything sent was seen and this
@@ -640,6 +668,7 @@ def write_visual_note(
     return VisualNoteDraft(
         markdown=markdown,
         basis_note=str(payload.get("basis_note") or "").strip(),
+        people=str(payload.get("people") or "").strip(),
         model=chosen_model,
         frames_sent=picked,
         transcript_chars=len(text),

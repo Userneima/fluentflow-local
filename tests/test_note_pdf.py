@@ -44,3 +44,16 @@ def test_a_list_right_under_a_sentence_stays_a_list():
 
     assert page.count("<li>") == 3
     assert "<ul>" in page
+
+
+def test_an_obsidian_callout_prints_as_a_labelled_quote():
+    """A reader's 「> [!question]」 and the answer added under it print as a quote
+    with a plain label, not as the literal 「[!question]」."""
+    page = np_.markdown.markdown(np_._markdown_for_print(
+        "正文。\n\n> [!question] 这是什么意思？\n\n> [!note] 补充\n> 答案在这里。\n"
+    ))
+    assert "[!" not in page
+    assert "<blockquote>" in page
+    assert "<strong>补充</strong><br />" in page, "a heading that repeats the label is not printed twice"
+    assert "<strong>问题</strong>　这是什么意思？" in page
+    assert "答案在这里。" in page
