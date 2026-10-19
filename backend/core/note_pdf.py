@@ -76,7 +76,7 @@ _LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s")
 # answers added later. Python-Markdown would print 「[!question]」 as text.
 _CALLOUT = re.compile(r"^(\s*>\s*)\[!(\w+)\][+-]?\s*(.*)$")
 _CALLOUT_LABELS = {"question": "问题", "note": "补充", "info": "补充", "tip": "提示",
-                   "quote": "引用", "warning": "注意", "summary": "小结"}
+                   "quote": "引用", "warning": "注意", "summary": "小结", "todo": "待办"}
 
 
 def _markdown_for_print(text: str) -> str:
