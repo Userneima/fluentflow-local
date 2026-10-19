@@ -57,3 +57,12 @@ def test_an_obsidian_callout_prints_as_a_labelled_quote():
     assert "<strong>补充</strong><br />" in page, "a heading that repeats the label is not printed twice"
     assert "<strong>问题</strong>　这是什么意思？" in page
     assert "答案在这里。" in page
+
+
+def test_a_link_to_a_heading_prints_as_its_words():
+    """On paper a 「[[#标题|第五章]]」 link keeps its words and loses the brackets."""
+    page = np_.markdown.markdown(np_._markdown_for_print(
+        "> [!tip] 这部分在[[#五、Agent 怎么\"自学习\"|第五章]]，另见[[#失败和停训]]。\n"
+    ))
+    assert "[[" not in page and "]]" not in page
+    assert "第五章" in page and "失败和停训" in page

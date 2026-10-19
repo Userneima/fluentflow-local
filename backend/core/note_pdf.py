@@ -75,6 +75,9 @@ _LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s")
 # Obsidian's callout, 「> [!question] 标题」: the reader's own questions and the
 # answers added later. Python-Markdown would print 「[!question]」 as text.
 _CALLOUT = re.compile(r"^(\s*>\s*)\[!(\w+)\][+-]?\s*(.*)$")
+# Obsidian's link to a heading in the same note, 「[[#五、标题|第五章]]」: the
+# reader clicks it in Obsidian; on paper only the words can stay.
+_HEADING_LINK = re.compile(r"\[\[#([^\]|]+)(?:\|([^\]]+))?\]\]")
 _CALLOUT_LABELS = {"question": "问题", "note": "补充", "info": "补充", "tip": "提示",
                    "quote": "引用", "warning": "注意", "summary": "小结", "todo": "待办"}
 
@@ -97,6 +100,7 @@ def _markdown_for_print(text: str) -> str:
         if fenced:
             out.append(line)
             continue
+        line = _HEADING_LINK.sub(lambda m: m.group(2) or m.group(1), line)
         callout = _CALLOUT.match(line)
         if callout:
             prefix, kind, heading = callout.groups()
