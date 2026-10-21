@@ -18,10 +18,24 @@ The command sequence (checked against lark-cli 1.0.70 and its embedded
 
 A screenshot that fails to upload does not fail the export; the counts come
 back as ``image_count`` / ``image_upload_count`` / ``image_upload_errors``.
+
+The note is written as ``feishu_note.to_feishu`` prepares it (callouts as
+Feishu callouts, tables kept as tables: lark-cli's markdown import renders
+them, checked 2026-10-21). After the pictures:
+
+3. ``docs +fetch --scope outline --detail with-ids`` for the headings' block
+   ids, then one ``docs +update --command str_replace --doc-format markdown``
+   per link to a heading of the note, swapping its placeholder for the
+   document's own link to that heading.
+
+What the document now holds comes back as ``sync``: the document, its
+revision after these writes, the note's digest, and which Feishu file each
+screenshot became. It is what keeping the two copies in step starts from.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -32,7 +46,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
-from backend.core.feishu_markdown import normalize_markdown_for_feishu
+from backend.core import feishu_note
 from backend.core.lark_exporter import _resolve_markdown_artifact_image
 
 logger = logging.getLogger(__name__)
@@ -264,8 +278,9 @@ def export_markdown_via_lark_cli(
         )
 
     space = (wiki_space or os.environ.get("FLUENTFLOW_LARK_CLI_WIKI_SPACE") or "").strip() or DEFAULT_WIKI_SPACE
+    prepared = feishu_note.to_feishu(markdown)
     export_markdown, pending, missing = _prepare_images(
-        normalize_markdown_for_feishu(markdown),
+        prepared.markdown,
         task_id=task_id,
         artifact_root=artifact_root,
     )
@@ -298,13 +313,14 @@ def export_markdown_via_lark_cli(
 
     uploaded = 0
     errors: List[str] = list(missing)
+    images: List[dict[str, Any]] = []
     for item in pending:
         if not doc_id:
             errors.append(item["src"])
             continue
         path: Path = item["path"]
         try:
-            _run(
+            inserted = _run(
                 runner,
                 [
                     bin_path, "docs", "+media-insert",
@@ -318,9 +334,27 @@ def export_markdown_via_lark_cli(
                 cwd=path.parent,
             )
             uploaded += 1
+            images.append({
+                "src": item["src"],
+                "name": path.name,
+                "file_token": inserted.get("file_token"),
+                "block_id": inserted.get("block_id"),
+            })
         except LarkCliError as exc:
             logger.warning("lark-cli image insert skipped for %s: %s", path.name, exc)
             errors.append(item["src"])
+
+    sync = {
+        "doc_id": doc_id or None,
+        "url": doc_url,
+        "revision_id": document.get("revision_id"),
+        "note_digest": hashlib.sha256((markdown or "").encode("utf-8")).hexdigest(),
+        "images": images,
+        "headings": {},
+        "link_errors": [],
+    }
+    if doc_id:
+        _link_headings(runner, bin_path, doc_id, doc_url, prepared.links, sync)
 
     return {
         "ok": True,
@@ -328,12 +362,62 @@ def export_markdown_via_lark_cli(
         "doc_token": doc_id or None,
         "doc_id": doc_id or None,
         "via": "lark_cli",
-        "markdown_format": "feishu_normalized",
+        "markdown_format": "feishu_note",
         "wiki_space": space,
         "image_count": len(pending) + len(missing),
         "image_upload_count": uploaded,
         "image_upload_errors": errors,
+        "sync": sync,
     }
+
+
+def _link_headings(
+    runner: Runner,
+    bin_path: str,
+    doc_id: str,
+    doc_url: str,
+    links: List[feishu_note.HeadingLink],
+    sync: dict[str, Any],
+) -> None:
+    """Point each link to a heading at that heading in the document, and note
+    the headings' block ids and the revision on ``sync``. A link that cannot be
+    fixed keeps its words and is listed; the document stands either way."""
+    try:
+        outline = _run(
+            runner,
+            [bin_path, "docs", "+fetch", "--doc", doc_id, "--scope", "outline",
+             "--detail", "with-ids", "--as", "user"],
+            timeout=60,
+        )
+    except LarkCliError as exc:
+        logger.warning("lark-cli outline fetch failed for %s: %s", doc_id, exc)
+        sync["link_errors"] = [link.label for link in links]
+        return
+    fetched = outline.get("document") if isinstance(outline.get("document"), dict) else outline
+    sync["headings"] = feishu_note.headings(str(fetched.get("content") or ""))
+    if fetched.get("revision_id") is not None:
+        sync["revision_id"] = fetched.get("revision_id")
+    base = doc_url.split("#", 1)[0]
+    for link in links:
+        block_id = sync["headings"].get(feishu_note.heading_key(link.heading))
+        target = f"[{link.label}]({base}#{block_id})" if block_id else link.label
+        try:
+            updated = _run(
+                runner,
+                [bin_path, "docs", "+update", "--doc", doc_id, "--command", "str_replace",
+                 "--doc-format", "markdown", "--pattern", f"[{link.label}]({link.placeholder})",
+                 "--content", target, "--as", "user"],
+                timeout=60,
+            )
+        except LarkCliError as exc:
+            logger.warning("lark-cli could not link %s in %s: %s", link.label, doc_id, exc)
+            sync["link_errors"].append(link.label)
+            continue
+        if not block_id or updated.get("result") not in (None, "success"):
+            sync["link_errors"].append(link.label)
+        revision = (updated.get("document") or {}).get("revision_id") if isinstance(updated.get("document"), dict) else None
+        if revision is not None:
+            sync["revision_id"] = revision
 
 
 __all__ = [

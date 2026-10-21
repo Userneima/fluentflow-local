@@ -51,10 +51,12 @@ def _fail(error: dict, code: int = 1) -> subprocess.CompletedProcess:
 
 
 class FakeCli:
-    def __init__(self, *, create=None, insert=None):
+    def __init__(self, *, create=None, insert=None, outline="", replace=None):
         self.calls: list[dict] = []
-        self._create = create or (lambda: _ok({"document": {"document_id": DOC_ID, "url": DOC_URL}}))
-        self._insert = insert or (lambda call: _ok({"document_id": DOC_ID, "block_id": "blk1"}))
+        self._create = create or (lambda: _ok({"document": {"document_id": DOC_ID, "url": DOC_URL, "revision_id": 3}}))
+        self._insert = insert or (lambda call: _ok({"document_id": DOC_ID, "block_id": "blk1", "file_token": "file1"}))
+        self._outline = outline
+        self._replace = replace or (lambda call: _ok({"document": {"revision_id": 9}, "result": "success"}))
 
     def __call__(self, cmd, **kwargs):
         call = {"cmd": list(cmd), "input": kwargs.get("input"), "cwd": kwargs.get("cwd")}
@@ -63,6 +65,10 @@ class FakeCli:
             return self._create()
         if cmd[1:3] == ["docs", "+media-insert"]:
             return self._insert(call)
+        if cmd[1:3] == ["docs", "+fetch"]:
+            return _ok({"document": {"document_id": DOC_ID, "revision_id": 5, "content": self._outline}})
+        if cmd[1:3] == ["docs", "+update"]:
+            return self._replace(call)
         raise AssertionError(f"unexpected command {cmd}")
 
     def of(self, verb: str) -> list[dict]:
