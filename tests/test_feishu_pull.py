@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 import backend.core.lark_cli_exporter as cli
-from backend.core import feishu_sync, job_store, note_versions
+from backend.core import feishu_sync, job_store, note_versions, output_folder
 from backend.core.storage_paths import _artifact_storage_dir
 from tests.test_feishu_chapter_update import URL, FakeDoc
 
@@ -57,6 +57,12 @@ NOTE = """# 访谈
 def _quiet(monkeypatch):
     monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
     monkeypatch.setattr(feishu_sync, "schedule_push_when_quiet", lambda task_id, delay=None: None)
+    # The output folder's own delayed refresh would fire a minute later, in
+    # the middle of other tests, and save these notes again.
+    monkeypatch.setattr(output_folder, "schedule_sync_when_quiet", lambda task_id: None)
+
+
+_CREATED: list[str] = []
 
 
 @pytest.fixture
@@ -64,11 +70,16 @@ def doc(monkeypatch):
     doc = FakeDoc()
     real = cli.export_markdown_via_lark_cli
     monkeypatch.setattr(cli, "export_markdown_via_lark_cli", lambda *a, **k: real(*a, **{**k, "runner": doc}))
-    return doc
+    yield doc
+    # Notes these tests edit would otherwise count as the user's own edits for
+    # every later test that reads them (the note style loop reads eight at a time).
+    job_store.delete_jobs(_CREATED)
+    _CREATED.clear()
 
 
 def _task(doc: FakeDoc, tmp_path: Path) -> tuple[str, Path]:
     task_id = f"fp-{uuid.uuid4().hex[:8]}"
+    _CREATED.append(task_id)
     frames = _artifact_storage_dir() / task_id / "frames"
     frames.mkdir(parents=True, exist_ok=True)
     (frames / "note_0001.jpg").write_bytes(b"jpeg")
@@ -160,37 +171,64 @@ def test_the_note_is_kept_before_it_is_replaced_and_not_pushed_back(doc, tmp_pat
     assert len(doc.writes) == writes, "nothing written back to Feishu"
 
 
-def test_both_changed_and_feishu_later_takes_feishus_and_keeps_the_note_beside(doc, tmp_path):
-    task, md = _task(doc, tmp_path)
+def _edit_note(task: str, old: str, new: str) -> None:
     result = job_store.get_job(task)["result"]
-    job_store.update_job_result(task, {**result, "summary_markdown": _note(task).replace("开场的话", "本地改的开场"),
-                                       "summary_edited_at": "2020-01-01T00:00:00+00:00"})
+    job_store.update_job_result(task, {**result, "summary_markdown": result["summary_markdown"].replace(old, new)})
+
+
+def test_both_changed_in_different_chapters_keeps_both_everywhere(doc, tmp_path):
+    task, md = _task(doc, tmp_path)
+    _edit_note(task, "开场的话", "本地改的开场")
+    doc.edit("结尾的话", "飞书里改的结尾")
+
+    _pull(task, doc)
+
+    assert "本地改的开场" in _note(task) and "飞书里改的结尾" in _note(task)
+    texts = doc.texts()
+    assert any("本地改的开场" in t for t in texts) and any("飞书里改的结尾" in t for t in texts)
+    assert not list(md.parent.glob("访谈_笔记_*修改-*.md")), "nothing lost, nothing to keep beside"
+
+
+def test_a_chapter_changed_on_both_sides_and_last_in_feishu_takes_feishus(doc, tmp_path):
+    task, md = _task(doc, tmp_path)
+    _edit_note(task, "结尾的话", "本地改的结尾")
     feishu_sync._NOTE_CHANGED_AT[task] = 0.0
     doc.edit("结尾的话", "飞书里改的结尾")
 
     _pull(task, doc)
 
-    assert "飞书里改的结尾" in _note(task) and "本地改的开场" not in _note(task)
+    assert "飞书里改的结尾" in _note(task) and "本地改的结尾" not in _note(task)
     beside = list(md.parent.glob("访谈_笔记_本地修改-*.md"))
-    assert beside and "本地改的开场" in beside[0].read_text(encoding="utf-8")
+    assert beside and "本地改的结尾" in beside[0].read_text(encoding="utf-8")
 
 
-def test_both_changed_and_the_note_later_keeps_the_note_everywhere(doc, tmp_path):
+def test_a_chapter_changed_on_both_sides_and_last_in_the_note_keeps_the_notes(doc, tmp_path):
     task, md = _task(doc, tmp_path)
     doc.edit("结尾的话", "飞书里改的结尾")
-    result = job_store.get_job(task)["result"]
-    job_store.update_job_result(task, {**result, "summary_markdown": _note(task).replace("开场的话", "本地改的开场")})
+    _edit_note(task, "结尾的话", "本地改的结尾")
     feishu_sync._NOTE_CHANGED_AT[task] = time.time() + 10_000
 
-    assert _pull(task, doc) == "kept_note"
+    _pull(task, doc)
 
-    assert "本地改的开场" in _note(task) and "飞书里改的结尾" not in _note(task)
+    assert "本地改的结尾" in _note(task)
     texts = doc.texts()
-    assert any("本地改的开场" in t for t in texts)
-    assert not any("飞书里改的结尾" in t for t in texts), "the chapter edited in Feishu gets the note's text"
-    assert any("结尾的话" in t for t in texts)
+    assert any("本地改的结尾" in t for t in texts) and not any("飞书里改的结尾" in t for t in texts)
     beside = list(md.parent.glob("访谈_笔记_飞书修改-*.md"))
     assert beside and "飞书里改的结尾" in beside[0].read_text(encoding="utf-8")
+
+
+def test_a_push_brings_in_feishus_edits_first_instead_of_burying_them(doc, tmp_path):
+    """The owner edited in Obsidian while an edit made in Feishu was waiting to
+    come back; the push recorded the document as pushed and the Feishu edit
+    never reached the note."""
+    task, _ = _task(doc, tmp_path)
+    doc.edit("结尾的话", "飞书里改的结尾")
+    _edit_note(task, "开场的话", "本地改的开场")
+
+    feishu_sync.push(task, runner=doc)
+
+    assert "飞书里改的结尾" in _note(task) and "本地改的开场" in _note(task)
+    assert any("本地改的开场" in t for t in doc.texts())
 
 
 def test_a_deleted_document_stops_the_syncing(doc, tmp_path):

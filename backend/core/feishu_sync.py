@@ -15,8 +15,10 @@ From then on:
   no longer look as they did after the push are written back into the note,
   in the note's own way (``feishu_note.from_feishu``); the other chapters keep
   the note's text as it was pushed.
-- When both sides changed, the later change is the note; the other version is
-  kept beside the md. Before either side is replaced, the version replaced is
+- When both sides changed, each chapter changed on one side only takes that
+  side's version; a chapter changed on both goes to the later change, and the
+  other version of the whole note is kept beside the md. A push first brings
+  in edits made in Feishu since the last one. Before either side is replaced, the version replaced is
   kept among the note's versions (``note_versions``).
 - A document deleted in Feishu, or no longer open to the user, stops the
   syncing of that note with the reason on the task; nothing is recreated.
@@ -118,7 +120,7 @@ def _stop(task_id: str, error: Exception) -> None:
     _record(task_id, lark_response={**response, "sync": sync}, lark_sync_error=reason)
 
 
-def push(task_id: str, *, previous: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = subprocess.run) -> Any:
     """Bring the task's Feishu document up to date with its note. Returns the
     export response, or None when there was nothing to do. Never raises: a
     failure is recorded on the task as ``lark_sync_error``. ``previous``
@@ -136,11 +138,18 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None) -> dict[str, A
     note = str(result.get("summary_markdown") or "")
     if not note.strip() or (previous is None and note_digest(note) == sync.get("note_digest")):
         return None
+    if previous is None:
+        # Edits made in Feishu since the last push come in first; writing over
+        # the document now would record them as pushed and never bring them back.
+        cli, bin_path = _cli()
+        modified = cli.modified_times(runner, bin_path, [str(sync["doc_id"])]).get(str(sync["doc_id"]))
+        if modified is not None and modified > int(sync.get("feishu_modified_at") or 0):
+            return pull(task_id, modified_at=modified, runner=runner)
     title = str(result.get("lark_doc_title") or "") or resolve_lark_doc_title(note, filename_stem="", form_title=None)
     try:
         response = export_markdown_via_lark_cli(
             title, note, task_id=task_id, artifact_root=_artifact_storage_dir(),
-            previous=sync, keep_feishu=keeper(task_id, result),
+            previous=sync, keep_feishu=keeper(task_id, result), runner=runner,
         )
     except Exception as exc:  # noqa: BLE001 - the note itself is fine
         if _gone(exc):
@@ -303,60 +312,127 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     def back(part: feishu_note.Section) -> str:
         return feishu_note.from_feishu(part.text, way)
 
-    merged: list[str] = []
+    # The note as Feishu now has it: the pushed note with the chapters edited
+    # in Feishu laid over it. A chapter is known by its heading words and
+    # which occurrence of them it is.
+    old_ids = _occurrences([r.get("key") for r in old])
+    current_ids = _occurrences([r.get("key") for r in current])
+    feishu_side: list[tuple[tuple[str, int], str]] = []
+    feishu_changed: set[tuple[str, int]] = set()
     for tag, i1, i2, j1, j2 in opcodes:
         if tag == "equal":
             for i, j in zip(range(i1, i2), range(j1, j2)):
                 same = old[i]["digest"] == current[j]["digest"]
-                merged.append(base[i].text if same and lined_up else back(feishu_parts[j]))
+                feishu_side.append((current_ids[j], base[i].text if same and lined_up else back(feishu_parts[j])))
+                if not same:
+                    feishu_changed.add(current_ids[j])
         else:
-            merged.extend(back(feishu_parts[j]) for j in range(j1, j2))
-    from_feishu = "\n\n".join(text.strip("\n") for text in merged if text.strip()) + "\n"
+            feishu_changed.update(old_ids[i] for i in range(i1, i2))
+            for j in range(j1, j2):
+                feishu_side.append((current_ids[j], back(feishu_parts[j])))
+                feishu_changed.add(current_ids[j])
+    from_feishu = _joined(text for _, text in feishu_side)
+
+    # The note's own changes since the push, chapter by chapter.
+    note = str(result.get("summary_markdown") or "")
+    note_changed = cli.note_digest(note) != sync.get("note_digest")
+    local_parts = feishu_note.sections(note)
+    local_ids = _occurrences([part.key for part in local_parts])
+    local_text = dict(zip(local_ids, (part.text for part in local_parts)))
+    base_text = dict(zip(_occurrences([part.key for part in base]), (part.text for part in base))) if lined_up else {}
+    if not note_changed:
+        local_changed: set[tuple[str, int]] = set()
+    elif lined_up:
+        local_changed = {cid for cid in local_ids if base_text.get(cid) != local_text[cid]}
+        local_changed |= {cid for cid in base_text if cid not in local_text}
+    else:
+        local_changed = set(local_ids)
+    feishu_later = float(modified_at or 0) > _local_changed_at(task_id, result)
+    conflicts = local_changed & feishu_changed
+
+    # Each side's chapters where only it changed them; a chapter changed on
+    # both sides goes to the later change.
+    merged: list[tuple[tuple[str, int], str]] = []
+    from_note: set[tuple[str, int]] = set()
+    for cid, text in feishu_side:
+        if cid in local_changed and not (cid in conflicts and feishu_later):
+            if cid in local_text:
+                merged.append((cid, local_text[cid]))
+                from_note.add(cid)
+            continue
+        merged.append((cid, text))
+    placed = {cid for cid, _ in merged}
+    for position, cid in enumerate(local_ids):
+        if cid in placed:
+            continue
+        if cid in base_text and (cid not in local_changed or feishu_later):
+            continue  # removed in Feishu, and the note did not change it later
+        before = next((local_ids[k] for k in range(position - 1, -1, -1) if local_ids[k] in placed), None)
+        at = 0 if before is None else [c for c, _ in merged].index(before) + 1
+        merged.insert(at, (cid, local_text[cid]))
+        placed.add(cid)
+        from_note.add(cid)
+    merged_note = _joined(text for _, text in merged)
+
+    if conflicts:
+        if feishu_later:
+            _keep_beside(task_id, result, note, "本地修改")
+        else:
+            _keep_beside(task_id, result, from_feishu, "飞书修改")
 
     outline = cli._run(runner, [bin_path, "docs", "+fetch", "--doc", doc_id, "--scope", "outline",
                                 "--detail", "with-ids", "--as", "user"], timeout=60)
     outline_doc = outline.get("document") if isinstance(outline.get("document"), dict) else outline
     heading_ids = feishu_note.heading_list(str(outline_doc.get("content") or ""))
-    note = str(result.get("summary_markdown") or "")
-    note_changed = cli.note_digest(note) != sync.get("note_digest")
+    merged_digests = dict(zip(
+        _occurrences([part.key for part in feishu_note.sections(merged_note)]),
+        (part.digest for part in feishu_note.sections(merged_note)),
+    ))
+    # What the document holds, chapter by chapter, as the next push sees it: a
+    # chapter that now has the note's text, or that the note no longer has, is
+    # out of date and gets rewritten or removed.
+    feishu_records = feishu_note.section_records(feishu_parts, heading_ids)
+    for cid, record in zip(current_ids, feishu_records):
+        record["digest"] = None if cid in from_note else merged_digests.get(cid)
 
-    if note_changed and _local_changed_at(task_id, result) >= float(modified_at or 0):
-        # Both changed and the note's change is the later one: the note stays,
-        # the Feishu version is kept beside the md, and the push rewrites the
-        # chapters edited in Feishu as well as the note's own.
-        _keep_beside(task_id, result, from_feishu, "飞书修改")
-        feishu_records = feishu_note.section_records(feishu_parts, heading_ids)
-        for tag, i1, i2, j1, j2 in opcodes:
-            for j in range(j1, j2):
-                i = i1 + (j - j1) if tag == "equal" else None
-                unchanged = i is not None and old[i]["digest"] == current[j]["digest"] and lined_up
-                feishu_records[j]["digest"] = records[i]["digest"] if unchanged else None
-        settle()
-        forced = {**recorded_sync(job_store.get_job(task_id)["result"]), "sections": feishu_records}
-        push(task_id, previous=forced)
-        return "kept_note"
-
-    # Feishu's change is the note now. What it replaces is kept first.
-    md = _note_md(task_id, result)
-    note_versions.keep(md, note, note_versions.TASK)
-    if note_changed:
-        _keep_beside(task_id, result, note, "本地修改")
-    after = _with_note(task_id, result, from_feishu)
-    cli.save_pushed_note(_artifact_storage_dir(), task_id, from_feishu)
+    pulled = merged_note != note
+    if pulled:
+        note_versions.keep(_note_md(task_id, result), note, note_versions.TASK)
     settled = {
         **sync,
         "feishu_sections": current,
-        "note_digest": cli.note_digest(from_feishu),
-        "sections": feishu_note.section_records(feishu_note.sections(from_feishu), heading_ids),
+        "note_digest": cli.note_digest(merged_note),
+        "sections": feishu_records,
         "headings": feishu_note.headings(str(outline_doc.get("content") or "")),
     }
     if modified_at is not None:
         settled["feishu_modified_at"] = modified_at
+    cli.save_pushed_note(_artifact_storage_dir(), task_id, from_feishu)
+    after = _with_note(task_id, result, merged_note) if pulled else dict(result)
     after["lark_response"] = {**response, "sync": settled}
     after["lark_sync_error"] = None
-    after["lark_pulled_at"] = datetime.now(timezone.utc).isoformat()
+    if pulled:
+        after["lark_pulled_at"] = datetime.now(timezone.utc).isoformat()
     job_store.save_result_changes(task_id, result, after)
-    return "pulled"
+    if from_note or any(record["digest"] is None for record in feishu_records):
+        push(task_id, previous=settled, runner=runner)
+    return "pulled" if pulled else "kept_note"
+
+
+def _occurrences(keys: list[Any]) -> list[tuple[str, int]]:
+    """Each heading's words with which occurrence of them it is, so two
+    chapters with the same heading stay apart."""
+    seen: dict[str, int] = {}
+    found: list[tuple[str, int]] = []
+    for key in keys:
+        count = seen.get(str(key), 0)
+        seen[str(key)] = count + 1
+        found.append((str(key), count))
+    return found
+
+
+def _joined(texts: Any) -> str:
+    return "\n\n".join(text.strip("\n") for text in texts if text.strip()) + "\n"
 
 
 def check_feishu(now: float | None = None, runner: Any = subprocess.run) -> list[str]:
