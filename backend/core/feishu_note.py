@@ -21,9 +21,12 @@ What does not, and what this module does about it:
 
 from __future__ import annotations
 
+import difflib
+import hashlib
 import html
 import re
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 
 # kind -> (emoji, background, border). The emoji is what the way back reads.
 CALLOUT_STYLES: dict[str, tuple[str, str, str]] = {
@@ -105,8 +108,10 @@ def _callout(lines: list[str], start: int) -> tuple[list[str], int]:
     return out, index
 
 
-def to_feishu(markdown: str) -> FeishuMarkdown:
-    """``markdown`` (the note as the md holds it) as written to Feishu."""
+def to_feishu(markdown: str, *, first_link: int = 0) -> FeishuMarkdown:
+    """``markdown`` (the note as the md holds it) as written to Feishu. Link
+    placeholders are numbered from ``first_link`` + 1, so pieces of one note
+    written in the same push never share one."""
     lines = (markdown or "").replace("\r\n", "\n").split("\n")
     out: list[str] = []
     links: list[HeadingLink] = []
@@ -114,7 +119,7 @@ def to_feishu(markdown: str) -> FeishuMarkdown:
     def heading_link(match: re.Match[str]) -> str:
         heading = match.group(1).strip()
         label = _LABEL_STRIP.sub("", (match.group(2) or heading)).strip() or heading
-        placeholder = f"{PLACEHOLDER_PREFIX}{len(links) + 1}"
+        placeholder = f"{PLACEHOLDER_PREFIX}{first_link + len(links) + 1}"
         links.append(HeadingLink(placeholder=placeholder, label=label, heading=heading))
         return f"[{label}]({placeholder})"
 
@@ -164,12 +169,210 @@ def headings(document_xml: str) -> dict[str, str]:
     return found
 
 
+def heading_list(document_xml: str) -> list[tuple[str, str]]:
+    """(heading words, block id) for each heading, in document order."""
+    return [(heading_key(inner), block_id) for _level, block_id, inner in _HEADING_TAG.findall(document_xml or "")]
+
+
+# ── updating the document chapter by chapter ────────────────────────────────
+#
+# Owner, 2026-10-21: a note already in Feishu is updated by chapter. Only the
+# chapters that changed since the last push are rewritten; the others stay as
+# they are, with their screenshots and any comments made on them in Feishu.
+# A chapter whose heading stayed the same keeps its heading block, so links to
+# it from elsewhere in the document keep working.
+
+_HEADING_LINE = re.compile(r"^(#{1,9})\s+(.+?)\s*$")
+
+
+@dataclass
+class Section:
+    """A heading and everything under it up to the next heading (any level).
+    The part before the first heading has level 0 and no heading."""
+    level: int
+    heading: str
+    body: str
+
+    @property
+    def key(self) -> str:
+        return heading_key(self.heading) if self.level else ""
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(f"{self.heading}\n{self.body}".encode("utf-8")).hexdigest()
+
+    @property
+    def text(self) -> str:
+        if not self.level:
+            return self.body
+        line = f"{'#' * self.level} {self.heading}"
+        return f"{line}\n\n{self.body}" if self.body.strip() else line
+
+
+def sections(markdown: str) -> list[Section]:
+    found: list[Section] = []
+    level, heading, body = 0, "", []
+    fenced = False
+    for line in (markdown or "").replace("\r\n", "\n").split("\n"):
+        if _FENCE.match(line):
+            fenced = not fenced
+        match = None if fenced else _HEADING_LINE.match(line)
+        if match:
+            if level or "\n".join(body).strip():
+                found.append(Section(level, heading, "\n".join(body).strip("\n")))
+            level, heading, body = len(match.group(1)), match.group(2).strip(), []
+            continue
+        body.append(line)
+    if level or "\n".join(body).strip():
+        found.append(Section(level, heading, "\n".join(body).strip("\n")))
+    return found
+
+
+def section_records(parts: list[Section], heading_ids: list[tuple[str, str]]) -> list[dict]:
+    """What is kept about each chapter after a push: its heading, digest and
+    the block id of its heading in the document (matched in order by words)."""
+    records: list[dict] = []
+    cursor = 0
+    for part in parts:
+        heading_id = None
+        if part.level:
+            for index in range(cursor, len(heading_ids)):
+                if heading_ids[index][0] == part.key:
+                    heading_id = heading_ids[index][1]
+                    cursor = index + 1
+                    break
+        records.append({"key": part.key, "level": part.level, "digest": part.digest, "heading_id": heading_id})
+    return records
+
+
+class _TopBlocks(HTMLParser):
+    """The document's top-level blocks, in order, from a with-ids fetch. A list
+    (``<ul>``) has no id of its own: its items are the blocks."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.blocks: list[tuple[str, str]] = []
+        self._stack: list[bool] = []
+
+    def _start(self, tag: str, attrs: list[tuple[str, str | None]], closes: bool) -> None:
+        inside = any(self._stack)
+        block_id = dict(attrs).get("id")
+        record = bool(block_id) and not inside and tag != "title"
+        if record:
+            self.blocks.append((tag, str(block_id)))
+        if not closes:
+            self._stack.append(record)
+
+    def handle_starttag(self, tag, attrs):  # noqa: D102
+        self._start(tag, attrs, closes=False)
+
+    def handle_startendtag(self, tag, attrs):  # noqa: D102
+        self._start(tag, attrs, closes=True)
+
+    def handle_endtag(self, tag):  # noqa: D102
+        if self._stack:
+            self._stack.pop()
+
+
+def top_blocks(document_xml: str) -> list[tuple[str, str]]:
+    parser = _TopBlocks()
+    parser.feed(document_xml or "")
+    return parser.blocks
+
+
+_HEADING_TAGS = {f"h{n}" for n in range(1, 10)}
+
+
+@dataclass
+class Delete:
+    block_ids: list[str]
+
+
+@dataclass
+class Insert:
+    """Write ``parts`` (new chapters, or only a chapter's body) after ``anchor``,
+    a block id or the document id for the very start."""
+    anchor: str
+    parts: list[int]
+    body_only: bool = False
+
+
+def plan_update(old: list[dict], new: list[Section], blocks: list[tuple[str, str]], doc_id: str) -> list:
+    """The deletes and inserts that turn the document (``blocks``, last pushed
+    as ``old``) into ``new``, chapter by chapter, in the order to run them:
+    from the end of the document backwards, so every anchor still exists when
+    it is used."""
+    bodies: dict[str | None, list[str]] = {None: []}
+    current: str | None = None
+    for tag, block_id in blocks:
+        if tag in _HEADING_TAGS:
+            current = block_id
+            bodies[current] = []
+        else:
+            bodies[current].append(block_id)
+
+    def heading_of(index: int) -> str | None:
+        heading_id = old[index].get("heading_id")
+        return heading_id if heading_id in bodies else None
+
+    def body_of(index: int) -> list[str]:
+        if not old[index].get("level"):
+            return bodies[None]
+        heading_id = heading_of(index)
+        return bodies[heading_id] if heading_id else []
+
+    def blocks_of(index: int) -> list[str]:
+        heading_id = heading_of(index)
+        return ([heading_id] if heading_id else []) + body_of(index)
+
+    def anchor_before(index: int) -> str:
+        for earlier in range(index - 1, -1, -1):
+            found = blocks_of(earlier)
+            if found:
+                return found[-1]
+        return doc_id
+
+    ops: list = []
+    matcher = difflib.SequenceMatcher(
+        a=[(r.get("key"), r.get("level")) for r in old], b=[(p.key, p.level) for p in new], autojunk=False,
+    )
+    for tag, i1, i2, j1, j2 in reversed(matcher.get_opcodes()):
+        if tag == "equal":
+            for i, j in reversed(list(zip(range(i1, i2), range(j1, j2)))):
+                if old[i].get("digest") == new[j].digest:
+                    continue
+                body = body_of(i)
+                if body:
+                    ops.append(Delete(body))
+                anchor = heading_of(i) if old[i].get("level") else doc_id
+                if anchor is None:
+                    # Its heading is gone from the document: write it whole.
+                    ops.append(Insert(anchor_before(i), [j]))
+                elif new[j].body.strip():
+                    ops.append(Insert(anchor, [j], body_only=True))
+            continue
+        gone = [block for i in range(i1, i2) for block in blocks_of(i)]
+        if gone:
+            ops.append(Delete(gone))
+        if j2 > j1:
+            ops.append(Insert(anchor_before(i1), list(range(j1, j2))))
+    return ops
+
+
 __all__ = [
     "CALLOUT_STYLES",
     "FeishuMarkdown",
+    "Delete",
     "HeadingLink",
+    "Insert",
+    "Section",
     "PLACEHOLDER_PREFIX",
     "heading_key",
+    "heading_list",
     "headings",
+    "plan_update",
+    "section_records",
+    "sections",
     "to_feishu",
+    "top_blocks",
 ]

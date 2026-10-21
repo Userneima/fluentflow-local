@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Form, HTTPException, Request
 
+from backend.core import feishu_sync
 from backend.core.event_context import event_metadata, new_task_id
 from backend.core.event_logger import log_event
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli, lark_cli_ready
@@ -160,6 +161,9 @@ async def export_lark(
     started_at = time.perf_counter()
     try:
         if export_target == "lark_cli":
+            # A note already kept in Feishu updates its document there.
+            owned = get_job(task_id_value, client_id=client_id) or {}
+            previous = feishu_sync.recorded_sync(owned.get("result"))
             resp = await loop.run_in_executor(
                 None,
                 lambda: export_markdown_via_lark_cli(
@@ -167,6 +171,8 @@ async def export_lark(
                     markdown,
                     task_id=task_id_value,
                     artifact_root=_artifact_storage_dir(),
+                    previous=previous,
+                    keep_feishu=feishu_sync.keeper(task_id_value, owned.get("result")) if previous else None,
                 ),
             )
         else:

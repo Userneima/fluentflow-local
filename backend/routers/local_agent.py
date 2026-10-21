@@ -36,6 +36,7 @@ from backend.core.job_store import (
     list_jobs,
     upsert_job,
 )
+from backend.core import feishu_sync
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
@@ -1243,10 +1244,14 @@ async def export_agent_task(
     try:
         loop = asyncio.get_running_loop()
         if export_target == "lark_cli":
+            # A note already kept in Feishu updates its document there.
+            previous = feishu_sync.recorded_sync(job.get("result"))
             export_response = await loop.run_in_executor(
                 None,
                 lambda: export_markdown_via_lark_cli(
                     resolved_title, markdown, task_id=task_id, artifact_root=_artifact_storage_dir(),
+                    previous=previous,
+                    keep_feishu=feishu_sync.keeper(task_id, job.get("result")) if previous else None,
                 ),
             )
         else:
