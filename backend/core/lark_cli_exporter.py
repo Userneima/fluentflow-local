@@ -304,9 +304,11 @@ def export_markdown_via_lark_cli(
         )
 
     space = (wiki_space or os.environ.get("FLUENTFLOW_LARK_CLI_WIKI_SPACE") or "").strip() or DEFAULT_WIKI_SPACE
-    prepared = feishu_note.to_feishu(markdown)
+    parts = feishu_note.sections(markdown)
+    links: List[feishu_note.HeadingLink] = []
+    written = _feishu_chunk(parts, list(range(len(parts))), links)
     export_markdown, pending, missing = _prepare_images(
-        prepared.markdown,
+        written,
         task_id=task_id,
         artifact_root=artifact_root,
     )
@@ -349,7 +351,7 @@ def export_markdown_via_lark_cli(
         "link_errors": [],
     }
     if doc_id:
-        _finish(runner, bin_path, doc_id, doc_url, prepared.links, feishu_note.sections(markdown), sync)
+        _finish(runner, bin_path, doc_id, doc_url, links, parts, sync)
         save_pushed_note(artifact_root, task_id, markdown)
     return _response(sync, pending, missing, images, errors, wiki_space=space)
 
@@ -375,6 +377,26 @@ def save_pushed_note(artifact_root: Optional[Path], task_id: Optional[str], mark
         path.write_text(markdown or "", encoding="utf-8")
     except OSError as exc:
         logger.warning("could not keep the pushed note of %s: %s", task_id, exc)
+
+
+def _feishu_chunk(
+    parts: List[feishu_note.Section], indices: List[int], links: List[feishu_note.HeadingLink], *, body_only: bool = False,
+) -> str:
+    """The chapters ``indices`` as written to Feishu, links numbered on from
+    ``links`` (extended). A chapter followed by a ``##`` chapter other than
+    the first one ends with the divider before it, so rewriting either chapter
+    later keeps the divider where it was."""
+    first_h2 = next((i for i, part in enumerate(parts) if part.level == 2), None)
+    pieces: List[str] = []
+    for index in indices:
+        following = parts[index + 1] if index + 1 < len(parts) else None
+        divider = following is not None and following.level == 2 and index + 1 != first_h2
+        text = parts[index].body if body_only else parts[index].text
+        prepared = feishu_note.to_feishu(text, first_link=len(links), divider_after=divider)
+        links.extend(prepared.links)
+        if prepared.markdown.strip():
+            pieces.append(prepared.markdown.strip("\n"))
+    return "\n\n".join(pieces)
 
 
 def note_digest(markdown: str) -> str:
@@ -519,11 +541,9 @@ def _update(
                 )
                 deleted.update(chunk)
             continue
-        source = "\n\n".join(parts[j].body if op.body_only else parts[j].text for j in op.parts)
-        prepared = feishu_note.to_feishu(source, first_link=len(links))
-        links.extend(prepared.links)
+        written = _feishu_chunk(parts, op.parts, links, body_only=op.body_only)
         content, wanted, gone = _prepare_images(
-            prepared.markdown, task_id=task_id, artifact_root=artifact_root, first_figure=figures[op.parts[0]],
+            written, task_id=task_id, artifact_root=artifact_root, first_figure=figures[op.parts[0]],
         )
         pending.extend(wanted)
         missing.extend(gone)

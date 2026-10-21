@@ -67,14 +67,19 @@ class FakeDoc:
             if not chunk:
                 continue
             heading = re.match(r"^(#{1,9})\s+(.*)$", chunk)
-            if heading:
+            if chunk == "---":
+                blocks.append({"tag": "hr", "id": self._id(), "text": ""})
+            elif chunk == "<p></p>":
+                blocks.append({"tag": "p", "id": self._id(), "text": ""})
+            elif heading:
                 blocks.append({"tag": f"h{len(heading.group(1))}", "id": self._id(), "text": heading.group(2)})
             else:
                 blocks.append({"tag": "p", "id": self._id(), "text": chunk})
         return blocks
 
     def texts(self) -> list[str]:
-        return [b["text"] for b in self.blocks if b["tag"] != "img"]
+        """The words of the document, without its pictures, dividers and empty paragraphs."""
+        return [b["text"].lstrip("\u3000") for b in self.blocks if b["tag"] not in ("img", "hr") and b["text"]]
 
     def markdown(self) -> str:
         """The document as lark-cli's markdown export shows it."""
@@ -82,6 +87,8 @@ class FakeDoc:
         for b in self.blocks:
             if b["tag"] == "img":
                 shown.append(f"![](https://feishu.cn/file/{b['token']})")
+            elif b["tag"] == "hr":
+                shown.append("---")
             elif b["tag"].startswith("h"):
                 shown.append("#" * int(b["tag"][1:]) + " " + b["text"])
             else:
@@ -105,6 +112,7 @@ class FakeDoc:
     def _xml(self) -> str:
         return f'<title id="{DOC}">t</title>' + "".join(
             f'<img id="{b["id"]}" src="{b["token"]}"/>' if b["tag"] == "img"
+            else f'<hr id="{b["id"]}"/>' if b["tag"] == "hr"
             else f'<{b["tag"]} id="{b["id"]}">{html.escape(b["text"])}</{b["tag"]}>'
             for b in self.blocks
         )

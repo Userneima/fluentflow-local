@@ -8,8 +8,9 @@ What does not, and what this module does about it:
 
 - An Obsidian callout (``> [!question] 标题``) arrives as a plain quote with
   「[!question]」 showing. It becomes a Feishu callout (高亮块) whose emoji says
-  which kind it was, so the way back can tell. Its title is bold, as Obsidian
-  sets it apart from the body (owner, 2026-10-21). A Feishu callout cannot hold a
+  which kind it was, so the way back can tell. Its title is a heading inside
+  the callout (``####``), set apart from the answer under it the way the owner
+  formatted one by hand in Feishu (2026-10-21). A Feishu callout cannot hold a
   table or a code block: from the first such line on, the rest of the callout
   is written after it, outside.
 - A link to a heading of the note (``[[#五、标题|第五章]]``) is dead text in
@@ -20,6 +21,12 @@ What does not, and what this module does about it:
   Feishu would drop them anyway, and nothing reads them back.
 - A single ``~`` is escaped (Feishu makes ``~x~`` strikethrough) and so is a
   ``<`` that does not open a tag Feishu knows (it drops ``<tag>`` with its text).
+- The page is laid out the way the owner's Feishu notes are (feishu-doc-ops,
+  formatting-style): a long prose paragraph starts with two full-width spaces;
+  an empty paragraph separates body blocks (none under a heading, none
+  between list items); a divider ends each chapter before the next ``##``; a
+  table gets columns fitted to its text, a header row, and centred cells.
+  All of it is undone on the way back, so the md never carries it.
 
 The way back (``from_feishu``) is at the end of this module.
 """
@@ -106,7 +113,7 @@ def _callout(lines: list[str], start: int) -> tuple[list[str], int]:
     assert match is not None
     indent, kind, title = match.group(1), match.group(2).lower(), match.group(3).strip()
     emoji, background, border = CALLOUT_STYLES.get(kind, DEFAULT_CALLOUT_STYLE)
-    inside: list[str] = [f"**{title}**"] if title else []
+    inside: list[str] = [f"#### {title}"] if title else []
     outside: list[str] = []
     index = start + 1
     while index < len(lines):
@@ -129,10 +136,11 @@ def _callout(lines: list[str], start: int) -> tuple[list[str], int]:
     return out, index
 
 
-def to_feishu(markdown: str, *, first_link: int = 0) -> FeishuMarkdown:
+def to_feishu(markdown: str, *, first_link: int = 0, divider_after: bool = False) -> FeishuMarkdown:
     """``markdown`` (the note as the md holds it) as written to Feishu. Link
     placeholders are numbered from ``first_link`` + 1, so pieces of one note
-    written in the same push never share one."""
+    written in the same push never share one. ``divider_after`` ends the piece
+    with the divider that comes before the next chapter."""
     lines = (markdown or "").replace("\r\n", "\n").split("\n")
     out: list[str] = []
     links: list[HeadingLink] = []
@@ -166,7 +174,147 @@ def to_feishu(markdown: str, *, first_link: int = 0) -> FeishuMarkdown:
             continue
         out.append(_HEADING_LINK.sub(heading_link, _escape(line)))
         index += 1
-    return FeishuMarkdown(markdown="\n".join(out), links=links)
+    laid = _layout(out)
+    if divider_after:
+        laid.extend(["", "---"])
+    return FeishuMarkdown(markdown="\n".join(laid), links=links)
+
+
+# ── the page as the owner's Feishu notes look ───────────────────────────────
+
+_LIST_START = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
+_HR = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
+_TABLE_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$")
+INDENT = "\u3000\u3000"
+EMPTY_PARAGRAPH = "<p></p>"
+# Shorter than this is a label or a line of metadata, not a paragraph to indent.
+_PROSE_MIN_CHARS = 20
+
+
+def _block_kind(block: list[str]) -> str:
+    first = block[0]
+    if _FENCE.match(first):
+        return "code"
+    if first.lstrip().startswith("<callout"):
+        return "callout"
+    if first.startswith("#"):
+        return "heading"
+    if _HR.match(first):
+        return "hr"
+    if _LIST_START.match(first):
+        return "list"
+    if first.lstrip().startswith("|") and len(block) > 1 and _TABLE_SEPARATOR.match(block[1]):
+        return "table"
+    if first.lstrip().startswith((">", "<", "!", "|")) or first.startswith(" "):
+        return "other"
+    return "prose"
+
+
+def _blocks(lines: list[str]) -> list[list[str]]:
+    """Lines grouped into blocks: blank lines separate them, except inside a code
+    block or a callout, which stay whole; a callout indented under a list item
+    belongs to that item's block."""
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        enclosing = _FENCE.match(line) or _CALLOUT_OPEN.match(line)
+        if enclosing:
+            closing = _FENCE if _FENCE.match(line) else _CALLOUT_CLOSE
+            group = [line]
+            index += 1
+            while index < len(lines):
+                group.append(lines[index])
+                index += 1
+                if closing.match(group[-1]):
+                    break
+            if line.startswith(" ") and current:
+                current.extend(group)
+            else:
+                if current:
+                    blocks.append(current)
+                    current = []
+                blocks.append(group)
+            continue
+        if not line.strip():
+            if current:
+                blocks.append(current)
+                current = []
+        else:
+            current.append(line)
+        index += 1
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def _cells(row: str) -> list[str]:
+    text = row.strip()
+    if text.startswith("|"):
+        text = text[1:]
+    if text.endswith("|") and not text.endswith("\\|"):
+        text = text[:-1]
+    return [cell.strip() for cell in re.split(r"(?<!\\)\|", text)]
+
+
+def _units(text: str) -> int:
+    plain = re.sub(r"\*\*|`|\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    return sum(2 if ord(ch) > 0x2E7F else 1 for ch in plain)
+
+
+def _cell_xml(text: str) -> str:
+    text = text.replace("\\|", "|").replace("\\~", "~")
+    text = html.escape(text, quote=False).replace("\\&lt;", "&lt;")
+    text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", lambda m: f'<a href="{html.escape(m.group(2))}">{m.group(1)}</a>', text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    return f'<p align="center">{text}</p>' if text else "<p></p>"
+
+
+def _table(block: list[str]) -> list[str]:
+    """A markdown table as a Feishu table: columns as wide as their text (a
+    table whose cells hold sentences fills the body width), a header row, every
+    cell centred."""
+    header = _cells(block[0])
+    rows = [_cells(line) for line in block[2:]]
+    columns = len(header)
+    rows = [(row + [""] * columns)[:columns] for row in rows]
+    widest = [max([_units(header[c])] + [_units(row[c]) for row in rows]) for c in range(columns)]
+    pixels = [units * 7 + 28 for units in widest]
+    if max(widest, default=0) > 40:
+        fixed = [min(p, 160) if w <= 20 else None for p, w in zip(pixels, widest)]
+        room = max(740 - sum(p for p in fixed if p), 120)
+        loose = [p for p, f in zip(pixels, fixed) if f is None]
+        total = sum(loose) or 1
+        widths = [f if f else max(120, round(room * p / total)) for p, f in zip(pixels, fixed)]
+    else:
+        widths = [min(max(p, 60), 275) for p in pixels]
+    cols = "".join(f'<col width="{w}"/>' for w in widths)
+    head = "".join(f'<th vertical-align="middle">{_cell_xml(cell)}</th>' for cell in header)
+    body = "".join(
+        "<tr>" + "".join(f'<td vertical-align="middle">{_cell_xml(cell)}</td>' for cell in row) + "</tr>"
+        for row in rows
+    )
+    return [f"<table><colgroup>{cols}</colgroup><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"]
+
+
+def _layout(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    previous = ""
+    for block in _blocks(lines):
+        kind = _block_kind(block)
+        if kind == "prose" and len("".join(block).strip()) >= _PROSE_MIN_CHARS and not block[0].startswith("\u3000"):
+            block = [INDENT + block[0]] + block[1:]
+        elif kind == "table":
+            block = _table(block)
+        if out:
+            spaced = (previous not in ("heading", "hr") and kind not in ("heading", "hr")
+                      and not (previous == "list" and kind == "list"))
+            out.extend(["", EMPTY_PARAGRAPH, ""] if spaced else [""])
+        out.extend(block)
+        previous = kind
+    return out
 
 
 # ── reading the document back ───────────────────────────────────────────────
@@ -234,10 +382,16 @@ def sections(markdown: str) -> list[Section]:
     found: list[Section] = []
     level, heading, body = 0, "", []
     fenced = False
+    boxed = False
     for line in (markdown or "").replace("\r\n", "\n").split("\n"):
         if _FENCE.match(line):
             fenced = not fenced
-        match = None if fenced else _HEADING_LINE.match(line)
+        # A heading inside a Feishu callout is the callout's title, not a chapter.
+        if not fenced and _CALLOUT_OPEN.match(line):
+            boxed = True
+        elif boxed and _CALLOUT_CLOSE.match(line):
+            boxed = False
+        match = None if fenced or boxed else _HEADING_LINE.match(line)
         if match:
             if level or "\n".join(body).strip():
                 found.append(Section(level, heading, "\n".join(body).strip("\n")))
@@ -446,6 +600,14 @@ def _unescape(line: str) -> str:
     return "".join(out)
 
 
+def _next_heading_level(lines: list[str], position: int) -> int:
+    for line in lines[position + 1:]:
+        if line.strip():
+            match = _HEADING_LINE.match(line)
+            return len(match.group(1)) if match else 0
+    return 0
+
+
 def from_feishu(feishu_markdown: str, way: Way) -> str:
     """A part of the Feishu document (lark-cli's markdown export) written the
     way the note writes it: callouts back to Obsidian callouts (the emoji says
@@ -499,8 +661,11 @@ def from_feishu(feishu_markdown: str, way: Way) -> str:
                 inner.pop(0)
             kind = _KIND_BY_EMOJI.get(emoji, "note")
             title = inner.pop(0) if inner else ""
-            if title.strip().startswith("**"):
-                # The bold FluentFlow put on the title, links in it included.
+            heading = re.match(r"^\s*#{1,6}\s+(.*)$", title)
+            if heading:
+                title = heading.group(1)
+            elif title.strip().startswith("**"):
+                # The bold an earlier push put on the title, links in it included.
                 title = title.replace("**", "")
             out.append(f"{indent}> [!{kind}] {title}".rstrip())
             out.extend(f"{indent}> {text}" if text.strip() else f"{indent}>" for text in inner)
@@ -530,8 +695,17 @@ def from_feishu(feishu_markdown: str, way: Way) -> str:
             out.append(str(by_caption[stripped].get("line")))
             index += 1
             continue
+        if line.startswith("\u3000"):
+            line = line.lstrip("\u3000")
         out.append(relink(_unescape(line.rstrip())))
         index += 1
+    # The divider that ends a chapter is the page's, not the note's.
+    while out and (not out[-1].strip() or _HR.match(out[-1])):
+        out.pop()
+    out = [
+        line for position, line in enumerate(out)
+        if not (_HR.match(line) and _next_heading_level(out, position) == 2)
+    ]
     # Feishu puts a blank line between a list item and the list nested in it.
     kept: list[str] = []
     for position, line in enumerate(out):

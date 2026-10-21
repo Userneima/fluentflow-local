@@ -87,16 +87,46 @@ def test_a_box_inside_a_list_item_stays_in_the_item():
 def test_a_table_in_a_box_follows_the_box_instead_of_being_lost():
     md = _converted().markdown
     box_end = md.index("</callout>", md.index("我想到了 DSH"))
-    assert md.index("| 改的是哪一环 | 例子 |") > box_end
-    assert "| 模型本身 | 切线路 |" in md
+    assert md.index(">改的是哪一环<") > box_end
+    assert ">模型本身<" in md and ">切线路<" in md
     assert "> | 模型本身" not in md
 
 
-def test_tables_headings_lists_and_quotes_are_left_as_they_are():
+def test_headings_lists_and_quotes_are_left_as_they_are():
     md = _converted().markdown
-    for kept in ("| | Qwen | DeepSeek |", "| 路线 | 开放 | 专注 |", "## 一、开场",
-                 "- **算力配比**：3:1:1。", "> 原话。"):
+    for kept in ("## 一、开场", "- **算力配比**：3:1:1。", "> 原话。"):
         assert kept in md
+
+
+def test_a_table_is_a_feishu_table_fitted_to_its_text_with_a_header_and_centred_cells():
+    md = _converted().markdown
+    qwen = next(line for line in md.split("\n") if line.startswith("<table>") and ">Qwen<" in line)
+    assert "<thead><tr><th" in qwen and ">Qwen</p></th>" in qwen
+    widths = [int(w) for w in __import__("re").findall(r'<col width="(\d+)"/>', qwen[:qwen.index("</colgroup>")])]
+    assert len(widths) == 3 and len(set(widths)) > 1, "fitted, not equal"
+    assert sum(widths) < 740, "short cells: the table ends after its text"
+    assert '<p align="center">开放</p>' in qwen and 'vertical-align="middle"' in qwen
+
+
+def test_long_paragraphs_are_indented_and_body_blocks_spaced_as_the_owners_notes():
+    md = feishu_note.to_feishu(
+        "## 一、甲\n\n第一段是一段足够长的正文，用来看首行有没有缩进两格。\n\n第二段同样是一段足够长的正文，也要缩进两格才对。\n\n"
+        "短标签\n\n- 列表一\n- 列表二\n\n## 二、乙\n\n正文。\n"
+    ).markdown
+    assert "## 一、甲\n\u3000\u3000第一段" in md.replace("\n\n", "\n"), "no blank paragraph under a heading"
+    assert "\u3000\u3000第二段" in md and "\u3000\u3000短标签" not in md
+    assert "缩进两格。\n\n<p></p>\n\n\u3000\u3000第二段" in md
+    assert "- 列表一\n- 列表二" in md
+
+
+def test_each_chapter_but_the_first_follows_a_divider():
+    from backend.core.lark_cli_exporter import _feishu_chunk
+
+    parts = feishu_note.sections("# 题\n\n## 一、甲\n\n甲。\n\n### （一）子\n\n子。\n\n## 二、乙\n\n乙。\n")
+    written = _feishu_chunk(parts, list(range(len(parts))), [])
+    assert written.count("---") == 1
+    assert written.index("子。") < written.index("---") < written.index("## 二、乙")
+    assert "---" not in written[:written.index("## 一、甲")]
 
 
 def test_part_markers_are_dropped():
@@ -174,12 +204,32 @@ def test_what_feishu_would_eat_is_escaped_outside_code():
     assert "`<code>~`" in md
 
 
-def test_a_box_title_is_bold_in_feishu_and_plain_again_when_it_comes_back():
+def test_a_box_title_is_a_heading_in_feishu_and_the_title_again_when_it_comes_back():
     md = feishu_note.to_feishu("> [!question] 究竟是哪些细节？\n> 回答一行\n").markdown
-    assert "**究竟是哪些细节？**" in md
-    back = feishu_note.from_feishu('<callout emoji="❓">\n**究竟是哪些细节？**  \n回答一行\n</callout>\n',
-                                   feishu_note.Way(doc_id="", headings_by_id={}, images=[]))
-    assert back == "> [!question] 究竟是哪些细节？\n> 回答一行"
+    assert "<callout" in md and "\n#### 究竟是哪些细节？\n回答一行\n</callout>" in md
+    way = feishu_note.Way(doc_id="", headings_by_id={}, images=[])
+    for shown in ('<callout emoji="❓">\n#### 究竟是哪些细节？\n回答一行\n</callout>\n',
+                  '<callout emoji="❓">\n**究竟是哪些细节？**  \n回答一行\n</callout>\n'):
+        assert feishu_note.from_feishu(shown, way) == "> [!question] 究竟是哪些细节？\n> 回答一行"
+
+
+def test_a_heading_in_a_box_does_not_split_the_box_into_chapters():
+    """The owner made a box's question a heading in Feishu; the box came back as
+    an empty box, its body outside it and a stray </callout>."""
+    shown = ('<title>t</title>\n\n## 三、框架\n\n正文。\n\n<callout emoji="❓">\n#### 究竟是哪些细节？\n'
+             'soul.md 存性格；  \nuser.md 存你是谁；\n</callout>\n\n### （一）下一节\n\n下一节。\n')
+    parts = feishu_note.sections(feishu_note.without_title(shown))
+    assert [p.heading for p in parts] == ["三、框架", "（一）下一节"]
+    back = feishu_note.from_feishu(parts[0].text, feishu_note.Way(doc_id="", headings_by_id={}, images=[]))
+    assert "> [!question] 究竟是哪些细节？\n> soul.md 存性格；\n> user.md 存你是谁；" in back
+    assert "</callout>" not in back
+
+
+def test_the_pages_layout_is_undone_when_it_comes_back():
+    shown = ("## 一、甲\n\n\u3000\u3000第一段是一段足够长的正文。\n\n\n\n\u3000\u3000第二段。\n\n---\n\n"
+             "## 二、乙\n\n乙。\n\n---\n")
+    back = feishu_note.from_feishu(shown, feishu_note.Way(doc_id="", headings_by_id={}, images=[]))
+    assert back == "## 一、甲\n\n第一段是一段足够长的正文。\n\n第二段。\n\n## 二、乙\n\n乙。"
 
 
 def test_a_chapter_link_in_a_box_title_is_fixed_too(tmp_path):

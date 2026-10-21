@@ -115,7 +115,7 @@ def test_each_local_screenshot_is_uploaded_right_above_its_own_caption(tmp_path)
     # Each picture is placed by a marker standing right before its own caption,
     # in a paragraph of its own where the picture was; the marker goes after.
     assert f"\n\n{markers[0]}图 1：架构图\n\n" in sent
-    assert f"\n\n{markers[1]}图 2：截图\n\n" in sent
+    assert f"\n\n{markers[1]}图 2：截图" in sent
     removed = [_flag(c["cmd"], "--pattern") for c in runner.of("+update") if _flag(c["cmd"], "--content") == ""]
     assert removed == markers
     for call, name in zip(inserts, ["note_0090.jpg", "note_0120.jpg"]):
