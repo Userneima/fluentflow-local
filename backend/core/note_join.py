@@ -8,6 +8,8 @@ why they live here and not in another request:
 - one H1 title for the whole note: the one the first part wrote if it wrote one,
   otherwise the task's title; titles written by later parts are dropped;
 - numbered second level headings are renumbered in order across all parts;
+- third level headings are numbered （一）（二）… within each chapter
+  (``number_subheadings``, also used for every other way a note is written);
 - a 「存疑」 section, if a part wrote one, is lifted out and the items are put
   in one section at the end of the note. The default skill marks a doubtful word
   where it stands with 「（存疑）」 and writes no such section, so this only acts
@@ -49,6 +51,54 @@ def chinese_number(value: int) -> str:
     tail = chinese_number(rest)
     # 110 is 一百一十, not 一百十.
     return _DIGITS[hundreds] + "百" + ("一" + tail if tail.startswith("十") else tail)
+
+
+# A number a heading already starts with: （一） / (一) / 一、 / 1. / 1、 / 1.2 / 1).
+# Never a title that only starts with a number, such as 「3.5小时」 or 「2024年」.
+_LEADING_NUMBER = re.compile(
+    r"^\s*(?:[（(][一二三四五六七八九十百零〇两]+[)）]"
+    r"|[一二三四五六七八九十百零〇两]+[、．.](?![\d])"
+    r"|\d+(?:[.．]\d+)*[.．、)）](?!\d)"
+    r"|\d+(?:[.．]\d+)+(?=\s))\s*"
+)
+_H3 = re.compile(r"^###\s+(.*?)\s*#*\s*$")
+_ANY_HEADING = re.compile(r"^(#{1,6})\s+\S")
+
+
+def number_subheadings(markdown: str) -> str:
+    """Number the third level headings （一）（二）… within each chapter, counting
+    again from （一） after every second level heading (owner, 2026-10-21). A
+    number a heading already carries is replaced, and a link to a renamed
+    heading (``[[#旧标题|…]]``) follows it. Headings inside code blocks are
+    left alone."""
+    lines = (markdown or "").split("\n")
+    renamed: dict[str, str] = {}
+    count = 0
+    in_fence = False
+    for index, line in enumerate(lines):
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        heading = _ANY_HEADING.match(line)
+        if heading and len(heading.group(1)) <= 2:
+            count = 0
+            continue
+        found = _H3.match(line)
+        if not found:
+            continue
+        old = found.group(1)
+        title = _LEADING_NUMBER.sub("", old).strip() or old
+        count += 1
+        new = f"（{chinese_number(count)}）{title}"
+        lines[index] = f"### {new}"
+        if old != new:
+            renamed.setdefault(old, new)
+    text = "\n".join(lines)
+    for old, new in renamed.items():
+        text = text.replace(f"[[#{old}]]", f"[[#{new}]]").replace(f"[[#{old}|", f"[[#{new}|")
+    return text
 
 
 def _is_doubt(heading_text: str) -> bool:
@@ -132,4 +182,4 @@ def join_parts(bodies: list[tuple[str, str]], *, title: str = "") -> str:
     heading_title = (first_title or title or "").strip()
     if heading_title:
         sections.insert(0, f"# {heading_title}")
-    return "\n\n".join(sections)
+    return number_subheadings("\n\n".join(sections))

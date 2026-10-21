@@ -8,7 +8,8 @@ What does not, and what this module does about it:
 
 - An Obsidian callout (``> [!question] 标题``) arrives as a plain quote with
   「[!question]」 showing. It becomes a Feishu callout (高亮块) whose emoji says
-  which kind it was, so the way back can tell. A Feishu callout cannot hold a
+  which kind it was, so the way back can tell. Its title is bold, as Obsidian
+  sets it apart from the body (owner, 2026-10-21). A Feishu callout cannot hold a
   table or a code block: from the first such line on, the rest of the callout
   is written after it, outside.
 - A link to a heading of the note (``[[#五、标题|第五章]]``) is dead text in
@@ -105,7 +106,7 @@ def _callout(lines: list[str], start: int) -> tuple[list[str], int]:
     assert match is not None
     indent, kind, title = match.group(1), match.group(2).lower(), match.group(3).strip()
     emoji, background, border = CALLOUT_STYLES.get(kind, DEFAULT_CALLOUT_STYLE)
-    inside: list[str] = [title] if title else []
+    inside: list[str] = [f"**{title}**"] if title else []
     outside: list[str] = []
     index = start + 1
     while index < len(lines):
@@ -498,6 +499,9 @@ def from_feishu(feishu_markdown: str, way: Way) -> str:
                 inner.pop(0)
             kind = _KIND_BY_EMOJI.get(emoji, "note")
             title = inner.pop(0) if inner else ""
+            if title.strip().startswith("**"):
+                # The bold FluentFlow put on the title, links in it included.
+                title = title.replace("**", "")
             out.append(f"{indent}> [!{kind}] {title}".rstrip())
             out.extend(f"{indent}> {text}" if text.strip() else f"{indent}>" for text in inner)
             continue

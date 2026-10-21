@@ -1120,7 +1120,7 @@ def _joined_draft(drafts, parts, *, title: str = ""):
         raise VisualNoteError("没有生成任何笔记内容")
     first = drafts[0]
     if len(drafts) == 1:
-        return first
+        return replace(first, markdown=note_join.number_subheadings(first.markdown or ""))
     bodies = []
     for draft, part in zip(drafts, parts):
         span = (

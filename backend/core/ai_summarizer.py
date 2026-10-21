@@ -1141,7 +1141,8 @@ def _renumber_chapter_headings(markdown: str) -> str:
             if sec == 0:
                 sec = 1
             sub += 1
-            out.append(f"### {sec}.{sub} {title}")
+            # Numbered （一）（二） with every other note (number_subheadings).
+            out.append(f"### {title}")
     return "\n".join(out)
 
 
@@ -1259,7 +1260,7 @@ def _run_chapter_coverage_mode(
     missing_count = len(missing_ids) if coverage_checked else None
 
     # Chapters are written independently, so normalize the assembled note into
-    # one consistent numbered hierarchy (## 一、 + ### x.y).
+    # one consistent numbered hierarchy (## 一、, then ### （一） at the end).
     final_note = _renumber_chapter_headings(final_note)
 
     chapter_coverage = _build_chapter_coverage_table(
@@ -1355,7 +1356,19 @@ def _condense_evidence(
     return _chat(client, model, _EVIDENCE_CONDENSE_SYSTEM, condensed)
 
 
-def summarize_transcript_with_metadata(
+def summarize_transcript_with_metadata(transcript: str, **kwargs: Any) -> SummaryResult:
+    """Generate a note and return mode/chunk metadata for product analysis.
+    Third level headings come out numbered （一）（二） within each chapter,
+    whichever mode wrote the note (owner, 2026-10-21)."""
+    from dataclasses import replace
+
+    from backend.core.note_join import number_subheadings
+
+    result = _summarize_transcript_with_metadata(transcript, **kwargs)
+    return replace(result, markdown=number_subheadings(result.markdown or ""))
+
+
+def _summarize_transcript_with_metadata(
     transcript: str,
     *,
     api_key: str | None = None,

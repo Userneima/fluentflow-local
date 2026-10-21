@@ -21,7 +21,7 @@ from pathlib import Path
 
 import backend.core.lark_cli_exporter as cli
 from backend.core import feishu_note
-from tests.test_lark_cli_export import DOC_URL, TASK, FakeCli, _flag, _frame_src, _frames
+from tests.test_lark_cli_export import DOC_URL, TASK, FakeCli, _flag, _frame_src, _frames, _ok
 
 NOTE = """# 访谈
 
@@ -172,3 +172,34 @@ def test_what_feishu_would_eat_is_escaped_outside_code():
     assert "\\~约\\~" in md and "~~删掉~~" in md
     assert "\\<tag>" in md and "<b>粗</b>" in md
     assert "`<code>~`" in md
+
+
+def test_a_box_title_is_bold_in_feishu_and_plain_again_when_it_comes_back():
+    md = feishu_note.to_feishu("> [!question] 究竟是哪些细节？\n> 回答一行\n").markdown
+    assert "**究竟是哪些细节？**" in md
+    back = feishu_note.from_feishu('<callout emoji="❓">\n**究竟是哪些细节？**  \n回答一行\n</callout>\n',
+                                   feishu_note.Way(doc_id="", headings_by_id={}, images=[]))
+    assert back == "> [!question] 究竟是哪些细节？\n> 回答一行"
+
+
+def test_a_chapter_link_in_a_box_title_is_fixed_too(tmp_path):
+    """Feishu shows a link in a bold title as [**label**](...)."""
+    def replace(call):
+        pattern = _flag(call["cmd"], "--pattern")
+        ok = pattern.startswith("[**") or "第五章" not in pattern
+        return _ok({"document": {"revision_id": 9}, "result": "success" if ok else "failed"})
+
+    runner = FakeCli(outline=OUTLINE, replace=replace)
+    result = cli.export_markdown_via_lark_cli("访谈", NOTE, task_id=TASK, artifact_root=tmp_path, runner=runner)
+
+    fixed = [_flag(c["cmd"], "--content") for c in runner.of("+update") if "第五章" in _flag(c["cmd"], "--pattern")]
+    assert fixed[-1] == f"[**第五章**]({DOC_URL}#h5)"
+    assert "第五章" not in result["sync"]["link_errors"]
+
+
+def test_a_box_title_with_a_link_comes_back_plain_with_its_link():
+    back = feishu_note.from_feishu(
+        '<callout emoji="💡">\n**这里讲的在**[**第五章**](https://x.feishu.cn/docx/D#h5)**。**\n</callout>\n',
+        feishu_note.Way(doc_id="D", headings_by_id={"h5": "五、Agent 怎么自学习"}, images=[]),
+    )
+    assert back == "> [!tip] 这里讲的在[[#五、Agent 怎么自学习|第五章]]。"

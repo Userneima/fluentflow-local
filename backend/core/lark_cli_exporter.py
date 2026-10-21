@@ -585,19 +585,23 @@ def _finish(
     base = doc_url.split("#", 1)[0]
     for link in links:
         block_id = sync["headings"].get(feishu_note.heading_key(link.heading))
-        target = f"[{link.label}]({base}#{block_id})" if block_id else link.label
-        try:
-            updated = _run(
-                runner,
-                [bin_path, "docs", "+update", "--doc", doc_id, "--command", "str_replace",
-                 "--doc-format", "markdown", "--pattern", f"[{link.label}]({link.placeholder})",
-                 "--content", target, "--as", "user"],
-                timeout=60,
-            )
-        except LarkCliError as exc:
-            logger.warning("lark-cli could not link %s in %s: %s", link.label, doc_id, exc)
-            sync["link_errors"].append(link.label)
-            continue
+        # A link in a callout's title is bold with the rest of the title, and
+        # Feishu shows it as [**label**](...).
+        for label in (link.label, f"**{link.label}**"):
+            target = f"[{label}]({base}#{block_id})" if block_id else label
+            try:
+                updated = _run(
+                    runner,
+                    [bin_path, "docs", "+update", "--doc", doc_id, "--command", "str_replace",
+                     "--doc-format", "markdown", "--pattern", f"[{label}]({link.placeholder})",
+                     "--content", target, "--as", "user"],
+                    timeout=60,
+                )
+            except LarkCliError as exc:
+                logger.warning("lark-cli could not link %s in %s: %s", link.label, doc_id, exc)
+                updated = {"result": "failed"}
+            if updated.get("result") in (None, "success"):
+                break
         if not block_id or updated.get("result") not in (None, "success"):
             sync["link_errors"].append(link.label)
         revision = (updated.get("document") or {}).get("revision_id") if isinstance(updated.get("document"), dict) else None
