@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.core import job_store
+from backend.core import job_store, note_versions
 from backend.core.storage_paths import _artifact_storage_dir
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,8 @@ PROCESS_DIRNAME = "过程文件"
 # Said wherever the folder is named to the user, so an agent passes it on.
 MD_HINT = (
     "笔记的 md 版推荐用 Obsidian 打开，截图和格式都能直接显示。在 Obsidian 里改它，停下一分钟后会自动收回 FluentFlow，"
-    "PDF 跟着更新，被替换的那一版存在旁边的「笔记_上一版.md」。在 Obsidian 里粘贴的图片，网页和 PDF 里看不到。"
+    "PDF 跟着更新，被替换的那一版存在旁边的「笔记_上一版.md」，更早被替换的每一版都在「过程文件/历史版本」里。"
+    "在 Obsidian 里粘贴的图片，网页和 PDF 里看不到。"
 )
 SHOTS_DIRNAME = "截图"
 CUT_LABEL = "去气口"
@@ -492,6 +493,12 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any], note_changed
         if taken is not None:
             result, note, record["md_taken_in"] = taken
             text, files = _note_for_folder(task_id, note, shots, relative_to=folder)
+        try:
+            on_disk = md.read_text(encoding="utf-8")
+        except OSError:
+            on_disk = ""
+        if on_disk and on_disk != text.rstrip() + "\n":
+            note_versions.keep(md, on_disk, note_versions.LOCAL)
         changed = _write_if_changed(md, text.rstrip() + "\n")
         # The copy an earlier version kept in 过程文件 would now be a stale twin.
         (process / md.name).unlink(missing_ok=True)
@@ -604,6 +611,7 @@ def _take_in_edits(
         # task's note changed) can save it over a newer note, and this is
         # where that newer note is found again.
         happened["previous"] = str(_keep_previous(md, would_write))
+        note_versions.keep(md, would_write, note_versions.TASK)
         stored = _stored_form(task_id, text, prefixes).strip()
         after = _with_note(task_id, result, stored)
         job_store.save_result_changes(task_id, result, after)
