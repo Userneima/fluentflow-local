@@ -542,6 +542,9 @@ def _update(
                 deleted.update(chunk)
             continue
         written = _feishu_chunk(parts, op.parts, links, body_only=op.body_only)
+        if not written.strip():
+            # Nothing the page shows (a part marker only): the delete was enough.
+            continue
         content, wanted, gone = _prepare_images(
             written, task_id=task_id, artifact_root=artifact_root, first_figure=figures[op.parts[0]],
         )

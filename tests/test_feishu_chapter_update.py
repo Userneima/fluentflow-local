@@ -156,6 +156,8 @@ class FakeDoc:
                 gone = set(_flag(cmd, "--block-id").split(","))
                 self.blocks = [b for b in self.blocks if b["id"] not in gone]
             elif command == "block_insert_after":
+                if not (kwargs.get("input") or "").strip():
+                    return _fail("--command block_insert_after requires --content")
                 anchor = _flag(cmd, "--block-id")
                 new = self._parse(kwargs.get("input") or "")
                 at = 0 if anchor == DOC else next(i for i, b in enumerate(self.blocks) if b["id"] == anchor) + 1
@@ -339,3 +341,14 @@ def test_a_push_updates_the_document_records_it_and_keeps_the_feishu_version(mon
     kept = note_versions.versions(md)
     assert kept and note_versions.FEISHU in kept[-1].name and "结尾的话" in kept[-1].read_text(encoding="utf-8")
     assert feishu_sync.push(task_id) is None, "nothing left to push"
+
+
+def test_a_chapter_whose_body_shows_nothing_in_feishu_is_not_written_empty():
+    doc = FakeDoc()
+    note = "# 访谈\n\n## 一、开场\n\n<!-- 第 1/2 部分 -->\n\n### （一）框架\n\n框架的话。\n"
+    sync = _export(doc, note)["sync"]
+    forced = {**sync, "sections": [{**s, "digest": None} for s in sync["sections"]]}
+
+    _export(doc, note, previous=forced, kept=[])
+
+    assert "框架的话。" in doc.texts()
