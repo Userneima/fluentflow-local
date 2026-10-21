@@ -65,6 +65,8 @@ class FakeCli:
             return self._create()
         if cmd[1:3] == ["docs", "+media-insert"]:
             return self._insert(call)
+        if cmd[1:3] == ["drive", "metas"]:
+            return _ok({"metas": [{"doc_token": DOC_ID, "latest_modify_time": "1700000000"}]})
         if cmd[1:3] == ["docs", "+fetch"]:
             return _ok({"document": {"document_id": DOC_ID, "revision_id": 5, "content": self._outline}})
         if cmd[1:3] == ["docs", "+update"]:
@@ -107,11 +109,15 @@ def test_each_local_screenshot_is_uploaded_right_above_its_own_caption(tmp_path)
     created = runner.of("+create")[0]
     sent = created["input"]
     assert "/jobs/" not in sent, "no image may point at this computer"
-    assert "\n\n图 1：架构图\n\n" in sent, "the caption is its own paragraph, where the picture was"
-    assert "\n\n图 2：截图\n\n" in sent
 
     inserts = runner.of("+media-insert")
-    assert [_flag(c["cmd"], "--selection-with-ellipsis") for c in inserts] == ["图 1：架构图", "图 2：截图"]
+    markers = [_flag(c["cmd"], "--selection-with-ellipsis") for c in inserts]
+    # Each picture is placed by a marker standing right before its own caption,
+    # in a paragraph of its own where the picture was; the marker goes after.
+    assert f"\n\n{markers[0]}图 1：架构图\n\n" in sent
+    assert f"\n\n{markers[1]}图 2：截图\n\n" in sent
+    removed = [_flag(c["cmd"], "--pattern") for c in runner.of("+update") if _flag(c["cmd"], "--content") == ""]
+    assert removed == markers
     for call, name in zip(inserts, ["note_0090.jpg", "note_0120.jpg"]):
         assert _flag(call["cmd"], "--doc") == DOC_ID, "media-insert needs the document id, not the wiki link"
         assert _flag(call["cmd"], "--file") == name, "lark-cli only accepts a relative file path"

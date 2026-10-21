@@ -970,6 +970,21 @@ def list_output_folder_notes(db_path: Path | str = DEFAULT_DB_PATH) -> list[tupl
     return [(str(t), str(p), float(m or 0.0), str(u or "")) for t, p, m, u in rows]
 
 
+def list_feishu_synced(db_path: Path | str = DEFAULT_DB_PATH) -> list[tuple[str, str, int, bool]]:
+    """``(task_id, doc_id, feishu_modified_at, stopped)`` of every task whose
+    note is kept in step with a Feishu document, read from the record only."""
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path), timeout=10) as conn:
+        rows = conn.execute(
+            "SELECT task_id, json_extract(result_json, '$.lark_response.sync.doc_id'),"
+            " json_extract(result_json, '$.lark_response.sync.feishu_modified_at'),"
+            " json_extract(result_json, '$.lark_response.sync.stopped')"
+            " FROM jobs WHERE json_valid(result_json)"
+            " AND json_extract(result_json, '$.lark_response.sync.doc_id') IS NOT NULL"
+        ).fetchall()
+    return [(str(t), str(d), int(m or 0), bool(s)) for t, d, m, s in rows]
+
+
 def cancel_job_steps(
     task_id: str,
     *,

@@ -12,9 +12,13 @@ The command sequence (checked against lark-cli 1.0.70 and its embedded
    note is first replaced by its own caption paragraph (``图 N：说明``), because
    Feishu can only fetch http(s) images from Markdown.
 2. For each local screenshot, run ``docs +media-insert --doc <document_id>
-   --file <name> --selection-with-ellipsis "<caption>" --before --as user`` from
+   --file <name> --selection-with-ellipsis "<marker>" --before --as user`` from
    the screenshot's folder (lark-cli only accepts relative file paths), so the
-   picture lands right above its caption.
+   picture lands right above its caption, then remove the marker with a
+   ``str_replace``. The marker (``⟦FFIMG-<push>-<n>⟧`` in front of the
+   caption) is unique to that picture in that push: captions are numbered over
+   the whole note, so a chapter rewritten later can carry the same caption as
+   one left alone, and locating by caption put the picture in the wrong place.
 
 A screenshot that fails to upload does not fail the export; the counts come
 back as ``image_count`` / ``image_upload_count`` / ``image_upload_errors``.
@@ -42,6 +46,7 @@ import os
 import re
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
@@ -56,6 +61,7 @@ DEFAULT_WIKI_SPACE = "my_library"
 # Marker the diagnostics layer keys on; keep it stable.
 LARK_CLI_NOT_FOUND = "lark-cli not found"
 
+NOT_UPLOADED = "（截图没有传上去）"
 _RE_MD_IMAGE_LINE = re.compile(r"^\s*!\[(.*?)\]\((.*?)\)\s*$")
 _CAPTION_STRIP = re.compile(r"[\\`*_\[\]$~<>#|]")
 
@@ -198,16 +204,20 @@ def _prepare_images(
     task_id: Optional[str],
     artifact_root: Optional[Path],
     first_figure: int = 0,
-) -> tuple[str, List[dict[str, Any]], List[str]]:
-    """Swap each local screenshot for a unique caption paragraph.
+    push: str = "",
+) -> tuple[str, List[dict[str, Any]], List[dict[str, Any]]]:
+    """Swap each local screenshot for its caption paragraph, the ones to upload
+    led by a marker unique to the picture in this push.
 
-    Returns the markdown to create, the screenshots to insert afterwards, and
+    Returns the markdown to write, the screenshots to insert afterwards, and
     the local screenshots whose file could not be found (named in the doc as
-    text, counted as failed uploads).
+    text, counted as failed uploads). Each keeps the note's own image line and
+    its caption, so the way back can put the picture back as it was.
     """
+    push = push or uuid.uuid4().hex[:8]
     out: List[str] = []
     pending: List[dict[str, Any]] = []
-    missing: List[str] = []
+    missing: List[dict[str, Any]] = []
     in_code = False
     figure = first_figure
     for line in markdown.split("\n"):
@@ -228,11 +238,14 @@ def _prepare_images(
         figure += 1
         caption = _caption_text(figure, alt)
         path = _resolve_markdown_artifact_image(src, task_id=task_id, artifact_root=artifact_root)
-        out.extend(["", caption if path else f"{caption}（截图没有传上去）", ""])
+        record = {"src": src, "line": line.strip(), "caption": caption if path else f"{caption}{NOT_UPLOADED}"}
         if path:
-            pending.append({"caption": caption, "path": path, "src": src})
+            marker = f"⟦FFIMG-{push}-{figure}⟧"
+            out.extend(["", marker + caption, ""])
+            pending.append({**record, "path": path, "marker": marker})
         else:
-            missing.append(src or caption)
+            out.extend(["", record["caption"], ""])
+            missing.append(record)
     return "\n".join(out), pending, missing
 
 
@@ -330,14 +343,38 @@ def export_markdown_via_lark_cli(
         "url": doc_url,
         "revision_id": document.get("revision_id"),
         "note_digest": note_digest(markdown),
-        "images": images,
+        "images": images + [{**item, "file_token": None, "block_id": None} for item in missing],
         "headings": {},
         "sections": [],
         "link_errors": [],
     }
     if doc_id:
         _finish(runner, bin_path, doc_id, doc_url, prepared.links, feishu_note.sections(markdown), sync)
+        save_pushed_note(artifact_root, task_id, markdown)
     return _response(sync, pending, missing, images, errors, wiki_space=space)
+
+
+PUSHED_NOTE = "feishu_pushed.md"
+
+
+def pushed_note_path(artifact_root: Optional[Path], task_id: Optional[str]) -> Optional[Path]:
+    """The note as last pushed to Feishu: what edits made in Feishu are laid
+    over when they come back, so the chapters not edited there keep the note's
+    own text."""
+    if artifact_root is None or not task_id:
+        return None
+    return Path(artifact_root) / task_id / PUSHED_NOTE
+
+
+def save_pushed_note(artifact_root: Optional[Path], task_id: Optional[str], markdown: str) -> None:
+    path = pushed_note_path(artifact_root, task_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(markdown or "", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("could not keep the pushed note of %s: %s", task_id, exc)
 
 
 def note_digest(markdown: str) -> str:
@@ -356,8 +393,8 @@ def _response(
         "markdown_format": "feishu_note",
         **extra,
         "image_count": len(pending) + len(missing),
-        "image_upload_count": len(images),
-        "image_upload_errors": list(missing) + errors,
+        "image_upload_count": sum(1 for image in images if image.get("file_token") or image.get("block_id")),
+        "image_upload_errors": [item["src"] for item in missing] + errors,
         "sync": sync,
     }
 
@@ -366,7 +403,7 @@ def _insert_images(
     runner: Runner, bin_path: str, doc_id: str, pending: List[dict[str, Any]],
 ) -> tuple[List[dict[str, Any]], List[str]]:
     """Each screenshot right above its caption; what each became in Feishu,
-    and the ones that did not make it."""
+    and the ones that did not make it. The marker goes either way."""
     images: List[dict[str, Any]] = []
     errors: List[str] = []
     for item in pending:
@@ -374,6 +411,7 @@ def _insert_images(
             errors.append(item["src"])
             continue
         path: Path = item["path"]
+        record = {"src": item["src"], "line": item["line"], "caption": item["caption"], "name": path.name}
         try:
             inserted = _run(
                 runner,
@@ -381,22 +419,27 @@ def _insert_images(
                     bin_path, "docs", "+media-insert",
                     "--doc", doc_id,
                     "--file", path.name,
-                    "--selection-with-ellipsis", item["caption"],
+                    "--selection-with-ellipsis", item["marker"],
                     "--before",
                     "--as", "user",
                 ],
                 timeout=90,
                 cwd=path.parent,
             )
-            images.append({
-                "src": item["src"],
-                "name": path.name,
-                "file_token": inserted.get("file_token"),
-                "block_id": inserted.get("block_id"),
-            })
+            images.append({**record, "file_token": inserted.get("file_token"), "block_id": inserted.get("block_id")})
         except LarkCliError as exc:
             logger.warning("lark-cli image insert skipped for %s: %s", path.name, exc)
             errors.append(item["src"])
+            images.append({**record, "caption": item["caption"], "file_token": None, "block_id": None})
+        try:
+            _run(
+                runner,
+                [bin_path, "docs", "+update", "--doc", doc_id, "--command", "str_replace",
+                 "--doc-format", "markdown", "--pattern", item["marker"], "--content", "", "--as", "user"],
+                timeout=60,
+            )
+        except LarkCliError as exc:
+            logger.warning("lark-cli could not remove image marker %s: %s", item["marker"], exc)
     return images, errors
 
 
@@ -461,7 +504,7 @@ def _update(
 
     links: List[feishu_note.HeadingLink] = []
     pending: List[dict[str, Any]] = []
-    missing: List[str] = []
+    missing: List[dict[str, Any]] = []
     deleted: set[str] = set()
     rewritten = 0
     for op in ops:
@@ -494,10 +537,15 @@ def _update(
         rewritten += len(op.parts)
 
     images, errors = _insert_images(runner, bin_path, doc_id, pending)
+    # A picture whose chapter was rewritten is in the new pictures, if it is
+    # still in the note; one never uploaded is listed again by its chapter.
+    rewritten_lines = {item["line"] for item in pending + missing}
     sync["images"] = [
-        image for image in previous.get("images") or [] if image.get("block_id") not in deleted
-    ] + images
+        image for image in previous.get("images") or []
+        if (image.get("block_id") not in deleted if image.get("block_id") else image.get("line") not in rewritten_lines)
+    ] + images + [{**item, "file_token": None, "block_id": None} for item in missing]
     _finish(runner, bin_path, doc_id, doc_url, links, parts, sync)
+    save_pushed_note(artifact_root, task_id, markdown)
     return {**_response(sync, pending, missing, images, errors), "updated": True, "sections_rewritten": rewritten}
 
 
@@ -555,6 +603,53 @@ def _finish(
         revision = (updated.get("document") or {}).get("revision_id") if isinstance(updated.get("document"), dict) else None
         if revision is not None:
             sync["revision_id"] = revision
+    _snapshot(runner, bin_path, doc_id, sync)
+
+
+def _snapshot(runner: Runner, bin_path: str, doc_id: str, sync: dict[str, Any]) -> None:
+    """What the document looks like now, chapter by chapter, and when Feishu
+    last saw it change: an edit made in Feishu later is anything newer than
+    this time, in any chapter that no longer looks like this."""
+    try:
+        shown = _run(
+            runner,
+            [bin_path, "docs", "+fetch", "--doc", doc_id, "--doc-format", "markdown", "--as", "user"],
+            timeout=60,
+        )
+        document = shown.get("document") if isinstance(shown.get("document"), dict) else shown
+        sync["feishu_sections"] = feishu_note.feishu_section_records(str(document.get("content") or ""))
+        if document.get("revision_id") is not None:
+            sync["revision_id"] = document.get("revision_id")
+    except LarkCliError as exc:
+        logger.warning("lark-cli could not read %s back after the push: %s", doc_id, exc)
+        sync["feishu_sections"] = None
+    modified = modified_times(runner, bin_path, [doc_id]).get(doc_id)
+    if modified is not None:
+        sync["feishu_modified_at"] = modified
+
+
+def modified_times(runner: Runner, bin_path: str, doc_ids: List[str]) -> Dict[str, int]:
+    """When Feishu last saw each document change (seconds), for the ones it
+    reports; a document it does not report is left out."""
+    times: Dict[str, int] = {}
+    for start in range(0, len(doc_ids), 50):
+        chunk = doc_ids[start:start + 50]
+        body = {"request_docs": [{"doc_token": doc_id, "doc_type": "docx"} for doc_id in chunk]}
+        try:
+            data = _run(
+                runner,
+                [bin_path, "drive", "metas", "batch_query", "--data", json.dumps(body), "--as", "user"],
+                timeout=60,
+            )
+        except LarkCliError as exc:
+            logger.warning("lark-cli could not read when documents changed: %s", exc)
+            continue
+        for meta in data.get("metas") or []:
+            try:
+                times[str(meta.get("doc_token"))] = int(meta.get("latest_modify_time"))
+            except (TypeError, ValueError):
+                continue
+    return times
 
 
 __all__ = [
@@ -563,6 +658,8 @@ __all__ = [
     "LarkCliError",
     "export_markdown_via_lark_cli",
     "lark_cli_ready",
+    "modified_times",
     "note_digest",
+    "pushed_note_path",
     "parse_lark_cli_output",
 ]

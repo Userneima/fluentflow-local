@@ -52,6 +52,8 @@ class FakeDoc:
         self.writes: list[str] = []
         self.calls: list[list[str]] = []
         self.fail_markdown_fetch = False
+        self.gone = False
+        self.modified = 1700000000
         self._next = 0
 
     def _id(self) -> str:
@@ -74,14 +76,58 @@ class FakeDoc:
     def texts(self) -> list[str]:
         return [b["text"] for b in self.blocks if b["tag"] != "img"]
 
+    def markdown(self) -> str:
+        """The document as lark-cli's markdown export shows it."""
+        shown = ["<title>t</title>"]
+        for b in self.blocks:
+            if b["tag"] == "img":
+                shown.append(f"![](https://feishu.cn/file/{b['token']})")
+            elif b["tag"].startswith("h"):
+                shown.append("#" * int(b["tag"][1:]) + " " + b["text"])
+            else:
+                shown.append(b["text"])
+        return "\n\n".join(shown) + "\n"
+
+    def edit(self, old: str, new: str) -> None:
+        """An edit made in Feishu."""
+        hits = [b for b in self.blocks if old in b.get("text", "")]
+        assert len(hits) == 1, old
+        hits[0]["text"] = hits[0]["text"].replace(old, new)
+        self.revision += 1
+        self.modified += 100
+
+    def add_after(self, text: str, markdown: str) -> None:
+        at = next(i for i, b in enumerate(self.blocks) if text in b.get("text", "")) + 1
+        self.blocks[at:at] = self._parse(markdown)
+        self.revision += 1
+        self.modified += 100
+
     def _xml(self) -> str:
         return f'<title id="{DOC}">t</title>' + "".join(
-            f'<{b["tag"]} id="{b["id"]}">{html.escape(b["text"])}</{b["tag"]}>' for b in self.blocks
+            f'<img id="{b["id"]}" src="{b["token"]}"/>' if b["tag"] == "img"
+            else f'<{b["tag"]} id="{b["id"]}">{html.escape(b["text"])}</{b["tag"]}>'
+            for b in self.blocks
         )
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
+        if self.gone:
+            return _fail("Document page has been deleted. This page can no longer be edited")
+        if cmd[1:3] == ["drive", "metas"]:
+            return _ok({"metas": [{"doc_token": DOC, "latest_modify_time": str(self.modified)}]})
         verb = cmd[2]
+        if verb == "+media-insert":
+            marker = _flag(cmd, "--selection-with-ellipsis")
+            at = next(i for i, b in enumerate(self.blocks) if marker in b.get("text", ""))
+            block = {"tag": "img", "id": self._id(), "token": f"tok{self._next}"}
+            self.blocks.insert(at, block)
+            self.modified += 1
+            return _ok({"block_id": block["id"], "file_token": block["token"], "document_id": DOC})
+        if verb == "+media-download":
+            from pathlib import Path
+            name = _flag(cmd, "--output") + ".png"
+            (Path(kwargs["cwd"]) / name).write_bytes(b"png")
+            return _ok({"saved_path": str(Path(kwargs["cwd"]) / name), "content_type": "image/png"})
         if verb == "+create":
             self.blocks = self._parse(kwargs.get("input") or "")
             self.revision += 1
@@ -91,12 +137,13 @@ class FakeDoc:
             if "--doc-format" in cmd and _flag(cmd, "--doc-format") == "markdown":
                 if self.fail_markdown_fetch:
                     return _fail("cannot read")
-                return _ok({"document": {"content": "\n\n".join(self.texts()), "revision_id": self.revision}})
+                return _ok({"document": {"content": self.markdown(), "revision_id": self.revision}})
             return _ok({"document": {"document_id": DOC, "content": self._xml(), "revision_id": self.revision}})
         if verb == "+update":
             command = _flag(cmd, "--command")
             self.writes.append(command)
             self.revision += 1
+            self.modified += 1
             if command == "block_delete":
                 gone = set(_flag(cmd, "--block-id").split(","))
                 self.blocks = [b for b in self.blocks if b["id"] not in gone]
@@ -107,7 +154,7 @@ class FakeDoc:
                 self.blocks[at:at] = new
             elif command == "str_replace":
                 pattern, content = _flag(cmd, "--pattern"), _flag(cmd, "--content")
-                hits = [b for b in self.blocks if pattern in b["text"]]
+                hits = [b for b in self.blocks if pattern in b.get("text", "")]
                 if len(hits) != 1:
                     return _ok({"document": {"revision_id": self.revision}, "result": "failed"})
                 hits[0]["text"] = hits[0]["text"].replace(pattern, content)

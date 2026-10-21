@@ -149,8 +149,10 @@ def test_the_document_its_version_and_each_screenshots_file_are_recorded(tmp_pat
 
     sync = result["sync"]
     assert sync["url"] == DOC_URL and sync["doc_id"]
-    assert sync["revision_id"] == 9, "the version after the last write"
+    assert sync["revision_id"] == 5, "the version the document reports when read after the last write"
+    assert sync["feishu_modified_at"] == 1700000000
     assert sync["images"] == [{"src": _frame_src("note_0001.jpg"), "name": "note_0001.jpg",
+                               "line": f"![开场画面]({_frame_src('note_0001.jpg')})", "caption": "图 1：开场画面",
                                "file_token": "file1", "block_id": "blk1"}]
     assert sync["note_digest"]
 
@@ -163,3 +165,10 @@ def test_the_document_stands_when_the_links_cannot_be_fixed(tmp_path):
     result = _export(tmp_path, FakeCli(outline=OUTLINE, replace=broken))
     assert result["ok"] and result["url"] == DOC_URL
     assert set(result["sync"]["link_errors"]) == {"第五章", "一、开场", "别处"}
+
+
+def test_what_feishu_would_eat_is_escaped_outside_code():
+    md = feishu_note.to_feishu("a ~约~ 数，~~删掉~~，<tag> 留着，<b>粗</b>，`<code>~` 原样。").markdown
+    assert "\\~约\\~" in md and "~~删掉~~" in md
+    assert "\\<tag>" in md and "<b>粗</b>" in md
+    assert "`<code>~`" in md
