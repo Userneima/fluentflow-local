@@ -2,20 +2,19 @@ import {TEXT_PROVIDERS, textProvider, textProviderLabel} from '../lib/textProvid
 import {useEffect, useState} from 'react';
 import SvgIcon from './SvgIcon.jsx';
 import {
+    MoreInfo,
     RouteCard,
-    SecretFeedback,
+    SecretInput,
     SettingCheckbox,
     cellBase,
     fieldLabelClass,
     inputClass,
-    saveButtonClass,
 } from './settingsPrimitives.jsx';
 import {
     LARK_EXPORT_ROUTE_AUTO,
     LARK_EXPORT_ROUTE_LOCAL_CLI,
     LARK_EXPORT_ROUTE_OPENAPI,
     normalizeSourceMode,
-    timeAgo,
     useApi,
     useI18n,
 } from '../app/shared.jsx';
@@ -70,7 +69,7 @@ export const SpeakerDiarizationRow = ({state, status}) => {
         ? (zh ? '这台电脑还没装讲话人区分组件。重新运行一次安装脚本就会装上。' : 'The speaker separation component is not installed on this computer. Run the installer again to add it.')
         : availability === 'needs_model'
             ? (zh ? '讲话人区分的模型还没下载（约 47MB）。在 FluentFlow 文件夹里运行 scripts/fetch_diarization_models.py 即可。' : 'The speaker separation models are not downloaded yet (about 47 MB). Run scripts/fetch_diarization_models.py in the FluentFlow folder.')
-            : (zh ? '标出每句话是谁说的，适合多人会议和访谈。默认关闭，要用时打开。' : 'Labels who said each line. Useful for meetings and interviews. Off unless you turn it on.');
+            : (zh ? '标出每句话是谁说的，适合多人会议和访谈。' : 'Labels who said each line, for meetings and interviews.');
     const fallback = status?.fallback_reason || '';
     return (
         <label htmlFor="settingsSpeakerDiarization" className={`flex items-start justify-between gap-3 ${cellBase} ${available ? 'cursor-pointer hover:bg-[#f4f3f3] dark:hover:bg-white/[0.04]' : 'cursor-not-allowed'}`}>
@@ -106,8 +105,8 @@ export const VoiceEnhanceRow = ({state}) => {
                 <span className="block text-sm font-bold">{lang === 'zh' ? '增强人声清晰度' : 'Clearer voice'}</span>
                 <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">
                     {lang === 'zh'
-                        ? '手机放桌上录的讲座会发闷，开了会另存一份人声更清楚的音频，转写也读它。已经混好的片子别开，会被改坏。'
-                        : 'For lectures recorded with a phone on the table, which sound muffled. Saves a clearer copy of the audio and transcribes from it. Leave off for already-mixed material, which it damages.'}
+                        ? '适合手机放桌上录的、发闷的讲座；已经混好的片子别开。'
+                        : 'For muffled lectures recorded with a phone on the table; leave off for already-mixed material.'}
                 </span>
             </span>
             <SettingCheckbox
@@ -164,13 +163,16 @@ export const VideoCookiesRow = ({state}) => {
             </div>
             <p className="mt-2.5 text-xs leading-relaxed text-on-surface-variant">
                 {lang === 'zh'
-                    ? '从所选浏览器复用你的登录 cookie，下载需要登录才能看的视频。仅在本机读取、不会上传；B 站高清和 YouTube 受限视频需要它。'
-                    : 'Reuse your login cookies from the chosen browser to download videos that need sign-in. Read locally only, never uploaded; needed for Bilibili HD and restricted YouTube videos.'}
-                {' '}
-                {lang === 'zh'
-                    ? '这个选择存在本机服务里，AI 工具提交的链接也会用它。'
-                    : 'The choice is kept by the local service, so links submitted by AI tools use it too.'}
+                    ? '下载 B 站高清、YouTube 受限视频时，借用这个浏览器的登录状态。'
+                    : 'Borrows this browser\'s login to download Bilibili HD and restricted YouTube videos.'}
             </p>
+            <MoreInfo lang={lang}>
+                <p>
+                    {lang === 'zh'
+                        ? '只在本机读取浏览器的登录 cookie，不会上传。这个选择存在本机服务里，AI 工具提交的链接也会用它。'
+                        : 'The login cookies are read on this machine only and never uploaded. The choice is kept by the local service, so links submitted by AI tools use it too.'}
+                </p>
+            </MoreInfo>
             {videoPrefError === 'video_cookies_browser' && (
                 <p className="mt-1.5 text-xs font-semibold text-red-600 dark:text-red-300">
                     {lang === 'zh'
@@ -309,8 +311,8 @@ export const CpuUsageRow = ({state}) => {
             {cpuUsage === 'full' && (
                 <p className="mt-3 text-xs font-semibold leading-relaxed text-amber-600 dark:text-amber-300">
                     {zh
-                        ? '处理时同时播放视频或开会，可能会卡顿、爆音。这是电脑忙不过来，文件本身没有问题，处理完再播放就正常。'
-                        : 'A video or call running while this processes may stutter or pop. That is the computer being busy; the files are fine and play normally once processing ends.'}
+                        ? '处理时同时放视频或开会可能卡顿、爆音，文件本身没有问题。'
+                        : 'A video or call running alongside may stutter or pop; the files themselves are fine.'}
                 </p>
             )}
             {videoPrefError === 'cpu_usage' && (
@@ -331,8 +333,8 @@ export const AutoIllustrateRow = ({state}) => {
                 <span className="block text-sm font-bold">{lang === 'zh' ? '给笔记自动配图' : 'Auto-illustrate notes'}</span>
                 <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">
                     {lang === 'zh'
-                        ? '视频笔记自动截取关键画面配图；需要通义千问（阿里云百炼）的 Key，会产生额外费用。纯口播视频通常无可配图。'
-                        : 'Capture key frames into video notes. Needs a Qwen (Alibaba Cloud Bailian) key and adds cost. Talking-head videos usually have nothing to illustrate.'}
+                        ? '从视频里截关键画面放进笔记，要用通义千问的 Key，会多花一点钱。'
+                        : 'Adds key frames to video notes. Uses the Qwen key and costs a little extra.'}
                 </span>
             </span>
             <SettingCheckbox
@@ -401,12 +403,15 @@ export const LarkExportRouteRow = ({state}) => {
 // Where the app route puts the document. Without a folder it lands in the
 // app's own space, which the user may not be able to open.
 export const LarkFolderRow = ({state}) => {
-    const {t} = useI18n();
+    const {t, lang} = useI18n();
     const {settings, updateLarkFolder, commitLarkFolder, videoPrefError = ''} = state;
     return (
         <div className={`md:col-span-2 space-y-2 ${cellBase}`}>
             <label htmlFor="settingsLarkFolder" className="block text-sm font-bold">{t('set.larkFolder')}</label>
-            <span className="block text-xs leading-relaxed text-on-surface-variant">{t('set.larkFolderHint')}</span>
+            <span className="block text-xs leading-relaxed text-on-surface-variant">
+                {lang === 'zh' ? '粘贴飞书文件夹链接，应用导出的文档放在这里。' : 'Paste a Feishu folder link; app exports go there.'}
+            </span>
+            <MoreInfo lang={lang}><p>{t('set.larkFolderHint')}</p></MoreInfo>
             <input
                 id="settingsLarkFolder"
                 className={inputClass}
@@ -416,32 +421,6 @@ export const LarkFolderRow = ({state}) => {
                 onBlur={()=>commitLarkFolder?.()}
             />
             {videoPrefError === 'lark_folder_token' && <PrefSaveFailed/>}
-        </div>
-    );
-};
-
-export const LarkExportHistory = ({state}) => {
-    const {t} = useI18n();
-    const {larkExports} = state;
-    if (larkExports.length === 0) return null;
-    return (
-        <div className={`md:col-span-2 ${cellBase}`}>
-            <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-sm font-bold">{t('set.larkHistory')}</h3>
-                <span className="text-xs font-semibold text-on-surface-variant">{larkExports.length} {t('dash.docUnit')}</span>
-            </div>
-            <div className="max-h-64 space-y-2 overflow-y-auto hide-scrollbar">
-                {larkExports.map((ex, i) => (
-                    <a key={i} href={ex.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 rounded-[12px] bg-[#f4f3f3] p-3 transition hover:bg-[#efeeee] dark:bg-white/[0.08] dark:hover:bg-white/[0.12]">
-                        <SvgIcon name="description" className="text-lg text-primary"/>
-                        <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-semibold">{ex.title}</span>
-                            <span className="block text-[10px] text-on-surface-variant">{timeAgo(ex.timestamp, t)}</span>
-                        </span>
-                        <SvgIcon name="open_in_new" className="text-sm text-on-surface-variant"/>
-                    </a>
-                ))}
-            </div>
         </div>
     );
 };
@@ -531,22 +510,24 @@ export const ProviderModelField = ({provider, value, configured, onChange}) => {
 };
 
 // Text-model provider, model, and the key that provider needs. `extraKey` is an
-// optional second key field rendered alongside it.
-export const TextModelKeyRows = ({state, extraKey = null}) => {
+// optional second key field rendered alongside it. `keyGroup` ({group, keys})
+// is the set of key fields saved together by the section's one save button.
+export const TextModelKeyRows = ({state, keyGroup, extraKey = null}) => {
     const {t, lang} = useI18n();
     const {
         updateSettingNow, aiProvider, aiModel, aiProviderDefaults, activeAiSecretKey, activeAiConfigured,
-        secretDraft, setSecretDraft, saveSecret, secretSaving, secretFeedback, secretRetentionText, secretInputPlaceholder,
+        secretRetentionText, secretInputPlaceholder,
     } = state;
     return (
         <div className="grid gap-4 px-5 py-4 md:grid-cols-2">
             <div className="space-y-2">
                 <label className={fieldLabelClass}>{t('set.provider')}</label>
+                {/* No "recommended" mark here: this list shows what is chosen
+                    now, and a mark on another provider reads as "you chose
+                    wrong". The first-run setup still recommends one. */}
                 <select className={inputClass} value={aiProvider} onChange={e=>updateSettingNow({aiProvider:e.target.value, aiModel: aiProviderDefaults[e.target.value] || ''})}>
                     {TEXT_PROVIDERS.map((item) => (
-                        <option key={item.id} value={item.id}>
-                            {lang === 'zh' ? item.labelZh : item.labelEn}{item.recommended ? (lang === 'zh' ? '（推荐）' : ' (recommended)') : ''}
-                        </option>
+                        <option key={item.id} value={item.id}>{lang === 'zh' ? item.labelZh : item.labelEn}</option>
                     ))}
                 </select>
             </div>
@@ -563,11 +544,7 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
                         {lang === 'zh' ? '去创建 Key' : 'Create a key'}
                     </a>
                 </p>
-                <div className="flex gap-2">
-                    <input className={inputClass} placeholder={secretInputPlaceholder(activeAiConfigured)} type="password" value={secretDraft[activeAiSecretKey] || ''} onChange={e=>setSecretDraft(d=>({...d, [activeAiSecretKey]: e.target.value}))}/>
-                    <button type="button" disabled={secretSaving || !secretDraft[activeAiSecretKey]} onClick={()=>saveSecret(activeAiSecretKey)} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
-                </div>
-                <SecretFeedback feedback={secretFeedback} keyName={activeAiSecretKey} lang={lang}/>
+                <SecretInput state={state} name={activeAiSecretKey} {...keyGroup} placeholder={secretInputPlaceholder(activeAiConfigured)}/>
             </div>
             {extraKey}
         </div>
@@ -575,63 +552,50 @@ export const TextModelKeyRows = ({state, extraKey = null}) => {
 };
 
 // The DashScope key as a separate field, for when it is not the text-model key.
-// The page passes in the copy that says what it is for.
-export const DashscopeKeyField = ({state, description}) => {
+export const DashscopeKeyField = ({state, keyGroup}) => {
     const {t, lang} = useI18n();
-    const {
-        credentialStatus, credentialConfigured, secretDraft, setSecretDraft, saveSecret,
-        secretSaving, secretFeedback, secretRetentionText, secretInputPlaceholder,
-    } = state;
+    const {credentialStatus, credentialConfigured, secretRetentionText, secretInputPlaceholder} = state;
     const configured = credentialConfigured(credentialStatus, 'dashscope_api_key');
     return (
         <div className="space-y-2 md:col-span-2">
             <label className={fieldLabelClass}>{t('set.dashscopeKey')}</label>
-            <p className="text-xs leading-relaxed text-on-surface-variant">{description}</p>
-            <p className="text-xs leading-relaxed text-on-surface-variant">{secretRetentionText(configured)}</p>
-            <div className="flex gap-2">
-                <input className={inputClass} placeholder={secretInputPlaceholder(configured)} type="password" value={secretDraft.dashscope_api_key || ''} onChange={e=>setSecretDraft(d=>({...d, dashscope_api_key: e.target.value}))}/>
-                <button type="button" disabled={secretSaving || !secretDraft.dashscope_api_key} onClick={()=>saveSecret('dashscope_api_key')} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
-            </div>
-            <SecretFeedback feedback={secretFeedback} keyName="dashscope_api_key" lang={lang}/>
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+                {lang === 'zh' ? '给笔记自动配图时用来挑截图。' : 'Picks screenshots when notes are auto-illustrated.'}
+                {' '}
+                {secretRetentionText(configured)}
+            </p>
+            <SecretInput state={state} name="dashscope_api_key" {...keyGroup} placeholder={secretInputPlaceholder(configured)}/>
         </div>
     );
 };
 
 // Optional: with it the note is written while looking at the frames. The text
 // model key above is the one a first-time user needs; this one upgrades the note.
-export const AnthropicKeyField = ({state}) => {
+export const AnthropicKeyField = ({state, keyGroup}) => {
     const {lang} = useI18n();
-    const {
-        credentialStatus, credentialConfigured, secretDraft, setSecretDraft, saveSecret,
-        secretSaving, secretFeedback, secretRetentionText, secretInputPlaceholder,
-        activeAiConfigured,
-    } = state;
+    const {credentialStatus, credentialConfigured, secretRetentionText, secretInputPlaceholder, activeAiConfigured} = state;
     const configured = credentialConfigured(credentialStatus, 'anthropic_api_key');
+    const zh = lang === 'zh';
     // What happens without it depends on whether a text-model key is there;
     // promising "the text model above" when none is filled in was untrue.
     const withoutIt = activeAiConfigured
-        ? (lang === 'zh' ? '不填也能出笔记，由上面的文本模型根据转录稿写。' : 'Without it the text model above still writes a note from the transcript.')
-        : (lang === 'zh' ? '上面的文本模型 Key 也还没填，两个都不填就只有转录稿，没有笔记。' : 'No text-model key is filled in above either; with neither, jobs produce a transcript but no note.');
+        ? (zh ? '不填也能出笔记，由上面的文本模型根据转录稿写。' : 'Without it the text model above still writes a note from the transcript.')
+        : (zh ? '上面的文本模型 Key 也还没填，两个都不填就只有转录稿，没有笔记。' : 'No text-model key is filled in above either; with neither, jobs produce a transcript but no note.');
     return (
         <div className="space-y-2">
-            <label className={fieldLabelClass}>{lang === 'zh' ? 'Anthropic API Key（可选）' : 'Anthropic API Key (optional)'}</label>
+            <label className={fieldLabelClass}>{zh ? 'Anthropic API Key（可选）' : 'Anthropic API Key (optional)'}</label>
             <p className="text-xs leading-relaxed text-on-surface-variant">
-                {lang === 'zh'
-                    ? '另外填上它，笔记改由 Claude 结合画面来写，能引用幻灯片和白板上的内容。'
-                    : 'Add this as well and Claude writes the note while looking at the video frames, so it can quote slides and whiteboards.'}
-                {lang === 'zh' ? '' : ' '}
-                {withoutIt}
+                {zh ? '填上后由 Claude 结合画面写笔记。' : 'With it, Claude writes the note from the video frames.'}
                 {' '}
-                <a className="font-semibold text-primary underline" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
-                    {lang === 'zh' ? '在 Anthropic 控制台创建 Key' : 'Create a key in the Anthropic Console'}
-                </a>
+                {secretRetentionText(configured)}
             </p>
-            <p className="text-xs leading-relaxed text-on-surface-variant">{secretRetentionText(configured)}</p>
-            <div className="flex gap-2">
-                <input className={inputClass} placeholder={secretInputPlaceholder(configured)} type="password" value={secretDraft.anthropic_api_key || ''} onChange={e=>setSecretDraft(d=>({...d, anthropic_api_key: e.target.value}))}/>
-                <button type="button" disabled={secretSaving || !secretDraft.anthropic_api_key} onClick={()=>saveSecret('anthropic_api_key')} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
-            </div>
-            <SecretFeedback feedback={secretFeedback} keyName="anthropic_api_key" lang={lang}/>
+            <MoreInfo lang={lang}>
+                <p>{zh ? '结合画面写的笔记能引用幻灯片和白板上的内容。' : 'A note written from the frames can quote slides and whiteboards.'} {withoutIt}</p>
+                <a className="font-semibold text-primary underline" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
+                    {zh ? '在 Anthropic 控制台创建 Key' : 'Create a key in the Anthropic Console'}
+                </a>
+            </MoreInfo>
+            <SecretInput state={state} name="anthropic_api_key" {...keyGroup} placeholder={secretInputPlaceholder(configured)}/>
         </div>
     );
 };
@@ -640,12 +604,12 @@ export const AnthropicKeyField = ({state}) => {
 // relay). When Claude is not there, it judges the cut from screenshots of the
 // long silent stretches (backend cut_judge). Address and model are shown back;
 // only the key is hidden.
-export const VisionModelField = ({state}) => {
+export const VISION_MODEL_KEYS = ['vision_base_url', 'vision_api_key', 'vision_model'];
+
+export const VisionModelField = ({state, keyGroup}) => {
     const {lang} = useI18n();
-    const {
-        credentialStatus, credentialConfigured, secretDraft, setSecretDraft, saveSecret,
-        secretSaving, secretFeedback, secretInputPlaceholder,
-    } = state;
+    const {credentialStatus, credentialConfigured, credentialLoad, secretInputPlaceholder} = state;
+    const zh = lang === 'zh';
     const keyConfigured = credentialConfigured(credentialStatus, 'vision_api_key');
     const shown = {
         vision_base_url: credentialStatus?.vision_base_url || '',
@@ -654,70 +618,64 @@ export const VisionModelField = ({state}) => {
     const field = (name, label, placeholder, type = 'text') => (
         <div className="space-y-1">
             <span className="text-xs text-on-surface-variant">{label}</span>
-            <div className="flex gap-2">
-                <input
-                    className={inputClass}
-                    type={type}
-                    placeholder={name === 'vision_api_key' ? secretInputPlaceholder(keyConfigured) : (shown[name] || placeholder)}
-                    value={secretDraft[name] || ''}
-                    onChange={e=>setSecretDraft(d=>({...d, [name]: e.target.value}))}
-                />
-                <button type="button" disabled={secretSaving || !secretDraft[name]} onClick={()=>saveSecret(name)} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
-            </div>
-            <SecretFeedback feedback={secretFeedback} keyName={name} lang={lang}/>
+            <SecretInput
+                state={state}
+                name={name}
+                {...keyGroup}
+                type={type}
+                placeholder={name === 'vision_api_key' ? secretInputPlaceholder(keyConfigured) : (shown[name] || placeholder)}
+            />
         </div>
     );
     const ready = keyConfigured && shown.vision_base_url && shown.vision_model;
     return (
         <div className="space-y-2">
-            <label className={fieldLabelClass}>{lang === 'zh' ? '看图模型（可选）' : 'Picture model (optional)'}</label>
+            <label className={fieldLabelClass}>{zh ? '看图模型（可选）' : 'Picture model (optional)'}</label>
             <p className="text-xs leading-relaxed text-on-surface-variant">
-                {lang === 'zh'
-                    ? '没有 Claude 时，判断剪哪里改由它看长空白的截图，而不是只看转录稿。填兼容 OpenAI 接口的服务，三项都填才生效，比如月之暗面：地址 https://api.moonshot.cn/v1，模型 kimi-k2.6。'
-                    : 'Without Claude, this model judges the cut from screenshots of long silent stretches instead of the transcript alone. Any OpenAI-compatible service; all three fields are needed, e.g. Moonshot: https://api.moonshot.cn/v1 with kimi-k2.6.'}
+                {zh ? '没有 Claude 时，由它看截图判断剪哪里。' : 'Without Claude, it judges the cut from screenshots.'}
                 {' '}
-                {ready
-                    ? (lang === 'zh' ? `现在用的是 ${shown.vision_model}。` : `Now using ${shown.vision_model}.`)
-                    : (lang === 'zh' ? '还没配好。' : 'Not set up yet.')}
+                {credentialLoad !== 'ready'
+                    ? ''
+                    : ready
+                        ? (zh ? `现在用的是 ${shown.vision_model}。` : `Now using ${shown.vision_model}.`)
+                        : (zh ? '还没配好。' : 'Not set up yet.')}
             </p>
-            {field('vision_base_url', lang === 'zh' ? '地址' : 'Address', 'https://api.moonshot.cn/v1')}
+            <MoreInfo lang={lang}>
+                <p>
+                    {zh
+                        ? '填兼容 OpenAI 接口的服务，三项都填才生效。比如月之暗面：地址 https://api.moonshot.cn/v1，模型 kimi-k2.6。没有它时只看转录稿判断。'
+                        : 'Any OpenAI-compatible service; all three fields are needed, e.g. Moonshot: https://api.moonshot.cn/v1 with kimi-k2.6. Without it the cut is judged from the transcript alone.'}
+                </p>
+            </MoreInfo>
+            {field('vision_base_url', zh ? '地址' : 'Address', 'https://api.moonshot.cn/v1')}
             {field('vision_api_key', 'Key', '', 'password')}
-            {field('vision_model', lang === 'zh' ? '模型名' : 'Model', 'kimi-k2.6')}
+            {field('vision_model', zh ? '模型名' : 'Model', 'kimi-k2.6')}
         </div>
     );
 };
 
-export const FeishuAppCredentialRows = ({state}) => {
+export const FEISHU_APP_KEYS = ['lark_app_id', 'lark_app_secret'];
+
+export const FeishuAppCredentialRows = ({state, keyGroup}) => {
     const {lang} = useI18n();
-    const {credentialStatus, secretDraft, setSecretDraft, saveSecret, secretSaving, secretFeedback, secretStatusText} = state;
+    const {credentialStatus, secretStatusText} = state;
     return (
         <div className="grid gap-4 px-5 py-4 md:grid-cols-2">
             <div className="space-y-2">
                 <label className={fieldLabelClass}>{lang === 'zh' ? '飞书应用 ID' : 'Feishu app ID'}</label>
-                <div className="flex gap-2">
-                    <input className={inputClass} placeholder={secretStatusText(credentialStatus?.lark_app_id_configured)} value={secretDraft.lark_app_id || ''} onChange={e=>setSecretDraft(d=>({...d, lark_app_id: e.target.value}))}/>
-                    <button type="button" disabled={secretSaving || !secretDraft.lark_app_id} onClick={()=>saveSecret('lark_app_id')} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
-                </div>
-                <SecretFeedback feedback={secretFeedback} keyName="lark_app_id" lang={lang}/>
+                <SecretInput state={state} name="lark_app_id" {...keyGroup} type="text" placeholder={secretStatusText(credentialStatus?.lark_app_id_configured)}/>
             </div>
             <div className="space-y-2">
                 <label className={fieldLabelClass}>{lang === 'zh' ? '飞书应用密钥' : 'Feishu app secret'}</label>
-                <div className="flex gap-2">
-                    <input className={inputClass} placeholder={secretStatusText(credentialStatus?.lark_app_secret_configured)} type="password" value={secretDraft.lark_app_secret || ''} onChange={e=>setSecretDraft(d=>({...d, lark_app_secret: e.target.value}))}/>
-                    <button type="button" disabled={secretSaving || !secretDraft.lark_app_secret} onClick={()=>saveSecret('lark_app_secret')} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
-                </div>
-                <SecretFeedback feedback={secretFeedback} keyName="lark_app_secret" lang={lang}/>
+                <SecretInput state={state} name="lark_app_secret" {...keyGroup} placeholder={secretStatusText(credentialStatus?.lark_app_secret_configured)}/>
             </div>
         </div>
     );
 };
 
-export const PyannoteTokenRow = ({state}) => {
+export const PyannoteTokenRow = ({state, keyGroup}) => {
     const {lang} = useI18n();
-    const {
-        secretDraft, setSecretDraft, saveSecret, secretSaving, secretFeedback,
-        pyannoteTokenConfigured, pyannoteTokenEditing, setPyannoteTokenEditing,
-    } = state;
+    const {setSecretDraft, pyannoteTokenConfigured, pyannoteTokenEditing, setPyannoteTokenEditing} = state;
     const showInput = !pyannoteTokenConfigured || pyannoteTokenEditing;
     return (
         <div className="px-5 py-4">
@@ -726,8 +684,8 @@ export const PyannoteTokenRow = ({state}) => {
                     <label className={fieldLabelClass}>{lang === 'zh' ? 'pyannote 模型令牌（Hugging Face）' : 'pyannote model token (Hugging Face)'}</label>
                     <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">
                         {pyannoteTokenConfigured
-                            ? (lang === 'zh' ? '已配置。token 不会显示，需要更换时重新输入。' : 'Configured. The token is hidden. Re-enter it only when replacing it.')
-                            : (lang === 'zh' ? '选了 pyannote 讲话人区分才用得上：用来下载它的模型，下载一次后在本机运行。' : 'Only for the pyannote speaker separation backend: downloads its model once; it then runs on this machine.')}
+                            ? (lang === 'zh' ? '已配置。需要更换时重新输入。' : 'Configured. Re-enter it only when replacing it.')
+                            : (lang === 'zh' ? '用来下载 pyannote 讲话人区分的模型，下载一次后在本机运行。' : 'Downloads the pyannote speaker separation model once; it then runs on this machine.')}
                     </p>
                 </div>
                 {pyannoteTokenConfigured && !pyannoteTokenEditing && (
@@ -738,8 +696,7 @@ export const PyannoteTokenRow = ({state}) => {
             </div>
             {showInput && (
                 <div className="flex flex-col gap-2 md:flex-row">
-                    <input className={inputClass} placeholder={lang === 'zh' ? '粘贴 Hugging Face hf_... token' : 'Paste Hugging Face hf_... token'} type="password" value={secretDraft.pyannote_auth_token || ''} onChange={e=>setSecretDraft(d=>({...d, pyannote_auth_token: e.target.value}))}/>
-                    <button type="button" disabled={secretSaving || !secretDraft.pyannote_auth_token} onClick={()=>saveSecret('pyannote_auth_token')} className={saveButtonClass}>{lang === 'zh' ? '保存' : 'Save'}</button>
+                    <SecretInput state={state} name="pyannote_auth_token" {...keyGroup} placeholder={lang === 'zh' ? '粘贴 Hugging Face hf_... token' : 'Paste Hugging Face hf_... token'}/>
                     {pyannoteTokenConfigured && (
                         <button type="button" onClick={()=>{setPyannoteTokenEditing(false); setSecretDraft(d=>({...d, pyannote_auth_token: ''}));}} className="rounded-[14px] border border-[#dedada] px-3 py-3 text-sm font-extrabold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px dark:border-white/[0.12] dark:text-white dark:hover:bg-white/[0.10]">
                             {lang === 'zh' ? '取消' : 'Cancel'}
@@ -747,7 +704,6 @@ export const PyannoteTokenRow = ({state}) => {
                     )}
                 </div>
             )}
-            <SecretFeedback feedback={secretFeedback} keyName="pyannote_auth_token" lang={lang}/>
         </div>
     );
 };

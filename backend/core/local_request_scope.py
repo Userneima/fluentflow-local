@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import time
 from typing import Optional
 
 from fastapi import HTTPException, Request
@@ -32,6 +33,29 @@ def require_local_agent_access(request: Request) -> None:
     supplied = bearer or (request.headers.get(AGENT_ACCESS_HEADER) or "").strip()
     if not supplied or not hmac.compare_digest(supplied, token):
         raise HTTPException(status_code=401, detail="Agent API 访问令牌无效。")
+    _note_agent_request(request)
+
+
+# When an agent (the MCP server, a script) last got through with the token, so
+# the Agent access panel can say whether one is connected. Kept in memory: it
+# answers "has an agent come by since FluentFlow started", which is what a
+# person setting one up needs. A browser page reading the same API (it sends
+# Sec-Fetch-* headers, which no agent client does) is not an agent.
+_last_agent_request_at: Optional[float] = None
+
+
+def _note_agent_request(request: Request) -> None:
+    global _last_agent_request_at
+    if request.headers.get("sec-fetch-mode") or request.headers.get("sec-fetch-site"):
+        return
+    _last_agent_request_at = time.time()
+
+
+def agent_access_status() -> dict:
+    return {
+        "token_configured": bool((os.environ.get(AGENT_ACCESS_TOKEN_ENV) or "").strip()),
+        "last_agent_request_at": _last_agent_request_at,
+    }
 
 
 def normalize_client_id(value: Optional[str]) -> Optional[str]:

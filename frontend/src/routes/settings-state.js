@@ -33,6 +33,9 @@ export const useSettingsPageState = () => {
     const {getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkVideoCookies, getPreferences, savePreferences} = useApi();
     const [settings, setSettings] = useState(() => loadSettings());
     const [credentialStatus, setCredentialStatus] = useState(null);
+    // Until the service answers, nothing on the page may say a key is or is
+    // not configured: 'loading' | 'ready' | 'error'.
+    const [credentialLoad, setCredentialLoad] = useState('loading');
     const [diarizationStatus, setDiarizationStatus] = useState(null);
     const [cookieCheck, setCookieCheck] = useState(null);
     const [cookieChecking, setCookieChecking] = useState(false);
@@ -75,7 +78,9 @@ export const useSettingsPageState = () => {
             setSettings(next);
             saveSettings(next);
         }
-        getCredentialsStatus().then(setCredentialStatus).catch(() => {});
+        getCredentialsStatus()
+            .then((status) => { setCredentialStatus(status || {}); setCredentialLoad('ready'); })
+            .catch(() => setCredentialLoad('error'));
         getSpeakerDiarizationStatus().then(setDiarizationStatus).catch(() => {});
         let active = true;
         if (getPreferences) {
@@ -195,49 +200,60 @@ export const useSettingsPageState = () => {
         });
     };
 
-    const saveSecret = async (key) => {
-        const value = secretDraft[key];
-        if (value === undefined) return;
+    // Saves every field of one group (`group` names it for the feedback line)
+    // that has something typed in, in one request, and only when asked: a key
+    // half pasted is never sent because the cursor left the field.
+    const saveSecrets = async (group, keys) => {
+        const payload = Object.fromEntries(
+            keys.map((key) => [key, String(secretDraft[key] ?? '').trim()]).filter(([, value]) => value),
+        );
+        const names = Object.keys(payload);
+        if (names.length === 0) return;
         setSecretSaving(true);
         setSecretFeedback(null);
         try {
-            const next = await saveCredentials({[key]: value});
-            const fresh = await getCredentialsStatus().catch(() => next);
-            const statusKey = credentialStatusKey(key);
-            if (value && statusKey) {
-                fresh[statusKey] = true;
+            const next = await saveCredentials(payload);
+            const fresh = {...(await getCredentialsStatus().catch(() => next))};
+            for (const key of names) {
+                fresh[credentialStatusKey(key)] = true;
                 if (key === 'dashscope_api_key' || key === 'qwen_api_key') {
                     fresh.qwen_api_key_configured = true;
                     fresh.dashscope_api_key_configured = true;
                 }
             }
             setCredentialStatus(fresh);
-            if (key === 'pyannote_auth_token') {
+            setCredentialLoad('ready');
+            if (names.includes('pyannote_auth_token')) {
                 const status = await getSpeakerDiarizationStatus();
                 setDiarizationStatus(status);
                 setPyannoteTokenEditing(false);
             }
-            setSecretDraft((draft) => ({...draft, [key]: ''}));
-            setSecretFeedback({key, ok: true});
+            setSecretDraft((draft) => ({...draft, ...Object.fromEntries(names.map((key) => [key, '']))}));
+            setSecretFeedback({key: group, ok: true});
         } catch (err) {
-            setSecretFeedback({key, ok: false, message: err.message || String(err)});
+            setSecretFeedback({key: group, ok: false, message: err.message || String(err)});
         } finally {
             setSecretSaving(false);
         }
     };
 
+    // Whether any of these fields has something typed in that is not saved.
+    const secretsPending = (keys) => keys.some((key) => String(secretDraft[key] ?? '').trim());
+
+    const loadingText = lang === 'zh' ? '正在读取…' : 'Loading…';
+
     const secretStatusText = (configured) => (
-        configured ? (lang === 'zh' ? '已配置' : 'Configured') : (lang === 'zh' ? '未配置' : 'Not configured')
+        credentialLoad !== 'ready' ? loadingText : configured ? (lang === 'zh' ? '已配置' : 'Configured') : (lang === 'zh' ? '未配置' : 'Not configured')
     );
 
     const secretRetentionText = (configured) => (
-        configured
+        credentialLoad !== 'ready' ? loadingText : configured
             ? (lang === 'zh' ? '已配置，留空则保留' : 'Configured. Leave blank to keep it.')
             : (lang === 'zh' ? '未配置' : 'Not configured')
     );
 
     const secretInputPlaceholder = (configured) => (
-        configured
+        credentialLoad !== 'ready' ? loadingText : configured
             ? (lang === 'zh' ? '已配置，输入新 Key 可替换' : 'Configured. Enter a new key to replace it.')
             : (lang === 'zh' ? '粘贴 API Key' : 'Paste API key')
     );
@@ -277,10 +293,12 @@ export const useSettingsPageState = () => {
         // Credentials.
         credentialStatus,
         setCredentialStatus,
+        credentialLoad,
         credentialConfigured,
         secretDraft,
         setSecretDraft,
-        saveSecret,
+        saveSecrets,
+        secretsPending,
         secretSaving,
         secretFeedback,
         secretStatusText,

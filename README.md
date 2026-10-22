@@ -221,8 +221,9 @@ FluentFlow Local 自带一个 MCP 服务（让 AI 工具直接调用本应用的
 提交视频、等待结果、读取和写笔记。这个接口要一个访问令牌才开，安装脚本已经生成好一串写进了仓库根目录的
 `.env`（`FLUENTFLOW_ACCESS_TOKEN=` 那一行），后台服务和 MCP 服务都从这里读。
 
-1. 在应用左下角「菜单 → Agent 接入」里填入 `.env` 里的那串令牌，页面会生成可以直接复制的 Claude Code
-   和 Codex 配置。也可以直接照 [AGENT_INSTALL.md](AGENT_INSTALL.md) 第 4 步注册。
+1. 打开应用左下角「菜单 → Agent 接入」，复制 Claude Code 或 Codex 的命令到终端运行一次。在这台电脑上
+   不用填令牌，MCP 服务自己从 `.env` 读；面板顶部写着有没有 agent 连上。也可以直接照
+   [AGENT_INSTALL.md](AGENT_INSTALL.md) 第 4 步注册。
 2. 想确认接通了，在仓库目录运行
    `.venv/bin/python scripts/check_mcp_server.py --backend-e2e`（Windows 为
    `.venv\Scripts\python.exe scripts\check_mcp_server.py --backend-e2e`）：它启动 MCP 服务、核对工具清单，

@@ -147,7 +147,21 @@ const changelogTitleTime = (title) => {
     return `${match[1]} ${match[2]}`;
 };
 
-const parseChangelog = (markdown) => (
+const titleDate = (title) => (title.match(/\d{4}-\d{2}-\d{2}/) || [''])[0];
+
+// The page is for people using the app; a sentence that names an environment
+// variable is for whoever edits .env, and the maintenance handbook says it.
+// Such sentences are dropped, and an entry left with nothing is skipped.
+const ENV_NAME = /\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/;
+export const userFacingItem = (text) => (
+    (text.match(/[^。]+。?/g) || [])
+        .filter((sentence) => !ENV_NAME.test(sentence))
+        .join('')
+        .replace(/`([^`]*)`/g, '$1')
+        .trim()
+);
+
+export const parseChangelog = (markdown) => (
     markdown
         .split(/\n(?=##\s+)/)
         .map((block) => {
@@ -158,11 +172,11 @@ const parseChangelog = (markdown) => (
             if (!isChangelogEntryTitle(title)) return null;
             const items = lines
                 .filter((line) => line.startsWith('- '))
-                .map((line) => line.replace(/^-\s+/, '').trim())
+                .map((line) => userFacingItem(line.replace(/^-\s+/, '').trim()))
                 .filter(Boolean)
                 .slice(0, 4);
             if (items.length === 0) return null;
-            return {title, updatedAt: changelogTitleTime(title), items};
+            return {title, date: titleDate(title), updatedAt: changelogTitleTime(title), items};
         })
         .filter(Boolean)
         .slice(0, 6)
@@ -185,7 +199,15 @@ const SectionList = ({sections}) => (
     </div>
 );
 
-const ChangelogPage = ({zh}) => {
+// The newest of the build's changelog time and the dated entries: the build
+// time alone can be older than an entry when only the page bundle was rebuilt.
+export const changelogLastUpdated = (releases, configured = CHANGELOG_UPDATED_AT) => {
+    const configuredDay = String(configured || '').slice(0, 10);
+    const newestEntry = releases.map((release) => release.date).filter(Boolean).sort().pop() || '';
+    return newestEntry > configuredDay ? newestEntry : configured;
+};
+
+const ChangelogPage = ({zh, onLoaded}) => {
     const [releases, setReleases] = useState([]);
     const [loadState, setLoadState] = useState('loading');
 
@@ -194,8 +216,10 @@ const ChangelogPage = ({zh}) => {
         import('../../../docs/03-更新记录.md?raw')
             .then((mod) => {
                 if (!active) return;
-                setReleases(parseChangelog(mod.default || ''));
+                const parsed = parseChangelog(mod.default || '');
+                setReleases(parsed);
                 setLoadState('ready');
+                onLoaded?.(parsed);
             })
             .catch(() => {
                 if (!active) return;
@@ -203,34 +227,22 @@ const ChangelogPage = ({zh}) => {
                 setLoadState('error');
             });
         return () => { active = false; };
-    }, []);
+    }, [onLoaded]);
 
     return (
         <div className="overflow-hidden rounded-[22px] border border-[#dedada] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
-            <section className="grid gap-3 px-5 py-5 md:grid-cols-[180px_minmax(0,1fr)] md:gap-8">
-                <h2 className="text-sm font-extrabold text-[#111111] dark:text-white">{zh ? '更新来源' : 'Source'}</h2>
-                <div className="space-y-3">
-                    <p className="max-w-[70ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/58">
-                        {zh
-                            ? '此页直接读取项目里的 docs/03-更新记录.md。以后只维护一份更新日志，前端页面会随构建同步。'
-                            : 'This page reads docs/03-更新记录.md directly. The project keeps one changelog source and syncs this page at build time.'}
-                    </p>
-                    <div className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] px-4 text-sm font-extrabold text-[#676970] dark:border-white/[0.12] dark:text-white/58">
-                        <SvgIcon name="description" className="text-[18px]"/>
-                        docs/03-更新记录.md
-                    </div>
-                </div>
-            </section>
-            <section className="border-t border-[#ece8e8] px-5 py-5 dark:border-white/[0.10]">
+            <section className="px-5 py-5">
                 <h2 className="mb-4 text-sm font-extrabold text-[#111111] dark:text-white">{zh ? '最近记录' : 'Recent entries'}</h2>
                 <div className="space-y-3">
                     {releases.length > 0 ? releases.map((release) => (
                         <div key={release.title} className="rounded-[14px] bg-[#f4f3f3] px-4 py-3 dark:bg-white/[0.08]">
                             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                                 <p className="text-sm font-extrabold text-[#111111] dark:text-white">{formatChangelogTitle(release.title, zh)}</p>
-                                <p className="text-xs font-semibold text-[#85868c] dark:text-white/42">
-                                    {zh ? '更新于' : 'Updated'} {release.updatedAt || formatDateTimeMinute(CHANGELOG_UPDATED_AT, zh)}
-                                </p>
+                                {!release.date && (
+                                    <p className="text-xs font-semibold text-[#85868c] dark:text-white/42">
+                                        {zh ? '更新于' : 'Updated'} {release.updatedAt || formatDateTimeMinute(CHANGELOG_UPDATED_AT, zh)}
+                                    </p>
+                                )}
                             </div>
                             {release.items.length > 0 && (
                                 <ul className="mt-2 space-y-1.5">
@@ -272,14 +284,16 @@ const About = () => {
             ? '这里说明 FluentFlow Local 在你电脑上存了什么、什么时候会把什么发出去，以及怎么删除。'
             : 'This policy explains what FluentFlow Local stores on your computer, when anything is sent out, and how to delete it.',
         changelog: zh
-            ? '这里展示最近的产品变化。它来自项目更新日志，不是单独维护的一份页面文案。'
-            : 'This page shows recent product changes from the project changelog instead of a separately maintained copy.',
+            ? '最近的产品变化。'
+            : 'Recent product changes.',
     }[activePage];
     const sections = activePage === 'service'
         ? (zh ? serviceSections : enServiceSections)
         : (zh ? privacySections : enPrivacySections);
+    const [changelogReleases, setChangelogReleases] = useState([]);
+    const changelogUpdated = changelogLastUpdated(changelogReleases);
     const headerUpdatedAt = activePage === 'changelog'
-        ? formatDateTimeMinute(CHANGELOG_UPDATED_AT, zh)
+        ? (/^\d{4}-\d{2}-\d{2}$/.test(changelogUpdated) ? changelogUpdated : formatDateTimeMinute(changelogUpdated, zh))
         : UPDATED_AT;
 
     return (
@@ -323,7 +337,7 @@ const About = () => {
                     ))}
                 </nav>
 
-                {activePage === 'changelog' ? <ChangelogPage zh={zh}/> : <SectionList sections={sections}/>}
+                {activePage === 'changelog' ? <ChangelogPage zh={zh} onLoaded={setChangelogReleases}/> : <SectionList sections={sections}/>}
 
                 <p className="mt-4 text-xs font-semibold leading-relaxed text-[#85868c] dark:text-white/45">
                     {zh

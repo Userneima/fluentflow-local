@@ -33,6 +33,7 @@ from backend.core.schema_versions import EVENT_SCHEMA_VERSION
 from backend.core.speaker_diarization import diarization_status
 from backend.core.versioning import get_app_version, version_payload
 from backend.core.edition_identity import identity_payload
+from backend.core.local_request_scope import agent_access_status
 
 
 router = APIRouter()
@@ -304,6 +305,12 @@ def runtime_config() -> dict[str, Any]:
             "writes_its_own_note": local_intake_flow.auto_note_enabled(),
         },
     }
+
+
+# Whether an agent can connect (the access token is set) and when one last did.
+@router.get("/agent-access/status")
+def get_agent_access_status() -> dict[str, Any]:
+    return agent_access_status()
 
 
 @router.get("/speaker-diarization/status")

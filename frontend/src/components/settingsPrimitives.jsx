@@ -78,3 +78,49 @@ export const SecretFeedback = ({feedback, keyName, lang}) => (
         </p>
     ) : null
 );
+
+// The longer explanation behind a one-sentence description, folded away.
+export const MoreInfo = ({lang, children}) => (
+    <details className="group/more mt-1 text-xs leading-relaxed text-on-surface-variant">
+        <summary className="inline cursor-pointer list-none font-semibold text-primary underline-offset-2 hover:underline">
+            {lang === 'zh' ? '了解更多' : 'Learn more'}
+        </summary>
+        <div className="mt-1 space-y-1">{children}</div>
+    </details>
+);
+
+// One save button for a group of key fields. Nothing typed is sent until it
+// is clicked (or Enter is pressed in one of the fields), so a key that is only
+// half pasted never replaces a working one.
+export const SecretSaveBar = ({state, group, keys, lang}) => {
+    const {saveSecrets, secretsPending, secretSaving, secretFeedback} = state;
+    const pending = secretsPending(keys);
+    return (
+        <div className="flex flex-wrap items-center gap-3">
+            <button type="button" disabled={secretSaving || !pending} onClick={() => saveSecrets(group, keys)} className={saveButtonClass}>
+                {secretSaving ? (lang === 'zh' ? '保存中…' : 'Saving…') : (lang === 'zh' ? '保存' : 'Save')}
+            </button>
+            {pending && !secretSaving && (
+                <span className="text-xs font-semibold text-amber-600 dark:text-amber-300">{lang === 'zh' ? '有没保存的改动' : 'Unsaved changes'}</span>
+            )}
+            {!pending && <SecretFeedback feedback={secretFeedback} keyName={group} lang={lang}/>}
+        </div>
+    );
+};
+
+// A key field: typing keeps a draft here; Enter saves the whole group.
+export const SecretInput = ({state, name, group, keys, placeholder, type = 'password', id}) => {
+    const {secretDraft, setSecretDraft, saveSecrets} = state;
+    return (
+        <input
+            id={id}
+            className={inputClass}
+            type={type}
+            autoComplete="off"
+            placeholder={placeholder}
+            value={secretDraft[name] || ''}
+            onChange={(event) => setSecretDraft((draft) => ({...draft, [name]: event.target.value}))}
+            onKeyDown={(event) => { if (event.key === 'Enter') saveSecrets(group, keys); }}
+        />
+    );
+};

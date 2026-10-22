@@ -11,7 +11,7 @@ import {cleanup, render, screen} from '@testing-library/react';
 let runtimeConfig = {};
 vi.mock('../app/AppContext.jsx', () => ({useApp: () => ({runtimeConfig})}));
 
-const {default: LocalAgentAccessPanel, agentAccessCommands} = await import('./LocalAgentAccessPanel.jsx');
+const {default: LocalAgentAccessPanel, agentAccessCommands, agentConnectionSentence} = await import('./LocalAgentAccessPanel.jsx');
 const {normalizeRuntimeConfig} = await import('../lib/sttPolicy.js');
 
 const HERE = {
@@ -58,5 +58,24 @@ describe('the page', () => {
         expect(screen.getByText(/check_mcp_server\.py --backend-e2e/)).toBeTruthy();
         expect(screen.queryByText(/npm run mcp:check:e2e/)).toBeNull();
         expect(document.body.textContent).not.toContain('<path-to-fluentflow>');
+    });
+
+    // Checklist 2026-10-22 (lane 3, item 9): on the machine that runs
+    // FluentFlow nothing asks for the access token (the MCP server and the
+    // check read it from the repository .env), and the page says whether an
+    // agent has connected.
+    it('asks for no token on this machine and prints commands without one', () => {
+        runtimeConfig = normalizeRuntimeConfig({repo_root: HERE.repoRoot, python_executable: HERE.pythonExecutable});
+        render(<LocalAgentAccessPanel/>);
+        expect(document.getElementById('local-agent-access-token')).toBeNull();
+        expect(document.body.textContent).not.toMatch(/FLUENTFLOW_ACCESS_TOKEN/);
+    });
+
+    it('says whether an agent can connect and whether one has', () => {
+        const now = Date.parse('2026-10-22T12:00:00Z');
+        expect(agentConnectionSentence({token_configured: false, last_agent_request_at: null}, now)).toMatch(/还连不上/);
+        expect(agentConnectionSentence({token_configured: true, last_agent_request_at: null}, now)).toMatch(/还没有 agent 连上过/);
+        expect(agentConnectionSentence({token_configured: true, last_agent_request_at: now / 1000 - 600}, now)).toBe('已有 agent 连上，最近一次在 10 分钟前。');
+        expect(agentConnectionSentence(null, now)).toBe('');
     });
 });

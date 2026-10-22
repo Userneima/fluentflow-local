@@ -21,6 +21,9 @@ let servicePreferences = {};
 // GET /speaker-diarization/status: sherpa-onnx installed, models not downloaded.
 let diarization = {available: false, dependency_installed: true, models_local: false, requested_backend: 'sherpa'};
 let credentials = {};
+// Replaced by a test that needs the status to arrive late or fail.
+let credentialsStatus = async () => credentials;
+const saveCredentials = vi.fn(async () => ({}));
 const savePreferences = vi.fn(async (patch) => ({...servicePreferences, ...patch}));
 
 vi.mock('../app/AppContext.jsx', () => ({
@@ -42,8 +45,8 @@ vi.mock('../app/shared.jsx', async () => {
             saveSettings: (next) => { stored = next; },
         }),
         useApi: () => ({
-            getCredentialsStatus: async () => credentials,
-            saveCredentials: async () => ({}),
+            getCredentialsStatus: () => credentialsStatus(),
+            saveCredentials,
             getSpeakerDiarizationStatus: async () => diarization,
             checkVideoCookies: async () => ({ok: true}),
             getPreferences: async () => servicePreferences,
@@ -70,6 +73,8 @@ describe('local settings page', () => {
         servicePreferences = {};
         diarization = {available: false, dependency_installed: true, models_local: false, requested_backend: 'sherpa'};
         credentials = {};
+        credentialsStatus = async () => credentials;
+        saveCredentials.mockClear();
         savePreferences.mockClear();
         localStorage.clear();
         runtimeConfig.writesItsOwnNote = true;
@@ -100,11 +105,79 @@ describe('local settings page', () => {
         expect(screen.getByText('高级 · 其他凭证')).toBeTruthy();
     });
 
-    it('puts the note key first, where a first-time user looks', () => {
+    it('puts the note key first, where a first-time user looks', async () => {
         render(<Settings/>);
         const headings = screen.getAllByRole('heading', {level: 2}).map((node) => node.textContent);
         expect(headings[0]).toBe('笔记');
-        expect(screen.getByText('DeepSeek API Key')).toBeTruthy();
+        expect(await screen.findByText('DeepSeek API Key')).toBeTruthy();
+    });
+
+    // Checklist 2026-10-22 (lane 3, item 2): before the service answers, the
+    // page must not claim a key is missing or show fields that the answer
+    // will hide; it says it is loading.
+    it('says nothing about any key until the service has answered', async () => {
+        let answer;
+        credentialsStatus = () => new Promise((resolve) => { answer = resolve; });
+        render(<Settings/>);
+        expect(screen.getByTestId('note-keys-loading').textContent).toMatch(/正在读取/);
+        expect(screen.queryByText(/未配置/)).toBeNull();
+        expect(screen.queryByText(/已配置/)).toBeNull();
+        expect(screen.queryByText('set.dashscopeKey')).toBeNull();
+        expect(screen.queryByText(/填好上面的 Anthropic API Key/)).toBeNull();
+        answer({anthropic_api_key_configured: true, visual_note_available: true});
+        expect(await screen.findByText(/已配置/)).toBeTruthy();
+        expect(screen.queryByTestId('note-keys-loading')).toBeNull();
+        expect(screen.queryByText('set.dashscopeKey')).toBeNull();
+    });
+
+    it('says the key status could not be read instead of saying keys are missing', async () => {
+        credentialsStatus = async () => { throw new Error('down'); };
+        render(<Settings/>);
+        await waitFor(() => expect(screen.getByTestId('note-keys-loading').textContent).toMatch(/读不到 Key 的状态/));
+        expect(screen.queryByText(/未配置/)).toBeNull();
+    });
+
+    // Checklist item 4: one save for the section's keys. Typing and leaving a
+    // field saves nothing (a half-pasted key must not replace a working one);
+    // the button sends everything typed in one go.
+    it('saves the typed keys together, only when asked', async () => {
+        render(<Settings/>);
+        await screen.findByText('DeepSeek API Key');
+        const textKey = screen.getAllByPlaceholderText('粘贴 API Key')[0];
+        fireEvent.change(textKey, {target: {value: ' sk-half'}});
+        fireEvent.blur(textKey);
+        const visionAddress = screen.getByPlaceholderText('https://api.moonshot.cn/v1');
+        fireEvent.change(visionAddress, {target: {value: 'https://api.moonshot.cn/v1'}});
+        fireEvent.blur(visionAddress);
+        expect(saveCredentials).not.toHaveBeenCalled();
+        expect(screen.getByText('有没保存的改动')).toBeTruthy();
+        const saveButtons = screen.getAllByRole('button', {name: '保存'});
+        fireEvent.click(saveButtons[0]);
+        await waitFor(() => expect(saveCredentials).toHaveBeenCalledTimes(1));
+        expect(saveCredentials).toHaveBeenCalledWith({deepseek_api_key: 'sk-half', vision_base_url: 'https://api.moonshot.cn/v1'});
+        expect(await screen.findByText('已保存')).toBeTruthy();
+    });
+
+    it('has one save button for the notes keys, not one per field', async () => {
+        render(<Settings/>);
+        const notes = document.getElementById('notes');
+        await screen.findByText('看图模型（可选）');
+        expect(Array.from(notes.querySelectorAll('button')).filter((node) => node.textContent === '保存')).toHaveLength(1);
+    });
+
+    it('saves with Enter in a key field', async () => {
+        render(<Settings/>);
+        await screen.findByText('DeepSeek API Key');
+        const textKey = screen.getAllByPlaceholderText('粘贴 API Key')[0];
+        fireEvent.change(textKey, {target: {value: 'sk-whole'}});
+        fireEvent.keyDown(textKey, {key: 'Enter'});
+        await waitFor(() => expect(saveCredentials).toHaveBeenCalledWith({deepseek_api_key: 'sk-whole'}));
+    });
+
+    // Checklist item 7: past exports are history, not a setting.
+    it('does not list past exports', () => {
+        render(<Settings/>);
+        expect(screen.queryByText('set.larkHistory')).toBeNull();
     });
 
     // Requirement (2026-10-12): transcription always runs at the accurate
@@ -180,42 +253,47 @@ describe('local settings page', () => {
         expect(screen.queryByText('FEISHU APP SECRET')).toBeNull();
     });
 
-    // Requirement: the notes section opens with what is always true, and the
-    // writer sentence alone says who writes the note, so the two cannot clash.
-    it('opens the notes section with the transcription fact only', () => {
+    // Checklist item 3: the notes section says who writes the note; that
+    // transcription needs no key belongs to the transcription section.
+    it('opens the notes section with who writes the note, not with transcription', async () => {
         render(<Settings/>);
-        const intro = screen.getByText(/^转录在本机完成，不需要 Key。/);
-        expect(intro.textContent).not.toMatch(/处理完就会自动写笔记/);
+        const notes = document.getElementById('notes');
+        await screen.findByText('DeepSeek API Key');
+        expect(notes.querySelector('p').textContent).toMatch(/还没有填写模型 Key/);
+        expect(notes.textContent).not.toMatch(/转录在本机完成/);
     });
 
-    it('does not promise a text-model note when no text-model key is filled in', () => {
+    it('does not promise a text-model note when no text-model key is filled in', async () => {
         render(<Settings/>);
+        expect(await screen.findByText(/两个都不填就只有转录稿，没有笔记/)).toBeTruthy();
         expect(screen.queryByText(/由上面的文本模型根据转录稿写/)).toBeNull();
-        expect(screen.getByText(/两个都不填就只有转录稿，没有笔记/)).toBeTruthy();
     });
 
-    it('calls Qwen by one name', () => {
+    it('calls Qwen by one name', async () => {
         stored = {aiProvider: 'qwen'};
         render(<Settings/>);
-        expect(screen.getByRole('option', {name: '通义千问（阿里云百炼）（推荐）'})).toBeTruthy();
+        expect(await screen.findByRole('option', {name: '通义千问（阿里云百炼）'})).toBeTruthy();
         expect(screen.queryByRole('option', {name: 'Qwen'})).toBeNull();
     });
 
-    // Owner, 2026-10-18: Qwen first and recommended, and Kimi and MiMo offered
-    // beside DeepSeek, for users who cannot get an Anthropic key.
-    it('offers Qwen first, then DeepSeek, Kimi, MiMo and OpenAI', () => {
+    // Owner, 2026-10-18: Qwen first, and Kimi and MiMo offered beside
+    // DeepSeek. Checklist item 6: the list shows what is chosen, so it carries
+    // no "recommended" mark on another provider.
+    it('offers Qwen first, then DeepSeek, Kimi, MiMo and OpenAI, with no recommended mark', async () => {
         render(<Settings/>);
+        await screen.findByText('DeepSeek API Key');
         const names = screen.getAllByRole('option').map((node) => node.textContent);
         const providers = names.filter((name) => /通义|DeepSeek|Kimi|MiMo|OpenAI/.test(name));
         expect(providers.slice(0, 5)).toEqual([
-            '通义千问（阿里云百炼）（推荐）', 'DeepSeek', 'Kimi（月之暗面）', '小米 MiMo', 'OpenAI',
+            '通义千问（阿里云百炼）', 'DeepSeek', 'Kimi（月之暗面）', '小米 MiMo', 'OpenAI',
         ]);
+        expect(names.some((name) => /推荐/.test(name) && /通义|DeepSeek|Kimi|MiMo|OpenAI/.test(name))).toBe(false);
     });
 
-    it('asks for the key of the chosen provider, with its console', () => {
+    it('asks for the key of the chosen provider, with its console', async () => {
         stored = {aiProvider: 'kimi'};
         render(<Settings/>);
-        expect(screen.getByText('Kimi（月之暗面） API Key')).toBeTruthy();
+        expect(await screen.findByText('Kimi（月之暗面） API Key')).toBeTruthy();
         expect(screen.getByRole('link', {name: '去创建 Key'}).getAttribute('href')).toBe('https://platform.moonshot.cn/console/api-keys');
     });
 

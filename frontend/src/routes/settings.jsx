@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {Section} from '../components/settingsPrimitives.jsx';
+import {SecretSaveBar, Section} from '../components/settingsPrimitives.jsx';
 import {
     AdvancedKeysFold,
     AnthropicKeyField,
@@ -10,8 +10,8 @@ import {
     ProcessingPresetRow,
     DashscopeKeyField,
     DefaultSourceRow,
+    FEISHU_APP_KEYS,
     FeishuAppCredentialRows,
-    LarkExportHistory,
     LarkExportRouteRow,
     LarkFolderRow,
     PyannoteTokenRow,
@@ -20,6 +20,7 @@ import {
     VoiceEnhanceRow,
     TextModelKeyRows,
     VideoCookiesRow,
+    VISION_MODEL_KEYS,
 } from '../components/settingsRows.jsx';
 import {LARK_EXPORT_ROUTE_LOCAL_CLI} from '../app/shared.jsx';
 import {useSettingsPageState} from './settings-state.js';
@@ -39,7 +40,8 @@ import {dismissNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 // turn off, not a fixed fact about the app.
 const Settings = () => {
     const state = useSettingsPageState();
-    const {lang, runtimeConfig, diarizationStatus, aiProvider, larkExportRoute, credentialStatus, settings} = state;
+    const {lang, runtimeConfig, diarizationStatus, aiProvider, larkExportRoute, credentialStatus, credentialLoad, settings, activeAiSecretKey} = state;
+    const zh = lang === 'zh';
     // The same sentence the start page shows, from the same rule, so the two
     // pages never disagree about whose model writes the note.
     const noteWriter = resolveNoteWriter({runtimeConfig, credentialStatus, settings});
@@ -59,11 +61,14 @@ const Settings = () => {
         const target = document.getElementById(id);
         if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({block: 'center'});
     }, []);
-    // The first sentence states only what is always true; who writes the note
-    // is the writer sentence's job, so the two cannot disagree.
-    const notesIntro = `${lang === 'zh'
-        ? '转录在本机完成，不需要 Key。'
-        : 'Transcription runs on this machine and needs no key.'}${writerSentence ? ` ${writerSentence}` : ''}`;
+    // The notes section says who writes the note and nothing else: that
+    // transcription needs no key belongs to the transcription section.
+    const notesIntro = credentialLoad === 'loading'
+        ? (zh ? '正在读取…' : 'Loading…')
+        : writerSentence;
+    // The key fields of each section are saved together by one button.
+    const noteKeys = {group: 'note-keys', keys: [activeAiSecretKey, 'dashscope_api_key', 'anthropic_api_key', ...VISION_MODEL_KEYS]};
+    const advancedKeys = {group: 'advanced-keys', keys: [...FEISHU_APP_KEYS, 'pyannote_auth_token']};
     // The token only fetches the optional pyannote backend's model, so it is
     // asked for only when that backend is chosen and installed and its model
     // files are not already here. The default backend needs no token.
@@ -103,36 +108,41 @@ const Settings = () => {
                         </button>
                     )}
                 </div>
-                <div className="divide-y divide-[#ece8e8] dark:divide-white/[0.1]">
-                    <TextModelKeyRows
-                        state={state}
-                        extraKey={aiProvider !== 'qwen' && !claudeWritesNote && (
-                            <DashscopeKeyField
-                                state={state}
-                                description={lang === 'zh'
-                                    ? '用于通义千问的看图模型给笔记挑选截图（「给笔记自动配图」需要它）；笔记仍可由 DeepSeek 或 OpenAI 来写。'
-                                    : 'Used by the Qwen vision model to pick screenshots for a note (needed by auto-illustrate). Notes can still be written by DeepSeek or OpenAI.'}
-                            />
-                        )}
-                    />
-                    <div className="grid gap-3 px-5 py-4">
-                        <AnthropicKeyField state={state}/>
-                        <VisionModelField state={state}/>
-                        {!claudeWritesNote && <AutoIllustrateRow state={state}/>}
+                {credentialLoad === 'ready' ? (
+                    <div className="divide-y divide-[#ece8e8] dark:divide-white/[0.1]">
+                        <TextModelKeyRows
+                            state={state}
+                            keyGroup={noteKeys}
+                            extraKey={aiProvider !== 'qwen' && !claudeWritesNote && <DashscopeKeyField state={state} keyGroup={noteKeys}/>}
+                        />
+                        <div className="grid gap-3 px-5 py-4">
+                            <AnthropicKeyField state={state} keyGroup={noteKeys}/>
+                            <VisionModelField state={state} keyGroup={noteKeys}/>
+                            {!claudeWritesNote && <AutoIllustrateRow state={state}/>}
+                        </div>
+                        <div className="px-5 py-4">
+                            <SecretSaveBar state={state} {...noteKeys} lang={lang}/>
+                        </div>
                     </div>
-                </div>
+                ) : (
+                    <p className="px-5 py-4 text-xs leading-relaxed text-on-surface-variant" data-testid="note-keys-loading">
+                        {credentialLoad === 'error'
+                            ? (zh ? '读不到 Key 的状态，刷新页面再试。' : 'Could not read the key status. Reload the page.')
+                            : (zh ? '正在读取 Key 的状态…' : 'Reading the key status…')}
+                    </p>
+                )}
             </Section>
 
             <Section
                 id="note-style"
                 title={lang === 'zh' ? '我的笔记风格' : 'My note style'}
                 description={lang === 'zh'
-                    ? 'Claude 写笔记时照这份写法。你在编辑器里改过的笔记会变成写法规则的候选；每次改动生效前，先用同一段录像新旧各写一份给你对比。'
-                    : 'Claude writes notes this way. Your edits become candidate rules; every change is compared on one recording before it takes effect.'}
+                    ? 'Claude 写笔记时照这份写法，你在编辑器里的修改会变成候选规则。'
+                    : 'Claude writes notes this way; your edits in the editor become candidate rules.'}
             >
-                {claudeWritesNote ? <NoteStylePanel/> : (
+                {credentialLoad !== 'ready' ? null : claudeWritesNote ? <NoteStylePanel/> : (
                     <p className="px-5 py-4 text-xs leading-relaxed text-on-surface-variant">
-                        {lang === 'zh' ? '这份写法用于 Claude 写的笔记。上面填好 Anthropic API Key 后就能在这里调整。' : 'This style applies to notes Claude writes. Add an Anthropic API key above to adjust it here.'}
+                        {lang === 'zh' ? '由 Claude 写笔记时才用得上，填好上面的 Anthropic API Key 后可以调整。' : 'Used when Claude writes the note; add an Anthropic API key above to adjust it.'}
                     </p>
                 )}
             </Section>
@@ -178,14 +188,16 @@ const Settings = () => {
                     <AutoExportRow state={state}/>
                     <LarkExportRouteRow state={state}/>
                     {larkExportRoute !== LARK_EXPORT_ROUTE_LOCAL_CLI && <LarkFolderRow state={state}/>}
-                    <LarkExportHistory state={state}/>
                 </div>
             </Section>
 
             {(showFeishuAppRows || showPyannoteToken) && (
                 <AdvancedKeysFold description={advancedDescription}>
-                    {showFeishuAppRows && <FeishuAppCredentialRows state={state}/>}
-                    {showPyannoteToken && <PyannoteTokenRow state={state}/>}
+                    {showFeishuAppRows && <FeishuAppCredentialRows state={state} keyGroup={advancedKeys}/>}
+                    {showPyannoteToken && <PyannoteTokenRow state={state} keyGroup={advancedKeys}/>}
+                    <div className="px-5 py-4">
+                        <SecretSaveBar state={state} {...advancedKeys} lang={lang}/>
+                    </div>
                 </AdvancedKeysFold>
             )}
         </SettingsPageShell>

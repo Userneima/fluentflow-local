@@ -13,7 +13,7 @@ import {MemoryRouter, Route, Routes} from 'react-router-dom';
 let lang = 'zh';
 vi.mock('../app/shared.jsx', () => ({useI18n: () => ({t: (key) => key, lang})}));
 
-const {default: About} = await import('./about.jsx');
+const {default: About, parseChangelog, userFacingItem, changelogLastUpdated} = await import('./about.jsx');
 
 const pageText = (page, language) => {
     lang = language;
@@ -50,5 +50,36 @@ describe('about pages', () => {
         const privacy = pageText('privacy', 'en');
         expect(privacy).toMatch(/send the transcript and the extracted frames to Claude/);
         expect(privacy).toMatch(/as yourself when lark-cli is signed in/);
+    });
+
+    // Checklist 2026-10-22 (lane 3, item 10): the changelog page is for people
+    // using the app. It does not point at the source file, does not show
+    // environment variable names, and its "last updated" is never older than
+    // its newest entry.
+    it('keeps the developer source note off the changelog page', async () => {
+        lang = 'zh';
+        render(
+            <MemoryRouter initialEntries={['/about/changelog']}>
+                <Routes><Route path="/about/:page" element={<About/>}/></Routes>
+            </MemoryRouter>,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(document.body.textContent).not.toMatch(/docs\/03-更新记录\.md/);
+        expect(document.body.textContent).not.toMatch(/更新来源/);
+    });
+
+    it('drops sentences that name an environment variable, keeping the rest', () => {
+        expect(userFacingItem('录像不再有时长上限，多长都处理。想限制的仍可在 `.env` 里设 `FLUENTFLOW_MAX_MEDIA_DURATION_S`。'))
+            .toBe('录像不再有时长上限，多长都处理。');
+        expect(userFacingItem('用 `FLUENTFLOW_PROCESSING_PRESET` 选档位。')).toBe('');
+        expect(userFacingItem('通义千问挑截图的模型换成 `qwen3.7-plus`。')).toBe('通义千问挑截图的模型换成 qwen3.7-plus。');
+        const releases = parseChangelog('# Log\n\n## 0.9.1 - 2026-10-16\n\n- 用 `FLUENTFLOW_X_Y` 设。\n- 修好了导出。\n');
+        expect(releases[0].items).toEqual(['修好了导出。']);
+    });
+
+    it('never says the changelog was last updated before its newest entry', () => {
+        const releases = [{title: 'Unreleased', date: ''}, {title: '0.9.1 - 2026-10-16', date: '2026-10-16'}];
+        expect(changelogLastUpdated(releases, '2026-10-12T09:00:00Z')).toBe('2026-10-16');
+        expect(changelogLastUpdated(releases, '2026-10-18T09:00:00Z')).toBe('2026-10-18T09:00:00Z');
     });
 });

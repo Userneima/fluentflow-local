@@ -12,6 +12,7 @@ from backend.core.frontend_paths import local_frontend_index_path
 # a direct visit or refresh of /agent still serves the app.
 LOCAL_API_PREFIXES = frozenset(
     {
+        "agent-access",
         "credentials",
         "events",
         "export-lark",
