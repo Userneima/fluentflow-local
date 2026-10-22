@@ -1,15 +1,11 @@
 // @vitest-environment jsdom
 
-// The bar exists to replace two panels, so what it must never do is turn back into
-// one: no action to take, no directory named, no next step. What it must do is make
-// the page explain itself — the player is shorter than the file that was uploaded,
-// and this is the only thing on screen that says why.
-//
-// The unavailable case is the one worth a test of its own. A page whose transcript
-// and note describe a shortened file must not quietly play the original instead;
-// the timings would be wrong everywhere and nothing would look broken.
+// Requirements (owner, 2026-10-22): the page does not announce the cut; the bar
+// appears only when the cut file cannot be read, says so in one sentence, and
+// offers to process the recording again. The cut video itself is downloaded from
+// the transcript's export menu.
 
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {cleanup, fireEvent, render, screen} from '@testing-library/react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import CutFlowBar from './CutFlowBar.jsx';
 import {cutFlowSummary, isAutoCutFlow} from '../routes/editor-helpers.js';
@@ -59,57 +55,25 @@ describe('isAutoCutFlow', () => {
 });
 
 describe('CutFlowBar', () => {
-    it('renders nothing when there is nothing to report', () => {
-        const {container} = render(<CutFlowBar summary={null} lang="zh"/>);
+    it('shows nothing while the cut file can be read', () => {
+        const {container} = render(<CutFlowBar summary={cutFlowSummary(autoResult())} lang="zh"/>);
         expect(container.textContent).toBe('');
     });
 
-    it('reports the step that already happened, with the numbers', () => {
-        render(<CutFlowBar summary={cutFlowSummary(autoResult())} lang="zh"/>);
-
-        expect(screen.getByText(/已自动去掉气口/)).toBeTruthy();
-        expect(screen.getByText(/剪掉 4 处/)).toBeTruthy();
+    it('shows nothing for a task that was not cut', () => {
+        const {container} = render(<CutFlowBar summary={null} lang="zh" unavailable/>);
+        expect(container.textContent).toBe('');
     });
 
-    it('says the player, the subtitles and the note are all the one cut file', () => {
-        render(<CutFlowBar summary={cutFlowSummary(autoResult())} lang="zh"/>);
-
-        expect(screen.getByText(/播放、字幕、笔记都是这一份剪后版本/)).toBeTruthy();
-        expect(screen.getByText(/原文件没有被改动/)).toBeTruthy();
-    });
-
-    it('asks the user for nothing: no processing action, no directory', () => {
-        render(<CutFlowBar summary={cutFlowSummary(autoResult())} lang="zh"/>);
+    it('says in one sentence that the cut file is unreadable, with a way to process it again', () => {
+        const onReprocess = vi.fn();
+        render(<CutFlowBar summary={cutFlowSummary(autoResult())} lang="zh" unavailable onReprocess={onReprocess}/>);
 
         const bar = screen.getByTestId('cut-flow-bar');
-        expect(bar.textContent).not.toMatch(/剪掉空白|重写笔记|下一步/);
-        expect(bar.textContent).not.toMatch(/目录|debreath\//);
-        const buttons = screen.getAllByRole('button').map((b) => b.textContent);
-        expect(buttons).toEqual([expect.stringMatching(/下载剪后文件/)]);
-    });
-
-    it('hands over the file rather than describing where it is', async () => {
-        const onDownload = vi.fn().mockResolvedValue(undefined);
-        render(<CutFlowBar summary={cutFlowSummary(autoResult())} lang="zh" onDownload={onDownload}/>);
-
-        fireEvent.click(screen.getByRole('button', {name: /下载剪后文件/}));
-        await waitFor(() => expect(onDownload).toHaveBeenCalledTimes(1));
-    });
-
-    it('flags a cut file that failed its own check instead of presenting it as clean', () => {
-        const result = autoResult();
-        result.debreath.render_verified = false;
-        render(<CutFlowBar summary={cutFlowSummary(result)} lang="zh"/>);
-
-        expect(screen.getByText(/没通过自检/)).toBeTruthy();
-    });
-
-    it('says the material is unavailable rather than letting the original stand in', () => {
-        render(<CutFlowBar summary={cutFlowSummary(autoResult())} lang="zh" unavailable/>);
-
-        expect(screen.getByText(/剪后文件读不到了/)).toBeTruthy();
-        expect(screen.getByText(/不能拿原文件顶上/)).toBeTruthy();
-        expect(screen.queryByRole('button')).toBeNull();
+        const button = screen.getByRole('button', {name: /重新处理/});
+        expect(bar.textContent.replace(button.textContent, '').trim()).toBe('剪后文件读不到了');
+        fireEvent.click(button);
+        expect(onReprocess).toHaveBeenCalledTimes(1);
     });
 });
 

@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
 
-// The editor, mounted, looking for the one line that says what the upload
-// already did to this recording.
-//
-// CutFlowBar had its own tests and no page rendered it, which is the failure this
-// file exists to make loud: a component test proves the bar works, not that the
-// reader ever sees it. So this one asserts against the real page.
+// The editor, mounted, for a task that cut itself before transcribing: it plays
+// the cut file, offers it from the transcript's export menu, and speaks up only
+// when that file cannot be read (owner, 2026-10-22). Asserted against the real
+// page, since a component test proves a bar works, not that anyone sees it.
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
@@ -77,7 +75,7 @@ const cutResult = (extra = {}) => ({
 
 const mount = () => render(<MemoryRouter><Editor/></MemoryRouter>);
 
-describe('the editor shows the cut-flow record', () => {
+describe('the editor for a task that cut itself', () => {
     beforeEach(() => {
         lastResult = null;
         artifactFetch = async (taskId, kind, filename) => new File(['x'], filename || kind, {type: 'video/mp4'});
@@ -96,14 +94,12 @@ describe('the editor shows the cut-flow record', () => {
         cleanup();
     });
 
-    it('renders the bar with the numbers for a task that cut itself', async () => {
+    it('does not announce the cut while the cut file plays', async () => {
         lastResult = cutResult();
-        mount();
+        const {container} = mount();
 
-        const bar = await screen.findByTestId('cut-flow-bar');
-        expect(bar.textContent).toMatch(/已自动去掉气口/);
-        expect(bar.textContent).toMatch(/剪掉 4 处/);
-        expect(bar.textContent).toMatch(/播放、字幕、笔记都是这一份剪后版本/);
+        await waitFor(() => expect(container.querySelector('video, audio')?.getAttribute('src')).toBeTruthy());
+        expect(screen.queryByTestId('cut-flow-bar')).toBeNull();
     });
 
     // 2026-10-14: the player streams from the service instead of fetching the
@@ -121,7 +117,7 @@ describe('the editor shows the cut-flow record', () => {
         expect(asked).toEqual([]);
     });
 
-    it('offers the cut file itself, streamed from its address under its own name', async () => {
+    it('hands over the cut video from the export menu, streamed from its address under its own name', async () => {
         lastResult = cutResult();
         const fetchedWhole = [];
         artifactFetch = async (...args) => { fetchedWhole.push(args); return new File(['x'], 'x'); };
@@ -131,8 +127,9 @@ describe('the editor shows the cut-flow record', () => {
         });
         mount();
 
-        const button = await screen.findByRole('button', {name: /下载剪后文件/});
-        button.click();
+        fireEvent.click(await screen.findByRole('button', {name: '导出'}));
+        const menu = await screen.findByRole('menu');
+        fireEvent.click(within(menu).getAllByRole('menuitem').find((item) => item.textContent.includes('剪后视频（与字幕对齐）')));
         await waitFor(() => expect(handed.length).toBe(1));
         expect(handed[0].href).toMatch(/\/jobs\/t1\/artifacts\/debreath_media$/);
         // Handed over under a filename, not under the path it is stored at.
@@ -147,7 +144,37 @@ describe('the editor shows the cut-flow record', () => {
 
         const bar = await screen.findByTestId('cut-flow-bar');
         expect(bar.textContent).toMatch(/剪后文件读不到了/);
-        expect(bar.textContent).toMatch(/不能拿原文件顶上/);
+        expect(screen.getByRole('button', {name: /重新处理/})).toBeTruthy();
+    });
+
+    // 2026-10-22: one dropped request on load used to mark a present cut file as
+    // unreadable until the page was reloaded.
+    it('plays a cut file whose first read got no answer, without calling it unreadable', async () => {
+        lastResult = cutResult();
+        let calls = 0;
+        globalThis.fetch = vi.fn(async () => {
+            calls += 1;
+            if (calls === 1) throw new TypeError('Failed to fetch');
+            return new Response('x', {status: 206, headers: {'content-type': 'video/mp4'}});
+        });
+        const {container} = mount();
+
+        await waitFor(() => {
+            const media = container.querySelector('video, audio');
+            expect(media?.getAttribute('src') || '').toMatch(/\/jobs\/t1\/artifacts\/debreath_media$/);
+        }, {timeout: 3000});
+        expect(screen.queryByTestId('cut-flow-bar')).toBeNull();
+    });
+
+    it('offers to process the recording again when the cut file is really gone', async () => {
+        lastResult = cutResult();
+        globalThis.fetch = vi.fn(async () => new Response('gone', {status: 404}));
+        mount();
+
+        const button = await screen.findByRole('button', {name: /重新处理/});
+        expect(screen.getByTestId('cut-flow-bar').textContent).toMatch(/剪后文件读不到了/);
+        fireEvent.click(button);
+        expect(await screen.findByRole('dialog')).toBeTruthy();
     });
 
     it('stays out of the way of a task that never went through the automatic flow', async () => {

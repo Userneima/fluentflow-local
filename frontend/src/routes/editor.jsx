@@ -63,6 +63,7 @@ import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
+import {probeMedia} from '../lib/probeMedia.js';
 import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
 import {
     jobOptionsForResult,
@@ -404,8 +405,8 @@ const Editor = () => {
     // played. One byte is asked for first so a missing file still falls through
     // to the next choice the way a failed fetch did.
     const openJobMedia = useCallback(async (url, name) => {
-        const probe = await apiFetch(url, {headers: {Range: 'bytes=0-0'}});
-        if (!probe.ok) throw new Error(lang === 'zh' ? '读不到这个文件' : 'File not found');
+        const probe = await probeMedia(apiFetch, url).catch(() => null);
+        if (!probe?.ok) throw new Error(lang === 'zh' ? '读不到这个文件' : 'File not found');
         const type = probe.headers.get('content-type') || '';
         try { await probe.body?.cancel?.(); } catch (_) { /* nothing left to read */ }
         const kind = type.startsWith('video/') || isLikelyVideoFile(name) ? 'video' : 'audio';
@@ -1491,8 +1492,11 @@ const Editor = () => {
                 <div className={headerCollapsed
                     ? 'pointer-events-none absolute inset-x-0 top-0 z-30 rounded-[18px] border border-[#e4e0e0] bg-white/95 px-3 py-2 opacity-0 shadow-[0_24px_60px_-30px_rgba(17,17,17,.6)] backdrop-blur transition-opacity duration-150 group-hover/header:pointer-events-auto group-hover/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:opacity-100 dark:border-white/[0.12] dark:bg-[#151515]/95 dark:shadow-[0_24px_60px_-30px_rgba(0,0,0,.85)]'
                     : ''}>
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
-                    <div className="min-w-0 pr-2">
+                {/* The actions move to their own line when the window is too
+                    narrow for both; squeezed into one row, the title column
+                    shrank to a single character per line. */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+                    <div className="min-w-0 flex-[1_1_26rem] pr-2">
                         <h1
                             className="max-w-[18em] truncate whitespace-nowrap font-headline text-[clamp(1.55rem,1.8vw,2rem)] font-extrabold leading-tight text-[#111111] dark:text-white"
                             title={rawEditorTitle}
@@ -1506,18 +1510,16 @@ const Editor = () => {
                             </p>
                         )}
                         <OutputFolderLine taskId={activeTaskId} result={result} lang={lang} className="mt-1"/>
-                        {/* The record of the step the upload ran on itself. It is
-                            here rather than beside the player because it explains the
-                            whole page: the media, the subtitles and the note are one
-                            shortened file, and nothing else on screen says so. */}
+                        {/* Appears only when the cut file the whole page is built on
+                            cannot be read. */}
                         <CutFlowBar
                             summary={cutFlow}
                             lang={lang}
                             unavailable={cutFileUnavailable}
-                            onDownload={handleDownloadCutFile}
+                            onReprocess={handleRetranscribe}
                         />
                     </div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                         <button
                             type="button"
                             onClick={()=>promptEditing.setPromptOpen(true)}
