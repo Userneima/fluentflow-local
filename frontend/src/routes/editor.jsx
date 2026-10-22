@@ -1,4 +1,4 @@
-import {useState,useEffect,useRef,useCallback,useMemo} from 'react';
+import {memo,useState,useEffect,useRef,useCallback,useMemo} from 'react';
 import {Link, useSearchParams} from 'react-router-dom';
 import {AlertCircle, MoreHorizontal} from 'lucide-react';
 import {
@@ -64,6 +64,7 @@ import NoteExplanation from '../components/NoteExplanation.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
 import {probeMedia} from '../lib/probeMedia.js';
+import {createPlaybackClock, usePlaybackTime} from '../lib/playbackClock.js';
 import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog, CutReviewDialog} from './editor-dialogs.jsx';
 import {
     jobOptionsForResult,
@@ -72,6 +73,9 @@ import {
     isAutoCutFlow,
     cutFlowSummary,
     cutItemsToJudge,
+    findSegmentAt,
+    sizeTextareas,
+    textareaSizesItself,
     localSourceFileMatchesResult,
     playbackMediaChoice,
     shouldKeepVideoReviewMounted,
@@ -112,6 +116,107 @@ const filterVisibleEditRecords = (records, segments) => records.filter((record) 
 // Which result a pending edit belongs to. A result opened while an edit is
 // still waiting to sync must neither inherit the edit nor be overwritten by it.
 const resultIdentity = (result) => (result ? `${result.task_id || result.filename || 'current_result'}` : 'empty_result');
+
+// The transcript can hold thousands of sentences (7104 on a 3.5-hour
+// interview), so each one is its own memoised row: typing in one sentence or
+// the player moving to the next re-renders that row, not the list. Callbacks
+// passed in are stable, and a row's sentence object only changes when that
+// sentence is edited. Boxes size themselves with CSS (field-sizing); where the
+// browser cannot, the page sizes them all in one pass (sizeTextareas).
+const SIZES_ITSELF = textareaSizesItself();
+
+const SentenceTime = memo(({seg, active, className, onSeek, children}) => (
+    <button type="button" onClick={() => onSeek(seg)} className={className(active)}>
+        {children}
+    </button>
+));
+
+const TranscriptLine = memo(({index, seg, active, review, onSeek, onEdit, onFocusLine, registerNode}) => (
+    <div
+        ref={(node) => registerNode(index, node)}
+        className={review
+            ? `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${active ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`
+            : `group grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${active ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
+    >
+        <SentenceTime
+            seg={seg}
+            active={active}
+            onSeek={onSeek}
+            className={(on) => (review
+                ? `pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`
+                : `pt-[1px] text-left font-mono text-xs tabular-nums transition ${on ? 'font-bold text-primary' : 'text-[#8a8a8a] hover:text-primary dark:text-white/40'}`)}
+        >
+            {fmtTime(seg.start)}
+        </SentenceTime>
+        <div className="min-w-0 flex-1">
+            <textarea
+                data-transcript-segment="true"
+                value={seg.text || ''}
+                onChange={(e) => { if (!SIZES_ITSELF) autoSizeTextarea(e.target); onEdit(index, e.target.value); }}
+                onFocus={onFocusLine}
+                rows={1}
+                className={review
+                    ? 'min-h-[1.45rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-semibold leading-snug text-[#111111] [field-sizing:content] focus:ring-0 dark:text-white'
+                    : 'min-h-[1.75rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-medium leading-snug text-[#111111] [field-sizing:content] focus:ring-0 dark:text-white'}
+            />
+        </div>
+    </div>
+));
+
+const BilingualLine = memo(({index, seg, active, review, onSeek, registerNode}) => (
+    <div
+        ref={(node) => registerNode(index, node)}
+        className={review
+            ? `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${active ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`
+            : `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${active ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
+    >
+        <SentenceTime
+            seg={seg}
+            active={active}
+            onSeek={onSeek}
+            className={(on) => (review
+                ? `pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`
+                : `flex flex-col items-start justify-start pt-[1px] font-mono text-xs tabular-nums transition ${on ? 'font-bold text-primary' : 'text-[#777] hover:text-primary dark:text-white/45'}`)}
+        >
+            {review ? fmtTime(seg.start) : (
+                <>
+                    <span className="block">{fmtTime(seg.start)}</span>
+                    <span className="mt-0.5 block text-[10px] opacity-70">{fmtTime(seg.end)}</span>
+                </>
+            )}
+        </SentenceTime>
+        <div className="min-w-0 flex-1">
+            <p className={`whitespace-pre-wrap text-sm leading-snug text-[#111111] dark:text-white ${review ? 'font-semibold' : 'font-medium'}`}>
+                {seg.text}
+            </p>
+            <p className={`mt-1.5 border-l-2 border-primary/25 pl-3 text-sm leading-snug text-[#666] ${review ? 'font-semibold dark:text-white/68' : 'font-medium dark:text-white/65'}`}>
+                {seg.text_zh}
+            </p>
+        </div>
+    </div>
+));
+
+// The clock and the progress bar: the only parts of the page that follow the
+// player every tick.
+const PlaybackBar = ({clock, duration, onSeek}) => {
+    const time = usePlaybackTime(clock);
+    const progress = duration > 0 ? Math.min(100, Math.max(0, time / duration * 100)) : 0;
+    return (
+        <>
+            <span className="text-xs font-mono text-on-surface-variant ml-auto">{fmtTime(time)} / {fmtTime(duration || time)}</span>
+            <input
+                type="range"
+                min="0"
+                max={Math.max(1, duration)}
+                step="0.1"
+                value={Math.min(time, Math.max(1, duration))}
+                onChange={(e) => onSeek(Number(e.target.value) || 0)}
+                className="order-last w-full basis-full accent-primary"
+                style={{background: `linear-gradient(90deg, #3B82F6 ${progress}%, var(--c-surface-container-highest) ${progress}%)`}}
+            />
+        </>
+    );
+};
 
 const Editor = () => {
     const {t, lang} = useI18n();
@@ -217,7 +322,8 @@ const Editor = () => {
     langRef.current = lang;
     const tRef = useRef(t);
     tRef.current = t;
-    const resultSegmentCount = pickTranscriptSegments(result).length;
+    // Memoised: it copies every sentence, and the page renders on each keystroke.
+    const resultSegmentCount = useMemo(() => pickTranscriptSegments(result).length, [result]);
     const resultTextLength = (result?.transcript_text || '').length;
     const resultKey = result
         ? `${result.task_id || result.filename || 'current_result'}:${result.transcript_edited ? 'edited' : `${resultSegmentCount}:${resultTextLength}`}`
@@ -248,7 +354,9 @@ const Editor = () => {
     const [mediaKind, setMediaKind] = useState('audio');
     const [mediaLoading, setMediaLoading] = useState(false);
     const [mediaError, setMediaError] = useState('');
-    const [mediaCurrentTime, setMediaCurrentTime] = useState(0);
+    const playbackClockRef = useRef(null);
+    if (!playbackClockRef.current) playbackClockRef.current = createPlaybackClock();
+    const playbackClock = playbackClockRef.current;
     const [mediaDuration, setMediaDuration] = useState(0);
     const [mediaPlaying, setMediaPlaying] = useState(false);
     const [followPlayback, setFollowPlayback] = useState(true);
@@ -607,9 +715,11 @@ const Editor = () => {
         () => simpleMd(summary, {renderImages: !hasInlineVisualEvidence || visualEvidenceVisible}),
         [summary, hasInlineVisualEvidence, visualEvidenceVisible]
     );
-    const displayTranscriptSegments = pickDisplayTranscriptSegments(result, segments);
-    const bilingualTranscriptSegments = displayTranscriptSegments
-        .filter((seg) => String(seg.text_zh || '').trim());
+    const displayTranscriptSegments = useMemo(() => pickDisplayTranscriptSegments(result, segments), [result, segments]);
+    const bilingualTranscriptSegments = useMemo(
+        () => displayTranscriptSegments.filter((seg) => String(seg.text_zh || '').trim()),
+        [displayTranscriptSegments],
+    );
     const hasBilingualTranscript = bilingualTranscriptSegments.length > 0;
     const visibleTranscriptView = hasBilingualTranscript && transcriptView !== 'raw' ? 'bilingual' : 'raw';
     const visibleTranscriptSegments = visibleTranscriptView === 'bilingual' ? bilingualTranscriptSegments : segments;
@@ -699,20 +809,20 @@ const Editor = () => {
     const canUseVideoReview = canShowVideoReview && mediaKind === 'video' && !!mediaUrl && segments.length > 0;
     const activeReviewMode = canUseVideoReview ? transcriptReviewMode : 'text';
     const shouldShowVideoReview = shouldKeepVideoReviewMounted({activeReviewMode});
-    const activeSegmentIndex = visibleTranscriptSegments.length > 0
-        ? (() => {
-            const found = visibleTranscriptSegments.findIndex((seg, index) => {
-            const start = Number(seg.start) || 0;
-            const nextStart = Number(visibleTranscriptSegments[index + 1]?.start);
-            const end = Number(seg.end) || (Number.isFinite(nextStart) ? nextStart : start + 6);
-            return mediaCurrentTime >= start && mediaCurrentTime < end;
-            });
-            return found >= 0 ? found : -1;
-        })()
-        : -1;
+    // The sentence playing now, worked out on each tick of the player but
+    // stored only when it changes, so the page re-renders once per sentence.
+    const [activeSegmentIndex, setActiveSegmentIndex] = useState(-1);
+    useEffect(() => {
+        const follow = (time) => {
+            const index = findSegmentAt(visibleTranscriptSegments, time);
+            setActiveSegmentIndex((previous) => (previous === index ? previous : index));
+        };
+        follow(playbackClock.get());
+        return playbackClock.subscribe(follow);
+    }, [playbackClock, visibleTranscriptSegments]);
     const updateMediaCurrentTime = useCallback((time, options={}) => {
         const next = Math.max(0, Number(time) || 0);
-        setMediaCurrentTime(next);
+        playbackClock.set(next);
         if (options.persist === false || !playbackMemoryKey) return;
         const now = Date.now();
         if (now - playbackSaveRef.current < 900 && !options.force) return;
@@ -724,7 +834,7 @@ const Editor = () => {
                 updatedAt: now,
             }));
         } catch(_) {}
-    }, [playbackDuration, playbackMemoryKey]);
+    }, [playbackClock, playbackDuration, playbackMemoryKey]);
     const restoreMediaPosition = useCallback((media, duration) => {
         const nextDuration = Number(duration) || 0;
         setMediaDuration(nextDuration || durSec || 0);
@@ -773,17 +883,24 @@ const Editor = () => {
         if (node) node.scrollIntoView({block:'center', behavior:'smooth'});
     }, [activeSegmentIndex, followPlayback, mediaPlaying]);
 
-    // Each textarea sizes itself when it mounts (stable ref callback, so React
-    // does not re-run it on every render) and in its own onChange. Measuring
-    // every segment on every keystroke was the editor's per-key cost. A result
-    // swap can replace text under a mounted textarea without an onChange, so
-    // all of them are measured once more when the result or the view changes.
-    const mountSegmentTextarea = useCallback((node) => { if (node) autoSizeTextarea(node); }, []);
+    // Only for a browser that cannot size the boxes with CSS: all of them in
+    // one pass when a result, a view or the number of sentences changes. Not
+    // on every saved edit: the page re-measured 7104 boxes after the first
+    // autosave and froze for eleven seconds.
     useEffect(() => {
+        if (SIZES_ITSELF) return;
         const root = transcriptScrollRef.current;
         if (!root) return;
-        root.querySelectorAll('textarea[data-transcript-segment="true"]').forEach(autoSizeTextarea);
-    }, [resultKey, visibleTranscriptView]);
+        sizeTextareas(root.querySelectorAll('textarea[data-transcript-segment="true"]'));
+    }, [summaryResultKey, visibleTranscriptView, activeReviewMode, segments.length]);
+
+    // Stable handlers for the rows, reading the latest page state through refs.
+    const rowHandlersRef = useRef({});
+    rowHandlersRef.current = {seekToSegment: (seg) => seekToSegment(seg), handleSegmentTextChange: (i, text) => handleSegmentTextChange(i, text)};
+    const seekRow = useCallback((seg) => rowHandlersRef.current.seekToSegment(seg), []);
+    const editRow = useCallback((index, text) => rowHandlersRef.current.handleSegmentTextChange(index, text), []);
+    const stopFollowing = useCallback(() => setFollowPlayback(false), []);
+    const registerRow = useCallback((index, node) => { if (node) segmentRefs.current[index] = node; }, []);
 
     useEffect(() => {
         const persistBeforeBackground = () => {
@@ -1450,7 +1567,6 @@ const Editor = () => {
             showToast(err.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable'), false);
         }
     };
-    const mediaProgress = playbackDuration > 0 ? Math.min(100, Math.max(0, mediaCurrentTime / playbackDuration * 100)) : 0;
 
     // Playback is when the media panel needs the height most, so the page
     // header steps aside then unless the reader pinned it open. Hovering the
@@ -1825,50 +1941,9 @@ const Editor = () => {
                                     <div ref={transcriptScrollRef} className="hide-scrollbar min-h-[10rem] flex-1 overflow-y-auto rounded-[18px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]">
                                         <div className="divide-y divide-[#e4e0e0] dark:divide-white/[0.08]">
                                             {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
-                                                <div
-                                                    key={`video-review-bilingual-${i}`}
-                                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                                    className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${i===activeSegmentIndex ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`}
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        onClick={()=>seekToSegment(seg)}
-                                                        className={`pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${i===activeSegmentIndex ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`}
-                                                    >
-                                                        {fmtTime(seg.start)}
-                                                    </button>
-                                                    <div className="min-w-0">
-                                                        <p className="whitespace-pre-wrap text-sm font-semibold leading-snug text-[#111111] dark:text-white">
-                                                            {seg.text}
-                                                        </p>
-                                                        <p className="mt-1.5 border-l-2 border-primary/25 pl-3 text-sm font-semibold leading-snug text-[#666] dark:text-white/68">
-                                                            {seg.text_zh}
-                                                        </p>
-                                                    </div>
-                                                </div>
+                                                <BilingualLine key={`video-review-bilingual-${i}`} index={i} seg={seg} active={i===activeSegmentIndex} review onSeek={seekRow} registerNode={registerRow}/>
                                             )) : segments.map((seg,i) => (
-                                                <div
-                                                    key={`video-review-${i}`}
-                                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                                    className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${i===activeSegmentIndex ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`}
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        onClick={()=>seekToSegment(seg)}
-                                                        className={`pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${i===activeSegmentIndex ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`}
-                                                    >
-                                                        {fmtTime(seg.start)}
-                                                    </button>
-                                                    <textarea
-                                                        data-transcript-segment="true"
-                                                        value={seg.text || ''}
-                                                        ref={(node)=>{ if(node) autoSizeTextarea(node); }}
-                                                        onChange={(e)=>{ autoSizeTextarea(e.target); handleSegmentTextChange(i, e.target.value); }}
-                                                                                                                onFocus={()=>setFollowPlayback(false)}
-                                                        rows={1}
-                                                        className="min-h-[1.45rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-semibold leading-snug text-[#111111] focus:ring-0 dark:text-white"
-                                                    />
-                                                </div>
+                                                <TranscriptLine key={`video-review-${i}`} index={i} seg={seg} active={i===activeSegmentIndex} review onSeek={seekRow} onEdit={editRow} onFocusLine={stopFollowing} registerNode={registerRow}/>
                                             ))}
                                         </div>
                                     </div>
@@ -1878,53 +1953,9 @@ const Editor = () => {
                             <>
                         <div ref={transcriptScrollRef} className="hide-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
                             {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
-                                <div
-                                    key={`bilingual-${i}`}
-                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                    className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${i===activeSegmentIndex && mediaUrl ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={()=>seekToSegment(seg)}
-                                        className={`flex flex-col items-start justify-start pt-[1px] font-mono text-xs tabular-nums transition ${i===activeSegmentIndex && mediaUrl ? 'font-bold text-primary' : 'text-[#777] hover:text-primary dark:text-white/45'}`}
-                                    >
-                                        <span className="block">{fmtTime(seg.start)}</span>
-                                        <span className="mt-0.5 block text-[10px] opacity-70">{fmtTime(seg.end)}</span>
-                                    </button>
-                                    <div className="min-w-0 flex-1">
-                                        <p className="whitespace-pre-wrap text-sm font-medium leading-snug text-[#111111] dark:text-white">
-                                            {seg.text}
-                                        </p>
-                                        <p className="mt-1.5 border-l-2 border-primary/25 pl-3 text-sm font-medium leading-snug text-[#666] dark:text-white/65">
-                                            {seg.text_zh}
-                                        </p>
-                                    </div>
-                                </div>
+                                <BilingualLine key={`bilingual-${i}`} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} onSeek={seekRow} registerNode={registerRow}/>
                             )) : segments.length > 0 ? segments.map((seg,i) => (
-                                <div
-                                    key={i}
-                                    ref={(node)=>{ if(node) segmentRefs.current[i]=node; }}
-                                    className={`group grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${i===activeSegmentIndex && mediaUrl ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={()=>seekToSegment(seg)}
-                                        className={`pt-[1px] text-left font-mono text-xs tabular-nums transition ${i===activeSegmentIndex && mediaUrl ? 'font-bold text-primary' : 'text-[#8a8a8a] hover:text-primary dark:text-white/40'}`}
-                                    >
-                                        {fmtTime(seg.start)}
-                                    </button>
-                                    <div className="min-w-0 flex-1">
-                                        <textarea
-                                            data-transcript-segment="true"
-                                            value={seg.text || ''}
-                                            ref={mountSegmentTextarea}
-                                                        onChange={(e)=>{ autoSizeTextarea(e.target); handleSegmentTextChange(i, e.target.value); }}
-                                                                                                    onFocus={()=>setFollowPlayback(false)}
-                                            rows={1}
-                                            className="min-h-[1.75rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-medium leading-snug text-[#111111] focus:ring-0 dark:text-white"
-                                        />
-                                    </div>
-                                        </div>
+                                <TranscriptLine key={i} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} onSeek={seekRow} onEdit={editRow} onFocusLine={stopFollowing} registerNode={registerRow}/>
                                 )) : isTranscriptHydrationPending ? (
                                     <div className="flex min-h-[320px] items-center justify-center rounded-[16px] border border-dashed border-outline-variant bg-surface-container-low px-4 py-8 text-center">
                                         <div className="max-w-[28rem]">
@@ -1987,8 +2018,7 @@ const Editor = () => {
                                             onEnded={()=>setMediaPlaying(false)}
                                         />
                                     {mediaUrl ? (
-                                        <div className="space-y-3">
-                                            <div className="flex items-center gap-3">
+                                        <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
                                                 <button type="button" onClick={togglePlayback} className="flex h-9 w-9 items-center justify-center rounded-[13px] bg-[#111111] text-white transition hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
                                                     <SvgIcon name={mediaPlaying ? 'pause' : 'play_arrow'} className="text-lg"/>
                                                 </button>
@@ -2004,21 +2034,7 @@ const Editor = () => {
                                                         {lang === 'zh' ? '剪后的版本' : 'Cut version'}
                                                     </span>
                                                 )}
-                                                <span className="text-xs font-mono text-on-surface-variant ml-auto">{fmtTime(mediaCurrentTime)} / {fmtTime(playbackDuration || mediaCurrentTime)}</span>
-                                            </div>
-                                            <input
-                                                type="range"
-                                                min="0"
-                                                max={Math.max(1, playbackDuration)}
-                                                step="0.1"
-                                                    value={Math.min(mediaCurrentTime, Math.max(1, playbackDuration))}
-                                                    onChange={(e)=>{
-                                                        const next = Number(e.target.value) || 0;
-                                                        seekMediaTo(next);
-                                                    }}
-                                                className="w-full accent-primary"
-                                                style={{background:`linear-gradient(90deg, #3B82F6 ${mediaProgress}%, var(--c-surface-container-highest) ${mediaProgress}%)`}}
-                                            />
+                                                <PlaybackBar clock={playbackClock} duration={playbackDuration} onSeek={seekMediaTo}/>
                                         </div>
                                     ) : (
                                         <div className="flex items-center justify-between gap-3">

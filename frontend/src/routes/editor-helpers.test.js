@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { claudeRewriteSettled, cutItemsToJudge, mergeNoteFields, noteCameFromClaude, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+import { claudeRewriteSettled, cutItemsToJudge, findSegmentAt, sizeTextareas, mergeNoteFields, noteCameFromClaude, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
 
 describe('shouldKeepVideoReviewMounted', () => {
     it('keeps the player mounted while playback is between subtitle segments', () => {
@@ -152,5 +152,54 @@ describe('cutItemsToJudge', () => {
     it('is zero for a task without a cut report', () => {
         expect(cutItemsToJudge({})).toBe(0);
         expect(cutItemsToJudge(null)).toBe(0);
+    });
+});
+
+// The highlighted sentence while playing: the one being said at that moment,
+// none between sentences.
+describe('findSegmentAt', () => {
+    const segs = [
+        {start: 0, end: 2, text: 'a'},
+        {start: 2, end: 5, text: 'b'},
+        {start: 8, end: 9, text: 'c'},
+        {start: 9, text: 'd'},
+        {start: 20, text: 'e'},
+    ];
+
+    it('finds the sentence being said', () => {
+        expect(findSegmentAt(segs, 0)).toBe(0);
+        expect(findSegmentAt(segs, 1.9)).toBe(0);
+        expect(findSegmentAt(segs, 2)).toBe(1);
+        expect(findSegmentAt(segs, 8.5)).toBe(2);
+    });
+
+    it('finds none in a gap between sentences or before the first', () => {
+        expect(findSegmentAt(segs, 6)).toBe(-1);
+        expect(findSegmentAt([{start: 3, end: 4}], 1)).toBe(-1);
+        expect(findSegmentAt([], 1)).toBe(-1);
+    });
+
+    it('lets a sentence without an end last until the next starts, or six seconds for the last', () => {
+        expect(findSegmentAt(segs, 15)).toBe(3);
+        expect(findSegmentAt(segs, 25)).toBe(4);
+        expect(findSegmentAt(segs, 26.5)).toBe(-1);
+    });
+
+    it('agrees with a plain scan on a long list', () => {
+        const long = Array.from({length: 3000}, (_, i) => ({start: i * 2, end: i * 2 + (i % 3 === 0 ? 1.5 : 2)}));
+        const scan = (t) => long.findIndex((s) => t >= s.start && t < s.end);
+        for (const t of [0, 1.7, 2.1, 777.6, 3001.5, 5999, 6000.2]) expect(findSegmentAt(long, t)).toBe(scan(t));
+    });
+});
+
+describe('sizeTextareas', () => {
+    it('gives every box the height of its own text', () => {
+        const boxes = [10, 40, 25].map((h) => {
+            const node = document.createElement('textarea');
+            Object.defineProperty(node, 'scrollHeight', {get: () => h});
+            return node;
+        });
+        sizeTextareas(boxes);
+        expect(boxes.map((b) => b.style.height)).toEqual(['10px', '40px', '25px']);
     });
 });

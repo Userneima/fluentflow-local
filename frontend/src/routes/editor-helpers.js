@@ -113,6 +113,40 @@ export const markdownDownloadMessage = (out, lang = 'zh') => {
         : 'Downloaded as a .zip: keep the Markdown file next to its images folder and the screenshots show';
 };
 
+// The sentence playing at `time`: the last one starting at or before it, as
+// long as it has not ended (a sentence without an end lasts until the next one
+// starts, or six seconds). -1 between sentences. Binary search, since it runs
+// on every tick of the player against lists of several thousand sentences.
+export const findSegmentAt = (segments, time) => {
+    const list = Array.isArray(segments) ? segments : [];
+    let lo = 0;
+    let hi = list.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if ((Number(list[mid]?.start) || 0) <= time) { found = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    if (found < 0) return -1;
+    const start = Number(list[found]?.start) || 0;
+    const nextStart = Number(list[found + 1]?.start);
+    const end = Number(list[found]?.end) || (Number.isFinite(nextStart) ? nextStart : start + 6);
+    return time < end ? found : -1;
+};
+
+// Whether the browser sizes a textarea to its text by itself (CSS
+// field-sizing). Chrome, Edge and Safari do; Firefox does not yet.
+export const textareaSizesItself = () => typeof CSS !== 'undefined' && !!CSS.supports?.('field-sizing', 'content');
+
+// For a browser that does not: size every box in one pass, all writes, then
+// all reads, then all writes, so the page is laid out once. Measuring them one
+// by one laid the page out once per box: 11.6 s for 7104 sentences.
+export const sizeTextareas = (nodes) => {
+    const list = Array.from(nodes || []);
+    list.forEach((node) => { node.style.height = 'auto'; });
+    const heights = list.map((node) => node.scrollHeight);
+    list.forEach((node, index) => { node.style.height = `${heights[index]}px`; });
+};
+
 // How many places of the cut wait for the user's judgement: items of the
 // report's judgement group without an answer. The full result carries the
 // report and the answers; a records-list copy carries only the count.
