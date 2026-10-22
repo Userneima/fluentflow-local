@@ -44,6 +44,9 @@ def _isolate_runtime_storage() -> Path:
     os.environ["FLUENTFLOW_DATA_DIR"] = str(root)
     # The recommended-model table is not fetched from GitHub in tests.
     os.environ["FLUENTFLOW_MODEL_TABLE_URL"] = ""
+    # Starlette's TestClient sends Host: testserver; the service only answers
+    # requests addressed to this machine (local_http_boundary).
+    os.environ["FLUENTFLOW_ALLOWED_HOSTS"] = "testserver"
 
     env_file = PROJECT_ROOT / ".env"
     dotenv_keys = set(dotenv_values(env_file)) if env_file.is_file() else set()

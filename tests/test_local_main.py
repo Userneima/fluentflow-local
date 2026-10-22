@@ -62,7 +62,8 @@ def _get_as_peer(peer: str, path: str = "/health") -> httpx.Response:
 
     async def scenario():
         transport = httpx.ASGITransport(app=create_local_app(), client=(peer, 40000))
-        async with httpx.AsyncClient(transport=transport, base_url="http://local") as client:
+        # A real address: the service refuses any other Host (DNS rebinding).
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8000") as client:
             return await client.get(path)
 
     return asyncio.run(scenario())
@@ -104,7 +105,8 @@ def _request_as_peer(peer: str, method: str, path: str, **kwargs) -> httpx.Respo
 
     async def scenario():
         transport = httpx.ASGITransport(app=create_local_app(), client=(peer, 40000))
-        async with httpx.AsyncClient(transport=transport, base_url="http://local") as client:
+        # A real address: the service refuses any other Host (DNS rebinding).
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8000") as client:
             return await client.request(method, path, **kwargs)
 
     return asyncio.run(scenario())
@@ -508,3 +510,26 @@ def test_screenshots_load_on_another_device_with_the_token_cookie(monkeypatch):
     assert b._cookie_token_ok(req("GET", "wrong")) is False
     assert b._cookie_token_ok(req("GET", None)) is False
     assert b._cookie_token_ok(req("POST", "tok-123")) is False, "never for writes"
+
+
+# Review 2026-10-22: a page on another domain pointed at 127.0.0.1 (DNS
+# rebinding) arrives from a loopback peer with no Origin on a read; the Host
+# header is what gives it away.
+def test_a_request_addressed_to_another_host_is_refused():
+    client = TestClient(create_local_app())
+    for path in ("/workflow-status", "/credentials/status", "/jobs"):
+        r = client.get(path, headers={"host": "rebind.attacker.example:8000"})
+        assert r.status_code == 403, path
+
+
+def test_requests_addressed_to_this_machine_are_served():
+    client = TestClient(create_local_app())
+    for host in ("127.0.0.1:8000", "localhost:8000", "[::1]:8000"):
+        assert client.get("/health", headers={"host": host}).status_code == 200, host
+
+
+def test_lan_mode_accepts_an_ip_address_but_not_a_domain(monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ALLOW_NON_LOOPBACK", "1")
+    client = TestClient(create_local_app())
+    assert client.get("/health", headers={"host": "192.168.1.5:8000"}).status_code == 200
+    assert client.get("/health", headers={"host": "rebind.attacker.example:8000"}).status_code == 403

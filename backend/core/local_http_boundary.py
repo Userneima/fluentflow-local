@@ -17,6 +17,14 @@ page sends it once it is filled in under "菜单 → Agent 接入" on that devic
 Only what it takes to load the page and get to that panel is served without
 it (see ``_open_without_token``). Without a token configured, other devices
 get the page and nothing else.
+
+(3) The ``Host`` header must name this machine: 127.0.0.1, localhost or
+[::1], plus in LAN mode an IP address or this machine's own ``.local`` name.
+A web page whose own domain is pointed at 127.0.0.1 (DNS rebinding) is a
+same-origin page to the browser, sends no ``Origin`` on a read, and arrives
+from a loopback peer, so without this check it could read the status list,
+transcripts and notes. ``FLUENTFLOW_ALLOWED_HOSTS`` (comma separated) adds
+names, for a proxy in front of the service or a test client.
 """
 
 from __future__ import annotations
@@ -42,6 +50,19 @@ READ_METHODS = {"GET", "HEAD"}
 # What the page needs before it has a token: the page itself, its static files,
 # and the health check it opens with.
 _OPEN_PATHS = {"/", "/health", "/favicon.ico", "/favicon.svg"}
+
+
+def _host_is_this_machine(request: Request) -> bool:
+    host_header = (request.headers.get("host") or "").strip()
+    if not host_header:
+        return True
+    host, _port = _host_and_port(host_header)
+    if host in LOOPBACK_ORIGIN_HOSTS:
+        return True
+    extra = {name.strip().lower() for name in (os.environ.get("FLUENTFLOW_ALLOWED_HOSTS") or "").split(",") if name.strip()}
+    if host in extra:
+        return True
+    return _allow_non_loopback() and _is_ip_literal_or_own_mdns(host)
 
 
 def _allow_non_loopback() -> bool:
@@ -164,6 +185,8 @@ def _cookie_token_ok(request: Request) -> bool:
 
 
 async def local_boundary_middleware(request: Request, call_next):
+    if not _host_is_this_machine(request):
+        return _forbidden("请求的地址不是这台电脑，已拒绝。请用 http://127.0.0.1 打开 FluentFlow。")
     peer = (request.client.host if request.client else "") or ""
     if peer not in LOOPBACK_PEERS:
         if not _allow_non_loopback():
