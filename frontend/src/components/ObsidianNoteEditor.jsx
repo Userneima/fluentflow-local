@@ -143,9 +143,7 @@ const ObsidianNoteEditor = ({lang = 'zh', markdown: source = '', taskId = '', ap
         <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center gap-2 border-b border-amber-300/60 bg-amber-50 px-4 py-2 text-xs font-bold text-amber-900 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200">
                 <span className="rounded-[6px] bg-amber-200/80 px-1.5 py-0.5 dark:bg-amber-400/20">{lang === 'zh' ? '样机' : 'Prototype'}</span>
-                <span>{lang === 'zh'
-                    ? 'Obsidian 式编辑器：改动只留在这个页面，不保存，刷新就还原。'
-                    : 'Obsidian-style editor: edits stay on this page and are not saved.'}</span>
+                <span>{lang === 'zh' ? '改动不保存' : 'Edits are not saved'}</span>
             </div>
             <div ref={hostRef} className="min-h-0 flex-1"/>
         </div>
