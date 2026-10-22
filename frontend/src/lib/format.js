@@ -685,8 +685,8 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 titleEn: `${providerName} API key is invalid`,
                 detailZh: `AI 笔记没有生成：${providerName} 不接受当前的 API Key（无效、已失效或没有权限）。转录和字幕已保存。`,
                 detailEn: `The AI note was not generated: ${providerName} rejected the current API key (invalid, expired, or without permission). Transcript and subtitles are saved.`,
-                nextZh: `到设置页替换 ${providerName} 的 API Key，再回到编辑器点击“重写笔记”。`,
-                nextEn: `Replace the ${providerName} API key in Settings, then return to the editor and click Regenerate note.`,
+                nextZh: `到设置页替换 ${providerName} 的 API Key，再回到编辑器点「写笔记」。`,
+                nextEn: `Replace the ${providerName} API key in Settings, then return to the editor and click Write the note.`,
             }),
         ],
         [
@@ -697,8 +697,8 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 titleEn: `${providerName} is rate limiting requests`,
                 detailZh: `AI 笔记没有生成：${providerName} 这段时间收到的请求太多，暂时拒绝了。转录和字幕已保存。`,
                 detailEn: `The AI note was not generated: ${providerName} is refusing requests for now. Transcript and subtitles are saved.`,
-                nextZh: '过几分钟回到编辑器点击“重写笔记”；反复出现就到服务商后台看额度。',
-                nextEn: 'Return to the editor in a few minutes and click Regenerate note; if it keeps happening, check your plan at the provider.',
+                nextZh: '过几分钟回到编辑器点「写笔记」；反复出现就到服务商后台看额度。',
+                nextEn: 'Return to the editor in a few minutes and click Write the note; if it keeps happening, check your plan at the provider.',
             }),
         ],
         [
@@ -722,8 +722,8 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 titleEn: `${providerName} balance is exhausted`,
                 detailZh: `AI 笔记没有生成：${providerName} 账号的余额或额度已用完。转录和字幕已保存。`,
                 detailEn: `The AI note was not generated: the ${providerName} account has no balance or quota left. Transcript and subtitles are saved.`,
-                nextZh: `到 ${providerName} 的控制台充值，或在设置页换一个服务商，再回到编辑器点击“重写笔记”。`,
-                nextEn: `Top up at ${providerName}, or switch provider in Settings, then return to the editor and click Regenerate note.`,
+                nextZh: `到 ${providerName} 的控制台充值，或在设置页换一个服务商，再回到编辑器点「写笔记」。`,
+                nextEn: `Top up at ${providerName}, or switch provider in Settings, then return to the editor and click Write the note.`,
             }),
         ],
         [
@@ -885,7 +885,7 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 titleEn: lower.includes('summary') ? 'Background note request failed' : 'Background queue request failed',
                 detailZh: lower.includes('summary') ? '后台任务调用笔记生成接口失败。请重试；如果连续出现，请重启后端服务。' : '处理流程调用转录接口失败。请重试；如果连续出现，请重启后端服务。',
                 detailEn: lower.includes('summary') ? 'The background task could not call the note endpoint. Retry or restart the backend.' : 'The processing flow could not call the transcription endpoint. Retry or restart the backend.',
-                nextZh: lower.includes('summary') ? '重试；如果转录已保存，打开结果后重写笔记。' : '重试；如果连续出现，重启后端服务后再提交。',
+                nextZh: lower.includes('summary') ? '重试；如果转录已保存，打开结果后点「写笔记」。' : '重试；如果连续出现，重启后端服务后再提交。',
                 nextEn: lower.includes('summary') ? 'Retry; if the transcript is saved, reopen the result and regenerate the note.' : 'Retry; if it keeps failing, restart the backend and submit again.',
             }),
         ],
@@ -910,7 +910,7 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 titleEn: 'AI returned an empty note',
                 detailZh: 'AI 返回了空笔记，没有生成可用内容。',
                 detailEn: 'The AI returned an empty note and produced no usable content.',
-                nextZh: '重写笔记；如果重复出现，换用直接生成模式或调整提示词。',
+                nextZh: '点「写笔记」再试；如果重复出现，换用直接生成模式或调整提示词。',
                 nextEn: 'Regenerate the note; if it repeats, use direct mode or adjust the prompt.',
             }),
         ],
@@ -991,7 +991,7 @@ export const noteGenerationDiagnosis = (result={}, lang='zh') => {
             severity: 'neutral',
             title: zh ? '还没有填写模型 Key，这次只出了转录稿' : 'No model key yet, so this is a transcript without a note',
             detail: zh ? '转录和字幕都已保留。' : 'The transcript and subtitles are kept.',
-            nextAction: zh ? '在「设置」里填好 Key 后点「重写笔记」，或者把笔记交给你的 agent 来写。' : 'Add a key in Settings and click Regenerate note, or have your agent write the note.',
+            nextAction: zh ? '在「设置」里填好 Key 后点「写笔记」，或者把笔记交给你的 agent 来写。' : 'Add a key in Settings and click Write the note, or have your agent write the note.',
             canRegenerate: true,
         };
     }
@@ -1003,7 +1003,7 @@ export const noteGenerationDiagnosis = (result={}, lang='zh') => {
             severity: 'neutral',
             title: zh ? '本次开启了仅转录模式' : 'Transcript-only mode was used',
             detail: zh ? '系统按设置跳过了 AI 笔记，转录和字幕已保留。' : 'The system skipped AI note generation by setting; transcript and subtitles are preserved.',
-            nextAction: zh ? '需要笔记时，打开结果并点击“重写笔记”。' : 'Open the result and click Regenerate note when you need a note.',
+            nextAction: zh ? '需要笔记时，打开结果点「写笔记」。' : 'Open the result and click Write the note when you need one.',
             canRegenerate: true,
         };
     }
@@ -1012,7 +1012,7 @@ export const noteGenerationDiagnosis = (result={}, lang='zh') => {
         const code = diag.code === 'unknown_error' ? 'ai_note_failed' : diag.code;
         const title = diag.code === 'unknown_error' ? (zh ? 'AI 笔记生成失败' : 'AI note generation failed') : diag.title;
         const nextAction = diag.code === 'unknown_error'
-            ? (zh ? '打开结果后点击“重写笔记”；如果仍失败，换一个笔记模式或缩短材料。' : 'Open the result and click Regenerate note; if it still fails, change the note mode or shorten the material.')
+            ? (zh ? '打开结果后点「写笔记」；如果仍失败，换一个笔记模式或缩短材料。' : 'Open the result and click Write the note; if it still fails, change the note mode or shorten the material.')
             : diag.nextAction;
         return {
             ...base,
@@ -1032,7 +1032,7 @@ export const noteGenerationDiagnosis = (result={}, lang='zh') => {
         severity: 'warning',
         title: zh ? '暂时没有可见笔记' : 'No visible note yet',
         detail: zh ? '转录已存在，但结果里没有记录明确的笔记状态。' : 'A transcript exists, but the result does not record a clear note status.',
-        nextAction: zh ? '打开结果点击“重写笔记”；如果失败，再查看任务详情。' : 'Open the result and click Regenerate note; check task details if it fails.',
+        nextAction: zh ? '打开结果点「写笔记」；如果失败，再查看任务详情。' : 'Open the result and click Write the note; check task details if it fails.',
         canRegenerate: true,
     };
 };

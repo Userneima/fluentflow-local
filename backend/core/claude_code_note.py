@@ -125,7 +125,7 @@ TRANSIENT_RETRY_DELAY_SECONDS = 10.0
 # offline mid-note. Told to log in again, though the login was fine all along.
 _OFFLINE_MESSAGE = (
     "连不上 Claude，可能是网络断了，或者登录凭证一时没刷新成功。"
-    "本机 Claude 仍是登录状态，不用重新登录；联网后点重写笔记即可。"
+    "本机 Claude 仍是登录状态，不用重新登录；联网后点「写笔记」即可。"
 )
 
 _LOGIN_MESSAGE = (

@@ -60,16 +60,15 @@ describe('who writes the note', () => {
 // note. When Claude writes from the frames, the person changing them is told so
 // before expecting a different note; for a text-model writer nothing is added.
 describe('what the prompt button says about who uses the prompt', () => {
-    it('says Claude does not read the prompt and points to the text-model choice in 重写笔记', () => {
+    it('says Claude does not read the prompt and points to the user\'s agent', () => {
         const writer = resolveNoteWriter({
             runtimeConfig: {writesItsOwnNote: true},
             credentialStatus: {visual_note_available: true},
         });
         const zh = notePromptScopeSentence(writer, 'zh');
         expect(zh).toMatch(/Claude 结合画面写笔记/);
-        expect(zh).toMatch(/重写笔记/);
-        expect(zh).toMatch(/改用文本模型按文字重写/);
-        expect(notePromptScopeSentence(writer, 'en')).toMatch(/rewrite from the text with the text model/);
+        expect(zh).toMatch(/交给你的 agent 按提示词重写/);
+        expect(notePromptScopeSentence(writer, 'en')).toMatch(/hand the note to your agent/);
     });
 
     it('says nothing extra when a text model writes the note, since the prompt applies directly', () => {

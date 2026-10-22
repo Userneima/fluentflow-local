@@ -558,7 +558,7 @@ def test_an_auth_failure_while_still_logged_in_does_not_send_the_user_to_log_in(
         ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
 
     message = str(caught.value)
-    assert "不用重新登录" in message and "重写笔记" in message
+    assert "不用重新登录" in message and "「写笔记」" in message
     assert "运行 `claude`" not in message
     assert len(calls) == 2, "a dropped connection is worth one more try"
 

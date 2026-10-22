@@ -252,6 +252,7 @@ const Editor = () => {
     const [retranscribeConfirmOpen, setRetranscribeConfirmOpen] = useState(false);
     const [visualEvidenceVisible, setVisualEvidenceVisible] = useState(true);
     const summaryRef = useRef(null);
+    const writeNoteButtonRef = useRef(null);
     const retranscribeInputRef = useRef(null);
     const fallbackTaskIdRef = useRef(createTaskId());
     const hydratedTaskIdsRef = useRef(new Set());
@@ -276,6 +277,8 @@ const Editor = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const urlTaskId = searchParams.get('task') || '';
     const urlWantsCutReview = searchParams.get('review') === 'cut';
+    // Prototype of the slim header (界面优化清单线二第 8 条): ?layout=v2.
+    const layoutV2 = searchParams.get('layout') === 'v2';
     const [urlTask, setUrlTask] = useState({id: '', state: 'idle'});
     const urlTaskIdRef = useRef(urlTaskId);
     urlTaskIdRef.current = urlTaskId;
@@ -313,7 +316,7 @@ const Editor = () => {
     useEffect(() => {
         if (!openTaskId || openTaskId === urlTaskId) return;
         if (urlTaskId && (urlTask.id !== urlTaskId || urlTask.state !== 'loaded')) return;
-        setSearchParams({task: openTaskId}, {replace: true});
+        setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('task', openTaskId); return next; }, {replace: true});
     }, [openTaskId, urlTaskId, urlTask, setSearchParams]);
 
     const result = lastResult;
@@ -824,7 +827,7 @@ const Editor = () => {
     useEffect(() => {
         if (!urlWantsCutReview || !result?.task_id || result.task_id !== urlTaskId) return;
         setCutReviewOpen(true);
-        setSearchParams({task: urlTaskId}, {replace: true});
+        setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('review'); return next; }, {replace: true});
     }, [urlWantsCutReview, result?.task_id, urlTaskId, setSearchParams]);
     // Answers given in the report change how many places still wait, so the
     // task's cut record is read again when the report closes.
@@ -1705,7 +1708,20 @@ const Editor = () => {
     // Playback is when the media panel needs the height most, so the page
     // header steps aside then unless the reader pinned it open. Hovering the
     // strip floats the full header back without resizing anything underneath.
-    const headerCollapsed = !headerPinned && mediaPlaying;
+    const headerCollapsed = !layoutV2 && !headerPinned && mediaPlaying;
+    // The one thing in the slim header that needs the user, if anything, and
+    // where clicking it takes them.
+    const noteMissing = !!result && !hasEditableSummary && (result.summary_skipped || result.summary_status === 'failed' || !!result.summary_error);
+    const noteBeingWritten = regenerating || noteIsBeingWritten(result);
+    const headerStatus = cutFileUnavailable
+        ? {tone: 'error', label: lang === 'zh' ? '剪后文件读不到了，重新处理' : 'The cut file cannot be read: process again', onClick: handleRetranscribe}
+        : cutJudgeCount > 0
+            ? {tone: 'ask', label: lang === 'zh' ? `剪辑有 ${cutJudgeCount} 处需要你判断` : `${cutJudgeCount} cut decision${cutJudgeCount === 1 ? '' : 's'} need your call`, onClick: () => setCutReviewOpen(true)}
+            : noteBeingWritten
+                ? {tone: 'busy', label: lang === 'zh' ? '写笔记中' : 'Writing the note', onClick: null}
+                : noteMissing
+                    ? {tone: 'ask', label: lang === 'zh' ? '笔记没生成' : 'No note yet', onClick: () => { writeNoteButtonRef.current?.scrollIntoView({block: 'center'}); writeNoteButtonRef.current?.focus(); }}
+                    : null;
     const togglePinnedHeader = () => {
         setHeaderPinned((pinned) => {
             const next = !pinned;
@@ -1757,6 +1773,8 @@ const Editor = () => {
         )}
         {regenerateConfirmOpen && (
             <RegenerateConfirmDialog
+                title={layoutV2 && noteMissing ? (lang === 'zh' ? '写笔记' : 'Write the note') : ''}
+                confirmLabel={layoutV2 && noteMissing ? (lang === 'zh' ? '开始写' : 'Start writing') : ''}
                 transcriptTitle={rawEditorTitle}
                 description={regenerateCopy.desc}
                 warning={regenerateCopy.warning}
@@ -1810,6 +1828,40 @@ const Editor = () => {
         />
         <main className="h-dvh overflow-hidden px-4 pb-4 pt-5 xl:px-5 2xl:px-6">
             <div className="mx-auto h-full min-h-0 w-full flex flex-col gap-3">
+                {layoutV2 ? (
+                    <div data-testid="editor-header-v2" className="flex h-10 shrink-0 items-center gap-3">
+                        <nav className="flex min-w-0 items-center gap-1.5 text-[13px] leading-none">
+                            <Link to="/agent" className="shrink-0 font-semibold text-[#666] hover:text-[#111111] dark:text-white/60 dark:hover:text-white">
+                                {lang === 'zh' ? '处理记录' : 'Records'}
+                            </Link>
+                            <span className="shrink-0 text-[#b4b4b4] dark:text-white/30">/</span>
+                            <h1 className="min-w-0 truncate text-[13px] font-extrabold text-[#111111] dark:text-white" title={rawEditorTitle}>
+                                {rawEditorTitle}
+                            </h1>
+                        </nav>
+                        {headerStatus && (
+                            <button
+                                type="button"
+                                data-testid="editor-header-status"
+                                onClick={headerStatus.onClick}
+                                disabled={!headerStatus.onClick}
+                                className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[10px] border px-2.5 text-[12px] font-bold disabled:cursor-default ${headerStatus.tone === 'error'
+                                    ? 'border-[#fda29b] bg-[#fef3f2] text-[#b42318] hover:bg-[#fee4e2] dark:border-[#f04438]/40 dark:bg-[#f04438]/[0.14] dark:text-[#f97066]'
+                                    : headerStatus.tone === 'busy'
+                                        ? 'border-[#e4e0e0] bg-white text-[#666] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65'
+                                        : 'border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] hover:bg-[#fff3dc] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]'}`}
+                            >
+                                {headerStatus.tone === 'busy'
+                                    ? <SvgIcon name="sync" className="text-[13px] animate-spin"/>
+                                    : <AlertCircle className="size-3.5" strokeWidth={2.15}/>}
+                                {headerStatus.label}
+                            </button>
+                        )}
+                        <div className="ml-auto flex shrink-0 items-center">
+                            <OutputFolderLine taskId={activeTaskId} result={result} lang={lang} compact/>
+                        </div>
+                    </div>
+                ) : (
                 <div className="group/header relative shrink-0">
                 {headerCollapsed && (
                     <div className="flex h-9 items-center gap-2 rounded-[14px] border border-[#e4e0e0] bg-white/85 px-3 dark:border-white/[0.12] dark:bg-white/[0.06]">
@@ -1925,6 +1977,7 @@ const Editor = () => {
                 </div>
                 </div>
                 </div>
+                )}
 
                 <PromptTemplateDialog
                     open={promptEditing.promptOpen}
@@ -2037,23 +2090,25 @@ const Editor = () => {
                                                     <span className="tabular-nums text-primary">{visibleEditRecords.length}</span>
                                                 </button>
                                             )}
-                                            <DropdownMenu
-                                                trigger={
-                                                    <button className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] bg-[#111111] px-3 text-xs font-bold text-white transition hover:bg-[#2a2a2a] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
-                                                        <SvgIcon name="download" className="text-[17px]"/>
-                                                        {lang === 'zh' ? '导出' : 'Export'}
-                                                    </button>
-                                                }
-                                                items={[
-                                                    {icon:'description', label:t('dl.txt'), badge:'TXT', onClick:()=>{dlTranscriptTxt(transcript,resultDownloadName); recordDownload('transcript_downloaded','txt'); showToast(t('dl.success'));}},
-                                                    {icon:'subtitles', label:downloadLabels.srt, badge:'SRT', disabled:segments.length===0, onClick:()=>{dlTranscriptSrt(segments,subtitleName); recordDownload('transcript_downloaded','srt'); showToast(t('dl.success'));}},
-                                                    {icon:'closed_caption', label:downloadLabels.vtt, badge:'VTT', disabled:segments.length===0, onClick:()=>{dlTranscriptVtt(segments,subtitleName); recordDownload('transcript_downloaded','vtt'); showToast(t('dl.success'));}},
-                                                    {icon:'translate', label:downloadLabels.bilingualSrt, badge:'双语 SRT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptSrt(bilingualTranscriptSegments,null,subtitleName); recordDownload('transcript_downloaded','bilingual_srt'); showToast(t('dl.success'));}},
-                                                    {icon:'translate', label:downloadLabels.bilingualVtt, badge:'双语 VTT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptVtt(bilingualTranscriptSegments,null,subtitleName); recordDownload('transcript_downloaded','bilingual_vtt'); showToast(t('dl.success'));}},
-                                                    ...(downloadLabels.cutVideo ? [{icon:'video', label:downloadLabels.cutVideo, badge:'MP4', disabled:!cutMediaArtifact, onClick:handleDownloadCutFile}] : []),
-                                                    {icon:'video', label:downloadLabels.sourceVideo, badge:'MP4', disabled:!canDownloadSourceVideo || downloading === 'source_video', onClick:handleDownloadSourceVideo},
-                                                ]}
-                                            />
+                                            {!layoutV2 && (
+                                                <DropdownMenu
+                                                    trigger={
+                                                        <button className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] bg-[#111111] px-3 text-xs font-bold text-white transition hover:bg-[#2a2a2a] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
+                                                            <SvgIcon name="download" className="text-[17px]"/>
+                                                            {lang === 'zh' ? '导出' : 'Export'}
+                                                        </button>
+                                                    }
+                                                    items={[
+                                                        {icon:'description', label:t('dl.txt'), badge:'TXT', onClick:()=>{dlTranscriptTxt(transcript,resultDownloadName); recordDownload('transcript_downloaded','txt'); showToast(t('dl.success'));}},
+                                                        {icon:'subtitles', label:downloadLabels.srt, badge:'SRT', disabled:segments.length===0, onClick:()=>{dlTranscriptSrt(segments,subtitleName); recordDownload('transcript_downloaded','srt'); showToast(t('dl.success'));}},
+                                                        {icon:'closed_caption', label:downloadLabels.vtt, badge:'VTT', disabled:segments.length===0, onClick:()=>{dlTranscriptVtt(segments,subtitleName); recordDownload('transcript_downloaded','vtt'); showToast(t('dl.success'));}},
+                                                        {icon:'translate', label:downloadLabels.bilingualSrt, badge:'双语 SRT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptSrt(bilingualTranscriptSegments,null,subtitleName); recordDownload('transcript_downloaded','bilingual_srt'); showToast(t('dl.success'));}},
+                                                        {icon:'translate', label:downloadLabels.bilingualVtt, badge:'双语 VTT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptVtt(bilingualTranscriptSegments,null,subtitleName); recordDownload('transcript_downloaded','bilingual_vtt'); showToast(t('dl.success'));}},
+                                                        ...(downloadLabels.cutVideo ? [{icon:'video', label:downloadLabels.cutVideo, badge:'MP4', disabled:!cutMediaArtifact, onClick:handleDownloadCutFile}] : []),
+                                                        {icon:'video', label:downloadLabels.sourceVideo, badge:'MP4', disabled:!canDownloadSourceVideo || downloading === 'source_video', onClick:handleDownloadSourceVideo},
+                                                    ]}
+                                                />
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -2218,35 +2273,37 @@ const Editor = () => {
                                             </button>
                                         )}
                                         {summary && <NoteExplanation result={result} lang={lang}/>}
-                                        <DropdownMenu
-                                            trigger={
-                                                <button disabled={!summary || !!downloading} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]">
-                                                    <SvgIcon name={downloading ? 'sync' : 'download'} className={`text-sm ${downloading?'animate-spin':''}`}/>
-                                                    {downloading ? t('dl.generating') : t('dl.summary')}
-                                            </button>
-                                            }
-                                            items={[
-                                                {icon:'description', label:t('dl.txt'), badge:'TXT', disabled:!summary, onClick:()=>{dlSummaryTxt(summary,resultDownloadName); recordDownload('summary_downloaded','txt'); showToast(t('dl.success'));}},
-                                                {icon:'markdown', label:t('dl.md'), badge:'MD', disabled:!summary, onClick:async()=>{
-                                                    try{
-                                                        const out = await dlSummaryMd(summary,resultDownloadName);
-                                                        recordDownload('summary_downloaded', out?.format === 'zip' ? 'md_zip' : 'md');
-                                                        showToast(markdownDownloadMessage(out, lang) || t('dl.success'), !out?.missing);
-                                                    }catch(e){showToast(e.message,false);}
-                                                }},
-                                                {divider:true},
-                                                {icon:'picture_as_pdf', label:t('dl.pdf'), badge:'PDF', disabled:!summary, onClick:async()=>{
-                                                    setDownloading('pdf');
-                                                    try{ await dlSummaryPdf(summary,resultDownloadName); recordDownload('summary_downloaded','pdf'); showToast(t('dl.pdfPrintOpened')); }catch(e){showToast(e.message,false);}
-                                                    finally{setDownloading(null);}
-                                                }},
-                                                {icon:'article', label:t('dl.word'), badge:'DOCX', disabled:!summary, onClick:async()=>{
-                                                    setDownloading('docx');
-                                                    try{ await dlSummaryWord(summary,resultDownloadName); recordDownload('summary_downloaded','docx'); showToast(t('dl.success')); }catch(e){showToast(e.message,false);}
-                                                    finally{setDownloading(null);}
-                                                }},
-                                            ]}
-                                        />
+                                        {!layoutV2 && (
+                                            <DropdownMenu
+                                                trigger={
+                                                    <button disabled={!summary || !!downloading} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]">
+                                                        <SvgIcon name={downloading ? 'sync' : 'download'} className={`text-sm ${downloading?'animate-spin':''}`}/>
+                                                        {downloading ? t('dl.generating') : t('dl.summary')}
+                                                </button>
+                                                }
+                                                items={[
+                                                    {icon:'description', label:t('dl.txt'), badge:'TXT', disabled:!summary, onClick:()=>{dlSummaryTxt(summary,resultDownloadName); recordDownload('summary_downloaded','txt'); showToast(t('dl.success'));}},
+                                                    {icon:'markdown', label:t('dl.md'), badge:'MD', disabled:!summary, onClick:async()=>{
+                                                        try{
+                                                            const out = await dlSummaryMd(summary,resultDownloadName);
+                                                            recordDownload('summary_downloaded', out?.format === 'zip' ? 'md_zip' : 'md');
+                                                            showToast(markdownDownloadMessage(out, lang) || t('dl.success'), !out?.missing);
+                                                        }catch(e){showToast(e.message,false);}
+                                                    }},
+                                                    {divider:true},
+                                                    {icon:'picture_as_pdf', label:t('dl.pdf'), badge:'PDF', disabled:!summary, onClick:async()=>{
+                                                        setDownloading('pdf');
+                                                        try{ await dlSummaryPdf(summary,resultDownloadName); recordDownload('summary_downloaded','pdf'); showToast(t('dl.pdfPrintOpened')); }catch(e){showToast(e.message,false);}
+                                                        finally{setDownloading(null);}
+                                                    }},
+                                                    {icon:'article', label:t('dl.word'), badge:'DOCX', disabled:!summary, onClick:async()=>{
+                                                        setDownloading('docx');
+                                                        try{ await dlSummaryWord(summary,resultDownloadName); recordDownload('summary_downloaded','docx'); showToast(t('dl.success')); }catch(e){showToast(e.message,false);}
+                                                        finally{setDownloading(null);}
+                                                    }},
+                                                ]}
+                                            />
+                                        )}
                                     </div>
                                 </div>
                                 {hasEditableSummary && !noteReady ? (
@@ -2276,11 +2333,37 @@ const Editor = () => {
                                     {result.summary_skipped ? (
                                         <>
                                             <p className="text-sm italic text-[#666] dark:text-white/60">{t(result.summary_skipped_reason === 'no_model_key' ? 'edit.summaryNoKey' : 'edit.summarySkipped')}</p>
+                                            {layoutV2 && !noteBeingWritten && (
+                                                <button
+                                                    ref={writeNoteButtonRef}
+                                                    type="button"
+                                                    data-testid="write-note"
+                                                    onClick={()=>setRegenerateConfirmOpen(true)}
+                                                    disabled={!transcript}
+                                                    className="my-3 inline-flex h-8 items-center gap-1.5 rounded-[12px] bg-[#111111] px-3 text-[13px] font-bold not-italic text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
+                                                >
+                                                    <SvgIcon name="edit_note" className="text-[15px]"/>
+                                                    {lang === 'zh' ? '写笔记' : 'Write the note'}
+                                                </button>
+                                            )}
                                             <AgentNotePrompt result={result} lang={lang}/>
                                         </>
                                     ) : result.summary_status === 'failed' || result.summary_error ? (
                                         <div className="space-y-2 text-sm text-[#666] dark:text-white/60">
                                             <p className="italic">{t('edit.summaryFailed')}</p>
+                                            {layoutV2 && !noteBeingWritten && (
+                                                <button
+                                                    ref={writeNoteButtonRef}
+                                                    type="button"
+                                                    data-testid="write-note"
+                                                    onClick={()=>setRegenerateConfirmOpen(true)}
+                                                    disabled={!transcript}
+                                                    className="inline-flex h-8 items-center gap-1.5 rounded-[12px] bg-[#111111] px-3 text-[13px] font-bold not-italic text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
+                                                >
+                                                    <SvgIcon name="edit_note" className="text-[15px]"/>
+                                                    {lang === 'zh' ? '写笔记' : 'Write the note'}
+                                                </button>
+                                            )}
                                             {summaryFailureHint && (
                                                 <p className="rounded-[14px] border border-error/20 bg-error-container px-3 py-2 text-xs font-semibold leading-relaxed text-on-error-container">
                                                     {summaryFailureHint}
@@ -2293,12 +2376,14 @@ const Editor = () => {
                                     )}
                                     </div>
                                 )}
+{!layoutV2 && (
                                 <div className="flex justify-end border-t border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                     <Link to={agentWorkflowHref} className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#dedada] bg-white px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]">
                                         <SvgIcon name="route" className="text-sm"/>
                                         {lang === 'zh' ? '处理记录' : 'Processing records'}
                                     </Link>
                                 </div>
+                                )}
                             </section>
                         </div>
                     </div>
