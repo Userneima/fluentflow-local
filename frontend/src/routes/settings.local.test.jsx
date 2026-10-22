@@ -158,6 +158,15 @@ describe('local settings page', () => {
         expect(screen.queryByTestId('settings-attention')).toBeNull();
     });
 
+    it('says whether an agent is connected once, on the step line, with the connect commands under it', async () => {
+        workflow = workflowFrom({agent: '已有 agent 连上。'});
+        render(<Settings/>);
+        await screen.findByText('已有 agent 连上。');
+        open('agent');
+        expect(screen.getAllByText(/agent 连上/)).toHaveLength(1);
+        expect(screen.getByText('Claude Code')).toBeTruthy();
+    });
+
     it('keeps keys closed until asked for, and opens them for a link to add one', async () => {
         render(<Settings/>);
         expect(screen.queryByText('DeepSeek API Key')).toBeNull();

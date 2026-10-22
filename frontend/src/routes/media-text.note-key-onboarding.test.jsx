@@ -24,8 +24,18 @@ const saveCredentials = vi.fn(async (patch) => {
     return credentials;
 });
 const checkCredential = vi.fn(async () => checkResult);
+// GET /workflow-status as the service answers it here: nothing can write a
+// note until the selected text model's key is saved (no Claude channel).
+const keyName = (provider) => (provider === 'qwen' ? 'dashscope' : provider);
+const getWorkflowStatus = vi.fn(async (choices) => ({
+    steps: [],
+    attention: credentials[`${keyName(choices.ai_provider)}_api_key_configured`] ? [] : [
+        {id: 'no-writer', target: 'accounts', text: {zh: '现在只出转录稿：把笔记交给你的 agent 写，或在「账号和 Key」里填一个 Key。', en: ''}},
+    ],
+}));
 const stableApi = {
     getCredentialsStatus: async () => credentials,
+    getWorkflowStatus,
     saveCredentials,
     checkCredential,
     summarizeTranscriptFile: vi.fn(),
@@ -66,7 +76,7 @@ const mount = () => render(
 );
 
 const INTRO = /笔记可以交给你自己的 agent/;
-const NO_NOTE = /还没有填写模型 Key/;
+const NO_NOTE = /现在只出转录稿/;
 
 const enterKey = (value, provider = 'DeepSeek') => {
     if (provider === 'DeepSeek') fireEvent.click(screen.getByRole('radio', {name: /^DeepSeek/}));

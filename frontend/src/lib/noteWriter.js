@@ -66,40 +66,6 @@ export const noteWriterLabel = (writer, lang = 'zh') => {
     return writer.model ? `${name}（${writer.model}）` : name;
 };
 
-// Said before everything else when the Claude login has expired.
-export const claudeLoginSentence = (lang = 'zh') => (lang === 'zh'
-    ? '本机 Claude 的登录已过期，结合画面的笔记暂时写不了：打开终端运行 claude 重新登录即可恢复。'
-    : 'Claude on this machine is logged out, so notes that read the frames cannot be written: run claude in a terminal to log in again.');
-
-// The one sentence every screen shows: 当前写笔记的是 X.
-export const noteWriterSentence = (writer, lang = 'zh') => {
-    const base = baseWriterSentence(writer, lang);
-    return writer?.claudeLoginExpired ? `${claudeLoginSentence(lang)}${lang === 'zh' ? '' : ' '}${base}` : base;
-};
-
-const baseWriterSentence = (writer, lang = 'zh') => {
-    const zh = lang === 'zh';
-    if (!writer || writer.kind === 'none') {
-        return zh
-            ? '还没有填写模型 Key。转录照常进行，笔记可以交给你的 agent（Claude Code、Codex 等）来写。'
-            : 'No model key yet. Transcription works as usual, and your agent (Claude Code, Codex, ...) can write the note.';
-    }
-    if (writer.kind === 'skipped') {
-        return zh ? '当前是仅转录模式，不写笔记。' : 'Transcript-only mode is on; no note is written.';
-    }
-    const sentence = zh ? `当前写笔记的是 ${noteWriterLabel(writer, lang)}。` : `Notes are currently written by ${noteWriterLabel(writer, lang)}.`;
-    return writer.kind === 'text_model' ? `${sentence}${zh ? '' : ' '}${textModelLimitSentence(lang)}` : sentence;
-};
-
-// Said wherever a text model is the writer (owner, 2026-10-16): the note it
-// writes is sent the transcript only, so the user knows before the first note
-// what it will lack. The
-// cut does not depend on it: deciding what to cut reads the transcript and the
-// program's own measure of whether the picture moved, never the frames.
-export const textModelLimitSentence = (lang = 'zh') => (lang === 'zh'
-    ? '由它写的笔记只根据说出来的话写，不看画面、不配截图，画面上没说出口的内容（幻灯片上的字、代码、表格）不会进笔记。剪辑不受影响。'
-    : 'Its notes are written from what was said only, without looking at the picture or adding screenshots; what was only shown on screen (slide text, code, tables) is left out. Cutting is not affected.');
-
 // What one queued recording costs, said in the confirm dialogs before a batch.
 export const noteWriterBatchClause = (writer, lang = 'zh') => {
     const zh = lang === 'zh';

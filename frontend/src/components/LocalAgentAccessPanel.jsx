@@ -101,7 +101,9 @@ export const useAgentAccessStatus = () => {
     return status;
 };
 
-const LocalAgentAccessPanel = ({compact = false, onClose = null}) => {
+// `showConnection`: false where the page around it already says whether an
+// agent is connected (the Settings step line).
+const LocalAgentAccessPanel = ({compact = false, onClose = null, showConnection = true}) => {
     const [token, setToken] = useState(() => localStorage.getItem(ACCESS_TOKEN_KEY) || '');
     const [copied, setCopied] = useState('');
     const apiBase = typeof window === 'undefined' ? 'http://127.0.0.1:8000' : window.location.origin;
@@ -126,7 +128,7 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null}) => {
 
     const content = (
         <>
-            {connectionText && (
+            {showConnection && connectionText && (
                 <p data-testid="agent-connection" className={`mb-4 rounded-[14px] border px-4 py-3 text-[13px] font-bold leading-5 ${connected
                     ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200'
                     : 'border-[#e5e5e5] bg-white text-[#111111] dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-white'}`}>

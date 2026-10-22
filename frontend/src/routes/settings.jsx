@@ -179,7 +179,7 @@ const Settings = () => {
                 </div>
             ))}
 
-            {card('agent', <LocalAgentAccessPanel compact/>)}
+            {card('agent', <LocalAgentAccessPanel compact showConnection={false}/>)}
 
             <section id="accounts" className="scroll-mt-7 rounded-[16px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
                 <button type="button" aria-expanded={accountsOpen} onClick={() => setAccountsOpen(!accountsOpen)} className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left">

@@ -34,7 +34,8 @@ import {
 } from '../lib/queueUpload.js';
 import SvgIcon from '../components/SvgIcon.jsx';
 import {finishedDuplicateLink, submitIgnoredExtraUrls, submitWasDuplicateOfActive} from '../lib/linkRetry.js';
-import {noteWriterBatchClause, noteWriterSentence, resolveNoteWriter, textModelKeyConfigured} from '../lib/noteWriter.js';
+import {noteWriterBatchClause, resolveNoteWriter, textModelKeyConfigured} from '../lib/noteWriter.js';
+import {NOTE_ATTENTION_IDS, workflowChoicesFrom} from '../lib/workflowStatus.js';
 import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {dismissNoteKeyOnboarding, noteKeyOnboardingDismissed, shouldAutoOpenNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 import {taskOutcome} from '../lib/taskState.js';
@@ -94,6 +95,7 @@ const MediaText = () => {
         locateDroppedFile,
         processLocalPaths,
         getCredentialsStatus,
+        getWorkflowStatus,
         getJob,
     } = useApi();
     const {loadSettings} = useSettings();
@@ -136,7 +138,22 @@ const MediaText = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [runtimeConfig, credentialStatus],
     );
-    const noNoteKey = credentialStatus !== null && noteWriter.kind === 'none';
+    // What the banner says comes from the service's step list, the one
+    // Settings shows (decision 6.24), read again whenever the keys change.
+    const [noteAttention, setNoteAttention] = useState([]);
+    useEffect(() => {
+        if (credentialStatus === null || !getWorkflowStatus) return undefined;
+        let active = true;
+        getWorkflowStatus(workflowChoicesFrom(loadSettings()))
+            .then((overview) => {
+                if (!active) return;
+                setNoteAttention((overview?.attention || []).filter((item) => NOTE_ATTENTION_IDS.includes(item.id)));
+            })
+            .catch(() => {});
+        return () => { active = false; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [credentialStatus, getWorkflowStatus]);
+    const noNoteKey = noteAttention.some((item) => item.id === 'no-writer');
     // The first-run note setup (lib/noteKeyOnboarding.js). Decided once, when
     // the key status first arrives; after that only the person opens or
     // closes it, so a status refresh cannot pop it back up.
@@ -159,8 +176,7 @@ const MediaText = () => {
     const subtitleNeedsTextKey = mode === 'subtitle' && credentialStatus !== null
         && !textModelKeyConfigured({credentialStatus, settings: loadSettings()});
     // The subtitle notice says the same thing more precisely; one is enough.
-    const showWriterBanner = !subtitleNeedsTextKey
-        && (noNoteKey || (credentialStatus !== null && noteWriter.claudeLoginExpired));
+    const showWriterBanner = !subtitleNeedsTextKey && noteAttention.length > 0;
     const subtitleKeyText = lang === 'zh'
         ? '用字幕生成笔记需要一个文本模型的 Key（例如 DeepSeek），去设置填写'
         : 'Turning subtitles into a note needs a text-model key (for example DeepSeek). Add one in Settings';
@@ -716,7 +732,7 @@ const MediaText = () => {
 
                 {showWriterBanner && !keySetupOpen && (
                     <div data-testid="note-writer-banner" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-[#ecd9a8] bg-[#fff8e6] px-4 py-3 text-sm text-[#5c4a1a] dark:border-[#6b5a2a] dark:bg-[#2a2415] dark:text-[#f0dfb0]">
-                        <span>{noteWriterSentence(noteWriter, lang)}</span>
+                        <span>{noteAttention.map((item) => (lang === 'zh' ? item.text.zh : item.text.en)).join(' ')}</span>
                         {noNoteKey && (
                             <span className="flex shrink-0 items-center gap-4">
                                 <button type="button" onClick={() => setKeySetupOpen(true)} className="font-extrabold underline">

@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {noteExplanation, notePromptScopeSentence, noteWriterBatchClause, noteWriterSentence, resolveNoteWriter} from './noteWriter.js';
+import {noteExplanation, notePromptScopeSentence, noteWriterBatchClause, noteWriterLabel, resolveNoteWriter} from './noteWriter.js';
 
 // Requirement: every screen names the same writer, and it is the one the
 // backend will actually use (local_intake_flow.auto_note_will_run).
@@ -12,7 +12,7 @@ describe('who writes the note', () => {
             settings: {aiProvider: 'deepseek'},
         });
         expect(writer.kind).toBe('claude');
-        expect(noteWriterSentence(writer, 'zh')).toBe('当前写笔记的是 Claude（本机已登录的订阅）。');
+        expect(noteWriterLabel(writer, 'zh')).toBe('Claude（本机已登录的订阅）');
         expect(noteWriterBatchClause(writer, 'zh')).toContain('Claude 订阅额度');
     });
 
@@ -21,7 +21,7 @@ describe('who writes the note', () => {
             runtimeConfig: {writesItsOwnNote: true},
             credentialStatus: {visual_note_available: true, anthropic_api_key_configured: true},
         });
-        expect(noteWriterSentence(writer, 'zh')).toBe('当前写笔记的是 Claude（你的 Anthropic API Key）。');
+        expect(noteWriterLabel(writer, 'zh')).toBe('Claude（你的 Anthropic API Key）');
         expect(noteWriterBatchClause(writer, 'zh')).not.toContain('订阅');
     });
 
@@ -32,7 +32,7 @@ describe('who writes the note', () => {
             settings: {aiProvider: 'deepseek', aiModel: 'deepseek-flash'},
         });
         expect(writer.kind).toBe('text_model');
-        expect(noteWriterSentence(writer, 'zh')).toMatch(/^当前写笔记的是 DeepSeek（deepseek-flash）。由它写的笔记只根据说出来的话写/);
+        expect(noteWriterLabel(writer, 'zh')).toBe('DeepSeek（deepseek-flash）');
         expect(noteWriterBatchClause(writer, 'zh')).not.toContain('Claude');
     });
 
@@ -43,7 +43,6 @@ describe('who writes the note', () => {
             settings: {aiProvider: 'openai'},
         });
         expect(writer.kind).toBe('none');
-        expect(noteWriterSentence(writer, 'zh')).toContain('还没有填写模型 Key');
     });
 
     it('says transcript-only when the user switched the note off', () => {
@@ -54,29 +53,6 @@ describe('who writes the note', () => {
         });
         expect(writer.kind).toBe('skipped');
         expect(noteWriterBatchClause(writer, 'zh')).toContain('仅转录');
-    });
-});
-
-describe('an expired Claude login is said before anything is submitted', () => {
-    const runtimeConfig = {writesItsOwnNote: true};
-    it('names the login and how to restore it, then who writes the note instead', () => {
-        const writer = resolveNoteWriter({
-            runtimeConfig,
-            credentialStatus: {visual_note_available: false, visual_note_login_expired: true, deepseek_api_key_configured: true},
-            settings: {aiProvider: 'deepseek', aiModel: 'deepseek-chat'},
-        });
-        const sentence = noteWriterSentence(writer, 'zh');
-        expect(sentence).toContain('登录已过期');
-        expect(sentence).toContain('claude');
-        expect(sentence).toContain('DeepSeek');
-    });
-    it('says nothing about the login when it is fine', () => {
-        const writer = resolveNoteWriter({
-            runtimeConfig,
-            credentialStatus: {visual_note_available: true, visual_note_login_expired: false},
-            settings: {},
-        });
-        expect(noteWriterSentence(writer, 'zh')).not.toContain('过期');
     });
 });
 
@@ -107,16 +83,6 @@ describe('what the prompt button says about who uses the prompt', () => {
     });
 });
 
-
-describe('a text model as the writer', () => {
-    it('says up front that its notes leave the picture out and that cutting is not affected', () => {
-        const sentence = noteWriterSentence({kind: 'text_model', provider: 'deepseek', model: ''}, 'zh');
-        expect(sentence).toContain('不看画面');
-        expect(sentence).toContain('不配截图');
-        expect(sentence).toContain('剪辑不受影响');
-        expect(noteWriterSentence({kind: 'claude', viaApiKey: false}, 'zh')).not.toContain('不看画面');
-    });
-});
 
 describe('noteExplanation', () => {
     it('says a text-model stand-in was written from the transcript only, why, and how to get the frame note', () => {

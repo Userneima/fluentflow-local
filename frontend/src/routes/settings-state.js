@@ -12,6 +12,7 @@ import {
     useSettings,
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
+import {workflowChoicesFrom} from '../lib/workflowStatus.js';
 import {
     VIDEO_COOKIES_PREF,
     normalizeCookiesBrowser,
@@ -277,15 +278,7 @@ export const useSettingsPageState = () => {
     // Claude login expiring).
     const [workflow, setWorkflow] = useState(null);
     const [workflowError, setWorkflowError] = useState(false);
-    const workflowChoices = JSON.stringify({
-        ai_provider: aiProvider,
-        ai_model: settings.aiModel || '',
-        default_source: settings.defaultSourceMode || '',
-        speaker_diarization: settings.speakerDiarization ? '1' : '',
-        voice_enhance: settings.voiceEnhance ? '1' : '',
-        skip_ai_summary: settings.skipAiSummary ? '1' : '',
-        export_to_lark: settings.exportToLark ? '1' : '',
-    });
+    const workflowChoices = JSON.stringify(workflowChoicesFrom(settings));
     const workflowInputs = JSON.stringify([workflowChoices, credentialStatus, diarizationStatus, cpuUsage, processingPreset, settings.videoCookiesBrowser, settings.larkExportRoute]);
     useEffect(() => {
         if (!getWorkflowStatus) return undefined;
