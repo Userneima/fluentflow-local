@@ -35,6 +35,10 @@ const resolveWriterKind = ({runtimeConfig = {}, credentialStatus = null, setting
     const status = credentialStatus || {};
     const provider = String(settings?.aiProvider || 'deepseek');
     const textKeyConfigured = textModelKeyConfigured({credentialStatus, settings});
+    // Transcript only wins, as in processing (note_declined, decision 1.1).
+    if (settings?.skipAiSummary) {
+        return {kind: 'skipped', provider: '', viaApiKey: false, model: ''};
+    }
     if (runtimeConfig?.writesItsOwnNote && status.visual_note_available) {
         return {
             kind: 'claude',
@@ -42,9 +46,6 @@ const resolveWriterKind = ({runtimeConfig = {}, credentialStatus = null, setting
             viaApiKey: !!status.anthropic_api_key_configured,
             model: '',
         };
-    }
-    if (settings?.skipAiSummary) {
-        return {kind: 'skipped', provider: '', viaApiKey: false, model: ''};
     }
     if (textKeyConfigured) {
         return {kind: 'text_model', provider, viaApiKey: true, model: String(settings?.aiModel || '')};

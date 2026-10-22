@@ -73,7 +73,7 @@ export const SecretFeedback = ({feedback, keyName, lang}) => (
     feedback?.key === keyName ? (
         <p className={`text-[11px] font-semibold ${feedback.ok ? 'text-green-600' : 'text-red-600'}`}>
             {feedback.ok
-                ? (lang === 'zh' ? '已保存' : 'Saved')
+                ? (feedback.removed ? (lang === 'zh' ? '已移除' : 'Removed') : (lang === 'zh' ? '已保存' : 'Saved'))
                 : `${lang === 'zh' ? '保存失败' : 'Save failed'}: ${feedback.message || ''}`}
         </p>
     ) : null
@@ -122,5 +122,22 @@ export const SecretInput = ({state, name, group, keys, placeholder, type = 'pass
             onChange={(event) => setSecretDraft((draft) => ({...draft, [name]: event.target.value}))}
             onKeyDown={(event) => { if (event.key === 'Enter') saveSecrets(group, keys); }}
         />
+    );
+};
+
+// Removes a saved key (or a set saved together, like the picture model's
+// address, key and model). Shown only for one that is configured.
+export const SecretRemove = ({state, group, keys, label, lang}) => {
+    const {removeSecrets, secretSaving} = state;
+    const zh = lang === 'zh';
+    const remove = () => {
+        const ok = typeof window === 'undefined' || typeof window.confirm !== 'function'
+            || window.confirm(zh ? `移除已保存的${label}？移除后要重新填才能用。` : `Remove the saved ${label}? You will need to enter it again to use it.`);
+        if (ok) removeSecrets(group, keys);
+    };
+    return (
+        <button type="button" disabled={secretSaving} onClick={remove} className="text-xs font-semibold text-on-surface-variant underline underline-offset-2 hover:text-red-600 disabled:opacity-40">
+            {zh ? '移除' : 'Remove'}
+        </button>
     );
 };

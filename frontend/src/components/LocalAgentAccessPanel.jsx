@@ -81,9 +81,9 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 export const agentConnectionSentence = (status, now = Date.now()) => {
     if (!status || status.unavailable) return '';
     if (!status.token_configured) return '还连不上：这台电脑没有设访问令牌，重新运行一次安装脚本会写好。';
-    if (!status.last_agent_request_at) return '还没有 agent 连上过（从这次启动 FluentFlow 算起）。';
+    if (!status.last_agent_request_at) return '这次启动 FluentFlow 后还没有 agent 调用过；已经接入过的不用重新接。';
     const minutes = Math.max(0, Math.round((now - status.last_agent_request_at * 1000) / 60000));
-    return minutes < 1 ? '已有 agent 连上，刚刚还在用。' : `已有 agent 连上，最近一次在 ${minutes} 分钟前。`;
+    return minutes < 1 ? '这次启动后有 agent 调用过，刚刚还在用。' : `这次启动后有 agent 调用过，最近一次在 ${minutes} 分钟前。`;
 };
 
 export const useAgentAccessStatus = () => {
@@ -101,9 +101,9 @@ export const useAgentAccessStatus = () => {
     return status;
 };
 
-// `showConnection`: false where the page around it already says whether an
-// agent is connected (the Settings step line).
-const LocalAgentAccessPanel = ({compact = false, onClose = null, showConnection = true}) => {
+// `embedded`: inside Settings' agent step, which already has the heading and
+// says whether an agent has called; only the commands are shown.
+const LocalAgentAccessPanel = ({compact = false, onClose = null, embedded = false}) => {
     const [token, setToken] = useState(() => localStorage.getItem(ACCESS_TOKEN_KEY) || '');
     const [copied, setCopied] = useState('');
     const apiBase = typeof window === 'undefined' ? 'http://127.0.0.1:8000' : window.location.origin;
@@ -128,7 +128,7 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null, showConnection 
 
     const content = (
         <>
-            {showConnection && connectionText && (
+            {!embedded && connectionText && (
                 <p data-testid="agent-connection" className={`mb-4 rounded-[14px] border px-4 py-3 text-[13px] font-bold leading-5 ${connected
                     ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200'
                     : 'border-[#e5e5e5] bg-white text-[#111111] dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-white'}`}>
@@ -162,6 +162,8 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null, showConnection 
             </div>
         </>
     );
+    if (embedded) return <div className="px-5 py-4">{content}</div>;
+
     return (
         <section className={compact ? 'flex min-h-0 flex-1 flex-col' : 'mx-auto w-full max-w-5xl px-6 py-8 lg:px-10'}>
             <header className={`${compact ? 'border-b border-[#e5e5e5] px-5 py-4 dark:border-white/[0.12]' : 'mb-6'} flex items-start justify-between gap-4`}>

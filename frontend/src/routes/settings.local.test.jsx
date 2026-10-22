@@ -28,8 +28,14 @@ const saveCredentials = vi.fn(async () => ({}));
 const STEP_IDS = ['intake', 'cutting', 'transcription', 'notes', 'outputs', 'agent'];
 const workflowFrom = (overrides = {}) => ({
     attention: overrides.attention || [],
-    steps: STEP_IDS.map((id) => ({id, title: {zh: `步骤 ${id}`, en: id}, summary: {zh: overrides[id] || `${id} 的现状`, en: id}, level: 'ok'})),
+    steps: STEP_IDS.map((id) => ({
+        id, title: {zh: `步骤 ${id}`, en: id}, summary: {zh: overrides[id] || `${id} 的现状`, en: id}, level: 'ok',
+        ...(id === 'notes' ? {writer: overrides.writer || 'none', claude_channel: overrides.claudeChannel || ''} : {}),
+        ...(id === 'cutting' ? {judge: overrides.judge || 'loudness'} : {}),
+    })),
 });
+// The service saying Claude (on the subscription) writes the note and judges the cut.
+const CLAUDE_AT_WORK = {writer: 'claude', claudeChannel: 'subscription', judge: 'claude'};
 let workflow = workflowFrom();
 let workflowStatus = async () => workflow;
 const getWorkflowStatus = vi.fn((choices) => workflowStatus(choices));
@@ -164,6 +170,7 @@ describe('local settings page', () => {
         await screen.findByText('已有 agent 连上。');
         open('agent');
         expect(screen.getAllByText(/agent 连上/)).toHaveLength(1);
+        expect(document.querySelector('#agent h1')).toBeNull();
         expect(screen.getByText('Claude Code')).toBeTruthy();
     });
 
@@ -183,6 +190,7 @@ describe('local settings page', () => {
     it('says nothing about any key until the service has answered', async () => {
         let answer;
         credentialsStatus = () => new Promise((resolve) => { answer = resolve; });
+        workflow = workflowFrom(CLAUDE_AT_WORK);
         render(<Settings/>);
         open('accounts');
         expect(screen.getByTestId('note-keys-loading').textContent).toMatch(/正在读取/);
@@ -279,7 +287,6 @@ describe('local settings page', () => {
     // offers no switch, and asks for no token.
     it('says how to install speaker separation when the component is missing', async () => {
         diarization = {available: false, dependency_installed: false, models_local: false, requested_backend: 'sherpa'};
-        stored = {speakerDiarization: true};
         render(<Settings/>);
         open('transcription');
         expect(await screen.findByText(/还没装讲话人区分组件。重新运行一次安装脚本/)).toBeTruthy();
@@ -390,6 +397,7 @@ describe('local settings page', () => {
     it('hides them while Claude writes the note', async () => {
         runtimeConfig.writesItsOwnNote = true;
         credentials = {anthropic_api_key_configured: true, visual_note_available: true};
+        workflow = workflowFrom(CLAUDE_AT_WORK);
         render(<Settings/>);
         open('notes', 'accounts');
         await waitFor(() => expect(screen.queryByText('给笔记自动配图')).toBeNull());
@@ -411,7 +419,7 @@ describe('local settings page', () => {
         render(<Settings/>);
         open('accounts');
         await screen.findByText('看图模型（可选）');
-        await waitFor(() => expect(screen.getByText(/现在用的是 kimi-k2.6/)).toBeTruthy());
+        await waitFor(() => expect(screen.getByText(/配的是 kimi-k2.6/)).toBeTruthy());
     });
 
     it('says the picture model is not set up while a field is missing', async () => {
@@ -527,5 +535,82 @@ describe('local settings page', () => {
         expect(screen.getByRole('button', {name: /^画质优先/}).getAttribute('aria-pressed')).toBe('true');
         fireEvent.click(screen.getByRole('button', {name: /省空间/}));
         await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({processing_preset: 'size'}));
+    });
+
+    // Review 2026-10-22, item 6: speaker labels switched on while the
+    // component is missing can be switched off, here and from the top.
+    it('lets speaker labels be switched off when they cannot run', async () => {
+        diarization = {available: false, dependency_installed: false, models_local: false, requested_backend: 'sherpa'};
+        stored = {speakerDiarization: true};
+        workflow = workflowFrom({attention: [{id: 'speakers', target: 'transcription', action: 'turn_off_speakers', text: {zh: '开了区分讲话人，但组件没装好', en: ''}}]});
+        render(<Settings/>);
+        open('transcription');
+        const box = document.getElementById('settingsSpeakerDiarization');
+        expect(box.checked).toBe(true);
+        expect(box.disabled).toBe(false);
+        fireEvent.click(await screen.findByRole('button', {name: '关掉区分讲话人'}));
+        expect(stored.speakerDiarization).toBe(false);
+    });
+
+    // Item 4: while Claude works, the fallbacks say they are fallbacks and
+    // the Anthropic key says it is not used on the subscription.
+    it('says the model keys are only a fallback while Claude does the work', async () => {
+        workflow = workflowFrom(CLAUDE_AT_WORK);
+        render(<Settings/>);
+        await screen.findByText('cutting 的现状');
+        open('cutting');
+        expect(screen.getByRole('button', {name: /备用：Claude 用不了时由看图模型判断/})).toBeTruthy();
+        open('accounts');
+        expect(await screen.findByText(/这个 Key 用不上/)).toBeTruthy();
+        expect(screen.getByText(/Claude 用不了时才用它/)).toBeTruthy();
+        expect(screen.getByText(/在 Claude 用不了时才用/)).toBeTruthy();
+    });
+
+    // Item 5: a saved key can be removed, after a confirmation, by sending
+    // the service an empty value.
+    it('removes a saved key after a confirmation', async () => {
+        credentials = {deepseek_api_key_configured: true};
+        const confirm = vi.spyOn(window, 'confirm');
+        render(<Settings/>);
+        open('accounts');
+        await screen.findByText('DeepSeek API Key');
+        confirm.mockReturnValueOnce(false);
+        fireEvent.click(screen.getAllByRole('button', {name: '移除'})[0]);
+        expect(saveCredentials).not.toHaveBeenCalled();
+        confirm.mockReturnValueOnce(true);
+        fireEvent.click(screen.getAllByRole('button', {name: '移除'})[0]);
+        await waitFor(() => expect(saveCredentials).toHaveBeenCalledWith({deepseek_api_key: ''}));
+        confirm.mockRestore();
+    });
+
+    it('offers no remove for a key that is not saved', async () => {
+        render(<Settings/>);
+        open('accounts');
+        await screen.findByText('DeepSeek API Key');
+        expect(screen.queryByRole('button', {name: '移除'})).toBeNull();
+    });
+
+    // Item 9: where "去处理" took the person is kept in the address.
+    it('keeps the opened section in the address and opens it again from there', async () => {
+        workflow = workflowFrom({attention: [{id: 'lark-app', target: 'accounts', text: {zh: '没填飞书应用', en: ''}}]});
+        render(<Settings/>);
+        fireEvent.click(await screen.findByRole('button', {name: '去处理'}));
+        expect(window.location.hash).toBe('#accounts');
+        cleanup();
+        window.history.replaceState(null, '', '#step-cutting');
+        render(<Settings/>);
+        expect(await screen.findByText('电脑占用')).toBeTruthy();
+        window.history.replaceState(null, '', '#');
+    });
+
+    // Item 7: whether Claude writes the note comes from the service, not the
+    // page's own rule (which here would say Claude).
+    it('shows the note style only when the service says Claude writes', async () => {
+        credentials = {visual_note_available: true};
+        workflow = workflowFrom({writer: 'text_model'});
+        render(<Settings/>);
+        await screen.findByText('cutting 的现状');
+        open('notes');
+        expect(screen.getByText('给笔记自动配图')).toBeTruthy();
     });
 });

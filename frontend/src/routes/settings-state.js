@@ -238,6 +238,24 @@ export const useSettingsPageState = () => {
         }
     };
 
+    // Removes saved keys: the service deletes a key sent as an empty value.
+    // Asked for by name, after a confirmation, never as a side effect.
+    const removeSecrets = async (group, keys) => {
+        setSecretSaving(true);
+        setSecretFeedback(null);
+        try {
+            await saveCredentials(Object.fromEntries(keys.map((key) => [key, ''])));
+            const fresh = await getCredentialsStatus();
+            setCredentialStatus(fresh);
+            if (keys.includes('pyannote_auth_token')) setDiarizationStatus(await getSpeakerDiarizationStatus());
+            setSecretFeedback({key: group, ok: true, removed: true});
+        } catch (err) {
+            setSecretFeedback({key: group, ok: false, message: err.message || String(err)});
+        } finally {
+            setSecretSaving(false);
+        }
+    };
+
     // Whether any of these fields has something typed in that is not saved.
     const secretsPending = (keys) => keys.some((key) => String(secretDraft[key] ?? '').trim());
 
@@ -320,6 +338,7 @@ export const useSettingsPageState = () => {
         secretDraft,
         setSecretDraft,
         saveSecrets,
+        removeSecrets,
         secretsPending,
         secretSaving,
         secretFeedback,

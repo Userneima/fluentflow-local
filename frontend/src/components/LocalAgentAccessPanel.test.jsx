@@ -74,8 +74,8 @@ describe('the page', () => {
     it('says whether an agent can connect and whether one has', () => {
         const now = Date.parse('2026-10-22T12:00:00Z');
         expect(agentConnectionSentence({token_configured: false, last_agent_request_at: null}, now)).toMatch(/还连不上/);
-        expect(agentConnectionSentence({token_configured: true, last_agent_request_at: null}, now)).toMatch(/还没有 agent 连上过/);
-        expect(agentConnectionSentence({token_configured: true, last_agent_request_at: now / 1000 - 600}, now)).toBe('已有 agent 连上，最近一次在 10 分钟前。');
+        expect(agentConnectionSentence({token_configured: true, last_agent_request_at: null}, now)).toMatch(/这次启动 FluentFlow 后还没有 agent 调用过；已经接入过的不用重新接/);
+        expect(agentConnectionSentence({token_configured: true, last_agent_request_at: now / 1000 - 600}, now)).toBe('这次启动后有 agent 调用过，最近一次在 10 分钟前。');
         expect(agentConnectionSentence(null, now)).toBe('');
     });
 });

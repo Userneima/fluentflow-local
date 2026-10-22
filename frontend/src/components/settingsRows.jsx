@@ -4,6 +4,7 @@ import {
     MoreInfo,
     RouteCard,
     SecretInput,
+    SecretRemove,
     SettingCheckbox,
     cellBase,
     fieldLabelClass,
@@ -83,11 +84,13 @@ export const SpeakerDiarizationRow = ({state, status}) => {
                     </span>
                 )}
             </span>
-            {availability !== 'not_installed' && (
+            {/* Switched on while the component is missing, it can still be
+                switched off here; switching on waits for the component. */}
+            {(availability !== 'not_installed' || !!settings.speakerDiarization) && (
                 <SettingCheckbox
                     id="settingsSpeakerDiarization"
-                    checked={!!settings.speakerDiarization && available}
-                    disabled={!available}
+                    checked={!!settings.speakerDiarization}
+                    disabled={!available && !settings.speakerDiarization}
                     onChange={e=>updateSettingNow({speakerDiarization:e.target.checked})}
                 />
             )}
@@ -523,6 +526,7 @@ export const TextModelKeyRows = ({state, keyGroup, extraKey = null}) => {
                     <a className="font-semibold text-primary underline" href={textProvider(aiProvider).consoleUrl} target="_blank" rel="noreferrer">
                         {lang === 'zh' ? '去创建 Key' : 'Create a key'}
                     </a>
+                    {activeAiConfigured && <>{' '}<SecretRemove state={state} group={keyGroup.group} keys={[activeAiSecretKey]} label={`${textProviderLabel(aiProvider, lang)} Key`} lang={lang}/></>}
                 </p>
                 <SecretInput state={state} name={activeAiSecretKey} {...keyGroup} placeholder={secretInputPlaceholder(activeAiConfigured)}/>
             </div>
@@ -543,6 +547,7 @@ export const DashscopeKeyField = ({state, keyGroup}) => {
                 {lang === 'zh' ? '给笔记自动配图时用来挑截图。' : 'Picks screenshots when notes are auto-illustrated.'}
                 {' '}
                 {secretRetentionText(configured)}
+                {configured && <>{' '}<SecretRemove state={state} group={keyGroup.group} keys={['dashscope_api_key']} label={lang === 'zh' ? '通义千问 Key' : 'Qwen key'} lang={lang}/></>}
             </p>
             <SecretInput state={state} name="dashscope_api_key" {...keyGroup} placeholder={secretInputPlaceholder(configured)}/>
         </div>
@@ -551,7 +556,9 @@ export const DashscopeKeyField = ({state, keyGroup}) => {
 
 // Optional: with it the note is written while looking at the frames. The text
 // model key above is the one a first-time user needs; this one upgrades the note.
-export const AnthropicKeyField = ({state, keyGroup}) => {
+// `claudeChannel` is the channel Claude runs on now (workflow status): on the
+// subscription this key changes nothing, and the field says so.
+export const AnthropicKeyField = ({state, keyGroup, claudeChannel = ''}) => {
     const {lang} = useI18n();
     const {credentialStatus, credentialConfigured, secretRetentionText, secretInputPlaceholder, activeAiConfigured} = state;
     const configured = credentialConfigured(credentialStatus, 'anthropic_api_key');
@@ -565,9 +572,14 @@ export const AnthropicKeyField = ({state, keyGroup}) => {
         <div className="space-y-2">
             <label className={fieldLabelClass}>{zh ? 'Anthropic API Key（可选）' : 'Anthropic API Key (optional)'}</label>
             <p className="text-xs leading-relaxed text-on-surface-variant">
-                {zh ? '填上后由 Claude 结合画面写笔记。' : 'With it, Claude writes the note from the video frames.'}
+                {claudeChannel === 'subscription'
+                    ? (zh ? '现在用的是本机已登录的 Claude 订阅，这个 Key 用不上。' : 'Claude runs on the subscription signed in here, so this key is not used.')
+                    : claudeChannel === 'anthropic_api_key'
+                        ? (zh ? 'Claude 正在用这个 Key 写笔记、判断剪辑。' : 'Claude uses this key to write notes and judge cuts.')
+                        : (zh ? '填上后由 Claude 结合画面写笔记。' : 'With it, Claude writes the note from the video frames.')}
                 {' '}
                 {secretRetentionText(configured)}
+                {configured && <>{' '}<SecretRemove state={state} group={keyGroup.group} keys={['anthropic_api_key']} label="Anthropic Key" lang={lang}/></>}
             </p>
             <MoreInfo lang={lang}>
                 <p>{zh ? '结合画面写的笔记能引用幻灯片和白板上的内容。' : 'A note written from the frames can quote slides and whiteboards.'} {withoutIt}</p>
@@ -586,7 +598,9 @@ export const AnthropicKeyField = ({state, keyGroup}) => {
 // only the key is hidden.
 export const VISION_MODEL_KEYS = ['vision_base_url', 'vision_api_key', 'vision_model'];
 
-export const VisionModelField = ({state, keyGroup}) => {
+// `claudeJudges`: Claude decides the cuts now (workflow status), so this model
+// is only the fallback.
+export const VisionModelField = ({state, keyGroup, claudeJudges = false}) => {
     const {lang} = useI18n();
     const {credentialStatus, credentialConfigured, credentialLoad, secretInputPlaceholder} = state;
     const zh = lang === 'zh';
@@ -612,13 +626,16 @@ export const VisionModelField = ({state, keyGroup}) => {
         <div className="space-y-2">
             <label className={fieldLabelClass}>{zh ? '看图模型（可选）' : 'Picture model (optional)'}</label>
             <p className="text-xs leading-relaxed text-on-surface-variant">
-                {zh ? '没有 Claude 时，由它看截图判断剪哪里。' : 'Without Claude, it judges the cut from screenshots.'}
+                {claudeJudges
+                    ? (zh ? '现在由 Claude 判断剪哪里，Claude 用不了时才用它。' : 'Claude judges the cuts now; this is used only when Claude is unavailable.')
+                    : (zh ? '没有 Claude 时，由它看截图判断剪哪里。' : 'Without Claude, it judges the cut from screenshots.')}
                 {' '}
                 {credentialLoad !== 'ready'
                     ? ''
                     : ready
-                        ? (zh ? `现在用的是 ${shown.vision_model}。` : `Now using ${shown.vision_model}.`)
+                        ? (zh ? `配的是 ${shown.vision_model}。` : `Set to ${shown.vision_model}.`)
                         : (zh ? '还没配好。' : 'Not set up yet.')}
+                {(keyConfigured || shown.vision_base_url || shown.vision_model) && <>{' '}<SecretRemove state={state} group={keyGroup.group} keys={VISION_MODEL_KEYS} label={zh ? '看图模型设置' : 'picture model settings'} lang={lang}/></>}
             </p>
             <MoreInfo lang={lang}>
                 <p>
@@ -639,8 +656,14 @@ export const FEISHU_APP_KEYS = ['lark_app_id', 'lark_app_secret'];
 export const FeishuAppCredentialRows = ({state, keyGroup}) => {
     const {lang} = useI18n();
     const {credentialStatus, secretStatusText} = state;
+    const configured = !!(credentialStatus?.lark_app_id_configured || credentialStatus?.lark_app_secret_configured);
     return (
         <div className="grid gap-4 px-5 py-4 md:grid-cols-2">
+            {configured && (
+                <p className="text-xs text-on-surface-variant md:col-span-2">
+                    <SecretRemove state={state} group={keyGroup.group} keys={FEISHU_APP_KEYS} label={lang === 'zh' ? '飞书应用凭证' : 'Feishu app credentials'} lang={lang}/>
+                </p>
+            )}
             <div className="space-y-2">
                 <label className={fieldLabelClass}>{lang === 'zh' ? '飞书应用 ID' : 'Feishu app ID'}</label>
                 <SecretInput state={state} name="lark_app_id" {...keyGroup} type="text" placeholder={secretStatusText(credentialStatus?.lark_app_id_configured)}/>
@@ -668,6 +691,9 @@ export const PyannoteTokenRow = ({state, keyGroup}) => {
                             : (lang === 'zh' ? '用来下载 pyannote 讲话人区分的模型，下载一次后在本机运行。' : 'Downloads the pyannote speaker separation model once; it then runs on this machine.')}
                     </p>
                 </div>
+                {pyannoteTokenConfigured && !pyannoteTokenEditing && (
+                    <SecretRemove state={state} group={keyGroup.group} keys={['pyannote_auth_token']} label={lang === 'zh' ? 'pyannote 令牌' : 'pyannote token'} lang={lang}/>
+                )}
                 {pyannoteTokenConfigured && !pyannoteTokenEditing && (
                     <button type="button" onClick={()=>setPyannoteTokenEditing(true)} className="shrink-0 rounded-[10px] border border-[#dedada] px-3 py-2 text-xs font-bold hover:bg-[#efeeee] dark:border-white/[0.12] dark:hover:bg-white/[0.12]">
                         {lang === 'zh' ? '更换' : 'Replace'}

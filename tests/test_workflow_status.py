@@ -34,6 +34,10 @@ def no_models(monkeypatch):
     monkeypatch.setattr(ws, "local_ai_kwargs", lambda **k: {})
     monkeypatch.setattr(ws, "diarization_status", lambda: {"available": True})
     monkeypatch.setattr(ws, "load_project_env", lambda: None)
+    monkeypatch.setattr(ws, "_lark_cli_ready", lambda: True)
+    monkeypatch.setattr(ws, "get_preference", lambda name: None)
+    for name in ("YT_DLP_COOKIES_FROM_BROWSER", "YT_DLP_COOKIES_FILE", "FLUENTFLOW_LOCAL_CUT_FIRST", "FLUENTFLOW_SURVEY_FIRST"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _step(overview, step_id):
@@ -73,6 +77,8 @@ def test_claude_writes_the_note_when_its_channel_works(no_models, monkeypatch):
     monkeypatch.setattr(claude_code_note, "login_state", lambda **k: True)
     overview = ws.workflow_status({"ai_provider": "deepseek"})
     assert _step(overview, "notes")["summary"]["zh"] == "Claude（本机已登录的订阅）结合画面写，照你的笔记风格。"
+    # Settings marks the Anthropic key unused on the subscription by this value.
+    assert (_step(overview, "notes")["writer"], _step(overview, "notes")["claude_channel"]) == ("claude", "subscription")
     assert overview["attention"] == []
 
 
@@ -120,3 +126,45 @@ def test_the_page_and_an_agent_read_it_over_http(no_models, monkeypatch):
     agent = client.get("/agent/v1/status", headers={"Authorization": "Bearer secret"}).json()
     assert [row["step"] for row in agent["steps"]][:2] == ["拿到素材", "剪辑"]
     assert "首页默认" not in agent["steps"][0]["now"]
+
+
+# Review 2026-10-22: each line must match what processing will actually do.
+
+def test_transcript_only_wins_even_when_claude_could_write(no_models, monkeypatch):
+    monkeypatch.setattr(visual_note_channel, "resolve_channel", lambda *a, **k: _channel(visual_note_channel.CHANNEL_SUBSCRIPTION, True))
+    monkeypatch.setattr(local_intake_flow, "auto_note_enabled", lambda: True)
+    monkeypatch.setattr(claude_code_note, "cli_available", lambda: True)
+    monkeypatch.setattr(claude_code_note, "login_state", lambda **k: True)
+    assert _step(ws.workflow_status({"skip_ai_summary": "1"}), "notes")["summary"]["zh"] == "只转录，不写笔记。"
+
+
+def test_the_download_login_falls_back_to_the_environment_like_the_download(no_models, monkeypatch):
+    assert "不借用浏览器登录" in _step(ws.workflow_status(), "intake")["summary"]["zh"]
+    monkeypatch.setenv("YT_DLP_COOKIES_FROM_BROWSER", "chrome:Profile 1")
+    assert "借用 Chrome 的登录状态" in _step(ws.workflow_status(), "intake")["summary"]["zh"]
+    monkeypatch.setattr(ws, "get_preference", lambda name: "safari" if name == "video_cookies_browser" else None)
+    assert "借用 Safari 的登录状态" in _step(ws.workflow_status(), "intake")["summary"]["zh"]
+
+
+def test_the_cut_line_follows_the_cut_order_processing_uses(no_models, monkeypatch):
+    monkeypatch.setattr(cut_judge, "choose", lambda *a, **k: cut_judge.Judge(visual_note_channel.CHANNEL_SUBSCRIPTION, True, lambda *a: ""))
+    monkeypatch.setenv("FLUENTFLOW_SURVEY_FIRST", "0")
+    assert _step(ws.workflow_status(), "cutting")["summary"]["zh"].startswith("转录前先按音量剪掉空白")
+    monkeypatch.setenv("FLUENTFLOW_LOCAL_CUT_FIRST", "0")
+    assert _step(ws.workflow_status(), "cutting")["summary"]["zh"].startswith("不自动剪空白")
+
+
+def test_a_feishu_route_missing_what_it_needs_needs_the_person(no_models, monkeypatch):
+    monkeypatch.setattr(ws, "get_preference", lambda name: "openapi" if name == "lark_export_route" else None)
+    monkeypatch.setattr(ws, "resolve_secret", lambda value, name: "")
+    overview = ws.workflow_status({"skip_ai_summary": "1"})
+    assert [item["id"] for item in overview["attention"]] == ["lark-app"]
+    assert overview["attention"][0]["target"] == "accounts"
+    assert _step(overview, "outputs")["level"] == "attention"
+
+
+def test_the_automatic_feishu_route_is_fine_with_lark_cli_signed_in(no_models, monkeypatch):
+    monkeypatch.setattr(ws, "resolve_secret", lambda value, name: "")
+    assert ws.workflow_status({"skip_ai_summary": "1"})["attention"] == []
+    monkeypatch.setattr(ws, "_lark_cli_ready", lambda: False)
+    assert [item["id"] for item in ws.workflow_status({"skip_ai_summary": "1"})["attention"]] == ["lark-app"]

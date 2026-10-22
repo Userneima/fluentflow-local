@@ -23,7 +23,6 @@ import {
 } from '../components/settingsRows.jsx';
 import {LARK_EXPORT_ROUTE_LOCAL_CLI} from '../app/shared.jsx';
 import {useSettingsPageState} from './settings-state.js';
-import {resolveNoteWriter} from '../lib/noteWriter.js';
 import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {NoteStylePanel} from '../components/NoteStylePanel.jsx';
 import LocalAgentAccessPanel from '../components/LocalAgentAccessPanel.jsx';
@@ -57,21 +56,28 @@ const StepCard = ({step, open, onToggle, lang, children}) => {
 const Settings = () => {
     const state = useSettingsPageState();
     const {
-        lang, runtimeConfig, diarizationStatus, aiProvider, larkExportRoute, credentialStatus, credentialLoad,
-        settings, activeAiSecretKey,
+        lang, runtimeConfig, diarizationStatus, aiProvider, larkExportRoute, credentialLoad,
+        activeAiSecretKey,
     } = state;
     const zh = lang === 'zh';
-    const noteWriter = resolveNoteWriter({runtimeConfig, credentialStatus, settings});
-    const claudeWritesNote = noteWriter.kind === 'claude';
     const {workflow, workflowError} = state;
+    const steps = Object.fromEntries((workflow?.steps || []).map((step) => [step.id, step]));
+    // What the service says it will do decides which options are shown, so an
+    // option that would change nothing is not offered.
+    const claudeWritesNote = steps.notes?.writer === 'claude';
+    const claudeChannel = steps.notes?.claude_channel || '';
+    const claudeJudgesCut = steps.cutting?.judge === 'claude';
     const loading = credentialLoad !== 'ready';
     const [openStep, setOpenStep] = useState('');
     const [accountsOpen, setAccountsOpen] = useState(false);
     const [keySetupOpen, setKeySetupOpen] = useState(false);
     const toggle = (id) => setOpenStep((current) => (current === id ? '' : id));
+    // Where "去处理" or a link took the person is kept in the address, so a
+    // reload or Back lands on the same section: #accounts, or #step-<id>.
     const goTo = (id) => {
         if (id === 'accounts') setAccountsOpen(true);
         else setOpenStep(id);
+        try { window.history.replaceState(window.history.state, '', `#${id === 'accounts' ? 'accounts' : `step-${id}`}`); } catch (_) { /* address only */ }
         setTimeout(() => {
             const target = document.getElementById(id);
             if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({block: 'start', behavior: 'smooth'});
@@ -82,7 +88,9 @@ const Settings = () => {
     useEffect(() => {
         const id = typeof window !== 'undefined' ? decodeURIComponent(window.location.hash.slice(1)) : '';
         if (!id) return;
-        if (id === 'notes') { goTo('accounts'); return; }
+        // #notes is what "add a key in Settings" links have always used.
+        if (id === 'notes' || id === 'accounts') { goTo('accounts'); return; }
+        if (id.startsWith('step-')) { goTo(id.slice(5)); return; }
         const target = document.getElementById(id);
         if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({block: 'center'});
     }, []);
@@ -94,7 +102,6 @@ const Settings = () => {
     const showFeishuAppRows = larkExportRoute !== LARK_EXPORT_ROUTE_LOCAL_CLI;
 
     const pick = (text) => (text ? (zh ? text.zh : text.en) : '');
-    const steps = Object.fromEntries((workflow?.steps || []).map((step) => [step.id, step]));
     const STEP_TITLES = {
         intake: zh ? '拿到素材' : 'Getting material',
         cutting: zh ? '剪辑' : 'Cutting',
@@ -133,7 +140,13 @@ const Settings = () => {
                         {attention.map((item) => (
                             <li key={item.id} className="flex flex-wrap items-baseline justify-between gap-2 text-sm font-semibold text-amber-900 dark:text-amber-100">
                                 <span>{pick(item.text)}</span>
-                                <button type="button" className={linkClass} onClick={() => goTo(item.target)}>{zh ? '去处理' : 'Fix'}</button>
+                                {item.action === 'turn_off_speakers' ? (
+                                    <button type="button" className={linkClass} onClick={() => state.updateSettingNow({speakerDiarization: false})}>
+                                        {zh ? '关掉区分讲话人' : 'Turn speaker labels off'}
+                                    </button>
+                                ) : (
+                                    <button type="button" className={linkClass} onClick={() => goTo(item.target)}>{zh ? '去处理' : 'Fix'}</button>
+                                )}
                             </li>
                         ))}
                     </ul>
@@ -151,7 +164,9 @@ const Settings = () => {
                 <div className="divide-y divide-[#ece8e8] dark:divide-white/[0.1]">
                     <ProcessingPresetRow state={state}/>
                     <CpuUsageRow state={state}/>
-                    <p className="px-5 py-3">{toAccounts(zh ? '换谁来判断剪哪里（看图模型）' : 'Change who decides the cuts (picture model)')}</p>
+                    <p className="px-5 py-3">{toAccounts(claudeJudgesCut
+                        ? (zh ? '备用：Claude 用不了时由看图模型判断' : 'Fallback: a picture model decides when Claude is unavailable')
+                        : (zh ? '换谁来判断剪哪里（看图模型）' : 'Change who decides the cuts (picture model)'))}</p>
                 </div>
             ))}
 
@@ -167,7 +182,9 @@ const Settings = () => {
                     {claudeWritesNote ? <NoteStylePanel/> : (
                         <div className="grid gap-3 p-5"><AutoIllustrateRow state={state}/></div>
                     )}
-                    <p className="px-5 py-3">{toAccounts(zh ? '换谁来写笔记（模型和 Key）' : 'Change who writes notes (models and keys)')}</p>
+                    <p className="px-5 py-3">{toAccounts(claudeWritesNote
+                        ? (zh ? '备用：Claude 用不了时用哪个模型写' : 'Fallback: which model writes when Claude is unavailable')
+                        : (zh ? '换谁来写笔记（模型和 Key）' : 'Change who writes notes (models and keys)'))}</p>
                 </div>
             ))}
 
@@ -179,13 +196,15 @@ const Settings = () => {
                 </div>
             ))}
 
-            {card('agent', <LocalAgentAccessPanel compact showConnection={false}/>)}
+            {card('agent', <LocalAgentAccessPanel embedded/>)}
 
             <section id="accounts" className="scroll-mt-7 rounded-[16px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
                 <button type="button" aria-expanded={accountsOpen} onClick={() => setAccountsOpen(!accountsOpen)} className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left">
                     <span>
                         <h2 className="text-sm font-extrabold">{zh ? '账号和 Key' : 'Accounts and keys'}</h2>
-                        <p className="mt-0.5 text-xs text-on-surface-variant">{zh ? '想换别的模型写笔记、判断剪辑，或用飞书应用导出时填。' : 'Fill these to use other models, or a Feishu app for export.'}</p>
+                        <p className="mt-0.5 text-xs text-on-surface-variant">{claudeWritesNote
+                            ? (zh ? '现在由 Claude 写笔记和判断剪辑；这里的模型 Key 在 Claude 用不了时才用。飞书应用凭证也在这里。' : 'Claude does the work now; these model keys are used only when it is unavailable. Feishu app credentials are here too.')
+                            : (zh ? '填模型 Key 让 FluentFlow 自己写笔记、判断剪辑；飞书应用凭证也在这里。' : 'Model keys let FluentFlow write notes and judge cuts itself; Feishu app credentials are here too.')}</p>
                     </span>
                     <span className="text-xs font-bold text-on-surface-variant">{accountsOpen ? (zh ? '收起' : 'Close') : (zh ? '展开' : 'Open')}</span>
                 </button>
@@ -222,8 +241,8 @@ const Settings = () => {
                                     extraKey={aiProvider !== 'qwen' && !claudeWritesNote && <DashscopeKeyField state={state} keyGroup={noteKeys}/>}
                                 />
                                 <div className="grid gap-3 px-5 py-4">
-                                    <AnthropicKeyField state={state} keyGroup={noteKeys}/>
-                                    <VisionModelField state={state} keyGroup={noteKeys}/>
+                                    <AnthropicKeyField state={state} keyGroup={noteKeys} claudeChannel={claudeChannel}/>
+                                    <VisionModelField state={state} keyGroup={noteKeys} claudeJudges={claudeJudgesCut}/>
                                     <SecretSaveBar state={state} {...noteKeys} lang={lang}/>
                                 </div>
                                 {(showFeishuAppRows || showPyannoteToken) && (

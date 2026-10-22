@@ -22,11 +22,14 @@ Every sentence comes in Chinese and English: ``{"zh": ..., "en": ...}``.
 
 from __future__ import annotations
 
+import os
+import time
 from typing import Any, Mapping
 
 from backend.core import claude_code_note, cut_judge, device_profile, local_intake_flow, visual_note_channel
 from backend.core import text_providers
-from backend.core.local_config import get_preference, load_project_env, resolve_secret
+from backend.core.lark_cli_exporter import lark_cli_ready
+from backend.core.local_config import get_preference, load_project_env, normalize_cookie_browser, resolve_secret
 from backend.core.local_entry_guards import local_ai_kwargs
 from backend.core.local_request_scope import agent_access_status
 from backend.core.speaker_diarization import diarization_status
@@ -67,10 +70,32 @@ def _claude_who(channel_name: str) -> tuple[str, str]:
     return "Claude（你的 Anthropic API Key）", "Claude (your Anthropic API key)"
 
 
+def _download_login() -> str:
+    """Whose login a link download carries, as the download decides it: the
+    remembered browser (routers/local_video_sources._video_cookies_browser),
+    else ``YT_DLP_COOKIES_FROM_BROWSER``, else a cookie file
+    (video_source._yt_dlp_cookies_args). '' for none."""
+    remembered = normalize_cookie_browser(get_preference("video_cookies_browser"))
+    if remembered:
+        return _BROWSERS.get(remembered, remembered)
+    env_browser = (os.environ.get("YT_DLP_COOKIES_FROM_BROWSER") or "").strip()
+    if env_browser:
+        name = env_browser.split(":", 1)[0].split("+", 1)[0].strip().lower()
+        return _BROWSERS.get(name, name)
+    cookie_file = (os.environ.get("YT_DLP_COOKIES_FILE") or "").strip()
+    if cookie_file and os.path.isfile(cookie_file):
+        return "cookie file"
+    return ""
+
+
 def _intake(choices: Mapping[str, Any], for_agent: bool) -> dict[str, Any]:
-    browser = _BROWSERS.get(str(get_preference("video_cookies_browser") or "").strip().lower())
-    zh = f"下载链接时借用 {browser} 的登录状态" if browser else "下载链接时不借用浏览器登录，B 站最高约 480p"
-    en = f"Links download with {browser}'s login" if browser else "Links download without a browser login (Bilibili up to about 480p)"
+    browser = _download_login()
+    if browser == "cookie file":
+        zh, en = "下载链接时带上 cookie 文件里的登录", "Links download with the login in the cookie file"
+    elif browser:
+        zh, en = f"下载链接时借用 {browser} 的登录状态", f"Links download with {browser}'s login"
+    else:
+        zh, en = "下载链接时不借用浏览器登录，B 站最高约 480p", "Links download without a browser login (Bilibili up to about 480p)"
     if not for_agent:
         upload = str(choices.get("default_source") or "") == "upload"
         zh += f"；首页默认停在「{'本机文件' if upload else '链接'}」"
@@ -79,8 +104,27 @@ def _intake(choices: Mapping[str, Any], for_agent: bool) -> dict[str, Any]:
 
 
 def _cutting(for_agent: bool) -> dict[str, Any]:
+    preset = _PRESETS.get(device_profile.preset(), _PRESETS["quality"])
+    cpu = _CPU.get(device_profile.cpu_usage(), _CPU["balanced"])
+    tail = (f"；{preset[0]}，{cpu[0]}。", f"; {preset[1]}, {cpu[1]}.")
+    # The order processing follows (local_intake_flow): no automatic cut at
+    # all, or a cut by loudness before anything reads the recording, or the
+    # model's reading of the whole transcript.
+    if not local_intake_flow.cut_first_enabled():
+        return {"id": "cutting", "title": _t("剪辑", "Cutting"), "level": "ok",
+                "judge": "none",
+                "summary": _t("不自动剪空白，转录和笔记都用原片" + tail[0],
+                              "Gaps are not cut automatically; transcript and note use the original" + tail[1])}
+    if not local_intake_flow.survey_first_enabled():
+        return {"id": "cutting", "title": _t("剪辑", "Cutting"), "level": "ok",
+                "judge": "loudness",
+                "summary": _t("转录前先按音量剪掉空白，不用模型判断" + tail[0],
+                              "Gaps are cut by loudness before transcription, without a model" + tail[1])}
     judge = cut_judge.choose()
     name = judge.name if judge else ""
+    kind = ("claude" if name in (visual_note_channel.CHANNEL_SUBSCRIPTION, visual_note_channel.CHANNEL_ANTHROPIC_KEY)
+            else "vision" if name.startswith("vision:") else "text_model" if name == "text_model"
+            else "agent" if for_agent else "loudness")
     if name in (visual_note_channel.CHANNEL_SUBSCRIPTION, visual_note_channel.CHANNEL_ANTHROPIC_KEY):
         who_zh, who_en = _claude_who(name)
         who = (f"{who_zh}判断剪哪里，会看截图", f"{who_en} decides the cuts, looking at screenshots")
@@ -94,13 +138,12 @@ def _cutting(for_agent: bool) -> dict[str, Any]:
         who = ("FluentFlow 没有判断模型，由提交任务的 agent 判断剪哪里", "FluentFlow has no model, so the agent that submits decides the cuts")
     else:
         who = ("没有判断模型，只按音量剪", "No model to decide, so cuts follow loudness only")
-    preset = _PRESETS.get(device_profile.preset(), _PRESETS["quality"])
-    cpu = _CPU.get(device_profile.cpu_usage(), _CPU["balanced"])
     return {
         "id": "cutting",
         "title": _t("剪辑", "Cutting"),
-        "summary": _t(f"{who[0]}；{preset[0]}，{cpu[0]}。", f"{who[1]}; {preset[1]}, {cpu[1]}."),
+        "summary": _t(who[0] + tail[0], who[1] + tail[1]),
         "level": "ok",
+        "judge": kind,
     }
 
 
@@ -113,6 +156,7 @@ def _transcription(choices: Mapping[str, Any], attention: list[dict[str, Any]]) 
         attention.append({
             "id": "speakers",
             "target": "transcription",
+            "action": "turn_off_speakers",
             "text": _t("开了区分讲话人，但这台电脑上的组件没装好，现在不会标出谁在说话。",
                        "Speaker separation is on, but its component is missing, so speakers are not labelled."),
         })
@@ -139,12 +183,18 @@ def _notes(choices: Mapping[str, Any], for_agent: bool, attention: list[dict[str
     kwargs = local_ai_kwargs(ai_provider=str(choices.get("ai_provider") or "") or None,
                              ai_model=str(choices.get("ai_model") or "") or None)
     provider = str(kwargs.get("provider") or "")
-    if local_intake_flow.auto_note_enabled() and channel.available:
+    # Transcript only wins over everything, as in processing: the job records
+    # note_declined and no writer is asked (decision 1.1).
+    writer = "none"
+    if _flag(choices, "skip_ai_summary"):
+        writer = "skipped"
+        summary = _t("只转录，不写笔记。", "Transcript only; no note.")
+    elif local_intake_flow.auto_note_enabled() and channel.available:
+        writer = "claude"
         who_zh, who_en = _claude_who(channel.name)
         summary = _t(f"{who_zh}结合画面写，照你的笔记风格。", f"{who_en} writes from the frames, in your note style.")
-    elif _flag(choices, "skip_ai_summary"):
-        summary = _t("只转录，不写笔记。", "Transcript only; no note.")
     elif kwargs.get("api_key"):
+        writer = "text_model"
         label = _provider_label(provider)
         model = str(kwargs.get("model") or "")
         name = f"{label}（{model}）" if model else label
@@ -159,15 +209,51 @@ def _notes(choices: Mapping[str, Any], for_agent: bool, attention: list[dict[str
                 "text": _t("现在只出转录稿：把笔记交给你的 agent 写，或在「账号和 Key」里填一个 Key。",
                            "Only transcripts for now: let your agent write notes, or add a key under Accounts and keys."),
             })
-    return {"id": "notes", "title": _t("写笔记", "Notes"), "summary": summary, "level": level}
+    # `writer` and `claude_channel` let Settings show only the options that
+    # change something: the frame-note style when Claude writes, the
+    # Anthropic key as unused while the subscription is the channel.
+    return {"id": "notes", "title": _t("写笔记", "Notes"), "summary": summary, "level": level,
+            "writer": writer,
+            "claude_channel": ("" if not channel.available
+                               else "subscription" if channel.name == visual_note_channel.CHANNEL_SUBSCRIPTION
+                               else "anthropic_api_key")}
 
 
-def _outputs(choices: Mapping[str, Any]) -> dict[str, Any]:
-    route = _LARK_ROUTES.get(str(get_preference("lark_export_route") or "auto"), _LARK_ROUTES["auto"])
+# `lark-cli auth status` is a subprocess; Settings reads this list every few
+# seconds, so its answer is reused for a minute.
+_LARK_CLI_TTL = 60.0
+_lark_cli_cache: tuple[float, bool] | None = None
+
+
+def _lark_cli_ready() -> bool:
+    global _lark_cli_cache
+    now = time.monotonic()
+    if _lark_cli_cache is None or now - _lark_cli_cache[0] > _LARK_CLI_TTL:
+        _lark_cli_cache = (now, bool(lark_cli_ready()))
+    return _lark_cli_cache[1]
+
+
+def _outputs(choices: Mapping[str, Any], attention: list[dict[str, Any]]) -> dict[str, Any]:
+    route_name = str(get_preference("lark_export_route") or "auto").strip().lower()
+    route = _LARK_ROUTES.get(route_name, _LARK_ROUTES["auto"])
     auto = _flag(choices, "export_to_lark")
     zh = f"产出放在原片旁边的同名文件夹；{'处理完自动导出到飞书' if auto else '导出到飞书要手动点'}，{route[0]}。"
     en = f"Outputs go in a folder beside the recording; {'exported to Feishu automatically' if auto else 'Feishu export is manual'}, {route[1]}."
-    return {"id": "outputs", "title": _t("产出和同步", "Outputs"), "summary": _t(zh, en), "level": "ok"}
+    level = "ok"
+    # What the chosen route needs, as the export resolves it
+    # (routers/local_feishu_export._local_lark_export_target).
+    app_ready = bool(resolve_secret(None, "lark_app_id") and resolve_secret(None, "lark_app_secret"))
+    if route_name == "openapi" and not app_ready:
+        level = "attention"
+        attention.append({"id": "lark-app", "target": "accounts", "text": _t(
+            "选了用飞书应用导出，但还没填飞书应用 ID 和密钥，导出会失败。",
+            "Feishu export uses your app, but its ID and secret are missing, so exports fail.")})
+    elif route_name not in ("openapi", "local_cli") and not app_ready and not _lark_cli_ready():
+        level = "attention"
+        attention.append({"id": "lark-app", "target": "accounts", "text": _t(
+            "导出到飞书还用不了：这台电脑的 lark-cli 没登录，也没填飞书应用 ID 和密钥。",
+            "Feishu export cannot work yet: lark-cli is not signed in here and no Feishu app is set up.")})
+    return {"id": "outputs", "title": _t("产出和同步", "Outputs"), "summary": _t(zh, en), "level": level}
 
 
 def _agent() -> dict[str, Any]:
@@ -176,10 +262,10 @@ def _agent() -> dict[str, Any]:
         summary = _t("还连不上：这台电脑没有设访问令牌，重新运行一次安装脚本会写好。",
                      "Cannot connect yet: no access token is set on this computer; running the installer again writes one.")
     elif not status["last_agent_request_at"]:
-        summary = _t("还没有 agent 连上过（从这次启动 FluentFlow 算起）。",
-                     "No agent has connected since FluentFlow started.")
+        summary = _t("这次启动 FluentFlow 后还没有 agent 调用过；已经接入过的不用重新接。",
+                     "No agent has called FluentFlow since it started; one already set up needs nothing more.")
     else:
-        summary = _t("已有 agent 连上。", "An agent is connected.")
+        summary = _t("这次启动后有 agent 调用过。", "An agent has called FluentFlow since it started.")
     return {"id": "agent", "title": _t("你的 agent", "Your agent"), "summary": summary, "level": "ok",
             "last_agent_request_at": status["last_agent_request_at"]}
 
@@ -195,7 +281,7 @@ def workflow_status(choices: Mapping[str, Any] | None = None, *, for_agent: bool
         _cutting(for_agent),
         _transcription(choices, attention),
         _notes(choices, for_agent, attention),
-        _outputs(choices),
+        _outputs(choices, attention),
         _agent(),
     ]
     return {"attention": attention, "steps": steps}

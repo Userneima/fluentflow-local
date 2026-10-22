@@ -3,7 +3,10 @@ import {normalizeTextProvider} from './textProviders.js';
 export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashscopeApiKey', 'qwenApiKey', 'larkAppId', 'larkAppSecret'];
 // Keys an older build could leave in stored settings. elevenLabsApiKey belonged
 // to a cloud transcription engine this app does not have; it is dropped, never sent.
-export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi', 'elevenLabsApiKey'];
+// skipAiSummary: the page's "transcript only" switch, gone from the page; a
+// value left in a browser silently stopped every note. An agent still asks for
+// a transcript only per task (skip_summary, decision 1.1).
+export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi', 'elevenLabsApiKey', 'skipAiSummary'];
 // What this build would use if the service could not say; the service's own
 // table (backend model_defaults, GET /models/defaults) is what the page shows.
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-flash';
