@@ -40,6 +40,17 @@ folder beside a recording from the user's disk, with the transcript and
 subtitles in its `过程文件`. Link the record and that output folder in the
 reply.
 
+## Delivery records
+
+A block of work handed to a separate session (one lane of a plan, one
+sub-session task) leaves a record in `docs/交付记录/YYYY-MM-DD-<topic>.md`,
+following `task-handoff` section 五 (owner, 2026-10-22): the session's delivery
+note, the acceptance section the main session adds after an independent review,
+and the file name of the exported conversation. Before/after screenshots go in
+`docs/images/` and are linked from the record. The plan document links each
+lane to its record. Records are kept, not deleted. Exported conversations live
+outside the repository in `~/Documents/对话存档/fluentflow-local/`.
+
 ## Restarting the backend
 
 Queued and running tasks live in the backend process. Restarting it marks every
