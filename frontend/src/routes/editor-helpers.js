@@ -58,6 +58,68 @@ export const cutFlowSummary = (result) => {
     };
 };
 
+// Speaker ids (SPEAKER_00 …) as readers see them: 说话人 A, B … in order of
+// first appearance, the same labels the note is written with
+// (backend/core/speaker_diarization.py speaker_display_map).
+export const speakerDisplayMap = (segments) => {
+    const map = new Map();
+    for (const seg of segments || []) {
+        const raw = seg?.speaker;
+        if (!raw || map.has(raw)) continue;
+        const index = map.size;
+        map.set(raw, index < 26 ? `说话人 ${String.fromCharCode(65 + index)}` : `说话人 ${index + 1}`);
+    }
+    return map;
+};
+
+const SENTENCE_END = /[。！？!?.…」』"]\s*$/;
+const PUNCTUATION = /[。！？，、；,.!?;]/;
+
+// The transcript as paragraphs for reading. Recognition returns short pieces
+// (a median of ten characters on the owner's recordings), one per line, which
+// reads as a column of fragments. A paragraph ends where the speaker changes,
+// where a long pause falls, or once it is long enough: at a sentence end, or,
+// after a piece recognised without punctuation, at the length alone. Pauses are
+// rarely there to use: in a cut recording the pieces follow each other with no
+// gap at all (measured 2026-10-22 on four tasks). Each paragraph keeps the
+// indices of its pieces, which stay the unit of editing and saving.
+export const groupTranscriptParagraphs = (segments, {softChars = 140, hardChars = 260, pauseSeconds = 1.5} = {}) => {
+    const list = Array.isArray(segments) ? segments : [];
+    const labels = speakerDisplayMap(list);
+    const paragraphs = [];
+    let current = null;
+    list.forEach((seg, index) => {
+        const text = String(seg?.text || '');
+        const speaker = seg?.speaker || null;
+        if (current) {
+            const previous = list[index - 1];
+            const speakerChanged = !!speaker && !!current.speaker && speaker !== current.speaker;
+            const gap = (Number(seg?.start) || 0) - (Number(previous?.end) || 0);
+            const previousText = String(previous?.text || '');
+            const longEnough = current.chars >= hardChars
+                || (current.chars >= softChars && (SENTENCE_END.test(previousText) || !PUNCTUATION.test(previousText)));
+            if (speakerChanged || gap > pauseSeconds || longEnough) current = null;
+        }
+        if (!current) {
+            current = {start: Number(seg?.start) || 0, end: Number(seg?.end) || 0, speaker, label: '', indices: [], chars: 0};
+            paragraphs.push(current);
+        }
+        if (!current.speaker && speaker) current.speaker = speaker;
+        current.indices.push(index);
+        current.chars += text.length;
+        current.end = Number(seg?.end) || current.end;
+    });
+    // A label only where it says something: material with two speakers or more,
+    // and only on the paragraph where a new speaker takes over.
+    const showLabels = labels.size >= 2;
+    let lastSpeaker = null;
+    return paragraphs.map(({chars: _chars, ...paragraph}) => {
+        const label = showLabels && paragraph.speaker && paragraph.speaker !== lastSpeaker ? labels.get(paragraph.speaker) : '';
+        if (paragraph.speaker) lastSpeaker = paragraph.speaker;
+        return {...paragraph, label};
+    });
+};
+
 // The sentence playing at `time`: the last one starting at or before it, as
 // long as it has not ended (a sentence without an end lasts until the next one
 // starts, or six seconds). -1 between sentences. Binary search, since it runs

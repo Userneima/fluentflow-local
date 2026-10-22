@@ -98,4 +98,21 @@ describe('editing a transcript segment', () => {
         expect(payload.edit_records).toHaveLength(1);
         expect(payload.edit_records[0]).toMatchObject({index: 0, before: 'hello world', after: 'hello worlds'});
     });
+
+    // Prototype behind ?transcript=paragraphs: the sentences sit inside
+    // paragraphs and each is still edited and saved on its own.
+    it('edits a sentence inside a paragraph and saves it the same way', async () => {
+        render(<MemoryRouter initialEntries={['/editor?transcript=paragraphs']}><Editor/></MemoryRouter>);
+        const box = await screen.findByRole('textbox', {name: '第 1 句'});
+        await waitFor(() => expect(box.textContent).toBe('hello world'));
+
+        box.textContent = 'hello worlds';
+        fireEvent.input(box);
+
+        await waitFor(() => expect(saveTranscriptEdit).toHaveBeenCalledTimes(1), {timeout: 3000});
+        const [, payload] = saveTranscriptEdit.mock.calls[0];
+        expect(payload.segments[0].text).toBe('hello worlds');
+        expect(payload.segments[1].text).toBe('second line');
+        expect(payload.edit_records[0]).toMatchObject({index: 0, before: 'hello world', after: 'hello worlds'});
+    });
 });
