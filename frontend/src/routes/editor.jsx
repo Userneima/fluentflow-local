@@ -427,7 +427,13 @@ const Editor = () => {
                 const fullText = full.transcript_text || '';
                 const currentDisplayCount = pickDisplayTranscriptSegments(result, currentSegments).length;
                 const fullDisplayCount = pickDisplayTranscriptSegments(full, fullSegments).length;
-                if (fullSegments.length > currentSegments.length || fullText.length > currentText.length || fullDisplayCount > currentDisplayCount) {
+                // The service's transcript replaces the page's when it is
+                // longer, or when it is a different version: a copy from the
+                // browser cache carries no version and may predate an edit made
+                // since (a fixed typo is no longer). This read happens only
+                // with no unsaved edit of the page's own.
+                const serverVersionDiffers = !!full.transcript_version && full.transcript_version !== result.transcript_version;
+                if (serverVersionDiffers || fullSegments.length > currentSegments.length || fullText.length > currentText.length || fullDisplayCount > currentDisplayCount) {
                     const fullBaselineSegments = pickTranscriptBaselineSegments(full);
                     setLastResult(full);
                     setEditedSegments(fullSegments.map((seg) => ({...seg})));
@@ -944,6 +950,30 @@ const Editor = () => {
         mediaObjectUrlRef.current = '';
     }, []);
 
+    // The version of the note and of the transcript a save must name: the
+    // latest the page knows, from the task as read or from the answer to the
+    // page's own last save. Saves of one kind go out one at a time, each
+    // reading this when it is sent; a save sent while the previous was still
+    // on its way used to name the version before it and be refused as stale,
+    // and the page reloaded over what had just been typed.
+    const contentVersionRef = useRef({taskId: '', note: null, transcript: null});
+    const resultTaskId = result?.task_id || '';
+    const resultNoteVersion = result?.note_version || null;
+    const resultTranscriptVersion = result?.transcript_version || null;
+    useEffect(() => {
+        contentVersionRef.current = {taskId: resultTaskId, note: resultNoteVersion, transcript: resultTranscriptVersion};
+    }, [resultTaskId, resultNoteVersion, resultTranscriptVersion]);
+    const takeSavedVersions = (taskId, saved) => {
+        if (!saved || contentVersionRef.current.taskId !== taskId) return;
+        contentVersionRef.current = {
+            taskId,
+            note: saved.note_version || contentVersionRef.current.note,
+            transcript: saved.transcript_version || contentVersionRef.current.transcript,
+        };
+    };
+    const noteSaveQueueRef = useRef(Promise.resolve());
+    const transcriptSaveQueueRef = useRef(Promise.resolve());
+
     // After 800ms without a keystroke: diff the segments against the baseline,
     // hand the edited result to the provider, and save it. One timer for both,
     // so the app tree re-renders once per pause instead of once per key.
@@ -971,13 +1001,28 @@ const Editor = () => {
                 return;
             }
             setTranscriptSaveStatus('saving');
-            saveTranscriptEdit(current.task_id, {
+            const send = () => saveTranscriptEdit(current.task_id, {
                 transcript_text: transcript,
                 segments,
                 edit_records: filterVisibleEditRecords(nextEditRecords, segments),
-                base_version: current.transcript_version,
-            }, resultJobOptions)
+                base_version: contentVersionRef.current.taskId === current.task_id
+                    ? contentVersionRef.current.transcript
+                    : current.transcript_version,
+            }, resultJobOptions);
+            const saving = transcriptSaveQueueRef.current.then(send, send);
+            transcriptSaveQueueRef.current = saving.catch(() => {});
+            saving
                 .then((data) => {
+                    // The new version counts whichever save is the latest.
+                    takeSavedVersions(current.task_id, data?.result);
+                    if (data?.result) {
+                        const {transcript_version: savedVersion} = data.result;
+                        setLastResult((prev) => (
+                            prev?.task_id === current.task_id && savedVersion
+                                ? {...prev, transcript_version: savedVersion}
+                                : prev
+                        ));
+                    }
                     if (seq !== transcriptSaveSeqRef.current) return;
                     setTranscriptUnsaved(false);
                     setTranscriptDirty(true);
@@ -1017,12 +1062,24 @@ const Editor = () => {
         }
         const seq = ++summarySaveSeqRef.current;
         setSummarySaveStatus('saving');
+        const taskId = result.task_id;
         const timer = setTimeout(() => {
-            saveSummaryEdit(result.task_id, {
+            const send = () => saveSummaryEdit(taskId, {
                 summary_markdown: summaryDraft,
-                base_version: result.note_version,
-            }, resultJobOptions)
+                base_version: contentVersionRef.current.taskId === taskId
+                    ? contentVersionRef.current.note
+                    : result.note_version,
+            }, resultJobOptions);
+            const saving = noteSaveQueueRef.current.then(send, send);
+            noteSaveQueueRef.current = saving.catch(() => {});
+            saving
                 .then((data) => {
+                    // The new version counts whichever save is the latest.
+                    takeSavedVersions(taskId, data?.result);
+                    if (data?.result?.note_version) {
+                        const savedVersion = data.result.note_version;
+                        setLastResult((prev) => (prev?.task_id === taskId ? {...prev, note_version: savedVersion} : prev));
+                    }
                     if (seq !== summarySaveSeqRef.current) return;
                     setSummaryUnsaved(false);
                     setSummarySaveStatus('saved');
@@ -1377,6 +1434,18 @@ const Editor = () => {
                         prompt_preset: data.prompt_preset || settings.promptPreset || DEFAULT_PROMPT_PRESET,
                         prompt_preset_label: data.prompt_preset_label || presetDisplayLabel(settings.promptPreset || DEFAULT_PROMPT_PRESET, settings, lang),
                         });
+            // The rewritten note has a new version, which this answer does not
+            // carry. Until the task is read again the note is not editable, so
+            // the first edit is saved against the rewritten note, not refused
+            // as made on the old one.
+            const rewrittenTaskId = data.task_id || activeTaskId;
+            setNoteReadFor('');
+            getJob(rewrittenTaskId, resultJobOptions)
+                .then((job) => {
+                    if (job?.result) setLastResult((prev) => (prev?.task_id === rewrittenTaskId ? mergeNoteFields(prev, job.result) : prev));
+                    setNoteReadFor(rewrittenTaskId);
+                })
+                .catch(() => setHydrationFailed(true));
             showToast(t('edit.regenDone'));
         } catch(err) { showToast(err.message, false); }
         finally { setRegenerating(false); }

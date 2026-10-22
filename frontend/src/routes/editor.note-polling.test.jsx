@@ -79,7 +79,9 @@ const pageApi = {
             openReads.push(taskId);
             return Promise.resolve({task_id: taskId, status: 'completed', stage: 'done', result: opened[taskId]});
         }
-        return api.getJob(taskId, options);
+        // A read the test did not set up answers nothing, as a promise like
+        // the real one.
+        return api.getJob(taskId, options) ?? Promise.resolve(undefined);
     },
 };
 
