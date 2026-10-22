@@ -118,7 +118,7 @@ const submitThroughEveryEntry = async () => {
 
     // A link.
     mount();
-    fireEvent.click(screen.getByText('链接'));
+    fireEvent.click(screen.getByRole('tab', {name: '视频链接'}));
     fireEvent.change(screen.getByRole('textbox'), {target: {value: 'https://www.bilibili.com/video/BV1xx411c7mD'}});
     await act(async () => { fireEvent.click(screen.getByTestId('submit-video-link')); });
     await waitFor(() => expect(sent.link).toBeTruthy());

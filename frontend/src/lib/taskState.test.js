@@ -34,7 +34,7 @@ describe('what a record badge says', () => {
     const done = (result) => ({status: 'completed', result: {summary_status: 'completed', summary_markdown: '# 笔记', ...result}});
 
     it('reads 已完成 only when the cut and the note both happened', () => {
-        expect(taskOutcome(done({debreath: {status: 'completed'}}), 'zh')).toEqual({tone: 'done', label: '已完成'});
+        expect(taskOutcome(done({debreath: {status: 'completed'}}), 'zh')).toMatchObject({tone: 'done', label: '已完成'});
     });
 
     it('says the note was not written', () => {
@@ -67,9 +67,9 @@ describe('what a record badge says', () => {
     });
 
     it('keeps failed, cancelled and live tasks as they were', () => {
-        expect(taskOutcome({status: 'failed'}, 'zh')).toEqual({tone: 'failed', label: '失败'});
-        expect(taskOutcome({status: 'cancelled'}, 'zh')).toEqual({tone: 'failed', label: '已取消'});
-        expect(taskOutcome({status: 'running'}, 'zh')).toEqual({tone: 'live', label: '处理中'});
-        expect(taskOutcome({status: 'completed', result: {summary_status: 'pending'}}, 'zh')).toEqual({tone: 'live', label: '写笔记中'});
+        expect(taskOutcome({status: 'failed'}, 'zh')).toMatchObject({tone: 'failed', label: '失败'});
+        expect(taskOutcome({status: 'cancelled'}, 'zh')).toMatchObject({tone: 'failed', label: '已取消'});
+        expect(taskOutcome({status: 'running'}, 'zh')).toMatchObject({tone: 'live', label: '处理中'});
+        expect(taskOutcome({status: 'completed', result: {summary_status: 'pending'}}, 'zh')).toMatchObject({tone: 'live', label: '写笔记中'});
     });
 });

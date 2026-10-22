@@ -58,6 +58,12 @@ const RECENT_BADGE_TONE = {
     failed: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300',
 };
 
+const ENTRY_TABS = [
+    {id: 'link', zh: '视频链接', en: 'Video link'},
+    {id: 'upload', zh: '本机文件', en: 'Files on this computer'},
+    {id: 'subtitle', zh: '字幕文件', en: 'Subtitle file'},
+];
+
 const MediaText = () => {
     const {t, lang} = useI18n();
     const {
@@ -164,6 +170,18 @@ const MediaText = () => {
     useEffect(() => {
         if (mode === 'subtitle') setSourceMode('upload');
     }, [mode]);
+    // Which of the three tabs is showing; a subtitle file keeps its own address
+    // (?mode=subtitle) so links and settings that open it still do.
+    const entry = mode === 'subtitle' ? 'subtitle' : sourceMode;
+    const chooseEntry = (next) => {
+        setUploadError(null);
+        if (next === 'subtitle') {
+            setSearchParams({mode: 'subtitle'});
+            return;
+        }
+        if (mode === 'subtitle') setSearchParams({mode: 'media'});
+        setSourceMode(next);
+    };
 
     const buildAiOptions = (settings) => ({
         aiProvider: settings.aiProvider || 'deepseek',
@@ -734,40 +752,33 @@ const MediaText = () => {
                     onDragOver={(e) => e.preventDefault()}
                 >
                     <div>
-                        <div className="mb-7 flex items-center justify-between gap-3">
-                            <div className="inline-flex min-w-0 shrink rounded-[18px] border border-[#dedada] bg-[#f4f3f3] p-1 dark:border-white/[0.12] dark:bg-white/[0.08]">
-                                {['media', 'subtitle'].map((item) => (
+                        {/* One switch for the three ways in. It was two stacked
+                            switches (视频/字幕, then 链接/本机文件), and the second
+                            only meant anything under the first. */}
+                        <div className="mb-6 inline-flex max-w-full rounded-[18px] border border-[#dedada] bg-[#f4f3f3] p-1 dark:border-white/[0.12] dark:bg-white/[0.08]" role="tablist" aria-label={lang === 'zh' ? '从哪里来' : 'Source'}>
+                            {ENTRY_TABS.map((item) => {
+                                const active = entry === item.id;
+                                return (
                                     <button
-                                        key={item}
+                                        key={item.id}
                                         type="button"
-                                        onClick={() => setSearchParams({mode: item})}
-                                        className={`h-10 min-w-0 whitespace-nowrap rounded-[14px] px-3 text-[13px] font-extrabold transition sm:px-4 sm:text-sm ${mode === item ? 'bg-white text-[#111111] shadow-sm dark:bg-white/[0.16] dark:text-white' : 'text-[#777] hover:text-[#111111] dark:text-white/55 dark:hover:text-white'}`}
+                                        role="tab"
+                                        aria-selected={active}
+                                        onClick={() => chooseEntry(item.id)}
+                                        className={`h-10 whitespace-nowrap rounded-[14px] px-4 text-sm font-extrabold transition ${active ? 'bg-white text-[#111111] shadow-sm dark:bg-white/[0.16] dark:text-white' : 'text-[#777] hover:text-[#111111] dark:text-white/55 dark:hover:text-white'}`}
                                     >
-                                        {item === 'media' ? (lang === 'zh' ? '视频生成笔记' : 'Media notes') : (lang === 'zh' ? '字幕生成笔记' : 'Subtitle notes')}
+                                        {lang === 'zh' ? item.zh : item.en}
                                     </button>
-                                ))}
-                            </div>
+                                );
+                            })}
                         </div>
 
                         {mode === 'media' && (
                             <div className="space-y-5">
-                                <div className="inline-flex rounded-[18px] border border-[#dedada] bg-[#f4f3f3] p-1 dark:border-white/[0.12] dark:bg-white/[0.08]">
-                                    {['link', 'upload'].map((item) => (
-                                        <button
-                                            key={item}
-                                            type="button"
-                                            onClick={() => setSourceMode(item)}
-                                            className={`h-10 rounded-[14px] px-4 text-sm font-extrabold transition ${sourceMode === item ? 'bg-white text-[#111111] shadow-sm dark:bg-white/[0.16] dark:text-white' : 'text-[#777] hover:text-[#111111] dark:text-white/55 dark:hover:text-white'}`}
-                                        >
-                                            {item === 'link' ? (lang === 'zh' ? '链接' : 'Link') : (lang === 'zh' ? '本机文件' : 'Local file')}
-                                        </button>
-                                    ))}
-                                </div>
-
                                 {sourceMode === 'link' ? (
                                     <div>
-                                        <label className="mb-2 block text-sm font-extrabold text-[#111111] dark:text-white">{lang === 'zh' ? '视频链接' : 'Video link'}</label>
                                         <textarea
+                                            aria-label={lang === 'zh' ? '视频链接' : 'Video link'}
                                             value={videoLinkInput}
                                             onChange={(e) => setVideoLinkInput(e.target.value)}
                                             className="min-h-[116px] w-full resize-none rounded-[18px] border border-[#dedada] bg-[#fbfbfb] px-5 py-4 text-[15px] font-semibold text-[#111111] outline-none placeholder:text-[#aaa] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/30 dark:focus:border-white/[0.4]"

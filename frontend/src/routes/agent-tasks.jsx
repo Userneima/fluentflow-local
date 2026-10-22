@@ -9,10 +9,11 @@ import {
     MoreHorizontal,
     Plus,
     RefreshCw,
+    Search,
     SlidersHorizontal,
     XCircle,
 } from 'lucide-react';
-import {CutReport} from '../components/CutReport.jsx';
+import {CutReport, hasReport} from '../components/CutReport.jsx';
 import AgentCutWait from '../components/AgentCutWait.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
 import {fmtDuration, progressMessageOf} from '../lib/format.js';
@@ -564,102 +565,109 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                 : (lang === 'zh' ? '处理中' : 'Working'))
             : `${progress}%`;
     const subtitle = completed ? taskProcessingTimeLabel(job, lang) : stageLabel(job, lang);
-    const metaItems = [
-        {label: lang === 'zh' ? '文件信息' : 'File', value: fileInfoLabel(job, lang)},
-        // Three, not four, and the two that are gone were both columns of the same
-        // words: "处理路线" said 本地转写 on every card, "判断材料类型" reported an
-        // internal classification, and "来源" said 本地视频文件 for material that is
-        // always a local file. Four tiles of equal width left the cut truncated at
-        // "剪掉 639 处，省 2m …" — the one number that differs per recording was the
-        // one being cut off to make room for words that never changed.
-        {label: lang === 'zh' ? '去气口' : 'Breath gaps', ...debreathTile(job, lang)},
-        // A note the text model wrote because the frame note could not run is
-        // a different note from the one asked for; the reason is the point.
-        {label: lang === 'zh' ? '笔记' : 'Note', value: noteTileValue(job, lang), hint: noteFallbackSentence(job?.result, lang), wrapHint: true},
-    ];
+    // One line of facts per finished record, in a fixed order: when, the file,
+    // what the cut removed, the note, how long processing took. The three tiles
+    // and the full output path made each record three screens' worth of rows
+    // for two or three records a screen (walkthrough, 2026-10-22).
+    const cutTile = debreathTile(job, lang);
+    const facts = [
+        formatTaskDateTime(job?.updated_at || job?.created_at, lang),
+        fileInfoLabel(job, lang),
+        `${lang === 'zh' ? '去气口' : 'Cut'} ${cutTile.value}${cutTile.hint ? `（${cutTile.hint}）` : ''}`,
+        `${lang === 'zh' ? '笔记' : 'Note'} ${noteTileValue(job, lang)}`,
+        completed ? `${lang === 'zh' ? '处理' : 'Took'} ${subtitle}` : '',
+    ].filter((item) => item && item !== '-');
+    // A note the text model wrote because the frame note could not run is a
+    // different note from the one asked for; the reason is the point.
+    const noteHint = noteFallbackSentence(job?.result, lang);
     const delivery = cutFileDelivery(job, lang);
     const outcome = taskOutcome(job, lang);
+    // The processing report opens under the row from the "更多" menu; the
+    // places waiting for a judgement are handled in the editor, where
+    // "查看结果" takes the owner.
+    const [reportOpen, setReportOpen] = useState(false);
+    const menuItems = [
+        hasReport(job) ? {icon: 'description', label: reportOpen ? (lang === 'zh' ? '收起处理说明' : 'Hide processing report') : (lang === 'zh' ? '处理说明' : 'Processing report'), onClick: () => setReportOpen((value) => !value)} : null,
+        {icon: 'delete', label: lang === 'zh' ? '删除记录' : 'Delete record', onClick: () => onDelete(job)},
+    ].filter(Boolean);
+    const secondaryButton = 'inline-flex h-9 items-center gap-1.5 rounded-[12px] border border-[#dedada] bg-white px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]';
     return (
         <article
             ref={highlightRef}
             data-highlighted={highlighted ? 'true' : undefined}
-            className={`rounded-[24px] border bg-white p-5 shadow-[0_18px_44px_-38px_rgba(17,17,17,.45)] dark:bg-white/[0.055] dark:shadow-none ${highlighted ? 'border-primary ring-2 ring-primary/30' : 'border-[#dedada] dark:border-white/[0.10]'}`}
+            className={`rounded-[16px] border bg-white px-4 py-3 dark:bg-white/[0.055] ${highlighted ? 'border-primary ring-2 ring-primary/30' : 'border-[#e4e1e1] dark:border-white/[0.10]'}`}
         >
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                 <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <span data-testid="task-outcome" className={`rounded-full border px-2.5 py-1 text-[11px] font-extrabold ${OUTCOME_PILL_CLASS[outcome.tone]}`}>
+                    <div className="flex min-w-0 items-center gap-2">
+                        <span data-testid="task-outcome" className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-extrabold ${OUTCOME_PILL_CLASS[outcome.tone]}`}>
                             {outcome.label}
                         </span>
-                        <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">
-                            {formatTaskDateTime(job?.updated_at || job?.created_at, lang)}
-                        </span>
+                        <h2 className="min-w-0 truncate font-headline text-[15px] font-extrabold text-[#111111] dark:text-white" title={displayTitle}>
+                            {displayTitle}
+                        </h2>
                     </div>
-                    <h2 className="mt-2 truncate font-headline text-[17px] font-extrabold text-[#111111] dark:text-white" title={displayTitle}>
-                        {displayTitle}
-                    </h2>
-                    <p className="mt-1 text-[13px] font-semibold leading-5 text-[#676970] dark:text-white/60">
-                        {subtitle}
-                        {failed ? ` · ${progressLabel}` : (!completed && ` · ${lang === 'zh' ? '进度' : 'Progress'}：${progressLabel}`)}
-                    </p>
+                    {terminal ? (
+                        <p data-testid="task-facts" className="mt-1 truncate text-[12px] font-semibold text-[#76777d] dark:text-white/55" title={facts.join(' · ')}>
+                            {facts.join(' · ')}
+                        </p>
+                    ) : (
+                        <p className="mt-1 text-[12px] font-semibold text-[#76777d] dark:text-white/55">
+                            {formatTaskDateTime(job?.updated_at || job?.created_at, lang)} · {subtitle} · {lang === 'zh' ? '进度' : 'Progress'}：{progressLabel}
+                        </p>
+                    )}
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
                     {completed ? (
-                        <button type="button" disabled={!job?.result || openingTaskId === taskId} onClick={() => onOpenResult(job)} className="inline-flex h-10 items-center gap-2 rounded-[14px] bg-[#111111] px-4 text-[13px] font-extrabold text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white dark:text-[#111111] dark:hover:bg-white/[0.88]">
+                        <button type="button" disabled={!job?.result || openingTaskId === taskId} onClick={() => onOpenResult(job)} className="inline-flex h-9 items-center gap-1.5 rounded-[12px] bg-[#111111] px-3.5 text-[12px] font-extrabold text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white dark:text-[#111111] dark:hover:bg-white/[0.88]">
                             {openingTaskId === taskId ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <FileText className="size-4" strokeWidth={2.15}/>}
                             {lang === 'zh' ? '查看结果' : 'View result'}
                         </button>
                     ) : failed && !retryUseless ? (
-                        <button type="button" disabled={retryingTaskId === taskId} onClick={() => onRetry(job)} className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] bg-[#f4f3f3] px-4 text-[13px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]">
+                        <button type="button" disabled={retryingTaskId === taskId} onClick={() => onRetry(job)} className={secondaryButton}>
                             {retryingTaskId === taskId ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <AlertCircle className="size-4" strokeWidth={2.15}/>}
                             {retryingTaskId === taskId ? (lang === 'zh' ? '正在入队…' : 'Queuing…') : (lang === 'zh' ? '重新提交' : 'Submit again')}
                         </button>
                     ) : null}
+                    <OutputFolderLine taskId={taskId} result={job?.result} lang={lang} compact/>
                     {cancellableLive ? (
-                        <button type="button" disabled={cancellingTaskId === taskId} onClick={() => onCancel(job)} className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-red-200 bg-red-50 px-4 text-[13px] font-extrabold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-45 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20">
+                        <button type="button" disabled={cancellingTaskId === taskId} onClick={() => onCancel(job)} className="inline-flex h-9 items-center gap-1.5 rounded-[12px] border border-red-200 bg-red-50 px-3 text-[12px] font-extrabold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-45 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20">
                             {cancellingTaskId === taskId ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <XCircle className="size-4" strokeWidth={2.15}/>}
                             {lang === 'zh' ? '取消' : 'Cancel'}
                         </button>
+                    ) : null}
+                    {completed && !job?.result ? (
+                        <span className="inline-flex h-9 items-center gap-1.5 rounded-[12px] border border-[#dedada] bg-[#f4f3f3] px-3 text-[12px] font-extrabold text-[#676970] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white/55">
+                            <CheckCircle2 className="size-4" strokeWidth={2.15}/>
+                            {lang === 'zh' ? '结果同步中' : 'Syncing result'}
+                        </span>
                     ) : null}
                     {/* Deleting is rare and cannot be undone; it does not sit
                         beside "查看结果" at the same weight. */}
                     {terminal && taskId ? (
                         <DropdownMenu
                             trigger={(
-                                <button type="button" disabled={deletingTaskId === taskId} aria-label={lang === 'zh' ? '更多' : 'More'} title={lang === 'zh' ? '更多' : 'More'} className="inline-flex size-10 items-center justify-center rounded-[14px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]">
+                                <button type="button" disabled={deletingTaskId === taskId} aria-label={lang === 'zh' ? '更多' : 'More'} title={lang === 'zh' ? '更多' : 'More'} className="inline-flex size-9 items-center justify-center rounded-[12px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]">
                                     {deletingTaskId === taskId ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <MoreHorizontal className="size-4" strokeWidth={2.15}/>}
                                 </button>
                             )}
-                            items={[{icon: 'delete', label: lang === 'zh' ? '删除记录' : 'Delete record', onClick: () => onDelete(job)}]}
+                            items={menuItems}
                         />
-                    ) : null}
-                    {completed && !job?.result ? (
-                        <span className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] bg-[#f4f3f3] px-4 text-[13px] font-extrabold text-[#676970] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white/55">
-                            <CheckCircle2 className="size-4" strokeWidth={2.15}/>
-                            {lang === 'zh' ? '结果同步中' : 'Syncing result'}
-                        </span>
                     ) : null}
                 </div>
             </div>
             {!completed && !failed ? (
-                <div className="mt-4">
-                    <div className="mb-2 flex items-end justify-between gap-4">
-                        <div>
-                            <p className="text-[12px] font-extrabold text-[#85868c] dark:text-white/55">{lang === 'zh' ? '当前阶段' : 'Current stage'}</p>
-                            <p className="mt-1 font-headline text-[22px] font-extrabold text-[#111111] dark:text-white">{stageLabel(job, lang)}</p>
-                        </div>
-                        <p className="font-headline text-[24px] font-extrabold tabular-nums text-[#111111] dark:text-white">{progressLabel}</p>
-                    </div>
-                    <div className={`h-2.5 overflow-hidden rounded-full bg-[#efeeee] dark:bg-white/[0.12] ${progressUnknown && live ? 'progress-indeterminate' : ''}`}>
+                <div className="mt-3">
+                    <div className={`h-2 overflow-hidden rounded-full bg-[#efeeee] dark:bg-white/[0.12] ${progressUnknown && live ? 'progress-indeterminate' : ''}`}>
                         {!progressUnknown && <div className="h-full rounded-full bg-[#111111] transition-all duration-500 dark:bg-white" style={{width: `${progress}%`}}/>}
                     </div>
-                    <p className="mt-3 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-2 text-[12px] font-semibold leading-5 text-[#57585d] dark:border-white/[0.10] dark:bg-white/[0.04] dark:text-white/62">
+                    <p className="mt-2 text-[12px] font-semibold leading-5 text-[#57585d] dark:text-white/62">
                         {detail}
                     </p>
                 </div>
             ) : null}
             {failedTerminal && detail ? (
-                <p className="mt-3 inline-flex max-w-full items-start gap-2 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold leading-5 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+                <p className="mt-2 inline-flex max-w-full items-start gap-2 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold leading-5 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                     <AlertCircle className="mt-0.5 size-4 shrink-0" strokeWidth={2.15}/>
                     <span className="min-w-0 break-words">{detail}</span>
                 </p>
@@ -676,16 +684,19 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                 own path when the file has moved, which is the one thing this
                 product cannot work out for the reader. */}
             {retryError ? (
-                <p data-testid="retry-error" className="mt-3 inline-flex max-w-full items-start gap-2 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold leading-5 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+                <p data-testid="retry-error" className="mt-2 inline-flex max-w-full items-start gap-2 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold leading-5 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                     <AlertCircle className="mt-0.5 size-4 shrink-0" strokeWidth={2.15}/>
                     <span className="min-w-0 break-words">{retryError}</span>
                 </p>
+            ) : null}
+            {noteHint ? (
+                <p className="mt-1.5 text-[12px] font-semibold leading-5 text-[#85868c] dark:text-white/45">{noteHint}</p>
             ) : null}
             {/* Only the two states worth a sentence. A cut file that landed where
                 it belongs says nothing, so a card with words here is a card with
                 something to do. */}
             {delivery ? (
-                <div className={`mt-3 flex flex-wrap items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px] font-semibold leading-5 ${
+                <div className={`mt-2 flex flex-wrap items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px] font-semibold leading-5 ${
                     delivery.tone === 'error'
                         ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200'
                         : 'border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]'
@@ -704,20 +715,12 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                     )}
                 </div>
             ) : null}
-            <OutputFolderLine taskId={taskId} result={job?.result} lang={lang} className="mt-3"/>
             <AgentCutWait job={job}/>
-            <CutReport job={job}/>
-            <div className="mt-4 grid gap-2 md:grid-cols-3">
-                {metaItems.map((item) => (
-                    <div key={item.label} className="min-w-0 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-2 dark:border-white/[0.10] dark:bg-white/[0.04]">
-                        <p className="text-[11px] font-extrabold text-[#85868c] dark:text-white/55">{item.label}</p>
-                        <p className="mt-1 truncate text-[13px] font-extrabold text-[#111111] dark:text-white" title={item.value}>{item.value}</p>
-                        {item.hint ? (
-                            <p className={`mt-0.5 text-[11px] font-semibold text-[#85868c] dark:text-white/45 ${item.wrapHint ? 'break-words leading-4' : 'truncate'}`} title={item.hint}>{item.hint}</p>
-                        ) : null}
-                    </div>
-                ))}
-            </div>
+            {reportOpen ? (
+                <div data-testid="cut-report-panel" className="mt-3 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]">
+                    <CutReport job={job} embedded/>
+                </div>
+            ) : null}
         </article>
     );
 };
@@ -760,6 +763,14 @@ const areCardPropsEqual = (prev, next) => {
     return cardRenderKey(prev.job) === cardRenderKey(next.job);
 };
 const AgentTaskCard = memo(AgentTaskCardView, areCardPropsEqual);
+
+const RECORD_FILTERS = [
+    {id: 'all', zh: '全部', en: 'All', match: () => true},
+    {id: 'live', zh: '进行中', en: 'In progress', match: (job) => isLiveTask(job)},
+    {id: 'judge', zh: '待你判断', en: 'To review', match: (job) => taskOutcome(job).kind === 'judge'},
+    // Failed, cancelled, or finished without the note or the cut.
+    {id: 'problem', zh: '有问题', en: 'Problems', match: (job) => !['live', 'judge', 'done'].includes(taskOutcome(job).kind)},
+];
 
 const AgentTasks = () => {
     const {lang} = useI18n();
@@ -824,6 +835,25 @@ const AgentTasks = () => {
         titleByTaskId.get(String(job?.metadata?.queue_wait?.waiting_for || '').trim()) || ''
     );
     const hasLiveOrUploadingJobs = Boolean(queueUploadJob) || liveJobs.length > 0;
+    // Search by title and a few filters over the whole list; which filter a
+    // record falls under comes from the same outcome its badge shows.
+    const [query, setQuery] = useState('');
+    const [filter, setFilter] = useState('all');
+    const filterCounts = useMemo(() => {
+        const counts = {all: displayJobs.length};
+        RECORD_FILTERS.forEach((item) => {
+            if (item.id !== 'all') counts[item.id] = displayJobs.filter((job) => item.match(job)).length;
+        });
+        return counts;
+    }, [displayJobs]);
+    const visibleJobs = useMemo(() => {
+        const needle = query.trim().toLowerCase();
+        const rule = RECORD_FILTERS.find((item) => item.id === filter) || RECORD_FILTERS[0];
+        return displayJobs.filter((job) => (
+            rule.match(job)
+            && (!needle || jobDisplayTitle(job, lang).toLowerCase().includes(needle))
+        ));
+    }, [displayJobs, filter, query, lang]);
     const queuedCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_QUEUED).length;
     const runningCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_RUNNING || normalizeTaskState(job) === TASK_STATE_UPLOADING).length;
 
@@ -1087,22 +1117,52 @@ const AgentTasks = () => {
 
                 {queueUploadJob ? <QueueUploadBanner upload={queueUploadJob} lang={lang} onCancel={cancelPendingUpload}/> : null}
 
-                <section className="grid gap-3 sm:grid-cols-3">
-                    <div className="rounded-[18px] border border-[#dedada] bg-white p-4 dark:border-white/[0.10] dark:bg-white/[0.055]">
-                        <p className="text-[11px] font-extrabold text-[#85868c] dark:text-white/55">{lang === 'zh' ? '进行中' : 'Running'}</p>
-                        <p className="mt-1 text-[22px] font-extrabold tabular-nums text-[#111111] dark:text-white">{runningCount}</p>
+                {/* One line instead of three tiles: the count of records only
+                    once the full list is in (it used to climb from the cached 100
+                    to the real total), and what is running only when something is. */}
+                <section className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={lang === 'zh' ? '筛选' : 'Filter'}>
+                        {RECORD_FILTERS.map((item) => {
+                            const count = filterCounts[item.id];
+                            if (item.id !== 'all' && !count && filter !== item.id) return null;
+                            const active = filter === item.id;
+                            return (
+                                <button
+                                    key={item.id}
+                                    type="button"
+                                    aria-pressed={active}
+                                    onClick={() => setFilter(item.id)}
+                                    className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12px] font-extrabold transition ${active
+                                        ? 'border-[#111111] bg-[#111111] text-white dark:border-white dark:bg-white dark:text-[#111111]'
+                                        : 'border-[#dedada] bg-white text-[#57585d] hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]'}`}
+                                >
+                                    {lang === 'zh' ? item.zh : item.en}
+                                    {loading && item.id === 'all' ? null : <span className="tabular-nums opacity-70">{count}</span>}
+                                </button>
+                            );
+                        })}
+                        {runningCount + queuedCount > 0 ? (
+                            <span data-testid="live-summary" className="ml-1 inline-flex items-center gap-1.5 text-[12px] font-extrabold text-blue-700 dark:text-blue-200">
+                                <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.15}/>
+                                {lang === 'zh'
+                                    ? [runningCount ? `${runningCount} 个在处理` : '', queuedCount ? `${queuedCount} 个排队` : ''].filter(Boolean).join(' · ')
+                                    : [runningCount ? `${runningCount} running` : '', queuedCount ? `${queuedCount} queued` : ''].filter(Boolean).join(' · ')}
+                            </span>
+                        ) : null}
                     </div>
-                    <div className="rounded-[18px] border border-[#dedada] bg-white p-4 dark:border-white/[0.10] dark:bg-white/[0.055]">
-                        <p className="text-[11px] font-extrabold text-[#85868c] dark:text-white/55">{lang === 'zh' ? '排队中' : 'Queued'}</p>
-                        <p className="mt-1 text-[22px] font-extrabold tabular-nums text-[#111111] dark:text-white">{queuedCount}</p>
-                    </div>
-                    <div className="rounded-[18px] border border-[#dedada] bg-white p-4 dark:border-white/[0.10] dark:bg-white/[0.055]">
-                        <p className="text-[11px] font-extrabold text-[#85868c] dark:text-white/55">{lang === 'zh' ? '历史记录' : 'History records'}</p>
-                        <p className="mt-1 text-[22px] font-extrabold tabular-nums text-[#111111] dark:text-white">{displayJobs.length}</p>
-                    </div>
+                    <label className="relative block sm:w-64">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#9a9ba0]" strokeWidth={2.15}/>
+                        <input
+                            type="search"
+                            value={query}
+                            onChange={(event) => setQuery(event.target.value)}
+                            placeholder={lang === 'zh' ? '搜索标题' : 'Search titles'}
+                            className="h-9 w-full rounded-[12px] border border-[#dedada] bg-white pl-9 pr-3 text-[13px] font-semibold text-[#111111] outline-none placeholder:text-[#a2a3a8] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:focus:border-white/40"
+                        />
+                    </label>
                 </section>
 
-                <section className="space-y-3">
+                <section className="space-y-2">
                     {loading && !displayJobs.length && !queueUploadJob && (
                         <div className="flex h-48 items-center justify-center rounded-[22px] border border-[#dedada] bg-white text-sm font-semibold text-[#676970] dark:border-white/[0.10] dark:bg-white/[0.055] dark:text-white/60">
                             <LoaderCircle className="mr-2 size-4 animate-spin" strokeWidth={2.15}/>
@@ -1126,7 +1186,12 @@ const AgentTasks = () => {
                             </div>
                         </div>
                     )}
-                    {displayJobs.map((job) => (
+                    {displayJobs.length > 0 && visibleJobs.length === 0 && (
+                        <p className="rounded-[16px] border border-dashed border-[#dedada] bg-white px-4 py-8 text-center text-[13px] font-semibold text-[#85868c] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-white/50">
+                            {lang === 'zh' ? '没有符合的记录。' : 'No matching records.'}
+                        </p>
+                    )}
+                    {visibleJobs.map((job) => (
                         <AgentTaskCard
                             key={taskIdForJob(job)}
                             job={job}

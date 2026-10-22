@@ -10,7 +10,9 @@ export const outputFolderPath = (result) => {
     return folder && typeof folder === 'object' ? String(folder.path || '').trim() : '';
 };
 
-export default function OutputFolderLine({taskId, result, lang = 'zh', className = ''}) {
+// compact: only the button, with the path on hover, for a list row where a
+// full path per record is a column of long text (walkthrough, 2026-10-22).
+export default function OutputFolderLine({taskId, result, lang = 'zh', className = '', compact = false}) {
     const zh = lang === 'zh';
     const {openOutputFolder} = useApi();
     const [error, setError] = useState('');
@@ -30,6 +32,24 @@ export default function OutputFolderLine({taskId, result, lang = 'zh', className
             setBusy(false);
         }
     };
+
+    if (compact) {
+        return (
+            <span data-testid="output-folder-line" className={`relative inline-flex ${className}`}>
+                <button
+                    type="button"
+                    onClick={open}
+                    disabled={busy}
+                    title={error || path}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-[12px] border border-[#dedada] bg-white px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]"
+                >
+                    <SvgIcon name="folder_open" className="text-sm"/>
+                    {zh ? '打开文件夹' : 'Open folder'}
+                </button>
+                {error && <span role="alert" className="absolute right-0 top-full z-10 mt-1 w-64 rounded-[10px] border border-red-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-error shadow-sm dark:border-red-500/20 dark:bg-[#1d1f22]">{error}</span>}
+            </span>
+        );
+    }
 
     return (
         <div data-testid="output-folder-line" className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs ${className}`}>

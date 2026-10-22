@@ -117,3 +117,74 @@ describe('a finished record', () => {
         expect((await screen.findByTestId('editor-address')).textContent).toBe('/editor?task=b&review=cut');
     });
 });
+
+// Walkthrough 2026-10-22, items 7, 8 and 13: a record is one compact row with
+// its facts on one line and the output folder behind a button, the three stat
+// tiles are gone, and a hundred records can be searched and filtered.
+describe('the list of records', () => {
+    const withFolder = (id, result) => finished(id, {output_folder: {path: `/Users/me/Movies/${id}/很长很长的产出文件夹路径`}, ...result});
+
+    it('puts a finished record on one line of facts and keeps the folder path behind a button', () => {
+        tasks = [withFolder('a', {audio_duration_seconds: 3110, debreath: {status: 'completed', plan: {cut_count: 501, removed_seconds: 1136}}})];
+        mount();
+        const facts = screen.getByTestId('task-facts').textContent;
+        expect(facts).toMatch(/51 分 50 秒/);
+        expect(facts).toMatch(/去气口 剪掉 18 分 56 秒/);
+        expect(facts).toMatch(/笔记 1200 字/);
+        expect(screen.queryByText(/很长很长的产出文件夹路径/)).toBeNull();
+        expect(screen.getByRole('button', {name: '打开文件夹'}).getAttribute('title')).toMatch(/很长很长的产出文件夹路径/);
+    });
+
+    it('has no stat tiles', () => {
+        tasks = [finished('a', {})];
+        mount();
+        expect(screen.queryByText('历史记录')).toBeNull();
+        expect(screen.queryByText('排队中')).toBeNull();
+    });
+
+    it('says what is running only while something is', () => {
+        tasks = [finished('a', {})];
+        const {unmount} = mount();
+        expect(screen.queryByTestId('live-summary')).toBeNull();
+        unmount();
+        tasks = [finished('a', {}), {task_id: 'r', status: 'running', stage: 'stt', progress: 40, created_at: '2026-10-22T10:00:00Z', metadata: {display_title: '在转的'}}];
+        mount();
+        expect(screen.getByTestId('live-summary').textContent).toBe('1 个在处理');
+    });
+
+    it('filters to records waiting for a judgement, and to records with a problem', () => {
+        tasks = [
+            finished('ok', {}),
+            finished('judge', {debreath: {status: 'completed', survey: {to_judge: 2}}}),
+            finished('nonote', {summary_status: 'failed', summary_chars: 0}),
+            {...finished('bad', {}), status: 'failed', result: null},
+        ];
+        mount();
+        const titles = () => screen.queryAllByRole('heading', {level: 2}).map((node) => node.textContent);
+        expect(titles()).toHaveLength(4);
+        fireEvent.click(screen.getByRole('button', {name: /待你判断/}));
+        expect(titles()).toEqual(['录像 judge']);
+        fireEvent.click(screen.getByRole('button', {name: /有问题/}));
+        expect(titles().sort()).toEqual(['录像 bad', '录像 nonote']);
+        fireEvent.click(screen.getByRole('button', {name: /全部/}));
+        expect(titles()).toHaveLength(4);
+    });
+
+    it('finds records by title', () => {
+        tasks = [finished('a', {}), {...finished('b', {}), metadata: {display_title: '罗福莉访谈'}}];
+        mount();
+        fireEvent.change(screen.getByRole('searchbox'), {target: {value: '福莉'}});
+        expect(screen.queryAllByRole('heading', {level: 2}).map((node) => node.textContent)).toEqual(['罗福莉访谈']);
+        fireEvent.change(screen.getByRole('searchbox'), {target: {value: '没有这个'}});
+        expect(screen.getByText('没有符合的记录。')).toBeTruthy();
+    });
+
+    it('opens the processing report from the 更多 menu', () => {
+        tasks = [finished('a', {debreath: {status: 'completed', survey: {has_report: true, to_judge: 0}}})];
+        mount();
+        expect(screen.queryByTestId('cut-report-panel')).toBeNull();
+        fireEvent.click(screen.getByRole('button', {name: '更多'}));
+        fireEvent.click(screen.getByRole('menuitem', {name: '处理说明'}));
+        expect(screen.getByTestId('cut-report-panel')).toBeTruthy();
+    });
+});

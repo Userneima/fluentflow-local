@@ -85,9 +85,9 @@ describe('the link box', () => {
 
     it('asks for a video link and names the platforms, without promising podcasts', () => {
         mount();
-        expect(screen.getByText('视频链接')).toBeTruthy();
+        expect(screen.getByRole('tab', {name: '视频链接'}).getAttribute('aria-selected')).toBe('true');
         expect(screen.queryByText(/播客/)).toBeNull();
-        const box = screen.getByRole('textbox');
+        const box = screen.getByRole('textbox', {name: '视频链接'});
         expect(box.getAttribute('placeholder')).toMatch(/抖音/);
         expect(box.getAttribute('placeholder')).toMatch(/Bilibili/);
         expect(box.getAttribute('placeholder')).toMatch(/YouTube/);
@@ -192,5 +192,28 @@ describe('a Douyin link', () => {
         submit('https://www.bilibili.com/video/BV1xx411c7mD');
         await waitFor(() => expect(createVideoSourceJob).toHaveBeenCalledTimes(1));
         expect(screen.queryByText(QUESTION)).toBeNull();
+    });
+});
+
+// Walkthrough 2026-10-22, item 1: one switch for the three ways in, not a
+// 视频/字幕 switch with a 链接/本机文件 switch under it.
+describe('the way-in switch', () => {
+    afterEach(() => { cleanup(); localStorage.clear(); });
+
+    it('offers link, files on this computer and a subtitle file side by side', () => {
+        mount();
+        expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['视频链接', '本机文件', '字幕文件']);
+        expect(screen.queryByText('视频生成笔记')).toBeNull();
+        expect(screen.queryByText('字幕生成笔记')).toBeNull();
+    });
+
+    it('switches to files and to a subtitle file with one click each', () => {
+        mount();
+        fireEvent.click(screen.getByRole('tab', {name: '本机文件'}));
+        expect(screen.getByText('拖放或选择音视频文件')).toBeTruthy();
+        fireEvent.click(screen.getByRole('tab', {name: '字幕文件'}));
+        expect(screen.getByText('拖放或选择字幕 / 文本文件')).toBeTruthy();
+        fireEvent.click(screen.getByRole('tab', {name: '视频链接'}));
+        expect(screen.getByRole('textbox', {name: '视频链接'})).toBeTruthy();
     });
 });
