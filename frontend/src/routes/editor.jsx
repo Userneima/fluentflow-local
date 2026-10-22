@@ -124,6 +124,12 @@ const resultIdentity = (result) => (result ? `${result.task_id || result.filenam
 // sentence is edited. Boxes size themselves with CSS (field-sizing); where the
 // browser cannot, the page sizes them all in one pass (sizeTextareas).
 const SIZES_ITSELF = textareaSizesItself();
+// Rows off screen are skipped in layout and paint until scrolled near
+// (content-visibility); the browser's find-in-page still searches them. Laying
+// out every one of 7104 rows made switching modes and resizing the pane slow.
+// The rows have no CSS transitions: a mode switch restyles every row, and
+// transitions there fired about 28,000 transitionend events per switch.
+const OFFSCREEN_SKIP = {contentVisibility: 'auto', containIntrinsicSize: 'auto 3rem'};
 
 const SentenceTime = memo(({seg, active, className, onSeek, children}) => (
     <button type="button" onClick={() => onSeek(seg)} className={className(active)}>
@@ -134,17 +140,18 @@ const SentenceTime = memo(({seg, active, className, onSeek, children}) => (
 const TranscriptLine = memo(({index, seg, active, review, onSeek, onEdit, onFocusLine, registerNode}) => (
     <div
         ref={(node) => registerNode(index, node)}
+        style={OFFSCREEN_SKIP}
         className={review
-            ? `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${active ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`
-            : `group grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${active ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
+            ? `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`
+            : `group grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
     >
         <SentenceTime
             seg={seg}
             active={active}
             onSeek={onSeek}
             className={(on) => (review
-                ? `pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`
-                : `pt-[1px] text-left font-mono text-xs tabular-nums transition ${on ? 'font-bold text-primary' : 'text-[#8a8a8a] hover:text-primary dark:text-white/40'}`)}
+                ? `pt-[1px] text-left font-mono text-xs font-bold tabular-nums ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`
+                : `pt-[1px] text-left font-mono text-xs tabular-nums ${on ? 'font-bold text-primary' : 'text-[#8a8a8a] hover:text-primary dark:text-white/40'}`)}
         >
             {fmtTime(seg.start)}
         </SentenceTime>
@@ -166,17 +173,18 @@ const TranscriptLine = memo(({index, seg, active, review, onSeek, onEdit, onFocu
 const BilingualLine = memo(({index, seg, active, review, onSeek, registerNode}) => (
     <div
         ref={(node) => registerNode(index, node)}
+        style={OFFSCREEN_SKIP}
         className={review
-            ? `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 transition-colors ${active ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`
-            : `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 transition-colors ${active ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
+            ? `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`
+            : `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
     >
         <SentenceTime
             seg={seg}
             active={active}
             onSeek={onSeek}
             className={(on) => (review
-                ? `pt-[1px] text-left font-mono text-xs font-bold tabular-nums transition ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`
-                : `flex flex-col items-start justify-start pt-[1px] font-mono text-xs tabular-nums transition ${on ? 'font-bold text-primary' : 'text-[#777] hover:text-primary dark:text-white/45'}`)}
+                ? `pt-[1px] text-left font-mono text-xs font-bold tabular-nums ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`
+                : `flex flex-col items-start justify-start pt-[1px] font-mono text-xs tabular-nums ${on ? 'font-bold text-primary' : 'text-[#777] hover:text-primary dark:text-white/45'}`)}
         >
             {review ? fmtTime(seg.start) : (
                 <>
@@ -911,6 +919,41 @@ const Editor = () => {
         const node = segmentRefs.current[followIndex];
         if (node) node.scrollIntoView({block:'center', behavior:'smooth'});
     }, [activeSegmentIndex, followPlayback, mediaPlaying]);
+
+    // Switching between text review and video review keeps the reader's
+    // place: while playing, the sentence playing is brought into view;
+    // otherwise the sentence at the top of the list stays at the top.
+    const reviewAnchorRef = useRef({index: -1, block: 'start'});
+    const firstVisibleLine = () => {
+        const box = transcriptScrollRef.current;
+        if (!box) return -1;
+        const top = box.getBoundingClientRect().top;
+        let lo = 0;
+        let hi = visibleTranscriptSegments.length - 1;
+        let found = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const node = segmentRefs.current[mid];
+            if (!node) return -1;
+            if (node.getBoundingClientRect().bottom > top) { found = mid; hi = mid - 1; } else { lo = mid + 1; }
+        }
+        return found;
+    };
+    const switchReviewMode = (mode) => {
+        persistMediaPosition();
+        reviewAnchorRef.current = mediaPlaying
+            ? {index: activeSegmentIndex, block: 'center'}
+            : {index: firstVisibleLine(), block: 'start'};
+        setTranscriptReviewMode(mode);
+    };
+    const reviewModeSeenRef = useRef(activeReviewMode);
+    useEffect(() => {
+        if (reviewModeSeenRef.current === activeReviewMode) return;
+        reviewModeSeenRef.current = activeReviewMode;
+        const {index, block} = reviewAnchorRef.current;
+        const node = segmentRefs.current[index];
+        if (node) node.scrollIntoView({block});
+    }, [activeReviewMode]);
 
     // Only for a browser that cannot size the boxes with CSS: all of them in
     // one pass when a result, a view or the number of sentences changes. Not
@@ -1941,7 +1984,7 @@ const Editor = () => {
                                                 <div className="inline-flex h-9 items-center gap-1 rounded-[13px] border border-[#e4e0e0] bg-[#f8f7fb] p-0.5 dark:border-white/[0.12] dark:bg-white/[0.06]">
                                                     <button
                                                         type="button"
-                                                        onClick={()=>{ persistMediaPosition(); setTranscriptReviewMode('text'); }}
+                                                        onClick={()=>switchReviewMode('text')}
                                                         className={`inline-flex h-full items-center justify-center rounded-[10px] px-2.5 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
                                                             activeReviewMode === 'text'
                                                                 ? 'bg-[#111111] text-white dark:bg-white dark:text-[#111111]'
@@ -1952,7 +1995,7 @@ const Editor = () => {
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        onClick={()=>{ if (canUseVideoReview) { persistMediaPosition(); setTranscriptReviewMode('video'); } }}
+                                                        onClick={()=>{ if (canUseVideoReview) switchReviewMode('video'); }}
                                                         disabled={!canUseVideoReview}
                                                         title={!canUseVideoReview ? (lang === 'zh' ? '选择原视频并保留时间戳后可用' : 'Available after choosing source video with timestamps') : undefined}
                                                         className={`inline-flex h-full items-center justify-center rounded-[10px] px-2.5 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:text-[#9a9a9a] disabled:hover:bg-transparent disabled:hover:text-[#9a9a9a] dark:disabled:text-white/28 dark:disabled:hover:text-white/28 ${
@@ -2022,39 +2065,35 @@ const Editor = () => {
                                         </div>
                                     </div>
                                 </div>
-                        {shouldShowVideoReview ? (
-                            <div className="min-h-0 flex-1 overflow-hidden p-4">
-                                <div className="flex h-full min-h-0 flex-col gap-3">
-                                    <video
-                                        ref={mediaRef}
-                                        src={mediaUrl || undefined}
-                                        controls
-                                        className="max-h-[min(58vh,36rem)] w-full shrink-0 rounded-[18px] bg-black object-contain"
-                                        onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
-                                        onLoadedMetadata={(e)=>restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0)}
-                                        onSeeked={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true})}
-                                        onPlay={()=>setMediaPlaying(true)}
-                                            onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
-                                            onEnded={()=>setMediaPlaying(false)}
-                                        />
-                                    <div ref={transcriptScrollRef} className="hide-scrollbar min-h-[10rem] flex-1 overflow-y-auto rounded-[18px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]">
-                                        <div className="divide-y divide-[#e4e0e0] dark:divide-white/[0.08]">
-                                            {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
-                                                <BilingualLine key={`video-review-bilingual-${i}`} index={i} seg={seg} active={i===activeSegmentIndex} review onSeek={seekRow} registerNode={registerRow}/>
-                                            )) : segments.map((seg,i) => (
-                                                <TranscriptLine key={`video-review-${i}`} index={i} seg={seg} active={i===activeSegmentIndex} review onSeek={seekRow} onEdit={editRow} onFocusLine={stopFollowing} registerNode={registerRow}/>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        ) : (
-                            <>
-                        <div ref={transcriptScrollRef} className="hide-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
+                        {/* One list and one player for both modes; switching only
+                            changes the layout. Rebuilding them made a switch take
+                            half a second on a 7104-sentence transcript, stopped
+                            playback while the page still showed it playing, and
+                            lost the reading position. */}
+                        <div className={shouldShowVideoReview ? 'flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4' : 'flex min-h-0 flex-1 flex-col overflow-hidden'}>
+                            <video
+                                ref={mediaRef}
+                                src={mediaUrl || undefined}
+                                controls={shouldShowVideoReview}
+                                className={shouldShowVideoReview ? 'max-h-[min(58vh,36rem)] w-full shrink-0 rounded-[18px] bg-black object-contain' : 'hidden'}
+                                onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
+                                onLoadedMetadata={(e)=>restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0)}
+                                onSeeked={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true})}
+                                onPlay={()=>setMediaPlaying(true)}
+                                onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
+                                onEnded={()=>setMediaPlaying(false)}
+                            />
+                            <div
+                                ref={transcriptScrollRef}
+                                className={shouldShowVideoReview
+                                    ? 'hide-scrollbar min-h-[10rem] flex-1 overflow-y-auto rounded-[18px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]'
+                                    : 'hide-scrollbar min-h-0 flex-1 overflow-y-auto p-3'}
+                            >
+                                <div className={shouldShowVideoReview ? 'divide-y divide-[#e4e0e0] dark:divide-white/[0.08]' : 'space-y-1.5'}>
                             {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
-                                <BilingualLine key={`bilingual-${i}`} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} onSeek={seekRow} registerNode={registerRow}/>
+                                <BilingualLine key={`bilingual-${i}`} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} review={shouldShowVideoReview} onSeek={seekRow} registerNode={registerRow}/>
                             )) : segments.length > 0 ? segments.map((seg,i) => (
-                                <TranscriptLine key={i} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} onSeek={seekRow} onEdit={editRow} onFocusLine={stopFollowing} registerNode={registerRow}/>
+                                <TranscriptLine key={i} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} review={shouldShowVideoReview} onSeek={seekRow} onEdit={editRow} onFocusLine={stopFollowing} registerNode={registerRow}/>
                                 )) : isTranscriptHydrationPending ? (
                                     <div className="flex min-h-[320px] items-center justify-center rounded-[16px] border border-dashed border-outline-variant bg-surface-container-low px-4 py-8 text-center">
                                         <div className="max-w-[28rem]">
@@ -2104,18 +2143,9 @@ const Editor = () => {
                                     </div>
                                 )}
                                 </div>
+                            </div>
+                            {!shouldShowVideoReview && (
                                 <div className="border-t border-[#e4e0e0] bg-[#fbfbfb]/90 p-4 dark:border-white/[0.12] dark:bg-white/[0.04]">
-                                        <video
-                                            ref={mediaRef}
-                                            src={mediaUrl || undefined}
-                                            className="hidden"
-                                            onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
-                                            onLoadedMetadata={(e)=>restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0)}
-                                            onSeeked={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true})}
-                                            onPlay={()=>setMediaPlaying(true)}
-                                            onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
-                                            onEnded={()=>setMediaPlaying(false)}
-                                        />
                                     {mediaUrl ? (
                                         <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
                                                 <button type="button" onClick={togglePlayback} className="flex h-9 w-9 items-center justify-center rounded-[13px] bg-[#111111] text-white transition hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
@@ -2144,8 +2174,8 @@ const Editor = () => {
                                         </div>
                                     )}
                                 </div>
-                            </>
-                        )}
+                            )}
+                        </div>
                         {/* No de-breath entry here any more. Removing the breath gaps
                             is what an upload does to itself, so a panel asking the user
                             to run it described a flow that no longer exists — the owner
