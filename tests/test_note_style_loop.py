@@ -52,7 +52,8 @@ def task():
 
 
 def _edit(client, task_id, text):
-    response = client.patch(f"/jobs/{task_id}/summary", json={"summary_markdown": text})
+    version = job_store.get_job(task_id, client_id=OWNER)["result"]["note_version"]
+    response = client.patch(f"/jobs/{task_id}/summary", json={"summary_markdown": text, "base_version": version})
     assert response.status_code == 200
     return response.json()["result"]
 

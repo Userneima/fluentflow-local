@@ -8,6 +8,8 @@ from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.routers.local_job_edit import router
 
 _HEADERS = {"x-fluentflow-client-id": "desktop-a"}
+# Every save names the version it was made on (decision 6.30).
+_VERSIONS = {"note_version": "n1", "transcript_version": "v1"}
 
 
 def _client() -> TestClient:
@@ -34,15 +36,15 @@ def test_transcript_missing_job_returns_404(monkeypatch):
 
 
 def test_transcript_requires_string_text(monkeypatch):
-    _patch_common(monkeypatch, {"task_id": "t1", "result": {}})
-    r = _client().patch("/jobs/t1/transcript", headers=_HEADERS, json={"transcript_text": 123})
+    _patch_common(monkeypatch, {"task_id": "t1", "result": dict(_VERSIONS)})
+    r = _client().patch("/jobs/t1/transcript", headers=_HEADERS, json={"transcript_text": 123, "base_version": "v1"})
     assert r.status_code == 400
 
 
 def test_transcript_rejects_oversize(monkeypatch):
-    _patch_common(monkeypatch, {"task_id": "t1", "result": {}})
+    _patch_common(monkeypatch, {"task_id": "t1", "result": dict(_VERSIONS)})
     monkeypatch.setenv("FLUENTFLOW_MAX_TRANSCRIPT_EDIT_CHARS", "10")
-    r = _client().patch("/jobs/t1/transcript", headers=_HEADERS, json={"transcript_text": "x" * 11})
+    r = _client().patch("/jobs/t1/transcript", headers=_HEADERS, json={"transcript_text": "x" * 11, "base_version": "v1"})
     assert r.status_code == 413
 
 
@@ -51,7 +53,7 @@ def test_transcript_edit_persists_scoped(monkeypatch):
 
     def scoped_get(task_id, client_id=None):
         scoped.append(client_id)
-        return {"task_id": task_id, "result": {}}
+        return {"task_id": task_id, "result": dict(_VERSIONS)}
 
     monkeypatch.setattr(local_job_edit, "get_job", scoped_get)
     monkeypatch.setattr(local_job_edit, "_sanitize_edit_segments", lambda value: [])
@@ -65,7 +67,7 @@ def test_transcript_edit_persists_scoped(monkeypatch):
         lambda task_id, _before, result, client_id=None: {"task_id": task_id, "result": result},
     )
 
-    r = _client().patch("/jobs/t1/transcript", headers=_HEADERS, json={"transcript_text": "hello world"})
+    r = _client().patch("/jobs/t1/transcript", headers=_HEADERS, json={"transcript_text": "hello world", "base_version": "v1"})
 
     assert r.status_code == 200
     result = r.json()["result"]
@@ -75,7 +77,7 @@ def test_transcript_edit_persists_scoped(monkeypatch):
 
 
 def test_transcript_backup_failure_returns_500(monkeypatch):
-    _patch_common(monkeypatch, {"task_id": "t1", "result": {}})
+    _patch_common(monkeypatch, {"task_id": "t1", "result": dict(_VERSIONS)})
     monkeypatch.setattr(local_job_edit, "_sanitize_edit_segments", lambda value: [])
     monkeypatch.setattr(local_job_edit, "_sanitize_edit_records", lambda value: [])
     monkeypatch.setattr(local_job_edit, "_canonical_display_segments", lambda result: [])
@@ -85,7 +87,7 @@ def test_transcript_backup_failure_returns_500(monkeypatch):
 
     monkeypatch.setattr(local_job_edit, "_write_edited_transcript_backup", boom)
 
-    r = _client().patch("/jobs/t1/transcript", headers=_HEADERS, json={"transcript_text": "hi"})
+    r = _client().patch("/jobs/t1/transcript", headers=_HEADERS, json={"transcript_text": "hi", "base_version": "v1"})
 
     assert r.status_code == 500
     assert "backup failed" in r.json()["detail"].lower()
@@ -100,14 +102,14 @@ def test_summary_missing_job_returns_404(monkeypatch):
 
 
 def test_summary_requires_string(monkeypatch):
-    _patch_common(monkeypatch, {"task_id": "t1", "result": {}})
-    r = _client().patch("/jobs/t1/summary", headers=_HEADERS, json={"summary_markdown": None})
+    _patch_common(monkeypatch, {"task_id": "t1", "result": dict(_VERSIONS)})
+    r = _client().patch("/jobs/t1/summary", headers=_HEADERS, json={"summary_markdown": None, "base_version": "n1"})
     assert r.status_code == 400
 
 
 def test_summary_edit_persists(monkeypatch):
-    _patch_common(monkeypatch, {"task_id": "t1", "result": {}})
-    r = _client().patch("/jobs/t1/summary", headers=_HEADERS, json={"summary_markdown": "# Note"})
+    _patch_common(monkeypatch, {"task_id": "t1", "result": dict(_VERSIONS)})
+    r = _client().patch("/jobs/t1/summary", headers=_HEADERS, json={"summary_markdown": "# Note", "base_version": "n1"})
     assert r.status_code == 200
     result = r.json()["result"]
     assert result["summary_markdown"] == "# Note"

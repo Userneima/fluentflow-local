@@ -377,8 +377,9 @@ def test_any_client_id_reads_and_mutates_the_same_task(scoped_stack):
         assert response.status_code == 200
         assert response.json()["result"]["transcript_text"] == "B 的内容"
 
+    version = client.get("/jobs/b-task", headers=a).json()["result"]["transcript_version"]
     edited = client.patch(
-        "/jobs/b-task/transcript", headers=a, json={"transcript_text": "A 改过的内容"}
+        "/jobs/b-task/transcript", headers=a, json={"transcript_text": "A 改过的内容", "base_version": version}
     )
     assert edited.status_code == 200
     assert client.post("/jobs/b-task/cancel", headers={}).status_code == 200

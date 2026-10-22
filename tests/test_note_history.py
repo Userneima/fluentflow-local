@@ -125,7 +125,9 @@ def _result(task_id: str) -> dict:
 
 
 def _web_edit(task_id: str, note: str) -> None:
-    response = _page().patch(f"/jobs/{task_id}/summary", headers=PAGE, json={"summary_markdown": note})
+    response = _page().patch(f"/jobs/{task_id}/summary", headers=PAGE, json={
+        "summary_markdown": note, "base_version": _result(task_id)["note_version"],
+    })
     assert response.status_code == 200, response.text
 
 

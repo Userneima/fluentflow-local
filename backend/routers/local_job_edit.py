@@ -36,13 +36,24 @@ STALE_NOTE = "笔记在别处被改过（Obsidian、agent 或另一个页面）�
 STALE_TRANSCRIPT = "字幕在别处被改过（重新剪辑、另一个页面或 agent），已换成最新的版本；你刚才这几秒的修改没有保存，请在新版本上再改一次。"
 
 
-def _refuse_if_moved_on(result: dict[str, Any], payload: dict[str, Any], key: str, message: str) -> None:
-    """Refuse a save made on an older copy than the task holds now.
+NO_VERSION_NOTE = "这次保存没有带上笔记的版本，页面拿到的可能不是完整的最新笔记，已拒绝，笔记没有改动。请刷新页面再改。"
+NO_VERSION_TRANSCRIPT = "这次保存没有带上字幕的版本，页面拿到的可能不是完整的最新字幕，已拒绝，字幕没有改动。请刷新页面再改。"
 
-    ``base_version`` is the version the page or agent started from (sent with
-    every read of the task); a save without one is taken as before."""
+
+def _refuse_if_moved_on(result: dict[str, Any], payload: dict[str, Any], key: str, message: str, missing: str) -> None:
+    """Refuse a save that does not name the version it was made on, or names an
+    older one than the task holds now.
+
+    ``base_version`` is the version the page started from (every read of the
+    task carries it). These two routes are the web editor's saves: no MCP tool
+    calls them, agents write through ``/agent/v1``. A save without a version
+    used to be taken as it was, which is how the task list's 240-character
+    preview was saved over a 40,000-character note (2026-10-22, decision 6.30).
+    """
     base = payload.get("base_version")
-    if isinstance(base, str) and base and base != result.get(key):
+    if not isinstance(base, str) or not base:
+        raise HTTPException(status_code=409, detail={"code": "version_required", "message": missing})
+    if base != result.get(key):
         raise HTTPException(status_code=409, detail={"code": "stale", "message": message})
 
 
@@ -57,7 +68,7 @@ def update_job_transcript(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     before = dict(job.get("result") or {})
-    _refuse_if_moved_on(before, payload, "transcript_version", STALE_TRANSCRIPT)
+    _refuse_if_moved_on(before, payload, "transcript_version", STALE_TRANSCRIPT, NO_VERSION_TRANSCRIPT)
     result = dict(before)
     transcript = payload.get("transcript_text")
     if not isinstance(transcript, str):
@@ -117,7 +128,7 @@ def update_job_summary(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     before = dict(job.get("result") or {})
-    _refuse_if_moved_on(before, payload, "note_version", STALE_NOTE)
+    _refuse_if_moved_on(before, payload, "note_version", STALE_NOTE, NO_VERSION_NOTE)
     result = dict(before)
     summary = payload.get("summary_markdown")
     if not isinstance(summary, str):
