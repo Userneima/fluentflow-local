@@ -127,6 +127,11 @@ export const LocalAppProvider = ({children}) => {
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 return response.json();
             },
+            getCredentialsStatus: async () => {
+                const response = await apiFetch(`${API_BASE}/credentials/status`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            },
             loadSettings: () => {
                 try { return JSON.parse(localStorage.getItem('fluentflow_settings') || '{}'); } catch (_) { return {}; }
             },

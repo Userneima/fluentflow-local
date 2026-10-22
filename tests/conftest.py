@@ -81,6 +81,16 @@ def test_runtime_root() -> Path:
 
 
 @pytest.fixture(autouse=True)
+def own_empty_settings_file(monkeypatch):
+    """Each test starts with its own empty settings file. Saved choices
+    (decision 6.31) change what a task does when it names none, so one test
+    saving a provider must not decide another test's note writer."""
+    # Inside the isolated runtime root, like every other runtime path.
+    folder = Path(tempfile.mkdtemp(prefix="settings-", dir=TEST_RUNTIME_ROOT))
+    monkeypatch.setenv("FLUENTFLOW_CONFIG_PATH", str(folder / "fluentflow_config.json"))
+
+
+@pytest.fixture(autouse=True)
 def isolate_local_auth_env(monkeypatch):
     """Keep developer .env auth settings from changing default API tests."""
     monkeypatch.delenv("FLUENTFLOW_AUTH_MODE", raising=False)

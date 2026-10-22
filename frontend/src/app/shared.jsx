@@ -223,6 +223,10 @@ const createApi = () => {
             fields.export_to_lark = "true";
             fields.lark_export_route = larkRoute;
             fields.lark_via_cli = isLocalLarkExportRoute(larkRoute) ? "true" : "false";
+        } else if(options.exportToLark === false) {
+            // Said only by a retry repeating what its task recorded; a page
+            // submission leaves it out and the saved choice applies (decision 6.31).
+            fields.export_to_lark = "false";
         }
         if(options.title) fields.title = options.title;
         if(options.folderToken) fields.folder_token = options.folderToken;
@@ -238,6 +242,7 @@ const createApi = () => {
         if(options.sttModel) fields.stt_model = options.sttModel;
         if(options.sttLanguage) fields.stt_language = options.sttLanguage;
         if(options.speakerDiarization) fields.speaker_diarization = "true";
+        else if(options.speakerDiarization === false) fields.speaker_diarization = "false";
         if(options.voiceEnhance) fields.voice_enhance = "true";
         if(options.durationLimitSeconds) fields.duration_limit_seconds = String(options.durationLimitSeconds);
         return fields;
@@ -748,6 +753,13 @@ const createApi = () => {
         if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
         return data?.preferences && typeof data.preferences === 'object' ? data.preferences : {};
     };
+    // The text model a task naming none will use (decision 6.31).
+    const getTextModelInUse = async () => {
+        const r = await apiFetch(`${API_BASE}/preferences`);
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data?.text_model && typeof data.text_model === 'object' ? data.text_model : null;
+    };
     const savePreferences = async (patch) => {
         const r = await apiFetch(`${API_BASE}/preferences`, {
             method: "POST",
@@ -793,7 +805,7 @@ const createApi = () => {
         return r.ok && data?.providers ? data.providers : {};
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobMedia, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, openOutputFolder, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getWorkflowStatus, getPreferences, savePreferences, noteStyle, getProviderModels, getModelDefaults, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobMedia, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, openOutputFolder, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getWorkflowStatus, getTextModelInUse, getPreferences, savePreferences, noteStyle, getProviderModels, getModelDefaults, checkHealth};
 };
 
 export const useSettings = () => {

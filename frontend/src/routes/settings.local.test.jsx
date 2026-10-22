@@ -637,6 +637,7 @@ describe('local settings page', () => {
     // service, so the page shows it rather than the default it replaces.
     it('shows a choice moved from this browser, not the default', async () => {
         stored = {aiProvider: 'kimi', speakerDiarization: true};
+        credentials = {kimi_api_key_configured: true};
         servicePreferences = {};
         savePreferences.mockImplementation(async (patch) => { servicePreferences = {...servicePreferences, ...patch}; return {}; });
         render(<Settings/>);

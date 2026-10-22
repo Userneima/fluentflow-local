@@ -41,6 +41,7 @@ from backend.core.media_intake import (
 )
 from backend.core.media_preflight import MediaPreflightError, preflight_media_file
 from backend.core.queue_options import _queue_options_from_mapping
+from backend.core.local_config import saved_choices
 from backend.core.request_scope import local_client_scope
 from backend.core.runtime_env import truthy
 from backend.core.storage_paths import _video_source_storage_dir
@@ -544,7 +545,8 @@ async def submit_video_source_job(
     if duplicate is not None:
         return duplicate
 
-    options = _queue_options_from_mapping(raw_options)
+    # The saved choices filled in before the options are stored (decision 6.31).
+    options = saved_choices(_queue_options_from_mapping(raw_options))
     task_id_value = claim_task_id(None, client_id=client_id)
     raw_title = title or display_title_for_source_input(input_text, input_text[:80])
     display_name = display_title_for_user(raw_title, raw_title)

@@ -79,11 +79,11 @@ def test_a_checker_that_errors_is_not_a_pass():
 
 
 def test_a_checklist_item_whose_request_failed_is_neither_found_nor_missing():
-    calls = {"n": 0}
-
+    # Batches run in parallel, so which call comes first is not fixed: the
+    # fake answers by what the request asks about. The batch holding E002
+    # reports it missing; every other batch fails to answer.
     def chat(system, user):
-        calls["n"] += 1
-        return '{"missing_ids": ["E002"]}' if calls["n"] == 1 else "不是 JSON"
+        return '{"missing_ids": ["E002"]}' if "E002" in user else "不是 JSON"
 
     points = [{"id": f"E{i:03d}", "text": "一条证据" * 10} for i in range(1, 7)]
     check = note_coverage.check_against_points(chat, points, "# 笔记", batch_chars=150)

@@ -97,6 +97,7 @@ const MediaText = () => {
         getWorkflowStatus,
         getPreferences,
         savePreferences,
+        getTextModelInUse,
         getJob,
     } = useApi();
     const {loadSettings, saveSettings} = useSettings();
@@ -131,13 +132,18 @@ const MediaText = () => {
     useEffect(() => {
         let active = true;
         if (!getPreferences) return () => { active = false; };
-        loadSavedChoices({getPreferences, savePreferences, loadSettings, saveSettings})
+        loadSavedChoices({getPreferences, savePreferences, getCredentialsStatus, getTextModelInUse, loadSettings, saveSettings})
             .then((loaded) => { if (active) setSavedChoices(loaded); })
             .catch(() => {});
         return () => { active = false; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [getPreferences, credentialStatus]);
-    const choiceSettings = () => ({...loadSettings(), ...savedChoices});
+    // Who writes a text-model note is the provider in use, which is not the
+    // saved one when that has no key (decision 6.31).
+    const choiceSettings = () => ({
+        ...loadSettings(),
+        ...(savedChoices.aiProviderInUse ? {aiProvider: savedChoices.aiProviderInUse, aiModel: savedChoices.aiModelInUse || ''} : {}),
+    });
     useEffect(() => {
         let active = true;
         getCredentialsStatus?.()

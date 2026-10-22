@@ -199,6 +199,13 @@ def _notes(choices: Mapping[str, Any], for_agent: bool, attention: list[dict[str
         model = str(kwargs.get("model") or "")
         name = f"{label}（{model}）" if model else label
         summary = _t(f"{name}只按转录稿写，不看画面。", f"{label}{f' ({model})' if model else ''} writes from the transcript only, without the frames.")
+        saved = str(get_preference("ai_provider") or "").strip().lower()
+        if saved and saved != provider:
+            # The saved provider has no key, so another one writes (decision 6.31).
+            summary = _t(
+                f"设置里存的是 {_provider_label(saved)}，它没有 Key，现在由{summary['zh']}",
+                f"{_provider_label(saved)} is saved but has no key, so {summary['en'][0].lower()}{summary['en'][1:]}",
+            )
     else:
         level = "attention"
         summary = _t("没有能写笔记的模型，只出转录稿。", "Nothing can write a note; only the transcript is produced.")

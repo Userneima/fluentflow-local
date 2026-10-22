@@ -345,3 +345,19 @@ def saved_choices(options: dict[str, Any] | None) -> dict[str, Any]:
         result["folder_token"] = str(preferences["lark_folder_token"])
     return result
 
+
+def as_recorded(options: dict[str, Any] | None) -> dict[str, Any]:
+    """A stored task's options for a retry: the switches it ran with.
+
+    New tasks record the filled-in choices (``saved_choices`` runs before the
+    options are stored). Older ones recorded speaker labels and auto export only
+    when they were on, so a missing one meant off; it is said out loud here, or
+    a retry would pick up whatever Settings says today (and export a task to
+    Feishu that never was).
+    """
+    result = dict(options or {})
+    for key in _BOOLEAN_PREFERENCES:
+        given = result.get(key)
+        if given is None or (isinstance(given, str) and not given.strip()):
+            result[key] = "false"
+    return result

@@ -12,8 +12,14 @@ import {MemoryRouter, Route, Routes} from 'react-router-dom';
 
 let credentials = {};
 const summarizeTranscriptFile = vi.fn(async () => ({transcript: 'x', summary: 'y'}));
+// The text model the service will use (GET /preferences text_model); null when
+// a test does not say.
+let textModelInUse = null;
 const stableApi = {
     getCredentialsStatus: async () => credentials,
+    getPreferences: async () => ({}),
+    savePreferences: async () => ({}),
+    getTextModelInUse: async () => textModelInUse,
     summarizeTranscriptFile,
     createVideoSourceJob: vi.fn(),
     getJob: vi.fn(),
@@ -60,6 +66,7 @@ describe('the subtitle tab without a text-model key', () => {
     beforeEach(() => {
         localStorage.clear();
         summarizeTranscriptFile.mockClear();
+        textModelInUse = null;
     });
     afterEach(() => {
         cleanup();
@@ -96,6 +103,17 @@ describe('the subtitle tab without a text-model key', () => {
         credentials = ONLY_ANTHROPIC;
         mount('media');
         await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(screen.queryByText(NOTICE)).toBeNull();
+    });
+
+    // Review 2026-10-23: with no provider saved, the service writes with the
+    // first one that has a key; the tab follows the service, not a DeepSeek
+    // default of its own.
+    it('takes the file when the provider the service will use has its key', async () => {
+        credentials = {...ONLY_ANTHROPIC, kimi_api_key_configured: true};
+        textModelInUse = {provider: 'kimi', model: ''};
+        mount();
+        await waitFor(() => expect(screen.getByRole('button', {name: /选择字幕文件/}).disabled).toBe(false));
         expect(screen.queryByText(NOTICE)).toBeNull();
     });
 });

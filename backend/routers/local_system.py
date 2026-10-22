@@ -35,6 +35,7 @@ from backend.core.versioning import get_app_version, version_payload
 from backend.core.edition_identity import identity_payload
 from backend.core.local_request_scope import agent_access_status
 from backend.core.workflow_status import workflow_status
+from backend.core.local_entry_guards import text_model_in_use
 
 
 router = APIRouter()
@@ -265,7 +266,10 @@ def list_provider_models(provider: str) -> dict[str, Any]:
 
 @router.get("/preferences")
 def get_preferences() -> dict[str, Any]:
-    return {"preferences": load_preferences()}
+    # ``text_model``: the provider and model a task that names none will use
+    # (the saved one, or the first with a key when it has none), so the page
+    # shows that instead of guessing a default (decision 6.31).
+    return {"preferences": load_preferences(), "text_model": text_model_in_use()}
 
 
 @router.post("/preferences")

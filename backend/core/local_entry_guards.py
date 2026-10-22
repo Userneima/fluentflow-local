@@ -166,9 +166,14 @@ def local_ai_kwargs(
     # A task that names no text model uses the one saved in Settings
     # (decision 6.31), so the page and an agent get the same writer; its model
     # comes with it unless the task named that provider with its own model.
+    #
+    # A saved provider whose key is gone (or was never there: older pages
+    # wrote DeepSeek into every browser, and it was moved here) does not stop
+    # notes while another provider has a key: the first one with a key writes,
+    # as with nothing saved, and Settings says so (workflow_status).
     if not provider_name:
         saved_provider = str(get_preference("ai_provider") or "").strip().lower()
-        if saved_provider:
+        if saved_provider and (resolved.get(saved_provider) or not any(resolved.values())):
             provider_name = saved_provider
             if not model_name:
                 model_name = str(get_preference("ai_model") or "").strip()
@@ -282,3 +287,17 @@ async def run_worker_with_terminal_state(
     finally:
         if gate is not None:
             gate.close()
+
+
+def text_model_in_use() -> dict[str, str]:
+    """The text model a task that names none will use, and what is saved:
+    ``{"provider", "model", "saved_provider", "saved_model"}`` ('' for none;
+    an empty model is the provider's default). Settings shows the first pair
+    and says when it differs from the saved one."""
+    kwargs = local_ai_kwargs()
+    return {
+        "provider": str(kwargs.get("provider") or ""),
+        "model": str(kwargs.get("model") or ""),
+        "saved_provider": str(get_preference("ai_provider") or ""),
+        "saved_model": str(get_preference("ai_model") or ""),
+    }

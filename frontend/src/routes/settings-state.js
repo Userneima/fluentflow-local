@@ -32,7 +32,7 @@ export const useSettingsPageState = () => {
     const {t, lang} = useI18n();
     const {loadSettings, saveSettings} = useSettings();
     const {larkExports, runtimeConfig} = useApp();
-    const {getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, getWorkflowStatus, checkVideoCookies, getPreferences, savePreferences} = useApi();
+    const {getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, getWorkflowStatus, getTextModelInUse, checkVideoCookies, getPreferences, savePreferences} = useApi();
     const [storedSettings, setSettings] = useState(() => loadSettings());
     // The note's text model, speaker labels and auto export, kept by the
     // service (lib/savedChoices.js); null until it has answered.
@@ -92,7 +92,7 @@ export const useSettingsPageState = () => {
         getSpeakerDiarizationStatus().then(setDiarizationStatus).catch(() => {});
         let active = true;
         if (getPreferences) {
-            loadSavedChoices({getPreferences, savePreferences, loadSettings, saveSettings}).then((loaded) => {
+            loadSavedChoices({getPreferences, savePreferences, getCredentialsStatus, getTextModelInUse, loadSettings, saveSettings}).then((loaded) => {
                 if (active) setChoices((current) => current || loaded);
             }).catch(() => { if (active) setChoices((current) => current || choicesFromPreferences({})); });
             getPreferences().then((prefs) => {

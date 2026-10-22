@@ -81,7 +81,7 @@ from backend.core.media_job import MediaJobContext, execute_media_job
 from backend.core.media_preflight import MediaPreflightError, preflight_media_file
 from backend.core.result_retention import finalize_completed_result_storage
 from backend.core.queue_options import _queue_options_from_mapping
-from backend.core.local_config import saved_choices
+from backend.core.local_config import as_recorded, saved_choices
 from backend.core.request_scope import local_client_scope
 from backend.core.runtime_env import truthy
 from backend.core.storage_cleanup import remove_tree
@@ -163,12 +163,15 @@ def _effective_duration_limit(requested: object = None) -> float | None:
 
 def _collect_options(**raw_options: Optional[str]) -> dict[str, str]:
     """Normalize form fields into the persisted queue-options vocabulary
-    (drop empties, strip values) shared by /process, /queue/process, and retry."""
-    return {
+    (drop empties, strip values) shared by /process, /queue/process and the
+    by-path routes, with the saved choices filled in where the request named
+    none (decision 6.31). What is stored is what the task runs with, so a
+    retry repeats it and the task record says whether it exported."""
+    return saved_choices({
         key: value.strip()
         for key, value in raw_options.items()
         if isinstance(value, str) and value.strip()
-    }
+    })
 
 
 async def _persist_uploaded_source(
@@ -1060,9 +1063,9 @@ def _local_media_job_context(
 ) -> MediaJobContext:
     """Build the pipeline context with the local edition's invariants: local
     STT and the local event hub. ``options`` uses the persisted queue-options vocabulary so the
-    upload and retry entries cannot drift apart. Speaker labels and auto
-    export a task does not name come from the saved choices (decision 6.31)."""
-    options = saved_choices(options)
+    upload and retry entries cannot drift apart. The saved choices are filled
+    in before the options are stored (``_collect_options``), not here, so a
+    retry runs with what the task recorded (decision 6.31)."""
     skip_summary = truthy(options.get("skip_summary"))
     visual_note_will_run = local_intake_flow.auto_note_will_run()
     note_after_cut = visual_note_will_run or local_intake_flow.survey_first_enabled()
@@ -1979,7 +1982,7 @@ def _in_place_origin(job: dict) -> Optional[dict]:
 def _stored_queue_options(job: dict) -> dict:
     metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     stored = metadata.get("queue_options")
-    return _queue_options_from_mapping(stored if isinstance(stored, dict) else metadata)
+    return as_recorded(_queue_options_from_mapping(stored if isinstance(stored, dict) else metadata))
 
 
 async def _retry_in_place(
@@ -2083,7 +2086,7 @@ async def _retry_link_task(
     if not link:
         return None
     stored = metadata.get("queue_options")
-    raw_options: dict = dict(stored) if isinstance(stored, dict) else {}
+    raw_options: dict = as_recorded(dict(stored) if isinstance(stored, dict) else {})
     # How the link is fetched follows the user's settings now, not the ones in
     # force when it was first submitted: someone who changed the browser whose
     # login is read must not have a retry (theirs, the MCP tool's, or startup
@@ -2196,7 +2199,7 @@ async def retry_task(
 
     metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     stored = metadata.get("queue_options")
-    options = _queue_options_from_mapping(stored if isinstance(stored, dict) else metadata)
+    options = as_recorded(_queue_options_from_mapping(stored if isinstance(stored, dict) else metadata))
     options.update(overrides or {})
     raw_title_value = str(
         options.get("title") or metadata.get("raw_title") or Path(filename).stem
