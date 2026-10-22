@@ -58,6 +58,7 @@ import {usePromptEditing} from '../lib/usePromptEditing.js';
 import {notePendingSentence, notePromptScopeSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
 import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
+import ObsidianNoteEditor from '../components/ObsidianNoteEditor.jsx';
 import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
 import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
@@ -166,6 +167,21 @@ const Editor = () => {
     resultRef.current = result;
     const matchedLocalSourceFileRef = useRef(matchedLocalSourceFile);
     matchedLocalSourceFileRef.current = matchedLocalSourceFile;
+    // Prototype: ?editor=obsidian swaps the note pane for the Obsidian-style
+    // editor, and &task=<id> opens that task first. Nothing typed in it is saved.
+    const prototypeParams = useMemo(() => new URLSearchParams(window.location.search), []);
+    const obsidianPrototype = prototypeParams.get('editor') === 'obsidian';
+    const prototypeTaskId = obsidianPrototype ? prototypeParams.get('task') : null;
+    const prototypeLoadRef = useRef({getJob, setLastResult});
+    prototypeLoadRef.current = {getJob, setLastResult};
+    useEffect(() => {
+        if (!prototypeTaskId || resultRef.current?.task_id === prototypeTaskId) return undefined;
+        let cancelled = false;
+        prototypeLoadRef.current.getJob(prototypeTaskId, {sttProvider: 'local'})
+            .then((fresh) => { if (!cancelled && fresh?.result) prototypeLoadRef.current.setLastResult(fresh.result); })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [prototypeTaskId]);
     const langRef = useRef(lang);
     langRef.current = lang;
     const tRef = useRef(t);
@@ -2017,12 +2033,22 @@ const Editor = () => {
                                 </div>
                                 {hasEditableSummary ? (
                                     <>
-                                        <RichNoteEditor
-                                            key={summaryResultKey}
-                                            lang={lang}
-                                            markdown={summaryMarkdownForEditor}
-                                            onChange={handleSummaryChange}
-                                        />
+                                        {obsidianPrototype ? (
+                                            <ObsidianNoteEditor
+                                                key={summaryResultKey}
+                                                lang={lang}
+                                                markdown={summaryMarkdownForEditor}
+                                                taskId={result?.task_id || ''}
+                                                apiBase={API_BASE}
+                                            />
+                                        ) : (
+                                            <RichNoteEditor
+                                                key={summaryResultKey}
+                                                lang={lang}
+                                                markdown={summaryMarkdownForEditor}
+                                                onChange={handleSummaryChange}
+                                            />
+                                        )}
                                         <div
                                             ref={summaryRef}
                                             className="fixed left-[-10000px] top-0 w-[720px] bg-white p-6 text-black"
