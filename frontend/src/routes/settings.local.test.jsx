@@ -131,13 +131,32 @@ describe('local settings page', () => {
 
     // Each line is what the service says, not something the page works out.
     it('shows what the service says about each step, and passes it the choices kept here', async () => {
-        stored = {aiProvider: 'kimi', speakerDiarization: true, exportToLark: true, defaultSourceMode: 'upload'};
+        stored = {defaultSourceMode: 'upload', voiceEnhance: true};
         workflow = workflowFrom({notes: 'Claude 结合画面写'});
         render(<Settings/>);
         expect(await screen.findByText('Claude 结合画面写')).toBeTruthy();
-        expect(getWorkflowStatus).toHaveBeenCalledWith(expect.objectContaining({
-            ai_provider: 'kimi', speaker_diarization: '1', export_to_lark: '1', default_source: 'upload',
-        }));
+        expect(getWorkflowStatus).toHaveBeenCalledWith({default_source: 'upload', voice_enhance: '1'});
+    });
+
+    // Decision 6.31: the text model, speaker labels and auto export are read
+    // from and saved to the service, not this browser.
+    it('reads the text model and switches from the service and saves changes there', async () => {
+        servicePreferences = {ai_provider: 'kimi', speaker_diarization: true, export_to_lark: true};
+        stored = {aiProvider: 'deepseek'};
+        render(<Settings/>);
+        open('accounts');
+        expect(await screen.findByText('Kimi（月之暗面） API Key')).toBeTruthy();
+        fireEvent.change(screen.getByDisplayValue('Kimi（月之暗面）'), {target: {value: 'qwen'}});
+        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({ai_provider: 'qwen', ai_model: ''}));
+        // The stale browser copy was dropped (the service already had a value)
+        // and the change was not written back to the browser.
+        expect('aiProvider' in stored).toBe(false);
+        cleanup();
+        render(<Settings/>);
+        open('outputs');
+        await waitFor(() => expect(document.getElementById('settingsExportToLark').checked).toBe(true));
+        fireEvent.click(document.getElementById('settingsExportToLark'));
+        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({export_to_lark: false}));
     });
 
     it('says loading until the service answers, and says so when it cannot', async () => {
@@ -351,7 +370,7 @@ describe('local settings page', () => {
     });
 
     it('calls Qwen by one name', async () => {
-        stored = {aiProvider: 'qwen'};
+        servicePreferences = {ai_provider: 'qwen'};
         render(<Settings/>);
         open('accounts');
         expect(await screen.findByRole('option', {name: '通义千问（阿里云百炼）'})).toBeTruthy();
@@ -374,7 +393,7 @@ describe('local settings page', () => {
     });
 
     it('asks for the key of the chosen provider, with its console', async () => {
-        stored = {aiProvider: 'kimi'};
+        servicePreferences = {ai_provider: 'kimi'};
         render(<Settings/>);
         open('accounts');
         expect(await screen.findByText('Kimi（月之暗面） API Key')).toBeTruthy();
@@ -433,7 +452,7 @@ describe('local settings page', () => {
     // nothing said so. The settings page says it once the provider's list is in.
     it('says when the saved model is no longer in the provider list', async () => {
         credentials = {deepseek_api_key_configured: true};
-        stored = {aiProvider: 'deepseek', aiModel: 'deepseek-v3-old'};
+        servicePreferences = {ai_provider: 'deepseek', ai_model: 'deepseek-v3-old'};
         render(<Settings/>);
         open('accounts');
         await waitFor(() => expect(screen.getByText(/deepseek-v3-old 已不在这家服务商现在的模型列表里/)).toBeTruthy());
@@ -541,15 +560,15 @@ describe('local settings page', () => {
     // component is missing can be switched off, here and from the top.
     it('lets speaker labels be switched off when they cannot run', async () => {
         diarization = {available: false, dependency_installed: false, models_local: false, requested_backend: 'sherpa'};
-        stored = {speakerDiarization: true};
+        servicePreferences = {speaker_diarization: true};
         workflow = workflowFrom({attention: [{id: 'speakers', target: 'transcription', action: 'turn_off_speakers', text: {zh: '开了区分讲话人，但组件没装好', en: ''}}]});
         render(<Settings/>);
         open('transcription');
+        await waitFor(() => expect(document.getElementById('settingsSpeakerDiarization').checked).toBe(true));
         const box = document.getElementById('settingsSpeakerDiarization');
-        expect(box.checked).toBe(true);
         expect(box.disabled).toBe(false);
         fireEvent.click(await screen.findByRole('button', {name: '关掉区分讲话人'}));
-        expect(stored.speakerDiarization).toBe(false);
+        await waitFor(() => expect(savePreferences).toHaveBeenCalledWith({speaker_diarization: false}));
     });
 
     // Item 4: while Claude works, the fallbacks say they are fallbacks and
@@ -612,5 +631,19 @@ describe('local settings page', () => {
         await screen.findByText('cutting 的现状');
         open('notes');
         expect(screen.getByText('给笔记自动配图')).toBeTruthy();
+    });
+
+    // A choice still in this browser is moved before the page reads the
+    // service, so the page shows it rather than the default it replaces.
+    it('shows a choice moved from this browser, not the default', async () => {
+        stored = {aiProvider: 'kimi', speakerDiarization: true};
+        servicePreferences = {};
+        savePreferences.mockImplementation(async (patch) => { servicePreferences = {...servicePreferences, ...patch}; return {}; });
+        render(<Settings/>);
+        open('accounts');
+        expect(await screen.findByText('Kimi（月之暗面） API Key')).toBeTruthy();
+        expect(savePreferences).toHaveBeenCalledWith({ai_provider: 'kimi', speaker_diarization: true});
+        expect('aiProvider' in stored).toBe(false);
+        savePreferences.mockImplementation(async (patch) => ({...servicePreferences, ...patch}));
     });
 });

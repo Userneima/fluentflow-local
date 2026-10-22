@@ -633,15 +633,14 @@ const createApi = () => {
         return data;
     };
     // The by-path routes take the same fields as the upload (submitOptionFields),
-    // in a JSON body. Two differences, both about what the route does with a
-    // missing field: the paths are always transcribed on this machine, so no
-    // engine is named; and speaker separation is ON when the field is absent
-    // (for callers with no settings page), so "off" has to be said out loud.
+    // in a JSON body. The paths are always transcribed on this machine, so no
+    // engine is named. Speaker labels are sent only when a caller names them;
+    // otherwise the service uses the saved choice (decision 6.31).
     const localQueueBody = (options={}) => {
         const body = submitOptionFields(options);
         delete body.stt_provider;
         delete body.stt_language;
-        body.speaker_diarization = options.speakerDiarization ? "true" : "false";
+        if (options.speakerDiarization !== undefined) body.speaker_diarization = options.speakerDiarization ? "true" : "false";
         return body;
     };
     const processLocalFolder = async (path, options={}) => {

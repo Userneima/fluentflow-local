@@ -24,18 +24,24 @@ const saveCredentials = vi.fn(async (patch) => {
     return credentials;
 });
 const checkCredential = vi.fn(async () => checkResult);
+// The service's saved choices (decision 6.31): the note's text model.
+let prefs = {};
+const getPreferences = vi.fn(async () => prefs);
+const savePreferences = vi.fn(async (patch) => { prefs = {...prefs, ...patch}; return {preferences: prefs}; });
 // GET /workflow-status as the service answers it here: nothing can write a
-// note until the selected text model's key is saved (no Claude channel).
+// note until the saved text model's key is saved (no Claude channel).
 const keyName = (provider) => (provider === 'qwen' ? 'dashscope' : provider);
-const getWorkflowStatus = vi.fn(async (choices) => ({
+const getWorkflowStatus = vi.fn(async () => ({
     steps: [],
-    attention: credentials[`${keyName(choices.ai_provider)}_api_key_configured`] ? [] : [
+    attention: credentials[`${keyName(prefs.ai_provider || 'deepseek')}_api_key_configured`] ? [] : [
         {id: 'no-writer', target: 'accounts', text: {zh: '现在只出转录稿：把笔记交给你的 agent 写，或在「账号和 Key」里填一个 Key。', en: ''}},
     ],
 }));
 const stableApi = {
     getCredentialsStatus: async () => credentials,
     getWorkflowStatus,
+    getPreferences,
+    savePreferences,
     saveCredentials,
     checkCredential,
     summarizeTranscriptFile: vi.fn(),
@@ -88,6 +94,7 @@ describe('the first-run note setup on the start page', () => {
     beforeEach(() => {
         localStorage.clear();
         credentials = {};
+        prefs = {};
         checkResult = {ok: true, reason: 'ok', message: 'Key 可以用。'};
         saveCredentials.mockClear();
         checkCredential.mockClear();
@@ -157,7 +164,7 @@ describe('the first-run note setup on the start page', () => {
     });
 
     it('makes the provider whose key was saved the note writer', async () => {
-        localStorage.setItem('fluentflow_settings', JSON.stringify({aiProvider: 'deepseek'}));
+        prefs = {ai_provider: 'deepseek'};
         mount();
         await screen.findByText(INTRO);
         enterKey('sk-qwen', '通义千问（阿里云百炼）');
@@ -165,17 +172,16 @@ describe('the first-run note setup on the start page', () => {
         expect(await screen.findByText('好了，处理完的录像会自动写笔记。')).toBeTruthy();
         expect(saveCredentials).toHaveBeenCalledWith({dashscope_api_key: 'sk-qwen'});
         expect(checkCredential).toHaveBeenCalledWith('qwen');
-        expect(JSON.parse(localStorage.getItem('fluentflow_settings')).aiProvider).toBe('qwen');
+        expect(prefs.ai_provider).toBe('qwen');
     });
 
     it('makes DeepSeek the note writer when another text model was picked', async () => {
-        localStorage.setItem('fluentflow_settings', JSON.stringify({aiProvider: 'openai', aiModel: 'gpt-5.4'}));
+        prefs = {ai_provider: 'openai', ai_model: 'gpt-5.4'};
         mount();
         await screen.findByText(INTRO);
         enterKey('sk-good');
 
         expect(await screen.findByText('好了，处理完的录像会自动写笔记。')).toBeTruthy();
-        const stored = JSON.parse(localStorage.getItem('fluentflow_settings'));
-        expect(stored.aiProvider).toBe('deepseek');
+        expect(prefs).toMatchObject({ai_provider: 'deepseek', ai_model: ''});
     });
 });

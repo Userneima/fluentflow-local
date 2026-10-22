@@ -57,7 +57,6 @@ import {larkExportToastText} from '../lib/format.js';
 import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
 import {usePromptEditing} from '../lib/usePromptEditing.js';
 import {notePendingSentence, notePromptScopeSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
-import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
@@ -238,7 +237,6 @@ const Editor = () => {
         setCurrentJob,
         addLarkExport,
         runtimeConfig,
-        diarizationStatus,
         ingestJobs,
     } = useApp();
     const {processVideoSSE, retryJob, fetchJobArtifactFile, downloadJobMedia, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
@@ -1178,11 +1176,8 @@ const Editor = () => {
         getJob(taskId, resultJobOptionsRef.current).then(done).catch(() => done(null));
     }, [getJob, setLastResult, showToast]);
     const buildAiOptions = (settings) => ({
-        aiProvider: settings.aiProvider||'deepseek',
-        aiModel: settings.aiModel||null,
         systemPrompt: resolveSystemPromptFromSettings(settings)||null,
         noteMode: settings.noteMode||'auto',
-        speakerDiarization: speakerDiarizationRequested(settings, diarizationStatus),
         generateVisuals: !!settings.autoIllustrate,
         sttProvider: effectiveSttProvider(settings, runtimeConfig),
     });
@@ -1442,8 +1437,6 @@ const Editor = () => {
             if(result.source) fd.append('source_type', result.source);
             if(result.filename) fd.append('source_filename', result.filename);
             if(durSec > 0) fd.append('source_duration_seconds', String(durSec));
-            if(settings.aiProvider) fd.append('ai_provider', settings.aiProvider);
-            if(settings.aiModel) fd.append('ai_model', settings.aiModel);
             if(settings.noteMode) fd.append('note_mode', settings.noteMode);
             const activePrompt = resolveSystemPromptFromSettings(settings);
             if(activePrompt) fd.append('system_prompt', activePrompt);
@@ -1531,7 +1524,6 @@ const Editor = () => {
             const resultData = await processVideoSSE(file, {
                 taskId,
                 sourceLastModifiedMs: file.lastModified||null,
-                exportToLark: settings.exportToLark||false,
                 larkExportRoute: larkExportRouteFromSettings(settings),
                 larkViaCli: !!settings.larkViaCli,
                 folderToken: settings.larkFolder || undefined,

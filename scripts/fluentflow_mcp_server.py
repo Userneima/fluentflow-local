@@ -818,14 +818,17 @@ _MEDIA_NOTE_FLOW = (
     "done, then use get_agent_note_material and save_agent_note; with no model at all the "
     "task also stops at the transcript for you to do that. note_mode, prompt_preset and "
     "system_prompt only apply when a text model writes the note; Claude's frame note "
-    "ignores them. Speaker separation is off unless speaker_diarization=true. Returns at "
-    "once; follow with wait_task."
+    "ignores them. The text model, speaker separation and auto export to Feishu follow what "
+    "the user saved in FluentFlow's Settings, the same as a recording submitted on the page; "
+    "speaker_diarization=true or false overrides it for this task. Returns at once; follow "
+    "with wait_task."
 )
 _SPEAKER_DIARIZATION_SCHEMA = {
     "type": "boolean",
     "description": (
-        "Label who spoke (说话人 A, B, ...) in the transcript and the note. Default: off. "
-        "Turn it on for a meeting, interview or panel; it adds little for a lecture or one speaker."
+        "Label who spoke (说话人 A, B, ...) in the transcript and the note. Left out: what the user "
+        "saved in Settings (off unless they turned it on). Turn it on for a meeting, interview or "
+        "panel; it adds little for a lecture or one speaker."
     ),
 }
 _TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's frame note)."

@@ -81,6 +81,7 @@ from backend.core.media_job import MediaJobContext, execute_media_job
 from backend.core.media_preflight import MediaPreflightError, preflight_media_file
 from backend.core.result_retention import finalize_completed_result_storage
 from backend.core.queue_options import _queue_options_from_mapping
+from backend.core.local_config import saved_choices
 from backend.core.request_scope import local_client_scope
 from backend.core.runtime_env import truthy
 from backend.core.storage_cleanup import remove_tree
@@ -1059,7 +1060,9 @@ def _local_media_job_context(
 ) -> MediaJobContext:
     """Build the pipeline context with the local edition's invariants: local
     STT and the local event hub. ``options`` uses the persisted queue-options vocabulary so the
-    upload and retry entries cannot drift apart."""
+    upload and retry entries cannot drift apart. Speaker labels and auto
+    export a task does not name come from the saved choices (decision 6.31)."""
+    options = saved_choices(options)
     skip_summary = truthy(options.get("skip_summary"))
     visual_note_will_run = local_intake_flow.auto_note_will_run()
     note_after_cut = visual_note_will_run or local_intake_flow.survey_first_enabled()
@@ -1634,7 +1637,9 @@ def _option_default_on(payload: dict, key: str) -> str:
     raw = (payload or {}).get(key)
     if raw is None:
         return "true"
-    return "true" if truthy(str(raw)) else ""
+    # "false", not "": an empty value reads as "not said", and the saved
+    # choice would then switch it back on (decision 6.31).
+    return "true" if truthy(str(raw)) else "false"
 
 
 def _payload_text(payload: dict, key: str) -> Optional[str]:

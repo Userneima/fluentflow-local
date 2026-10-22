@@ -61,6 +61,8 @@ def test_speaker_separation_runs_when_the_caller_asks() -> None:
 
 
 def test_an_explicit_opt_out_still_wins() -> None:
+    # Recorded as "false", not dropped: a dropped value reads as "not said",
+    # and the choice saved in Settings would switch it back on (decision 6.31).
     for value in ("0", "false", False):
         options, _ = local_path_options({"speaker_diarization": value})
-        assert "speaker_diarization" not in options, value
+        assert options.get("speaker_diarization") == "false", value

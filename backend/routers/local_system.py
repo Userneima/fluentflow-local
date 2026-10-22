@@ -309,25 +309,17 @@ def runtime_config() -> dict[str, Any]:
 
 
 # Who does each step and what needs the person (decision 6.24). The page passes
-# the choices it keeps in the browser; see backend/core/workflow_status.py.
+# the two choices still kept in the browser; see backend/core/workflow_status.py.
 @router.get("/workflow-status")
 def get_workflow_status(
-    ai_provider: str = "",
-    ai_model: str = "",
     default_source: str = "",
-    speaker_diarization: str = "",
     voice_enhance: str = "",
     skip_ai_summary: str = "",
-    export_to_lark: str = "",
 ) -> dict[str, Any]:
     return workflow_status({
-        "ai_provider": ai_provider,
-        "ai_model": ai_model,
         "default_source": default_source,
-        "speaker_diarization": speaker_diarization,
         "voice_enhance": voice_enhance,
         "skip_ai_summary": skip_ai_summary,
-        "export_to_lark": export_to_lark,
     })
 
 

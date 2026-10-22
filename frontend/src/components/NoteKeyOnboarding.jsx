@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import SvgIcon from './SvgIcon.jsx';
 import {inputClass, saveButtonClass} from './settingsPrimitives.jsx';
-import {useApi, useSettings} from '../app/shared.jsx';
+import {useApi} from '../app/shared.jsx';
 import {resolveNoteWriter} from '../lib/noteWriter.js';
 import {NOTE_KEY_DONE, NOTE_KEY_INTRO, agentSetupPrompt, noteKeyChoices} from '../lib/noteKeyOnboarding.js';
 
@@ -22,8 +22,7 @@ export const NoteKeyOnboarding = ({
     onUseTextProvider,
     closeDelayMs = 2500,
 }) => {
-    const {saveCredentials, checkCredential, getCredentialsStatus} = useApi();
-    const {loadSettings, saveSettings} = useSettings();
+    const {saveCredentials, checkCredential, getCredentialsStatus, savePreferences} = useApi();
     const choices = noteKeyChoices({writesItsOwnNote: !!runtimeConfig?.writesItsOwnNote});
     const [choiceId, setChoiceId] = useState(choices[0].id);
     const choice = choices.find((item) => item.id === choiceId) || choices[0];
@@ -63,16 +62,14 @@ export const NoteKeyOnboarding = ({
         }
     };
 
-    // A text-model key just saved is the one notes are written with from now on.
-    const switchNotesTo = (provider) => {
+    // A text-model key just saved is the one notes are written with from now
+    // on: saved in the service, which every task without its own choice reads
+    // (decision 6.31). The page around this may show it at once.
+    const switchNotesTo = async (provider) => {
         const patch = {aiProvider: provider, aiModel: ''};
-        const current = loadSettings();
-        if ((current.aiProvider || 'deepseek') === provider) {
-            return current;
-        }
-        if (onUseTextProvider) onUseTextProvider(patch);
-        else saveSettings({...current, ...patch});
-        return {...current, ...patch};
+        await savePreferences?.({ai_provider: provider, ai_model: ''});
+        onUseTextProvider?.(patch);
+        return patch;
     };
 
     const checkAndSave = async () => {
@@ -94,8 +91,8 @@ export const NoteKeyOnboarding = ({
                 await saveCredentials({[choice.secretKey]: ''}).catch(() => {});
             }
             const settings = result?.reason === 'invalid_key' || !choice.textProvider
-                ? loadSettings()
-                : switchNotesTo(choice.id);
+                ? {}
+                : await switchNotesTo(choice.id);
             const status = await getCredentialsStatus().catch(() => null);
             if (status) onStatusChange?.(status);
             if (result?.ok) {

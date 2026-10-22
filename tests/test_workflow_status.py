@@ -92,8 +92,9 @@ def test_an_expired_claude_login_is_put_first(no_models, monkeypatch):
 
 
 def test_a_text_model_writes_from_the_transcript_only(no_models, monkeypatch):
-    monkeypatch.setattr(ws, "local_ai_kwargs", lambda **k: {"provider": k.get("ai_provider") or "deepseek", "api_key": "sk"})
-    summary = _step(ws.workflow_status({"ai_provider": "kimi"}), "notes")["summary"]["zh"]
+    # The provider saved in Settings, which local_ai_kwargs falls back to.
+    monkeypatch.setattr(ws, "local_ai_kwargs", lambda **k: {"provider": "kimi", "api_key": "sk"})
+    summary = _step(ws.workflow_status(), "notes")["summary"]["zh"]
     assert summary == "Kimi（月之暗面）只按转录稿写，不看画面。"
 
 
@@ -111,9 +112,11 @@ def test_transcript_only_is_a_choice_not_a_problem(no_models):
 
 def test_speaker_labels_on_without_the_component_needs_the_person(no_models, monkeypatch):
     monkeypatch.setattr(ws, "diarization_status", lambda: {"available": False})
-    overview = ws.workflow_status({"speaker_diarization": "1", "skip_ai_summary": "1"})
+    monkeypatch.setattr(ws, "get_preference", lambda name: True if name == "speaker_diarization" else None)
+    overview = ws.workflow_status({"skip_ai_summary": "1"})
     assert [item["id"] for item in overview["attention"]] == ["speakers"]
     assert "不区分讲话人" in _step(overview, "transcription")["summary"]["zh"]
+    monkeypatch.setattr(ws, "get_preference", lambda name: None)
     assert ws.workflow_status({"skip_ai_summary": "1"})["attention"] == []
 
 

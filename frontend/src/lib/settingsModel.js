@@ -78,17 +78,19 @@ export const sanitizeSettings = (settings={}) => {
     const next = {...settings};
     SENSITIVE_SETTING_KEYS.forEach((key) => delete next[key]);
     LEGACY_REMOVED_SETTING_KEYS.forEach((key) => delete next[key]);
-    const provider = normalizeTextProvider(next.aiProvider);
-    next.aiProvider = provider;
-    next.aiModel = normalizeAiModel(provider, next.aiModel);
+    // The text model and speaker labels are kept by the service now
+    // (lib/savedChoices.js); a copy still stored here is normalized until it
+    // is moved over, and none is created.
+    if ('aiProvider' in next || 'aiModel' in next) {
+        const provider = normalizeTextProvider(next.aiProvider);
+        next.aiProvider = provider;
+        next.aiModel = normalizeAiModel(provider, next.aiModel);
+    }
     if (!SUPPORTED_FRONTEND_NOTE_MODES.has(next.noteMode)) {
         next.noteMode = 'auto';
     }
     next.sttModel = normalizeSttModel(next.sttModel);
-    // Speaker separation is off unless the user turns it on (2026-10-15): it
-    // only pays off for meetings and interviews, and the agent offers it when a
-    // transcript turns out to be one. Someone who switched it on stays on.
-    next.speakerDiarization = !!next.speakerDiarization;
+    if ('speakerDiarization' in next) next.speakerDiarization = !!next.speakerDiarization;
     next.defaultSourceMode = normalizeSourceMode(next.defaultSourceMode);
     next.larkExportRoute = larkExportRouteFromSettings(next);
     next.larkViaCli = isLocalLarkExportRoute(next.larkExportRoute);

@@ -67,7 +67,8 @@ const Settings = () => {
     const claudeWritesNote = steps.notes?.writer === 'claude';
     const claudeChannel = steps.notes?.claude_channel || '';
     const claudeJudgesCut = steps.cutting?.judge === 'claude';
-    const loading = credentialLoad !== 'ready';
+    // Keys and the saved text model both have to be in before the fields show.
+    const loading = credentialLoad !== 'ready' || !state.choicesLoaded;
     const [openStep, setOpenStep] = useState('');
     const [accountsOpen, setAccountsOpen] = useState(false);
     const [keySetupOpen, setKeySetupOpen] = useState(false);
@@ -133,6 +134,11 @@ const Settings = () => {
 
     return (
         <SettingsPageShell intro={zh ? '一条录像从拿到素材到出笔记，每一步现在是怎么做的。' : 'How each step from recording to note is done right now.'}>
+            {state.videoPrefError === 'saved_choices' && (
+                <p className="text-xs font-semibold text-red-600 dark:text-red-300">
+                    {zh ? '没能保存到本机服务，请再改一次。' : 'Could not save to the local service. Change it again.'}
+                </p>
+            )}
             {attention.length > 0 && (
                 <section className="rounded-[16px] border border-amber-300 bg-amber-50 px-5 py-3 dark:border-amber-400/30 dark:bg-amber-400/10" data-testid="settings-attention">
                     <h2 className="text-[13px] font-extrabold text-amber-800 dark:text-amber-200">{zh ? '需要你处理' : 'Needs you'}</h2>

@@ -36,11 +36,11 @@ import SvgIcon from '../components/SvgIcon.jsx';
 import {finishedDuplicateLink, submitIgnoredExtraUrls, submitWasDuplicateOfActive} from '../lib/linkRetry.js';
 import {noteWriterBatchClause, resolveNoteWriter, textModelKeyConfigured} from '../lib/noteWriter.js';
 import {NOTE_ATTENTION_IDS, workflowChoicesFrom} from '../lib/workflowStatus.js';
+import {loadSavedChoices} from '../lib/savedChoices.js';
 import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {dismissNoteKeyOnboarding, noteKeyOnboardingDismissed, shouldAutoOpenNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 import {taskOutcome} from '../lib/taskState.js';
 import {fmtDuration} from '../lib/format.js';
-import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
 const transcriptExts = /\.(srt|vtt|txt|md)$/i;
@@ -78,7 +78,6 @@ const MediaText = () => {
         setLastSourceFile,
         addLarkExport,
         runtimeConfig,
-        diarizationStatus,
         setPendingUploadAbort,
         abortPendingUpload,
         backendDown,
@@ -96,9 +95,11 @@ const MediaText = () => {
         processLocalPaths,
         getCredentialsStatus,
         getWorkflowStatus,
+        getPreferences,
+        savePreferences,
         getJob,
     } = useApi();
-    const {loadSettings} = useSettings();
+    const {loadSettings, saveSettings} = useSettings();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     // How many files were just dropped that this machine could not place. Says
@@ -124,6 +125,19 @@ const MediaText = () => {
     // answer goes into the batch confirmations below, so the three never
     // disagree about whose model is doing the writing.
     const [credentialStatus, setCredentialStatus] = useState(null);
+    // The text model notes are written with is saved in the service
+    // (decision 6.31); the browser's settings no longer hold it.
+    const [savedChoices, setSavedChoices] = useState({});
+    useEffect(() => {
+        let active = true;
+        if (!getPreferences) return () => { active = false; };
+        loadSavedChoices({getPreferences, savePreferences, loadSettings, saveSettings})
+            .then((loaded) => { if (active) setSavedChoices(loaded); })
+            .catch(() => {});
+        return () => { active = false; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [getPreferences, credentialStatus]);
+    const choiceSettings = () => ({...loadSettings(), ...savedChoices});
     useEffect(() => {
         let active = true;
         getCredentialsStatus?.()
@@ -132,11 +146,11 @@ const MediaText = () => {
         return () => { active = false; };
     }, [getCredentialsStatus]);
     const noteWriter = useMemo(
-        () => resolveNoteWriter({runtimeConfig, credentialStatus, settings: loadSettings()}),
+        () => resolveNoteWriter({runtimeConfig, credentialStatus, settings: choiceSettings()}),
         // loadSettings reads localStorage; the stored settings only change on the
         // settings page, which is a different route.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        [runtimeConfig, credentialStatus],
+        [runtimeConfig, credentialStatus, savedChoices],
     );
     // What the banner says comes from the service's step list, the one
     // Settings shows (decision 6.24), read again whenever the keys change.
@@ -174,7 +188,7 @@ const MediaText = () => {
     // only; Claude's frame note needs the video. With no text-model key the
     // job would finish without a note and without saying why.
     const subtitleNeedsTextKey = mode === 'subtitle' && credentialStatus !== null
-        && !textModelKeyConfigured({credentialStatus, settings: loadSettings()});
+        && !textModelKeyConfigured({credentialStatus, settings: choiceSettings()});
     // The subtitle notice says the same thing more precisely; one is enough.
     const showWriterBanner = !subtitleNeedsTextKey && noteAttention.length > 0;
     const subtitleKeyText = lang === 'zh'
@@ -201,13 +215,10 @@ const MediaText = () => {
     };
 
     const buildAiOptions = (settings) => ({
-        aiProvider: settings.aiProvider || 'deepseek',
-        aiModel: settings.aiModel || null,
         systemPrompt: resolveSystemPromptFromSettings(settings) || null,
         noteMode: settings.noteMode || 'auto',
         promptPreset: settings.promptPreset || DEFAULT_PROMPT_PRESET,
         promptPresetLabel: presetDisplayLabel(settings.promptPreset || DEFAULT_PROMPT_PRESET, settings, lang),
-        speakerDiarization: speakerDiarizationRequested(settings, diarizationStatus),
         generateVisuals: !!settings.autoIllustrate,
         sttProvider: effectiveSttProvider(settings, runtimeConfig),
         cookiesFromBrowser: settings.videoCookiesBrowser || '',
@@ -218,7 +229,6 @@ const MediaText = () => {
     // and miss another (the dialog and folder entries used to drop the Feishu
     // export, the provider and the prompt without saying so).
     const buildSubmitOptions = (settings) => ({
-        exportToLark: settings.exportToLark || false,
         larkExportRoute: larkExportRouteFromSettings(settings),
         larkViaCli: !!settings.larkViaCli,
         folderToken: settings.larkFolder || undefined,
@@ -625,7 +635,7 @@ const MediaText = () => {
             setUploadError(t('dash.subtitleFileError'));
             return;
         }
-        if (credentialStatus !== null && !textModelKeyConfigured({credentialStatus, settings: loadSettings()})) {
+        if (credentialStatus !== null && !textModelKeyConfigured({credentialStatus, settings: choiceSettings()})) {
             setUploadError(subtitleKeyText);
             return;
         }

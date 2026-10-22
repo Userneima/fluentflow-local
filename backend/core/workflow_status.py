@@ -9,13 +9,13 @@ effective preset and processor share (an environment variable wins there),
 ``diarization_status`` for speaker labels, the saved preferences, the agent
 access status.
 
-Some choices live only in the browser and travel with each submission (the
-note's text provider and model, speaker labels, voice cleanup, transcript only,
-auto export to Feishu, the start page's default source). The page passes them
-in ``choices``; without them (an agent asking) the line describes a job an
-agent submits: the first provider that has a key, no speaker labels, no voice
-cleanup, no auto export, and the cut judged by that agent when FluentFlow has
-no model of its own.
+The note's text provider and model, speaker labels and auto export to Feishu
+are saved in the service (decision 6.31) and read here like any other
+preference, so the page and an agent asking get the same lines. Voice cleanup
+and the start page's default source still live in the browser and come in
+``choices``; without them (an agent asking) the line describes a job an agent
+submits, and the cut is judged by that agent when FluentFlow has no model of
+its own.
 
 Every sentence comes in Chinese and English: ``{"zh": ..., "en": ...}``.
 """
@@ -148,7 +148,7 @@ def _cutting(for_agent: bool) -> dict[str, Any]:
 
 
 def _transcription(choices: Mapping[str, Any], attention: list[dict[str, Any]]) -> dict[str, Any]:
-    wants_speakers = _flag(choices, "speaker_diarization")
+    wants_speakers = bool(get_preference("speaker_diarization"))
     status = diarization_status()
     ready = bool(status.get("available"))
     broken = wants_speakers and not ready
@@ -180,8 +180,8 @@ def _notes(choices: Mapping[str, Any], for_agent: bool, attention: list[dict[str
             "text": _t("本机 Claude 的登录已过期，结合画面的笔记暂时写不了：打开终端运行 claude 重新登录。",
                        "Claude on this machine is logged out, so notes from the frames cannot be written: run claude in a terminal to log in."),
         })
-    kwargs = local_ai_kwargs(ai_provider=str(choices.get("ai_provider") or "") or None,
-                             ai_model=str(choices.get("ai_model") or "") or None)
+    # No provider named: the saved one, as for any task that names none.
+    kwargs = local_ai_kwargs()
     provider = str(kwargs.get("provider") or "")
     # Transcript only wins over everything, as in processing: the job records
     # note_declined and no writer is asked (decision 1.1).
@@ -236,7 +236,7 @@ def _lark_cli_ready() -> bool:
 def _outputs(choices: Mapping[str, Any], attention: list[dict[str, Any]]) -> dict[str, Any]:
     route_name = str(get_preference("lark_export_route") or "auto").strip().lower()
     route = _LARK_ROUTES.get(route_name, _LARK_ROUTES["auto"])
-    auto = _flag(choices, "export_to_lark")
+    auto = bool(get_preference("export_to_lark"))
     zh = f"产出放在原片旁边的同名文件夹；{'处理完自动导出到飞书' if auto else '导出到飞书要手动点'}，{route[0]}。"
     en = f"Outputs go in a folder beside the recording; {'exported to Feishu automatically' if auto else 'Feishu export is manual'}, {route[1]}."
     level = "ok"

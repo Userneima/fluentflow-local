@@ -27,9 +27,12 @@ describe('Lark export route', () => {
 });
 
 describe('speaker diarization default', () => {
-    // Requirement (2026-10-15): off for every entry until the user turns it on.
-    it('leaves speaker separation off when the setting was never set', () => {
-        expect(sanitizeSettings({}).speakerDiarization).toBe(false);
+    // Decision 6.31: speaker labels and the text model are saved in the
+    // service; the browser does not create a copy of its own.
+    it('creates no browser copy of the choices the service keeps', () => {
+        const clean = sanitizeSettings({});
+        expect('speakerDiarization' in clean).toBe(false);
+        expect('aiProvider' in clean).toBe(false);
     });
 
     it('keeps an explicit opt-out', () => {

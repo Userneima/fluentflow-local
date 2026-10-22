@@ -133,9 +133,17 @@ def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = Non
 # "full") is how much of the processor a cut may take, and
 # ``processing_preset`` ("quality" | "speed" | "size") what a cut favours; see
 # ``device_profile``.
+#
+# ``ai_provider`` and ``ai_model`` (the text model that writes notes; empty
+# model = the provider's default), ``speaker_diarization`` and
+# ``export_to_lark`` (booleans) are the choices a task uses when it does not
+# name its own (decision 6.31): the page and an agent submitting the same
+# recording get the same result. See ``saved_choices``.
 LOCAL_PREFERENCE_FIELDS = {
     "video_cookies_browser", "lark_export_route", "lark_folder_token", "cpu_usage", "processing_preset",
+    "ai_provider", "ai_model", "speaker_diarization", "export_to_lark",
 }
+_BOOLEAN_PREFERENCES = ("speaker_diarization", "export_to_lark")
 # Preferences that no longer exist, dropped from the file on the next save.
 # ``allow_miuistore`` switched the Douyin third-party resolver, which now
 # always runs.
@@ -192,7 +200,18 @@ def save_preferences(patch: dict[str, Any], path: Path | str | None = None) -> d
                 next_preferences[key] = choice
             else:
                 next_preferences.pop(key, None)
-        elif key == "lark_folder_token":
+        elif key in _BOOLEAN_PREFERENCES:
+            next_preferences[key] = value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
+        elif key == "ai_provider":
+            from backend.core import text_providers
+            provider = str(value).strip().lower()
+            if provider and provider not in text_providers.PROVIDERS:
+                raise ValueError(f"不支持的服务商：{value}")
+            if provider:
+                next_preferences[key] = provider
+            else:
+                next_preferences.pop(key, None)
+        elif key in ("lark_folder_token", "ai_model"):
             token = str(value).strip()
             if token:
                 next_preferences[key] = token
@@ -297,3 +316,32 @@ def resolve_secret(
     if value:
         return value
     return get_sensitive_setting(name, path)
+
+
+def saved_choices(options: dict[str, Any] | None) -> dict[str, Any]:
+    """``options`` with the saved choices filled in where the task names none.
+
+    A task's own value always wins, an explicit "false" included; an absent
+    key, ``None`` or an empty string takes the saved preference. The switches,
+    and the Feishu route and folder an automatic export uses, go through here;
+    the text model is resolved in ``local_entry_guards.local_ai_kwargs``, which
+    every note path calls.
+    """
+    result = dict(options or {})
+    preferences = load_preferences()
+
+    def absent(key: str) -> bool:
+        given = result.get(key)
+        return given is None or (isinstance(given, str) and not given.strip())
+
+    for key in _BOOLEAN_PREFERENCES:
+        if absent(key) and key in preferences:
+            result[key] = "true" if preferences[key] else "false"
+    # An automatic export goes the way Settings says, to its folder; without
+    # this a task that named no route was exported with the Feishu app.
+    if absent("lark_export_route") and absent("lark_via_cli"):
+        result["lark_export_route"] = str(preferences.get("lark_export_route") or "auto")
+    if absent("folder_token") and preferences.get("lark_folder_token"):
+        result["folder_token"] = str(preferences["lark_folder_token"])
+    return result
+

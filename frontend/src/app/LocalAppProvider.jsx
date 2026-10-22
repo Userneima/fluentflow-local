@@ -2,6 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {API_BASE, apiFetch} from './apiConfig.js';
 import {AppCtx} from './AppContext.jsx';
 import {localExecutionHeaders} from '../lib/localExecution.js';
+import {migrateSavedChoices} from '../lib/savedChoices.js';
 import {
     SENSITIVE_SETTING_KEYS,
     sanitizeSettings,
@@ -134,8 +135,12 @@ export const LocalAppProvider = ({children}) => {
             },
             storage: (() => { try { return localStorage; } catch (_) { return null; } })(),
         };
-        // One after the other: both read and rewrite the same stored settings.
-        syncVideoLinkPreferences(preferenceSync).then(() => syncLarkExportPreferences(preferenceSync));
+        // One after the other: each reads and rewrites the same stored settings.
+        // The note's text model, speaker labels and auto export move to the
+        // service the same way (lib/savedChoices.js, decision 6.31).
+        syncVideoLinkPreferences(preferenceSync)
+            .then(() => syncLarkExportPreferences(preferenceSync))
+            .then(() => migrateSavedChoices(preferenceSync));
 
         const cached = readCachedAccountJobs(LOCAL_SCOPE);
         tombstonesRef.current = new Set();

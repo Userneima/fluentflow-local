@@ -37,7 +37,7 @@ from backend.core.event_context import new_task_id
 from backend.core.event_logger import log_event
 from backend.core.job_store import create_job_if_absent, get_job, upsert_job
 from backend.core import text_providers
-from backend.core.local_config import resolve_secret
+from backend.core.local_config import get_preference, resolve_secret
 from backend.core.local_error_diagnostics import diagnose_error
 
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -162,6 +162,18 @@ def local_ai_kwargs(
         for provider, key_name in _PROVIDER_KEY_NAMES
     }
     provider_name = (ai_provider or "").strip().lower()
+    model_name = (ai_model or "").strip()
+    # A task that names no text model uses the one saved in Settings
+    # (decision 6.31), so the page and an agent get the same writer; its model
+    # comes with it unless the task named that provider with its own model.
+    if not provider_name:
+        saved_provider = str(get_preference("ai_provider") or "").strip().lower()
+        if saved_provider:
+            provider_name = saved_provider
+            if not model_name:
+                model_name = str(get_preference("ai_model") or "").strip()
+    elif not model_name and provider_name == str(get_preference("ai_provider") or "").strip().lower():
+        model_name = str(get_preference("ai_model") or "").strip()
     if not provider_name:
         provider_name = next(
             (provider for provider, _ in _PROVIDER_KEY_NAMES if resolved[provider]), ""
@@ -172,8 +184,8 @@ def local_ai_kwargs(
     matching_key = resolved.get(provider_name)
     if matching_key:
         kwargs["api_key"] = matching_key
-    if (model := (ai_model or "").strip()):
-        kwargs["model"] = model
+    if model_name:
+        kwargs["model"] = model_name
     if (prompt := (system_prompt or "").strip()):
         kwargs["system_prompt"] = prompt
     if (mode := (note_mode or "").strip()):

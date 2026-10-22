@@ -13,6 +13,7 @@ import {
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import {workflowChoicesFrom} from '../lib/workflowStatus.js';
+import {SAVED_CHOICE_KEYS, choicesFromPreferences, loadSavedChoices, splitChoicePatch} from '../lib/savedChoices.js';
 import {
     VIDEO_COOKIES_PREF,
     normalizeCookiesBrowser,
@@ -32,7 +33,13 @@ export const useSettingsPageState = () => {
     const {loadSettings, saveSettings} = useSettings();
     const {larkExports, runtimeConfig} = useApp();
     const {getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, getWorkflowStatus, checkVideoCookies, getPreferences, savePreferences} = useApi();
-    const [settings, setSettings] = useState(() => loadSettings());
+    const [storedSettings, setSettings] = useState(() => loadSettings());
+    // The note's text model, speaker labels and auto export, kept by the
+    // service (lib/savedChoices.js); null until it has answered.
+    const [choices, setChoices] = useState(null);
+    // What the page shows and the rows read: the service's choices over the
+    // browser's settings.
+    const settings = choices ? {...storedSettings, ...choices} : storedSettings;
     const [credentialStatus, setCredentialStatus] = useState(null);
     // Until the service answers, nothing on the page may say a key is or is
     // not configured: 'loading' | 'ready' | 'error'.
@@ -85,6 +92,9 @@ export const useSettingsPageState = () => {
         getSpeakerDiarizationStatus().then(setDiarizationStatus).catch(() => {});
         let active = true;
         if (getPreferences) {
+            loadSavedChoices({getPreferences, savePreferences, loadSettings, saveSettings}).then((loaded) => {
+                if (active) setChoices((current) => current || loaded);
+            }).catch(() => { if (active) setChoices((current) => current || choicesFromPreferences({})); });
             getPreferences().then((prefs) => {
                 if (!active || touchedCpuUsageRef.current) return;
                 const stored = String(prefs?.cpu_usage || '');
@@ -193,12 +203,23 @@ export const useSettingsPageState = () => {
         }
     };
 
+    // The service keeps the saved choices; everything else stays here.
     const updateSettingNow = (patch) => {
-        setSettings((s) => {
-            const next = {...s, ...patch};
-            saveSettings(next);
-            return next;
-        });
+        const {service, local} = splitChoicePatch(patch);
+        if (Object.keys(local).length > 0) {
+            setSettings((s) => {
+                const next = {...s, ...local};
+                saveSettings(next);
+                return next;
+            });
+        }
+        if (Object.keys(service).length > 0) {
+            setChoices((current) => ({...(current || choicesFromPreferences({})), ...Object.fromEntries(
+                Object.keys(patch).filter((key) => SAVED_CHOICE_KEYS.includes(key)).map((key) => [key, patch[key]]),
+            )}));
+            setVideoPrefError('');
+            Promise.resolve(savePreferences?.(service)).catch(() => setVideoPrefError('saved_choices'));
+        }
     };
 
     // Saves every field of one group (`group` names it for the feedback line)
@@ -297,7 +318,7 @@ export const useSettingsPageState = () => {
     const [workflow, setWorkflow] = useState(null);
     const [workflowError, setWorkflowError] = useState(false);
     const workflowChoices = JSON.stringify(workflowChoicesFrom(settings));
-    const workflowInputs = JSON.stringify([workflowChoices, credentialStatus, diarizationStatus, cpuUsage, processingPreset, settings.videoCookiesBrowser, settings.larkExportRoute]);
+    const workflowInputs = JSON.stringify([workflowChoices, choices, credentialStatus, diarizationStatus, cpuUsage, processingPreset, settings.videoCookiesBrowser, settings.larkExportRoute]);
     useEffect(() => {
         if (!getWorkflowStatus) return undefined;
         let live = true;
@@ -325,6 +346,7 @@ export const useSettingsPageState = () => {
         lang,
         runtimeConfig,
         settings,
+        choicesLoaded: !!choices,
         updateSettingNow,
         larkExports,
         // Who does each step now.

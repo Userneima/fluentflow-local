@@ -155,41 +155,26 @@ describe('every entry sends the same settings', () => {
         expect(settingsOnly(sent.folder)).toEqual(upload);
         expect(settingsOnly(sent.link)).toEqual(upload);
 
-        // And that set is the user's settings, Feishu export included.
+        // And that set is the user's settings kept in this browser.
         expect(upload).toMatchObject({
-            export_to_lark: 'true',
-            lark_export_route: 'local_cli',
-            ai_provider: 'qwen',
-            ai_model: 'qwen-max',
             system_prompt: '只列三条要点',
             prompt_preset: 'custom',
             generate_visuals: 'true',
             voice_enhance: 'true',
-            speaker_diarization: 'true',
         });
     });
 
-    it('says "speaker separation off" out loud on the by-path entries, where a missing field means on', async () => {
-        localStorage.setItem('fluentflow_settings', JSON.stringify({...SETTINGS, speakerDiarization: false, defaultSourceMode: 'upload'}));
+    // Decision 6.31 (owner, 2026-10-23): the text model, speaker labels and
+    // auto export are saved in the service and a task that names none uses
+    // them, so the page does not send them; a stale copy in this browser
+    // must not override the saved choice either.
+    it('leaves the text model, speaker labels and auto export to the service on every entry', async () => {
         await submitThroughEveryEntry();
-        expect(sent.paths.speaker_diarization).toBe('false');
-        expect(sent.folder.speaker_diarization).toBe('false');
-        expect(sent.upload.speaker_diarization).toBeUndefined();
-    });
-
-    // Requirement: a build without the speaker separation component does not
-    // ask for it, so no task carries a request that is always skipped.
-    it('does not ask for speaker separation when this build cannot do it', async () => {
-        diarizationStatus = {available: false, dependency_installed: false};
-        try {
-            await submitThroughEveryEntry();
-        } finally {
-            diarizationStatus = null;
+        for (const entry of ['upload', 'paths', 'folder', 'link']) {
+            for (const field of ['ai_provider', 'ai_model', 'speaker_diarization', 'export_to_lark']) {
+                expect(sent[entry][field], `${entry} ${field}`).toBeUndefined();
+            }
         }
-        expect(sent.upload.speaker_diarization).toBeUndefined();
-        expect(sent.paths.speaker_diarization).toBe('false');
-        expect(sent.folder.speaker_diarization).toBe('false');
-        expect(sent.link.speaker_diarization).toBeUndefined();
     });
 });
 

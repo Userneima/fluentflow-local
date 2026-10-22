@@ -49,7 +49,8 @@ def test_path_and_link_leave_it_off_when_not_asked(monkeypatch, dependency):
 
 
 def test_an_explicit_choice_wins_either_way(monkeypatch):
-    assert "speaker_diarization" not in local_path_options({"speaker_diarization": False})[0]
+    # An explicit "off" is kept as "false" so the saved choice cannot override it.
+    assert local_path_options({"speaker_diarization": False})[0]["speaker_diarization"] == "false"
     assert _link_options(monkeypatch, {"speaker_diarization": False})["speaker_diarization"] is False
     assert local_path_options({"speaker_diarization": True})[0]["speaker_diarization"] == "true"
     assert _link_options(monkeypatch, {"speaker_diarization": True})["speaker_diarization"] is True
