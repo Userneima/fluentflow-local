@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
+from backend.core import note_versions
 from backend.core.job_store import get_job, save_result_changes
 from backend.core.local_request_scope import request_client_id
 from backend.core.result_artifacts import (
@@ -150,6 +151,7 @@ def update_job_summary(
         "summary_edited": True,
         "summary_edited_at": edited_at,
     })
+    note_versions.declare(result, note_versions.WEB_EDIT)
     # The note's own file only; rewriting the transcript files on every pause
     # in typing was work for nothing.
     result = _attach_result_artifacts(task_id, result, parts=("summary",))

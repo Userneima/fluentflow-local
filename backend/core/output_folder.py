@@ -498,7 +498,7 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any], note_changed
         except OSError:
             on_disk = ""
         if on_disk and on_disk != text.rstrip() + "\n":
-            note_versions.keep(md, on_disk, note_versions.LOCAL)
+            note_versions.keep(md, on_disk, note_versions.LOCAL, note_versions.changed_by(result))
         changed = _write_if_changed(md, text.rstrip() + "\n")
         # The copy an earlier version kept in 过程文件 would now be a stale twin.
         (process / md.name).unlink(missing_ok=True)
@@ -611,7 +611,7 @@ def _take_in_edits(
         # task's note changed) can save it over a newer note, and this is
         # where that newer note is found again.
         happened["previous"] = str(_keep_previous(md, would_write))
-        note_versions.keep(md, would_write, note_versions.TASK)
+        note_versions.keep(md, would_write, note_versions.TASK, note_versions.OBSIDIAN)
         stored = _stored_form(task_id, text, prefixes).strip()
         after = _with_note(task_id, result, stored)
         job_store.save_result_changes(task_id, result, after)
@@ -641,6 +641,7 @@ def _with_note(task_id: str, result: dict[str, Any], note: str) -> dict[str, Any
         "summary_edited_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "summary_edited_in": "obsidian",
     })
+    note_versions.declare(after, note_versions.OBSIDIAN)
     return _attach_result_artifacts(task_id, after, parts=("summary",))
 
 

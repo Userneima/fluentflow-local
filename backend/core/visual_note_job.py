@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, cut_timeline, debreath_job, visual_note_channel
-from backend.core import note_coverage, note_join, note_skills, visual_note_check
+from backend.core import note_coverage, note_join, note_skills, note_versions, visual_note_check
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
@@ -592,7 +592,8 @@ def _store(task_id: str, *, client_id: str | None, state: dict[str, Any],
 
 
 def _promotion(
-    result: dict[str, Any], markdown: str, *, media_kind: str | None = MEDIA_CUT
+    result: dict[str, Any], markdown: str, *, media_kind: str | None = MEDIA_CUT,
+    by: str = note_versions.REWRITE,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Make this note the task's note, keeping the one it displaces.
 
@@ -621,6 +622,7 @@ def _promotion(
         "summary_edited": False,
         "summary_original_markdown": None,
     }
+    note_versions.declare(fields, by)
     return fields, replaced
 
 
@@ -691,6 +693,7 @@ def put_back_onto_original(task_id: str, ranges: list[cut_timeline.KeptRange], *
             "summary_markdown": _times_back_onto_original(str(result["summary_markdown"]), ranges),
             "summary_written_from": frame_note_written_from(MEDIA_SOURCE_UNCHANGED),
         }
+        note_versions.declare(fields, note_versions.ADJUST)
     _store(
         task_id, client_id=client_id, state=note_state, artifacts=artifacts,
         result_fields=fields or None, rewrite_artifacts=bool(fields),
@@ -1424,6 +1427,7 @@ def restore_previous_note(task_id: str, *, client_id: str | None = None) -> dict
             "summary_edited": bool(replaced.get("previous_summary_edited")),
             # Which text was generated for the restored note is not known.
             "summary_original_markdown": None,
+            **note_versions.declare({"summary_markdown": previous}, note_versions.RESTORE),
         },
         rewrite_artifacts=True,
     )

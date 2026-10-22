@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import claude_vision, correction_notes, cut_timeline, note_coverage, note_skills, visual_note_check
+from backend.core import claude_vision, correction_notes, cut_timeline, note_coverage, note_skills, note_versions, visual_note_check
 from backend.core import visual_note_job as vn
 from backend.core.claude_vision import FrameInput
 from backend.core.result_artifacts import (
@@ -467,7 +467,7 @@ def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, m
     markdown = vn._rewrite_image_targets(joined, task_id, frames)
     artifact = write_text_artifact(task_id, VISUAL_NOTE_KIND, VISUAL_NOTE_ARTIFACT_FILENAME, markdown.rstrip() + "\n")
     skill = note_skills.load_note_skill()
-    result_fields, replaced = vn._promotion(result, markdown, media_kind=media.kind)
+    result_fields, replaced = vn._promotion(result, markdown, media_kind=media.kind, by=note_versions.AGENT_NOTE)
     # A part saved again after the join replaces the agent's own earlier join;
     # the note to put back is still the one from before the agent started.
     if keep_replaced:

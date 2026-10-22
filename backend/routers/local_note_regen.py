@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
-from backend.core import visual_note_job
+from backend.core import note_versions, visual_note_job
 from backend.core.ai_summarizer import summarize_transcript_with_metadata
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 from backend.core.event_context import event_metadata
@@ -207,6 +207,7 @@ async def regenerate_summary(
             # rewrite as Claude reading the frames.
             "summary_written_from": "text_regeneration",
         }
+        note_versions.declare(payload, note_versions.REWRITE)
         existing = (
             existing_job
             if existing_job and task_id_value == requested_task_id

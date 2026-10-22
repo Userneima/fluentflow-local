@@ -60,6 +60,7 @@ from backend.core.event_context import (
 )
 from backend.core.event_logger import log_event
 from backend.core.job_event_hub import JobEventHub, _sse, event_from_sse_chunk
+from backend.core import note_versions
 from backend.core.job_lifecycle import (
     result_for_summary_failure,
     result_for_summary_success,
@@ -1440,6 +1441,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             )
 
         # ── Done ───────────────────────────────────────────
+        if str(result.get("summary_markdown") or "").strip():
+            note_versions.declare(result, note_versions.GENERATED)
         result = _attach_result_artifacts(task_id_value, result)
         result = _finalize_result_storage(ctx, result)
         _log_task_completed(

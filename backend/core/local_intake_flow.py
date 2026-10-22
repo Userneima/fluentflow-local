@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import compress_media, debreath_job, silence_cuts, visual_note_channel, visual_note_job
-from backend.core import device_profile, output_folder
+from backend.core import device_profile, note_versions, output_folder
 from backend.core.task_watch import TaskWatch
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -475,6 +475,7 @@ def _write_text_note_instead(
         value = getattr(summary, attribute, None)
         if value:
             fields[field] = value
+    note_versions.declare(fields, note_versions.GENERATED)
     latest = get_job(task_id, client_id=client_id)
     if latest:
         before = dict(latest.get("result") or {})

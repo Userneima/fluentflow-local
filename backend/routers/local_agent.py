@@ -43,7 +43,7 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import agent_cut, agent_note, debreath_job, local_folder_intake, note_feedback, note_pdf, note_skills, visual_note_job
+from backend.core import agent_cut, agent_note, debreath_job, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_request_scope import (
@@ -310,6 +310,7 @@ async def _write_transcript_task(
             "chapter_coverage": getattr(summary_result, "chapter_coverage", None),
         })
         result = bind_chapter_coverage_time_ranges(result)
+        note_versions.declare(result, note_versions.GENERATED)
         summary_status = "completed"
     try:
         result = _attach_result_artifacts(task_id_value, result)
@@ -893,6 +894,35 @@ def get_agent_note_part(request: Request, task_id: str, part: int) -> dict[str, 
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+def _history_call(action, *args, **kwargs):
+    try:
+        return action(*args, **kwargs)
+    except note_history.NoteHistoryError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+@router.get("/tasks/{task_id}/note/versions")
+def list_note_versions(request: Request, task_id: str) -> dict[str, Any]:
+    """The note now and its kept versions, newest first, with what replaced each."""
+    return _history_call(note_history.list_versions, task_id, client_id=_local_client_scope(request))
+
+
+@router.get("/tasks/{task_id}/note/versions/{version_id}")
+def read_note_version(request: Request, task_id: str, version_id: str) -> dict[str, Any]:
+    return _history_call(note_history.read_version, task_id, version_id, client_id=_local_client_scope(request))
+
+
+@router.post("/tasks/{task_id}/note/versions/{version_id}/restore")
+def restore_note_version(
+    request: Request, task_id: str, version_id: str, payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """Put a kept version back as the note, through the note's ordinary save."""
+    return _history_call(
+        note_history.restore_version, task_id, version_id,
+        base_version=(payload or {}).get("base_version"), client_id=_local_client_scope(request),
+    )
+
+
 def _feedback_call(action, *args, **kwargs):
     try:
         return action(*args, **kwargs)
@@ -1153,6 +1183,7 @@ async def regenerate_agent_task_note(
         "prompt_preset_label": prompt_preset_label,
     })
     result = bind_chapter_coverage_time_ranges(result)
+    note_versions.declare(result, note_versions.REWRITE)
     result = _attach_result_artifacts(task_id, result)
     updated = finalize_note_if_unchanged(
         task_id,
@@ -1263,7 +1294,7 @@ async def export_agent_task(
                 lambda: export_markdown_via_lark_cli(
                     resolved_title, markdown, task_id=task_id, artifact_root=_artifact_storage_dir(),
                     previous=previous,
-                    keep_feishu=feishu_sync.keeper(task_id, job.get("result")) if previous else None,
+                    keep_feishu=feishu_sync.keeper(task_id, job.get("result"), note_versions.EXPORT) if previous else None,
                 ),
             )
         else:

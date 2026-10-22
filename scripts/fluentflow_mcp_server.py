@@ -830,6 +830,37 @@ _SPEAKER_DIARIZATION_SCHEMA = {
 }
 _TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's frame note)."
 
+def list_note_versions(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    """The task's note now and every kept earlier version, newest first, with what replaced each."""
+    return _agent_request(
+        "GET", f"/agent/v1/tasks/{task_id}/note/versions", api_base=api_base, client_id=client_id,
+    )
+
+
+def read_note_version(
+    task_id: str, version_id: str, api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    """One kept version of the task's note, whole."""
+    from urllib.parse import quote
+
+    return _agent_request(
+        "GET", f"/agent/v1/tasks/{task_id}/note/versions/{quote(version_id, safe='')}",
+        api_base=api_base, client_id=client_id,
+    )
+
+
+def restore_note_version(
+    task_id: str, version_id: str, base_version: str, api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    """Put a kept version back as the task's note; the note it replaces is kept first."""
+    from urllib.parse import quote
+
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/note/versions/{quote(version_id, safe='')}/restore",
+        api_base=api_base, client_id=client_id, payload={"base_version": base_version},
+    )
+
+
 TOOL_FUNCTIONS = {
     "submit_video_link": submit_video_link,
     "submit_transcript": submit_transcript,
@@ -856,6 +887,9 @@ TOOL_FUNCTIONS = {
     "draft_note_part": draft_note_part,
     "apply_note_rule": apply_note_rule,
     "export_result": export_result,
+    "list_note_versions": list_note_versions,
+    "read_note_version": read_note_version,
+    "restore_note_version": restore_note_version,
 }
 
 
@@ -1403,6 +1437,76 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "api_base": {"type": "string"},
             },
             "required": ["skill_text", "rule", "feedback_ids", "rounds", "evidence"],
+        },
+    },
+    {
+        "name": "list_note_versions",
+        "description": (
+            "List the earlier versions FluentFlow kept of a task's note. Use it when the user says the "
+            "note lost content, got much shorter, was overwritten, or asks for an earlier version. Before "
+            "anything writes over the note (an edit on the page, the md edited in Obsidian, an agent's "
+            "note, a rewrite, Feishu, a restore), the version being replaced is kept. Returns current "
+            "(the note now: note_version, chars, chars_change, changed_by) and versions, newest first: "
+            "version_id, saved_at, side (where that version lived: 本地 = the md in the output folder, "
+            "FluentFlow = the task's note, 飞书 = the Feishu document), replaced_by (what wrote over it: "
+            "web_edit, obsidian, agent_note, rewrite, generated, feishu_pull, export, restore, adjust; "
+            "null for versions kept before this was recorded, shown as 未记录), chars, chars_change "
+            "(against the previous version on the same side; the 飞书 side is Feishu's export format and "
+            "runs a few hundred characters longer than the others) and sharp_drop (at least 1,000 characters and half the "
+            "length lost at once, the sign of a note saved over by a fragment). Tell the user what "
+            "you found before restoring anything."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "read_note_version",
+        "description": (
+            "Read one kept version of a task's note in full (markdown), by the version_id "
+            "list_note_versions gave. Use it to check a version is the one the user wants before "
+            "restoring it, or to copy a lost passage back by hand. Versions with side 本地 point their "
+            "screenshots at 过程文件/截图 beside the md; side 飞书 is Feishu's own export format."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "version_id": {"type": "string"},
+                "api_base": {"type": "string"},
+            },
+            "required": ["task_id", "version_id"],
+        },
+    },
+    {
+        "name": "restore_note_version",
+        "description": (
+            "Make a kept version the task's note again. Ask the user first: it replaces the note "
+            "everywhere it is kept. The current note is kept as a version first (replaced_by=restore), "
+            "so a restore can itself be undone. It then goes through the note's ordinary save: the "
+            "task's note changes at once, the md and PDF in the output folder follow within seconds, "
+            "and a note kept in step with Feishu has its changed chapters rewritten there; the answer's "
+            "follows lists where it applies. base_version is current.note_version from "
+            "list_note_versions: when the note changed since (the user editing in Obsidian or on the "
+            "page, Feishu, another agent), the restore is refused with code stale and nothing changes; "
+            "list again and confirm with the user. Versions with side 飞书 cannot be restored (Feishu's "
+            "format loses screenshots and chapter links); restore the 本地 or FluentFlow version from "
+            "the same moment instead."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "version_id": {"type": "string"},
+                "base_version": {
+                    "type": "string",
+                    "description": "current.note_version from list_note_versions.",
+                },
+                "api_base": {"type": "string"},
+            },
+            "required": ["task_id", "version_id", "base_version"],
         },
     },
     {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.core import note_versions
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 
 
@@ -122,4 +123,5 @@ def result_for_summary_success(
         result["prompt_preset_label"] = prompt_preset_label
     # Always written, so a note regenerated in time clears an earlier ``True``.
     result["deadline_hit"] = bool(deadline_hit)
+    note_versions.declare(result, note_versions.GENERATED)
     return bind_chapter_coverage_time_ranges(result)

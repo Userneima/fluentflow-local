@@ -67,23 +67,17 @@ def recorded_sync(result: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _note_md(task_id: str, result: dict[str, Any]) -> Path:
-    """Where the note's versions are kept: beside its md in the output folder,
-    or, for a note with no folder, in the task's own storage."""
-    from backend.core.output_folder import RESULT_KEY
-    from backend.core.storage_paths import _artifact_storage_dir
-
-    folder = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
-    if folder.get("md_path"):
-        return Path(str(folder["md_path"]))
-    return _artifact_storage_dir() / task_id / "笔记.md"
+    return note_versions.md_for(task_id, result)
 
 
-def keeper(task_id: str, result: dict[str, Any] | None) -> Callable[[str], None]:
-    """What saves the Feishu document's markdown before an update replaces it."""
+def keeper(task_id: str, result: dict[str, Any] | None, by: str | None = None) -> Callable[[str], None]:
+    """What saves the Feishu document's markdown before an update replaces it.
+    ``by`` is what replaces it; by default, whatever wrote the note pushed."""
     md = _note_md(task_id, result if isinstance(result, dict) else {})
+    by = by or note_versions.changed_by(result)
 
     def keep(text: str) -> None:
-        note_versions.keep(md, text, note_versions.FEISHU)
+        note_versions.keep(md, text, note_versions.FEISHU, by)
 
     return keep
 
@@ -237,6 +231,7 @@ def _with_note(task_id: str, result: dict[str, Any], note: str) -> dict[str, Any
         "summary_edited_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "summary_edited_in": "feishu",
     })
+    note_versions.declare(after, note_versions.FEISHU_PULL)
     return _attach_result_artifacts(task_id, after, parts=("summary",))
 
 
@@ -397,7 +392,7 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
 
     pulled = merged_note != note
     if pulled:
-        note_versions.keep(_note_md(task_id, result), note, note_versions.TASK)
+        note_versions.keep(_note_md(task_id, result), note, note_versions.TASK, note_versions.FEISHU_PULL)
     settled = {
         **sync,
         "feishu_sections": current,

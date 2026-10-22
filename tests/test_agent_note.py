@@ -107,6 +107,18 @@ def test_saving_makes_it_the_note_and_the_old_one_comes_back(job_store, tmp_path
     assert restored["result"]["summary_markdown"] == "原来的文字笔记"
 
 
+def test_the_note_says_an_agent_replaced_the_previous_one_and_a_restore_says_so_too(job_store, tmp_path):
+    # Owner, 2026-10-22: every kept version of a note says what wrote over it.
+    from backend.core import note_versions
+
+    _material(tmp_path)
+    updated = an.save(TASK, note_markdown="# 笔记\n\n正文。", client_id="anonymous")
+    assert note_versions.changed_by(updated["result"]) == note_versions.AGENT_NOTE
+
+    restored = vn.restore_previous_note(TASK, client_id="anonymous")
+    assert note_versions.changed_by(restored["result"]) == note_versions.RESTORE
+
+
 def test_a_frame_the_agent_made_up_does_not_count_as_a_picture(job_store, tmp_path):
     _material(tmp_path)
 

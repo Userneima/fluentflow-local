@@ -54,7 +54,10 @@ The MCP tools appear in the user's next conversation with you. When asked for a 
 then: submit with `submit_local_media` or `submit_video_link`, wait with `wait_task`,
 fetch the material with `get_agent_note_material`, write the note following its
 `instructions`, and save it with `save_agent_note`. A long recording comes in several
-parts; fetch and write each, then save them together.
+parts; fetch and write each, then save them together. When a note lost content or the
+user wants an earlier version, `list_note_versions` shows every kept version with what
+replaced it, `read_note_version` reads one, and `restore_note_version` (after the user
+agrees) puts it back everywhere the note is kept.
 
 ## Only these need the user
 
