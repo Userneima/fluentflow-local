@@ -124,7 +124,7 @@ describe('a queue that is not moving', () => {
         mount();
 
         const line = await screen.findByText(/在等「0811 上午 · 训练营第一讲」/);
-        expect(line.textContent).toMatch(/已经等了 52:13/);
+        expect(line.textContent).toMatch(/已经等了 52 分 13 秒/);
         expect(line.textContent).toMatch(/一次只处理一个/);
         // The task id identifies the right row to a developer and nothing at all
         // to the person who queued five lectures.

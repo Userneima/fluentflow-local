@@ -17,10 +17,12 @@ import {MemoryRouter, Route, Routes} from 'react-router-dom';
 // GET /speaker-diarization/status as the app provider holds it.
 let diarizationStatus = null;
 let history = [];
+let tasks = [];
 
 vi.mock('../app/AppContext.jsx', () => ({
     useApp: () => ({
         history,
+        tasks,
         diarizationStatus,
         addToHistory: () => {},
         currentJob: null,
@@ -191,23 +193,55 @@ describe('every entry sends the same settings', () => {
     });
 });
 
-// Requirement: 「最近任务」 names a cancelled task 已取消, as the task list does.
+// Requirements: 「最近活动」 names a cancelled task 已取消, as the task list does
+// (earlier); a finished task with nothing missing carries no badge, because a
+// row of 已完成 says nothing (walkthrough 2026-10-22, item 5); one whose note or
+// cut did not happen, or that waits for the owner, says so (item 9); and every
+// card stays one card when the list is replaced (item 4: entries built in the
+// same millisecond shared a key and the page duplicated and dropped cards).
 describe('recent tasks on the start page', () => {
-    afterEach(() => { cleanup(); history = []; });
+    afterEach(() => { cleanup(); history = []; tasks = []; });
+    const badge = (name) => screen.getByText(name).parentElement.querySelector('[data-testid="recent-badge"]')?.textContent || '';
 
-    it('labels each state the way the task list does', () => {
+    it('labels live, failed and cancelled tasks, and leaves a plain finished one bare', () => {
         history = [
-            {id: 'a', name: '取消的', status: 'cancelled', timestamp: Date.now()},
-            {id: 'b', name: '失败的', status: 'failed', timestamp: Date.now()},
-            {id: 'c', name: '完成的', status: 'completed', timestamp: Date.now()},
-            {id: 'd', name: '进行中的', status: 'processing', timestamp: Date.now()},
+            {id: 'a', taskId: 'a', name: '取消的', status: 'cancelled', timestamp: Date.now()},
+            {id: 'b', taskId: 'b', name: '失败的', status: 'failed', timestamp: Date.now()},
+            {id: 'c', taskId: 'c', name: '完成的', status: 'completed', timestamp: Date.now()},
+            {id: 'd', taskId: 'd', name: '进行中的', status: 'processing', timestamp: Date.now()},
         ];
         mount();
-        const badge = (name) => screen.getByText(name).parentElement.querySelector('span').textContent;
         expect(badge('取消的')).toBe('已取消');
         expect(badge('失败的')).toBe('失败');
-        expect(badge('完成的')).toBe('已完成');
+        expect(badge('完成的')).toBe('');
         expect(badge('进行中的')).toBe('处理中');
+    });
+
+    it('says what is missing on a finished task, read from the task itself', () => {
+        history = [
+            {id: 'n', taskId: 'n', name: '没笔记的', status: 'completed', timestamp: Date.now()},
+            {id: 'j', taskId: 'j', name: '要判断的', status: 'completed', timestamp: Date.now()},
+        ];
+        tasks = [
+            {task_id: 'n', status: 'completed', result: {summary_status: 'failed', summary_chars: 0}},
+            {task_id: 'j', status: 'completed', result: {summary_status: 'completed', summary_chars: 800, debreath: {status: 'completed', survey: {to_judge: 3}}}},
+        ];
+        mount();
+        expect(badge('没笔记的')).toBe('笔记没生成');
+        expect(badge('要判断的')).toBe('3 处待你判断');
+    });
+
+    it('shows each task once when the entries share an id', () => {
+        const same = 1792679206324;
+        history = ['甲', '乙', '丙'].map((name, index) => ({id: same, taskId: `t${index}`, name, status: 'completed', timestamp: Date.now()}));
+        const {rerender} = mount();
+        history = ['丙', '甲', '乙'].map((name) => ({id: same, taskId: `t${['甲', '乙', '丙'].indexOf(name)}`, name, status: 'completed', timestamp: Date.now()}));
+        rerender(
+            <MemoryRouter initialEntries={['/media-text']}>
+                <Routes><Route path="/media-text" element={<MediaText/>}/></Routes>
+            </MemoryRouter>
+        );
+        expect(screen.getAllByText(/^[甲乙丙]$/).map((node) => node.textContent)).toEqual(['丙', '甲', '乙']);
     });
 });
 

@@ -13,6 +13,7 @@ import {
     useApi,
     useI18n,
 } from '../app/shared.jsx';
+import {fmtDuration} from '../lib/format.js';
 import {useApp} from '../app/AppContext.jsx';
 
 const stageLabel = (stage, lang, {audioOnly = false} = {}) => {
@@ -51,11 +52,10 @@ const stageLabel = (stage, lang, {audioOnly = false} = {}) => {
 };
 
 const MediaPreparation = ({prep, lang}) => {
-    // The cut, explained where there is room to explain it. The records card says
-    // the outcome in three words; the reason it declined is a sentence, and the
-    // engine's own spot-check warning is the only thing that can tell a user the
-    // threshold did not suit this material — every count looks reasonable while a
-    // faint room is being cut close to the speech.
+    // What the cut came to, and nothing of how it was decided: the walkthrough
+    // (2026-10-22) found decibels, 0.3-second windows and a raw count of 1029
+    // here, under a headline count of 501 that did not match. The engine's own
+    // warnings and threshold reasoning stay in the task record for diagnosis.
     if (!prep) return null;
     const isZh = lang === 'zh';
     const declined = prep.used_for_transcription === false;
@@ -70,8 +70,8 @@ const MediaPreparation = ({prep, lang}) => {
         if (prep.not_used_reason) lines.push(prep.not_used_reason);
     } else if (cuts > 0) {
         lines.push(isZh
-            ? `剪掉 ${cuts} 处，删掉 ${fmtElapsed(removed)}，剩 ${fmtElapsed(kept)}；转写和笔记都基于这份剪后文件。`
-            : `${cuts} cuts, ${fmtElapsed(removed)} removed, ${fmtElapsed(kept)} left; the transcript and note both come from that file.`);
+            ? `剪掉 ${fmtDuration(removed, lang)}，剩 ${fmtDuration(kept, lang)}。`
+            : `${fmtDuration(removed, lang)} removed, ${fmtDuration(kept, lang)} left.`);
         if (prep.delivered_path && !prep.output_folder) {
             lines.push((isZh ? '剪后文件：' : 'Cut file: ') + prep.delivered_path);
         }
@@ -90,9 +90,6 @@ const MediaPreparation = ({prep, lang}) => {
             ? '剪出来的文件没通过自检，文件保留了但没有用于后面的步骤。'
             : 'The cut file failed its own check; it was kept but not used downstream.');
     }
-    if (prep.threshold_choice?.adapted && prep.threshold_choice?.reason) {
-        lines.push(prep.threshold_choice.reason);
-    }
     if (prep.error) lines.push(prep.error);
     return (
         <div className="mt-4 rounded-[15px] border border-[#dedada] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
@@ -102,11 +99,6 @@ const MediaPreparation = ({prep, lang}) => {
             {lines.map((line) => (
                 <p key={line} className="mt-1.5 text-[13px] font-semibold leading-5 text-[#111111] dark:text-white">
                     {line}
-                </p>
-            ))}
-            {(prep.warnings || []).map((warning) => (
-                <p key={warning} className="mt-1.5 rounded-[10px] bg-[#fffaeb] px-2.5 py-1.5 text-[12px] font-semibold leading-5 text-[#b54708] dark:bg-[#f79009]/[0.14] dark:text-[#fdb022]">
-                    {warning}
                 </p>
             ))}
         </div>
@@ -255,9 +247,7 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
     const noteWordCount = noteWordCountTag(pageData, lang);
     const source = sourceKindLabel(task, isZh);
     const duration = Number(pageData?.task?.duration_seconds || pageData?.source?.duration_seconds);
-    const durationText = Number.isFinite(duration) && duration > 0
-        ? `${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, '0')}`
-        : '';
+    const durationText = Number.isFinite(duration) && duration > 0 ? fmtDuration(duration, lang) : '';
     const fileSizeText = task.fileSizeMb ? fmtBytes(task.fileSizeMb * 1024 * 1024) : '';
     const audioOnlyTask = /\.(mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i.test(String(task.sourceFilename || ''))
         || String(task.sourceType || '').toLowerCase() === 'audio'
@@ -322,10 +312,10 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
             : failed
                 ? (diagnosis.detail || diagnosis.next_action || (isZh ? '查看失败原因，按建议重新处理。' : 'Review the failure reason and retry if needed.'))
                 : runningDetail;
-    const progressValue = completed ? 100 : failed ? Math.max(progress, 8) : progress;
+    const progressValue = failed ? Math.max(progress, 8) : progress;
     const canShowSttLine = activeCurrentJob?.stage === 'stt';
     const infoCards = activeCurrentJob ? [
-        {label: isZh ? '已用时间' : 'Elapsed', value: fmtElapsed(activeJobElapsed)},
+        {label: isZh ? '已用时间' : 'Elapsed', value: fmtDuration(activeJobElapsed, lang)},
         {label: isZh ? '文件大小' : 'File size', value: activeJobFileSize},
         {label: isZh ? '转录路线' : 'Route', value: activeJobRoute || route || currentStageLabel},
         {label: isZh ? '摘要模式' : 'Summary mode', value: activeJobSummaryMode},
@@ -388,6 +378,8 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
                 )}
             </div>
 
+            {/* A finished task has no stage and no progress left to show. */}
+            {!completed && (
             <div className="mt-7">
                 <div className="mb-2 flex items-end justify-between gap-4">
                     <div>
@@ -399,7 +391,7 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
                         </p>
                     </div>
                     <p className="font-headline text-[30px] font-extrabold tabular-nums text-[#111111] dark:text-white">
-                        {completed ? '100%' : failed ? '-' : progressText}
+                        {failed ? '-' : progressText}
                     </p>
                 </div>
                 <div className={`h-2.5 w-full overflow-hidden rounded-full bg-[#efeeee] dark:bg-white/[0.12] ${running && (sttUnknown || downloadUnknown) ? 'progress-indeterminate' : ''}`}>
@@ -421,6 +413,7 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
                     </p>
                 )}
             </div>
+            )}
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {infoCards.map((item) => (

@@ -19,9 +19,13 @@ const AgentCutWait = ({job}) => {
     if (!taskId || !state?.status) return null;
 
     if (state.status === 'fallback' && state.fallback_reason) {
+        // One sentence of state. The reason the person pressed the button
+        // themselves needs no echo; the others say what happened to the agent.
+        const reason = String(state.fallback_reason).replace(/[。.]$/, '');
+        const chosenHere = /自己判断/.test(reason);
         return (
             <p data-testid="agent-cut-fallback" className="mt-3 text-[12px] font-semibold leading-5 text-[#676970] dark:text-white/60">
-                {`没有等到 agent 的剪辑判断（${state.fallback_reason}），由 FluentFlow 自己判断。`}
+                {chosenHere ? '剪辑由 FluentFlow 判断（你选的）。' : `${reason}，剪辑改由 FluentFlow 判断。`}
             </p>
         );
     }

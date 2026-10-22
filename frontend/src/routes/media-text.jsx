@@ -37,7 +37,7 @@ import {finishedDuplicateLink, submitIgnoredExtraUrls, submitWasDuplicateOfActiv
 import {noteWriterBatchClause, noteWriterSentence, resolveNoteWriter, textModelKeyConfigured} from '../lib/noteWriter.js';
 import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {dismissNoteKeyOnboarding, noteKeyOnboardingDismissed, shouldAutoOpenNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
-import {taskStatusLabel} from '../lib/taskState.js';
+import {taskOutcome} from '../lib/taskState.js';
 import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
@@ -52,10 +52,17 @@ const platformItems = [
     {label: '本地文件', tone: 'bg-[#efeeee] text-[#111111]', icon: 'local-file'},
 ];
 
+const RECENT_BADGE_TONE = {
+    live: 'bg-blue-50 text-blue-700 dark:bg-blue-400/10 dark:text-blue-200',
+    warn: 'bg-[#fffaf0] text-[#8a5a00] dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]',
+    failed: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300',
+};
+
 const MediaText = () => {
     const {t, lang} = useI18n();
     const {
         history,
+        tasks,
         addToHistory,
         currentJob,
         setCurrentJob,
@@ -653,6 +660,14 @@ const MediaText = () => {
     };
 
     const recent = history.slice(0, 6);
+    // The badge comes from the task itself where the page has it, so a card
+    // says when the note or the cut did not happen; a finished task with
+    // nothing to add carries no badge at all.
+    const jobByTaskId = useMemo(() => new Map((tasks || []).map((job) => [String(job?.task_id || ''), job])), [tasks]);
+    const recentOutcome = (item) => taskOutcome(
+        jobByTaskId.get(String(item.taskId || '')) || {status: item.status === 'processing' ? 'running' : item.status},
+        lang,
+    );
 
     const openRecentTask = async (item) => {
         const cachedResult = historyEntryToResult(item);
@@ -714,13 +729,11 @@ const MediaText = () => {
                 </div>
 
                 <section
-                    className="relative overflow-hidden rounded-[24px] border border-[#dedada] bg-white p-8 shadow-[0_26px_70px_-46px_rgba(17,17,17,.5)] dark:border-white/[0.12] dark:bg-[#1d1f22] dark:shadow-none"
+                    className="rounded-[24px] border border-[#dedada] bg-white p-8 shadow-[0_26px_70px_-46px_rgba(17,17,17,.5)] dark:border-white/[0.12] dark:bg-[#1d1f22] dark:shadow-none"
                     onDrop={handleDrop}
                     onDragOver={(e) => e.preventDefault()}
                 >
-                    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_14%,rgba(0,174,236,.14),transparent_32%),radial-gradient(circle_at_82%_10%,rgba(255,0,51,.08),transparent_28%),radial-gradient(circle_at_44%_105%,rgba(151,231,211,.12),transparent_34%)] dark:bg-[radial-gradient(circle_at_18%_14%,rgba(0,174,236,.18),transparent_34%),radial-gradient(circle_at_82%_10%,rgba(255,0,51,.12),transparent_30%),radial-gradient(circle_at_42%_108%,rgba(151,231,211,.12),transparent_36%)]"/>
-                    <div className="pointer-events-none absolute inset-0 bg-white/72 dark:bg-[#1d1f22]/78"/>
-                    <div className="relative z-10">
+                    <div>
                         <div className="mb-7 flex items-center justify-between gap-3">
                             <div className="inline-flex min-w-0 shrink rounded-[18px] border border-[#dedada] bg-[#f4f3f3] p-1 dark:border-white/[0.12] dark:bg-white/[0.08]">
                                 {['media', 'subtitle'].map((item) => (
@@ -734,9 +747,6 @@ const MediaText = () => {
                                     </button>
                                 ))}
                             </div>
-                            <Link to="/agent" className="inline-flex h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-[16px] bg-[#efeeee] px-4 text-sm font-extrabold text-[#111111] hover:bg-[#e8e5e5] dark:bg-white/[0.12] dark:text-white dark:hover:bg-white/[0.18]">
-                                {t('dash.viewTasks')}
-                            </Link>
                         </div>
 
                         {mode === 'media' && (
@@ -772,24 +782,17 @@ const MediaText = () => {
                                         type="button"
                                         onClick={handleChooseFromComputer}
                                         disabled={submitting || choosing || backendDown}
-                                        className="flex min-h-[180px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
+                                        className="flex min-h-[180px] w-full flex-col items-center justify-center rounded-[20px] py-8 border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
                                     >
                                         <SvgIcon name={choosing ? 'sync' : 'upload-file'} className={`mb-3 size-8 text-[#111111] dark:text-white ${choosing ? 'animate-spin' : ''}`}/>
                                         <span className="text-lg font-extrabold">{lang === 'zh' ? '拖放或选择音视频文件' : 'Drop or choose media files'}</span>
                                         <span className="mt-2 text-sm font-semibold text-[#777] dark:text-white/55">MP4 / MOV / MP3 / WAV / M4A</span>
-                                        {/* Said once, here, where the choice is made.
-                                            The product has always put the cut file in
-                                            the owner's folder and has never told them
-                                            so — the only place it was written was the
-                                            hover text of a button that no longer
-                                            exists. Repeating it on every processing
-                                            record instead would be a column of the
-                                            same words; this is the moment it decides
-                                            anything. */}
-                                        <span className="mt-3 max-w-[46ch] text-[13px] font-semibold leading-relaxed text-[#8a8a8a] dark:text-white/45">
+                                        {/* Said once, where the choice is made: the owner
+                                            otherwise does not know a folder appears. */}
+                                        <span className="mt-3 text-[13px] font-semibold text-[#8a8a8a] dark:text-white/45">
                                             {lang === 'zh'
-                                                ? '处理完，原片旁边会多一个同名文件夹，剪后的视频、PDF 笔记、转录稿和字幕都在里面，原片不动。拖进来的文件如果认不出位置，就只能留在应用里，到时候会说明。'
-                                                : 'When it is done, a folder named after the recording appears next to it with the de-breathed video, the PDF note, the transcript and subtitles; the original is left untouched. A dropped file this machine cannot place stays in the app instead, and says so.'}
+                                                ? '产出放在原片旁边的同名文件夹，原片不动。'
+                                                : 'Outputs go in a folder next to the recording; the original is left untouched.'}
                                         </span>
                                     </button>
                                 )}
@@ -849,8 +852,8 @@ const MediaText = () => {
                             <SvgIcon name="info" className="mt-0.5 size-4 shrink-0"/>
                             <p>
                                 {lang === 'zh'
-                                    ? '这份是拷进应用里处理的——拖进来的文件不带它在硬盘上的位置，所以原片旁边不会有产出文件夹，结果只能从处理记录里看和下载。想让它们落回原文件夹，点上面那块区域重新选一次。'
-                                    : 'This one was copied into the app to be processed — a dropped file does not carry where it lives, so no output folder appears next to the original and the results are only in the processing records. To have them land in your folder, click the area above and pick it again.'}
+                                    ? '没认出这个文件在哪，结果只在处理记录里。想放回原文件夹，点上面重新选一次。'
+                                    : 'Could not tell where this file lives, so the results are only in the processing records. To have them land in its folder, click above and pick it again.'}
                             </p>
                             </div>
                         )}
@@ -905,15 +908,20 @@ const MediaText = () => {
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-                            {recent.map((item) => (
-                                <button key={item.id} type="button" onClick={() => openRecentTask(item)} className="min-w-0 rounded-[18px] bg-[#f4f3f3] p-4 text-left transition hover:bg-[#efeeee] dark:bg-white/[0.08] dark:hover:bg-white/[0.12]">
-                                    <div className="mb-2 flex items-center justify-between gap-2">
-                                        <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold">{item.name}</h3>
-                                        <span className="inline-flex shrink-0 whitespace-nowrap rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-[#666] dark:bg-white/[0.16] dark:text-white/70">{taskStatusLabel({status: item.status}, lang)}</span>
-                                    </div>
-                                    <p className="text-xs font-semibold text-[#777] dark:text-white/55">{timeAgo(item.timestamp, t)}{item.durationMin > 0 && ` · ${item.durationMin} ${t('dash.minUnit')}`}</p>
-                                </button>
-                            ))}
+                            {recent.map((item) => {
+                                const outcome = recentOutcome(item);
+                                return (
+                                    <button key={item.taskId || item.id} type="button" onClick={() => openRecentTask(item)} className="min-w-0 rounded-[18px] bg-[#f4f3f3] p-4 text-left transition hover:bg-[#efeeee] dark:bg-white/[0.08] dark:hover:bg-white/[0.12]">
+                                        <div className="mb-2 flex items-center justify-between gap-2">
+                                            <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold">{item.name}</h3>
+                                            {outcome.tone !== 'done' && (
+                                                <span data-testid="recent-badge" className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold ${RECENT_BADGE_TONE[outcome.tone]}`}>{outcome.label}</span>
+                                            )}
+                                        </div>
+                                        <p className="text-xs font-semibold text-[#777] dark:text-white/55">{timeAgo(item.timestamp, t)}{item.durationMin > 0 && ` · ${item.durationMin} ${t('dash.minUnit')}`}</p>
+                                    </button>
+                                );
+                            })}
                         </div>
                     )}
                 </section>

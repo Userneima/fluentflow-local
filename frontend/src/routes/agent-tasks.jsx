@@ -6,19 +6,19 @@ import {
     FileText,
     History,
     LoaderCircle,
+    MoreHorizontal,
     Plus,
     RefreshCw,
     SlidersHorizontal,
-    Trash2,
     XCircle,
 } from 'lucide-react';
 import {CutReport} from '../components/CutReport.jsx';
 import AgentCutWait from '../components/AgentCutWait.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
-import {fmtDurationCompact, progressMessageOf} from '../lib/format.js';
+import {fmtDuration, progressMessageOf} from '../lib/format.js';
+import {DropdownMenu} from '../app/DropdownMenu.jsx';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
 import {
-    fmtElapsed,
     fmtBytes,
     fmtFileSize,
     diagnoseTaskError,
@@ -47,7 +47,8 @@ import {
     TASK_STATE_CANCELLED,
     TASK_STATE_CACHED_ONLY,
     taskStatusLabel,
-    isNoteStillBeingWritten,
+    taskOutcome,
+    cutsToJudge,
 } from '../lib/taskState.js';
 import {useJobPolling} from '../lib/useJobPolling.js';
 import {extraUrlsIgnoredNotice, retryInputForJob, retryOptionsForJob} from '../lib/linkRetry.js';
@@ -83,16 +84,6 @@ const formatTaskDateTime = (value, lang) => {
     }
 };
 
-const formatProcessingElapsed = (seconds) => {
-    const total = Math.max(0, Math.round(Number(seconds) || 0));
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    const secs = total % 60;
-    if (hours > 0) return `${hours}h${minutes}min`;
-    if (minutes > 0) return secs > 0 ? `${minutes}min${secs}s` : `${minutes}min`;
-    return `${secs}s`;
-};
-
 const taskProcessingTimeLabel = (job, lang) => {
     const result = job?.result || {};
     const metadata = job?.metadata || {};
@@ -117,7 +108,7 @@ const taskProcessingTimeLabel = (job, lang) => {
     );
     const explicitFactor = Number(result.stt_realtime_factor || metadata.stt_realtime_factor || 0);
     const factor = explicitFactor > 0 ? explicitFactor : (sourceDuration > 0 ? elapsed / sourceDuration : 0);
-    const elapsedLabel = formatProcessingElapsed(elapsed);
+    const elapsedLabel = fmtDuration(elapsed, lang);
     if (factor > 0) {
         const percent = Math.max(1, Math.round(factor * 100));
         return lang === 'zh'
@@ -244,7 +235,7 @@ const queueWaitDetail = (job, lang, aheadName = '') => {
     const waitingFor = String(wait?.waiting_for || '').trim();
     if (!waitingFor) return '';
     const since = Date.parse(wait?.since || '');
-    const waited = Number.isFinite(since) ? fmtElapsed((Date.now() - since) / 1000) : '';
+    const waited = Number.isFinite(since) ? fmtDuration((Date.now() - since) / 1000, lang) : '';
     // The recording's own name, because that is what the reader recognises on
     // this page. A task id identifies the right row to a developer and nothing
     // at all to the person who queued five lectures; it is the fallback only
@@ -336,7 +327,7 @@ const fileInfoLabel = (job, lang) => {
     const parts = [];
     if ((job?.source_type || job?.result?.source || '') === 'video_link') parts.push(sourceLabel(job, lang));
     if (sizeMb) parts.push(fmtFileSize(sizeMb));
-    if (durationSec) parts.push(fmtElapsed(durationSec));
+    if (durationSec) parts.push(fmtDuration(durationSec, lang));
     return parts.join(' · ') || '-';
 };
 
@@ -418,6 +409,9 @@ export const debreathTile = (job, lang) => {
     const plan = state.plan || {};
     const cuts = Number(plan.cut_count) || 0;
     const removed = Number(plan.removed_seconds) || 0;
+    // Only the time removed. The engine's cut count counts every breath gap
+    // one by one (1887 on a long interview), while the processing report
+    // groups them into a few dozen entries, so the two numbers never agreed.
     if (state.status === 'running') return {value: isZh ? '正在剪…' : 'Cutting…'};
     if (state.status === 'failed') return {value: isZh ? '没成功' : 'Failed'};
     if (state.not_worth_rendering) {
@@ -439,8 +433,8 @@ export const debreathTile = (job, lang) => {
         return {value: isZh ? '按原片处理' : 'Used the original'};
     }
     if (!cuts) return {value: isZh ? '没有可剪的空白' : 'Nothing to cut'};
-    const removedText = fmtDurationCompact(removed);
-    const value = isZh ? `剪掉 ${cuts} 处，省 ${removedText}` : `${cuts} cuts, ${removedText} saved`;
+    const removedText = fmtDuration(removed, lang);
+    const value = isZh ? `剪掉 ${removedText}` : `${removedText} removed`;
     // No line for the file landing beside the original: that is the normal outcome,
     // and a card that narrates the normal outcome is noise. The hint below is kept
     // for the outcomes that are *not* obvious from the numbers.
@@ -475,10 +469,11 @@ export const noteTileValue = (job, lang) => {
     return isZh ? '等处理' : 'Pending';
 };
 
-const statePillClass = (state, job) => {
-    if (state === TASK_STATE_COMPLETED && !isNoteStillBeingWritten(job)) return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-100';
-    if (state === TASK_STATE_FAILED || state === TASK_STATE_CANCELLED) return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300';
-    return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-200';
+const OUTCOME_PILL_CLASS = {
+    done: 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-100',
+    warn: 'border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]',
+    failed: 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300',
+    live: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-200',
 };
 
 const QueueUploadBanner = ({upload, lang, onCancel}) => {
@@ -583,6 +578,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
         {label: lang === 'zh' ? '笔记' : 'Note', value: noteTileValue(job, lang), hint: noteFallbackSentence(job?.result, lang), wrapHint: true},
     ];
     const delivery = cutFileDelivery(job, lang);
+    const outcome = taskOutcome(job, lang);
     return (
         <article
             ref={highlightRef}
@@ -592,8 +588,8 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-extrabold ${statePillClass(state, job)}`}>
-                            {statusLabel(job, lang)}
+                        <span data-testid="task-outcome" className={`rounded-full border px-2.5 py-1 text-[11px] font-extrabold ${OUTCOME_PILL_CLASS[outcome.tone]}`}>
+                            {outcome.label}
                         </span>
                         <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">
                             {formatTaskDateTime(job?.updated_at || job?.created_at, lang)}
@@ -625,11 +621,17 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                             {lang === 'zh' ? '取消' : 'Cancel'}
                         </button>
                     ) : null}
+                    {/* Deleting is rare and cannot be undone; it does not sit
+                        beside "查看结果" at the same weight. */}
                     {terminal && taskId ? (
-                        <button type="button" disabled={deletingTaskId === taskId} onClick={() => onDelete(job)} className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] bg-white px-4 text-[13px] font-extrabold text-[#57585d] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]">
-                            {deletingTaskId === taskId ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <Trash2 className="size-4" strokeWidth={2.15}/>}
-                            {lang === 'zh' ? '删除记录' : 'Delete record'}
-                        </button>
+                        <DropdownMenu
+                            trigger={(
+                                <button type="button" disabled={deletingTaskId === taskId} aria-label={lang === 'zh' ? '更多' : 'More'} title={lang === 'zh' ? '更多' : 'More'} className="inline-flex size-10 items-center justify-center rounded-[14px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]">
+                                    {deletingTaskId === taskId ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <MoreHorizontal className="size-4" strokeWidth={2.15}/>}
+                                </button>
+                            )}
+                            items={[{icon: 'delete', label: lang === 'zh' ? '删除记录' : 'Delete record', onClick: () => onDelete(job)}]}
+                        />
                     ) : null}
                     {completed && !job?.result ? (
                         <span className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] bg-[#f4f3f3] px-4 text-[13px] font-extrabold text-[#676970] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white/55">
@@ -992,10 +994,15 @@ const AgentTasks = () => {
     const openResult = async (job) => {
         const taskId = taskIdForJob(job);
         if (!taskId) return;
+        // The task id goes in the address, and a task whose cut still has
+        // places for the owner to judge says so, so the editor can take them
+        // there (the editor side is drawn by the editor's own work).
         const open = (sourceJob, result) => {
             setLastResult(result);
             addToHistory(jobToHistoryEntry({...sourceJob, result}));
-            navigate('/editor');
+            const params = new URLSearchParams({task: taskId});
+            if (cutsToJudge({...sourceJob, result})) params.set('review', 'cut');
+            navigate(`/editor?${params.toString()}`);
         };
         if (job.result) {
             open(job, job.result);

@@ -132,13 +132,26 @@ export const fmtElapsed = (sec) => {
         ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
         : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 };
-export const fmtDurationCompact = (sec) => {
-    const n = Math.max(0, Number(sec) || 0);
+// How long something lasts or took: a recording, a cut, a transcription. One
+// wording on every page (owner's walkthrough, 2026-10-22, found "12min43s",
+// "11m 24s", "3:34:38" and "02m28s" side by side). Clock form (fmtElapsed) is
+// for positions in a recording, not for lengths. Seconds stop mattering past
+// an hour.
+export const fmtDuration = (sec, lang = 'zh') => {
+    const n = Math.max(0, Math.round(Number(sec) || 0));
     const h = Math.floor(n / 3600);
     const m = Math.floor((n % 3600) / 60);
-    const s = Math.floor(n % 60);
-    if (h > 0) return `${h}h ${m}m ${s}s`;
-    return `${m}m ${s}s`;
+    const s = n % 60;
+    const zh = lang === 'zh';
+    if (h > 0) {
+        if (!m) return zh ? `${h} 小时` : `${h}h`;
+        return zh ? `${h} 小时 ${m} 分` : `${h}h ${m}m`;
+    }
+    if (m > 0) {
+        if (!s) return zh ? `${m} 分钟` : `${m}m`;
+        return zh ? `${m} 分 ${s} 秒` : `${m}m ${s}s`;
+    }
+    return zh ? `${s} 秒` : `${s}s`;
 };
 export const fmtFileSize = (mb) => {
     const n = Number(mb);

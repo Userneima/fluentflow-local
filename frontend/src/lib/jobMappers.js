@@ -339,6 +339,10 @@ export const jobToHistoryEntry = (sourceJob) => {
     const snapshot = taskSnapshotForJob(job);
     const result = job.result || {};
     const entry = resultToHistoryEntry(result, {
+        // The task id, not the default Date.now(): every entry built in the
+        // same millisecond got the same id, and lists keyed on it duplicated
+        // and dropped cards when the cached list was replaced by the fetched one.
+        id: job.task_id || undefined,
         taskId: job.task_id,
         name: jobDisplayTitle(job),
         displayTitle: jobDisplayTitle(job),

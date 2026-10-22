@@ -41,9 +41,16 @@ describe('AgentCutWait', () => {
         await waitFor(() => expect(screen.getByText('这个任务已经不在等 agent 判断了。')).toBeTruthy());
     });
 
-    it('says why FluentFlow judged when the agent did not answer', () => {
+    // Walkthrough 2026-10-22: one sentence of state, no nested parentheses.
+    it('says why FluentFlow judged when the agent did not answer, in one sentence', () => {
         render(<AgentCutWait job={job({status: 'fallback', fallback_reason: 'agent 的对话已经关掉了'})}/>);
-        expect(screen.getByText(/没有等到 agent 的剪辑判断（agent 的对话已经关掉了）/)).toBeTruthy();
+        expect(screen.getByTestId('agent-cut-fallback').textContent).toBe('agent 的对话已经关掉了，剪辑改由 FluentFlow 判断。');
+    });
+
+    it('does not echo the reason back when the person chose it on the page', () => {
+        render(<AgentCutWait job={job({status: 'fallback', fallback_reason: '你在网页上选了让 FluentFlow 自己判断'})}/>);
+        const text = screen.getByTestId('agent-cut-fallback').textContent;
+        expect(text).toBe('剪辑由 FluentFlow 判断（你选的）。');
     });
 
     it('shows nothing for a task the agent judged or that never waited', () => {

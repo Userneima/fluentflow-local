@@ -62,12 +62,15 @@ describe('debreathTile', () => {
         expect(tile.value).toBe('按原片处理');
     });
 
-    it('reports the saving when the cut was used', () => {
+    // Walkthrough 2026-10-22: the card said "剪掉 1887 处" while the grouped
+    // report listed a few dozen entries. The card gives the time removed only.
+    it('reports the time saved when the cut was used, and not the raw cut count', () => {
         const tile = debreathTile(
             job({status: 'completed', used_for_transcription: true, plan: {cut_count: 642, removed_seconds: 245}}),
             'zh'
         );
-        expect(tile.value).toMatch(/642/);
+        expect(tile.value).toBe('剪掉 4 分 5 秒');
+        expect(tile.value).not.toMatch(/642/);
     });
 });
 

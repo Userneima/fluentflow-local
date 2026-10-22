@@ -101,20 +101,46 @@ describe('a task that is writing the note', () => {
     });
 });
 
+// Walkthrough 2026-10-22: a finished task has no stage and no progress left,
+// so neither the "当前阶段 已完成 100%" block nor a full bar is shown.
 describe('a finished task', () => {
-    it('reads as complete at 100% with its title, even when the stored progress lags', () => {
+    it('shows its title and no stage or progress, even when the stored progress lags', () => {
         mount(pageFor({stage: 'done', status: 'completed', progress: 97}));
-        expect(stageShown()).toBe('已完成');
-        expect(percentShown()).toBe('100%');
+        expect(screen.queryByText('当前阶段')).toBeNull();
+        expect(screen.queryByText('100%')).toBeNull();
+        expect(screen.queryByText('97%')).toBeNull();
         expect(screen.getByText('已完成记录')).toBeTruthy();
         expect(screen.getByText('5.投资人视角下的AI浪潮')).toBeTruthy();
-        expect(screen.getByText('处理已完成，可以打开结果继续复查。')).toBeTruthy();
     });
 
-    it('still reads as complete when only the status says so', () => {
+    it('reads as finished when only the status says so', () => {
         mount(pageFor({status: 'completed'}));
-        expect(stageShown()).toBe('已完成');
-        expect(percentShown()).toBe('100%');
+        expect(screen.queryByText('当前阶段')).toBeNull();
+        expect(screen.getByText('已完成记录')).toBeTruthy();
+    });
+});
+
+// Walkthrough 2026-10-22: the breath-gap box says what the cut came to, not
+// how it was decided (decibels, windows, raw counts that disagree with the
+// grouped report).
+describe('what the cut did, on a finished task', () => {
+    const prep = {
+        used_for_transcription: true,
+        cut_count: 1029,
+        removed_seconds: 1136,
+        kept_seconds: 1964,
+        warnings: ['抽查发现有 1029 处剪在离说话 0.3 秒以内，环境声 -42 dB'],
+        threshold_choice: {adapted: true, reason: '底噪 -38 dB，阈值调到 -33 dB'},
+    };
+
+    it('gives the time removed and left, in the shared duration wording', () => {
+        mount(pageFor({status: 'completed'}, {media_preparation: prep}));
+        expect(screen.getByText('剪掉 18 分 56 秒，剩 32 分 44 秒。')).toBeTruthy();
+    });
+
+    it('shows no count, decibels or thresholds', () => {
+        const {container} = mount(pageFor({status: 'completed'}, {media_preparation: prep}));
+        expect(container.textContent).not.toMatch(/1029|dB|0\.3 秒|阈值/);
     });
 });
 

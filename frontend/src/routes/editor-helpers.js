@@ -1,6 +1,7 @@
 // Pure helper functions extracted from editor.jsx (formatting and URL/file
 // normalization). No React/JSX dependency.
 import {normalizeSttProvider, noteGenerationDiagnosis} from '../app/shared.jsx';
+import {fmtDuration} from '../lib/format.js';
 
 
 export const jobOptionsForResult = (result) => (
@@ -175,12 +176,8 @@ export const summaryFailureNextStep = (result, lang) => {
         : `${diagnosis.title}: ${diagnosis.detail}${next}`;
 };
 
-export const formatElapsedMinuteSecond = (seconds) => {
-    const n = Math.max(0, Math.floor(Number(seconds) || 0));
-    const m = Math.floor(n / 60);
-    const s = n % 60;
-    return `${String(m).padStart(2, '0')}m${String(s).padStart(2, '0')}s`;
-};
+// The same wording as every other length on the records pages (lib/format.js).
+export const formatElapsedMinuteSecond = (seconds, lang = 'zh') => fmtDuration(seconds, lang);
 
 export const formatSttOriginalRatio = (factor, lang) => {
     const n = Number(factor);
