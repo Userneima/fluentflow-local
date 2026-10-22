@@ -38,6 +38,7 @@ import {noteWriterBatchClause, noteWriterSentence, resolveNoteWriter, textModelK
 import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {dismissNoteKeyOnboarding, noteKeyOnboardingDismissed, shouldAutoOpenNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 import {taskOutcome} from '../lib/taskState.js';
+import {fmtDuration} from '../lib/format.js';
 import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
@@ -929,7 +930,7 @@ const MediaText = () => {
                                                 <span data-testid="recent-badge" className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold ${RECENT_BADGE_TONE[outcome.tone]}`}>{outcome.label}</span>
                                             )}
                                         </div>
-                                        <p className="text-xs font-semibold text-[#777] dark:text-white/55">{timeAgo(item.timestamp, t)}{item.durationMin > 0 && ` · ${item.durationMin} ${t('dash.minUnit')}`}</p>
+                                        <p className="text-xs font-semibold text-[#777] dark:text-white/55">{timeAgo(item.timestamp, t)}{(item.audioDurationSec || item.durationMin) > 0 && ` · ${fmtDuration(item.audioDurationSec || item.durationMin * 60, lang)}`}</p>
                                     </button>
                                 );
                             })}

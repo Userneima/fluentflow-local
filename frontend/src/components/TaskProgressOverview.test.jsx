@@ -178,3 +178,33 @@ describe('a link download of unknown size', () => {
         expect(percentShown()).toMatch(/已下载 10(\.0)? MB/);
     });
 });
+
+// Walkthrough review 2026-10-22: a task whose cut and note both failed read
+// "已完成记录", "nothing to cut" and a raw encoder error. The page names what
+// is missing, as the records list does, and keeps the raw error off screen.
+describe('a finished task whose cut and note failed', () => {
+    const page = () => pageFor({status: 'completed', stage: 'done'}, {
+        note: {status: 'failed', markdown_chars: 0},
+        diagnosis: {detail: '这台机器上的 Claude 还没有登录。'},
+        media_preparation: {status: 'failed', error: 'render batch failed: Generic error in an external library [vost#0:0/hevc'},
+    });
+
+    it('says what is missing instead of 已完成', () => {
+        mount(page());
+        expect(screen.getByTestId('overview-badge').textContent).toBe('笔记没生成');
+        expect(screen.queryByText('已完成记录')).toBeNull();
+        expect(screen.getByText('去气口没成功，笔记没生成。 这台机器上的 Claude 还没有登录。')).toBeTruthy();
+    });
+
+    it('says the cut failed, not that there was nothing to cut, and shows no raw error', () => {
+        const {container} = mount(page());
+        expect(screen.getByText('去气口没成功。')).toBeTruthy();
+        expect(container.textContent).not.toMatch(/没有找到可剪的空白|render batch|vost/);
+    });
+
+    it('shows no route or material classification tiles', () => {
+        mount(page());
+        expect(screen.queryByText('处理路线')).toBeNull();
+        expect(screen.queryByText('判断材料类型')).toBeNull();
+    });
+});

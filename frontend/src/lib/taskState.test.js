@@ -73,3 +73,13 @@ describe('what a record badge says', () => {
         expect(taskOutcome({status: 'completed', result: {summary_status: 'pending'}}, 'zh')).toMatchObject({tone: 'live', label: '写笔记中'});
     });
 });
+
+// Walkthrough review 2026-10-22: a finished task whose cut is being redone is
+// still producing a result, so it is not a green 已完成.
+describe('a finished task whose cut is being redone', () => {
+    it('reads as in progress', () => {
+        const outcome = taskOutcome({status: 'completed', result: {summary_status: 'completed', summary_chars: 900, debreath: {status: 'running'}}}, 'zh');
+        expect(outcome.kind).toBe('live');
+        expect(outcome.label).toBe('正在剪气口');
+    });
+});

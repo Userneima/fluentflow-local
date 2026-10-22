@@ -270,21 +270,6 @@ function decisionEntries(packageData, lang) {
         .filter((entry) => !isCompactOverviewEntry(entry) && !isMaterialClassificationEntry(entry));
 }
 
-function materialDecisionEntry(packageData, lang) {
-    return rawDecisionEntries(packageData, lang).find(isMaterialClassificationEntry) || null;
-}
-
-const trimSentencePunctuation = (value) => (
-    String(value || '').trim().replace(/[。.;；]+$/g, '')
-);
-
-const materialJudgmentValue = (entry, lang) => {
-    if (!entry) return '';
-    const decision = trimSentencePunctuation(decisionSentence(entry, lang));
-    const evidence = materialClassificationEvidenceLine(entry, lang);
-    return [decision, evidence].filter(Boolean).join(' · ');
-};
-
 const DecisionEntry = ({entry, index, isLast, lang}) => {
     const tone = statusTone(entry.status);
     const Icon = tone.Icon;
@@ -753,7 +738,6 @@ const AgentTrace = () => {
 
     const title = pageData?.task?.title || pageData?.title || taskId;
     const decisions = useMemo(() => decisionEntries(pageData, lang), [pageData, lang]);
-    const materialEntry = useMemo(() => materialDecisionEntry(pageData, lang), [pageData, lang]);
     const chapterCoverage = useMemo(() => chapterCoverageData(pageData), [pageData]);
     const canOpenResult = Boolean(
         pageData?.actions?.some((action) => action?.id === 'open_result' && action?.enabled !== false)
@@ -832,22 +816,18 @@ const AgentTrace = () => {
                     )}
                 </header>
 
-                <TaskProgressOverview pageData={pageData} materialJudgment={materialJudgmentValue(materialEntry, lang)}/>
+                <TaskProgressOverview pageData={pageData}/>
 
                 <ChapterCoverageEvidence coverage={chapterCoverage} lang={lang}/>
 
+                {/* What the pipeline decided, for diagnosing a task. Not part of
+                    reading the result, so folded away by default. */}
                 {decisions.length > 0 && (
-                <div className="min-w-0">
-                    <section className="min-w-0 space-y-4">
-                        <div>
-                            <p className="text-[12px] font-extrabold text-[#676970] dark:text-white/[0.76]">
-                                {isZh ? '判断记录' : 'Decision records'}
-                            </p>
-                            <h2 className="font-headline text-[18px] font-extrabold text-[#111111] dark:text-white">
-                                {isZh ? '原始判断字段' : 'Raw decision fields'}
-                            </h2>
-                        </div>
-                        <div className="space-y-3">
+                    <details data-testid="trace-details" className="min-w-0 rounded-[18px] border border-[#dedada] bg-white px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
+                        <summary className="cursor-pointer text-[13px] font-extrabold text-[#676970] dark:text-white/[0.76]">
+                            {isZh ? '排查信息' : 'Diagnostics'}
+                        </summary>
+                        <div className="mt-3 space-y-3">
                             {decisions.map((entry, index) => (
                                 <DecisionEntry
                                     key={entry.id || `${entry.title}-${index}`}
@@ -858,8 +838,7 @@ const AgentTrace = () => {
                                 />
                             ))}
                         </div>
-                    </section>
-                </div>
+                    </details>
                 )}
             </div>
         </main>

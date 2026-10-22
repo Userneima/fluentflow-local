@@ -231,17 +231,26 @@ describe('recent tasks on the start page', () => {
         expect(badge('要判断的')).toBe('3 处待你判断');
     });
 
-    it('shows each task once when the entries share an id', () => {
-        const same = 1792679206324;
-        history = ['甲', '乙', '丙'].map((name, index) => ({id: same, taskId: `t${index}`, name, status: 'completed', timestamp: Date.now()}));
-        const {rerender} = mount();
-        history = ['丙', '甲', '乙'].map((name) => ({id: same, taskId: `t${['甲', '乙', '丙'].indexOf(name)}`, name, status: 'completed', timestamp: Date.now()}));
-        rerender(
-            <MemoryRouter initialEntries={['/media-text']}>
-                <Routes><Route path="/media-text" element={<MediaText/>}/></Routes>
-            </MemoryRouter>
-        );
-        expect(screen.getAllByText(/^[甲乙丙]$/).map((node) => node.textContent)).toEqual(['丙', '甲', '乙']);
+    it('keys each card on its task, so entries sharing an id stay one card each', () => {
+        // React only warns about a duplicate key; the duplicated and missing
+        // cards it then produces depend on timing. The warning is the check.
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const same = 1792679206324;
+            history = ['甲', '乙', '丙'].map((name, index) => ({id: same, taskId: `t${index}`, name, status: 'completed', timestamp: Date.now()}));
+            mount();
+            expect(screen.getAllByText(/^[甲乙丙]$/).map((node) => node.textContent)).toEqual(['甲', '乙', '丙']);
+            const keyWarnings = errors.mock.calls.filter((call) => String(call[0]).includes('same key'));
+            expect(keyWarnings).toEqual([]);
+        } finally {
+            errors.mockRestore();
+        }
+    });
+
+    it('writes the recording length in the shared duration wording', () => {
+        history = [{id: 'x', taskId: 'x', name: '长访谈', status: 'completed', timestamp: Date.now(), durationMin: 214.6, audioDurationSec: 12878.9}];
+        mount();
+        expect(screen.getByText('长访谈').parentElement.nextElementSibling.textContent).toMatch(/· 3 小时 34 分$/);
     });
 });
 

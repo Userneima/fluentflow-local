@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { reconcileTaskList, entryToJob, jobToHistoryEntry, larkExportsFromJobs, sortJobsForHistoryView } from './jobMappers.js';
 import { normalizeTaskState } from './taskState.js';
 
@@ -240,5 +240,20 @@ describe('larkExportsFromJobs', () => {
         expect(list.map((item) => item.url)).toEqual(['https://f/doc-b', 'https://f/doc-a', 'https://f/doc-old']);
         expect(list[0].title).toBe('我起的标题');
         expect(list[1].title).toBe('自动导出的讲座');
+    });
+});
+
+// Walkthrough 2026-10-22, item 4: entries built in the same millisecond took
+// the same id from Date.now(), and the start page keyed its cards on it, so
+// cards were duplicated and dropped. Each task's entry has its own id.
+describe('history entries built in the same millisecond', () => {
+    it('get distinct ids, one per task', () => {
+        const spy = vi.spyOn(Date, 'now').mockReturnValue(1792679206324);
+        try {
+            const ids = ['a', 'b', 'c'].map((id) => jobToHistoryEntry({task_id: id, status: 'completed', result: {task_id: id}}).id);
+            expect(new Set(ids).size).toBe(3);
+        } finally {
+            spy.mockRestore();
+        }
     });
 });

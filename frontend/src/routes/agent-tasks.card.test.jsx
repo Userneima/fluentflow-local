@@ -152,6 +152,21 @@ describe('the list of records', () => {
         expect(screen.getByTestId('live-summary').textContent).toBe('1 个在处理');
     });
 
+    // Review 2026-10-22: a finished task still writing its note, or redoing its
+    // cut, is in progress for the filter and the count alike.
+    it('counts a task still writing its note or redoing its cut as in progress', () => {
+        tasks = [
+            finished('ok', {}),
+            finished('writing', {summary_status: 'pending', summary_chars: 0}),
+            finished('recut', {debreath: {status: 'running'}}),
+        ];
+        mount();
+        expect(screen.getByTestId('live-summary').textContent).toBe('2 个在处理');
+        fireEvent.click(screen.getByRole('button', {name: /进行中/}));
+        const titles = screen.queryAllByRole('heading', {level: 2}).map((node) => node.textContent).sort();
+        expect(titles).toEqual(['录像 recut', '录像 writing']);
+    });
+
     it('filters to records waiting for a judgement, and to records with a problem', () => {
         tasks = [
             finished('ok', {}),

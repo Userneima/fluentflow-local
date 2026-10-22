@@ -55,7 +55,8 @@ describe('CutReport', () => {
 
     it('asks only in the first group, with why', async () => {
         opened({report: REPORT});
-        await waitFor(() => screen.getByText('原片 38:36，剪后 04:12'));
+        // Lengths in the shared duration wording (walkthrough 2026-10-22, item 12).
+        await waitFor(() => screen.getByText('原片 38 分 36 秒，剪后 4 分 12 秒'));
         expect(screen.getByText('请你判断：去掉的是有人说话的内容，请你确认。')).toBeTruthy();
         expect(screen.getAllByText('剪得对').length).toBe(1);
         expect(screen.queryByText('确实该保留')).toBeNull();
@@ -127,5 +128,19 @@ describe('CutReport', () => {
         fireEvent.click(screen.getByText('撤销这次改动'));
         fireEvent.click(screen.getByText('确定撤销'));
         await waitFor(() => expect(apiFetch.mock.calls[1][0]).toBe('/api/jobs/t1/cut-report/changes/0/undo'));
+    });
+});
+
+// Walkthrough review 2026-10-22: opened from the records "更多" menu (embedded),
+// the report must not flash "没有处理说明" before it has been read.
+describe('CutReport embedded', () => {
+    it('says it is reading on the first frame, then shows the report', async () => {
+        let answer;
+        apiFetch.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+        render(<CutReport job={listJob(0)} embedded/>);
+        expect(screen.queryByText('这条视频没有处理说明。')).toBeNull();
+        expect(screen.getByText('正在读取…')).toBeTruthy();
+        answer({ok: true, json: () => Promise.resolve({result: {debreath: {survey: {report: REPORT}}}})});
+        await waitFor(() => screen.getByText('原片 38 分 36 秒，剪后 4 分 12 秒'));
     });
 });

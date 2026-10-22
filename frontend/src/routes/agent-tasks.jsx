@@ -766,7 +766,9 @@ const AgentTaskCard = memo(AgentTaskCardView, areCardPropsEqual);
 
 const RECORD_FILTERS = [
     {id: 'all', zh: '全部', en: 'All', match: () => true},
-    {id: 'live', zh: '进行中', en: 'In progress', match: (job) => isLiveTask(job)},
+    // Anything still producing a result: queued or running, and a finished
+    // task whose note is being written or whose cut is being redone.
+    {id: 'live', zh: '进行中', en: 'In progress', match: (job) => taskOutcome(job).kind === 'live'},
     {id: 'judge', zh: '待你判断', en: 'To review', match: (job) => taskOutcome(job).kind === 'judge'},
     // Failed, cancelled, or finished without the note or the cut.
     {id: 'problem', zh: '有问题', en: 'Problems', match: (job) => !['live', 'judge', 'done'].includes(taskOutcome(job).kind)},
@@ -819,7 +821,8 @@ const AgentTasks = () => {
     const displayJobs = useMemo(() => (
         mergeJobs(currentJobRecords, jobs)
     ), [currentJobRecords, jobs]);
-    const liveJobs = useMemo(() => displayJobs.filter(isLiveTask), [displayJobs]);
+    // Same rule as the 进行中 filter, so the count, the filter and the polling agree.
+    const liveJobs = useMemo(() => displayJobs.filter((job) => taskOutcome(job).kind === 'live'), [displayJobs]);
     // The name of whichever task a waiting one is behind. Looked up here because
     // only the list knows both rows; the waiting job's own record carries the id
     // and nothing a reader would recognise.
@@ -855,7 +858,7 @@ const AgentTasks = () => {
         ));
     }, [displayJobs, filter, query, lang]);
     const queuedCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_QUEUED).length;
-    const runningCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_RUNNING || normalizeTaskState(job) === TASK_STATE_UPLOADING).length;
+    const runningCount = liveJobs.length - queuedCount;
 
     // Shared fetch + polling (see lib/useJobPolling.js), with task-oriented wording.
     const {loading, error, setError, loadJobs} = useJobPolling({

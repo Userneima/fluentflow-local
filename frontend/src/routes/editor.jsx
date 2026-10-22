@@ -753,7 +753,7 @@ const Editor = () => {
     const sttElapsedSec = result?.stt_elapsed_seconds || 0;
     const sttRealtimeFactor = result?.stt_realtime_factor || (durSec > 0 && sttElapsedSec > 0 ? sttElapsedSec / durSec : null);
     const sttElapsedLabel = sttElapsedSec > 0
-        ? `${t('edit.sttElapsed')} ${formatElapsedMinuteSecond(sttElapsedSec)}${sttRealtimeFactor ? (lang === 'zh' ? `（${formatSttOriginalRatio(sttRealtimeFactor, lang)}）` : ` (${formatSttOriginalRatio(sttRealtimeFactor, lang)})`) : ''}`
+        ? `${t('edit.sttElapsed')} ${formatElapsedMinuteSecond(sttElapsedSec, lang)}${sttRealtimeFactor ? (lang === 'zh' ? `（${formatSttOriginalRatio(sttRealtimeFactor, lang)}）` : ` (${formatSttOriginalRatio(sttRealtimeFactor, lang)})`) : ''}`
         : '';
     const activeTaskId = result?.task_id || fallbackTaskIdRef.current;
     const playbackMemoryKey = result ? `fluentflow_playback_position_${activeTaskId}` : '';

@@ -1,6 +1,7 @@
 import {useEffect, useState} from 'react';
 import {AlertCircle, Check, CheckCircle2, ChevronDown, ChevronRight, FileSearch, LoaderCircle, Play, RotateCcw, Scissors, Undo2} from 'lucide-react';
 import {API_BASE, apiFetch} from '../app/shared.jsx';
+import {fmtDuration} from '../lib/format.js';
 
 // What the cut did to this recording, organised for reading (cut_report on the
 // backend): groups, what is open and what is folded, one sentence per item.
@@ -36,14 +37,11 @@ const post = async (url, body) => {
     return response.json();
 };
 
+// Lengths in the shared wording; a gap under ten seconds keeps its tenths,
+// since "0 秒" would hide what was cut.
 const length = (seconds) => {
     const value = Number(seconds) || 0;
-    if (value < 10) return `${value.toFixed(1)} 秒`;
-    const total = Math.round(value);
-    if (total < 60) return `${total} 秒`;
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    return s ? `${m} 分 ${s} 秒` : `${m} 分钟`;
+    return value < 10 ? `${value.toFixed(1)} 秒` : fmtDuration(value);
 };
 
 const surveyOf = (job) => job?.result?.debreath?.survey;
@@ -222,7 +220,8 @@ export const CutReport = ({job, embedded = false}) => {
     const taskId = job?.task_id || job?.id;
     const [open, setOpen] = useState(embedded);
     const [survey, setSurvey] = useState(null);
-    const [loading, setLoading] = useState(false);
+    // Embedded opens loading, so its first frame is not "没有处理说明".
+    const [loading, setLoading] = useState(embedded);
     const [error, setError] = useState('');
     const [saving, setSaving] = useState(false);
     const rerendering = !!survey?.rerendering;
@@ -321,7 +320,7 @@ export const CutReport = ({job, embedded = false}) => {
                     ) : report ? (
                         <>
                             <p className="text-[13px] font-extrabold tabular-nums text-[#111111] dark:text-white">
-                                原片 {clock(report.before_seconds)}，剪后 {clock(report.after_seconds)}
+                                原片 {fmtDuration(report.before_seconds)}，剪后 {fmtDuration(report.after_seconds)}
                             </p>
                             {report.summary ? <p className="mt-1 text-[13px] font-semibold leading-5 text-[#57585d] dark:text-white/70">{report.summary}</p> : null}
                             {rerendering ? (

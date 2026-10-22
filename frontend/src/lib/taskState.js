@@ -84,6 +84,10 @@ export const taskOutcome = (job = {}, lang = 'zh') => {
         return {kind: 'live', tone: 'live', label: taskStatusLabel(job, lang)};
     }
     const result = job?.result || {};
+    // A finished task whose cut is being redone is still producing a result.
+    if (String(result.debreath?.status || '').toLowerCase() === 'running') {
+        return {kind: 'live', tone: 'live', label: zh ? '正在剪气口' : 'Cutting'};
+    }
     const noteChars = Number.isFinite(result.summary_chars)
         ? result.summary_chars
         : String(result.summary_markdown || '').trim().length;

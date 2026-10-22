@@ -14,6 +14,7 @@ import {
     useI18n,
 } from '../app/shared.jsx';
 import {fmtDuration} from '../lib/format.js';
+import {taskOutcome} from '../lib/taskState.js';
 import {useApp} from '../app/AppContext.jsx';
 
 const stageLabel = (stage, lang, {audioOnly = false} = {}) => {
@@ -63,7 +64,14 @@ const MediaPreparation = ({prep, lang}) => {
     const removed = Number(prep.removed_seconds) || 0;
     const kept = Number(prep.kept_seconds) || 0;
     const lines = [];
-    if (declined) {
+    // A failed or running cut is said as such; it never falls through to
+    // "nothing to cut", and the raw encoder error stays in the task record.
+    const cutStatus = String(prep.status || '').toLowerCase();
+    if (cutStatus === 'failed') {
+        lines.push(isZh ? '去气口没成功。' : 'The breath-gap cut did not succeed.');
+    } else if (cutStatus === 'running') {
+        lines.push(isZh ? '正在剪气口。' : 'Cutting breath gaps.');
+    } else if (declined) {
         lines.push(isZh
             ? '这次按原文件转写和写笔记，没有用剪后的版本。'
             : 'The recording was transcribed and the note written from it, not from a cut version.');
@@ -90,7 +98,6 @@ const MediaPreparation = ({prep, lang}) => {
             ? '剪出来的文件没通过自检，文件保留了但没有用于后面的步骤。'
             : 'The cut file failed its own check; it was kept but not used downstream.');
     }
-    if (prep.error) lines.push(prep.error);
     return (
         <div className="mt-4 rounded-[15px] border border-[#dedada] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
             <p className="text-[11px] font-extrabold text-[#676970] dark:text-white/[0.72]">
@@ -217,7 +224,43 @@ const noteWordCountTag = (pageData, lang) => {
     return lang === 'zh' ? `${formatted} 字` : `${formatted} chars`;
 };
 
-const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
+// The task page's data in the shape taskOutcome reads, so this page names a
+// finished task the way the records list does (walkthrough review, 2026-10-22:
+// a task whose cut and note both failed read "已完成记录").
+const outcomeJobFromPage = (pageData) => {
+    const task = pageData?.task || {};
+    const note = pageData?.note || {};
+    const prep = pageData?.media_preparation;
+    const chars = Number(note.markdown_chars);
+    return {
+        status: task.status,
+        stage: task.stage,
+        result: {
+            summary_status: note.status || null,
+            summary_chars: Number.isFinite(chars) ? chars : String(note.markdown || '').trim().length,
+            debreath: prep ? {status: prep.status, survey: prep.survey} : undefined,
+        },
+    };
+};
+
+const outcomeHint = (outcome, pageData, isZh) => {
+    const prepFailed = String(pageData?.media_preparation?.status || '').toLowerCase() === 'failed';
+    const noteFailed = String(pageData?.note?.status || '').toLowerCase() === 'failed';
+    if (outcome.kind === 'no_note' || outcome.kind === 'cut_failed') {
+        const missing = [
+            prepFailed ? (isZh ? '去气口没成功' : 'the breath-gap cut did not succeed') : '',
+            noteFailed ? (isZh ? '笔记没生成' : 'no note was written') : '',
+        ].filter(Boolean).join(isZh ? '，' : ', ');
+        const why = noteFailed ? String(pageData?.diagnosis?.detail || pageData?.note?.diagnosis?.detail || '').trim() : '';
+        return [missing ? `${missing}${isZh ? '。' : '.'}` : '', why].filter(Boolean).join(' ');
+    }
+    if (outcome.kind === 'transcript_only') return isZh ? '没填模型 Key，这次只有转录稿。' : 'No model key, so this time there is a transcript only.';
+    if (outcome.kind === 'judge') return isZh ? '剪辑有几处等你判断，点「查看结果」去处理。' : 'Some cuts wait for your judgement; open the result to review them.';
+    if (outcome.kind === 'live') return isZh ? '还在出结果，进度会在这里更新。' : 'Still producing results; progress updates here.';
+    return isZh ? '处理已完成，可以打开结果继续复查。' : 'Processing is complete. Open the result to review it.';
+};
+
+const TaskProgressOverview = ({pageData}) => {
     const {lang, t} = useI18n();
     const {cancelJobRecord} = useApi();
     const {currentJob, setCurrentJob} = useApp();
@@ -297,10 +340,11 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
         }
     };
 
+    const outcome = completed ? taskOutcome(outcomeJobFromPage(pageData), lang) : null;
     const badgeText = activeCurrentJob
         ? (isZh ? '当前任务' : 'Active task')
         : completed
-            ? (isZh ? '已完成记录' : 'Completed record')
+            ? (outcome.kind === 'done' ? (isZh ? '已完成记录' : 'Completed record') : outcome.label)
             : failed
                 ? (isZh ? '处理失败' : 'Failed')
                 : (isZh ? '任务记录' : 'Task record');
@@ -308,7 +352,7 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
     const overviewHint = activeCurrentJob
         ? (isZh ? '你可以离开本页，进度会在记录里继续更新。' : 'You can leave this page; progress will continue updating in records.')
         : completed
-            ? (isZh ? '处理已完成，可以打开结果继续复查。' : 'Processing is complete. Open the result to review it.')
+            ? outcomeHint(outcome, pageData, isZh)
             : failed
                 ? (diagnosis.detail || diagnosis.next_action || (isZh ? '查看失败原因，按建议重新处理。' : 'Review the failure reason and retry if needed.'))
                 : runningDetail;
@@ -320,10 +364,11 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
         {label: isZh ? '转录路线' : 'Route', value: activeJobRoute || route || currentStageLabel},
         {label: isZh ? '摘要模式' : 'Summary mode', value: activeJobSummaryMode},
     ] : [
+        // Where it came from and how big it is. The route ("本地转写 · large-v3")
+        // and the material classification were internal readings, dropped from
+        // the records card earlier for the same reason.
         {label: isZh ? '来源' : 'Source', value: source},
-        {label: isZh ? '处理路线' : 'Route', value: route || currentStageLabel},
         {label: isZh ? '文件信息' : 'File', value: [fileSizeText, durationText].filter(Boolean).join(' · ')},
-        {label: isZh ? '判断材料类型' : 'Material type', value: materialJudgment, wrap: true},
     ];
 
     return (
@@ -335,7 +380,9 @@ const TaskProgressOverview = ({pageData, materialJudgment = ''}) => {
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                        <span className="inline-flex rounded-full bg-[#efeeee] px-3 py-1 text-[12px] font-extrabold text-[#111111] dark:bg-white/[0.13] dark:text-white">
+                        <span data-testid="overview-badge" className={`inline-flex rounded-full px-3 py-1 text-[12px] font-extrabold ${outcome?.tone === 'warn'
+                            ? 'bg-[#fffaf0] text-[#8a5a00] dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]'
+                            : 'bg-[#efeeee] text-[#111111] dark:bg-white/[0.13] dark:text-white'}`}>
                             {badgeText}
                         </span>
                         {noteMode && (
