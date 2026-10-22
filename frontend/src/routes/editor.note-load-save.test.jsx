@@ -55,6 +55,15 @@ vi.mock('../app/shared.jsx', async () => {
     };
 });
 
+// jsdom has no layout. The note editor scrolls the selection into view after
+// a change, which asks for rectangles; without these the run ends with an
+// unhandled error and a failing exit code even though every test passed.
+const noRects = () => ({length: 0, item: () => null, [Symbol.iterator]: function* () {}});
+const emptyRect = () => ({x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({})});
+Range.prototype.getClientRects = noRects;
+Range.prototype.getBoundingClientRect = emptyRect;
+Element.prototype.getClientRects = noRects;
+
 const {AppCtx} = await import('../app/AppContext.jsx');
 const {default: Editor} = await import('./editor.jsx');
 
