@@ -124,6 +124,16 @@ def update_job_summary(
     max_chars = int(os.environ.get("FLUENTFLOW_MAX_SUMMARY_EDIT_CHARS", "500000"))
     if len(summary) > max_chars:
         raise HTTPException(status_code=413, detail=f"Summary edit is too large: {len(summary)} chars")
+    current = str(before.get("summary_markdown") or "")
+    if len(current) > len(summary) and summary.strip() and summary == current[:len(summary)] and len(summary) <= 240:
+        # The task list carries only the note's first 240 characters. A page
+        # that saved before the full note reached it sent that preview back as
+        # the whole note, and the 3.5-hour interview's 40,000-character note
+        # became 240 characters in the task, its folder and Feishu (2026-10-22).
+        raise HTTPException(status_code=409, detail={
+            "code": "preview_not_note",
+            "message": "这次保存只有笔记开头的一小段，像是页面还没载入全文就存了，已拒绝，笔记没有改动。请刷新页面再改。",
+        })
 
     edited_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     if not result.get("summary_edited") and not result.get("summary_original_markdown"):

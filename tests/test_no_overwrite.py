@@ -83,6 +83,39 @@ def test_the_page_saves_when_it_edited_the_latest_note():
     assert "第二次改" in job_store.get_job(task)["result"]["summary_markdown"]
 
 
+LONG_NOTE = "# 访谈\n\n" + "".join(f"## 第{i}节\n\n第{i}节讲了很多内容，每一段都很长。\n\n" for i in range(1, 80))
+
+
+def test_the_task_list_preview_saved_as_the_note_is_refused():
+    """The task list carries a note's first 240 characters. A page that saves
+    that preview back must not replace the whole note (2026-10-22: a 40,000
+    character note became 240 in the task, its folder and Feishu)."""
+    task = _task(summary_markdown=LONG_NOTE)
+    loaded = job_store.get_job(task)["result"]
+
+    response = _edit_client().patch(f"/jobs/{task}/summary", headers=HEADERS, json={
+        "summary_markdown": LONG_NOTE[:240], "base_version": loaded["note_version"],
+    })
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "preview_not_note"
+    assert job_store.get_job(task)["result"]["summary_markdown"] == LONG_NOTE
+
+
+def test_a_note_cut_short_on_purpose_still_saves():
+    """Deleting most of a note and keeping a new short text is an edit, not the preview."""
+    task = _task(summary_markdown=LONG_NOTE)
+    loaded = job_store.get_job(task)["result"]
+    kept = "# 访谈\n\n只留下这一句总结。\n"
+
+    response = _edit_client().patch(f"/jobs/{task}/summary", headers=HEADERS, json={
+        "summary_markdown": kept, "base_version": loaded["note_version"],
+    })
+
+    assert response.status_code == 200
+    assert job_store.get_job(task)["result"]["summary_markdown"] == kept
+
+
 def test_the_page_cannot_save_old_subtitles_over_newer_ones():
     task = _task()
     loaded = job_store.get_job(task)["result"]
