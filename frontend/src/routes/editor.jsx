@@ -59,7 +59,6 @@ import {usePromptEditing} from '../lib/usePromptEditing.js';
 import {notePendingSentence, notePromptScopeSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
 import {speakerDiarizationRequested} from '../lib/settingsModel.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
-import NoteEvidenceStrip from '../components/NoteEvidenceStrip.jsx';
 import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
@@ -2149,20 +2148,6 @@ const Editor = () => {
                                     )}
                                     </div>
                                 )}
-                                {/* Same rule as the de-breath entry, and gone for the
-                                    same reason: an upload already wrote this note from
-                                    the cut file, so an entry offering to write it was
-                                    offering to redo finished work. The note above *is*
-                                    that note.
-
-                                    What replaced it is not an action but an account:
-                                    which frames the note was written from, and which
-                                    ones it was given and ignored. */}
-                                <NoteEvidenceStrip
-                                    result={result}
-                                    lang={lang}
-                                    onSeek={(seconds) => seekMediaTo(seconds)}
-                                />
                                 <div className="flex justify-end border-t border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                     <Link to={agentWorkflowHref} className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#dedada] bg-white px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]">
                                         <SvgIcon name="route" className="text-sm"/>
