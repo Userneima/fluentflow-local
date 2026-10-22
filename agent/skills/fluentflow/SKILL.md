@@ -7,6 +7,8 @@ description: Turn a video, recording or video link into a transcript and a study
 
 FluentFlow runs on the user's machine and does the heavy work: download, cut silent gaps, transcribe, pick frames. You write the note yourself from what it hands you, so the user needs no model key. All of it goes through the `fluentflow-local` MCP tools; do not reimplement any step in the conversation.
 
+When the user asks how FluentFlow is set up (who writes the notes, who decides the cuts, whether something needs fixing), call `get_status`: it returns, step by step, how a task you submit will be handled and anything the user has to fix first, the same list the Settings page shows. Relay it in a sentence or two.
+
 If the tools fail because nothing answers at `127.0.0.1:8000`, ask the user to open "FluentFlow Local" from the Desktop (or start it yourself the same way), then retry.
 
 ## Making a note

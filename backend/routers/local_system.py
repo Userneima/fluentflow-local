@@ -34,6 +34,7 @@ from backend.core.speaker_diarization import diarization_status
 from backend.core.versioning import get_app_version, version_payload
 from backend.core.edition_identity import identity_payload
 from backend.core.local_request_scope import agent_access_status
+from backend.core.workflow_status import workflow_status
 
 
 router = APIRouter()
@@ -305,6 +306,29 @@ def runtime_config() -> dict[str, Any]:
             "writes_its_own_note": local_intake_flow.auto_note_enabled(),
         },
     }
+
+
+# Who does each step and what needs the person (decision 6.24). The page passes
+# the choices it keeps in the browser; see backend/core/workflow_status.py.
+@router.get("/workflow-status")
+def get_workflow_status(
+    ai_provider: str = "",
+    ai_model: str = "",
+    default_source: str = "",
+    speaker_diarization: str = "",
+    voice_enhance: str = "",
+    skip_ai_summary: str = "",
+    export_to_lark: str = "",
+) -> dict[str, Any]:
+    return workflow_status({
+        "ai_provider": ai_provider,
+        "ai_model": ai_model,
+        "default_source": default_source,
+        "speaker_diarization": speaker_diarization,
+        "voice_enhance": voice_enhance,
+        "skip_ai_summary": skip_ai_summary,
+        "export_to_lark": export_to_lark,
+    })
 
 
 # Whether an agent can connect (the access token is set) and when one last did.

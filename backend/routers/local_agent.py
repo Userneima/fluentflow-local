@@ -55,6 +55,7 @@ from backend.core.note_title import resolve_lark_doc_title
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.core.edition_identity import INTAKE_REJECTION
+from backend.core.workflow_status import workflow_status
 from backend.routers.local_feishu_export import _local_lark_export_target, _record_export_on_task
 from backend.routers.local_job_debreath import start_local_debreath
 from backend.routers.local_job_visual_note import start_local_visual_note
@@ -495,6 +496,17 @@ def _note_title(markdown: str) -> str:
         if line.startswith("#"):
             return line.lstrip("#").strip()
     return ""
+
+
+@router.get("/status")
+def agent_workflow_status() -> dict[str, Any]:
+    """Who does each step for a task an agent submits, and what needs the
+    person: the same list Settings shows (decision 6.24), in Chinese."""
+    overview = workflow_status(for_agent=True)
+    return {
+        "attention": [item["text"]["zh"] for item in overview["attention"]],
+        "steps": [{"step": step["title"]["zh"], "now": step["summary"]["zh"]} for step in overview["steps"]],
+    }
 
 
 @router.get("/tasks")

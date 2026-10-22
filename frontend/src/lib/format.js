@@ -324,7 +324,7 @@ const feishuTaskDiagnosis = (raw, lower) => {
             titleZh: '没有填飞书应用凭证', titleEn: 'Feishu app credentials missing',
             detailZh: '「飞书应用导出」需要 App ID 和 App Secret，现在还没有填。',
             detailEn: 'Feishu app export needs an App ID and App Secret, and none are set.',
-            nextZh: '到设置「高级 · 其他凭证」里填写 FEISHU APP ID 和 FEISHU APP SECRET；或在「飞书导出路线」里改选「本机身份导出」。',
+            nextZh: '到设置「账号和 Key」里填写 FEISHU APP ID 和 FEISHU APP SECRET；或在「飞书导出路线」里改选「本机身份导出」。',
             nextEn: 'Enter FEISHU APP ID and FEISHU APP SECRET in Settings, or switch the route to Local identity export.',
             retryable: false,
         });
@@ -335,7 +335,7 @@ const feishuTaskDiagnosis = (raw, lower) => {
             titleZh: '飞书应用凭证不对', titleEn: 'Feishu app credentials rejected',
             detailZh: '飞书不接受当前的 App ID / App Secret（填错了，或 Secret 已经重置）。',
             detailEn: 'Feishu rejected the App ID / App Secret (wrong, or the secret was reset).',
-            nextZh: '到飞书开放平台 → 你的应用 → 凭证与基础信息，复制最新的 App ID 和 App Secret，填回设置「高级 · 其他凭证」后重试。',
+            nextZh: '到飞书开放平台 → 你的应用 → 凭证与基础信息，复制最新的 App ID 和 App Secret，填回设置「账号和 Key」后重试。',
             nextEn: 'Copy the current App ID and App Secret from the Feishu open platform into Settings, then retry.',
             retryable: false,
         });

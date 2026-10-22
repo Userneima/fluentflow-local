@@ -1,6 +1,5 @@
 import {TEXT_PROVIDERS, textProvider, textProviderLabel} from '../lib/textProviders.js';
 import {useEffect, useState} from 'react';
-import SvgIcon from './SvgIcon.jsx';
 import {
     MoreInfo,
     RouteCard,
@@ -25,7 +24,7 @@ import {
 
 // `overlays` are the page's fixed dialogs. They render inside this wrapper
 // rather than beside it so they keep inheriting the page's own text color.
-export const SettingsPageShell = ({banner = null, overlays = null, children}) => {
+export const SettingsPageShell = ({banner = null, overlays = null, intro = null, children}) => {
     const {t, lang} = useI18n();
     return (
         <div className="ml-[var(--sidebar-offset)] min-h-screen bg-[#f8f7fb] pb-8 text-[#111111] transition-[margin] duration-200 ease-out dark:bg-[#101010] dark:text-white/[0.92]">
@@ -33,9 +32,9 @@ export const SettingsPageShell = ({banner = null, overlays = null, children}) =>
                 <header className="mb-6">
                     <h1 className="font-headline text-2xl font-extrabold tracking-tight text-[#111111] dark:text-white">{t('set.title')}</h1>
                     <p className="mt-2 max-w-[62ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/58">
-                        {lang === 'zh'
+                        {intro || (lang === 'zh'
                             ? '这里放长期偏好和凭证。每个任务是怎么处理的，写在它自己的处理记录里。'
-                            : 'Long-term preferences and credentials live here. How each task was handled is written in its own processing record.'}
+                            : 'Long-term preferences and credentials live here. How each task was handled is written in its own processing record.')}
                     </p>
                 </header>
                 {banner}
@@ -422,25 +421,6 @@ export const LarkFolderRow = ({state}) => {
             />
             {videoPrefError === 'lark_folder_token' && <PrefSaveFailed/>}
         </div>
-    );
-};
-
-// The advanced fold's shell. The page passes in its description.
-export const AdvancedKeysFold = ({description, children}) => {
-    const {lang} = useI18n();
-    return (
-        <details id="advanced" className="group scroll-mt-7 rounded-[18px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4">
-                <div>
-                    <h2 className="font-headline text-base font-extrabold">{lang === 'zh' ? '高级 · 其他凭证' : 'Advanced · Other credentials'}</h2>
-                    <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">{description}</p>
-                </div>
-                <SvgIcon name="expand_less" className="shrink-0 text-lg text-on-surface-variant transition group-open:rotate-180"/>
-            </summary>
-            <div className="divide-y divide-[#ece8e8] border-t border-[#ece8e8] dark:divide-white/[0.1] dark:border-white/[0.1]">
-                {children}
-            </div>
-        </details>
     );
 };
 

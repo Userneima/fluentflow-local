@@ -717,6 +717,11 @@ def save_agent_cut_report(
     )
 
 
+def get_status(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    """Who does each step of a task this agent submits, and what needs the user."""
+    return _agent_request("GET", "/agent/v1/status", api_base=api_base, client_id=client_id)
+
+
 def get_note_skill(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
     """The note-writing rules in effect, and every rule added from the user's feedback."""
     return _agent_request("GET", "/agent/v1/note-skill", api_base=api_base, client_id=client_id)
@@ -844,6 +849,7 @@ TOOL_FUNCTIONS = {
     "get_agent_note_material": get_agent_note_material,
     "save_agent_note": save_agent_note,
     "get_agent_note_part": get_agent_note_part,
+    "get_status": get_status,
     "get_note_skill": get_note_skill,
     "record_note_feedback": record_note_feedback,
     "list_note_feedback": list_note_feedback,
@@ -1312,6 +1318,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "api_base": {"type": "string"},
             },
         },
+    },
+    {
+        "name": "get_status",
+        "description": (
+            "How FluentFlow on this machine handles a task you submit, step by step (getting the material, "
+            "cutting, transcription, notes, outputs, agent connection), and anything the user has to fix first. "
+            "The same list the Settings page shows. Use it when the user asks what FluentFlow is set up to do."
+        ),
+        "inputSchema": {"type": "object", "properties": {"api_base": {"type": "string"}}},
     },
     {
         "name": "get_note_skill",

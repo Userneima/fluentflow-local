@@ -142,7 +142,7 @@ def _feishu_rule(raw: str, lowered: str, via_cli: bool) -> dict[str, Any]:
             "feishu_app_credentials_missing",
             "没有填飞书应用凭证",
             "「飞书应用导出」需要 App ID 和 App Secret，现在还没有填。",
-            "到设置「高级 · 其他凭证」里填写 FEISHU APP ID 和 FEISHU APP SECRET；"
+            "到设置「账号和 Key」里填写 FEISHU APP ID 和 FEISHU APP SECRET；"
             "或在「飞书导出路线」里改选「本机身份导出」。",
             retryable=False,
         )
@@ -158,7 +158,7 @@ def _feishu_rule(raw: str, lowered: str, via_cli: bool) -> dict[str, Any]:
             "飞书应用凭证不对",
             "飞书不接受当前的 App ID / App Secret（填错了，或 Secret 已经重置）。",
             "到飞书开放平台 → 你的应用 → 凭证与基础信息，复制最新的 App ID 和 App Secret，"
-            "填回设置「高级 · 其他凭证」后重试。",
+            "填回设置「账号和 Key」后重试。",
             retryable=False,
         )
     if "folder not found" in lowered or "http 404" in lowered or "notexist" in lowered or "文件夹不存在" in raw:

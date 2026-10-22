@@ -79,21 +79,21 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 // GET /agent-access/status. Read again every few seconds while the panel is
 // open, so running the command in a terminal shows up here.
 export const agentConnectionSentence = (status, now = Date.now()) => {
-    if (!status) return '';
+    if (!status || status.unavailable) return '';
     if (!status.token_configured) return '还连不上：这台电脑没有设访问令牌，重新运行一次安装脚本会写好。';
     if (!status.last_agent_request_at) return '还没有 agent 连上过（从这次启动 FluentFlow 算起）。';
     const minutes = Math.max(0, Math.round((now - status.last_agent_request_at * 1000) / 60000));
     return minutes < 1 ? '已有 agent 连上，刚刚还在用。' : `已有 agent 连上，最近一次在 ${minutes} 分钟前。`;
 };
 
-const useAgentAccessStatus = () => {
+export const useAgentAccessStatus = () => {
     const [status, setStatus] = useState(null);
     useEffect(() => {
         let live = true;
         const read = () => apiFetch(`${API_BASE}/agent-access/status`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((value) => { if (live && value) setStatus(value); })
-            .catch(() => {});
+            .then((r) => (r.ok ? r.json() : {unavailable: true}))
+            .then((value) => { if (live) setStatus(value); })
+            .catch(() => { if (live) setStatus({unavailable: true}); });
         read();
         const timer = window.setInterval(read, 5000);
         return () => { live = false; window.clearInterval(timer); };

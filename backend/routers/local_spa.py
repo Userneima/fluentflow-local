@@ -27,6 +27,7 @@ LOCAL_API_PREFIXES = frozenset(
         "summarize-transcript-file",
         "version",
         "video-sources",
+        "workflow-status",
     }
 )
 

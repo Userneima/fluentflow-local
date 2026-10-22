@@ -182,8 +182,8 @@ export const noteExplanation = (result, lang = 'zh', connection = {}) => {
         // key is hard to get for most users in China. The key stays, second.
         agentPrompt: fallback ? agentNotePrompt(result, lang, connection) : '',
         keyOption: fallback ? (zh
-            ? '也可以在「设置 → 笔记」填 Anthropic API Key，让 FluentFlow 自己结合画面写（国内账号一般较难申请）。'
-            : 'Or add an Anthropic API key under Settings → Notes so FluentFlow writes it from the frames itself.')
+            ? '也可以在「设置 → 账号和 Key」填 Anthropic API Key，让 FluentFlow 自己结合画面写（国内账号一般较难申请）。'
+            : 'Or add an Anthropic API key under Settings → Accounts and keys so FluentFlow writes it from the frames itself.')
             : '',
     };
 };

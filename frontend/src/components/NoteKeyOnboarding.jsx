@@ -101,7 +101,7 @@ export const NoteKeyOnboarding = ({
             if (result?.ok) {
                 const writer = resolveNoteWriter({runtimeConfig, credentialStatus: status, settings});
                 if (status && writer.kind === 'none') {
-                    setFeedback({tone: 'warn', text: 'Key 可以用，已经保存，但笔记暂时还写不了。到「设置 → 笔记」看看原因。'});
+                    setFeedback({tone: 'warn', text: 'Key 可以用，已经保存，但笔记暂时还写不了。到「设置」最上面看看原因。'});
                     return;
                 }
                 setDraft('');

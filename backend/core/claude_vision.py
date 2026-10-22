@@ -497,7 +497,7 @@ def unavailable_reason(api_key: str | None = None) -> str | None:
     if not resolve_api_key(api_key):
         return (
             "还没有配置 Anthropic 的 API Key，无法请 Claude 看画面。"
-            "在设置页「笔记」一栏填入 Anthropic API Key 后重试，不必重启。"
+            "在设置页「账号和 Key」里填入 Anthropic API Key 后重试，不必重启。"
             "没有这个 Key 时不会改用别的模型冒充「看过画面」。"
         )
     return None

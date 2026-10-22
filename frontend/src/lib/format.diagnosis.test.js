@@ -125,7 +125,7 @@ describe('a Feishu export failure', () => {
         ['这台电脑上的 lark-cli 没有可用的登录身份（没登录或登录已过期）。', 'lark_cli_login_required', 'lark-cli auth login'],
         ['lark-cli 失败 [subtype=missing_scope missing_scopes=wiki:node:create]：x', 'feishu_missing_scope', 'lark-cli auth login --scope "wiki:node:create"'],
         ['Lark create-doc error: code=99991672 msg=scopes is required: [docx:document:create]', 'feishu_missing_scope', 'docx:document:create'],
-        ['Lark credentials not set: provide app_id/app_secret', 'feishu_app_credentials_missing', '高级 · 其他凭证'],
+        ['Lark credentials not set: provide app_id/app_secret', 'feishu_app_credentials_missing', '账号和 Key'],
         ["Feishu tenant token error: {'code': 10014, 'msg': 'app secret invalid'}", 'feishu_app_credentials_invalid', '凭证与基础信息'],
         ['Feishu create-doc HTTP 404: folder not found', 'feishu_folder_not_found', '飞书文件夹链接'],
         ['Feishu 写入块失败: code=99991400 msg=request trigger frequency limit', 'feishu_rate_limited', '过一两分钟'],

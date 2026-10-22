@@ -72,7 +72,7 @@ def _chat() -> Callable[[str, str], str]:
 
     found = claude_chat(resolve_secret(None, "anthropic_api_key"))
     if found is None:
-        raise NoteStyleError("整理笔记风格要用 Claude：在设置页「笔记」填入 Anthropic API Key 后再试。")
+        raise NoteStyleError("整理笔记风格要用 Claude：在设置页「账号和 Key」里填入 Anthropic API Key 后再试。")
     return found[0]
 
 

@@ -30,7 +30,7 @@ export const useSettingsPageState = () => {
     const {t, lang} = useI18n();
     const {loadSettings, saveSettings} = useSettings();
     const {larkExports, runtimeConfig} = useApp();
-    const {getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, checkVideoCookies, getPreferences, savePreferences} = useApi();
+    const {getCredentialsStatus, saveCredentials, getSpeakerDiarizationStatus, getWorkflowStatus, checkVideoCookies, getPreferences, savePreferences} = useApi();
     const [settings, setSettings] = useState(() => loadSettings());
     const [credentialStatus, setCredentialStatus] = useState(null);
     // Until the service answers, nothing on the page may say a key is or is
@@ -271,6 +271,32 @@ export const useSettingsPageState = () => {
     };
 
     const aiProvider = normalizeTextProvider(settings.aiProvider);
+    // Who does each step now, from the service (decision 6.24). Read again
+    // whenever something on this page that changes the answer changes, and
+    // every 10 seconds for what changes elsewhere (an agent connecting, a
+    // Claude login expiring).
+    const [workflow, setWorkflow] = useState(null);
+    const [workflowError, setWorkflowError] = useState(false);
+    const workflowChoices = JSON.stringify({
+        ai_provider: aiProvider,
+        ai_model: settings.aiModel || '',
+        default_source: settings.defaultSourceMode || '',
+        speaker_diarization: settings.speakerDiarization ? '1' : '',
+        voice_enhance: settings.voiceEnhance ? '1' : '',
+        skip_ai_summary: settings.skipAiSummary ? '1' : '',
+        export_to_lark: settings.exportToLark ? '1' : '',
+    });
+    const workflowInputs = JSON.stringify([workflowChoices, credentialStatus, diarizationStatus, cpuUsage, processingPreset, settings.videoCookiesBrowser, settings.larkExportRoute]);
+    useEffect(() => {
+        if (!getWorkflowStatus) return undefined;
+        let live = true;
+        const read = () => getWorkflowStatus(JSON.parse(workflowChoices))
+            .then((value) => { if (live) { setWorkflow(value); setWorkflowError(false); } })
+            .catch(() => { if (live) setWorkflowError(true); });
+        read();
+        const timer = setInterval(read, 10000);
+        return () => { live = false; clearInterval(timer); };
+    }, [workflowInputs]); // eslint-disable-line react-hooks/exhaustive-deps
     const aiModel = normalizeAiModel(aiProvider, settings.aiModel);
     // Switching provider starts on that provider's default ('' follows it).
     const aiProviderDefaults = Object.fromEntries(TEXT_PROVIDERS.map((item) => [item.id, '']));
@@ -290,6 +316,9 @@ export const useSettingsPageState = () => {
         settings,
         updateSettingNow,
         larkExports,
+        // Who does each step now.
+        workflow,
+        workflowError,
         // Credentials.
         credentialStatus,
         setCredentialStatus,
