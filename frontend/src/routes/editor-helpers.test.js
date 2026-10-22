@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { claudeRewriteSettled, cutFlowSummary, isAutoCutFlow, cutItemsToJudge, findSegmentAt, sizeTextareas, mergeNoteFields, noteCameFromClaude, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+import { claudeRewriteSettled, cutFlowSummary, isAutoCutFlow, cutItemsToJudge, findSegmentAt, groupTranscriptParagraphs, sizeTextareas, mergeNoteFields, noteCameFromClaude, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
 
 describe('shouldKeepVideoReviewMounted', () => {
     it('keeps the player mounted while playback is between subtitle segments', () => {
@@ -270,5 +270,61 @@ describe('cutFlowSummary', () => {
         const summary = cutFlowSummary(autoResult({artifacts: {}}));
         expect(summary.mediaArtifact).toBeNull();
         expect(summary.cutCount).toBe(4);
+    });
+});
+
+
+// The transcript reads as paragraphs, not a column of fragments (界面优化清单
+// 线二第 1、2 条): a paragraph per speaker turn, broken further only when it
+// gets long; the speaker named where a new one takes over, as in the note.
+describe('groupTranscriptParagraphs', () => {
+    const piece = (start, text, speaker) => ({start, end: start + 2, text, speaker});
+
+    it('keeps one speaker\'s consecutive pieces in one paragraph and starts a new one when the speaker changes', () => {
+        const paragraphs = groupTranscriptParagraphs([
+            piece(0, '是这么样', 'S0'), piece(2, '就是想想', 'S0'), piece(4, '然后一些', 'S0'),
+            piece(6, '要不咱们', 'S1'), piece(8, '花个五分钟', 'S1'),
+            piece(10, '大家可以', 'S0'),
+        ]);
+        expect(paragraphs.map((p) => p.indices)).toEqual([[0, 1, 2], [3, 4], [5]]);
+        expect(paragraphs.map((p) => p.label)).toEqual(['说话人 A', '说话人 B', '说话人 A']);
+        expect(paragraphs.map((p) => p.start)).toEqual([0, 6, 10]);
+    });
+
+    it('does not name anyone when the material has a single speaker or none', () => {
+        expect(groupTranscriptParagraphs([piece(0, 'a', 'S0'), piece(2, 'b', 'S0')]).map((p) => p.label)).toEqual(['']);
+        expect(groupTranscriptParagraphs([piece(0, 'a'), piece(2, 'b')]).map((p) => p.label)).toEqual(['']);
+    });
+
+    it('names the speaker once per turn, not again on a paragraph that only continues it', () => {
+        const long = '这是一段比较长的话没有标点'.repeat(3);
+        const pieces = [];
+        for (let i = 0; i < 6; i += 1) pieces.push(piece(i * 2, long, 'S0'));
+        pieces.push(piece(12, '好的', 'S1'));
+        const paragraphs = groupTranscriptParagraphs(pieces);
+        expect(paragraphs.length).toBeGreaterThan(2);
+        expect(paragraphs[0].label).toBe('说话人 A');
+        expect(paragraphs.slice(1, -1).every((p) => p.label === '')).toBe(true);
+        expect(paragraphs.at(-1).label).toBe('说话人 B');
+    });
+
+    it('breaks a long run at a sentence end rather than mid-sentence', () => {
+        const sentence = '这是一句完整的话，后面还有一些内容要讲完。';
+        const pieces = [];
+        for (let i = 0; i < 12; i += 1) pieces.push(piece(i * 2, i % 2 ? sentence : '然后我们继续说，', null));
+        const paragraphs = groupTranscriptParagraphs(pieces);
+        expect(paragraphs.length).toBeGreaterThan(1);
+        for (const p of paragraphs.slice(0, -1)) expect(pieces[p.indices.at(-1)].text).toMatch(/。$/);
+    });
+
+    it('starts a new paragraph after a long pause', () => {
+        const paragraphs = groupTranscriptParagraphs([piece(0, 'a'), piece(2, 'b'), {start: 10, end: 12, text: 'c'}]);
+        expect(paragraphs.map((p) => p.indices)).toEqual([[0, 1], [2]]);
+    });
+
+    it('keeps every piece exactly once and in order, so each stays editable and saved on its own', () => {
+        const pieces = Array.from({length: 50}, (_, i) => piece(i, `第${i}段内容`, i % 7 < 3 ? 'S0' : 'S1'));
+        const indices = groupTranscriptParagraphs(pieces).flatMap((p) => p.indices);
+        expect(indices).toEqual(pieces.map((_, i) => i));
     });
 });

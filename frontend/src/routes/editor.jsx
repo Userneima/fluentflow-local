@@ -1,4 +1,4 @@
-import {memo,useState,useEffect,useRef,useCallback,useMemo} from 'react';
+import {memo,useState,useEffect,useLayoutEffect,useRef,useCallback,useMemo} from 'react';
 import {Link, useSearchParams} from 'react-router-dom';
 import {AlertCircle} from 'lucide-react';
 import SvgIcon from '../components/SvgIcon.jsx';
@@ -49,6 +49,7 @@ import {
     cutFlowSummary,
     cutItemsToJudge,
     findSegmentAt,
+    groupTranscriptParagraphs,
     sizeTextareas,
     textareaSizesItself,
     localSourceFileMatchesResult,
@@ -171,6 +172,79 @@ const BilingualLine = memo(({index, seg, active, review, onSeek, registerNode}) 
     </div>
 ));
 
+// Prototype (界面优化清单线二第 1、2 条), behind ?transcript=paragraphs: the
+// text view reads as paragraphs, a new one where the speaker changes or once
+// it is long enough (groupTranscriptParagraphs), the speaker named where a new
+// one takes over. Each recognised sentence stays the unit of editing, saving,
+// edit records and subtitles.
+
+// One sentence inside a paragraph, edited in place. Its text is put in the DOM
+// by hand and only while it is not being typed in, so a re-render never moves
+// the caret; Enter does not split it.
+const EditableSegment = memo(({index, text, active, onEdit, onFocusSegment, registerNode}) => {
+    const nodeRef = useRef(null);
+    useLayoutEffect(() => {
+        const node = nodeRef.current;
+        if (node && document.activeElement !== node && node.textContent !== text) node.textContent = text;
+    }, [text]);
+    return (
+        <span
+            ref={(node) => { nodeRef.current = node; registerNode(index, node); }}
+            role="textbox"
+            aria-label={`第 ${index + 1} 句`}
+            contentEditable="plaintext-only"
+            suppressContentEditableWarning
+            spellCheck={false}
+            data-transcript-segment="true"
+            onInput={(e) => onEdit(index, e.currentTarget.textContent || '')}
+            onFocus={() => onFocusSegment(index)}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
+            className={`rounded-[4px] px-[1px] outline-none focus:bg-[#eef2ff] dark:focus:bg-white/[0.1] ${active ? 'bg-[#e3e9ff] dark:bg-white/[0.14]' : 'hover:bg-[#f3f2f6] dark:hover:bg-white/[0.06]'}`}
+        />
+    );
+});
+
+// Re-rendered only when one of its sentences changes or the playing sentence
+// enters or leaves it.
+const sameParagraph = (prev, next) => (
+    prev.activeIndex === next.activeIndex
+    && prev.paragraph.label === next.paragraph.label
+    && prev.paragraph.start === next.paragraph.start
+    && prev.paragraph.indices.length === next.paragraph.indices.length
+    && prev.paragraph.indices.every((index, k) => index === next.paragraph.indices[k] && prev.segments[index] === next.segments[index])
+);
+const TranscriptParagraph = memo(({paragraph, segments, activeIndex, onSeek, onEdit, onFocusSegment, registerNode}) => (
+    <div data-testid="transcript-paragraph" style={OFFSCREEN_SKIP} className="rounded-[16px] px-3 py-2.5 hover:bg-[#fbfbfd] dark:hover:bg-white/[0.03]">
+        <div className="mb-1 flex items-baseline gap-2">
+            {paragraph.label && (
+                <span className="text-xs font-extrabold text-[#111111] dark:text-white">{paragraph.label}</span>
+            )}
+            <button
+                type="button"
+                onClick={() => onSeek(paragraph)}
+                className={`font-mono text-xs tabular-nums ${activeIndex >= 0 ? 'font-bold text-primary' : 'text-[#8a8a8a] hover:text-primary dark:text-white/40'}`}
+            >
+                {fmtTime(paragraph.start)}
+            </button>
+        </div>
+        <p className="text-[15px] font-medium leading-[1.85] text-[#111111] dark:text-white">
+            {paragraph.indices.map((index, k) => (
+                <span key={index}>
+                    {k > 0 ? ' ' : null}
+                    <EditableSegment
+                        index={index}
+                        text={segments[index]?.text || ''}
+                        active={index === activeIndex}
+                        onEdit={onEdit}
+                        onFocusSegment={onFocusSegment}
+                        registerNode={registerNode}
+                    />
+                </span>
+            ))}
+        </p>
+    </div>
+), sameParagraph);
+
 // The clock and the progress bar: the only parts of the page that follow the
 // player every tick.
 const PlaybackBar = ({clock, duration, onSeek}) => {
@@ -240,6 +314,7 @@ const Editor = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const urlTaskId = searchParams.get('task') || '';
     const urlWantsCutReview = searchParams.get('review') === 'cut';
+    const paragraphsPrototype = searchParams.get('transcript') === 'paragraphs';
     const [urlTask, setUrlTask] = useState({id: '', state: 'idle'});
     const urlTaskIdRef = useRef(urlTaskId);
     urlTaskIdRef.current = urlTaskId;
@@ -727,6 +802,10 @@ const Editor = () => {
         [summary, hasInlineVisualEvidence, visualEvidenceVisible]
     );
     const displayTranscriptSegments = useMemo(() => pickDisplayTranscriptSegments(result, segments), [result, segments]);
+    const transcriptParagraphs = useMemo(
+        () => (paragraphsPrototype ? groupTranscriptParagraphs(segments) : []),
+        [paragraphsPrototype, segments],
+    );
     const bilingualTranscriptSegments = useMemo(
         () => displayTranscriptSegments.filter((seg) => String(seg.text_zh || '').trim()),
         [displayTranscriptSegments],
@@ -929,6 +1008,14 @@ const Editor = () => {
     const seekRow = useCallback((seg) => rowHandlersRef.current.seekToSegment(seg), []);
     const editRow = useCallback((index, text) => rowHandlersRef.current.handleSegmentTextChange(index, text), []);
     const stopFollowing = useCallback(() => setFollowPlayback(false), []);
+    // Putting the caret in a sentence of a paragraph while nothing plays moves
+    // the player there, so it can be heard right after.
+    rowHandlersRef.current.focusSentence = (index) => {
+        setFollowPlayback(false);
+        const seg = segments[index];
+        if (!mediaPlaying && seg?.start != null) seekMediaTo(Number(seg.start) || 0, {follow: false});
+    };
+    const focusSentence = useCallback((index) => rowHandlersRef.current.focusSentence(index), []);
     const registerRow = useCallback((index, node) => { if (node) segmentRefs.current[index] = node; }, []);
 
     useEffect(() => {
@@ -1820,6 +1907,17 @@ const Editor = () => {
                                 <div className={shouldShowVideoReview ? 'divide-y divide-[#e4e0e0] dark:divide-white/[0.08]' : 'space-y-1.5'}>
                             {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
                                 <BilingualLine key={`bilingual-${i}`} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} review={shouldShowVideoReview} onSeek={seekRow} registerNode={registerRow}/>
+                            )) : segments.length > 0 && paragraphsPrototype && !shouldShowVideoReview ? transcriptParagraphs.map((paragraph) => (
+                                <TranscriptParagraph
+                                    key={paragraph.indices[0]}
+                                    paragraph={paragraph}
+                                    segments={segments}
+                                    activeIndex={mediaUrl && paragraph.indices.includes(activeSegmentIndex) ? activeSegmentIndex : -1}
+                                    onSeek={seekRow}
+                                    onEdit={editRow}
+                                    onFocusSegment={focusSentence}
+                                    registerNode={registerRow}
+                                />
                             )) : segments.length > 0 ? segments.map((seg,i) => (
                                 <TranscriptLine key={i} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} review={shouldShowVideoReview} onSeek={seekRow} onEdit={editRow} onFocusLine={stopFollowing} registerNode={registerRow}/>
                                 )) : isTranscriptHydrationPending ? (
