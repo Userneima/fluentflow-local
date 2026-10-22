@@ -89,7 +89,8 @@ describe('retranscribing in the editor', () => {
     it('runs the recording again from this machine instead of moving it through the browser', async () => {
         render(<MemoryRouter><Editor/></MemoryRouter>);
 
-        (await screen.findByRole('button', {name: /edit\.retranscribe$/})).click();
+        (await screen.findByRole('button', {name: '更多操作'})).click();
+        (await screen.findByRole('menuitem', {name: /edit\.retranscribe$/})).click();
         (await screen.findByRole('button', {name: /edit\.retranscribeConfirmAction/})).click();
 
         await waitFor(() => expect(calls.retry).toEqual(['t1']));
@@ -128,7 +129,8 @@ describe('retranscribing a recording read in place', () => {
     it('asks the backend to re-read the original instead of uploading the playback audio', async () => {
         render(<MemoryRouter><Editor/></MemoryRouter>);
 
-        (await screen.findByRole('button', {name: /edit\.retranscribe$/})).click();
+        (await screen.findByRole('button', {name: '更多操作'})).click();
+        (await screen.findByRole('menuitem', {name: /edit\.retranscribe$/})).click();
         (await screen.findByRole('button', {name: /edit\.retranscribeConfirmAction/})).click();
 
         await waitFor(() => expect(calls.retry).toEqual(['t1']));

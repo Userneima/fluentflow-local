@@ -1,5 +1,6 @@
 import {useState,useEffect,useRef,useCallback,useMemo} from 'react';
-import {Link} from 'react-router-dom';
+import {Link, useSearchParams} from 'react-router-dom';
+import {AlertCircle, MoreHorizontal} from 'lucide-react';
 import {
     DEFAULT_PROMPT_PRESET,
     presetDisplayLabel,
@@ -64,13 +65,14 @@ import NoteExplanation from '../components/NoteExplanation.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
 import CutFlowBar from '../components/CutFlowBar.jsx';
 import {probeMedia} from '../lib/probeMedia.js';
-import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog} from './editor-dialogs.jsx';
+import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog, CutReviewDialog} from './editor-dialogs.jsx';
 import {
     jobOptionsForResult,
     isLikelyVideoFile,
     isVideoResultSource,
     isAutoCutFlow,
     cutFlowSummary,
+    cutItemsToJudge,
     localSourceFileMatchesResult,
     playbackMediaChoice,
     shouldKeepVideoReviewMounted,
@@ -158,6 +160,51 @@ const Editor = () => {
         if (doneJobTimerRef.current) clearTimeout(doneJobTimerRef.current);
     }, []);
 
+    // The editor's address names its task (?task=<id>), so a refresh, the back
+    // button or a bookmark reopens the same result. ?review=cut also opens the
+    // cut's processing report, for the records page's "有 N 处需要你判断".
+    const [searchParams, setSearchParams] = useSearchParams();
+    const urlTaskId = searchParams.get('task') || '';
+    const urlWantsCutReview = searchParams.get('review') === 'cut';
+    const [urlTask, setUrlTask] = useState({id: '', state: 'idle'});
+    const urlTaskIdRef = useRef(urlTaskId);
+    urlTaskIdRef.current = urlTaskId;
+    useEffect(() => {
+        if (!urlTaskId) return;
+        // The address and the open result agree: nothing to open, and a later
+        // switch to another result moves the address instead of reopening this.
+        if (lastResult?.task_id === urlTaskId) {
+            if (urlTask.id !== urlTaskId || urlTask.state !== 'loaded') setUrlTask({id: urlTaskId, state: 'loaded'});
+            return;
+        }
+        if (urlTask.id === urlTaskId) return;
+        setUrlTask({id: urlTaskId, state: 'loading'});
+        getJob(urlTaskId)
+            .then((job) => {
+                if (urlTaskIdRef.current !== urlTaskId) return;
+                if (!job?.result) {
+                    setUrlTask({id: urlTaskId, state: 'missing'});
+                    return;
+                }
+                setLastResult({...job.result, task_id: job.result.task_id || urlTaskId});
+                setUrlTask({id: urlTaskId, state: 'loaded'});
+            })
+            .catch(() => {
+                if (urlTaskIdRef.current === urlTaskId) setUrlTask({id: urlTaskId, state: 'missing'});
+            });
+    }, [urlTaskId, lastResult?.task_id, urlTask, getJob, setLastResult]);
+    const openingUrlTask = !!urlTaskId && lastResult?.task_id !== urlTaskId
+        && (urlTask.id !== urlTaskId || urlTask.state === 'loading');
+    const urlTaskMissing = !!urlTaskId && lastResult?.task_id !== urlTaskId && urlTask.id === urlTaskId && urlTask.state === 'missing';
+    // The open result writes itself into the address, unless the address names
+    // a task that is still being opened or could not be found.
+    const openTaskId = lastResult?.task_id || '';
+    useEffect(() => {
+        if (!openTaskId || openTaskId === urlTaskId) return;
+        if (urlTaskId && (urlTask.id !== urlTaskId || urlTask.state !== 'loaded')) return;
+        setSearchParams({task: openTaskId}, {replace: true});
+    }, [openTaskId, urlTaskId, urlTask, setSearchParams]);
+
     const result = lastResult;
     const matchedLocalSourceFile = localSourceFileMatchesResult(lastSourceFile, result) ? lastSourceFile : null;
     // Effects keyed on a derived string (resultKey, mediaSourceKey) read the
@@ -178,9 +225,13 @@ const Editor = () => {
         : 'empty_result';
     const summaryResultKey = resultIdentity(result);
     const editTargetRef = useRef('');
+    // Which file plays is part of the key: a result opened from recent activity
+    // is a light copy without the cut file's record, and when the full copy
+    // arrives the player must move to the cut file the transcript belongs to.
     const mediaSourceKey = result
         ? [
             result.task_id || result.filename || 'current_result',
+            playbackMediaChoice(result)?.kind || 'no-preferred-media',
             result.artifacts?.playback_audio?.filename || (result.playback_audio_available ? 'playback-audio' : 'no-playback-audio'),
             result.source_file_available ? 'stored' : 'unstored',
             matchedLocalSourceFile ? `${matchedLocalSourceFile.name}:${matchedLocalSourceFile.size}:${matchedLocalSourceFile.lastModified || 0}` : 'no-local-file',
@@ -622,6 +673,29 @@ const Editor = () => {
     // as an empty player. Either the record of the file is gone, or reading it
     // failed — the effect above refuses to substitute the recording in both cases.
     const cutFileUnavailable = !!cutFlow && (!cutFlow.mediaArtifact || (!!mediaError && !mediaUrl));
+    const cutJudgeCount = cutItemsToJudge(result);
+    const [cutReviewOpen, setCutReviewOpen] = useState(false);
+    // Arriving with ?review=cut opens the report once the named task is open,
+    // and the parameter is dropped so a refresh does not open it again.
+    useEffect(() => {
+        if (!urlWantsCutReview || !result?.task_id || result.task_id !== urlTaskId) return;
+        setCutReviewOpen(true);
+        setSearchParams({task: urlTaskId}, {replace: true});
+    }, [urlWantsCutReview, result?.task_id, urlTaskId, setSearchParams]);
+    // Answers given in the report change how many places still wait, so the
+    // task's cut record is read again when the report closes.
+    const closeCutReview = () => {
+        setCutReviewOpen(false);
+        const taskId = result?.task_id;
+        if (!taskId) return;
+        getJob(taskId, resultJobOptions)
+            .then((job) => {
+                const fresh = job?.result;
+                if (!fresh) return;
+                setLastResult((prev) => (prev?.task_id === taskId ? {...prev, debreath: fresh.debreath} : prev));
+            })
+            .catch(() => {});
+    };
     const canShowVideoReview = isVideoResultSource(result, matchedLocalSourceFile);
     const canUseVideoReview = canShowVideoReview && mediaKind === 'video' && !!mediaUrl && segments.length > 0;
     const activeReviewMode = canUseVideoReview ? transcriptReviewMode : 'text';
@@ -870,7 +944,7 @@ const Editor = () => {
     const promptEditing = usePromptEditing({loadSettings, saveSettings, t, lang, showToast});
 
     // Who writes a regenerated note: the same answer the start page gives
-    // (lib/noteWriter.js), so "重生笔记" uses the writer that wrote the note.
+    // (lib/noteWriter.js), so "重写笔记" uses the writer that wrote the note.
     const [credentialStatus, setCredentialStatus] = useState(null);
     useEffect(() => {
         let active = true;
@@ -1307,13 +1381,20 @@ const Editor = () => {
             : 'Playing now. FluentFlow does not keep a copy, so choose it again next time if it still cannot be found.');
     };
 
-    if(!result) return (
+    if (openingUrlTask) return (
+        <div className="ml-[var(--sidebar-offset)] flex min-h-dvh items-center justify-center bg-[#f8f7fb] text-sm font-semibold text-[#666] dark:bg-[#101010] dark:text-white/60">
+            <SvgIcon name="sync" className="mr-2 h-4 w-4 animate-spin"/>
+            {lang === 'zh' ? '正在打开这条记录…' : 'Opening this record…'}
+        </div>
+    );
+
+    if(!result || urlTaskMissing) return (
         <div className="ml-[var(--sidebar-offset)] min-h-dvh bg-[#f8f7fb] pb-8 text-[#111111] dark:bg-[#101010] dark:text-white/[0.92]">
             <main className="flex h-[calc(100vh-2rem)] items-center justify-center px-8">
                 <div className="w-full max-w-xl rounded-[28px] border border-[#e4e0e0] bg-white px-8 py-10 text-center shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
                     <SvgIcon name="edit_note" className="mb-4 text-6xl text-[#8a8a8a] dark:text-white/40"/>
-                    <h2 className="mb-2 font-headline text-2xl font-extrabold text-[#111111] dark:text-white">{t('edit.noResult')}</h2>
-                    <p className="mb-6 text-sm font-semibold leading-relaxed text-[#666] dark:text-white/60">{t('edit.noResultDesc')}</p>
+                    <h2 className="mb-2 font-headline text-2xl font-extrabold text-[#111111] dark:text-white">{urlTaskMissing ? (lang === 'zh' ? '找不到这条记录' : 'Record not found') : t('edit.noResult')}</h2>
+                    <p className="mb-6 text-sm font-semibold leading-relaxed text-[#666] dark:text-white/60">{urlTaskMissing ? (lang === 'zh' ? '它可能已被删除。从处理记录选一条打开。' : 'It may have been deleted. Open one from the records.') : t('edit.noResultDesc')}</p>
                     <Link to="/agent" className="inline-flex items-center gap-2 rounded-[14px] bg-[#111111] px-6 py-3 text-sm font-bold text-white transition-colors hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
                         <SvgIcon name="monitoring" className="text-lg"/>{t('edit.chooseRecord')}
                     </Link>
@@ -1384,8 +1465,8 @@ const Editor = () => {
         });
     };
     const pinHeaderLabel = headerPinned
-        ? (lang === 'zh' ? '已固定' : 'Pinned')
-        : (lang === 'zh' ? '固定' : 'Pin');
+        ? (lang === 'zh' ? '已固定顶栏' : 'Header pinned')
+        : (lang === 'zh' ? '固定顶栏' : 'Pin header');
     const pinHeaderTitle = headerPinned
         ? (lang === 'zh' ? '取消固定：播放时自动折叠顶栏' : 'Unpin: collapse the header during playback')
         : (lang === 'zh' ? '固定顶栏：播放时也保持展开' : 'Pin the header so it stays open during playback');
@@ -1445,6 +1526,9 @@ const Editor = () => {
                 onCancel={()=>setRetranscribeConfirmOpen(false)}
                 onConfirm={confirmRetranscribe}
             />
+        )}
+        {cutReviewOpen && (
+            <CutReviewDialog result={result} onClose={closeCutReview}/>
         )}
         {editRecordsOpen && (
             <EditRecordsDialog
@@ -1518,35 +1602,19 @@ const Editor = () => {
                             unavailable={cutFileUnavailable}
                             onReprocess={handleRetranscribe}
                         />
+                        {cutJudgeCount > 0 && (
+                            <button
+                                type="button"
+                                data-testid="cut-judge-entry"
+                                onClick={()=>setCutReviewOpen(true)}
+                                className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-[11px] border border-[#f5c86b] bg-[#fffaf0] px-2.5 text-xs font-bold text-[#8a5a00] transition hover:bg-[#fff3dc] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]"
+                            >
+                                <AlertCircle className="size-3.5" strokeWidth={2.15}/>
+                                {lang === 'zh' ? `剪辑有 ${cutJudgeCount} 处需要你判断` : `${cutJudgeCount} cut decision${cutJudgeCount === 1 ? '' : 's'} need your call`}
+                            </button>
+                        )}
                     </div>
                     <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-                        <button
-                            type="button"
-                            onClick={()=>promptEditing.setPromptOpen(true)}
-                            title={notePromptScopeSentence(noteWriter, lang) || undefined}
-                            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
-                        >
-                            <SvgIcon name="tune" className="text-[17px]"/>
-                            <span>{t('prompt.collapsed')}</span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={()=>setRegenerateConfirmOpen(true)}
-                            disabled={regenerating||!transcript}
-                            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
-                        >
-                            <SvgIcon name={regenerating ? 'sync' : 'refresh'} className={`text-[17px] ${regenerating?'animate-spin':''}`}/>
-                            <span>{regenerating ? t('edit.regenerating') : t('edit.regenerate')}</span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={handleRetranscribe}
-                            disabled={retranscribing||retranscribeBlockedByJob}
-                            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#666] transition hover:bg-[#efeeee] hover:text-[#111111] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65 dark:hover:bg-white/[0.1] dark:hover:text-white"
-                        >
-                            <SvgIcon name={retranscribing ? 'sync' : 'record_voice_over'} className={`text-[17px] ${retranscribing?'animate-spin':''}`}/>
-                            <span>{retranscribing ? t('edit.retranscribing') : t('edit.retranscribe')}</span>
-                        </button>
                         {savedLarkUrl && (
                             <a
                                 href={savedLarkUrl}
@@ -1568,6 +1636,15 @@ const Editor = () => {
                         )}
                         <button
                             type="button"
+                            onClick={()=>setRegenerateConfirmOpen(true)}
+                            disabled={regenerating||!transcript}
+                            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
+                        >
+                            <SvgIcon name={regenerating ? 'sync' : 'refresh'} className={`text-[17px] ${regenerating?'animate-spin':''}`}/>
+                            <span>{regenerating ? t('edit.regenerating') : t('edit.regenerate')}</span>
+                        </button>
+                        <button
+                            type="button"
                             onClick={handleExportLark}
                             disabled={exporting||!summary}
                             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] bg-[#111111] px-4 text-xs font-extrabold text-white transition hover:bg-[#2a2a2a] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
@@ -1575,7 +1652,26 @@ const Editor = () => {
                             <SvgIcon name={exporting ? 'sync' : 'cloud_upload'} className={`text-[17px] ${exporting?'animate-spin':''}`}/>
                             <span>{t('edit.export')}</span>
                         </button>
-                        {pinHeaderButton}
+                        {/* Used now and then: the prompt, a fresh transcription,
+                            and whether the header stays open during playback. */}
+                        <DropdownMenu
+                            trigger={
+                                <button
+                                    type="button"
+                                    aria-label={lang === 'zh' ? '更多操作' : 'More actions'}
+                                    title={lang === 'zh' ? '更多操作' : 'More actions'}
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-[14px] border border-[#e4e0e0] bg-white text-[#666] transition hover:bg-[#efeeee] hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65 dark:hover:bg-white/[0.1] dark:hover:text-white"
+                                >
+                                    <MoreHorizontal className="size-[18px]" strokeWidth={2.15}/>
+                                </button>
+                            }
+                            items={[
+                                {label: t('prompt.collapsed'), onClick: () => promptEditing.setPromptOpen(true)},
+                                {label: retranscribing ? t('edit.retranscribing') : t('edit.retranscribe'), disabled: retranscribing || retranscribeBlockedByJob, onClick: handleRetranscribe},
+                                {divider: true},
+                                {label: lang === 'zh' ? '播放时固定顶栏' : 'Pin header during playback', badge: headerPinned ? (lang === 'zh' ? '已开' : 'On') : (lang === 'zh' ? '已关' : 'Off'), onClick: togglePinnedHeader},
+                            ]}
+                        />
                     </div>
                 </div>
                 </div>

@@ -273,22 +273,24 @@ describe('the prompt dialog while Claude writes the note', () => {
         cleanup();
     });
 
-    it('points to the text-model choice in 重生笔记, where the prompt is used', async () => {
+    it('points to the text-model choice in 重写笔记, where the prompt is used', async () => {
         runtimeConfig.writesItsOwnNote = true;
         credentialStatus = {visual_note_available: true};
         mount();
-        const button = await screen.findByRole('button', {name: /prompt\.collapsed/});
-        await waitFor(() => expect(button.getAttribute('title')).toMatch(/Claude 结合画面写笔记/));
-        fireEvent.click(button);
+        // The prompt lives in the header's "more" menu.
+        fireEvent.click(await screen.findByRole('button', {name: '更多操作'}));
+        fireEvent.click(await screen.findByRole('menuitem', {name: /prompt\.collapsed/}));
         const note = await screen.findByTestId('prompt-scope-note');
-        expect(note.textContent).toMatch(/重生笔记/);
+        await waitFor(() => expect(note.textContent).toMatch(/Claude 结合画面写笔记/));
+        expect(note.textContent).toMatch(/重写笔记/);
         expect(note.textContent).toMatch(/改用文本模型按文字重写/);
     });
 
     it('adds nothing when a text model writes the note', async () => {
         credentialStatus = {deepseek_api_key_configured: true};
         mount();
-        fireEvent.click(await screen.findByRole('button', {name: /prompt\.collapsed/}));
+        fireEvent.click(await screen.findByRole('button', {name: '更多操作'}));
+        fireEvent.click(await screen.findByRole('menuitem', {name: /prompt\.collapsed/}));
         await screen.findByRole('dialog');
         expect(screen.queryByTestId('prompt-scope-note')).toBeNull();
     });

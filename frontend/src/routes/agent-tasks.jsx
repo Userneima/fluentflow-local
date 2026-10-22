@@ -556,7 +556,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
     const detail = failed
         ? diagnosis.detail
         : completed
-            ? (lang === 'zh' ? '处理完成，可以打开结果继续校对、下载或重生笔记。' : 'Done. Open the result to review, download, or regenerate notes.')
+            ? (lang === 'zh' ? '处理完成，可以打开结果继续校对、下载或重写笔记。' : 'Done. Open the result to review, download, or regenerate notes.')
             : liveStageDetail(job, lang, aheadName);
     const failedProgressLabel = state === TASK_STATE_CANCELLED
         ? (lang === 'zh' ? '已取消' : 'Cancelled')

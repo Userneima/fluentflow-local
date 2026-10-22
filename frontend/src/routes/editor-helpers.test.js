@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { claudeRewriteSettled, mergeNoteFields, noteCameFromClaude, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+import { claudeRewriteSettled, cutItemsToJudge, mergeNoteFields, noteCameFromClaude, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
 
 describe('shouldKeepVideoReviewMounted', () => {
     it('keeps the player mounted while playback is between subtitle segments', () => {
@@ -125,5 +125,32 @@ describe('a Claude note written from the original recording still counts as Clau
         expect(noteCameFromClaude({summary_written_from: 'debreath_media_note'})).toBe(true);
         expect(noteCameFromClaude({summary_written_from: 'text_regeneration'})).toBe(false);
         expect(noteCameFromClaude({note_from_frames: false, summary_written_from: 'debreath_media_note'})).toBe(false);
+    });
+});
+
+// The editor says how many cut places wait for the user, the same number the
+// records page shows: judgement items without an answer.
+describe('cutItemsToJudge', () => {
+    const survey = (verdicts) => ({debreath: {survey: {
+        report: {sections: [
+            {judge: true, items: [{key: 'a'}, {key: 'b'}]},
+            {items: [{key: 'c'}]},
+        ]},
+        verdicts,
+    }}});
+
+    it('counts the judgement items still unanswered, not the rest of the report', () => {
+        expect(cutItemsToJudge(survey({}))).toBe(2);
+        expect(cutItemsToJudge(survey({a: 'agree'}))).toBe(1);
+        expect(cutItemsToJudge(survey({a: 'agree', b: 'agree'}))).toBe(0);
+    });
+
+    it('uses the count a records-list copy carries when the report is not there', () => {
+        expect(cutItemsToJudge({debreath: {survey: {has_report: true, to_judge: 3}}})).toBe(3);
+    });
+
+    it('is zero for a task without a cut report', () => {
+        expect(cutItemsToJudge({})).toBe(0);
+        expect(cutItemsToJudge(null)).toBe(0);
     });
 });

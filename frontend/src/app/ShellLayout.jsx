@@ -25,7 +25,9 @@ const ShellLayout = ({sideNavProps = {}, children}) => {
                 each page's own <main> scrolls. */}
             <div className="relative flex h-dvh min-h-0 w-full flex-1 flex-col overflow-clip">
                 <BackendStatusBanner/>
-                <Suspense fallback={<div className="flex h-full items-center justify-center text-sm font-semibold text-on-surface-variant">Loading...</div>}>
+                {/* A page's code is still loading: a spinner, no words, since the
+                    language setting may not be read yet. */}
+                <Suspense fallback={<div role="status" aria-label="加载中" className="flex h-full items-center justify-center"><span className="size-5 animate-spin rounded-full border-2 border-[#d6d3d3] border-t-[#111111] dark:border-white/20 dark:border-t-white"/></div>}>
                     {children}
                 </Suspense>
             </div>

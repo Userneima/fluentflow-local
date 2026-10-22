@@ -1096,7 +1096,7 @@ def test_two_placeholder_notes_fail_and_the_old_note_stays(job_store, tmp_path):
     assert job_store["result"]["summary_markdown"] == "原来的文字笔记"
     state = vn.visual_note_state(job_store["result"])
     assert state["status"] == vn.STATUS_FAILED
-    assert "重生笔记" in state["error"]
+    assert "重写笔记" in state["error"]
 
 
 @pytest.mark.parametrize("written", [

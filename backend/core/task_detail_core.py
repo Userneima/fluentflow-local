@@ -704,7 +704,7 @@ def _actions(
     if diagnosis.get("step_id") == "note_generation" and _has_transcript(result):
         actions.append({
             "id": "regenerate_note",
-            "label": "重生笔记",
+            "label": "重写笔记",
             "method": "POST",
             "path": f"/agent/v1/tasks/{task_id}/note/regenerate",
             "enabled": True,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-// The note after transcription, and "重生笔记".
+// The note after transcription, and "重写笔记".
 //
 // What the person should get:
 //   - A task opened while its note is still being written shows the note once
@@ -8,7 +8,7 @@
 //     seconds and stops asking once the note is in or has failed, when the page
 //     closes, or when another task is opened.
 //   - A note they have typed and not yet saved is never replaced by the poll.
-//   - When Claude writes the notes, "重生笔记" asks Claude to rewrite it from the
+//   - When Claude writes the notes, "重写笔记" asks Claude to rewrite it from the
 //     transcript and the frames, says so in the dialog, and shows the new note
 //     when it is written. A busy queue is reported in plain Chinese.
 //   - When a text model writes the notes, the dialog names it, and warns that
@@ -247,7 +247,7 @@ const confirmRegenerate = async () => {
     });
 };
 
-describe('重生笔记 when Claude writes the notes', () => {
+describe('重写笔记 when Claude writes the notes', () => {
     it('asks Claude to rewrite from the frames, not the text model, and shows the new note', async () => {
         claudeWriter();
         const fetchSpy = vi.fn(async () => ({ok: true, json: async () => ({})}));
@@ -294,7 +294,7 @@ describe('重生笔记 when Claude writes the notes', () => {
         mount(finishedTask());
         await openRegenerateDialog();
         await confirmRegenerate();
-        expect(screen.getByText('队列里还有任务在处理，等它处理完再重生笔记。')).toBeTruthy();
+        expect(screen.getByText('队列里还有任务在处理，等它处理完再重写笔记。')).toBeTruthy();
         // Nothing started, so nothing is polled and the button is usable again.
         await advance(30000);
         expect(api.getJob).not.toHaveBeenCalled();
@@ -314,7 +314,7 @@ describe('重生笔记 when Claude writes the notes', () => {
     });
 });
 
-describe('重生笔记 when a text model writes the notes', () => {
+describe('重写笔记 when a text model writes the notes', () => {
     it('names the text model, warns that the screenshots go, and uses the text rewrite', async () => {
         textWriter();
         const fetchSpy = vi.fn(async () => ({
@@ -348,7 +348,7 @@ describe('重生笔记 when a text model writes the notes', () => {
     });
 });
 
-describe('重生笔记 decided per task when Claude writes the notes', () => {
+describe('重写笔记 decided per task when Claude writes the notes', () => {
     // Claude writes the notes, and a DeepSeek key is there for the text model.
     const claudeWithTextKey = () => {
         runtimeConfig = {...runtimeConfig, writesItsOwnNote: true};

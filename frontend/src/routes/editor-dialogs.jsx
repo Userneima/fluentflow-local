@@ -4,6 +4,7 @@
 import SvgIcon from '../components/SvgIcon.jsx';
 import {fmtTime, useI18n} from '../app/shared.jsx';
 import {useDismissable} from '../lib/useDismissable.js';
+import {CutReport} from '../components/CutReport.jsx';
 
 const modalOptions = {closeOnOutsideClick: false, trapFocus: true};
 
@@ -183,6 +184,35 @@ export const EditRecordsDialog = ({records, onClose, onSeek}) => {
                             </div>
                         </article>
                     ))}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// The cut's processing report for this task, opened from the editor so the
+// places waiting for a judgement can be answered without leaving the result.
+export const CutReviewDialog = ({result, onClose}) => {
+    const {lang} = useI18n();
+    const dialogRef = useDismissable(true, onClose, modalOptions);
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
+            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="cut-review-title" className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-[24px] border border-[#e4e0e0] bg-white shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
+                <div className="flex items-center justify-between gap-4 border-b border-[#e4e0e0] px-6 py-4 dark:border-white/[0.12]">
+                    <h2 id="cut-review-title" className="font-headline text-lg font-extrabold text-[#111111] dark:text-white">
+                        {lang === 'zh' ? '剪辑处理说明' : 'What the cut did'}
+                    </h2>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label={lang === 'zh' ? '关闭' : 'Close'}
+                        className="flex h-9 w-9 items-center justify-center rounded-[13px] bg-[#efeeee] text-[#666] transition hover:bg-[#e4e0e0] hover:text-[#111111] dark:bg-white/[0.08] dark:text-white/60 dark:hover:bg-white/[0.12] dark:hover:text-white"
+                    >
+                        <SvgIcon name="close" className="text-lg"/>
+                    </button>
+                </div>
+                <div className="flex-1 overflow-y-auto px-6 py-4">
+                    <CutReport job={{task_id: result?.task_id, result}} embedded/>
                 </div>
             </div>
         </div>

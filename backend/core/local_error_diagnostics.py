@@ -310,7 +310,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "invalid_api_key",
             "AI API Key 无效",
             "AI 笔记没有生成：当前 API Key 无效或已失效，转录和字幕仍会保留。",
-            "到设置页更新自己的 AI API Key，然后重生笔记。",
+            "到设置页更新自己的 AI API Key，然后重写笔记。",
         )
     if "no position encodings are defined" in lowered:
         return _diag(
@@ -357,7 +357,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "ai_rate_limited",
             "AI 服务限流",
             "AI 笔记没有生成：AI 服务说请求过于频繁或额度用完，暂时被限流，转录和字幕仍会保留。",
-            "稍后重生笔记；如果反复出现，到服务商后台查看套餐额度和并发限制。",
+            "稍后重写笔记；如果反复出现，到服务商后台查看套餐额度和并发限制。",
         )
     if "http error 429" in lowered or "too many requests" in lowered:
         return _diag(
@@ -505,7 +505,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "queue_summary_failed",
             "后台笔记生成调用失败",
             "本机后台任务调用笔记生成接口失败。",
-            "重试；如果转录已保存，打开结果后重生笔记。",
+            "重试；如果转录已保存，打开结果后重写笔记。",
         )
     if "job not found" in lowered or "404" in lowered or "归属" in raw:
         return _diag(
@@ -527,7 +527,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "empty_ai_note",
             "AI 返回了空笔记",
             "AI 没有生成可用内容。",
-            "重生笔记；如果重复出现，调整提示词或更换模型。",
+            "重写笔记；如果重复出现，调整提示词或更换模型。",
         )
     if "失去了访问自己程序文件夹的权限" in raw or (
         "operation not permitted" in lowered and "/" not in raw

@@ -112,6 +112,22 @@ export const markdownDownloadMessage = (out, lang = 'zh') => {
         : 'Downloaded as a .zip: keep the Markdown file next to its images folder and the screenshots show';
 };
 
+// How many places of the cut wait for the user's judgement: items of the
+// report's judgement group without an answer. The full result carries the
+// report and the answers; a records-list copy carries only the count.
+export const cutItemsToJudge = (result) => {
+    const survey = result?.debreath?.survey;
+    if (!survey || typeof survey !== 'object') return 0;
+    const sections = Array.isArray(survey.report?.sections) ? survey.report.sections : null;
+    if (!sections) return Math.max(0, Number(survey.to_judge) || 0);
+    const verdicts = survey.verdicts && typeof survey.verdicts === 'object' ? survey.verdicts : {};
+    return sections
+        .filter((section) => section?.judge)
+        .flatMap((section) => section.items || [])
+        .filter((item) => item && !verdicts[item.key])
+        .length;
+};
+
 // Which stored file the player should load: the one this transcript belongs to.
 //
 // Not a preference. The transcript's timestamps drive every seek, every
@@ -297,7 +313,7 @@ export const autoExportPending = (job) => autoExportRequested(job) && !larkExpor
 
 // What the regenerate dialog says about who will write the new note, and what
 // the user loses by it.
-// What "重生笔记" will do for this task, said before it does it.
+// What "重写笔记" will do for this task, said before it does it.
 //
 // When Claude writes the notes it rewrites from the cut file's frames, which
 // not every task has (a subtitle file, a link transcribed from its subtitles, a
@@ -330,7 +346,7 @@ export const regenerateDialogCopy = ({
         // writer, would race it for the same note.
         return {
             desc: zh
-                ? '这个任务的笔记正在重写，写好会自动出现在右侧。等它写完再重生。'
+                ? '这个任务的笔记正在重写，写好会自动出现在右侧。等它写完再重写。'
                 : 'This note is already being rewritten and will appear on the right when it is done. Wait for it before regenerating.',
             warning: '',
             primary: writerKind === 'claude' ? 'claude' : 'text',
@@ -347,7 +363,7 @@ export const regenerateDialogCopy = ({
                 ? `这个任务没法让 Claude 结合画面重写：${reason}。这次会改用 ${label} 按当前转录和你选的提示词重写，笔记里的截图不会保留。`
                 : `Claude cannot rewrite this task from the frames: ${reason}. ${label} will rewrite it from the current transcript with your chosen prompt instead; screenshots in the note are not kept.`,
             warning: textWriterReady ? '' : (zh
-                ? '还没有填文本模型的 Key，这个任务现在重生不了。去设置填写后再试。'
+                ? '还没有填文本模型的 Key，这个任务现在重写不了。去设置填写后再试。'
                 : 'No text-model key yet, so this task cannot be regenerated now. Add one in Settings and try again.'),
             primary: 'text',
             confirmDisabled: !textWriterReady,
@@ -392,10 +408,10 @@ export const visualNoteStartErrorMessage = (err, lang = 'zh') => {
     if (err?.status === 409) {
         if (!detail || detail.includes('队列')) {
             return zh
-                ? '队列里还有任务在处理，等它处理完再重生笔记。'
+                ? '队列里还有任务在处理，等它处理完再重写笔记。'
                 : 'Another task is still being processed. Regenerate the note once the queue is empty.';
         }
         return zh ? `这次没法用 Claude 重写笔记：${detail}` : `Claude cannot rewrite this note: ${detail}`;
     }
-    return detail || (zh ? '重生笔记没能开始' : 'The note rewrite did not start');
+    return detail || (zh ? '重写笔记没能开始' : 'The note rewrite did not start');
 };

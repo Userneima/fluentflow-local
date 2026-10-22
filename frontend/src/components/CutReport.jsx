@@ -216,9 +216,11 @@ const Change = ({change, index, busy, onUndo}) => {
 
 const REFRESH_MS = 3000;
 
-export const CutReport = ({job}) => {
+// embedded: shown inside the editor's dialog, open from the start and without
+// its own open/close button.
+export const CutReport = ({job, embedded = false}) => {
     const taskId = job?.task_id || job?.id;
-    const [open, setOpen] = useState(false);
+    const [open, setOpen] = useState(embedded);
     const [survey, setSurvey] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -240,6 +242,12 @@ export const CutReport = ({job}) => {
         const timer = window.setInterval(() => { load().catch(() => {}); }, REFRESH_MS);
         return () => window.clearInterval(timer);
     }, [open, rerendering, taskId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    useEffect(() => {
+        if (!embedded || !taskId) return;
+        setLoading(true);
+        load().catch((exc) => setError(exc.message)).finally(() => setLoading(false));
+    }, [embedded, taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     if (!taskId || !hasReport(job)) return null;
 
@@ -292,8 +300,8 @@ export const CutReport = ({job}) => {
     // Before the task is opened, the list row says how many wait.
     const toJudge = open && report ? waiting.length : Number(surveyOf(job)?.to_judge) || 0;
     return (
-        <div className="mt-3">
-            <button
+        <div className={embedded ? '' : 'mt-3'}>
+            {embedded ? null : <button
                 type="button"
                 className={toJudge && !open
                     ? `${smallButton} border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]`
@@ -302,9 +310,9 @@ export const CutReport = ({job}) => {
             >
                 {toJudge && !open ? <AlertCircle className="size-3.5" strokeWidth={2.15}/> : <FileSearch className="size-3.5" strokeWidth={2.15}/>}
                 {open ? '收起处理说明' : toJudge ? `有 ${toJudge} 处需要你判断` : '看看这条视频处理了什么'}
-            </button>
+            </button>}
             {open ? (
-                <div className="mt-2 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]">
+                <div className={embedded ? '' : 'mt-2 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]'}>
                     {loading ? (
                         <p className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#57585d] dark:text-white/62">
                             <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.15}/>
