@@ -129,6 +129,11 @@ def test_transcript_task_completes_with_local_package(monkeypatch, agent_stack):
     assert "package" not in body
     package = client.get(f"/agent/v1/tasks/{body['task_id']}/package", headers=_HEADERS).json()
     assert package["note"]["markdown"] == "# Agent 笔记"
+    # A later version replacing this note records it as generated (owner, 2026-10-22).
+    from backend.core import note_versions
+
+    stored = job_store.get_job(body["task_id"], db_path=agent_stack["jobs_db"])
+    assert note_versions.changed_by(stored["result"]) == note_versions.GENERATED
     assert "usage" not in package and "execution" not in package  # local package
 
     # Follow-up reads work through the same surface.

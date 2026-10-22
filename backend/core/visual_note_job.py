@@ -1160,6 +1160,7 @@ def _run_visual_note(
     on_local_work_done: Callable[[], None] | None = None,
     note_skill: note_skills.NoteSkill | None = None,
     checker: tuple[note_coverage.Chat, str] | None = None,
+    note_by: str = note_versions.REWRITE,
     reviser: note_coverage.Chat | None = None,
     planned_ranges: list[cut_timeline.KeptRange] | None = None,
 ) -> dict[str, Any]:
@@ -1348,7 +1349,9 @@ def _run_visual_note(
         if replace_note:
             current = get_job(task_id, client_id=client_id) or {}
             current_result = current.get("result") if isinstance(current.get("result"), dict) else {}
-            result_fields, state["replaced_note"] = _promotion(current_result, markdown, media_kind=media.kind)
+            result_fields, state["replaced_note"] = _promotion(
+                current_result, markdown, media_kind=media.kind, by=note_by,
+            )
         return _store(
             task_id,
             client_id=client_id,
@@ -1449,7 +1452,7 @@ def use_generated_note(task_id: str, *, client_id: str | None = None) -> dict[st
     if not markdown.strip():
         raise VisualNoteError("这个任务还没有根据剪后版本写好的笔记")
     media_source = state.get("media_source") if isinstance(state.get("media_source"), dict) else {}
-    fields, replaced = _promotion(result, markdown, media_kind=media_source.get("kind"))
+    fields, replaced = _promotion(result, markdown, media_kind=media_source.get("kind"), by=note_versions.SWITCH_BACK)
     if state.get("switch_back_edited") is not None:
         # The note switched back to is the one a restore put aside, edits and all.
         fields["summary_edited"] = bool(state.get("switch_back_edited"))
@@ -1567,8 +1570,11 @@ def run_visual_note(
 
     error: BaseException | None = None
     try:
+        # The note the flow writes after transcription is the task's first
+        # note; the button on a finished task rewrites one.
+        note_by = note_versions.GENERATED if trigger == "auto" else note_versions.REWRITE
         return _run_visual_note(
-            task_id, client_id=client_id, on_local_work_done=hand_off, **kwargs,
+            task_id, client_id=client_id, on_local_work_done=hand_off, note_by=note_by, **kwargs,
         )
     except BaseException as exc:
         error = exc

@@ -51,6 +51,7 @@ GENERATED = "generated"
 FEISHU_PULL = "feishu_pull"
 EXPORT = "export"
 RESTORE = "restore"
+SWITCH_BACK = "switch_back"
 ADJUST = "adjust"
 BY_LABELS = {
     WEB_EDIT: "网页编辑",
@@ -61,6 +62,7 @@ BY_LABELS = {
     FEISHU_PULL: "飞书拉回",
     EXPORT: "导出到飞书",
     RESTORE: "恢复版本",
+    SWITCH_BACK: "切回生成版",
     ADJUST: "时间改回原片",
 }
 NOT_RECORDED = "未记录"

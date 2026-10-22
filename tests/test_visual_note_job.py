@@ -620,6 +620,23 @@ def test_the_new_note_can_be_chosen_again_without_paying_for_another_run(
     assert replaced["previous_markdown"] == "原来的文字笔记", "still restorable"
 
 
+def test_each_note_says_what_wrote_it_over_the_one_before(job_store, tmp_path):
+    # Owner, 2026-10-22: every kept version of a note says what replaced it.
+    # The note the flow writes after transcription is generated; the button
+    # on a finished task rewrites; switching back writes nothing new.
+    from backend.core import note_versions
+
+    auto = _run(tmp_path, "![幻灯片](note_0001.jpg)\n\n流程写的笔记。", trigger="auto")
+    assert note_versions.changed_by(auto["result"]) == note_versions.GENERATED
+
+    manual = _run(tmp_path, "![幻灯片](note_0001.jpg)\n\n按按钮重写的笔记。")
+    assert note_versions.changed_by(manual["result"]) == note_versions.REWRITE
+
+    vn.restore_previous_note(TASK, client_id="anonymous")
+    again = vn.use_generated_note(TASK, client_id="anonymous")
+    assert note_versions.changed_by(again["result"]) == note_versions.SWITCH_BACK
+
+
 def test_restoring_with_nothing_to_restore_is_refused_in_words(job_store):
     with pytest.raises(vn.VisualNoteError, match="没有可以恢复"):
         vn.restore_previous_note(TASK, client_id="anonymous")

@@ -1449,7 +1449,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "(the note now: note_version, chars, chars_change, changed_by) and versions, newest first: "
             "version_id, saved_at, side (where that version lived: 本地 = the md in the output folder, "
             "FluentFlow = the task's note, 飞书 = the Feishu document), replaced_by (what wrote over it: "
-            "web_edit, obsidian, agent_note, rewrite, generated, feishu_pull, export, restore, adjust; "
+            "web_edit, obsidian, agent_note, rewrite, generated, feishu_pull, export, restore, switch_back, adjust; "
             "null for versions kept before this was recorded, shown as 未记录), chars, chars_change "
             "(against the previous version on the same side; the 飞书 side is Feishu's export format and "
             "runs a few hundred characters longer than the others) and sharp_drop (at least 1,000 characters and half the "
@@ -1467,8 +1467,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "description": (
             "Read one kept version of a task's note in full (markdown), by the version_id "
             "list_note_versions gave. Use it to check a version is the one the user wants before "
-            "restoring it, or to copy a lost passage back by hand. Versions with side 本地 point their "
-            "screenshots at 过程文件/截图 beside the md; side 飞书 is Feishu's own export format."
+            "restoring it, or to copy a lost passage back by hand. Versions with side 本地, and FluentFlow "
+            "versions kept when an Obsidian edit came in, point their screenshots at 过程文件/截图 beside "
+            "the md (a restore turns them back into the task's own pictures); side 飞书 is Feishu's own "
+            "export format."
         ),
         "inputSchema": {
             "type": "object",
@@ -1486,9 +1488,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "Make a kept version the task's note again. Ask the user first: it replaces the note "
             "everywhere it is kept. The current note is kept as a version first (replaced_by=restore), "
             "so a restore can itself be undone. It then goes through the note's ordinary save: the "
-            "task's note changes at once, the md and PDF in the output folder follow within seconds, "
-            "and a note kept in step with Feishu has its changed chapters rewritten there; the answer's "
-            "follows lists where it applies. base_version is current.note_version from "
+            "task's note changes at once; the md and PDF in the output folder, and the Feishu document "
+            "of a note kept in step with Feishu (changed chapters only), are queued to follow, usually "
+            "within seconds to a minute. The answer's follows lists where it applies; if one did not "
+            "follow, get_task says why (output_folder.error, lark_sync_error). base_version is current.note_version from "
             "list_note_versions: when the note changed since (the user editing in Obsidian or on the "
             "page, Feishu, another agent), the restore is refused with code stale and nothing changes; "
             "list again and confirm with the user. Versions with side 飞书 cannot be restored (Feishu's "

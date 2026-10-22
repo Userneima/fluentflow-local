@@ -455,6 +455,16 @@ class MediaJobContext:
     event_route: str = "/process"
 
 
+def _declared_generated(result: dict[str, Any]) -> dict[str, Any]:
+    """The finished result with its note declared as generated. Declared here,
+    at the end: the note is rewritten after ``result_for_summary_success``
+    (its screenshots and the frames left out), and a declaration only holds
+    for the note it was made on."""
+    if str(result.get("summary_markdown") or "").strip():
+        note_versions.declare(result, note_versions.GENERATED)
+    return result
+
+
 def _finalize_result_storage(ctx: MediaJobContext, result: dict[str, Any]) -> dict[str, Any]:
     if not ctx.finalize_result_storage:
         return result
@@ -1441,9 +1451,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             )
 
         # ── Done ───────────────────────────────────────────
-        if str(result.get("summary_markdown") or "").strip():
-            note_versions.declare(result, note_versions.GENERATED)
-        result = _attach_result_artifacts(task_id_value, result)
+        result = _attach_result_artifacts(task_id_value, _declared_generated(result))
         result = _finalize_result_storage(ctx, result)
         _log_task_completed(
             task_id=task_id_value,

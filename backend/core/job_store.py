@@ -711,6 +711,7 @@ def save_result_changes(
     db_path: Path | str = DEFAULT_DB_PATH,
     client_id: str | None = None,
     touch_updated_at: bool = True,
+    unless_moved: tuple[str, ...] = (),
 ) -> dict[str, Any] | None:
     """Write only what a step changed: the fields that differ between the
     result it read (``before``) and the one it built (``after``), onto the
@@ -742,6 +743,11 @@ def save_result_changes(
             return None
         stored = _json_loads(row["result_json"])
         current = normalize_result_for_read(stored)
+        if any((current or {}).get(key) != (before_read or {}).get(key) for key in unless_moved):
+            # ``unless_moved``: fields this write rests on; one changed since
+            # ``before`` was read, so nothing is written.
+            conn.rollback()
+            return None
         merged = _apply_changes(
             current if isinstance(current, dict) else {},
             before_read if isinstance(before_read, dict) else {},

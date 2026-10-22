@@ -211,6 +211,10 @@ def test_a_note_for_a_cut_that_never_rendered_goes_back_onto_the_original(job_st
     assert note["frames_cited"][0]["timestamp_seconds"] == 30.0
     assert note["media_source"]["kind"] == vn.MEDIA_SOURCE_UNCHANGED
     assert result["summary_written_from"] == "source_media_note"
+    # The version this replaces records why (owner, 2026-10-22).
+    from backend.core import note_versions
+
+    assert note_versions.changed_by(result) == note_versions.ADJUST
 
 
 def test_a_note_whose_cut_did_come_out_is_left_alone(job_store):  # noqa: F811

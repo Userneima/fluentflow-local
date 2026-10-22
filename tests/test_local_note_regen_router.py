@@ -125,6 +125,10 @@ def test_regenerate_merges_into_existing_job(monkeypatch):
     # A text rewrite is the text model's note; the page must stop describing it
     # as Claude reading the frames.
     assert job["result"]["summary_written_from"] == "text_regeneration"
+    # The version it replaced records a rewrite (owner, 2026-10-22).
+    from backend.core import note_versions
+
+    assert note_versions.changed_by(job["result"]) == note_versions.REWRITE
 
 
 def test_regenerate_does_not_overwrite_note_edited_while_ai_runs(monkeypatch):

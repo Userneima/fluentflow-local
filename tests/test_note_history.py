@@ -322,6 +322,69 @@ def test_a_restore_brings_all_three_places_back_and_keeps_what_it_replaced(tmp_p
     assert restore_copies and "只剩一句" in restore_copies[0].path.read_text(encoding="utf-8")
 
 
+def test_a_restore_keeps_an_edit_the_folder_has_not_caught_up_with(tmp_path):
+    # The md follows the task's note only after a minute without edits; a
+    # restore inside that minute must still keep the latest edit (review,
+    # 2026-10-23: only the md was kept, and the last page edit was lost).
+    task, md = _task(tmp_path)
+    _web_edit(task, "# 访谈\n\n第一次在网页上改。\n")
+    output_folder.sync(task)
+    _web_edit(task, "# 访谈\n\n第二次在网页上改，还没同步到文件夹。\n")
+    listed = _agent().get(f"/agent/v1/tasks/{task}/note/versions", headers=AGENT).json()
+    target = next(v for v in listed["versions"] if v["chars"] > 30)
+
+    response = _agent().post(f"/agent/v1/tasks/{task}/note/versions/{quote(target['version_id'])}/restore",
+                             headers=AGENT, json={"base_version": listed["current"]["note_version"]})
+
+    assert response.status_code == 200, response.text
+    kept = [v.path.read_text(encoding="utf-8") for v in note_versions.kept(md) if v.by == note_versions.RESTORE]
+    assert any("第二次在网页上改" in text for text in kept), "kept by the restore itself, before any folder refresh"
+
+
+def test_the_note_kept_when_an_obsidian_edit_came_in_restores_with_its_screenshots(tmp_path):
+    task, md = _task(tmp_path)
+    original = _result(task)["summary_markdown"]
+    _edit(md, md.read_text(encoding="utf-8").replace("开场的话。", "在 Obsidian 里改的开场。"))
+    output_folder.sync(task)
+    kept = _newest(md)
+    assert (kept.side, kept.by) == (note_versions.TASK, note_versions.OBSIDIAN)
+
+    response = _agent().post(f"/agent/v1/tasks/{task}/note/versions/{quote(kept.id)}/restore",
+                             headers=AGENT, json={"base_version": _result(task)["note_version"]})
+
+    assert response.status_code == 200, response.text
+    note = _result(task)["summary_markdown"]
+    assert note.strip() == original.strip()
+    assert f"/jobs/{task}/artifacts/frame?file=note_0001.jpg" in note
+    assert output_folder.PROCESS_DIRNAME not in note
+
+
+def test_an_edit_landing_while_a_restore_runs_is_not_overwritten(tmp_path, monkeypatch):
+    task, md = _task(tmp_path)
+    _web_edit(task, "# 改短了\n")
+    output_folder.sync(task)
+    listed = _agent().get(f"/agent/v1/tasks/{task}/note/versions", headers=AGENT).json()
+    from backend.core import note_history
+
+    keep_current = note_history._keep_current
+
+    def edit_meanwhile(*args, **kwargs):
+        keep_current(*args, **kwargs)
+        # An Obsidian edit taken in between the version check and the write.
+        result = _result(task)
+        job_store.save_result_changes(task, result, note_versions.declare(
+            {**result, "summary_markdown": "# 改短了\n\n恢复进行中收回的修改。\n"}, note_versions.OBSIDIAN))
+
+    monkeypatch.setattr(note_history, "_keep_current", edit_meanwhile)
+    response = _agent().post(
+        f"/agent/v1/tasks/{task}/note/versions/{quote(listed['versions'][0]['version_id'])}/restore",
+        headers=AGENT, json={"base_version": listed["current"]["note_version"]},
+    )
+
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "stale"
+    assert "恢复进行中收回的修改" in _result(task)["summary_markdown"]
+
+
 def test_a_restore_on_a_note_that_moved_on_is_refused_and_changes_nothing(tmp_path):
     task, md = _task(tmp_path)
     _web_edit(task, "# 改短了\n")
@@ -394,4 +457,37 @@ def test_a_note_the_pipeline_writes_says_it_was_generated():
 
     result = result_for_summary_success({"task_id": "x", "transcript_text": "一句。"}, "# 生成的笔记\n")
 
+    assert note_versions.changed_by(result) == note_versions.GENERATED
+
+
+def test_the_pipeline_declares_its_note_after_its_last_change_to_it():
+    # The pipeline rewrites the note's screenshot links after building the
+    # result; the declaration has to be made on the note it ends with.
+    from backend.core import media_job
+    from backend.core.job_lifecycle import result_for_summary_success
+
+    result = result_for_summary_success({"task_id": "x"}, "# 笔记\n\n![](frame-1.jpg)\n")
+    result["summary_markdown"] = "# 笔记\n\n![](/jobs/x/artifacts/frame?file=note_0001.jpg)\n"
+    assert note_versions.changed_by(result) is None
+
+    assert note_versions.changed_by(media_job._declared_generated(result)) == note_versions.GENERATED
+
+
+def test_the_text_note_written_when_the_frame_note_cannot_run_says_it_was_generated(tmp_path, monkeypatch):
+    import backend.core.ai_summarizer as ai_summarizer
+    import backend.core.local_entry_guards as guards
+    from backend.core import local_intake_flow
+
+    task, md = _task(tmp_path)
+    monkeypatch.setattr(guards, "local_ai_kwargs", lambda **kw: {"api_key": "sk-test", "provider": "deepseek"})
+    monkeypatch.setattr(ai_summarizer, "summarize_transcript_with_metadata", lambda transcript, **kw: SimpleNamespace(
+        markdown="# 文本模型写的笔记\n\n正文。", requested_mode="auto", resolved_mode="direct", chunk_count=1,
+        deadline_hit=False))
+    monkeypatch.setattr(ai_summarizer, "text_model_name", lambda **kw: "deepseek-test")
+
+    local_intake_flow._write_text_note_instead(
+        task, LOCAL_OWNER_ID, SimpleNamespace(unavailable_reason="Claude 没登录。", name="subscription"))
+
+    result = _result(task)
+    assert result["summary_markdown"].startswith("# 文本模型写的笔记")
     assert note_versions.changed_by(result) == note_versions.GENERATED

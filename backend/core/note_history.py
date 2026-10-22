@@ -131,11 +131,12 @@ def read_version(task_id: str, version_id: str, *, client_id: str | None = None)
     }
 
 
-def _as_task_note(task_id: str, md: Path, version: note_versions.Version, text: str) -> str:
-    """The version as the task keeps its note. A copy of the md points its
-    screenshots at ``过程文件/截图…/``; they go back to the task's own pictures."""
-    if version.side != note_versions.LOCAL:
-        return text
+def _stored(task_id: str, md: Path, text: str) -> str:
+    """``text`` as the task keeps its note: screenshots pointing at
+    ``过程文件/截图…/`` beside the md go back to the task's own pictures. Text
+    already in the task's form is unchanged. A copy of the md, and the task's
+    note kept when an Obsidian edit replaced it (written as the md was), both
+    point there."""
     from backend.core import output_folder
 
     process = md.parent / output_folder.PROCESS_DIRNAME
@@ -146,21 +147,23 @@ def _as_task_note(task_id: str, md: Path, version: note_versions.Version, text: 
 
 
 def _keep_current(task_id: str, md: Path, result: dict[str, Any]) -> None:
-    """The note as it is before the restore, kept first. When the md in the
-    folder is exactly what FluentFlow last wrote, that copy is kept, so the
-    folder's own refresh after the restore finds it already kept."""
-    from backend.core import output_folder
-
+    """Everything the restore is about to replace, kept first. The task's note
+    is the note now: the md in the folder catches up with it only after a
+    minute without edits, so a copy of the md alone could miss the last edit.
+    When the md says the same, that copy is kept instead, so the folder's own
+    refresh after the restore finds it already kept; when it says something
+    else (an Obsidian edit not yet taken in), it is kept as well."""
     note = str(result.get("summary_markdown") or "")
-    record = result.get(output_folder.RESULT_KEY) if isinstance(result.get(output_folder.RESULT_KEY), dict) else {}
     try:
         on_disk = md.read_text(encoding="utf-8")
     except OSError:
         on_disk = ""
-    if on_disk and record.get("md_written_digest") == output_folder._digest(on_disk):
+    if on_disk.strip() and _stored(task_id, md, on_disk).strip() == note.strip():
         note_versions.keep(md, on_disk, note_versions.LOCAL, note_versions.RESTORE)
-    else:
-        note_versions.keep(md, note, note_versions.TASK, note_versions.RESTORE)
+        return
+    note_versions.keep(md, note, note_versions.TASK, note_versions.RESTORE)
+    if on_disk.strip():
+        note_versions.keep(md, on_disk, note_versions.LOCAL, note_versions.RESTORE)
 
 
 def restore_version(
@@ -181,7 +184,7 @@ def restore_version(
             "或者读取这一版，把需要的段落改进笔记。",
             code="feishu_side")
     md = note_versions.md_for(task_id, before)
-    note = _as_task_note(task_id, md, version, _read(version.path)).strip()
+    note = _stored(task_id, md, _read(version.path)).strip()
     if not note:
         raise NoteHistoryError("这一版是空的，不能恢复。", code="empty")
     current = str(before.get("summary_markdown") or "")
@@ -206,8 +209,13 @@ def restore_version(
     })
     note_versions.declare(after, note_versions.RESTORE)
     after = _attach_result_artifacts(task_id, after, parts=("summary",))
-    saved = save_result_changes(task_id, before, after, client_id=client_id)
+    # Written only while the note is still the one checked above: a page
+    # save or an Obsidian edit taken in between would otherwise be replaced
+    # without being kept.
+    saved = save_result_changes(task_id, before, after, client_id=client_id, unless_moved=("summary_markdown",))
     if not saved:
+        if get_job(task_id, client_id=client_id):
+            raise NoteHistoryError(STALE, code="stale")
         raise NoteHistoryError("任务不存在", status=404, code="not_found")
     _follow_now(task_id, saved.get("result"))
     restored = saved.get("result") if isinstance(saved.get("result"), dict) else {}
@@ -238,10 +246,13 @@ def _follow_now(task_id: str, result: Any) -> None:
 def _follows(result: dict[str, Any]) -> list[str]:
     from backend.core import feishu_sync, output_folder
 
-    places = ["FluentFlow 任务里的笔记（已写入）"]
+    # The folder and Feishu are updated in the background: what is written
+    # here is that they were queued, and where a failure shows up.
+    places = ["FluentFlow 任务里的笔记：已写入"]
     folder = result.get(output_folder.RESULT_KEY) if isinstance(result.get(output_folder.RESULT_KEY), dict) else {}
     if folder.get("md_path"):
-        places.append(f"产出文件夹的 md 和 PDF（{folder['md_path']}，几秒内更新）")
+        places.append(f"产出文件夹的 md 和 PDF（{folder['md_path']}）：已排队，通常几秒内更新；"
+                      "没更新时 get_task 的 output_folder.error 写原因")
     if feishu_sync.recorded_sync(result) is not None:
-        places.append("飞书文档（只重写变了的章节，几秒到一分钟内更新）")
+        places.append("飞书文档：已排队，只重写变了的章节，通常一分钟内；没更新时 get_task 的 lark_sync_error 写原因")
     return places
