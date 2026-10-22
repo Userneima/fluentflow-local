@@ -33,7 +33,8 @@ vi.mock('../app/shared.jsx', async () => {
         ...actual,
         useI18n: () => ({t: (key) => key, lang: 'zh'}),
         useSettings: () => ({loadSettings: () => ({}), saveSettings: () => {}}),
-        useApi: () => ({
+        // One object for the whole page, as the real useApi gives (useMemo).
+        useApi: () => (globalThis.__addressTestApi ||= {
             processVideoSSE: async () => ({}),
             fetchJobArtifactFile: async () => new File(['x'], 'x'),
             downloadJobMedia: async () => {},
@@ -173,14 +174,17 @@ describe('the editor address', () => {
     });
 
     it('moves with the result when another one is opened, without going back to the first', async () => {
+        jobs.t1 = {result: task('t1')};
+        jobs.t2 = {result: task('t2')};
         mount('/editor', task('t1'));
         await waitFor(() => expect(address()).toBe('/editor?task=t1'));
+        const readsOfFirst = getJobCalls.filter((id) => id === 't1').length;
 
         await act(async () => { setResultFromTest(task('t2')); });
 
         await waitFor(() => expect(address()).toBe('/editor?task=t2'));
         expect(screen.getByRole('heading', {name: '课程 t2'})).toBeTruthy();
-        expect(getJobCalls).not.toContain('t1');
+        expect(getJobCalls.filter((id) => id === 't1').length).toBe(readsOfFirst);
     });
 });
 

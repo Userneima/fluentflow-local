@@ -291,6 +291,7 @@ const Editor = () => {
                     return;
                 }
                 setLastResult({...job.result, task_id: job.result.task_id || urlTaskId});
+                setNoteReadFor(urlTaskId);
                 setUrlTask({id: urlTaskId, state: 'loaded'});
             })
             .catch(() => {
@@ -366,6 +367,13 @@ const Editor = () => {
     const [summaryUnsaved, setSummaryUnsaved] = useState(false);
     const [summarySaveStatus, setSummarySaveStatus] = useState('idle');
     const [hydratingResult, setHydratingResult] = useState(false);
+    // The task whose full note this page has read from the service. Until then
+    // the note on the page may be the task list's or the browser cache's first
+    // 240 characters, which must be neither edited nor saved: on 2026-10-22 the
+    // page saved that preview over a 40,000-character note.
+    const [noteReadFor, setNoteReadFor] = useState('');
+    const noteReadForRef = useRef(noteReadFor);
+    noteReadForRef.current = noteReadFor;
     const [hydrationFailed, setHydrationFailed] = useState(false);
     const [transcriptView, setTranscriptView] = useState('bilingual');
     const [editRecordsOpen, setEditRecordsOpen] = useState(false);
@@ -401,8 +409,9 @@ const Editor = () => {
         }
         const currentSegments = pickTranscriptSegments(result);
         const currentText = result.transcript_text || '';
-        const needsHydration = currentSegments.length === 0 || currentText.length <= 260;
-        if (!needsHydration || hydratedTaskIdsRef.current.has(result.task_id)) {
+        const noteUnread = noteReadForRef.current !== result.task_id;
+        const needsHydration = currentSegments.length === 0 || currentText.length <= 260 || noteUnread;
+        if (!needsHydration || (hydratedTaskIdsRef.current.has(result.task_id) && !noteUnread)) {
             setHydratingResult(false);
             if (!needsHydration) setHydrationFailed(false);
             return;
@@ -431,8 +440,13 @@ const Editor = () => {
                     });
                     setTranscriptDirty(!!full.transcript_edited);
                     setTranscriptSaveStatus(full.transcript_edited ? 'saved' : 'idle');
+                } else {
+                    // The transcript on the page is already whole; the note
+                    // and its version are taken from the service.
+                    setLastResult((prev) => (prev?.task_id === result.task_id ? mergeNoteFields(prev, full) : prev));
                 }
                 hydratedTaskIdsRef.current.add(result.task_id);
+                setNoteReadFor(result.task_id);
             })
             .catch(() => {
                 if (!cancelled) setHydrationFailed(true);
@@ -519,8 +533,12 @@ const Editor = () => {
         applyTranscriptEdit([], text);
     };
 
+    const noteEditableRef = useRef(false);
     const handleSummaryChange = useCallback((text) => {
         const result = resultRef.current;
+        // Only a change made to the full note counts; anything the editor
+        // reports before that (a preview, a load) is not the user's.
+        if (!noteEditableRef.current) return;
         setSummaryDraft(text);
         setSummaryUnsaved(true);
         setSummarySaveStatus(result?.task_id ? 'saving' : 'local');
@@ -700,6 +718,11 @@ const Editor = () => {
         || result?.summary_status === 'completed'
         || !!result?.summary_edited
     );
+    // Editable once the page has the task's full note: read from the service
+    // here, or a result with nothing on the service to read (no task, or one
+    // kept only in this browser).
+    const noteReady = !!result && (!result.task_id || isLocalHistoryResult(result) || noteReadFor === result.task_id);
+    noteEditableRef.current = noteReady;
     const summarySaveLabel = summarySaveStatus === 'saving'
         ? (lang === 'zh' ? '保存中' : 'Saving')
         : summarySaveStatus === 'saved'
@@ -983,6 +1006,13 @@ const Editor = () => {
         if (!summaryUnsaved) return;
         if (!result?.task_id) {
             setSummarySaveStatus('local');
+            return;
+        }
+        // A save always names the version of the note it was made on. A copy
+        // without one is not the task's note (the list's preview is such a
+        // copy), and the service would take an unversioned save as it is.
+        if (!result.note_version) {
+            setSummarySaveStatus('failed');
             return;
         }
         const seq = ++summarySaveSeqRef.current;
@@ -2128,7 +2158,15 @@ const Editor = () => {
                                         />
                                     </div>
                                 </div>
-                                {hasEditableSummary ? (
+                                {hasEditableSummary && !noteReady ? (
+                                    <div data-testid="note-loading" className="hide-scrollbar min-h-0 flex-1 overflow-y-auto p-6">
+                                        <p className="text-sm italic text-[#666] dark:text-white/60">
+                                            {hydrationFailed
+                                                ? (lang === 'zh' ? '笔记全文没有读出来，刷新页面再试。' : 'The full note did not load. Refresh the page to try again.')
+                                                : (lang === 'zh' ? '正在读取笔记全文…' : 'Loading the full note…')}
+                                        </p>
+                                    </div>
+                                ) : hasEditableSummary ? (
                                     <>
                                         <RichNoteEditor
                                             key={summaryResultKey}

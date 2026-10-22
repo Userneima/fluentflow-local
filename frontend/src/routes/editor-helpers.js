@@ -299,6 +299,9 @@ const NOTE_FIELDS = new Set([
     'artifacts', 'requested_note_mode', 'resolved_note_mode', 'chapter_coverage',
     'prompt_preset', 'prompt_preset_label',
     'note_written_by', 'note_fallback_reason', 'deadline_hit',
+    // The version travels with the note it belongs to: a save made on the
+    // note taken from the service must name that note's version.
+    'note_version',
     ...LARK_FIELDS,
 ]);
 export const mergeNoteFields = (current, fresh) => {

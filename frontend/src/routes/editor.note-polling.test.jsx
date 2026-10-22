@@ -62,9 +62,26 @@ vi.mock('../app/shared.jsx', async () => {
         ...actual,
         useI18n: () => ({t: (key) => key, lang: 'zh'}),
         useSettings: () => ({loadSettings: () => storedSettings, saveSettings: () => {}}),
-        useApi: () => api,
+        useApi: () => pageApi,
     };
 });
+
+// The page reads each task once when it opens it, for the full note (2026-10-22:
+// the list's 240-character preview was saved over a note). That read is
+// answered with the task as opened and counted apart, so the assertions below
+// count the polls alone.
+let opened = {};
+let openReads = [];
+const pageApi = {
+    ...api,
+    getJob: (taskId, options) => {
+        if (opened[taskId] && !openReads.includes(taskId)) {
+            openReads.push(taskId);
+            return Promise.resolve({task_id: taskId, status: 'completed', stage: 'done', result: opened[taskId]});
+        }
+        return api.getJob(taskId, options);
+    },
+};
 
 const {default: Editor} = await import('./editor.jsx');
 
@@ -84,7 +101,7 @@ const jobWith = (result, stage = 'done') => ({task_id: result.task_id, status: '
 
 const Harness = ({initial}) => {
     const [lastResult, setLastResult] = useState(initial);
-    switchTask = setLastResult;
+    switchTask = (next) => { if (next?.task_id) opened[next.task_id] = next; setLastResult(next); };
     const value = {
         lastResult,
         setLastResult,
@@ -99,7 +116,10 @@ const Harness = ({initial}) => {
     return <AppState.Provider value={value}><MemoryRouter><Editor/></MemoryRouter></AppState.Provider>;
 };
 
-const mount = (initial) => render(<Harness initial={initial}/>);
+const mount = (initial) => {
+    opened[initial.task_id] = initial;
+    return render(<Harness initial={initial}/>);
+};
 const advance = (ms) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 // Answers the polls in order; the last answer repeats.
 const answerPolls = (...results) => {
@@ -113,6 +133,8 @@ const answerPolls = (...results) => {
 
 beforeEach(() => {
     vi.useFakeTimers();
+    opened = {};
+    openReads = [];
     runtimeConfig = {allowedSttProviders: ['local'], defaultSttProvider: 'local', limits: {}};
     credentialStatus = {};
     storedSettings = {};
