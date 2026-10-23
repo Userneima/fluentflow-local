@@ -491,3 +491,16 @@ def test_the_text_note_written_when_the_frame_note_cannot_run_says_it_was_genera
     result = _result(task)
     assert result["summary_markdown"].startswith("# 文本模型写的笔记")
     assert note_versions.changed_by(result) == note_versions.GENERATED
+
+
+def test_a_write_naming_a_note_version_the_task_no_longer_has_writes_nothing(tmp_path):
+    # The store checks the named version in the same write (decision 6.30).
+    task, md = _task(tmp_path)
+    read = _result(task)
+    _web_edit(task, read["summary_markdown"] + "\n别处刚改的。\n")
+
+    with pytest.raises(job_store.VersionMoved):
+        job_store.save_result_changes(task, read, {**read, "summary_markdown": "# agent 写的\n"},
+                                      expect_versions={"note_version": read["note_version"]})
+
+    assert "别处刚改的" in _result(task)["summary_markdown"]

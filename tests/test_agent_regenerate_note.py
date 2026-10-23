@@ -202,3 +202,73 @@ def test_without_a_prompt_the_tasks_own_settings_are_used_again(client, text_mod
     assert text_model[0]["system_prompt"] == "按会议纪要写"
     assert text_model[0]["note_mode"] == "chapter_coverage"
     assert _stored("regen-same")["result"]["prompt_preset"] == "meeting"
+
+
+# ── the version the agent read (owner, 2026-10-23, decision 6.30) ───────────
+
+def _version_of(task_id: str) -> str:
+    return _stored(task_id)["result"]["note_version"]
+
+
+def test_get_task_says_which_version_of_the_note_it_read(client):
+    _task("regen-ver-read", note="# 笔记", written_from=None)
+
+    task = client.get("/agent/v1/tasks/regen-ver-read", headers=_HEADERS).json()["task"]
+
+    assert task["note_version"] == _version_of("regen-ver-read")
+
+
+def test_a_rewrite_naming_an_older_version_is_refused_and_the_note_stays(client, text_model):
+    _task("regen-ver-old", note="# 原来的笔记", written_from=None)
+    read = _version_of("regen-ver-old")
+    loaded = _stored("regen-ver-old")["result"]
+    job_store.save_result_changes("regen-ver-old", loaded, {**loaded, "summary_markdown": "# 用户刚改过"})
+
+    response = client.post("/agent/v1/tasks/regen-ver-old/note/regenerate", headers=_HEADERS,
+                           json={"base_version": read})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "stale"
+    assert _stored("regen-ver-old")["result"]["summary_markdown"] == "# 用户刚改过"
+    assert text_model == [], "nothing is paid for"
+
+
+def test_a_rewrite_naming_the_current_version_or_none_goes_through(client, text_model):
+    _task("regen-ver-ok", note="# 原来的笔记", written_from=None)
+    response = client.post("/agent/v1/tasks/regen-ver-ok/note/regenerate", headers=_HEADERS,
+                           json={"base_version": _version_of("regen-ver-ok")})
+    assert response.status_code == 200, response.text
+    assert _stored("regen-ver-ok")["result"]["summary_markdown"] == TEXT_NOTE
+
+    _task("regen-ver-none", note="# 原来的笔记", written_from=None)
+    response = client.post("/agent/v1/tasks/regen-ver-none/note/regenerate", headers=_HEADERS, json={})
+    assert response.status_code == 200, response.text
+
+
+def test_putting_the_previous_note_back_with_an_older_version_is_refused(client, text_model):
+    _task("regen-ver-restore", note="# 原来的笔记", written_from=None)
+    client.post("/agent/v1/tasks/regen-ver-restore/note/regenerate", headers=_HEADERS, json={})
+    stale = "0" * 16
+
+    response = client.post("/agent/v1/tasks/regen-ver-restore/visual-note", headers=_HEADERS,
+                           json={"restore_previous_note": True, "base_version": stale})
+
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "stale"
+    assert _stored("regen-ver-restore")["result"]["summary_markdown"] == TEXT_NOTE
+
+
+def test_a_stale_agent_note_save_answers_stale_with_what_to_do(client, monkeypatch):
+    from backend.core import agent_note
+
+    def refused(*_a, **_k):
+        raise visual_note_job.NoteMovedError(visual_note_job.NOTE_MOVED)
+
+    monkeypatch.setattr(agent_note, "save", refused)
+    _task("regen-ver-save", note="# 笔记", written_from=None)
+
+    response = client.post("/agent/v1/tasks/regen-ver-save/agent-note", headers=_HEADERS,
+                           json={"note_markdown": "# 新", "base_version": "0" * 16})
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "stale" and "note_version" in detail["message"]

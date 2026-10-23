@@ -93,7 +93,9 @@ def start_local_visual_note(
         if not bool(body.get(flag)):
             continue
         try:
-            updated = action(task_id, client_id=client_id)
+            updated = action(task_id, client_id=client_id, base_version=body.get("base_version"))
+        except visual_note_job.NoteMovedError as exc:
+            raise HTTPException(status_code=409, detail={"code": "stale", "message": str(exc)}) from exc
         except visual_note_job.VisualNoteError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
@@ -117,6 +119,11 @@ def start_local_visual_note(
             detail="有任务正在处理中，等队列空下来再生成笔记，避免两件重活同时跑。",
         )
     replace_note = bool(body.get("replace_note", True))
+    base_version = str(body.get("base_version") or "").strip() or None
+    try:
+        visual_note_job.check_base(job.get("result"), base_version)
+    except visual_note_job.NoteMovedError as exc:
+        raise HTTPException(status_code=409, detail={"code": "stale", "message": str(exc)}) from exc
     try:
         visual_note_job.claim(task_id)
     except visual_note_job.VisualNoteError as exc:
@@ -131,6 +138,7 @@ def start_local_visual_note(
                 claimed=True,
                 replace_note=replace_note,
                 keyframe_extractor=extract_keyframes,
+                base_version=base_version,
             )
         except visual_note_job.VisualNoteError as exc:
             logger.warning("visual note refused for %s: %s", task_id, exc)

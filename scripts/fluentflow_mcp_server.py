@@ -450,6 +450,7 @@ def regenerate_note(
     note_mode: str | None = None,
     prompt_preset: str | None = None,
     system_prompt: str | None = None,
+    base_version: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -459,7 +460,8 @@ def regenerate_note(
         f"/agent/v1/tasks/{task_id}/note/regenerate",
         api_base=api_base,
         client_id=client_id,
-        payload=_options(note_mode=note_mode, prompt_preset=prompt_preset, system_prompt=system_prompt),
+        payload=_options(note_mode=note_mode, prompt_preset=prompt_preset, system_prompt=system_prompt,
+                         base_version=base_version),
         timeout=180,
     )
 
@@ -509,6 +511,7 @@ def write_note_from_cut_media(
     replace_note: bool = True,
     restore_previous_note: bool = False,
     use_generated_note: bool = False,
+    base_version: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -545,6 +548,8 @@ def write_note_from_cut_media(
         payload["preview"] = True
     else:
         payload["replace_note"] = bool(replace_note)
+    if base_version and not payload.get("preview"):
+        payload["base_version"] = base_version
     return _agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/visual-note",
@@ -621,6 +626,7 @@ def save_agent_note(
     part_notes: list[str] | None = None,
     basis_note: str = "",
     model: str = "",
+    base_version: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -647,7 +653,7 @@ def save_agent_note(
         api_base=api_base,
         client_id=client_id,
         payload=_options(note_markdown=note_markdown, part=part, part_notes=part_notes, basis_note=basis_note,
-                         model=model),
+                         model=model, base_version=base_version),
         # Saving runs FluentFlow's coverage check on each part, a model request
         # over that part's whole transcript.
         timeout=600,
@@ -990,7 +996,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "name": "get_task",
         "description": (
             "Read lightweight task status from FluentFlow. done is true only once the "
-            "note is finished too; note_pending says it is still being written."
+            "note is finished too; note_pending says it is still being written. note_version "
+            "is the version of the note now: read it before you change the note, and pass it as "
+            "base_version when you save (save_agent_note, regenerate_note, write_note_from_cut_media)."
         ),
         "inputSchema": {
             "type": "object",
@@ -1078,7 +1086,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "given here, or the ones the task was submitted with. The old note is never "
             "lost: it is kept and can be put back for free with write_note_from_cut_media "
             "restore_previous_note=true. If the rewrite fails the task stays completed "
-            "with its old note, and summary_status=failed plus summary_error say why."
+            "with its old note, and summary_status=failed plus summary_error say why. With "
+            "base_version, an edit the user makes while it is rewritten wins: the rewrite is "
+            "refused (stale) instead of replacing it."
         ),
         "inputSchema": {
             "type": "object",
@@ -1092,6 +1102,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "system_prompt": {
                     "type": "string",
                     "description": "Text-model path only: instructions for the note. Default: the task's own.",
+                },
+                "base_version": {
+                    "type": "string",
+                    "description": (
+                        "The note_version you read the note at (get_task, get_agent_note_material). "
+                        "When the note changed since, nothing is saved and the answer has code stale: "
+                        "read the note again, merge your change into it, save with the new version. "
+                        "Leaving it out saves as before, over any change made meanwhile."
+                    ),
                 },
                 "api_base": {"type": "string"},
             },
@@ -1186,6 +1205,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "default": False,
                     "description": "Make the already-written note the task's note again. Free.",
                 },
+                "base_version": {
+                    "type": "string",
+                    "description": (
+                        "The note_version you read the note at (get_task, get_agent_note_material). "
+                        "When the note changed since, nothing is saved and the answer has code stale: "
+                        "read the note again, merge your change into it, save with the new version. "
+                        "Leaving it out saves as before, over any change made meanwhile."
+                    ),
+                },
                 "api_base": {"type": "string"},
             },
             "required": ["task_id"],
@@ -1273,7 +1301,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "task_id and have it fetch, write and save. If the result came back truncated or saved to "
             "a file because it was too large for one tool result, call again with small_parts=true: "
             "the recording then comes in total_parts parts to fetch, write and save one at a time. "
-            "The first call for a video extracts frames (up to a minute)."
+            "The first call for a video extracts frames (up to a minute). note_version is the task's "
+            "note as you read it: pass it to save_agent_note as base_version."
         ),
         "inputSchema": {
             "type": "object",
@@ -1303,7 +1332,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "nothing is replaced. The first save of each part is checked against its transcript for "
             "knowledge points the note never mentions (when FluentFlow has a model to check with) and "
             "they come back in coverage.missing, by part: when it is not empty, write in the ones worth "
-            "keeping and save that part again once. A part saved again is not checked again."
+            "keeping and save that part again once. A part saved again is not checked again. "
+            "Pass base_version (note_version from the material or get_task): if the user changed the "
+            "note in the page, Obsidian or Feishu while you wrote, the save is refused with code stale "
+            "and nothing is replaced; get_task_package for the current note, merge your note into it "
+            "and save again with the new note_version. Each answer carries note_version as the note "
+            "is after it; use that one for the next save of a part."
         ),
         "inputSchema": {
             "type": "object",
@@ -1317,6 +1351,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "description": "One or two sentences: which parts rest on the frames, which on the transcript only.",
                 },
                 "model": {"type": "string", "description": "Which model wrote it, recorded on the note."},
+                "base_version": {
+                    "type": "string",
+                    "description": (
+                        "The note_version you read the note at (get_task, get_agent_note_material). "
+                        "When the note changed since, nothing is saved and the answer has code stale: "
+                        "read the note again, merge your change into it, save with the new version. "
+                        "Leaving it out saves as before, over any change made meanwhile."
+                    ),
+                },
                 "api_base": {"type": "string"},
             },
             "required": ["task_id"],

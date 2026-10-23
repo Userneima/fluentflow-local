@@ -46,7 +46,7 @@ from backend.core.result_artifacts import (
     artifact_target_path,
     write_text_artifact,
 )
-from backend.core.result_schema import NOTE_FROM_AGENT
+from backend.core.result_schema import NOTE_FROM_AGENT, content_versions
 from backend.core.visual_note_channel import Channel
 
 CHANNEL_AGENT = "agent"
@@ -254,6 +254,9 @@ def material(
         ],
         "has_video": media.has_video,
         "skill": {"path": str(skill.path), "default": skill.is_default, "version": skill.version},
+        # The note this material was read against: pass it back as
+        # ``base_version`` when saving, so an edit made meanwhile is not replaced.
+        "note_version": content_versions(result).get("note_version"),
     }
 
 
@@ -279,6 +282,7 @@ def save(
     model: str = "",
     client_id: str | None = None,
     checker: tuple[note_coverage.Chat, str] | None | bool = True,
+    base_version: str | None = None,
 ) -> dict[str, Any]:
     """Make the agent's note the task's note, keeping the one it replaces.
 
@@ -292,6 +296,9 @@ def save(
     frame note does (``vn.coverage_checker``), ``None`` checks nothing.
     """
     job = _job(task_id, client_id)
+    # The note version the agent read before writing: checked now, before the
+    # coverage check spends a model call, and again in the write itself.
+    expect = vn.check_base(job.get("result"), base_version)
     media, parts, _segments = _eligible(task_id, job)
     kept = _kept_from_earlier_save(job)
     if part_notes:
@@ -306,7 +313,8 @@ def save(
         ]
         coverage = _not_again(parts) if kept else _coverage(cleaned, parts, checker)
         updated = _finish(task_id, job, media, parts, cleaned, coverage,
-                          basis_note=basis_note, model=model, client_id=client_id, keep_replaced=kept)
+                          basis_note=basis_note, model=model, client_id=client_id, keep_replaced=kept,
+                          expect_versions=expect)
         _write_store(task_id, parts, {
             part.index: _stored(part, draft.markdown, record)
             for part, draft, record in zip(parts, cleaned, coverage["parts"])
@@ -318,7 +326,8 @@ def save(
         cleaned = [_cleaned(note_markdown, parts[0], where="这份笔记", basis_note=basis_note, model=model)]
         coverage = _not_again(parts) if kept else _coverage(cleaned, parts, checker)
         updated = _finish(task_id, job, media, parts, cleaned, coverage,
-                          basis_note=basis_note, model=model, client_id=client_id, keep_replaced=kept)
+                          basis_note=basis_note, model=model, client_id=client_id, keep_replaced=kept,
+                          expect_versions=expect)
         _write_store(task_id, parts, {1: _stored(parts[0], cleaned[0].markdown, coverage["parts"][0])},
                      joined=_note_of(updated), kept_replaced=kept or _replaced_of(updated),
                      basis_note=basis_note, model=model)
@@ -332,7 +341,8 @@ def save(
         {"part": part.index, **note_coverage.unchecked("整篇交回的修改，没有逐部分查漏")} for part in parts
     ], "missing": []}
     updated = _finish(task_id, job, media, parts, cleaned, coverage, basis_note=basis_note, model=model,
-                      client_id=client_id, joined_markdown=cleaned[0].markdown, keep_replaced=kept)
+                      client_id=client_id, joined_markdown=cleaned[0].markdown, keep_replaced=kept,
+                      expect_versions=expect)
     # The saved parts no longer describe the note; what is kept is which note
     # an agent's later save must still be able to put back.
     _write_store(task_id, [], {}, joined=_note_of(updated), kept_replaced=kept or _replaced_of(updated),
@@ -361,6 +371,7 @@ def save_part(
     model: str = "",
     client_id: str | None = None,
     checker: tuple[note_coverage.Chat, str] | None | bool = True,
+    base_version: str | None = None,
 ) -> dict[str, Any]:
     """Keep one part of the note; once every part is in, they become the task's note.
 
@@ -380,6 +391,9 @@ def save_part(
     is in again, and then the changed note is the one that can be put back.
     """
     job = _job(task_id, client_id)
+    # Checked on every part: the note the parts will replace once joined is
+    # the one the agent read.
+    expect = vn.check_base(job.get("result"), base_version)
     media, parts, _segments = _eligible(task_id, job)
     if not note_markdown:
         raise AgentNoteError("没有收到这一部分的笔记内容（note_markdown）")
@@ -422,7 +436,7 @@ def save_part(
                 "missing": [{"part": p.index, **item}
                             for p in parts for item in (saved[p.index]["coverage"].get("missing") or [])]}
     updated = _finish(task_id, job, media, parts, cleaned, combined, basis_note=basis_note, model=model,
-                      client_id=client_id, keep_replaced=kept)
+                      client_id=client_id, keep_replaced=kept, expect_versions=expect)
     _write_store(task_id, parts, saved, joined=_note_of(updated), kept_replaced=kept or _replaced_of(updated),
                  basis_note=basis_note, model=model)
     answer["job"] = updated
@@ -452,7 +466,8 @@ def saved_part(task_id: str, *, part: int, client_id: str | None = None) -> dict
 
 def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, model: str,
             client_id: str | None, joined_markdown: str | None = None,
-            keep_replaced: dict[str, Any] | None = None) -> dict[str, Any]:
+            keep_replaced: dict[str, Any] | None = None,
+            expect_versions: dict[str, str] | None = None) -> dict[str, Any]:
     joined = joined_markdown if joined_markdown is not None else (
         vn._joined_draft(cleaned, parts, title=vn.note_title(job)).markdown
     )
@@ -510,6 +525,7 @@ def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, m
         artifacts={VISUAL_NOTE_KIND: artifact},
         result_fields=result_fields,
         rewrite_artifacts=True,
+        expect_versions=expect_versions,
     )
 
 

@@ -704,6 +704,11 @@ def _apply_changes(current: dict[str, Any], before: dict[str, Any], after: dict[
     return merged
 
 
+class VersionMoved(Exception):
+    """A write that named the content version it started from found the task
+    holding another one; nothing was written."""
+
+
 def save_result_changes(
     task_id: str,
     before: dict[str, Any] | None,
@@ -712,6 +717,7 @@ def save_result_changes(
     client_id: str | None = None,
     touch_updated_at: bool = True,
     unless_moved: tuple[str, ...] = (),
+    expect_versions: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     """Write only what a step changed: the fields that differ between the
     result it read (``before``) and the one it built (``after``), onto the
@@ -748,6 +754,13 @@ def save_result_changes(
             # ``before`` was read, so nothing is written.
             conn.rollback()
             return None
+        if expect_versions:
+            # ``expect_versions``: the content versions (``note_version``...)
+            # the caller started from, checked in the same write.
+            now = content_versions(current)
+            if any(now.get(key) != value for key, value in expect_versions.items()):
+                conn.rollback()
+                raise VersionMoved(task_id)
         merged = _apply_changes(
             current if isinstance(current, dict) else {},
             before_read if isinstance(before_read, dict) else {},

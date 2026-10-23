@@ -167,6 +167,8 @@ def _task_done(job: dict[str, Any]) -> bool:
 def _task_package_response(job: dict[str, Any]) -> dict[str, Any]:
     package = build_agent_task_package(job, artifact_root=_artifact_storage_dir())
     package["note_pending"] = _note_pending(job)
+    # The version of the note in this package: what a save of an edit to it names.
+    package["note_version"] = (job.get("result") or {}).get("note_version")
     return package
 
 
@@ -189,6 +191,7 @@ def _task_brief(job: dict[str, Any]) -> dict[str, Any]:
         "note": {
             "status": note.get("status"),
             "chars": note.get("markdown_chars"),
+            "version": (job.get("result") or {}).get("note_version"),
             "pending": package.get("note_pending"),
             "written_by": cut_media_note.get("channel"),
         },
@@ -556,6 +559,10 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             "cut_running": _cut_running(job),
             "done": _task_done(job),
             "agent_cut": _agent_cut_brief(job),
+            # What an edit starts from: name it as ``base_version`` when saving
+            # the note, so a change made elsewhere meanwhile is not replaced.
+            "note_version": (job.get("result") or {}).get("note_version"),
+            "transcript_version": (job.get("result") or {}).get("transcript_version"),
         },
         "package_url": f"/agent/v1/tasks/{task_id}/package",
     }
@@ -827,6 +834,7 @@ def save_agent_note(
                 basis_note=str(body.get("basis_note") or ""),
                 model=str(body.get("model") or ""),
                 client_id=_local_client_scope(request),
+                base_version=body.get("base_version"),
             )
             answer = {
                 "ok": True,
@@ -848,6 +856,9 @@ def save_agent_note(
             if saved["job"] is not None:
                 answer["previous_note_restorable"] = True
                 answer["package_url"] = f"/agent/v1/tasks/{task_id}/package"
+            # The task's note as it is after this save: what the next save of a
+            # part names (the note changes once every part is in).
+            answer.update(_current_versions(task_id, request))
             return answer
         updated = agent_note.save(
             task_id,
@@ -856,7 +867,10 @@ def save_agent_note(
             basis_note=str(body.get("basis_note") or ""),
             model=str(body.get("model") or ""),
             client_id=_local_client_scope(request),
+            base_version=body.get("base_version"),
         )
+    except visual_note_job.NoteMovedError as exc:
+        raise _note_moved(exc) from exc
     except visual_note_job.VisualNoteError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (TypeError, ValueError) as exc:
@@ -892,6 +906,16 @@ def get_agent_note_part(request: Request, task_id: str, part: int) -> dict[str, 
         )}
     except visual_note_job.VisualNoteError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _note_moved(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=409, detail={"code": "stale", "message": str(exc)})
+
+
+def _current_versions(task_id: str, request: Request) -> dict[str, Any]:
+    job = get_job(task_id, client_id=_local_client_scope(request)) or {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    return {"note_version": result.get("note_version")}
 
 
 def _history_call(action, *args, **kwargs):
@@ -1052,6 +1076,13 @@ async def regenerate_agent_task_note(
     job = _job_for_request(request, task_id)
     initial_result = deepcopy(job.get("result"))
     result = dict(initial_result or {})
+    # A named note version is checked now; the text rewrite below is written
+    # only while the note is still the one read here, the frame rewrite checks
+    # it again when it replaces the note.
+    try:
+        visual_note_job.check_base(result, payload.get("base_version"))
+    except visual_note_job.NoteMovedError as exc:
+        raise _note_moved(exc) from exc
 
     frame_note_unavailable: Optional[str] = None
     if _note_written_from_frames(result):
@@ -1060,7 +1091,8 @@ async def regenerate_agent_task_note(
         )
         if described["eligible"]:
             accepted = start_local_visual_note(
-                request, task_id, background_tasks, {"replace_note": True}
+                request, task_id, background_tasks,
+                {"replace_note": True, "base_version": payload.get("base_version")},
             )
             return {
                 "ok": True,

@@ -65,7 +65,9 @@ from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
-from backend.core.job_store import get_job, list_jobs_by_statuses, save_result_changes, update_job_result, upsert_job
+from backend.core.job_store import (
+    VersionMoved, get_job, list_jobs_by_statuses, save_result_changes, update_job_result, upsert_job,
+)
 from backend.core.result_artifacts import (
     DEBREATH_MEDIA_KIND,
     TRANSCRIPT_MEDIA_CUT,
@@ -78,7 +80,7 @@ from backend.core.result_artifacts import (
     resolve_artifact_file,
     write_text_artifact,
 )
-from backend.core.result_schema import NOTE_FROM_CUT_MEDIA, frame_note_written_from
+from backend.core.result_schema import NOTE_FROM_CUT_MEDIA, content_versions, frame_note_written_from
 from backend.core.title_display import display_title_for_user
 from backend.core.storage_paths import _artifact_storage_dir, find_source_file, in_place_source_path
 
@@ -125,6 +127,27 @@ class VisualNoteError(RuntimeError):
     def __init__(self, message: str, *, actionable: bool = False) -> None:
         super().__init__(message)
         self.actionable = actionable
+
+
+class NoteMovedError(VisualNoteError):
+    """The note changed after the caller read the version it named."""
+
+
+NOTE_MOVED = ("笔记在你读取之后被改过（网页、Obsidian、飞书或别的 agent），这次没有保存，笔记保持别处改后的样子。"
+              "重新读一遍任务（get_task 拿 note_version，get_task_package 拿笔记全文），把你的修改合并进最新的笔记，"
+              "带新的 note_version 再存。")
+
+
+def check_base(result: dict[str, Any] | None, base_version: str | None) -> dict[str, str] | None:
+    """The note version a write names, checked against the task's now.
+    Returns what to check again in the write itself; None when none was named
+    (the write goes ahead as before)."""
+    base = str(base_version or "").strip()
+    if not base:
+        return None
+    if content_versions(result if isinstance(result, dict) else {}).get("note_version") != base:
+        raise NoteMovedError(NOTE_MOVED)
+    return {"note_version": base}
 
 
 def _now() -> str:
@@ -563,7 +586,8 @@ def _require_eligible(
 def _store(task_id: str, *, client_id: str | None, state: dict[str, Any],
            artifacts: dict[str, dict[str, Any]] | None = None,
            result_fields: dict[str, Any] | None = None,
-           rewrite_artifacts: bool = False) -> dict[str, Any]:
+           rewrite_artifacts: bool = False,
+           expect_versions: dict[str, str] | None = None) -> dict[str, Any]:
     """Merge one transition into the job result and persist it.
 
     ``result_fields`` is how the finished note becomes the task's note. It writes
@@ -585,7 +609,11 @@ def _store(task_id: str, *, client_id: str | None, state: dict[str, Any],
     if artifacts:
         result["artifacts"] = {**dict(result.get("artifacts") or {}), **artifacts}
     # Only the note's fields: the cut may be rendering while the note is written.
-    updated = save_result_changes(task_id, before, result, client_id=client_id)
+    try:
+        updated = save_result_changes(task_id, before, result, client_id=client_id,
+                                      expect_versions=expect_versions)
+    except VersionMoved as exc:
+        raise NoteMovedError(NOTE_MOVED) from exc
     if not updated:
         raise VisualNoteError("任务不存在")
     return updated
@@ -1161,6 +1189,7 @@ def _run_visual_note(
     note_skill: note_skills.NoteSkill | None = None,
     checker: tuple[note_coverage.Chat, str] | None = None,
     note_by: str = note_versions.REWRITE,
+    base_version: str | None = None,
     reviser: note_coverage.Chat | None = None,
     planned_ranges: list[cut_timeline.KeptRange] | None = None,
 ) -> dict[str, Any]:
@@ -1359,6 +1388,9 @@ def _run_visual_note(
             artifacts={VISUAL_NOTE_KIND: artifact},
             result_fields=result_fields,
             rewrite_artifacts=bool(result_fields),
+            # A caller that named the note it started from: an edit made while
+            # the note was written wins, and this run is recorded as refused.
+            expect_versions={"note_version": base_version} if base_version and result_fields else None,
         )
     except (VisualNoteError, ClaudeVisionError) as exc:
         _store(
@@ -1384,7 +1416,9 @@ def _run_visual_note(
         release(task_id)
 
 
-def restore_previous_note(task_id: str, *, client_id: str | None = None) -> dict[str, Any]:
+def restore_previous_note(
+    task_id: str, *, client_id: str | None = None, base_version: str | None = None,
+) -> dict[str, Any]:
     """Put back the note this flow replaced.
 
     Free, and the reason the replacement is allowed to be the default. The note
@@ -1395,6 +1429,7 @@ def restore_previous_note(task_id: str, *, client_id: str | None = None) -> dict
     if not job:
         raise VisualNoteError("任务不存在")
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    expect = check_base(result, base_version)
     state = visual_note_state(result)
     replaced = state.get("replaced_note") if isinstance(state.get("replaced_note"), dict) else {}
     previous = str(replaced.get("previous_markdown") or "")
@@ -1433,10 +1468,13 @@ def restore_previous_note(task_id: str, *, client_id: str | None = None) -> dict
             **note_versions.declare({"summary_markdown": previous}, note_versions.RESTORE),
         },
         rewrite_artifacts=True,
+        expect_versions=expect,
     )
 
 
-def use_generated_note(task_id: str, *, client_id: str | None = None) -> dict[str, Any]:
+def use_generated_note(
+    task_id: str, *, client_id: str | None = None, base_version: str | None = None,
+) -> dict[str, Any]:
     """Make the already-written note the task's note again, without a new run.
 
     Exists so changing one's mind after a restore costs nothing. Rewriting would
@@ -1447,6 +1485,7 @@ def use_generated_note(task_id: str, *, client_id: str | None = None) -> dict[st
     if not job:
         raise VisualNoteError("任务不存在")
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    expect = check_base(result, base_version)
     state = visual_note_state(result)
     markdown = str(state.get("markdown") or "")
     if not markdown.strip():
@@ -1469,6 +1508,7 @@ def use_generated_note(task_id: str, *, client_id: str | None = None) -> dict[st
         state={"promoted": True, "replaced_note": replaced},
         result_fields=fields,
         rewrite_artifacts=True,
+        expect_versions=expect,
     )
 
 
