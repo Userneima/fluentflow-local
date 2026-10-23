@@ -140,7 +140,7 @@ const BilingualLine = memo(({index, seg, active, review, onSeek, registerNode}) 
         style={OFFSCREEN_SKIP}
         className={review
             ? `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`
-            : `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
+            : `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[12px] px-3 py-2.5 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
     >
         <SentenceTime
             seg={seg}
@@ -151,7 +151,7 @@ const BilingualLine = memo(({index, seg, active, review, onSeek, registerNode}) 
             {review ? fmtTime(seg.start) : (
                 <>
                     <span className="block">{fmtTime(seg.start)}</span>
-                    <span className="mt-0.5 block text-[10px] opacity-70">{fmtTime(seg.end)}</span>
+                    <span className="mt-0.5 block text-[11px] opacity-70">{fmtTime(seg.end)}</span>
                 </>
             )}
         </SentenceTime>
@@ -234,7 +234,7 @@ const sameParagraph = (prev, next) => (
     && prev.paragraph.indices.every((index, k) => index === next.paragraph.indices[k] && prev.segments[index] === next.segments[index])
 );
 const TranscriptParagraph = memo(({paragraph, segments, activeIndex, onSeek, onEdit, onFocusSegment, registerNode}) => (
-    <div data-testid="transcript-paragraph" style={OFFSCREEN_SKIP} className="rounded-[16px] px-3 py-2.5 hover:bg-[#fbfbfd] dark:hover:bg-white/[0.03]">
+    <div data-testid="transcript-paragraph" style={OFFSCREEN_SKIP} className="rounded-[12px] px-3 py-2.5 hover:bg-[#fbfbfd] dark:hover:bg-white/[0.03]">
         <div className="mb-1 flex items-baseline gap-2">
             {paragraph.label && (
                 <span className="text-xs font-extrabold text-[#111111] dark:text-white">{paragraph.label}</span>
@@ -1957,7 +1957,7 @@ const Editor = () => {
                             )) : segments.length > 0 ? segments.map((seg,i) => (
                                 <TranscriptLine key={i} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} onSeek={seekRow} onEdit={editRow} onFocusLine={stopFollowing} registerNode={registerRow}/>
                                 )) : isTranscriptHydrationPending ? (
-                                    <div className="flex min-h-[320px] items-center justify-center rounded-[16px] border border-dashed border-outline-variant bg-surface-container-low px-4 py-8 text-center">
+                                    <div className="flex min-h-[320px] items-center justify-center rounded-[12px] border border-dashed border-outline-variant bg-surface-container-low px-4 py-8 text-center">
                                         <div className="max-w-[28rem]">
                                             <SvgIcon name="sync" className="mx-auto mb-3 h-5 w-5 animate-spin text-primary"/>
                                             <p className="text-sm font-bold text-on-surface">
@@ -1971,7 +1971,7 @@ const Editor = () => {
                                         </div>
                                     </div>
                                 ) : isTranscriptHydrationFailed ? (
-                                    <div className="flex min-h-[320px] items-center justify-center rounded-[16px] border border-amber-200 bg-amber-50 px-4 py-8 text-center text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-100">
+                                    <div className="flex min-h-[320px] items-center justify-center rounded-[12px] border border-amber-200 bg-amber-50 px-4 py-8 text-center text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-100">
                                         <div className="max-w-[30rem]">
                                             <SvgIcon name="info" className="mx-auto mb-3 h-5 w-5 text-amber-600 dark:text-amber-200"/>
                                             <p className="text-sm font-bold">
@@ -2010,7 +2010,7 @@ const Editor = () => {
                                 <div className="border-t border-[#e4e0e0] bg-[#fbfbfb]/90 p-4 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                     {mediaUrl ? (
                                         <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
-                                                <button type="button" onClick={togglePlayback} aria-label={mediaPlaying ? (lang === 'zh' ? '暂停' : 'Pause') : (lang === 'zh' ? '播放' : 'Play')} className={iconButton('primary', 'md')}>
+                                                <button type="button" onClick={togglePlayback} aria-label={mediaPlaying ? (lang === 'zh' ? '暂停' : 'Pause') : (lang === 'zh' ? '播放' : 'Play')} title={mediaPlaying ? (lang === 'zh' ? '暂停' : 'Pause') : (lang === 'zh' ? '播放' : 'Play')} className={iconButton('primary', 'md')}>
                                                     <SvgIcon name={mediaPlaying ? 'pause' : 'play_arrow'} className="text-lg"/>
                                                 </button>
                                                 <button type="button" onClick={()=>setFollowPlayback(v=>!v)} aria-pressed={followPlayback} className={chip(followPlayback)}>

@@ -159,6 +159,18 @@ export const fmtDuration = (sec, lang = 'zh', {tenths = false} = {}) => {
     }
     return zh ? `${s} 秒` : `${s}s`;
 };
+// The first sentences of a reason from the service, for a status line on the
+// page: what went wrong and what to do, never a paragraph (docs/06-界面规矩.md).
+const SENTENCE_RE = /[^。！？!?]+(?:[。！？!?]+|$)/g;
+export const shortReason = (text, count = 2) => (String(text || '').match(SENTENCE_RE) || [])
+    .map((part) => part.trim()).filter(Boolean).slice(0, count).join(' ').replace(/(?<=[。！？]) (?=\S)/g, '');
+
+// How long a note is: "1734 字". One wording on every page (the task page
+// wrote "1,734 字" while the records page wrote "1734 字").
+export const fmtCharCount = (chars, lang = 'zh') => {
+    const n = Math.max(0, Math.round(Number(chars) || 0));
+    return lang === 'zh' ? `${n} 字` : `${n} chars`;
+};
 export const fmtFileSize = (mb) => {
     const n = Number(mb);
     if(!Number.isFinite(n) || n <= 0) return '-';
@@ -738,7 +750,7 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 code: 'diarization_unsupported',
                 titleZh: '说话人区分不可用',
                 titleEn: 'Diarization unavailable',
-                detailZh: '本地说话人区分模型无法处理当前音频长度。请关闭说话人区分。',
+                detailZh: '本机的说话人区分模型无法处理当前音频长度。请关闭说话人区分。',
                 detailEn: 'Local diarization cannot handle this audio length. Disable diarization.',
                 nextZh: '关闭说话人区分后重试。',
                 nextEn: 'Disable diarization and retry.',
@@ -788,9 +800,9 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
             lower.includes('stt processing timed out') || raw.includes('转写超时'),
             taskErrorDiagnosis({
                 code: 'stt_timeout',
-                titleZh: '转写超时',
+                titleZh: '转录超时',
                 titleEn: 'Transcription timed out',
-                detailZh: '转写很长时间没有任何进展，被当作卡住中止了。',
+                detailZh: '转录很长时间没有任何进展，被当作卡住中止了。',
                 detailEn: 'Transcription made no progress for a long time and was stopped as stuck.',
                 nextZh: '重试一次。同一个文件反复卡住，把本机日志发给维护者。',
                 nextEn: 'Retry once. If the same file gets stuck again, send the local log to the maintainer.',

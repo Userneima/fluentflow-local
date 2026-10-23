@@ -13,7 +13,7 @@ import {API_BASE, apiFetch, localExecutionHeaders, noteModeLabel, useI18n, noteG
 import {useApp} from '../app/AppContext.jsx';
 import TaskProgressOverview from '../components/TaskProgressOverview.jsx';
 import {normalizeTaskState} from '../lib/taskState.js';
-import {fmtDuration} from '../lib/format.js';
+import {fmtCharCount, fmtDuration} from '../lib/format.js';
 import {button} from '../lib/ui.js';
 
 const statusText = (status, lang) => {
@@ -95,8 +95,8 @@ const readableDecisionText = (value, lang) => {
         .replace(/\bsource_type=transcript_file\b/g, '来源类型：字幕文件')
         .replace(/\bsource_type=audio_file\b/g, '来源类型：音频文件')
         .replace(/\bsource_type=video\b/g, '来源类型：视频')
-        .replace(/设置中的转写引擎：\s*local\b/g, '设置中的转写引擎：本地')
-        .replace(/转写引擎：\s*local\b/g, '转写引擎：本地')
+        .replace(/设置中的转写引擎：\s*local\b/g, '设置中的转录引擎：本机')
+        .replace(/转写引擎：\s*local\b/g, '转录引擎：本机')
         .replace(/\bcontent has structured learning markers\b/g, '内容有结构化学习标记');
 };
 
@@ -253,7 +253,7 @@ function fallbackDecisionEntries(packageData, lang) {
             decision: note.diagnosis?.title || (lang === 'zh' ? '等待结果' : 'Waiting for result'),
             reason: note.diagnosis?.detail || '',
             evidence: compactValues([
-                note.markdown_chars ? `${lang === 'zh' ? '笔记字数' : 'Note chars'}：${Number(note.markdown_chars).toLocaleString()}` : '',
+                note.markdown_chars ? `${lang === 'zh' ? '笔记字数' : 'Note chars'}：${fmtCharCount(note.markdown_chars, lang)}` : '',
             ]),
             impact: note.diagnosis?.next_action || '',
             source: 'inferred',
@@ -280,7 +280,7 @@ const DecisionEntry = ({entry, index, isLast, lang}) => {
         <article className="grid grid-cols-[42px_minmax(0,1fr)] gap-3">
             <div className="relative flex justify-center">
                 {!isLast && <div className="absolute top-11 h-[calc(100%-1rem)] w-px bg-[#dedada] dark:bg-white/[0.12]"/>}
-                <div className={`relative z-10 flex size-9 items-center justify-center rounded-[13px] border ${tone.dot}`}>
+                <div className={`relative z-10 flex size-9 items-center justify-center rounded-[12px] border ${tone.dot}`}>
                     <Icon className={`size-[18px] ${entry.status === 'running' ? 'animate-spin' : ''}`} strokeWidth={2.15}/>
                 </div>
             </div>
@@ -290,7 +290,7 @@ const DecisionEntry = ({entry, index, isLast, lang}) => {
                         {entry.title || (lang === 'zh' ? `原始判断 ${index + 1}` : `Raw decision ${index + 1}`)}
                     </p>
                     {entry.status && entry.status !== 'completed' && (
-                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${tone.badge}`}>
+                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-extrabold ${tone.badge}`}>
                             {statusText(entry.status, lang)}
                         </span>
                     )}
@@ -311,7 +311,7 @@ const DecisionEntry = ({entry, index, isLast, lang}) => {
 };
 
 const StatBlock = ({label, value}) => (
-    <div className="rounded-[14px] border border-[#dedada] bg-[#fbfbfb] p-3 dark:border-white/[0.10] dark:bg-white/[0.04]">
+    <div className="rounded-[12px] border border-[#dedada] bg-[#fbfbfb] p-3 dark:border-white/[0.10] dark:bg-white/[0.04]">
         <p className="text-[11px] font-extrabold text-[#85868c] dark:text-white/[0.72]">{label}</p>
         <p className="mt-1 truncate text-[14px] font-extrabold text-[#111111] dark:text-white">{value}</p>
     </div>
@@ -359,7 +359,7 @@ const ChapterCoverageEvidence = ({coverage, lang}) => {
             )}
 
             {visibleEvidence.length > 0 && (
-                <div className="mt-4 overflow-x-auto rounded-[16px] border border-[#dedada] dark:border-white/[0.10]">
+                <div className="mt-4 overflow-x-auto rounded-[12px] border border-[#dedada] dark:border-white/[0.10]">
                     <div className="grid min-w-[46rem] grid-cols-[5rem_7rem_minmax(0,1fr)_9rem] border-b border-[#dedada] bg-[#fbfbfb] px-3 py-2 text-[11px] font-extrabold text-[#85868c] dark:border-white/[0.10] dark:bg-white/[0.035] dark:text-white/[0.72]">
                         <span>ID</span>
                         <span>{isZh ? '重要性' : 'Weight'}</span>

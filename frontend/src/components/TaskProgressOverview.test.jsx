@@ -87,7 +87,7 @@ describe('a task that is transcribing', () => {
         expect(screen.getByText('当前任务')).toBeTruthy();
         expect(stageShown()).toBe('转录中');
         expect(percentShown()).toBe('处理中');
-        expect(screen.getByText('正在加载本地模型')).toBeTruthy();
+        expect(screen.getByText('正在加载本机的转录模型')).toBeTruthy();
         expect(screen.queryByText('40%')).toBeNull();
         expect(screen.getByRole('button', {name: '取消任务'})).toBeTruthy();
     });
@@ -150,9 +150,9 @@ describe('a failed task', () => {
             {stage: 'failed', status: 'failed', progress: 42},
             {diagnosis: {detail: 'DeepSeek 的 API Key 不被接受，请到设置页重新填写。', next_action: '到设置页检查 DeepSeek API Key。'}},
         ));
-        expect(stageShown()).toBe('失败');
+        // No stage, percentage or bar: the line under the title says why.
+        expect(screen.queryByText('当前阶段')).toBeNull();
         expect(screen.getByText('处理失败')).toBeTruthy();
-        expect(percentShown()).toBe('-');
         expect(screen.queryByText('42%')).toBeNull();
         expect(screen.getByText('DeepSeek 的 API Key 不被接受，请到设置页重新填写。')).toBeTruthy();
     });
@@ -162,10 +162,23 @@ describe('a failed task', () => {
         expect(screen.getByText('重新打开 FluentFlow Local 后再试一次。')).toBeTruthy();
     });
 
-    it('still tells the person to look at the reason when there is no diagnosis at all', () => {
+    it('says what to do next when there is no diagnosis at all', () => {
         mount(pageFor({stage: 'error', status: 'failed', progress: 0}));
-        expect(stageShown()).toBe('失败');
-        expect(screen.getByText('查看失败原因，按建议重新处理。')).toBeTruthy();
+        expect(screen.queryByText('当前阶段')).toBeNull();
+        expect(screen.getByText('这条任务没处理完，可以在处理记录里重新提交。')).toBeTruthy();
+    });
+
+    // 2026-10-24 review: a link that failed while downloading keeps its stage
+    // ('video_source') with progress 100, and the page called it finished.
+    it('reads as failed when only the status says so', () => {
+        mount(pageFor(
+            {stage: 'video_source', status: 'failed', progress: 100},
+            {diagnosis: {detail: '读不到 Edge 里的抖音登录：系统不允许读取这个浏览器的数据。去系统设置里打开完全磁盘访问权限。重启后再试。'}},
+        ));
+        expect(screen.getByTestId('overview-badge').textContent).toBe('处理失败');
+        expect(screen.getByTestId('overview-badge').className).toMatch(/b42318/);
+        expect(screen.queryByText(/处理已完成/)).toBeNull();
+        expect(screen.getByText('读不到 Edge 里的抖音登录：系统不允许读取这个浏览器的数据。去系统设置里打开完全磁盘访问权限。')).toBeTruthy();
     });
 });
 

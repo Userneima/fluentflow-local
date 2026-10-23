@@ -22,7 +22,7 @@ export default function AgentNotePrompt({result, lang = 'zh'}) {
         }
     };
     return (
-        <div className="mt-3 space-y-2 rounded-[14px] border border-[#e4e0e0] bg-[#fbfbfb] px-3 py-3 text-sm not-italic text-[#333] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-white/80">
+        <div className="mt-3 space-y-2 rounded-[12px] border border-[#e4e0e0] bg-[#fbfbfb] px-3 py-3 text-sm not-italic text-[#333] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-white/80">
             <p className="text-[13px] font-semibold">
                 {zh ? '这份笔记可以交给你的 agent（Claude Code、Codex、WorkBuddy 等）用它自己的订阅来写。把下面这段发给它，没接入过 FluentFlow 也没关系，它会自己接上：' : 'Your agent (Claude Code, Codex, WorkBuddy, ...) can write this note on its own subscription. Send it this; it connects to FluentFlow itself if it has not yet:'}
             </p>

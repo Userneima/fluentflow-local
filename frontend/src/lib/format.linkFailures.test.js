@@ -111,8 +111,8 @@ describe('download progress', () => {
 // If either side rewords one, this is where the two stop agreeing.
 describe('every sentence the backend raises for a link lands in its own category', () => {
     const cases = [
-        ['图文作品没有可转写的音视频：这个抖音链接是图文作品（图片加配乐）。请换一个视频链接。', 'video_link_image_post', false],
-        ['抖音没有给出可下载的视频：可能是图文作品（图文作品没有可转写的音视频）、视频已删除或设为私密。请在抖音里打开确认；能播放的话，把视频下载到本机后上传。', 'video_link_no_media', true],
+        ['图文作品没有可转录的音视频：这个抖音链接是图文作品（图片加配乐）。请换一个视频链接。', 'video_link_image_post', false],
+        ['抖音没有给出可下载的视频：可能是图文作品（图文作品没有可转录的音视频）、视频已删除或设为私密。请在抖音里打开确认；能播放的话，把视频下载到本机后上传。', 'video_link_no_media', true],
         ['抖音视频解析成功，但下载没有成功，第三方解析也没有拿到。请稍后重试，或把视频下载到本机后上传。', 'video_link_download_failed', true],
         ['抖音的登录信息过期了：在 Chrome 里打开 douyin.com 登录一次，再重试这个链接。', 'douyin_login_expired', true],
         ['读不到 Chrome 里的抖音登录：系统不允许 FluentFlow 读取这个浏览器的数据。可以在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里允许启动 FluentFlow 的程序，或者先把视频下载到本机再上传。', 'video_cookies_unreadable', true],

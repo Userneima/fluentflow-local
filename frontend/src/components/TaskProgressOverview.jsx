@@ -13,7 +13,7 @@ import {
     useApi,
     useI18n,
 } from '../app/shared.jsx';
-import {fmtDuration} from '../lib/format.js';
+import {fmtCharCount, fmtDuration, shortReason} from '../lib/format.js';
 import {taskOutcome} from '../lib/taskState.js';
 import {useApp} from '../app/AppContext.jsx';
 import {button} from '../lib/ui.js';
@@ -74,7 +74,7 @@ const MediaPreparation = ({prep, lang}) => {
         lines.push(isZh ? '正在剪气口。' : 'Cutting breath gaps.');
     } else if (declined) {
         lines.push(isZh
-            ? '这次按原文件转写和写笔记，没有用剪后的版本。'
+            ? '这次按原文件转录和写笔记，没有用剪后的版本。'
             : 'The recording was transcribed and the note written from it, not from a cut version.');
         if (prep.not_used_reason) lines.push(prep.not_used_reason);
     } else if (cuts > 0) {
@@ -100,7 +100,7 @@ const MediaPreparation = ({prep, lang}) => {
             : 'The cut file failed its own check; it was kept but not used downstream.');
     }
     return (
-        <div className="mt-4 rounded-[15px] border border-[#dedada] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <div className="mt-4 rounded-[12px] border border-[#dedada] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
             <p className="text-[11px] font-extrabold text-[#676970] dark:text-white/[0.72]">
                 {isZh ? '去气口这一步做了什么' : 'What the breath-gap pass did'}
             </p>
@@ -140,7 +140,7 @@ const normalizeTask = (pageData, currentJob) => {
 const InfoTile = ({label, value, wrap = false}) => {
     if (!value) return null;
     return (
-        <div className="min-w-0 rounded-[15px] border border-[#dedada] bg-[#fbfbfb] px-3 py-2.5 dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <div className="min-w-0 rounded-[12px] border border-[#dedada] bg-[#fbfbfb] px-3 py-2.5 dark:border-white/[0.12] dark:bg-white/[0.05]">
             <p className="text-[11px] font-extrabold text-[#676970] dark:text-white/[0.72]">{label}</p>
             <p className={`mt-1 text-[14px] font-extrabold text-[#111111] dark:text-white ${wrap ? 'whitespace-normal break-words leading-5' : 'truncate'}`} title={String(value)}>
                 {value}
@@ -221,8 +221,7 @@ const noteWordCountTag = (pageData, lang) => {
     const markdown = String(pageData?.note?.markdown || '');
     const chars = Number.isFinite(explicitChars) && explicitChars > 0 ? explicitChars : markdown.trim().length;
     if (!chars) return '';
-    const formatted = chars.toLocaleString(lang === 'zh' ? 'zh-CN' : 'en-US');
-    return lang === 'zh' ? `${formatted} 字` : `${formatted} chars`;
+    return fmtCharCount(chars, lang);
 };
 
 // The task page's data in the shape taskOutcome reads, so this page names a
@@ -252,8 +251,15 @@ const outcomeHint = (outcome, pageData, isZh) => {
             prepFailed ? (isZh ? '去气口没成功' : 'the breath-gap cut did not succeed') : '',
             noteFailed ? (isZh ? '笔记没生成' : 'no note was written') : '',
         ].filter(Boolean).join(isZh ? '，' : ', ');
-        const why = noteFailed ? String(pageData?.diagnosis?.detail || pageData?.note?.diagnosis?.detail || '').trim() : '';
+        const why = noteFailed ? shortReason(pageData?.diagnosis?.detail || pageData?.note?.diagnosis?.detail, 2) : '';
         return [missing ? `${missing}${isZh ? '。' : '.'}` : '', why].filter(Boolean).join(' ');
+    }
+    if (outcome.kind === 'failed' || outcome.kind === 'cancelled') {
+        const why = shortReason(pageData?.diagnosis?.detail || pageData?.diagnosis?.next_action, 2);
+        if (why) return why;
+        return outcome.kind === 'cancelled'
+            ? (isZh ? '这条任务取消了。' : 'This task was cancelled.')
+            : (isZh ? '这条任务没处理完，可以在处理记录里重新提交。' : 'This task did not finish; submit it again from the records.');
     }
     if (outcome.kind === 'transcript_only') return isZh ? '没填模型 Key，这次只有转录稿。' : 'No model key, so this time there is a transcript only.';
     if (outcome.kind === 'judge') return isZh ? '剪辑有几处等你判断，点「查看结果」去处理。' : 'Some cuts wait for your judgement; open the result to review them.';
@@ -281,7 +287,10 @@ const TaskProgressOverview = ({pageData}) => {
             : `${Math.round(progress)}%`;
     const sttUnknown = task.taskId === currentJob?.taskId && isSttProgressUnmeasured(currentJob);
     const stateText = String(task.stage || task.status || '').toLowerCase();
-    const failed = ['failed', 'error', 'cancelled'].includes(stateText);
+    // The stage stays where the task stopped ('video_source'), so the status
+    // decides whether it failed.
+    const failed = ['failed', 'error', 'cancelled'].includes(stateText)
+        || ['failed', 'error', 'cancelled'].includes(String(task.status || '').toLowerCase());
     const completed = !failed && (stateText === 'done' || stateText === 'completed' || String(task.status || '').toLowerCase() === 'completed' || progress >= 100);
     const running = !completed && !failed;
     const activeCurrentJob = running && currentJob?.taskId && currentJob.taskId === task.taskId ? currentJob : null;
@@ -355,7 +364,7 @@ const TaskProgressOverview = ({pageData}) => {
         : completed
             ? outcomeHint(outcome, pageData, isZh)
             : failed
-                ? (diagnosis.detail || diagnosis.next_action || (isZh ? '查看失败原因，按建议重新处理。' : 'Review the failure reason and retry if needed.'))
+                ? (shortReason(diagnosis.detail || diagnosis.next_action, 2) || (isZh ? '这条任务没处理完，可以在处理记录里重新提交。' : 'This task did not finish; submit it again from the records.'))
                 : runningDetail;
     const progressValue = failed ? Math.max(progress, 8) : progress;
     const canShowSttLine = activeCurrentJob?.stage === 'stt';
@@ -373,17 +382,15 @@ const TaskProgressOverview = ({pageData}) => {
     ];
 
     return (
-        <section className={`rounded-[16px] border p-5 ${
-            failed
-                ? 'border-red-200 bg-red-50 dark:border-red-500/20 dark:bg-red-500/10'
-                : 'border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.04]'
-        }`}>
+        <section className="rounded-[16px] border border-[#e4e0e0] bg-white p-5 dark:border-white/[0.12] dark:bg-white/[0.04]">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                         <span data-testid="overview-badge" className={`inline-flex rounded-full px-3 py-1 text-[12px] font-extrabold ${outcome?.tone === 'warn'
                             ? 'bg-[#fffaf0] text-[#8a5a00] dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]'
-                            : 'bg-[#efeeee] text-[#111111] dark:bg-white/[0.13] dark:text-white'}`}>
+                            : failed || outcome?.tone === 'failed'
+                                ? 'bg-[#fef3f2] text-[#b42318] dark:bg-[#f04438]/[0.14] dark:text-[#f97066]'
+                                : 'bg-[#efeeee] text-[#111111] dark:bg-white/[0.13] dark:text-white'}`}>
                             {badgeText}
                         </span>
                         {noteMode && (
@@ -397,7 +404,7 @@ const TaskProgressOverview = ({pageData}) => {
                             </span>
                         )}
                     </div>
-                    <h2 className="mt-3 max-w-[48rem] truncate font-headline text-[20px] font-extrabold leading-tight text-[#111111] dark:text-white" title={overviewTitle || undefined}>
+                    <h2 className="mt-3 max-w-[48rem] truncate font-headline text-[16px] font-extrabold leading-tight text-[#111111] dark:text-white" title={overviewTitle || undefined}>
                         {overviewTitle || headline}
                     </h2>
                     <p className="mt-2 text-[14px] font-semibold leading-6 text-[#676970] dark:text-white/[0.62]">
@@ -426,8 +433,9 @@ const TaskProgressOverview = ({pageData}) => {
                 )}
             </div>
 
-            {/* A finished task has no stage and no progress left to show. */}
-            {!completed && (
+            {/* A finished or failed task has no stage and no progress left to
+                show; a failed one says why in the line under the title. */}
+            {!completed && !failed && (
             <div className="mt-7">
                 <div className="mb-2 flex items-end justify-between gap-4">
                     <div>
@@ -456,7 +464,7 @@ const TaskProgressOverview = ({pageData}) => {
                     </div>
                 )}
                 {cancelError && (
-                    <p className="mt-3 rounded-[14px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+                    <p className="mt-3 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                         {cancelError}
                     </p>
                 )}

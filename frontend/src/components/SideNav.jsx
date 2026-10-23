@@ -21,7 +21,7 @@ import {useDismissable} from '../lib/useDismissable.js';
 import {iconButton, navItem, menuItem, rowButton, floatingLayer} from '../lib/ui.js';
 
 const FluentFlowLogo = ({compact = false}) => (
-    <div className={`relative flex shrink-0 items-center justify-center bg-[#111111] text-white [--ff-logo-line:#111111] dark:bg-white dark:text-[#111111] dark:[--ff-logo-line:#ffffff] ${compact ? 'size-6 rounded-[9px]' : 'size-8 rounded-[10px]'}`}>
+    <div className={`relative flex shrink-0 items-center justify-center bg-[#111111] text-white [--ff-logo-line:#111111] dark:bg-white dark:text-[#111111] dark:[--ff-logo-line:#ffffff] ${compact ? 'size-6 rounded-[8px]' : 'size-8 rounded-[10px]'}`}>
         <svg viewBox="0 0 64 64" className={compact ? 'size-[18px]' : 'size-[24px]'} fill="none" aria-hidden="true">
             <rect x="17" y="19" width="28" height="26" rx="8" fill="currentColor"/>
             <rect x="43" y="25" width="8" height="14" rx="4" fill="currentColor"/>
@@ -78,7 +78,7 @@ const SideNav = ({
     }, [menuOpen]);
 
     const items = [
-        {path:'/media-text', icon:Video, label: lang === 'zh' ? '视频转写与总结' : 'Media notes'},
+        {path:'/media-text', icon:Video, label: lang === 'zh' ? '视频转录与总结' : 'Media notes'},
         {path:'/agent', icon:SlidersHorizontal, k:'nav.processing'},
         {path:'/editor', icon:FilePenLine, k:'nav.editor'},
         {path:'/settings', icon:Settings, k:'nav.settings'},
@@ -235,7 +235,7 @@ const SideNav = ({
                                     <span className="font-bold tabular-nums">{versionLabel}</span>
                                 </div>
                                 {versionDetail && (
-                                    <div className="mt-0.5 truncate text-[10px]" title={versionDetail}>{versionDetail}</div>
+                                    <div className="mt-0.5 truncate text-[11px]" title={versionDetail}>{versionDetail}</div>
                                 )}
                             </div>
                         </div>
@@ -249,7 +249,7 @@ const SideNav = ({
                         role="dialog"
                         aria-modal="true"
                         aria-labelledby="agent-access-title"
-                        className="flex max-h-[min(860px,calc(100dvh-48px))] w-full max-w-[1120px] flex-col overflow-hidden rounded-[16px] border border-[#e4e0e0] bg-white text-[#111111] shadow-[0_24px_60px_-30px_rgba(17,17,17,0.45)] dark:border-white/[0.14] dark:bg-[#101010] dark:text-white/[0.92]"
+                        className={`flex max-h-[min(860px,calc(100dvh-48px))] w-full max-w-[1120px] flex-col overflow-hidden text-[#111111] dark:text-white/[0.92] ${floatingLayer}`}
                     >
                         <AgentAccessPanel compact onClose={() => setAgentAccessOpen(false)}/>
                     </section>

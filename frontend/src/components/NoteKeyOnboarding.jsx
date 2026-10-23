@@ -152,7 +152,7 @@ export const NoteKeyOnboarding = ({
                 <p role="status" className={`mt-4 text-sm font-extrabold ${toneClass.ok}`}>{NOTE_KEY_DONE}</p>
             ) : (
                 <>
-                    <div data-testid="note-onboarding-agent" className="mt-4 space-y-2 rounded-[16px] border border-[#dfe7ff] bg-[#f5f8ff] p-4 dark:border-white/[0.12] dark:bg-white/[0.05]">
+                    <div data-testid="note-onboarding-agent" className="mt-4 space-y-2 rounded-[12px] border border-[#dfe7ff] bg-[#f5f8ff] p-4 dark:border-white/[0.12] dark:bg-white/[0.05]">
                         <p className="text-sm font-extrabold">推荐：交给你自己的 agent 写</p>
                         <p className="text-xs leading-relaxed text-on-surface-variant">
                             在 Claude Code、Codex、WorkBuddy 这类 agent 里用 FluentFlow，它用你已有的订阅结合画面写笔记，不用申请 Key。把下面这段发给它，它会自己接上 FluentFlow：
@@ -170,7 +170,7 @@ export const NoteKeyOnboarding = ({
                             return (
                                 <div
                                     key={item.id}
-                                    className={`rounded-[16px] border p-4 transition ${selected ? 'border-[#111111] bg-[#f8f7fb] dark:border-white/50 dark:bg-white/[0.08]' : 'border-[#e4e0e0] dark:border-white/[0.12]'}`}
+                                    className={`rounded-[12px] border p-4 transition ${selected ? 'border-[#111111] bg-[#f8f7fb] dark:border-white/50 dark:bg-white/[0.08]' : 'border-[#e4e0e0] dark:border-white/[0.12]'}`}
                                 >
                                     <button
                                         type="button"

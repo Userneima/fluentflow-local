@@ -53,7 +53,7 @@ const copyText = async (text, onDone) => {
 };
 
 const CodeBlock = ({label, value, copied, onCopy}) => (
-    <div className="rounded-[14px] border border-[#e5e5e5] bg-white p-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
+    <div className="rounded-[12px] border border-[#e5e5e5] bg-white p-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
         <div className="mb-2 flex items-center justify-between gap-3">
             <span className="text-[11px] font-extrabold uppercase tracking-[0.08em] text-[#85868c] dark:text-white/50">{label}</span>
             <button type="button" onClick={() => onCopy(value)} className={button('secondary', 'sm')}>
@@ -65,7 +65,7 @@ const CodeBlock = ({label, value, copied, onCopy}) => (
 );
 
 const StepCard = ({number, icon: Icon, title, body}) => (
-    <div className="relative flex gap-3 rounded-[14px] border border-[#e5e5e5] bg-white p-4 dark:border-white/[0.12] dark:bg-white/[0.05]">
+    <div className="relative flex gap-3 rounded-[12px] border border-[#e5e5e5] bg-white p-4 dark:border-white/[0.12] dark:bg-white/[0.05]">
         <Icon className="mt-0.5 size-5 shrink-0 text-primary" strokeWidth={2.1}/>
         <div className="min-w-0">
             <h2 className="text-[14px] font-extrabold leading-5 text-[#111111] dark:text-white">{number}. {title}</h2>
@@ -130,14 +130,14 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null, embedded = fals
     const content = (
         <>
             {!embedded && connectionText && (
-                <p data-testid="agent-connection" className={`mb-4 rounded-[14px] border px-4 py-3 text-[13px] font-bold leading-5 ${connected
+                <p data-testid="agent-connection" className={`mb-4 rounded-[12px] border px-4 py-3 text-[13px] font-bold leading-5 ${connected
                     ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200'
                     : 'border-[#e5e5e5] bg-white text-[#111111] dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-white'}`}>
                     {connectionText}
                 </p>
             )}
             {!onThisMachine && (
-                <div className="mb-4 rounded-[14px] border border-[#e5e5e5] bg-white p-4 dark:border-white/[0.12] dark:bg-white/[0.05]">
+                <div className="mb-4 rounded-[12px] border border-[#e5e5e5] bg-white p-4 dark:border-white/[0.12] dark:bg-white/[0.05]">
                     <label className="mb-2 block text-[14px] font-extrabold text-[#111111] dark:text-white" htmlFor="local-agent-access-token">访问令牌</label>
                     <input id="local-agent-access-token" value={token} onChange={(event) => saveToken(event.target.value)} type="password" autoComplete="off" placeholder="FLUENTFLOW_ACCESS_TOKEN" className="h-10 w-full rounded-[10px] border border-[#dedada] bg-white px-3 text-[14px] font-semibold text-[#111111] outline-none transition focus:border-primary dark:border-white/[0.14] dark:bg-white/[0.06] dark:text-white"/>
                     <p className="mt-2 text-[12px] font-semibold leading-5 text-[#686a70] dark:text-white/60">从别的设备打开时要填，值在运行 FluentFlow 的电脑的 .env 里，只存在这个浏览器。</p>
@@ -153,7 +153,7 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null, embedded = fals
                 <CodeBlock label="其他 MCP 工具（JSON 配置）" value={commands.json} copied={copied === 'config'} onCopy={onCopy('config')}/>
                 <CodeBlock label="验证（在终端运行）" value={commands.verify} copied={copied === 'verify'} onCopy={onCopy('verify')}/>
             </div>
-            <div className="mt-4 flex items-start gap-2 rounded-[14px] border border-[#e5e5e5] bg-white p-4 text-[13px] font-semibold leading-5 text-[#686a70] dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-white/60">
+            <div className="mt-4 flex items-start gap-2 rounded-[12px] border border-[#e5e5e5] bg-white p-4 text-[13px] font-semibold leading-5 text-[#686a70] dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-white/60">
                 <Terminal className="mt-0.5 size-4 shrink-0 text-primary"/>
                 <span>
                     {commands.complete

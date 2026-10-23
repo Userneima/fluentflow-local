@@ -43,10 +43,10 @@ export const DropdownMenu = ({trigger, items, align='right'}) => {
                         <button key={i} type="button" role="menuitem" onClick={()=>{close(); it.onClick?.();}} disabled={it.disabled} className={menuItem(it.danger ? 'danger' : 'default')}>
                             {it.icon && (() => {
                                 const Icon = dropdownIconMap[it.icon] || FileText;
-                                return <Icon className="size-4 text-slate-400" strokeWidth={2.15}/>;
+                                return <Icon className="size-4 opacity-70" strokeWidth={2.15}/>;
                             })()}
                             <span className="flex-1">{it.label}</span>
-                            {it.badge && <span className="text-[10px] text-slate-400 font-medium">{it.badge}</span>}
+                            {it.badge && <span className="text-[11px] text-slate-400 font-medium">{it.badge}</span>}
                         </button>
                     ))}
                 </div>

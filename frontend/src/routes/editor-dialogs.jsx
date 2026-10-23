@@ -16,7 +16,7 @@ export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, 
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
             <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="regenerate-confirm-title" className={`w-full max-w-lg overflow-hidden ${floatingLayer}`}>
                 <div className="flex items-start gap-4 border-b border-[#e4e0e0] px-6 py-5 dark:border-white/[0.12]">
-                    <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[14px] bg-[#eef2ff] text-primary dark:bg-white/[0.08] dark:text-white">
+                    <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[12px] bg-[#eef2ff] text-primary dark:bg-white/[0.08] dark:text-white">
                         <SvgIcon name="refresh" className=""/>
                     </div>
                     <div className="min-w-0">
@@ -27,12 +27,12 @@ export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, 
                             {description || t('edit.regenerateConfirmDesc')}
                         </p>
                         {warning && (
-                            <p data-testid="regenerate-warning" className="mt-3 rounded-[14px] border border-error/20 bg-error-container px-3 py-2 text-xs font-semibold leading-relaxed text-on-error-container">
+                            <p data-testid="regenerate-warning" className="mt-3 rounded-[12px] border border-error/20 bg-error-container px-3 py-2 text-xs font-semibold leading-relaxed text-on-error-container">
                                 {warning}
                             </p>
                         )}
-                        <div className="mt-4 rounded-[16px] border border-[#e4e0e0] bg-[#f8f7fb] p-3 dark:border-white/[0.12] dark:bg-white/[0.06]">
-                            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#777] dark:text-white/45">{lang === 'zh' ? '当前转录' : 'Current transcript'}</p>
+                        <div className="mt-4 rounded-[12px] border border-[#e4e0e0] bg-[#f8f7fb] p-3 dark:border-white/[0.12] dark:bg-white/[0.06]">
+                            <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[#777] dark:text-white/45">{lang === 'zh' ? '当前转录' : 'Current transcript'}</p>
                             <p className="truncate text-sm font-bold text-[#111111] dark:text-white">{transcriptTitle}</p>
                         </div>
                         {alternative && (
@@ -83,7 +83,7 @@ export const RetranscribeConfirmDialog = ({canRetranscribe, sourceLabel, sourceN
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
             <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="retranscribe-confirm-title" className={`w-full max-w-lg overflow-hidden ${floatingLayer}`}>
                 <div className="flex items-start gap-4 border-b border-[#e4e0e0] px-6 py-5 dark:border-white/[0.12]">
-                    <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[14px] bg-[#eef2ff] text-primary dark:bg-white/[0.08] dark:text-white">
+                    <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[12px] bg-[#eef2ff] text-primary dark:bg-white/[0.08] dark:text-white">
                         <SvgIcon name="record_voice_over" className=""/>
                     </div>
                     <div className="min-w-0">
@@ -93,8 +93,8 @@ export const RetranscribeConfirmDialog = ({canRetranscribe, sourceLabel, sourceN
                         <p className="mt-2 text-sm font-medium leading-relaxed text-[#666] dark:text-white/60">
                             {canRetranscribe ? t('edit.retranscribeConfirmDesc') : t('edit.retranscribeUnavailableDesc')}
                         </p>
-                        <div className="mt-4 rounded-[16px] border border-[#e4e0e0] bg-[#f8f7fb] p-3 dark:border-white/[0.12] dark:bg-white/[0.06]">
-                            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#777] dark:text-white/45">{sourceLabel}</p>
+                        <div className="mt-4 rounded-[12px] border border-[#e4e0e0] bg-[#f8f7fb] p-3 dark:border-white/[0.12] dark:bg-white/[0.06]">
+                            <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[#777] dark:text-white/45">{sourceLabel}</p>
                             <p className="truncate text-sm font-bold text-[#111111] dark:text-white">{sourceName}</p>
                         </div>
                     </div>
@@ -163,21 +163,21 @@ export const EditRecordsDialog = ({records, onClose, onSeek}) => {
                             </div>
                             <div className="space-y-3 p-4">
                                 <div className="grid gap-3 md:grid-cols-2">
-                                    <div className="rounded-[14px] border border-red-500/10 bg-red-50/70 p-3 dark:bg-red-500/10">
-                                        <p className="mb-1 text-[10px] font-bold text-red-600 dark:text-red-300">{t('edit.before')}</p>
+                                    <div className="rounded-[12px] border border-red-500/10 bg-red-50/70 p-3 dark:bg-red-500/10">
+                                        <p className="mb-1 text-[11px] font-bold text-red-600 dark:text-red-300">{t('edit.before')}</p>
                                         <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#111111] dark:text-white">{record.before}</p>
                                     </div>
-                                    <div className="rounded-[14px] border border-green-500/10 bg-green-50/80 p-3 dark:bg-green-500/10">
-                                        <p className="mb-1 text-[10px] font-bold text-green-700 dark:text-green-300">{t('edit.after')}</p>
+                                    <div className="rounded-[12px] border border-green-500/10 bg-green-50/80 p-3 dark:bg-green-500/10">
+                                        <p className="mb-1 text-[11px] font-bold text-green-700 dark:text-green-300">{t('edit.after')}</p>
                                         <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#111111] dark:text-white">{record.after}</p>
                                     </div>
                                 </div>
                                 <div className="grid gap-3 text-xs text-[#666] dark:text-white/60 md:grid-cols-2">
-                                    <div className="rounded-[14px] bg-[#f8f7fb] p-3 dark:bg-white/[0.06]">
+                                    <div className="rounded-[12px] bg-[#f8f7fb] p-3 dark:bg-white/[0.06]">
                                         <p className="mb-1 font-bold text-[#111111] dark:text-white">{t('edit.previousSentence')}</p>
                                         <p className="whitespace-pre-wrap leading-relaxed">{record.previous_before || record.previous_after || '-'}</p>
                                     </div>
-                                    <div className="rounded-[14px] bg-[#f8f7fb] p-3 dark:bg-white/[0.06]">
+                                    <div className="rounded-[12px] bg-[#f8f7fb] p-3 dark:bg-white/[0.06]">
                                         <p className="mb-1 font-bold text-[#111111] dark:text-white">{t('edit.nextSentence')}</p>
                                         <p className="whitespace-pre-wrap leading-relaxed">{record.next_before || record.next_after || '-'}</p>
                                     </div>

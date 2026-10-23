@@ -3,7 +3,7 @@ import {AlertCircle, CheckCircle2, LoaderCircle, RotateCcw} from 'lucide-react';
 import {friendlyTaskError, useApi, useI18n} from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import {markBackendJob} from '../lib/taskState.js';
-import {button} from '../lib/ui.js';
+import {button, floatingLayer} from '../lib/ui.js';
 
 // How often an open window asks whether the service restarted under it. The
 // usual restart happens while the page stays open, so asking only on load
@@ -45,7 +45,7 @@ const copy = (lang) => (lang === 'zh' ? {
 const InterruptedTaskRow = ({task, text, outcome}) => {
     const location = task.original_path || task.source_link || '';
     return (
-        <li className="rounded-[14px] border border-[#e6e3e3] bg-[#faf9f9] px-3 py-2.5 dark:border-white/[0.10] dark:bg-white/[0.04]">
+        <li className="rounded-[12px] border border-[#e6e3e3] bg-[#faf9f9] px-3 py-2.5 dark:border-white/[0.10] dark:bg-white/[0.04]">
             <div className="flex items-start justify-between gap-3">
                 <p className="min-w-0 break-words text-[13px] font-extrabold text-[#111111] dark:text-white">{task.title}</p>
                 <span className="shrink-0 rounded-full bg-[#efeeee] px-2 py-0.5 text-[11px] font-bold text-[#676970] dark:bg-white/[0.08] dark:text-white/60">
@@ -196,9 +196,9 @@ const InterruptedTasksDialog = () => {
 
     return (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="interruptedTasksTitle">
-            <div className="flex max-h-[85dvh] w-full max-w-[520px] flex-col rounded-[16px] border border-[#e4e0e0] bg-white p-5 shadow-[0_24px_60px_-30px_rgba(17,17,17,0.45)] dark:border-white/[0.12] dark:bg-[#151515]">
+            <div className={`flex max-h-[85dvh] w-full max-w-[520px] flex-col p-5 ${floatingLayer}`}>
                 <div className="flex items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">
                         <RotateCcw className="size-5" strokeWidth={2.15}/>
                     </span>
                     <div className="min-w-0">

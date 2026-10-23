@@ -17,7 +17,7 @@ const EXAMPLE_SEPARATOR = /\n\s*={3,}\s*\n/;
 
 
 const NotePreview = ({title, markdown}) => (
-    <div className="min-w-0 rounded-[14px] border border-[#ece8e8] bg-white dark:border-white/[0.1] dark:bg-white/[0.03]">
+    <div className="min-w-0 rounded-[12px] border border-[#ece8e8] bg-white dark:border-white/[0.1] dark:bg-white/[0.03]">
         <div className="border-b border-[#ece8e8] px-4 py-2 text-xs font-extrabold dark:border-white/[0.1]">{title}</div>
         <div
             className="note-preview max-h-[60vh] overflow-auto px-4 py-3 text-sm leading-relaxed"

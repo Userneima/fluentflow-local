@@ -82,7 +82,7 @@ const privacySections = [
     {
         title: '保留与删除',
         body: [
-            'FluentFlow 不会自动删除任何东西：转写稿、笔记、截图、去掉气口的音视频，以及它另存的原片（上传文件的副本、从链接下载的视频），都会一直保留，直到你在任务列表里删掉这条任务。去掉气口的版本不一定能完全替代原片，所以原片也留着。你自己文件夹里的原文件不受影响。',
+            'FluentFlow 不会自动删除任何东西：转录稿、笔记、截图、去掉气口的音视频，以及它另存的原片（上传文件的副本、从链接下载的视频），都会一直保留，直到你在任务列表里删掉这条任务。去掉气口的版本不一定能完全替代原片，所以原片也留着。你自己文件夹里的原文件不受影响。',
             '浏览器里的最近记录只存在当前浏览器，清掉它不会删除电脑上的任务。',
         ],
     },
@@ -236,7 +236,7 @@ const ChangelogPage = ({zh, onLoaded}) => {
                 <h2 className="mb-4 text-sm font-extrabold text-[#111111] dark:text-white">{zh ? '最近记录' : 'Recent entries'}</h2>
                 <div className="space-y-3">
                     {releases.length > 0 ? releases.map((release) => (
-                        <div key={release.title} className="rounded-[14px] bg-[#f4f3f3] px-4 py-3 dark:bg-white/[0.08]">
+                        <div key={release.title} className="rounded-[12px] bg-[#f4f3f3] px-4 py-3 dark:bg-white/[0.08]">
                             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                                 <p className="text-sm font-extrabold text-[#111111] dark:text-white">{formatChangelogTitle(release.title, zh)}</p>
                                 {!release.date && (
@@ -256,7 +256,7 @@ const ChangelogPage = ({zh, onLoaded}) => {
                             )}
                         </div>
                     )) : (
-                        <div className="rounded-[14px] bg-[#f4f3f3] px-4 py-3 dark:bg-white/[0.08]">
+                        <div className="rounded-[12px] bg-[#f4f3f3] px-4 py-3 dark:bg-white/[0.08]">
                             <p className="text-sm font-extrabold text-[#111111] dark:text-white">
                                 {loadState === 'error'
                                     ? (zh ? '暂时无法读取更新记录' : 'Unable to load changelog')

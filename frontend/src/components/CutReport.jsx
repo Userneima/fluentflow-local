@@ -305,7 +305,7 @@ export const CutReport = ({job, embedded = false}) => {
                 {open ? '收起处理说明' : toJudge ? `有 ${toJudge} 处需要你判断` : '看看这条视频处理了什么'}
             </button>}
             {open ? (
-                <div className={embedded ? '' : 'mt-2 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]'}>
+                <div className={embedded ? '' : 'mt-2 rounded-[12px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]'}>
                     {loading ? (
                         <p className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#57585d] dark:text-white/60">
                             <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.15}/>

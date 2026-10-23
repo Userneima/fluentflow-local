@@ -29,9 +29,9 @@ const ICON_SIZES = {
 
 const BUTTON_TONES = {
     primary: 'bg-[#111111] text-white hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85',
-    secondary: 'border border-[#dedada] bg-white text-[#111111] hover:bg-[#efeeee] dark:border-white/[0.14] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]',
+    secondary: 'border border-[#dedada] bg-[#ffffff] text-[#111111] hover:bg-[#efeeee] dark:border-white/[0.14] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]',
     quiet: 'text-[#57585d] hover:bg-[#efeeee] hover:text-[#111111] dark:text-white/70 dark:hover:bg-white/[0.08] dark:hover:text-white',
-    danger: 'border border-red-200 bg-white text-red-700 hover:bg-red-50 dark:border-red-400/40 dark:bg-transparent dark:text-red-300 dark:hover:bg-red-500/15',
+    danger: 'border border-red-200 bg-[#ffffff] text-[#b91c1c] hover:bg-[#fef2f2] dark:border-red-400/40 dark:bg-transparent dark:text-red-300 dark:hover:bg-red-500/15',
 };
 
 export const BUTTON_TONE_NAMES = Object.keys(BUTTON_TONES);
@@ -52,7 +52,7 @@ export const iconButton = (tone = 'secondary', size = 'sm') => [
     'inline-flex shrink-0 items-center justify-center rounded-[10px] transition',
     pick(ICON_SIZES, size, 'sm'),
     tone === 'secondary'
-        ? 'border border-[#dedada] bg-white text-[#57585d] hover:bg-[#efeeee] hover:text-[#111111] dark:border-white/[0.14] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.12] dark:hover:text-white'
+        ? 'border border-[#dedada] bg-[#ffffff] text-[#57585d] hover:bg-[#efeeee] hover:text-[#111111] dark:border-white/[0.14] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.12] dark:hover:text-white'
         : pick(BUTTON_TONES, tone, 'quiet'),
     focusRing,
     disabledState,
@@ -72,10 +72,10 @@ export const linkButton = (tone = 'inherit', size = '') => [
 // 文本校对 / 视频复查). The selected one is white on the grey track.
 export const segmentGroup = 'inline-flex shrink-0 items-center gap-1 rounded-[12px] bg-[#efeeee] p-1 dark:bg-white/[0.08]';
 export const segmentItem = (active, size = 'md') => [
-    'inline-flex items-center justify-center whitespace-nowrap rounded-[9px] font-bold transition',
+    'inline-flex items-center justify-center whitespace-nowrap rounded-[8px] font-bold transition',
     size === 'sm' ? 'h-7 px-2.5 text-[12px]' : 'h-8 px-3.5 text-[13px]',
     active
-        ? 'bg-white text-[#111111] shadow-[0_1px_2px_rgba(17,17,17,0.12)] dark:bg-white/[0.18] dark:text-white'
+        ? 'bg-[#ffffff] text-[#111111] shadow-[0_1px_2px_rgba(17,17,17,0.12)] dark:bg-white/[0.18] dark:text-white'
         : 'text-[#666] hover:text-[#111111] dark:text-white/60 dark:hover:text-white',
     focusRing,
     disabledState,
@@ -86,7 +86,7 @@ export const segmentItem = (active, size = 'md') => [
 const STATUS_TONES = {
     warning: 'border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] hover:bg-[#fff3dc] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022] dark:hover:bg-[#fdb022]/[0.16]',
     error: 'border-[#fda29b] bg-[#fef3f2] text-[#b42318] hover:bg-[#fee4e2] dark:border-[#f04438]/40 dark:bg-[#f04438]/[0.14] dark:text-[#f97066] dark:hover:bg-[#f04438]/[0.2]',
-    busy: 'border-[#e4e0e0] bg-white text-[#666] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65',
+    busy: 'border-[#e4e0e0] bg-[#ffffff] text-[#666] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65',
 };
 export const statusButton = (tone = 'warning') => [
     'inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[10px] border px-2.5 text-[12px] font-bold transition disabled:cursor-default',
@@ -100,7 +100,7 @@ export const chip = (active) => [
     'inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[10px] border px-2.5 text-[12px] font-bold transition',
     active
         ? 'border-[#111111] bg-[#111111] text-white dark:border-white dark:bg-white dark:text-[#111111]'
-        : 'border-[#dedada] bg-white text-[#57585d] hover:bg-[#efeeee] hover:text-[#111111] dark:border-white/[0.14] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.12] dark:hover:text-white',
+        : 'border-[#dedada] bg-[#ffffff] text-[#57585d] hover:bg-[#efeeee] hover:text-[#111111] dark:border-white/[0.14] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.12] dark:hover:text-white',
     focusRing,
     disabledState,
 ].join(' ');
@@ -121,7 +121,7 @@ export const navItem = (active, collapsed = false) => [
 export const menuItem = (tone = 'default', open = false) => [
     'flex w-full items-center gap-3 rounded-[8px] px-3 py-2.5 text-left text-[13px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40',
     tone === 'danger'
-        ? 'text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/15'
+        ? 'text-[#dc2626] hover:bg-[#fef2f2] dark:text-red-300 dark:hover:bg-red-500/15'
         : 'text-on-surface hover:bg-[#f4f3f3] dark:hover:bg-white/[0.08]',
     open ? 'bg-[#f4f3f3] dark:bg-white/[0.08]' : '',
 ].filter(Boolean).join(' ');
@@ -156,7 +156,7 @@ export const factToggle = (open) => [
     'inline-flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-[8px] border px-2 py-0.5 text-[12px] font-semibold transition',
     open
         ? 'border-[#111111] bg-[#111111] text-white dark:border-white dark:bg-white dark:text-[#111111]'
-        : 'border-[#b9b5b5] bg-white text-[#111111] shadow-[0_1px_0_rgba(17,17,17,0.06)] hover:bg-[#efeeee] dark:border-white/30 dark:bg-white/[0.04] dark:text-white dark:hover:bg-white/[0.12]',
+        : 'border-[#b9b5b5] bg-[#ffffff] text-[#111111] shadow-[0_1px_0_rgba(17,17,17,0.06)] hover:bg-[#efeeee] dark:border-white/30 dark:bg-white/[0.04] dark:text-white dark:hover:bg-white/[0.12]',
     focusRing,
 ].join(' ');
 
@@ -187,6 +187,6 @@ export const textButton = `text-left transition hover:underline ${focusRing} ${d
 
 // Cards and blocks. Cards on a page have a border and no shadow; only layers
 // floating above the page (dialogs, menus, toasts) cast one.
-export const surfaceCard = 'rounded-[16px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.04]';
+export const surfaceCard = 'rounded-[16px] border border-[#e4e0e0] bg-[#ffffff] dark:border-white/[0.12] dark:bg-white/[0.04]';
 export const insetBlock = 'rounded-[12px] border border-[#ece8e8] bg-[#fbfbfb] dark:border-white/[0.10] dark:bg-white/[0.03]';
-export const floatingLayer = 'rounded-[16px] border border-[#e4e0e0] bg-white shadow-[0_24px_60px_-30px_rgba(17,17,17,0.45)] dark:border-white/[0.12] dark:bg-[#1e2024]';
+export const floatingLayer = 'rounded-[16px] border border-[#e4e0e0] bg-[#ffffff] shadow-[0_24px_60px_-30px_rgba(17,17,17,0.45)] dark:border-white/[0.12] dark:bg-[#1e2024]';

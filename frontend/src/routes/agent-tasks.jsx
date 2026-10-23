@@ -13,7 +13,7 @@ import {
 import {CutReport, hasReport} from '../components/CutReport.jsx';
 import AgentCutWait from '../components/AgentCutWait.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
-import {fmtDuration, progressMessageOf} from '../lib/format.js';
+import {fmtCharCount, fmtDuration, progressMessageOf} from '../lib/format.js';
 import {DropdownMenu} from '../app/DropdownMenu.jsx';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
 import {
@@ -178,7 +178,7 @@ const stageLabel = (job, lang) => {
         audio: audioOnly
             ? (isZh ? '准备音频' : 'Preparing audio')
             : (isZh ? '提取音频' : 'Extracting audio'),
-        stt: isZh ? '语音转写' : 'Transcribing',
+        stt: isZh ? '语音转录' : 'Transcribing',
         transcript_ready: isZh ? '整理转录' : 'Transcript ready',
         summary: isZh ? '生成笔记' : 'Generating note',
         export: isZh ? '导出飞书' : 'Exporting',
@@ -207,7 +207,7 @@ const queueWaitDetail = (job, lang, aheadName = '') => {
     // when the task ahead is not one of the rows on screen.
     const ahead = aheadName || waitingFor;
     if (lang === 'zh') {
-        return `在等「${ahead}」处理完${waited ? `，已经等了 ${waited}` : ''}。一次只处理一个；前面那个要先剪掉气口再转写，素材长的话这一步就要几分钟。`;
+        return `在等「${ahead}」处理完${waited ? `，已经等了 ${waited}` : ''}。一次只处理一个；前面那个要先剪掉气口再转录，素材长的话这一步就要几分钟。`;
     }
     return `Waiting for "${ahead}"${waited ? `, ${waited} so far` : ''}. One at a time; that task removes its breath gaps before transcribing, which takes minutes on long material.`;
 };
@@ -237,7 +237,7 @@ const liveStageDetail = (job, lang, aheadName = '') => {
         // breath gaps — minutes on a long video. "Queued" alone made a working
         // queue look stalled.
         return lang === 'zh'
-            ? '已经加入队列，会按顺序开始处理。前面那个任务要先剪掉气口再转写，素材长的话这一步要几分钟。'
+            ? '已经加入队列，会按顺序开始处理。前面那个任务要先剪掉气口再转录，素材长的话这一步要几分钟。'
             : 'Queued and waiting for its turn. The task ahead removes its breath gaps before transcribing, which takes minutes on long material.';
     }
     if (job?.stage === 'prepare_media') {
@@ -245,7 +245,7 @@ const liveStageDetail = (job, lang, aheadName = '') => {
             ? (lang === 'zh' ? '录音' : 'recording')
             : (lang === 'zh' ? '录像' : 'video');
         return lang === 'zh'
-            ? `正在把${material}里的空白剪掉，之后的转写和笔记都基于剪好的那份。素材长的话要几分钟。`
+            ? `正在把${material}里的空白剪掉，之后的转录和笔记都基于剪好的那份。素材长的话要几分钟。`
             : `Removing the quiet stretches from the ${material}; the transcript and note will both come from the shortened file. Minutes on long material.`;
     }
     return lang === 'zh' ? '进度会在这里持续更新，离开本页也不会中断任务。' : 'Progress keeps updating here; leaving this page will not stop the task.';
@@ -403,7 +403,7 @@ export const noteTileValue = (job, lang) => {
         : String(result.summary_markdown || '').trim().length;
     if (chars) {
         const fromCut = result.summary_written_from === 'debreath_media_note';
-        const base = isZh ? `${chars} 字` : `${chars} chars`;
+        const base = fmtCharCount(chars, lang);
         return fromCut
             ? (isZh ? `${base}（据剪后版本）` : `${base} (from the cut version)`)
             : base;
@@ -524,7 +524,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
         cancellableLive ? {label: zh ? '取消任务' : 'Cancel task', disabled: cancellingTaskId === taskId, onClick: () => onCancel(job)} : null,
         // Step-by-step state and the failure diagnosis of this one task.
         taskId ? {label: zh ? '处理过程' : 'Processing steps', onClick: () => onOpenSteps(job)} : null,
-        terminal && taskId ? {icon: 'delete', label: zh ? '删除记录' : 'Delete record', onClick: () => onDelete(job)} : null,
+        terminal && taskId ? {icon: 'delete', danger: true, label: zh ? '删除记录' : 'Delete record', onClick: () => onDelete(job)} : null,
     ].filter(Boolean);
     const menuBusy = deletingTaskId === taskId || cancellingTaskId === taskId;
     const cutText = `${zh ? '去气口' : 'Cut'} ${cutTile.value}${cutTile.hint ? `（${cutTile.hint}）` : ''}`;
@@ -668,7 +668,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
             ) : null}
             <AgentCutWait job={job}/>
             {reportOpen ? (
-                <div data-testid="cut-report-panel" className="mt-3 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]">
+                <div data-testid="cut-report-panel" className="mt-3 rounded-[12px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]">
                     <CutReport job={job} embedded/>
                 </div>
             ) : null}
@@ -814,7 +814,7 @@ const AgentTasks = () => {
     // Shared fetch + polling (see lib/useJobPolling.js), with task-oriented wording.
     const {loading, error, setError, loadJobs} = useJobPolling({
         hasLiveJobs: hasLiveOrUploadingJobs,
-        refreshFailedZh: '任务刷新失败，已保留本地缓存。',
+        refreshFailedZh: '处理记录刷新失败，先显示上次读到的。',
         refreshFailedEn: 'Failed to refresh tasks. Local cache is preserved.',
     });
 

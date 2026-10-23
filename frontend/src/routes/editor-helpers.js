@@ -1,6 +1,7 @@
 // Pure helper functions extracted from editor.jsx (formatting and URL/file
 // normalization). No React/JSX dependency.
 import {normalizeSttProvider, noteGenerationDiagnosis} from '../app/shared.jsx';
+import {shortReason} from '../lib/format.js';
 
 
 export const jobOptionsForResult = (result) => (
@@ -212,16 +213,13 @@ export const localSourceFileMatchesResult = (file, result) => {
 // and what to do about it (docs/06-界面规矩.md: a status and the next step).
 // The line above it already says the note failed and to click 写笔记, so the
 // diagnosis title and its generic "下一步" are not repeated.
-const SENTENCE_RE = /[^。！？!?]+(?:[。！？!?]+|$)/g;
-const firstSentences = (text, count) => (String(text || '').match(SENTENCE_RE) || [])
-    .map((part) => part.trim()).filter(Boolean).slice(0, count).join(' ').replace(/(?<=[。！？]) (?=\S)/g, '');
 
 export const summaryFailureNextStep = (result, lang) => {
     if (!(result?.summary_status === 'failed' || result?.summary_error)) return '';
     const diagnosis = noteGenerationDiagnosis(result, lang);
     const known = diagnosis.code !== 'ai_note_failed';
-    const cause = firstSentences(diagnosis.detail, known ? 1 : 2);
-    const fix = known ? firstSentences(diagnosis.nextAction, 1) : '';
+    const cause = shortReason(diagnosis.detail, known ? 1 : 2);
+    const fix = known ? shortReason(diagnosis.nextAction, 1) : '';
     return [cause, fix].filter(Boolean).join(lang === 'zh' ? '' : ' ');
 };
 

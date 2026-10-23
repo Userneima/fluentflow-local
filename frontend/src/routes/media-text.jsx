@@ -391,7 +391,7 @@ const MediaText = () => {
                     : `\n(At most ${LOCAL_PATHS_PER_BATCH} at a time: the first ${taken.length} now, choose the other ${left} afterwards.)`)
                 : '';
             const confirmText = lang === 'zh'
-                ? `选了 ${chosen.length} 个文件。每个都会自动去气口、转写${clause}。继续吗？${tail}`
+                ? `选了 ${chosen.length} 个文件。每个都会自动去气口、转录${clause}。继续吗？${tail}`
                 : `${chosen.length} files selected. Each one is cut and transcribed${clause}. Continue?${tail}`;
             if (!window.confirm(confirmText)) return null;
         }
@@ -511,7 +511,7 @@ const MediaText = () => {
             const tail = skipped.length ? `\n（${skipped.join('；')}）` : '';
             const clause = noteWriterBatchClause(noteWriter, lang);
             const confirmText = lang === 'zh'
-                ? `要处理这个文件夹里的 ${count} 个录像吗？每个都会自动去气口、转写${clause}。${tail}`
+                ? `要处理这个文件夹里的 ${count} 个录像吗？每个都会自动去气口、转录${clause}。${tail}`
                 : `Process ${count} recordings in this folder? Each is cut and transcribed${clause}.${tail}`;
             if (!window.confirm(confirmText)) return;
             setDroppedWithoutPath(0);
@@ -809,7 +809,7 @@ const MediaText = () => {
                                             aria-label={lang === 'zh' ? '视频链接' : 'Video link'}
                                             value={videoLinkInput}
                                             onChange={(e) => setVideoLinkInput(e.target.value)}
-                                            className="min-h-[116px] w-full resize-none rounded-[12px] border border-[#dedada] bg-[#fbfbfb] px-4 py-3 text-[14px] font-semibold text-[#111111] outline-none placeholder:text-[#aaa] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/30 dark:focus:border-white/[0.4]"
+                                            className="min-h-[116px] w-full resize-none rounded-[10px] border border-[#dedada] bg-[#fbfbfb] px-4 py-3 text-[14px] font-semibold text-[#111111] outline-none placeholder:text-[#aaa] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/30 dark:focus:border-white/[0.4]"
                                             placeholder={lang === 'zh' ? '粘贴一个抖音、Bilibili 或 YouTube 的视频链接（分享文本也行），或 .mp4 直链' : 'Paste one Douyin, Bilibili, or YouTube video link (share text works too), or a direct .mp4 link'}
                                         />
                                     </div>
@@ -887,7 +887,7 @@ const MediaText = () => {
                             of. A drop this machine could place is silent, because
                             nothing about it is different. */}
                         {droppedWithoutPath > 0 && (
-                            <div className="mt-5 flex items-start gap-2 rounded-[16px] border border-[#f5c86b] bg-[#fffaf0] px-4 py-3 text-sm font-semibold leading-relaxed text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]">
+                            <div className="mt-5 flex items-start gap-2 rounded-[12px] border border-[#f5c86b] bg-[#fffaf0] px-4 py-3 text-sm font-semibold leading-relaxed text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]">
                             <SvgIcon name="info" className="mt-0.5 size-4 shrink-0"/>
                             <p>
                                 {lang === 'zh'
@@ -896,8 +896,8 @@ const MediaText = () => {
                             </p>
                             </div>
                         )}
-                        {uploadError && <div className="mt-5 rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-300">{uploadError}</div>}
-                        {processingResult && <div className="mt-5 rounded-[16px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">{t('dash.done')} <button type="button" onClick={() => navigate('/editor')} className={linkButton()}>{t('dash.viewEditor')}</button></div>}
+                        {uploadError && <div className="mt-5 rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-300">{uploadError}</div>}
+                        {processingResult && <div className="mt-5 rounded-[12px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">{t('dash.done')} <button type="button" onClick={() => navigate('/editor')} className={linkButton()}>{t('dash.viewEditor')}</button></div>}
                     </div>
                 </section>
 
@@ -921,11 +921,11 @@ const MediaText = () => {
                             <span className="shrink-0 text-sm font-extrabold tabular-nums">{Math.round(Math.max(0, Math.min(100, Number(currentJob?.progress) || 0)))}%</span>
                         </div>
                         <div className="mt-4 grid grid-cols-2 gap-3">
-                            <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
+                            <div className="rounded-[12px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
                                 <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{t('dash.fileSize')}</p>
                                 <p className="mt-1 text-sm font-extrabold">{fmtFileSize(currentJob.fileSizeMb)}</p>
                             </div>
-                            <div className="rounded-[16px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
+                            <div className="rounded-[12px] bg-[#f4f3f3] p-3 dark:bg-white/[0.08]">
                                 <p className="text-[11px] font-bold text-[#777] dark:text-white/55">{lang === 'zh' ? '来源' : 'Source'}</p>
                                 <p className="mt-1 truncate text-sm font-extrabold">{(() => { const s = String(currentJob.sourceType || '').toLowerCase(); if (s.includes('audio')) return lang === 'zh' ? '音频' : 'Audio'; if (s.includes('transcript') || s.includes('subtitle')) return lang === 'zh' ? '字幕' : 'Subtitle'; if (s.includes('video') || s === 'queue_upload') return lang === 'zh' ? '视频' : 'Video'; return '-'; })()}</p>
                             </div>
@@ -949,9 +949,9 @@ const MediaText = () => {
                                 return (
                                     <button key={item.taskId || item.id} type="button" onClick={() => openRecentTask(item)} className={tileButton}>
                                         <div className="mb-2 flex items-center justify-between gap-2">
-                                            <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold">{item.name}</h3>
+                                            <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold" title={item.name}>{item.name}</h3>
                                             {outcome.tone !== 'done' && (
-                                                <span data-testid="recent-badge" className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold ${RECENT_BADGE_TONE[outcome.tone]}`}>{outcome.label}</span>
+                                                <span data-testid="recent-badge" className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-bold ${RECENT_BADGE_TONE[outcome.tone]}`}>{outcome.label}</span>
                                             )}
                                         </div>
                                         <p className="text-xs font-semibold text-[#777] dark:text-white/55">{timeAgo(item.timestamp, t)}{(item.audioDurationSec || item.durationMin) > 0 && ` · ${fmtDuration(item.audioDurationSec || item.durationMin * 60, lang)}`}</p>
