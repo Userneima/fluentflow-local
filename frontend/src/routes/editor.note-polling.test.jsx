@@ -258,16 +258,18 @@ const textWriter = () => {
     runtimeConfig = {...runtimeConfig, writesItsOwnNote: false};
     credentialStatus = {deepseek_api_key_configured: true};
 };
-const finishedTask = (extra = {}) => task({summary_status: 'completed', summary_markdown: 'old note', ...extra});
+// The note is written from the editor only when the task has none: the 写笔记
+// button under the note pane's sentence (界面优化清单线二第 8 条).
+const finishedTask = (extra = {}) => task({summary_status: 'failed', summary_markdown: '', summary_error: 'AI summarization returned empty result', ...extra});
 
 const openRegenerateDialog = async () => {
     await advance(0);
-    fireEvent.click(screen.getByText('edit.regenerate'));
+    fireEvent.click(screen.getByTestId('write-note'));
     return screen.getByRole('dialog');
 };
 const confirmRegenerate = async () => {
     await act(async () => {
-        fireEvent.click(screen.getByText('edit.regenerateConfirmAction'));
+        fireEvent.click(screen.getByText('开始写'));
     });
 };
 
@@ -282,7 +284,7 @@ describe('重写笔记 when Claude writes the notes', () => {
         answerPolls(
             jobWith(before),
             jobWith(finishedTask({visual_note: {status: 'running', started_at: startedAt}})),
-            jobWith(finishedTask({summary_markdown: '# rewritten with frames', visual_note: {status: 'completed', started_at: startedAt}})),
+            jobWith(finishedTask({summary_status: 'completed', summary_error: null, summary_markdown: '# rewritten with frames', visual_note: {status: 'completed', started_at: startedAt}})),
         );
         mount(before);
 
@@ -298,9 +300,9 @@ describe('重写笔记 when Claude writes the notes', () => {
 
         // The old record is not mistaken for the new note.
         await advance(5000);
-        expect(screen.getByLabelText('note').value).toBe('old note');
+        expect(screen.queryByLabelText('note')).toBeNull();
         await advance(5000);
-        expect(screen.getByLabelText('note').value).toBe('old note');
+        expect(screen.queryByLabelText('note')).toBeNull();
         await advance(5000);
         expect(screen.getByLabelText('note').value).toBe('# rewritten with frames');
         expect(screen.getByText('edit.regenDone')).toBeTruthy();
@@ -322,10 +324,10 @@ describe('重写笔记 when Claude writes the notes', () => {
         // Nothing started, so nothing is polled and the button is usable again.
         await advance(30000);
         expect(api.getJob).not.toHaveBeenCalled();
-        expect(screen.getByText('edit.regenerate')).toBeTruthy();
+        expect(screen.getByTestId('write-note').disabled).toBe(false);
     });
 
-    it('reports a failed rewrite and leaves the old note in place', async () => {
+    it('reports a failed rewrite and leaves the task as it was', async () => {
         claudeWriter();
         const startedAt = new Date(Date.now() + 1000).toISOString();
         answerPolls(jobWith(finishedTask({visual_note: {status: 'failed', started_at: startedAt, error: '剪后文件读不到了'}})));
@@ -334,41 +336,29 @@ describe('重写笔记 when Claude writes the notes', () => {
         await confirmRegenerate();
         await advance(5000);
         expect(screen.getByText(/Claude 重写笔记失败：剪后文件读不到了/)).toBeTruthy();
-        expect(screen.getByLabelText('note').value).toBe('old note');
+        expect(screen.getByTestId('write-note')).toBeTruthy();
     });
 });
 
 describe('重写笔记 when a text model writes the notes', () => {
-    it('names the text model, warns that the screenshots go, and uses the text rewrite', async () => {
+    it('names the text model and writes the note with it', async () => {
         textWriter();
         const fetchSpy = vi.fn(async () => ({
             ok: true,
             json: async () => ({summary_markdown: 'text-only note', summary_status: 'completed'}),
         }));
         vi.stubGlobal('fetch', fetchSpy);
-        mount(finishedTask({
-            summary_markdown: '![frame](/frames/1.jpg)\n\nClaude note',
-            summary_written_from: 'debreath_media_note',
-            visual_note: {status: 'completed'},
-        }));
+        mount(finishedTask());
 
         const dialog = await openRegenerateDialog();
         expect(dialog.textContent).toMatch(/DeepSeek/);
         expect(dialog.textContent).not.toMatch(/Claude（/);
-        expect(screen.getByTestId('regenerate-warning').textContent).toMatch(/截图不会保留/);
         await confirmRegenerate();
         await advance(0);
 
         expect(api.startJobVisualNote).not.toHaveBeenCalled();
         expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('regenerate-summary'))).toBe(true);
         expect(screen.getByLabelText('note').value).toBe('text-only note');
-    });
-
-    it('does not warn about screenshots when the current note was not written by Claude', async () => {
-        textWriter();
-        mount(finishedTask());
-        await openRegenerateDialog();
-        expect(screen.queryByTestId('regenerate-warning')).toBeNull();
     });
 });
 
@@ -563,10 +553,9 @@ describe('a task with automatic Feishu export', () => {
         mount(task());
         await advance(5000);
         expect(screen.getByLabelText('note').value).toBe('# note');
-        expect(screen.queryByTestId('lark-export-link')).toBeNull();
         await advance(10000);
-        expect(screen.getByTestId('lark-export-link').getAttribute('href')).toBe('https://feishu.example/doc');
         await advance(30000);
+        // The third answer carries the link; nothing is asked after it.
         expect(api.getJob).toHaveBeenCalledTimes(3);
     });
 
@@ -578,7 +567,9 @@ describe('a task with automatic Feishu export', () => {
         );
         mount(task());
         await advance(10000);
-        expect(screen.getByText(/edit.autoExportFailed：飞书没有登录/)).toBeTruthy();
+        const status = screen.getByTestId('editor-header-status');
+        expect(status.textContent).toBe('自动导出到飞书没成功');
+        expect(status.getAttribute('title')).toBe('飞书没有登录');
         await advance(30000);
         expect(api.getJob).toHaveBeenCalledTimes(2);
     });
@@ -595,7 +586,6 @@ describe('a task with automatic Feishu export', () => {
         fireEvent.change(screen.getByLabelText('note'), {target: {value: 'my edit'}});
         await advance(5000);
         expect(screen.getByLabelText('note').value).toBe('my edit');
-        expect(screen.getByTestId('lark-export-link')).toBeTruthy();
     });
 
     it('gives up after ten minutes', async () => {

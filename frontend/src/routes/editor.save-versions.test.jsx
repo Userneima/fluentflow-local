@@ -144,8 +144,8 @@ describe('typing again while the previous save is on its way', () => {
     });
 });
 
-describe('after the text model rewrites the note', () => {
-    it('saves the first edit against the rewritten note\'s version', async () => {
+describe('after the text model writes the note', () => {
+    it('saves the first edit against the written note\'s version', async () => {
         globalThis.fetch = vi.fn(async (url) => {
             if (String(url).includes('regenerate-summary')) {
                 // The service has stored the new note; reading the task now
@@ -155,10 +155,16 @@ describe('after the text model rewrites the note', () => {
             }
             return new Response('x', {status: 206, headers: {'content-type': 'video/mp4'}});
         });
-        mount();
-        await screen.findByLabelText('note');
-        fireEvent.click(screen.getByText('edit.regenerate'));
-        await act(async () => { fireEvent.click(await screen.findByText('edit.regenerateConfirmAction')); });
+        // A task whose note was not written: the page offers 写笔记.
+        const noNote = task({summary_markdown: '', summary_status: 'failed', summary_error: 'AI summarization returned empty result', note_version: 'n7'});
+        jobs.t1 = {task_id: 't1', status: 'completed', result: noNote};
+        render(
+            <MemoryRouter initialEntries={['/editor']}>
+                <Routes><Route path="/editor" element={<Harness initial={noNote}/>}/></Routes>
+            </MemoryRouter>,
+        );
+        fireEvent.click(await screen.findByTestId('write-note'));
+        await act(async () => { fireEvent.click(await screen.findByText('开始写')); });
         await waitFor(() => expect(screen.getByLabelText('note').value).toContain('重写的正文'));
 
         fireEvent.change(screen.getByLabelText('note'), {target: {value: '# 新笔记\n\n重写的正文。我补一句。'}});

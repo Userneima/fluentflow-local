@@ -244,8 +244,8 @@ def _outputs(choices: Mapping[str, Any], attention: list[dict[str, Any]]) -> dic
     route_name = str(get_preference("lark_export_route") or "auto").strip().lower()
     route = _LARK_ROUTES.get(route_name, _LARK_ROUTES["auto"])
     auto = bool(get_preference("export_to_lark"))
-    zh = f"产出放在原片旁边的同名文件夹；{'处理完自动导出到飞书' if auto else '导出到飞书要手动点'}，{route[0]}。"
-    en = f"Outputs go in a folder beside the recording; {'exported to Feishu automatically' if auto else 'Feishu export is manual'}, {route[1]}."
+    zh = f"产出放在原片旁边的同名文件夹；{'处理完自动导出到飞书' if auto else '要导出到飞书时交给你的 agent'}，{route[0]}。"
+    en = f"Outputs go in a folder beside the recording; {'exported to Feishu automatically' if auto else 'your agent exports to Feishu when asked'}, {route[1]}."
     level = "ok"
     # What the chosen route needs, as the export resolves it
     # (routers/local_feishu_export._local_lark_export_target).

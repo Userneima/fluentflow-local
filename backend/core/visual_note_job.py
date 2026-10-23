@@ -1049,7 +1049,7 @@ def _checked_draft(write, part, frames, *, api_key, rules=None):
         if reason is None:
             return replace(draft, markdown=markdown)
         logger.warning("visual note draft refused (%s); writing it again", reason)
-    raise ClaudeVisionError(f"{reason}，重写一次也一样。这份没有替换现有笔记，可以稍后再点「重写笔记」。")
+    raise ClaudeVisionError(f"{reason}，重写一次也一样。这份没有替换现有笔记，可以稍后再试，或交给你的 agent 重写。")
 
 
 def coverage_checker(api_key: str | None = None) -> tuple[note_coverage.Chat, str] | None:

@@ -4,7 +4,17 @@
 //
 // Requirement (2026-10-14): the recording is run again from where it is on this
 // machine. It is not fetched into the browser and posted back, which moved the
-// whole file twice and stored a second copy of it.
+// whole file twice and stored a second copy of it. The page offers it where it
+// is needed: the header's 「剪后文件读不到了，重新处理」 (界面优化清单线二第 8 条).
+
+// A task that was cut before transcription and whose cut file is gone.
+const cutGone = {
+    transcript_media: 'debreath_media',
+    debreath: {status: 'completed', ran_before_transcription: true, used_for_transcription: true},
+};
+const reprocess = async () => {
+    (await screen.findByTestId('editor-header-status')).click();
+};
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {cleanup, render, screen, waitFor} from '@testing-library/react';
@@ -78,6 +88,7 @@ describe('retranscribing in the editor', () => {
             summary_markdown: 'note',
             source_file_available: true,
             artifacts: {},
+            ...cutGone,
         };
     });
 
@@ -89,8 +100,7 @@ describe('retranscribing in the editor', () => {
     it('runs the recording again from this machine instead of moving it through the browser', async () => {
         render(<MemoryRouter><Editor/></MemoryRouter>);
 
-        (await screen.findByRole('button', {name: '更多操作'})).click();
-        (await screen.findByRole('menuitem', {name: /edit\.retranscribe$/})).click();
+        await reprocess();
         (await screen.findByRole('button', {name: /edit\.retranscribeConfirmAction/})).click();
 
         await waitFor(() => expect(calls.retry).toEqual(['t1']));
@@ -118,6 +128,7 @@ describe('retranscribing a recording read in place', () => {
             summary_markdown: 'note',
             source_file_available: false,
             artifacts: {playback_audio: {filename: 'lecture_audio.mp3'}},
+            ...cutGone,
         };
     });
 
@@ -129,8 +140,7 @@ describe('retranscribing a recording read in place', () => {
     it('asks the backend to re-read the original instead of uploading the playback audio', async () => {
         render(<MemoryRouter><Editor/></MemoryRouter>);
 
-        (await screen.findByRole('button', {name: '更多操作'})).click();
-        (await screen.findByRole('menuitem', {name: /edit\.retranscribe$/})).click();
+        await reprocess();
         (await screen.findByRole('button', {name: /edit\.retranscribeConfirmAction/})).click();
 
         await waitFor(() => expect(calls.retry).toEqual(['t1']));

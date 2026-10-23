@@ -146,6 +146,6 @@ def test_the_auto_export_line_reads_the_saved_choice(saved, monkeypatch):
     def outputs():
         return next(step for step in ws.workflow_status({"skip_ai_summary": "1"})["steps"] if step["id"] == "outputs")["summary"]["zh"]
 
-    assert "导出到飞书要手动点" in outputs()
+    assert "要导出到飞书时交给你的 agent" in outputs()
     saved(export_to_lark=True)
     assert "处理完自动导出到飞书" in outputs()

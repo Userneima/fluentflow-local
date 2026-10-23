@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 
 // The editor, mounted, for a task that cut itself before transcribing: it plays
-// the cut file, offers it from the transcript's export menu, and speaks up only
-// when that file cannot be read (owner, 2026-10-22). Asserted against the real
-// page, since a component test proves a bar works, not that anyone sees it.
+// the cut file, and the header's status speaks up only when that file cannot
+// be read, with the way to process it again (owner, 2026-10-22; the slim
+// header, 界面优化清单线二第 8 条). Asserted against the real page.
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 
 const runtimeConfig = {allowedSttProviders: ['local'], defaultSttProvider: 'local', limits: {}};
@@ -99,7 +99,7 @@ describe('the editor for a task that cut itself', () => {
         const {container} = mount();
 
         await waitFor(() => expect(container.querySelector('video, audio')?.getAttribute('src')).toBeTruthy());
-        expect(screen.queryByTestId('cut-flow-bar')).toBeNull();
+        expect(screen.queryByTestId('editor-header-status')).toBeNull();
     });
 
     // 2026-10-14: the player streams from the service instead of fetching the
@@ -117,34 +117,13 @@ describe('the editor for a task that cut itself', () => {
         expect(asked).toEqual([]);
     });
 
-    it('hands over the cut video from the export menu, streamed from its address under its own name', async () => {
-        lastResult = cutResult();
-        const fetchedWhole = [];
-        artifactFetch = async (...args) => { fetchedWhole.push(args); return new File(['x'], 'x'); };
-        const handed = [];
-        HTMLAnchorElement.prototype.click.mockImplementation(function () {
-            handed.push({href: this.getAttribute('href'), download: this.download});
-        });
-        mount();
-
-        fireEvent.click(await screen.findByRole('button', {name: '导出'}));
-        const menu = await screen.findByRole('menu');
-        fireEvent.click(within(menu).getAllByRole('menuitem').find((item) => item.textContent.includes('剪后视频（与字幕对齐）')));
-        await waitFor(() => expect(handed.length).toBe(1));
-        expect(handed[0].href).toMatch(/\/jobs\/t1\/artifacts\/debreath_media$/);
-        // Handed over under a filename, not under the path it is stored at.
-        expect(handed[0].download).toBe('lecture_debreath.mp4');
-        // The browser saves it from the address; the page never holds the file.
-        expect(fetchedWhole).toEqual([]);
-    });
-
     it('says the cut file is unreadable rather than letting the recording stand in', async () => {
         lastResult = cutResult({artifacts: {}});
         mount();
 
-        const bar = await screen.findByTestId('cut-flow-bar');
-        expect(bar.textContent).toMatch(/剪后文件读不到了/);
-        expect(screen.getByRole('button', {name: /重新处理/})).toBeTruthy();
+        const status = await screen.findByTestId('editor-header-status');
+        expect(status.textContent).toMatch(/剪后文件读不到了/);
+        expect(status.textContent).toMatch(/重新处理/);
     });
 
     // 2026-10-22: one dropped request on load used to mark a present cut file as
@@ -163,7 +142,7 @@ describe('the editor for a task that cut itself', () => {
             const media = container.querySelector('video, audio');
             expect(media?.getAttribute('src') || '').toMatch(/\/jobs\/t1\/artifacts\/debreath_media$/);
         }, {timeout: 3000});
-        expect(screen.queryByTestId('cut-flow-bar')).toBeNull();
+        expect(screen.queryByTestId('editor-header-status')).toBeNull();
     });
 
     it('offers to process the recording again when the cut file is really gone', async () => {
@@ -171,9 +150,9 @@ describe('the editor for a task that cut itself', () => {
         globalThis.fetch = vi.fn(async () => new Response('gone', {status: 404}));
         mount();
 
-        const button = await screen.findByRole('button', {name: /重新处理/});
-        expect(screen.getByTestId('cut-flow-bar').textContent).toMatch(/剪后文件读不到了/);
-        fireEvent.click(button);
+        const status = await screen.findByTestId('editor-header-status');
+        await waitFor(() => expect(status.textContent).toMatch(/剪后文件读不到了，重新处理/));
+        fireEvent.click(status);
         expect(await screen.findByRole('dialog')).toBeTruthy();
     });
 
@@ -181,117 +160,7 @@ describe('the editor for a task that cut itself', () => {
         lastResult = cutResult({transcript_media: 'source', debreath: undefined, artifacts: {}});
         mount();
 
-        await screen.findByText('edit.regenerate');
-        expect(screen.queryByTestId('cut-flow-bar')).toBeNull();
-    });
-});
-
-// Requirement: subtitles made from the cut file line up with the cut video only.
-// Whoever downloads them must be able to tell, from the menu and from the file
-// name, which video they belong to, and must be offered that video.
-describe('the transcript download menu for a task transcribed from the cut file', () => {
-    let saved;
-    beforeEach(() => {
-        lastResult = null;
-        credentialStatus = null;
-        saved = [];
-        artifactFetch = async (taskId, kind, filename) => new File(['x'], filename || kind, {type: 'video/mp4'});
-        URL.createObjectURL = () => 'blob:menu';
-        URL.revokeObjectURL = () => {};
-        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click() {
-            saved.push(this.download);
-        });
-    });
-
-    afterEach(() => {
-        vi.restoreAllMocks();
-        cleanup();
-    });
-
-    const openTranscriptMenu = async () => {
-        const trigger = await screen.findByRole('button', {name: '导出'});
-        fireEvent.click(trigger);
-        return screen.findByRole('menu');
-    };
-
-    it('labels the subtitles as the cut version and offers the cut video next to them', async () => {
-        lastResult = cutResult();
-        mount();
-        const menu = await openTranscriptMenu();
-        const labels = within(menu).getAllByRole('menuitem').map((item) => item.textContent);
-        expect(labels.some((text) => text.includes('dl.srt') && text.includes('对应剪后视频'))).toBe(true);
-        expect(labels.some((text) => text.includes('dl.vtt') && text.includes('对应剪后视频'))).toBe(true);
-        expect(labels.some((text) => text.includes('剪后视频（与字幕对齐）'))).toBe(true);
-        expect(labels.some((text) => text.includes('原视频') && text.includes('对不上'))).toBe(true);
-    });
-
-    it('names the subtitle file after the cut version', async () => {
-        lastResult = cutResult();
-        mount();
-        const menu = await openTranscriptMenu();
-        const srt = within(menu).getAllByRole('menuitem').find((item) => item.textContent.includes('dl.srt'));
-        fireEvent.click(srt);
-        await waitFor(() => expect(saved.length).toBe(1));
-        expect(saved[0]).toBe('lecture_剪后版.srt');
-    });
-
-    it('hands over the cut video from the menu', async () => {
-        lastResult = cutResult();
-        mount();
-        const menu = await openTranscriptMenu();
-        fireEvent.click(within(menu).getAllByRole('menuitem').find((item) => item.textContent.startsWith('剪后视频')));
-        // The player fetches the same file for itself; what matters is the file
-        // handed to the browser as a download.
-        await waitFor(() => expect(saved).toEqual(['lecture_debreath.mp4']));
-    });
-
-    it('leaves the menu as it was for a transcript of the original recording', async () => {
-        lastResult = cutResult({transcript_media: 'source', debreath: undefined, artifacts: {}});
-        mount();
-        const menu = await openTranscriptMenu();
-        const labels = within(menu).getAllByRole('menuitem').map((item) => item.textContent);
-        expect(labels.join('|')).not.toMatch(/剪后/);
-        expect(labels.some((text) => text.startsWith('dl.sourceVideo'))).toBe(true);
-        fireEvent.click(within(menu).getAllByRole('menuitem').find((item) => item.textContent.includes('dl.srt')));
-        await waitFor(() => expect(saved.length).toBe(1));
-        expect(saved[0]).toBe('lecture.srt');
-    });
-});
-
-// Requirement: changing the prompt does nothing to a note Claude writes from the
-// frames, so the prompt dialog says so while Claude is the writer.
-describe('the prompt dialog while Claude writes the note', () => {
-    beforeEach(() => {
-        lastResult = cutResult({transcript_media: 'source', debreath: undefined, artifacts: {}});
-        artifactFetch = async (taskId, kind, filename) => new File(['x'], filename || kind, {type: 'video/mp4'});
-    });
-
-    afterEach(() => {
-        runtimeConfig.writesItsOwnNote = undefined;
-        credentialStatus = null;
-        vi.restoreAllMocks();
-        cleanup();
-    });
-
-    it('points to the text-model choice in 重写笔记, where the prompt is used', async () => {
-        runtimeConfig.writesItsOwnNote = true;
-        credentialStatus = {visual_note_available: true};
-        mount();
-        // The prompt lives in the header's "more" menu.
-        fireEvent.click(await screen.findByRole('button', {name: '更多操作'}));
-        fireEvent.click(await screen.findByRole('menuitem', {name: /prompt\.collapsed/}));
-        const note = await screen.findByTestId('prompt-scope-note');
-        await waitFor(() => expect(note.textContent).toMatch(/Claude 结合画面写笔记/));
-        expect(note.textContent).toMatch(/重写笔记/);
-        expect(note.textContent).toMatch(/改用文本模型按文字重写/);
-    });
-
-    it('adds nothing when a text model writes the note', async () => {
-        credentialStatus = {deepseek_api_key_configured: true};
-        mount();
-        fireEvent.click(await screen.findByRole('button', {name: '更多操作'}));
-        fireEvent.click(await screen.findByRole('menuitem', {name: /prompt\.collapsed/}));
-        await screen.findByRole('dialog');
-        expect(screen.queryByTestId('prompt-scope-note')).toBeNull();
+        await screen.findByTestId('editor-header');
+        expect(screen.queryByTestId('editor-header-status')).toBeNull();
     });
 });

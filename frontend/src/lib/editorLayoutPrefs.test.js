@@ -1,15 +1,12 @@
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {
-    HEADER_PINNED_STORAGE_KEY,
     MAX_SPLIT_RATIO,
     MIN_SPLIT_RATIO,
     SPLIT_RATIO_STORAGE_KEY,
     clampSplitRatio,
-    loadHeaderPinned,
     loadSplitRatio,
     nudgeSplitRatio,
     parseSplitRatio,
-    saveHeaderPinned,
     saveSplitRatio,
     splitPaneStyles,
     splitRatioFromPointer,
@@ -93,16 +90,6 @@ describe('persistence', () => {
         expect(loadSplitRatio()).toBeNull();
     });
 
-    it('defaults the header to auto-collapse and remembers pinning', () => {
-        expect(loadHeaderPinned()).toBe(false);
-
-        saveHeaderPinned(true);
-        expect(globalThis.localStorage.getItem(HEADER_PINNED_STORAGE_KEY)).toBe('1');
-        expect(loadHeaderPinned()).toBe(true);
-
-        saveHeaderPinned(false);
-        expect(loadHeaderPinned()).toBe(false);
-    });
 
     it('survives storage being unavailable', () => {
         Object.defineProperty(globalThis, 'localStorage', {
@@ -111,8 +98,6 @@ describe('persistence', () => {
         });
 
         expect(() => saveSplitRatio(0.5)).not.toThrow();
-        expect(() => saveHeaderPinned(true)).not.toThrow();
         expect(loadSplitRatio()).toBeNull();
-        expect(loadHeaderPinned()).toBe(false);
     });
 });

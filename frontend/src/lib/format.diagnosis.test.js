@@ -101,7 +101,7 @@ describe('failures the backend now reports in Chinese keep their category on the
     it('names rate limiting and tells the person to wait', () => {
         const d = diagnoseTaskError('Error code: 429 - {"error":{"message":"Rate limit reached"}}', 'zh', {provider: 'deepseek'});
         expect(d.code).toBe('ai_rate_limited');
-        expect(d.nextAction).toContain('重写笔记');
+        expect(d.nextAction).toContain('「写笔记」');
     });
     it('says too many files were picked and is not retryable', () => {
         const d = diagnoseTaskError('一次最多提交 5 个文件，这次选了 8 个。请分成几批提交。', 'zh');

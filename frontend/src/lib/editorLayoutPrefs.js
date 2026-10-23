@@ -4,7 +4,6 @@
 // never travel with the job.
 
 export const SPLIT_RATIO_STORAGE_KEY = 'fluentflow_editor_split_ratio';
-export const HEADER_PINNED_STORAGE_KEY = 'fluentflow_editor_header_pinned';
 
 // Keeps both panes usable: neither side can be dragged down to a sliver where
 // its toolbar wraps into an unreadable column.
@@ -55,18 +54,6 @@ export const saveSplitRatio = (ratio) => {
         else store.setItem(SPLIT_RATIO_STORAGE_KEY, String(clamped));
     } catch {
         // A full or blocked quota must not break the drag interaction.
-    }
-};
-
-export const loadHeaderPinned = () => storage()?.getItem(HEADER_PINNED_STORAGE_KEY) === '1';
-
-export const saveHeaderPinned = (pinned) => {
-    const store = storage();
-    if (!store) return;
-    try {
-        store.setItem(HEADER_PINNED_STORAGE_KEY, pinned ? '1' : '0');
-    } catch {
-        // Same reasoning as saveSplitRatio.
     }
 };
 

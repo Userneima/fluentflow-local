@@ -1,6 +1,6 @@
 import {memo,useState,useEffect,useRef,useCallback,useMemo} from 'react';
 import {Link, useSearchParams} from 'react-router-dom';
-import {AlertCircle, MoreHorizontal} from 'lucide-react';
+import {AlertCircle} from 'lucide-react';
 import {
     DEFAULT_PROMPT_PRESET,
     presetDisplayLabel,
@@ -9,9 +9,7 @@ import {
 import SvgIcon from '../components/SvgIcon.jsx';
 import EditorSplitHandle from '../components/EditorSplitHandle.jsx';
 import {
-    loadHeaderPinned,
     loadSplitRatio,
-    saveHeaderPinned,
     saveSplitRatio,
     splitPaneStyles,
 } from '../lib/editorLayoutPrefs.js';
@@ -23,45 +21,28 @@ import {
     autoSizeTextarea,
     buildTranscriptEditRecords,
     composeTranscriptText,
-    dlSummaryMd,
-    dlSummaryPdf,
-    dlSummaryTxt,
-    dlSummaryWord,
-    dlBilingualTranscriptSrt,
-    dlBilingualTranscriptVtt,
-    dlTranscriptSrt,
-    dlTranscriptTxt,
-    dlTranscriptVtt,
     fmtTime,
     apiFetch,
-    DropdownMenu,
     fileNameStem,
     isLocalHistoryResult,
-    isLocalLarkExportRoute,
     larkExportRouteFromSettings,
-    localExecutionHeaders,
     pickDisplayTranscriptSegments,
     normalizeSttModel,
     pickTranscriptBaselineSegments,
     pickTranscriptSegments,
     resultToHistoryEntry,
     resultDisplayTitle,
-    shouldUseLocalSingleUserClientId,
     simpleMd,
     useApi,
     useI18n,
     useSettings,
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
-import {larkExportToastText} from '../lib/format.js';
-import PromptTemplateDialog from '../components/PromptTemplateDialog.jsx';
-import {usePromptEditing} from '../lib/usePromptEditing.js';
-import {notePendingSentence, notePromptScopeSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
+import {notePendingSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
 import RichNoteEditor from '../components/RichNoteEditor.jsx';
 import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
-import CutFlowBar from '../components/CutFlowBar.jsx';
 import {probeMedia} from '../lib/probeMedia.js';
 import {createPlaybackClock, usePlaybackTime} from '../lib/playbackClock.js';
 import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog, CutReviewDialog} from './editor-dialogs.jsx';
@@ -79,9 +60,6 @@ import {
     playbackMediaChoice,
     shouldKeepVideoReviewMounted,
     summaryFailureNextStep,
-    formatElapsedMinuteSecond,
-    formatSttOriginalRatio,
-    downloadBrowserFile,
     NOTE_POLL_INTERVAL_MS,
     noteIsBeingWritten,
     noteWritingSettled,
@@ -94,10 +72,6 @@ import {
     larkExportSettled,
     regenerateDialogCopy,
     visualNoteStartErrorMessage,
-    transcriptFromCutFile,
-    subtitleDownloadName,
-    transcriptDownloadLabels,
-    markdownDownloadMessage,
 } from './editor-helpers.js';
 
 // The records worth showing: a changed sentence whose current text is still the
@@ -233,25 +207,21 @@ const Editor = () => {
         lastSourceFile,
         setLastSourceFile,
         addToHistory,
-        currentJob,
         setCurrentJob,
         addLarkExport,
         runtimeConfig,
         ingestJobs,
     } = useApp();
-    const {processVideoSSE, retryJob, fetchJobArtifactFile, downloadJobMedia, recordEvent, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
-    const {loadSettings, saveSettings} = useSettings();
-    const [exporting, setExporting] = useState(false);
+    const {processVideoSSE, retryJob, fetchJobArtifactFile, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
+    const {loadSettings} = useSettings();
     const [regenerating, setRegenerating] = useState(false);
     const [retranscribing, setRetranscribing] = useState(false);
-    const [downloading, setDownloading] = useState(null);
     const [toast, setToast] = useState(null);
-    const [larkUrl, setLarkUrl] = useState(null);
-    const larkImagesMissing = Math.max(0, Number(lastResult?.lark_response?.image_count || 0) - Number(lastResult?.lark_response?.image_upload_count || 0));
     const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
     const [retranscribeConfirmOpen, setRetranscribeConfirmOpen] = useState(false);
     const [visualEvidenceVisible, setVisualEvidenceVisible] = useState(true);
     const summaryRef = useRef(null);
+    const writeNoteButtonRef = useRef(null);
     const retranscribeInputRef = useRef(null);
     const fallbackTaskIdRef = useRef(createTaskId());
     const hydratedTaskIdsRef = useRef(new Set());
@@ -313,7 +283,7 @@ const Editor = () => {
     useEffect(() => {
         if (!openTaskId || openTaskId === urlTaskId) return;
         if (urlTaskId && (urlTask.id !== urlTaskId || urlTask.state !== 'loaded')) return;
-        setSearchParams({task: openTaskId}, {replace: true});
+        setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('task', openTaskId); return next; }, {replace: true});
     }, [openTaskId, urlTaskId, urlTask, setSearchParams]);
 
     const result = lastResult;
@@ -383,7 +353,6 @@ const Editor = () => {
     const [hydrationFailed, setHydrationFailed] = useState(false);
     const [transcriptView, setTranscriptView] = useState('bilingual');
     const [editRecordsOpen, setEditRecordsOpen] = useState(false);
-    const [headerPinned, setHeaderPinned] = useState(loadHeaderPinned);
     const [splitRatio, setSplitRatio] = useState(loadSplitRatio);
     const mediaRef = useRef(null);
     const mediaInputRef = useRef(null);
@@ -774,7 +743,6 @@ const Editor = () => {
     const canUseStoredSource = !!result?.source_file_available && !!result?.task_id;
     const canUsePlaybackAudio = !!result?.artifacts?.playback_audio && !!result?.task_id;
     const canRetranscribeStoredMedia = !!matchedLocalSourceFile || canUseStoredSource || canUsePlaybackAudio;
-    const retranscribeBlockedByJob = !!currentJob && !['summary', 'export', 'done'].includes(currentJob.stage);
     const retranscribeSourceLabel = canRetranscribeStoredMedia
         ? ((matchedLocalSourceFile || canUseStoredSource)
             ? (lang === 'zh' ? '原文件' : 'Source file')
@@ -785,28 +753,12 @@ const Editor = () => {
         || result?.filename
         || t('edit.title');
     const durSec = result?.audio_duration_seconds || 0;
-    const sttElapsedSec = result?.stt_elapsed_seconds || 0;
-    const sttRealtimeFactor = result?.stt_realtime_factor || (durSec > 0 && sttElapsedSec > 0 ? sttElapsedSec / durSec : null);
-    const sttElapsedLabel = sttElapsedSec > 0
-        ? `${t('edit.sttElapsed')} ${formatElapsedMinuteSecond(sttElapsedSec, lang)}${sttRealtimeFactor ? (lang === 'zh' ? `（${formatSttOriginalRatio(sttRealtimeFactor, lang)}）` : ` (${formatSttOriginalRatio(sttRealtimeFactor, lang)})`) : ''}`
-        : '';
     const activeTaskId = result?.task_id || fallbackTaskIdRef.current;
     const playbackMemoryKey = result ? `fluentflow_playback_position_${activeTaskId}` : '';
     const summaryFailureHint = summaryFailureNextStep(result, lang);
     const resultTitle = resultDisplayTitle(result, {name: t('edit.title')});
-    const resultDownloadName = resultTitle || result?.filename;
-    // Subtitles follow the transcript's clock; when that is the cut file's, the
-    // file names and the menu say so (editor-helpers.js transcriptFromCutFile).
-    const subtitleName = subtitleDownloadName(resultDownloadName, result);
-    const downloadLabels = transcriptDownloadLabels(result, t, lang);
-    const cutMediaArtifact = transcriptFromCutFile(result) ? (result?.artifacts?.debreath_media || null) : null;
     const rawEditorTitle = resultTitle || result?.filename || t('edit.title');
-    const agentWorkflowHref = result?.task_id ? `/tasks/${encodeURIComponent(result.task_id)}/agent` : '/agent';
     const playbackDuration = mediaDuration || durSec || 0;
-    const canDownloadSourceVideo = !!(
-        isLikelyVideoFile(matchedLocalSourceFile || result?.filename)
-        && (matchedLocalSourceFile || (result?.task_id && result?.source_file_available))
-    );
     const playingCutVersion = !matchedLocalSourceFile && playbackMediaChoice(result)?.isCut === true;
     // What already happened to this recording, for the one line under the title.
     // Gated on the same condition as the badge above: the bar's sentence is about
@@ -824,7 +776,7 @@ const Editor = () => {
     useEffect(() => {
         if (!urlWantsCutReview || !result?.task_id || result.task_id !== urlTaskId) return;
         setCutReviewOpen(true);
-        setSearchParams({task: urlTaskId}, {replace: true});
+        setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('review'); return next; }, {replace: true});
     }, [urlWantsCutReview, result?.task_id, urlTaskId, setSearchParams]);
     // Answers given in the report change how many places still wait, so the
     // task's cut record is read again when the report closes.
@@ -1182,7 +1134,6 @@ const Editor = () => {
         sttProvider: effectiveSttProvider(settings, runtimeConfig),
     });
 
-    const promptEditing = usePromptEditing({loadSettings, saveSettings, t, lang, showToast});
 
     // Who writes a regenerated note: the same answer the start page gives
     // (lib/noteWriter.js), so "重写笔记" uses the writer that wrote the note.
@@ -1301,60 +1252,7 @@ const Editor = () => {
         };
     }, [notePolling, pollTaskId, getJob, setLastResult, showToast]);
 
-    // Said above the note when the text model wrote it in place of Claude.
-    const savedLarkUrl = result?.lark_response?.url || null;
-    const autoExportError = !savedLarkUrl && result?.lark_error ? String(result.lark_error) : '';
 
-    const handleExportLark = async () => {
-        if(!result || exporting) return;
-        // Every export makes a new Feishu document, so say so before a second one.
-        if(savedLarkUrl && !window.confirm(t('edit.exportAgainConfirm'))) return;
-        setExporting(true);
-        let larkExportRoute = larkExportRouteFromSettings(loadSettings());
-        try {
-            const settings = loadSettings();
-            larkExportRoute = larkExportRouteFromSettings(settings);
-            const fd = new FormData();
-            fd.append('markdown', summary || '');
-            fd.append('title', fileNameStem(resultDownloadName));
-            fd.append('task_id', activeTaskId);
-            if(result.source) fd.append('source_type', result.source);
-            if(result.filename) fd.append('source_filename', result.filename);
-            if(durSec > 0) fd.append('source_duration_seconds', String(durSec));
-            fd.append('lark_export_route', larkExportRoute);
-            fd.append('lark_via_cli', isLocalLarkExportRoute(larkExportRoute) ? 'true' : 'false');
-            if(settings.larkFolder) fd.append('folder_token', settings.larkFolder);
-            const headers = shouldUseLocalSingleUserClientId()
-                ? localExecutionHeaders({localExecution: true, larkExportRoute})
-                : localExecutionHeaders({larkExportRoute});
-            const r = await apiFetch(`${API_BASE}/export-lark`, {method:'POST', headers, body:fd});
-            const data = await r.json().catch(()=>({}));
-            if(!r.ok) {
-                const d = data.detail;
-                const msg = Array.isArray(d) ? d.map(x=>x.msg||x).join('; ') : (d || 'Export failed');
-                const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-                err.status = r.status;
-                err.payload = data;
-                throw err;
-            }
-            const exportUrl = data.url || null;
-            if(!exportUrl && !data.dry_run) throw new Error(data.msg || 'No document URL returned');
-            setLarkUrl(exportUrl);
-            const dispTitle = data.doc_title || fileNameStem(resultDownloadName) || "Export";
-            if(exportUrl) {
-                addLarkExport({url:exportUrl, title: dispTitle, timestamp:Date.now()});
-                // The backend kept the link on the task; mirror it so the
-                // "exported · open" link shows without reloading.
-                setLastResult((prev) => (prev && (prev.task_id || '') === (result.task_id || '')
-                    ? {...prev, lark_response: data, lark_doc_title: dispTitle, lark_error: null}
-                    : prev));
-            }
-            showToast(larkExportToastText(data, t));
-        } catch(err) {
-            showToast(t('edit.exportFail')+': '+err.message, false);
-        }
-        finally { setExporting(false); }
-    };
 
     // Whether Claude can rewrite this particular task from its frames. Asked
     // when the task opens, so the answer is there before the dialog is, and
@@ -1653,84 +1551,24 @@ const Editor = () => {
                                                 </div>
     );
 
-    const recordDownload = (eventName, format) => {
-        recordEvent({
-            event_name: eventName,
-            task_id: activeTaskId,
-            source_type: result.source || null,
-            source_filename: result.filename,
-            source_duration_seconds: durSec,
-            transcript_length: transcript.length,
-            summary_length: summary.length,
-            stage: "download",
-            success: true,
-            metadata: {format},
-        });
-    };
-    const handleDownloadSourceVideo = async () => {
-        if (!canDownloadSourceVideo || downloading) return;
-        setDownloading('source_video');
-        try {
-            const name = result.filename || `${resultDownloadName}.mp4`;
-            if (matchedLocalSourceFile && isLikelyVideoFile(matchedLocalSourceFile)) {
-                downloadBrowserFile(matchedLocalSourceFile, name);
-            } else {
-                await downloadJobMedia(result.task_id, 'source', name);
-            }
-            recordDownload('source_video_downloaded', 'video');
-            showToast(t('dl.success'));
-        } catch (err) {
-            showToast(err.message || (lang === 'zh' ? '原视频不可用' : 'Source video unavailable'), false);
-        } finally {
-            setDownloading(null);
-        }
-    };
-    // Hands over the cut file itself. The bar deliberately does not name a
-    // directory — the owner of a finished task could not find the file precisely
-    // because the old copy described a filesystem instead of giving it to them.
-    const handleDownloadCutFile = async () => {
-        const artifact = cutFlow?.mediaArtifact || cutMediaArtifact;
-        if (!artifact || !result?.task_id) return;
-        const name = String(artifact.filename || '').split('/').pop()
-            || `${resultDownloadName || result.filename || 'media'}_debreath.mp4`;
-        try {
-            await downloadJobMedia(result.task_id, 'debreath_media', name);
-            recordDownload('cut_media_downloaded', 'video');
-            showToast(t('dl.success'));
-        } catch (err) {
-            showToast(err.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable'), false);
-        }
-    };
 
-    // Playback is when the media panel needs the height most, so the page
-    // header steps aside then unless the reader pinned it open. Hovering the
-    // strip floats the full header back without resizing anything underneath.
-    const headerCollapsed = !headerPinned && mediaPlaying;
-    const togglePinnedHeader = () => {
-        setHeaderPinned((pinned) => {
-            const next = !pinned;
-            saveHeaderPinned(next);
-            return next;
-        });
-    };
-    const pinHeaderLabel = headerPinned
-        ? (lang === 'zh' ? '已固定顶栏' : 'Header pinned')
-        : (lang === 'zh' ? '固定顶栏' : 'Pin header');
-    const pinHeaderTitle = headerPinned
-        ? (lang === 'zh' ? '取消固定：播放时自动折叠顶栏' : 'Unpin: collapse the header during playback')
-        : (lang === 'zh' ? '固定顶栏：播放时也保持展开' : 'Pin the header so it stays open during playback');
-    const pinHeaderButton = (
-        <button
-            type="button"
-            onClick={togglePinnedHeader}
-            aria-pressed={headerPinned}
-            title={pinHeaderTitle}
-            className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#e4e0e0] bg-white px-2.5 text-[11px] font-bold text-[#666] transition hover:bg-[#efeeee] hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65 dark:hover:bg-white/[0.1] dark:hover:text-white"
-        >
-            <SvgIcon name={headerPinned ? 'pin' : 'pin_off'} className="text-[15px]"/>
-            <span className="hidden sm:inline">{pinHeaderLabel}</span>
-        </button>
-    );
+    // The one thing in the slim header that needs the user, if anything, and
+    // where clicking it takes them.
+    const autoExportError = !result?.lark_response?.url && result?.lark_error ? String(result.lark_error) : '';
+    const noteMissing = !!result && !hasEditableSummary && (result.summary_skipped || result.summary_status === 'failed' || !!result.summary_error);
+    const noteBeingWritten = regenerating || noteIsBeingWritten(result);
+    const headerStatus = cutFileUnavailable
+        ? {tone: 'error', label: lang === 'zh' ? '剪后文件读不到了，重新处理' : 'The cut file cannot be read: process again', onClick: handleRetranscribe}
+        : cutJudgeCount > 0
+            ? {tone: 'ask', label: lang === 'zh' ? `剪辑有 ${cutJudgeCount} 处需要你判断` : `${cutJudgeCount} cut decision${cutJudgeCount === 1 ? '' : 's'} need your call`, onClick: () => setCutReviewOpen(true)}
+            : noteBeingWritten
+                ? {tone: 'busy', label: lang === 'zh' ? '写笔记中' : 'Writing the note', onClick: null}
+                : noteMissing
+                    ? {tone: 'ask', label: lang === 'zh' ? '笔记没生成' : 'No note yet', onClick: () => { writeNoteButtonRef.current?.scrollIntoView({block: 'center'}); writeNoteButtonRef.current?.focus(); }}
+                    : autoExportError
+                        // Nothing on this page redoes the export; the reason is on hover.
+                        ? {tone: 'error', label: lang === 'zh' ? '自动导出到飞书没成功' : 'The automatic Feishu export failed', title: autoExportError, onClick: null}
+                        : null;
     const paneStyles = splitPaneStyles(splitRatio);
     const commitSplitRatio = (ratio) => saveSplitRatio(ratio === undefined ? splitRatio : ratio);
     const resetSplitRatio = () => { setSplitRatio(null); saveSplitRatio(null); };
@@ -1742,21 +1580,10 @@ const Editor = () => {
                 {toast.msg}
                                             </div>
         )}
-        {larkUrl && (
-            <div className="fixed left-1/2 top-6 z-50 flex max-w-lg -translate-x-1/2 items-center gap-4 rounded-[20px] border border-[#d9eadf] bg-white px-6 py-4 shadow-[0_18px_44px_-26px_rgba(17,17,17,.55)] dark:border-emerald-400/20 dark:bg-[#151515]">
-                <SvgIcon name="check_circle" className="text-2xl text-emerald-600 dark:text-emerald-300"/>
-                <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-[#111111] dark:text-white">{t('edit.exportDone')}</p>
-                    {larkImagesMissing > 0 && <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">{t('edit.exportImagesMissing').replace('{n}', String(larkImagesMissing))}</p>}
-                    <a href={larkUrl} target="_blank" rel="noopener noreferrer" className="text-primary text-sm hover:underline truncate block">{larkUrl}</a>
-                                                </div>
-                <button onClick={()=>setLarkUrl(null)} className="flex-shrink-0 text-[#777] hover:text-[#111111] dark:text-white/50 dark:hover:text-white">
-                    <SvgIcon name="close" className="text-sm"/>
-                </button>
-                                                </div>
-        )}
         {regenerateConfirmOpen && (
             <RegenerateConfirmDialog
+                title={noteMissing ? (lang === 'zh' ? '写笔记' : 'Write the note') : ''}
+                confirmLabel={noteMissing ? (lang === 'zh' ? '开始写' : 'Start writing') : ''}
                 transcriptTitle={rawEditorTitle}
                 description={regenerateCopy.desc}
                 warning={regenerateCopy.warning}
@@ -1810,131 +1637,40 @@ const Editor = () => {
         />
         <main className="h-dvh overflow-hidden px-4 pb-4 pt-5 xl:px-5 2xl:px-6">
             <div className="mx-auto h-full min-h-0 w-full flex flex-col gap-3">
-                <div className="group/header relative shrink-0">
-                {headerCollapsed && (
-                    <div className="flex h-9 items-center gap-2 rounded-[14px] border border-[#e4e0e0] bg-white/85 px-3 dark:border-white/[0.12] dark:bg-white/[0.06]">
-                        <h1 className="min-w-0 flex-1 truncate text-sm font-extrabold text-[#111111] dark:text-white" title={rawEditorTitle}>
-                            {rawEditorTitle}
-                        </h1>
-                        <span className="hidden shrink-0 text-[11px] font-semibold text-[#888] md:inline dark:text-white/45">
-                            {lang === 'zh' ? '悬停显示操作' : 'Hover for actions'}
-                        </span>
-                        {pinHeaderButton}
-                    </div>
-                )}
-                <div className={headerCollapsed
-                    ? 'pointer-events-none absolute inset-x-0 top-0 z-30 rounded-[18px] border border-[#e4e0e0] bg-white/95 px-3 py-2 opacity-0 shadow-[0_24px_60px_-30px_rgba(17,17,17,.6)] backdrop-blur transition-opacity duration-150 group-hover/header:pointer-events-auto group-hover/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:opacity-100 dark:border-white/[0.12] dark:bg-[#151515]/95 dark:shadow-[0_24px_60px_-30px_rgba(0,0,0,.85)]'
-                    : ''}>
-                {/* The actions move to their own line when the window is too
-                    narrow for both; squeezed into one row, the title column
-                    shrank to a single character per line. */}
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-                    <div className="min-w-0 flex-[1_1_26rem] pr-2">
-                        <h1
-                            className="max-w-[18em] truncate whitespace-nowrap font-headline text-[clamp(1.55rem,1.8vw,2rem)] font-extrabold leading-tight text-[#111111] dark:text-white"
-                            title={rawEditorTitle}
-                            aria-label={rawEditorTitle}
-                        >
-                            {rawEditorTitle}
-                        </h1>
-                        {sttElapsedLabel && (
-                            <p className="mt-1 truncate text-sm font-semibold leading-snug text-[#666] dark:text-white/60">
-                                {sttElapsedLabel}
-                            </p>
-                        )}
-                        <OutputFolderLine taskId={activeTaskId} result={result} lang={lang} className="mt-1"/>
-                        {/* Appears only when the cut file the whole page is built on
-                            cannot be read. */}
-                        <CutFlowBar
-                            summary={cutFlow}
-                            lang={lang}
-                            unavailable={cutFileUnavailable}
-                            onReprocess={handleRetranscribe}
-                        />
-                        {cutJudgeCount > 0 && (
+                    <div data-testid="editor-header" className="flex h-10 shrink-0 items-center gap-3">
+                        <nav className="flex min-w-0 items-center gap-1.5 text-[13px] leading-none">
+                            <Link to="/agent" className="shrink-0 font-semibold text-[#666] hover:text-[#111111] dark:text-white/60 dark:hover:text-white">
+                                {lang === 'zh' ? '处理记录' : 'Records'}
+                            </Link>
+                            <span className="shrink-0 text-[#b4b4b4] dark:text-white/30">/</span>
+                            <h1 className="min-w-0 truncate text-[13px] font-extrabold text-[#111111] dark:text-white" title={rawEditorTitle}>
+                                {rawEditorTitle}
+                            </h1>
+                        </nav>
+                        {headerStatus && (
                             <button
                                 type="button"
-                                data-testid="cut-judge-entry"
-                                onClick={()=>setCutReviewOpen(true)}
-                                className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-[11px] border border-[#f5c86b] bg-[#fffaf0] px-2.5 text-xs font-bold text-[#8a5a00] transition hover:bg-[#fff3dc] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]"
+                                data-testid="editor-header-status"
+                                title={headerStatus.title || undefined}
+                                onClick={headerStatus.onClick}
+                                disabled={!headerStatus.onClick}
+                                className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[10px] border px-2.5 text-[12px] font-bold disabled:cursor-default ${headerStatus.tone === 'error'
+                                    ? 'border-[#fda29b] bg-[#fef3f2] text-[#b42318] hover:bg-[#fee4e2] dark:border-[#f04438]/40 dark:bg-[#f04438]/[0.14] dark:text-[#f97066]'
+                                    : headerStatus.tone === 'busy'
+                                        ? 'border-[#e4e0e0] bg-white text-[#666] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65'
+                                        : 'border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] hover:bg-[#fff3dc] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]'}`}
                             >
-                                <AlertCircle className="size-3.5" strokeWidth={2.15}/>
-                                {lang === 'zh' ? `剪辑有 ${cutJudgeCount} 处需要你判断` : `${cutJudgeCount} cut decision${cutJudgeCount === 1 ? '' : 's'} need your call`}
+                                {headerStatus.tone === 'busy'
+                                    ? <SvgIcon name="sync" className="text-[13px] animate-spin"/>
+                                    : <AlertCircle className="size-3.5" strokeWidth={2.15}/>}
+                                {headerStatus.label}
                             </button>
                         )}
+                        <div className="ml-auto flex shrink-0 items-center">
+                            <OutputFolderLine taskId={activeTaskId} result={result} lang={lang} compact/>
+                        </div>
                     </div>
-                    <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-                        {savedLarkUrl && (
-                            <a
-                                href={savedLarkUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                data-testid="lark-export-link"
-                                className="inline-flex h-10 items-center px-1 text-xs font-bold text-emerald-700 hover:underline dark:text-emerald-300"
-                            >
-                                {t('edit.exportedOnce')} · {t('edit.exportOpen')}
-                            </a>
-                        )}
-                        {autoExportError && (
-                            <span
-                                className="inline-flex h-10 max-w-[220px] items-center truncate text-xs font-semibold text-red-600 dark:text-red-300"
-                                title={autoExportError}
-                            >
-                                {t('edit.autoExportFailed')}：{autoExportError}
-                            </span>
-                        )}
-                        <button
-                            type="button"
-                            onClick={()=>setRegenerateConfirmOpen(true)}
-                            disabled={regenerating||!transcript}
-                            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
-                        >
-                            <SvgIcon name={regenerating ? 'sync' : 'refresh'} className={`text-[17px] ${regenerating?'animate-spin':''}`}/>
-                            <span>{regenerating ? t('edit.regenerating') : t('edit.regenerate')}</span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={handleExportLark}
-                            disabled={exporting||!summary}
-                            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[14px] bg-[#111111] px-4 text-xs font-extrabold text-white transition hover:bg-[#2a2a2a] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
-                        >
-                            <SvgIcon name={exporting ? 'sync' : 'cloud_upload'} className={`text-[17px] ${exporting?'animate-spin':''}`}/>
-                            <span>{t('edit.export')}</span>
-                        </button>
-                        {/* Used now and then: the prompt, a fresh transcription,
-                            and whether the header stays open during playback. */}
-                        <DropdownMenu
-                            trigger={
-                                <button
-                                    type="button"
-                                    aria-label={lang === 'zh' ? '更多操作' : 'More actions'}
-                                    title={lang === 'zh' ? '更多操作' : 'More actions'}
-                                    className="inline-flex h-10 w-10 items-center justify-center rounded-[14px] border border-[#e4e0e0] bg-white text-[#666] transition hover:bg-[#efeeee] hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65 dark:hover:bg-white/[0.1] dark:hover:text-white"
-                                >
-                                    <MoreHorizontal className="size-[18px]" strokeWidth={2.15}/>
-                                </button>
-                            }
-                            items={[
-                                {label: t('prompt.collapsed'), onClick: () => promptEditing.setPromptOpen(true)},
-                                {label: retranscribing ? t('edit.retranscribing') : t('edit.retranscribe'), disabled: retranscribing || retranscribeBlockedByJob, onClick: handleRetranscribe},
-                                {divider: true},
-                                {label: lang === 'zh' ? '播放时固定顶栏' : 'Pin header during playback', badge: headerPinned ? (lang === 'zh' ? '已开' : 'On') : (lang === 'zh' ? '已关' : 'Off'), onClick: togglePinnedHeader},
-                            ]}
-                        />
-                    </div>
-                </div>
-                </div>
-                </div>
 
-                <PromptTemplateDialog
-                    open={promptEditing.promptOpen}
-                    onClose={()=>promptEditing.setPromptOpen(false)}
-                    t={t}
-                    lang={lang}
-                    settings={loadSettings()}
-                    scopeNote={notePromptScopeSentence(noteWriter, lang)}
-                    {...promptEditing.dialogProps}
-                />
 
                         <div ref={splitContainerRef} className="flex min-h-0 flex-1 gap-0 overflow-hidden">
                             <section style={paneStyles.left} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
@@ -2037,23 +1773,6 @@ const Editor = () => {
                                                     <span className="tabular-nums text-primary">{visibleEditRecords.length}</span>
                                                 </button>
                                             )}
-                                            <DropdownMenu
-                                                trigger={
-                                                    <button className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] bg-[#111111] px-3 text-xs font-bold text-white transition hover:bg-[#2a2a2a] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
-                                                        <SvgIcon name="download" className="text-[17px]"/>
-                                                        {lang === 'zh' ? '导出' : 'Export'}
-                                                    </button>
-                                                }
-                                                items={[
-                                                    {icon:'description', label:t('dl.txt'), badge:'TXT', onClick:()=>{dlTranscriptTxt(transcript,resultDownloadName); recordDownload('transcript_downloaded','txt'); showToast(t('dl.success'));}},
-                                                    {icon:'subtitles', label:downloadLabels.srt, badge:'SRT', disabled:segments.length===0, onClick:()=>{dlTranscriptSrt(segments,subtitleName); recordDownload('transcript_downloaded','srt'); showToast(t('dl.success'));}},
-                                                    {icon:'closed_caption', label:downloadLabels.vtt, badge:'VTT', disabled:segments.length===0, onClick:()=>{dlTranscriptVtt(segments,subtitleName); recordDownload('transcript_downloaded','vtt'); showToast(t('dl.success'));}},
-                                                    {icon:'translate', label:downloadLabels.bilingualSrt, badge:'双语 SRT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptSrt(bilingualTranscriptSegments,null,subtitleName); recordDownload('transcript_downloaded','bilingual_srt'); showToast(t('dl.success'));}},
-                                                    {icon:'translate', label:downloadLabels.bilingualVtt, badge:'双语 VTT', disabled:!hasBilingualTranscript, onClick:()=>{dlBilingualTranscriptVtt(bilingualTranscriptSegments,null,subtitleName); recordDownload('transcript_downloaded','bilingual_vtt'); showToast(t('dl.success'));}},
-                                                    ...(downloadLabels.cutVideo ? [{icon:'video', label:downloadLabels.cutVideo, badge:'MP4', disabled:!cutMediaArtifact, onClick:handleDownloadCutFile}] : []),
-                                                    {icon:'video', label:downloadLabels.sourceVideo, badge:'MP4', disabled:!canDownloadSourceVideo || downloading === 'source_video', onClick:handleDownloadSourceVideo},
-                                                ]}
-                                            />
                                         </div>
                                     </div>
                                 </div>
@@ -2119,11 +1838,11 @@ const Editor = () => {
                                         <div className="flex items-center gap-2 rounded-[12px] border border-[#d6dcff] bg-[#eef2ff] px-3 py-2 dark:border-white/[0.12] dark:bg-white/[0.08]">
                                             <SvgIcon name="info" className="text-primary text-[15px] flex-shrink-0"/>
                                             <p className="truncate text-xs font-semibold text-on-surface-variant" title={lang==='zh'
-                                                ? '当前结果没有时间戳分段。重新转录原音频后会恢复逐段校对。'
-                                                : 'This result has no timestamped segments. Retranscribe the source audio to restore segment review.'}>
+                                                ? '当前结果没有时间戳分段。在首页把这条录像重新处理一遍，就能逐段校对。'
+                                                : 'This result has no timestamped segments. Process the recording again from the start page to review it segment by segment.'}>
                                                 {lang==='zh'
-                                                    ? '当前结果没有时间戳分段。重新转录原音频后会恢复逐段校对。'
-                                                    : 'No timestamped segments. Retranscribe the source audio to restore segment review.'}
+                                                    ? '当前结果没有时间戳分段。在首页把这条录像重新处理一遍，就能逐段校对。'
+                                                    : 'No timestamped segments. Process the recording again from the start page to review it segment by segment.'}
                                             </p>
                                         </div>
                                     <textarea
@@ -2218,35 +1937,6 @@ const Editor = () => {
                                             </button>
                                         )}
                                         {summary && <NoteExplanation result={result} lang={lang}/>}
-                                        <DropdownMenu
-                                            trigger={
-                                                <button disabled={!summary || !!downloading} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]">
-                                                    <SvgIcon name={downloading ? 'sync' : 'download'} className={`text-sm ${downloading?'animate-spin':''}`}/>
-                                                    {downloading ? t('dl.generating') : t('dl.summary')}
-                                            </button>
-                                            }
-                                            items={[
-                                                {icon:'description', label:t('dl.txt'), badge:'TXT', disabled:!summary, onClick:()=>{dlSummaryTxt(summary,resultDownloadName); recordDownload('summary_downloaded','txt'); showToast(t('dl.success'));}},
-                                                {icon:'markdown', label:t('dl.md'), badge:'MD', disabled:!summary, onClick:async()=>{
-                                                    try{
-                                                        const out = await dlSummaryMd(summary,resultDownloadName);
-                                                        recordDownload('summary_downloaded', out?.format === 'zip' ? 'md_zip' : 'md');
-                                                        showToast(markdownDownloadMessage(out, lang) || t('dl.success'), !out?.missing);
-                                                    }catch(e){showToast(e.message,false);}
-                                                }},
-                                                {divider:true},
-                                                {icon:'picture_as_pdf', label:t('dl.pdf'), badge:'PDF', disabled:!summary, onClick:async()=>{
-                                                    setDownloading('pdf');
-                                                    try{ await dlSummaryPdf(summary,resultDownloadName); recordDownload('summary_downloaded','pdf'); showToast(t('dl.pdfPrintOpened')); }catch(e){showToast(e.message,false);}
-                                                    finally{setDownloading(null);}
-                                                }},
-                                                {icon:'article', label:t('dl.word'), badge:'DOCX', disabled:!summary, onClick:async()=>{
-                                                    setDownloading('docx');
-                                                    try{ await dlSummaryWord(summary,resultDownloadName); recordDownload('summary_downloaded','docx'); showToast(t('dl.success')); }catch(e){showToast(e.message,false);}
-                                                    finally{setDownloading(null);}
-                                                }},
-                                            ]}
-                                        />
                                     </div>
                                 </div>
                                 {hasEditableSummary && !noteReady ? (
@@ -2276,11 +1966,37 @@ const Editor = () => {
                                     {result.summary_skipped ? (
                                         <>
                                             <p className="text-sm italic text-[#666] dark:text-white/60">{t(result.summary_skipped_reason === 'no_model_key' ? 'edit.summaryNoKey' : 'edit.summarySkipped')}</p>
+                                            {!noteBeingWritten && (
+                                                <button
+                                                    ref={writeNoteButtonRef}
+                                                    type="button"
+                                                    data-testid="write-note"
+                                                    onClick={()=>setRegenerateConfirmOpen(true)}
+                                                    disabled={!transcript}
+                                                    className="my-3 inline-flex h-8 items-center gap-1.5 rounded-[12px] bg-[#111111] px-3 text-[13px] font-bold not-italic text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
+                                                >
+                                                    <SvgIcon name="edit_note" className="text-[15px]"/>
+                                                    {lang === 'zh' ? '写笔记' : 'Write the note'}
+                                                </button>
+                                            )}
                                             <AgentNotePrompt result={result} lang={lang}/>
                                         </>
                                     ) : result.summary_status === 'failed' || result.summary_error ? (
                                         <div className="space-y-2 text-sm text-[#666] dark:text-white/60">
                                             <p className="italic">{t('edit.summaryFailed')}</p>
+                                            {!noteBeingWritten && (
+                                                <button
+                                                    ref={writeNoteButtonRef}
+                                                    type="button"
+                                                    data-testid="write-note"
+                                                    onClick={()=>setRegenerateConfirmOpen(true)}
+                                                    disabled={!transcript}
+                                                    className="inline-flex h-8 items-center gap-1.5 rounded-[12px] bg-[#111111] px-3 text-[13px] font-bold not-italic text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
+                                                >
+                                                    <SvgIcon name="edit_note" className="text-[15px]"/>
+                                                    {lang === 'zh' ? '写笔记' : 'Write the note'}
+                                                </button>
+                                            )}
                                             {summaryFailureHint && (
                                                 <p className="rounded-[14px] border border-error/20 bg-error-container px-3 py-2 text-xs font-semibold leading-relaxed text-on-error-container">
                                                     {summaryFailureHint}
@@ -2293,12 +2009,6 @@ const Editor = () => {
                                     )}
                                     </div>
                                 )}
-                                <div className="flex justify-end border-t border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.04]">
-                                    <Link to={agentWorkflowHref} className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#dedada] bg-white px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]">
-                                        <SvgIcon name="route" className="text-sm"/>
-                                        {lang === 'zh' ? '处理记录' : 'Processing records'}
-                                    </Link>
-                                </div>
                             </section>
                         </div>
                     </div>

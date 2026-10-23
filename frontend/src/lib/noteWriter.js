@@ -89,8 +89,8 @@ export const noteWriterBatchClause = (writer, lang = 'zh') => {
 export const notePromptScopeSentence = (writer, lang = 'zh') => {
     if (writer?.kind !== 'claude') return '';
     return lang === 'zh'
-        ? '当前由 Claude 结合画面写笔记，不读提示词和笔记模式。要按提示词写，点「重写笔记」，选「改用文本模型按文字重写」。'
-        : 'Claude is writing notes from the video frames and does not read the prompt or note mode. To use the prompt, click Regenerate note and choose to rewrite from the text with the text model.';
+        ? '当前由 Claude 结合画面写笔记，不读提示词和笔记模式。要按提示词写，把笔记交给你的 agent 按提示词重写。'
+        : 'Claude is writing notes from the video frames and does not read the prompt or note mode. To use the prompt, hand the note to your agent to rewrite with it.';
 };
 
 // Whether this task's note was written by the text model because the frame

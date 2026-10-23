@@ -13,7 +13,7 @@ from backend.core.result_schema import canonical_display_segments, canonical_raw
 # key). Not the transcript-only mode the user chose, and said differently.
 NO_MODEL_KEY = "no_model_key"
 NO_MODEL_KEY_TITLE = "还没有填写模型 Key，这次只出了转录稿"
-NO_MODEL_KEY_NEXT = "在「设置」里填好 Key 后点「重写笔记」，或者把笔记交给你的 agent 来写。"
+NO_MODEL_KEY_NEXT = "在「设置」里填好 Key 后点「写笔记」，或者把笔记交给你的 agent 来写。"
 
 
 def skipped_for_no_model_key(result: dict[str, Any]) -> bool:
