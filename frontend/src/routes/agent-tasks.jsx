@@ -3,6 +3,7 @@ import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {
     AlertCircle,
     CheckCircle2,
+    ChevronDown,
     FileText,
     History,
     LoaderCircle,
@@ -725,6 +726,209 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
     );
 };
 
+// Records page redesign mockup (?layout=v2, 2026-10-23). One row per record:
+// the title opens the editor, the facts are small blocks that wrap rather than
+// truncate, the cut block opens the processing report in place, and the right
+// side holds only two icon buttons in fixed slots. A finished record with
+// nothing wrong carries no badge, the same rule as the start page's recent list.
+const factBlock = 'inline-flex items-center gap-1 whitespace-nowrap rounded-[8px] bg-[#f2f1f1] px-2 py-0.5 text-[12px] font-semibold text-[#57585d] dark:bg-white/[0.07] dark:text-white/62';
+const iconButton = 'inline-flex size-9 items-center justify-center rounded-[12px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]';
+
+const sizeAndLengthLabel = (job, lang) => {
+    const sizeMb = Number(job?.source_file_size_mb || job?.metadata?.file_size_mb || 0) || 0;
+    const durationSec = Number(job?.result?.audio_duration_seconds || job?.source_duration_seconds || job?.metadata?.duration_seconds || 0) || 0;
+    const parts = [];
+    if (durationSec) parts.push(fmtDuration(durationSec, lang));
+    if (sizeMb) parts.push(fmtFileSize(sizeMb));
+    if ((job?.source_type || job?.result?.source || '') === 'video_link') parts.push(sourceLabel(job, lang));
+    return parts.join(' · ');
+};
+
+const AgentTaskRowV2View = ({job, lang, aheadName = '', retryError = '', highlighted = false, cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onRetry}) => {
+    const zh = lang === 'zh';
+    const taskId = taskIdForJob(job);
+    const highlightRef = useRef(null);
+    useEffect(() => {
+        if (highlighted) highlightRef.current?.scrollIntoView?.({block: 'center', behavior: 'smooth'});
+    }, [highlighted]);
+    const [reportOpen, setReportOpen] = useState(false);
+    const state = normalizeTaskState(job);
+    const live = isLiveTask(job);
+    const completed = state === TASK_STATE_COMPLETED || state === TASK_STATE_CACHED_ONLY;
+    const failedTerminal = state === TASK_STATE_FAILED;
+    const failed = failedTerminal || state === TASK_STATE_CANCELLED;
+    const terminal = completed || failed;
+    const cancellableLive = live && taskId && !job?.metadata?.queue_provisional;
+    const progress = completed ? 100 : Math.max(0, Math.min(100, Number(job?.progress) || (state === TASK_STATE_QUEUED ? 0 : 2)));
+    const current = jobToCurrentJob(job);
+    const downloadUnknown = isDownloadProgressUnmeasured(job);
+    const progressUnknown = isSttProgressUnmeasured(current) || downloadUnknown;
+    const downloadedBytes = Number(job?.metadata?.video_source_progress?.loaded_bytes) || 0;
+    const displayTitle = jobDisplayTitle(job, lang);
+    const diagnosis = failed
+        ? diagnoseTaskError(job?.error_reason || job?.result?.summary_error || '', lang, taskErrorContextForJob(job))
+        : null;
+    const retryUseless = failedTerminal && mediaSourceForJob(job) === 'video_link' && diagnosis && !diagnosis.retryable;
+    const outcome = taskOutcome(job, lang);
+    const cutTile = debreathTile(job, lang);
+    const reportAvailable = hasReport(job);
+    const sizeAndLength = sizeAndLengthLabel(job, lang);
+    const noteHint = noteFallbackSentence(job?.result, lang);
+    const delivery = cutFileDelivery(job, lang);
+    const opening = openingTaskId === taskId;
+    const progressLabel = progressUnknown && live
+        ? (downloadUnknown && downloadedBytes > 0
+            ? (zh ? `已下载 ${fmtBytes(downloadedBytes)}` : `${fmtBytes(downloadedBytes)} downloaded`)
+            : (zh ? '处理中' : 'Working'))
+        : `${progress}%`;
+    const menuItems = [
+        cancellableLive ? {label: zh ? '取消任务' : 'Cancel task', disabled: cancellingTaskId === taskId, onClick: () => onCancel(job)} : null,
+        terminal && taskId ? {icon: 'delete', label: zh ? '删除记录' : 'Delete record', onClick: () => onDelete(job)} : null,
+    ].filter(Boolean);
+    const menuBusy = deletingTaskId === taskId || cancellingTaskId === taskId;
+    const cutText = `${zh ? '去气口' : 'Cut'} ${cutTile.value}${cutTile.hint ? `（${cutTile.hint}）` : ''}`;
+    return (
+        <article
+            ref={highlightRef}
+            data-highlighted={highlighted ? 'true' : undefined}
+            data-testid="task-row-v2"
+            className={`rounded-[16px] border bg-white px-4 py-3 dark:bg-white/[0.055] ${highlighted ? 'border-primary ring-2 ring-primary/30' : 'border-[#e4e1e1] dark:border-white/[0.10]'}`}
+        >
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1.5">
+                <div className="col-start-1 row-start-1 flex min-w-0 items-start gap-2 max-[699px]:col-span-2">
+                    {outcome.tone !== 'done' ? (
+                        <span data-testid="task-outcome" className={`mt-[1px] shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-extrabold ${OUTCOME_PILL_CLASS[outcome.tone]}`}>
+                            {outcome.label}
+                        </span>
+                    ) : null}
+                    <h2 className="min-w-0 font-headline text-[15px] font-extrabold leading-[22px] text-[#111111] dark:text-white" title={displayTitle}>
+                        {completed ? (
+                            <button
+                                type="button"
+                                disabled={opening}
+                                onClick={() => onOpenResult(job)}
+                                className="line-clamp-2 break-words text-left hover:underline disabled:cursor-wait disabled:opacity-60"
+                            >
+                                {displayTitle}
+                            </button>
+                        ) : (
+                            <span className="line-clamp-2 break-words">{displayTitle}</span>
+                        )}
+                    </h2>
+                    {opening ? <LoaderCircle className="mt-1 size-4 shrink-0 animate-spin text-[#85868c]" strokeWidth={2.15}/> : null}
+                </div>
+                <div data-testid="task-facts" className="col-start-1 row-start-2 flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span className="mr-0.5 whitespace-nowrap text-[12px] font-semibold text-[#85868c] dark:text-white/50">
+                        {formatTaskDateTime(job?.updated_at || job?.created_at, lang)}
+                    </span>
+                    {terminal ? (
+                        <>
+                            {sizeAndLength ? <span className={factBlock}>{sizeAndLength}</span> : null}
+                            {reportAvailable ? (
+                                <button
+                                    type="button"
+                                    aria-expanded={reportOpen}
+                                    onClick={() => setReportOpen((value) => !value)}
+                                    title={zh ? (reportOpen ? '收起处理说明' : '看处理说明') : (reportOpen ? 'Hide processing report' : 'Processing report')}
+                                    className={`${factBlock} cursor-pointer transition hover:bg-[#e6e4e4] hover:text-[#111111] dark:hover:bg-white/[0.12] dark:hover:text-white ${reportOpen ? '!bg-[#111111] !text-white dark:!bg-white dark:!text-[#111111]' : ''}`}
+                                >
+                                    {cutText}
+                                    <ChevronDown className={`size-3.5 transition-transform ${reportOpen ? 'rotate-180' : ''}`} strokeWidth={2.4}/>
+                                </button>
+                            ) : (
+                                <span className={factBlock}>{cutText}</span>
+                            )}
+                            <span className={factBlock}>{zh ? '笔记' : 'Note'} {noteTileValue(job, lang)}</span>
+                        </>
+                    ) : (
+                        <span className={factBlock}>{stageLabel(job, lang)} · {progressLabel}</span>
+                    )}
+                </div>
+                <div className="col-start-2 row-start-1 row-span-2 flex items-start gap-2 self-start max-[699px]:row-start-2 max-[699px]:row-span-1">
+                    {/* Fixed slots: a record without an output folder keeps the
+                        space, so the menu button lines up down the list. */}
+                    <span className="inline-flex size-9">
+                        <OutputFolderLine taskId={taskId} result={job?.result} lang={lang} iconOnly/>
+                    </span>
+                    <span className="inline-flex size-9">
+                        {menuItems.length ? (
+                            <DropdownMenu
+                                trigger={(
+                                    <button type="button" disabled={menuBusy} aria-label={zh ? '更多' : 'More'} title={zh ? '更多' : 'More'} className={iconButton}>
+                                        {menuBusy ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <MoreHorizontal className="size-4" strokeWidth={2.15}/>}
+                                    </button>
+                                )}
+                                items={menuItems}
+                            />
+                        ) : null}
+                    </span>
+                </div>
+            </div>
+            {!completed && !failed ? (
+                <div className="mt-3">
+                    <div className={`h-2 overflow-hidden rounded-full bg-[#efeeee] dark:bg-white/[0.12] ${progressUnknown && live ? 'progress-indeterminate' : ''}`}>
+                        {!progressUnknown && <div className="h-full rounded-full bg-[#111111] transition-all duration-500 dark:bg-white" style={{width: `${progress}%`}}/>}
+                    </div>
+                    <p className="mt-2 text-[12px] font-semibold leading-5 text-[#57585d] dark:text-white/62">
+                        {liveStageDetail(job, lang, aheadName)}
+                    </p>
+                </div>
+            ) : null}
+            {failedTerminal && diagnosis?.detail ? (
+                <div className="mt-2 flex max-w-full flex-wrap items-start gap-x-3 gap-y-1.5 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold leading-5 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+                    <AlertCircle className="mt-0.5 size-4 shrink-0" strokeWidth={2.15}/>
+                    <span className="min-w-0 flex-1 break-words">{diagnosis.detail}</span>
+                    {diagnosis.settingsTarget ? (
+                        <Link to={diagnosis.settingsTarget} className="shrink-0 font-extrabold underline hover:no-underline">
+                            {zh ? '去设置修改' : 'Change it in Settings'}
+                        </Link>
+                    ) : null}
+                    {!retryUseless ? (
+                        <button type="button" disabled={retryingTaskId === taskId} onClick={() => onRetry(job)} className="shrink-0 font-extrabold underline hover:no-underline disabled:opacity-50">
+                            {retryingTaskId === taskId ? (zh ? '正在入队…' : 'Queuing…') : (zh ? '重新提交' : 'Submit again')}
+                        </button>
+                    ) : null}
+                </div>
+            ) : null}
+            {retryError ? (
+                <p data-testid="retry-error" className="mt-2 inline-flex max-w-full items-start gap-2 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold leading-5 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+                    <AlertCircle className="mt-0.5 size-4 shrink-0" strokeWidth={2.15}/>
+                    <span className="min-w-0 break-words">{retryError}</span>
+                </p>
+            ) : null}
+            {noteHint ? (
+                <p className="mt-1.5 text-[12px] font-semibold leading-5 text-[#85868c] dark:text-white/45">{noteHint}</p>
+            ) : null}
+            {delivery ? (
+                <div className={`mt-2 flex flex-wrap items-start gap-2 rounded-[12px] border px-3 py-2 text-[12px] font-semibold leading-5 ${
+                    delivery.tone === 'error'
+                        ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200'
+                        : 'border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]'
+                }`}>
+                    <AlertCircle className="mt-0.5 size-4 shrink-0" strokeWidth={2.15}/>
+                    <span className="min-w-0 flex-1 break-words">{delivery.text}</span>
+                    {job?.result?.artifacts?.debreath_media && (
+                        <button
+                            type="button"
+                            disabled={downloadingTaskId === taskId}
+                            onClick={() => onDownloadCut?.(job)}
+                            className="ml-auto inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[10px] border border-current/25 bg-white/70 px-2.5 text-[12px] font-extrabold transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/[0.10] dark:hover:bg-white/[0.16]"
+                        >
+                            {zh ? '下载剪后文件' : 'Download the cut file'}
+                        </button>
+                    )}
+                </div>
+            ) : null}
+            <AgentCutWait job={job}/>
+            {reportOpen ? (
+                <div data-testid="cut-report-panel" className="mt-3 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]">
+                    <CutReport job={job} embedded/>
+                </div>
+            ) : null}
+        </article>
+    );
+};
+
 // What the card shows, as one string. Every 5-second poll rebuilds the list
 // with fresh objects; a card whose row did not change must not render again.
 const cardRenderKey = (job) => {
@@ -763,6 +967,7 @@ const areCardPropsEqual = (prev, next) => {
     return cardRenderKey(prev.job) === cardRenderKey(next.job);
 };
 const AgentTaskCard = memo(AgentTaskCardView, areCardPropsEqual);
+const AgentTaskRowV2 = memo(AgentTaskRowV2View, areCardPropsEqual);
 
 const RECORD_FILTERS = [
     {id: 'all', zh: '全部', en: 'All', match: () => true},
@@ -784,6 +989,8 @@ const AgentTasks = () => {
     const {loadSettings} = useSettings();
     const location = useLocation();
     const navigate = useNavigate();
+    // Redesign mockup, side by side with the current page (2026-10-23).
+    const layoutV2 = new URLSearchParams(location.search).get('layout') === 'v2';
     const seededJob = location.state?.job && typeof location.state.job === 'object' ? location.state.job : null;
     const [cancellingTaskId, setCancellingTaskId] = useState('');
     const [openingTaskId, setOpeningTaskId] = useState('');
@@ -878,9 +1085,9 @@ const AgentTasks = () => {
 
     useEffect(() => {
         if (location.state?.queueSubmitError || location.state?.queueSubmittedAt) {
-            navigate('/agent', {replace: true, state: {}});
+            navigate({pathname: '/agent', search: location.search}, {replace: true, state: {}});
         }
-    }, [location.state?.queueSubmitError, location.state?.queueSubmittedAt, navigate]);
+    }, [location.state?.queueSubmitError, location.state?.queueSubmittedAt, location.search, navigate]);
 
     const cancelPendingUpload = () => {
         const confirmText = lang === 'zh'
@@ -1072,6 +1279,7 @@ const AgentTasks = () => {
     return (
         <main className="ml-[var(--sidebar-offset)] h-dvh flex-1 overflow-y-auto bg-[#f8f7fb] px-6 py-5 text-[#111111] transition-[margin] duration-200 ease-out hide-scrollbar dark:bg-[#101010] dark:text-white/[0.92] lg:px-10">
             <div className="mx-auto max-w-7xl space-y-5">
+                {layoutV2 ? null : (
                 <header className="flex flex-col gap-4 border-b border-[#dedada] pb-5 dark:border-white/[0.10] lg:flex-row lg:items-end lg:justify-between">
                     <div className="min-w-0">
                         <p className="inline-flex items-center gap-2 text-[12px] font-extrabold text-[#676970] dark:text-white/[0.72]">
@@ -1093,6 +1301,7 @@ const AgentTasks = () => {
                         </Link>
                     </div>
                 </header>
+                )}
 
                 {error && (
                     <div className="rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">
@@ -1194,8 +1403,10 @@ const AgentTasks = () => {
                             {lang === 'zh' ? '没有符合的记录。' : 'No matching records.'}
                         </p>
                     )}
-                    {visibleJobs.map((job) => (
-                        <AgentTaskCard
+                    {visibleJobs.map((job) => {
+                        const Row = layoutV2 ? AgentTaskRowV2 : AgentTaskCard;
+                        return (
+                        <Row
                             key={taskIdForJob(job)}
                             job={job}
                             lang={lang}
@@ -1209,7 +1420,8 @@ const AgentTasks = () => {
                             downloadingTaskId={downloadingTaskId}
                             {...cardHandlers}
                         />
-                    ))}
+                        );
+                    })}
                 </section>
             </div>
         </main>

@@ -76,6 +76,9 @@ const SideNav = ({
         if (!menuOpen) setLegalMenuOpen(false);
     }, [menuOpen]);
 
+    // Records page mockup: the layout switch stays on while moving between pages.
+    const layoutV2 = new URLSearchParams(loc.search).get('layout') === 'v2';
+    const withLayout = (path) => (layoutV2 ? `${path}?layout=v2` : path);
     const items = [
         {path:'/media-text', icon:Video, label: lang === 'zh' ? '视频转写与总结' : 'Media notes'},
         {path:'/agent', icon:SlidersHorizontal, k:'nav.processing'},
@@ -113,6 +116,9 @@ const SideNav = ({
                             </div>
                         )}
                     </Link>
+                    {/* No toggle while a narrow window holds the sidebar folded
+                        (records page mockup, ?layout=v2): it would do nothing. */}
+                    {onToggle ? (
                     <button
                         type="button"
                         onClick={onToggle}
@@ -122,6 +128,7 @@ const SideNav = ({
                     >
                         <CollapseIcon className={collapsed ? 'size-[14px]' : 'size-[18px]'} strokeWidth={1.9}/>
                     </button>
+                    ) : null}
                 </div>
 
                 <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden">
@@ -131,7 +138,7 @@ const SideNav = ({
                         return (
                             <Link
                                 key={it.path}
-                                to={it.path}
+                                to={withLayout(it.path)}
                                 title={collapsed ? (it.label || t(it.k)) : undefined}
                                 className={`flex items-center rounded-[16px] text-[14px] font-semibold tracking-normal transition ${
                                     active
