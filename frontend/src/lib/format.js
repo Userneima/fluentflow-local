@@ -53,10 +53,13 @@ export const composeTranscriptText = (segments, fallback='') => (
         ? segments.map((seg) => (seg?.text || '').trim()).filter(Boolean).join('\n')
         : (fallback || '')
 );
+// A sentence emptied by an edit stays in the list: the service keeps it, and
+// each sentence is edited and saved by its position, so dropping it would
+// shift every later sentence onto its neighbour's position.
 export const normalizeTranscriptSegments = (value) => (
     Array.isArray(value)
         ? value
-            .filter((seg) => seg && typeof seg === 'object' && String(seg.text || '').trim())
+            .filter((seg) => seg && typeof seg === 'object')
             .map((seg) => ({...seg, text: String(seg.text || '')}))
         : []
 );
@@ -74,7 +77,7 @@ export const normalizeDisplaySegments = (value) => (
 export const pickTranscriptSegments = (source={}) => {
     for (const key of ['raw_segments', 'segments', 'cleaned_segments']) {
         const segments = normalizeTranscriptSegments(source?.[key]);
-        if (segments.length > 0) return segments;
+        if (segments.some((seg) => seg.text.trim())) return segments;
     }
     return [];
 };

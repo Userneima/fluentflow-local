@@ -173,14 +173,41 @@ const BilingualLine = memo(({index, seg, active, review, onSeek, registerNode}) 
 // unit of editing, saving, edit records and subtitles.
 
 // One sentence inside a paragraph, edited in place. Its text is put in the DOM
-// by hand and only while it is not being typed in, so a re-render never moves
-// the caret; Enter does not split it.
+// by hand, so a re-render never moves the caret; Enter does not split it, and
+// pasted lines join with spaces. While it is being typed in, the page hands
+// back what was typed (a keystroke or two behind) and that is left alone; any
+// other text for this sentence came from elsewhere (the version the service
+// holds, after a save was refused) and replaces what is shown, and the sentence
+// is left, so the old text cannot be typed on and saved over it.
 const EditableSegment = memo(({index, text, active, onEdit, onFocusSegment, registerNode}) => {
     const nodeRef = useRef(null);
+    const typedRef = useRef([]);
     useLayoutEffect(() => {
         const node = nodeRef.current;
-        if (node && document.activeElement !== node && node.textContent !== text) node.textContent = text;
+        if (!node || node.textContent === text) return;
+        if (document.activeElement === node) {
+            if (typedRef.current.includes(text)) return;
+            node.textContent = text;
+            node.blur();
+            return;
+        }
+        node.textContent = text;
     }, [text]);
+    const report = (node) => {
+        let value = node.textContent || '';
+        if (/[\r\n]/.test(value)) {
+            value = value.replace(/\s*[\r\n]+\s*/g, ' ');
+            node.textContent = value;
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            range.collapse(false);
+            const selection = window.getSelection?.();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+        }
+        typedRef.current = [...typedRef.current.slice(-19), value];
+        onEdit(index, value);
+    };
     return (
         <span
             ref={(node) => { nodeRef.current = node; registerNode(index, node); }}
@@ -190,10 +217,10 @@ const EditableSegment = memo(({index, text, active, onEdit, onFocusSegment, regi
             suppressContentEditableWarning
             spellCheck={false}
             data-transcript-segment="true"
-            onInput={(e) => onEdit(index, e.currentTarget.textContent || '')}
-            onFocus={() => onFocusSegment(index)}
+            onInput={(e) => report(e.currentTarget)}
+            onFocus={() => { typedRef.current = []; onFocusSegment(index); }}
             onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
-            className={`rounded-[4px] px-[1px] outline-none focus:bg-[#eef2ff] dark:focus:bg-white/[0.1] ${active ? 'bg-[#e3e9ff] dark:bg-white/[0.14]' : 'hover:bg-[#f3f2f6] dark:hover:bg-white/[0.06]'}`}
+            className={`rounded-[4px] px-[1px] outline-none empty:inline-block empty:min-w-[1em] empty:bg-[#f3f2f6] focus:bg-[#eef2ff] dark:focus:bg-white/[0.1] ${active ? 'bg-[#e3e9ff] dark:bg-white/[0.14]' : 'hover:bg-[#f3f2f6] dark:hover:bg-white/[0.06]'}`}
         />
     );
 });
@@ -382,6 +409,9 @@ const Editor = () => {
         ].join(':')
         : 'empty_media_source';
     const [editedSegments, setEditedSegments] = useState([]);
+    const editedSegmentsRef = useRef(editedSegments);
+    const transcriptComposingRef = useRef(false);
+    editedSegmentsRef.current = editedSegments;
     // The segments the provider last received. Edit records are diffed from
     // these, not from every keystroke.
     const [syncedSegments, setSyncedSegments] = useState([]);
@@ -531,7 +561,14 @@ const Editor = () => {
         const sourceSegments = pickTranscriptSegments(result);
         const baselineSourceSegments = pickTranscriptBaselineSegments(result);
         const sourceText = result.transcript_text || '';
-        setEditedSegments(sourceSegments.map((seg) => ({...seg})));
+        // After this page's own save the result holds the sentences just
+        // saved; the list on the page is kept as it is, so nothing under the
+        // caret is re-laid.
+        const shown = editedSegmentsRef.current;
+        const unchanged = shown.length === sourceSegments.length && sourceSegments.every((seg, i) => (
+            seg.text === shown[i].text && seg.start === shown[i].start && seg.end === shown[i].end && seg.speaker === shown[i].speaker
+        ));
+        if (!unchanged) setEditedSegments(sourceSegments.map((seg) => ({...seg})));
         setSyncedSegments(sourceSegments);
         setEditedTranscript(composeTranscriptText(sourceSegments, sourceText));
         setBaselineSegments((prev) => {
@@ -981,7 +1018,27 @@ const Editor = () => {
         reviewModeSeenRef.current = activeReviewMode;
         const {index, block} = reviewAnchorRef.current;
         const node = segmentRefs.current[index];
-        if (node) node.scrollIntoView({block});
+        if (!node) return undefined;
+        node.scrollIntoView({block});
+        // Rows off screen are laid out at a placeholder height; once the rows
+        // near the target are drawn at their real height the target moves.
+        // Measure again over the next frames and scroll it back into place.
+        const box = transcriptScrollRef.current;
+        let frame = 0;
+        let handle = 0;
+        const settle = () => {
+            if (!box || !node.isConnected) return;
+            const outer = box.getBoundingClientRect();
+            const rect = node.getBoundingClientRect();
+            const offset = block === 'center'
+                ? (rect.top + rect.height / 2) - (outer.top + outer.height / 2)
+                : rect.top - outer.top;
+            if (Math.abs(offset) > 1) box.scrollTop += offset;
+            frame += 1;
+            if (frame < 10) handle = requestAnimationFrame(settle);
+        };
+        handle = requestAnimationFrame(settle);
+        return () => cancelAnimationFrame(handle);
     }, [activeReviewMode]);
 
     // Only for a browser that cannot size the boxes with CSS: all of them in
@@ -1060,7 +1117,11 @@ const Editor = () => {
     useEffect(() => {
         if (!transcriptUnsaved) return;
         const seq = ++transcriptSaveSeqRef.current;
-        const timer = setTimeout(() => {
+        let timer = null;
+        const sync = () => {
+            // Half-typed pinyin is not the user's text yet: wait until the
+            // input method hands over the characters.
+            if (transcriptComposingRef.current) { timer = setTimeout(sync, 300); return; }
             const current = resultRef.current;
             // The page moved on to another result while this edit waited.
             if (!current || resultIdentity(current) !== editTargetRef.current) return;
@@ -1123,7 +1184,8 @@ const Editor = () => {
                     }
                     setTranscriptSaveStatus('failed');
                 });
-        }, 800);
+        };
+        timer = setTimeout(sync, 800);
         return () => clearTimeout(timer);
     }, [transcriptUnsaved, transcript, segments, baselineSegments, resultJobOptions, saveTranscriptEdit, setLastResult]);
 
@@ -1893,6 +1955,8 @@ const Editor = () => {
                             />
                             <div
                                 ref={transcriptScrollRef}
+                                onCompositionStart={() => { transcriptComposingRef.current = true; }}
+                                onCompositionEnd={() => { transcriptComposingRef.current = false; }}
                                 className={shouldShowVideoReview
                                     ? 'hide-scrollbar min-h-[10rem] flex-1 overflow-y-auto rounded-[18px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]'
                                     : 'hide-scrollbar min-h-0 flex-1 overflow-y-auto p-3'}
