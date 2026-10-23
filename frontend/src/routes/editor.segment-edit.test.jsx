@@ -74,10 +74,12 @@ describe('editing a transcript segment', () => {
 
     it('shows the keystroke at once, and shares and saves it only after a pause', async () => {
         render(<MemoryRouter><Editor/></MemoryRouter>);
-        const box = await screen.findByDisplayValue('hello world');
+        const box = await screen.findByRole('textbox', {name: '第 1 句'});
+        await waitFor(() => expect(box.textContent).toBe('hello world'));
 
-        fireEvent.change(box, {target: {value: 'hello worlds'}});
-        expect(box.value).toBe('hello worlds');
+        box.textContent = 'hello worlds';
+        fireEvent.input(box);
+        expect(box.textContent).toBe('hello worlds');
         // The keystroke stayed on this page.
         expect(setLastResult).not.toHaveBeenCalled();
         expect(saveTranscriptEdit).not.toHaveBeenCalled();
@@ -99,10 +101,10 @@ describe('editing a transcript segment', () => {
         expect(payload.edit_records[0]).toMatchObject({index: 0, before: 'hello world', after: 'hello worlds'});
     });
 
-    // Prototype behind ?transcript=paragraphs: the sentences sit inside
-    // paragraphs and each is still edited and saved on its own.
+    // The text view shows paragraphs; each sentence in one is still edited
+    // and saved on its own.
     it('edits a sentence inside a paragraph and saves it the same way', async () => {
-        render(<MemoryRouter initialEntries={['/editor?transcript=paragraphs']}><Editor/></MemoryRouter>);
+        render(<MemoryRouter initialEntries={['/editor']}><Editor/></MemoryRouter>);
         const box = await screen.findByRole('textbox', {name: '第 1 句'});
         await waitFor(() => expect(box.textContent).toBe('hello world'));
 

@@ -243,11 +243,13 @@ describe('the player', () => {
     });
 });
 
-// Switching text review and video review only changes the layout
-// (界面优化线二审查，2026-10-22): rebuilding the player stopped playback while
-// the page still showed it playing, and rebuilding the list lost the place.
+// Switching text review and video review keeps the player and the reader's
+// place (界面优化线二审查，2026-10-22): rebuilding the player stopped playback
+// while the page still showed it playing. Text review shows paragraphs and
+// video review one sentence per line (decision 6.35), so the list itself is
+// swapped; the sentence playing is brought into view in either.
 describe('switching between text review and video review', () => {
-    it('keeps the same player and the same transcript, and shows the sentence playing', async () => {
+    it('keeps the same player, and shows the sentence playing in either view', async () => {
         const recording = task('t1', {
             source_file_available: true,
             segments: Array.from({length: 30}, (_, i) => ({start: i * 2, end: i * 2 + 2, text: `第 ${i} 句`})),
@@ -258,7 +260,6 @@ describe('switching between text review and video review', () => {
         const {container} = mount('/editor', recording);
         await waitFor(() => expect(screen.getByRole('button', {name: '视频复查'}).disabled).toBe(false));
         const player = container.querySelector('video');
-        const firstLine = screen.getByDisplayValue('第 0 句');
         // Playing sentence 20.
         await act(async () => {
             player.dispatchEvent(new Event('play'));
@@ -269,12 +270,13 @@ describe('switching between text review and video review', () => {
         fireEvent.click(screen.getByRole('button', {name: '视频复查'}));
         expect(container.querySelector('video')).toBe(player);
         expect(player.controls).toBe(true);
-        expect(screen.getByDisplayValue('第 0 句')).toBe(firstLine);
+        expect(screen.getByDisplayValue('第 20 句')).toBeTruthy();
         expect(scrolled.at(-1)).toContain('00:40');
 
         fireEvent.click(screen.getByRole('button', {name: '文本校对'}));
         expect(container.querySelector('video')).toBe(player);
-        expect(screen.getByDisplayValue('第 0 句')).toBe(firstLine);
+        expect(screen.getByRole('textbox', {name: '第 21 句'}).textContent).toBe('第 20 句');
+        expect(scrolled.at(-1)).toBe('第 20 句');
     });
 });
 
@@ -291,8 +293,9 @@ describe('switching while nothing plays', () => {
         // 40 px apart, the list's top edge at 0.
         const original = Element.prototype.getBoundingClientRect;
         Element.prototype.getBoundingClientRect = function rect() {
-            const boxes = this.querySelectorAll?.('textarea') || [];
-            const match = boxes.length === 1 ? /第 (\d+) 句/.exec(boxes[0].value || '') : null;
+            // A sentence in the paragraph view is its own node.
+            const boxes = this.matches?.('[data-transcript-segment]') ? [this] : [];
+            const match = boxes.length === 1 ? /第 (\d+) 句/.exec(boxes[0].textContent || '') : null;
             if (match) {
                 const bottom = (Number(match[1]) - 12 + 1) * 40;
                 return {top: bottom - 40, bottom, left: 0, right: 0, width: 0, height: 40};

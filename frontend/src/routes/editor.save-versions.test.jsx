@@ -129,12 +129,14 @@ describe('typing again while the previous save is on its way', () => {
 
     it('saves the transcript against the version the previous save produced', async () => {
         mount();
-        const line = await screen.findByDisplayValue('first line here');
-        fireEvent.change(line, {target: {value: 'first line here, fixed'}});
+        const line = await screen.findByRole('textbox', {name: '第 1 句'});
+        await waitFor(() => expect(line.textContent).toBe('first line here'));
+        const type = (text) => { line.textContent = text; fireEvent.input(line); };
+        type('first line here, fixed');
         await waitFor(() => expect(transcriptSaves.length).toBe(1), {timeout: 3000});
         expect(transcriptSaves[0].payload.base_version).toBe('v7');
 
-        fireEvent.change(line, {target: {value: 'first line here, fixed again'}});
+        type('first line here, fixed again');
         await act(async () => { await new Promise((r) => setTimeout(r, 1200)); });
         await act(async () => { transcriptSaves[0].resolve({result: {transcript_version: 'v8', transcript_edited: true}}); });
 
@@ -185,8 +187,8 @@ describe('opening a copy kept in the browser', () => {
                 <Routes><Route path="/editor" element={<Harness initial={cached}/>}/></Routes>
             </MemoryRouter>,
         );
-        expect(await screen.findByDisplayValue('first line here')).toBeTruthy();
-        expect(screen.queryByDisplayValue('frist line here')).toBeNull();
+        const line = await screen.findByRole('textbox', {name: '第 1 句'});
+        await waitFor(() => expect(line.textContent).toBe('first line here'));
     });
 });
 

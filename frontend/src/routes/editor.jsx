@@ -105,21 +105,18 @@ const SentenceTime = memo(({seg, active, className, onSeek, children}) => (
     </button>
 ));
 
-const TranscriptLine = memo(({index, seg, active, review, onSeek, onEdit, onFocusLine, registerNode}) => (
+// One sentence per line, for video review next to the player.
+const TranscriptLine = memo(({index, seg, active, onSeek, onEdit, onFocusLine, registerNode}) => (
     <div
         ref={(node) => registerNode(index, node)}
         style={OFFSCREEN_SKIP}
-        className={review
-            ? `grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`
-            : `group grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 rounded-[16px] px-3 py-2.5 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.1]' : 'hover:bg-[#f8f7fb] dark:hover:bg-white/[0.06]'}`}
+        className={`grid grid-cols-[64px_minmax(0,1fr)] items-start gap-3 px-1 py-2 ${active ? 'bg-[#eef2ff] dark:bg-white/[0.08]' : 'hover:bg-white/70 dark:hover:bg-white/[0.04]'}`}
     >
         <SentenceTime
             seg={seg}
             active={active}
             onSeek={onSeek}
-            className={(on) => (review
-                ? `pt-[1px] text-left font-mono text-xs font-bold tabular-nums ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`
-                : `pt-[1px] text-left font-mono text-xs tabular-nums ${on ? 'font-bold text-primary' : 'text-[#8a8a8a] hover:text-primary dark:text-white/40'}`)}
+            className={(on) => `pt-[1px] text-left font-mono text-xs font-bold tabular-nums ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`}
         >
             {fmtTime(seg.start)}
         </SentenceTime>
@@ -130,9 +127,7 @@ const TranscriptLine = memo(({index, seg, active, review, onSeek, onEdit, onFocu
                 onChange={(e) => { if (!SIZES_ITSELF) autoSizeTextarea(e.target); onEdit(index, e.target.value); }}
                 onFocus={onFocusLine}
                 rows={1}
-                className={review
-                    ? 'min-h-[1.45rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-semibold leading-snug text-[#111111] [field-sizing:content] focus:ring-0 dark:text-white'
-                    : 'min-h-[1.75rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-medium leading-snug text-[#111111] [field-sizing:content] focus:ring-0 dark:text-white'}
+                className="min-h-[1.45rem] w-full resize-none overflow-hidden border-none bg-transparent p-0 text-sm font-semibold leading-snug text-[#111111] [field-sizing:content] focus:ring-0 dark:text-white"
             />
         </div>
     </div>
@@ -172,11 +167,10 @@ const BilingualLine = memo(({index, seg, active, review, onSeek, registerNode}) 
     </div>
 ));
 
-// Prototype (界面优化清单线二第 1、2 条), behind ?transcript=paragraphs: the
-// text view reads as paragraphs, a new one where the speaker changes or once
-// it is long enough (groupTranscriptParagraphs), the speaker named where a new
-// one takes over. Each recognised sentence stays the unit of editing, saving,
-// edit records and subtitles.
+// The text view reads as paragraphs (decision 6.35): a new one where the
+// speaker changes or once it is long enough (groupTranscriptParagraphs), the
+// speaker named where a new one takes over. Each recognised sentence stays the
+// unit of editing, saving, edit records and subtitles.
 
 // One sentence inside a paragraph, edited in place. Its text is put in the DOM
 // by hand and only while it is not being typed in, so a re-render never moves
@@ -314,7 +308,6 @@ const Editor = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const urlTaskId = searchParams.get('task') || '';
     const urlWantsCutReview = searchParams.get('review') === 'cut';
-    const paragraphsPrototype = searchParams.get('transcript') === 'paragraphs';
     const [urlTask, setUrlTask] = useState({id: '', state: 'idle'});
     const urlTaskIdRef = useRef(urlTaskId);
     urlTaskIdRef.current = urlTaskId;
@@ -803,8 +796,8 @@ const Editor = () => {
     );
     const displayTranscriptSegments = useMemo(() => pickDisplayTranscriptSegments(result, segments), [result, segments]);
     const transcriptParagraphs = useMemo(
-        () => (paragraphsPrototype ? groupTranscriptParagraphs(segments) : []),
-        [paragraphsPrototype, segments],
+        () => groupTranscriptParagraphs(segments),
+        [segments],
     );
     const bilingualTranscriptSegments = useMemo(
         () => displayTranscriptSegments.filter((seg) => String(seg.text_zh || '').trim()),
@@ -1907,7 +1900,7 @@ const Editor = () => {
                                 <div className={shouldShowVideoReview ? 'divide-y divide-[#e4e0e0] dark:divide-white/[0.08]' : 'space-y-1.5'}>
                             {visibleTranscriptView === 'bilingual' && bilingualTranscriptSegments.length > 0 ? bilingualTranscriptSegments.map((seg,i) => (
                                 <BilingualLine key={`bilingual-${i}`} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} review={shouldShowVideoReview} onSeek={seekRow} registerNode={registerRow}/>
-                            )) : segments.length > 0 && paragraphsPrototype && !shouldShowVideoReview ? transcriptParagraphs.map((paragraph) => (
+                            )) : segments.length > 0 && !shouldShowVideoReview ? transcriptParagraphs.map((paragraph) => (
                                 <TranscriptParagraph
                                     key={paragraph.indices[0]}
                                     paragraph={paragraph}
@@ -1919,7 +1912,7 @@ const Editor = () => {
                                     registerNode={registerRow}
                                 />
                             )) : segments.length > 0 ? segments.map((seg,i) => (
-                                <TranscriptLine key={i} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} review={shouldShowVideoReview} onSeek={seekRow} onEdit={editRow} onFocusLine={stopFollowing} registerNode={registerRow}/>
+                                <TranscriptLine key={i} index={i} seg={seg} active={i===activeSegmentIndex && !!mediaUrl} onSeek={seekRow} onEdit={editRow} onFocusLine={stopFollowing} registerNode={registerRow}/>
                                 )) : isTranscriptHydrationPending ? (
                                     <div className="flex min-h-[320px] items-center justify-center rounded-[16px] border border-dashed border-outline-variant bg-surface-container-low px-4 py-8 text-center">
                                         <div className="max-w-[28rem]">
