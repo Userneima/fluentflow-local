@@ -415,6 +415,9 @@ def test_a_feishu_side_version_is_not_restored(tmp_path, monkeypatch):
     task, md = _task(tmp_path)
     doc = FakeDoc()
     _in_feishu(task, doc, monkeypatch)
+    # A Feishu-side version is kept only when the document was edited there.
+    doc.edit("框架的话。", "框架的话，飞书里补的。")
+    feishu_sync.pull(task, modified_at=doc.modified, runner=doc)
     _web_edit(task, _result(task)["summary_markdown"].replace("开场的话。", "改过的开场。"))
     feishu_sync.push(task, runner=doc)
     feishu_version = next(v for v in note_versions.kept(md) if v.side == note_versions.FEISHU)

@@ -54,7 +54,7 @@ PROCESS_DIRNAME = "过程文件"
 # Said wherever the folder is named to the user, so an agent passes it on.
 MD_HINT = (
     "笔记的 md 版推荐用 Obsidian 打开，截图和格式都能直接显示。在 Obsidian 里改它，停下一分钟后会自动收回 FluentFlow，"
-    "PDF 跟着更新，被替换的那一版存在旁边的「笔记_上一版.md」，更早被替换的每一版都在「过程文件/历史版本」里。"
+    "PDF 跟着更新。每次被替换的版本都在「过程文件/历史版本」里，改了什么记在「过程文件/修改记录.md」。"
     "在 Obsidian 里粘贴的图片，网页和 PDF 里看不到。"
 )
 SHOTS_DIRNAME = "截图"
@@ -551,15 +551,6 @@ def _keep_beside(md: Path, text: str, label: str) -> Path:
     return copy
 
 
-PREVIOUS_LABEL = "上一版"
-
-
-def _keep_previous(md: Path, text: str) -> Path:
-    copy = md.with_name(f"{md.stem}_{PREVIOUS_LABEL}.md")
-    copy.write_text(text, encoding="utf-8")
-    return copy
-
-
 def _timestamp(raw: Any) -> float:
     try:
         return datetime.fromisoformat(str(raw)).timestamp() if raw else 0.0
@@ -606,11 +597,9 @@ def _take_in_edits(
             return result, note, happened
         if note_moved:
             happened["copy"] = str(_keep_beside(md, would_write, "FluentFlow版本"))
-        # The version the edit replaces, one copy kept and overwritten each
-        # time: an editor holding a stale copy (open in Obsidian while the
-        # task's note changed) can save it over a newer note, and this is
-        # where that newer note is found again.
-        happened["previous"] = str(_keep_previous(md, would_write))
+        # The version the edit replaces: an editor holding a stale copy (open
+        # in Obsidian while the task's note changed) can save it over a newer
+        # note, and this is where that newer note is found again.
         note_versions.keep(md, would_write, note_versions.TASK, note_versions.OBSIDIAN)
         stored = _stored_form(task_id, text, prefixes).strip()
         after = _with_note(task_id, result, stored)

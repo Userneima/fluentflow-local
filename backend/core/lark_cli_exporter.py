@@ -645,11 +645,16 @@ def _snapshot(runner: Runner, bin_path: str, doc_id: str, sync: dict[str, Any]) 
         )
         document = shown.get("document") if isinstance(shown.get("document"), dict) else shown
         sync["feishu_sections"] = feishu_note.feishu_section_records(str(document.get("content") or ""))
+        # ``feishu_sections`` moves on when an edit made in Feishu is pulled
+        # in; this stays as the push left it, for telling whether the document
+        # was edited in Feishu since (``feishu_sync.keeper``).
+        sync["pushed_sections"] = sync["feishu_sections"]
         if document.get("revision_id") is not None:
             sync["revision_id"] = document.get("revision_id")
     except LarkCliError as exc:
         logger.warning("lark-cli could not read %s back after the push: %s", doc_id, exc)
         sync["feishu_sections"] = None
+        sync["pushed_sections"] = None
     modified = modified_times(runner, bin_path, [doc_id]).get(doc_id)
     if modified is not None:
         sync["feishu_modified_at"] = modified

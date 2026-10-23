@@ -317,7 +317,7 @@ def test_a_note_kept_in_feishu_is_pushed_when_it_changes_and_others_are_not(monk
     assert scheduled == [synced]
 
 
-def test_a_push_updates_the_document_records_it_and_keeps_the_feishu_version(monkeypatch, tmp_path):
+def test_a_push_updates_the_document_and_records_it(monkeypatch, tmp_path):
     doc = FakeDoc()
     task_id = _task(_first(doc))
     monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
@@ -338,8 +338,9 @@ def test_a_push_updates_the_document_records_it_and_keeps_the_feishu_version(mon
     assert stored["lark_response"]["sync"]["revision_id"] == doc.revision
     assert stored["lark_response"]["sync"]["note_digest"] == cli.note_digest(stored["summary_markdown"])
     assert any("新结尾" in t for t in doc.texts())
-    kept = note_versions.versions(md)
-    assert kept and note_versions.FEISHU in kept[-1].name and "结尾的话" in kept[-1].read_text(encoding="utf-8")
+    # Nobody edited the document in Feishu: it is the note as pushed, and no
+    # Feishu-side copy is kept (tests/test_note_changes.py has both cases).
+    assert not [path for path in note_versions.versions(md) if note_versions.FEISHU in path.name]
     assert feishu_sync.push(task_id) is None, "nothing left to push"
 
 

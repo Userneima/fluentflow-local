@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.core import note_versions
+from backend.core import note_changes, note_versions
 from backend.core.job_store import get_job, save_result_changes
 from backend.core.result_schema import content_versions
 
@@ -101,6 +101,7 @@ def list_versions(task_id: str, *, client_id: str | None = None) -> dict[str, An
         "current": current,
         "versions": list(reversed(rows)),
         "kept_in": str(note_versions.folder_for(md)),
+        "change_log": str(note_versions.folder_for(md).parent / note_changes.FILENAME),
     }
 
 

@@ -319,8 +319,9 @@ async def lifespan(app: FastAPI):
     if stranded_notes:
         logger.info("Startup recovery cleared %s stranded visual notes", stranded_notes)
     # An md note edited in Obsidian comes back into its task; a note kept in
-    # Feishu follows it there (the import registers its listener).
-    from backend.core import feishu_sync, output_folder
+    # Feishu follows it there; each change of a note is written in its change
+    # log (each import registers its listener).
+    from backend.core import feishu_sync, note_changes, output_folder  # noqa: F401
 
     feishu_sync.start_watch()
 

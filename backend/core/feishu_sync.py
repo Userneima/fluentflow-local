@@ -19,7 +19,8 @@ From then on:
   side's version; a chapter changed on both goes to the later change, and the
   other version of the whole note is kept beside the md. A push first brings
   in edits made in Feishu since the last one. Before either side is replaced, the version replaced is
-  kept among the note's versions (``note_versions``).
+  kept among the note's versions (``note_versions``); the Feishu side only
+  when it was edited in Feishu since the last push.
 - A document deleted in Feishu, or no longer open to the user, stops the
   syncing of that note with the reason on the task; nothing is recreated.
 
@@ -70,13 +71,42 @@ def _note_md(task_id: str, result: dict[str, Any]) -> Path:
     return note_versions.md_for(task_id, result)
 
 
+def _as_pushed(result: dict[str, Any] | None, text: str) -> bool:
+    """Whether the Feishu document still reads as it did after the last push,
+    chapter by chapter in the tidied form recorded then: Feishu rewrites some
+    of what is pushed (escapes, callouts, pictures), so the words are not
+    compared as they stand. An edit made in Feishu and pulled in since still
+    counts as an edit: the push about to run writes over it."""
+    response = result.get("lark_response") if isinstance(result, dict) else None
+    sync = response.get("sync") if isinstance(response, dict) else None
+    if not isinstance(sync, dict):
+        return False
+    # Synced before 2026-10-23: only the chapters as last seen were recorded.
+    recorded = sync.get("pushed_sections") if "pushed_sections" in sync else sync.get("feishu_sections")
+    if not isinstance(recorded, list):
+        return False
+    now = feishu_note.feishu_section_records(text)
+    return [(r.get("key"), r.get("digest")) for r in recorded] == [(r["key"], r["digest"]) for r in now]
+
+
 def keeper(task_id: str, result: dict[str, Any] | None, by: str | None = None) -> Callable[[str], None]:
     """What saves the Feishu document's markdown before an update replaces it.
-    ``by`` is what replaces it; by default, whatever wrote the note pushed."""
+    ``by`` is what replaces it; by default, whatever wrote the note pushed.
+
+    A document nobody edited in Feishu since the last push is not saved when
+    the note has an output folder: it is the note as it was pushed, which the
+    folder keeps as the md's version when the md is next rewritten, and a
+    second copy in Feishu's format is one more near-duplicate (owner,
+    2026-10-23). A note with no folder has no md whose versions are kept, so
+    its Feishu copy is still saved."""
     md = _note_md(task_id, result if isinstance(result, dict) else {})
     by = by or note_versions.changed_by(result)
+    folder = (result or {}).get("output_folder") if isinstance(result, dict) else None
+    has_folder = isinstance(folder, dict) and bool(folder.get("md_path"))
 
     def keep(text: str) -> None:
+        if has_folder and _as_pushed(result, text):
+            return
         note_versions.keep(md, text, note_versions.FEISHU, by)
 
     return keep

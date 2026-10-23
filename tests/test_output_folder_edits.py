@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.core import job_store, note_pdf, output_folder
+from backend.core import job_store, note_pdf, note_versions, output_folder
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.storage_paths import _artifact_storage_dir
 
@@ -167,7 +167,10 @@ def test_a_saved_md_is_noticed_once_it_has_been_left_alone(tmp_path, pdfs):
     assert task in output_folder.edited_notes(now=saved_at + output_folder.EDIT_SETTLE_SECONDS + 1)
 
 
-def test_the_version_an_edit_replaces_is_kept_as_the_previous_one(tmp_path, pdfs):
+def test_the_version_an_edit_replaces_is_kept_among_the_versions_and_no_previous_copy_sits_beside_the_md(tmp_path, pdfs):
+    """Owner, 2026-10-23 (decision 6.36): the 笔记_上一版.md beside the md made
+    the folder look as if it held two notes; every replaced version is in
+    过程文件/历史版本 instead."""
     task, md = _task(tmp_path, NOTE)
     output_folder.sync(task)
     _edit(md, md.read_text(encoding="utf-8") + "\n第一次改。\n")
@@ -176,9 +179,10 @@ def test_the_version_an_edit_replaces_is_kept_as_the_previous_one(tmp_path, pdfs
 
     output_folder.sync(task)
 
-    previous = md.with_name("访谈_笔记_上一版.md")
-    assert "第一次改" in previous.read_text(encoding="utf-8") and "第二次改" not in previous.read_text(encoding="utf-8")
-    assert len(list(md.parent.glob("访谈_笔记_上一版*.md"))) == 1, "one copy, overwritten each time"
+    assert not list(md.parent.glob("*上一版*.md"))
+    task_side = [v for v in note_versions.kept(md) if v.side == note_versions.TASK]
+    assert "第一次改" in task_side[-1].path.read_text(encoding="utf-8")
+    assert "第二次改" not in task_side[-1].path.read_text(encoding="utf-8")
 
 
 def test_a_stale_copy_saved_over_a_newer_note_can_be_found_again(tmp_path, pdfs):
@@ -195,7 +199,8 @@ def test_a_stale_copy_saved_over_a_newer_note_can_be_found_again(tmp_path, pdfs)
     _edit(md, stale + "\n用户在旧副本里打的字。\n", at=time.time() + 30)
     output_folder.sync(task)
 
-    assert "agent 写的回答" in md.with_name("访谈_笔记_上一版.md").read_text(encoding="utf-8")
+    newest = note_versions.kept(md)[-1]
+    assert newest.side == note_versions.TASK and "agent 写的回答" in newest.path.read_text(encoding="utf-8")
 
 
 def test_a_burst_of_saves_refreshes_the_folder_once_after_it_stops(monkeypatch):
