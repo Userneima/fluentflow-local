@@ -1,10 +1,10 @@
 import {useEffect, useRef, useState} from 'react';
-import {Annotation, EditorState} from '@codemirror/state';
+import {EditorState} from '@codemirror/state';
 import {EditorView, keymap} from '@codemirror/view';
 import {defaultKeymap, history, historyKeymap, indentWithTab, redo, redoDepth, undo, undoDepth} from '@codemirror/commands';
 import {markdown, markdownKeymap} from '@codemirror/lang-markdown';
 import SvgIcon from './SvgIcon.jsx';
-import {noteLivePreview} from '../lib/noteLivePreview.js';
+import {noteLivePreview, syncFocus} from '../lib/noteLivePreview.js';
 import {lineStyleOf, setLineStyle, toggleInline, toggleList} from '../lib/noteEditorCommands.js';
 
 // The note editor (decision 5.34): the note's markdown source edited in place,
@@ -16,9 +16,6 @@ import {lineStyleOf, setLineStyle, toggleInline, toggleList} from '../lib/noteEd
 // (onChange). What it takes: a newer note handed down by the page (an Obsidian
 // edit taken in, a Feishu pull, a poll) replaces the text and is not reported
 // back, so it is never saved again as if the user had typed it.
-
-// Marks a transaction that brings in the page's copy rather than a user edit.
-const fromPage = Annotation.define();
 
 const calloutColors = {
     question: '236, 117, 0',
@@ -126,52 +123,90 @@ const ToolbarButton = ({className = 'inline-flex', disabled = false, icon, label
     </button>
 );
 
-const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, taskId = '', apiBase = ''}) => {
+// A note written with Windows line ends keeps them; any other note uses \n.
+const lineSeparatorFor = (text) => (text.includes('\r\n') ? '\r\n' : undefined);
+
+const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChange, taskId = '', apiBase = ''}) => {
     const hostRef = useRef(null);
     const viewRef = useRef(null);
     const onChangeRef = useRef(onChange);
     onChangeRef.current = onChange;
+    const onEditingChangeRef = useRef(onEditingChange);
+    onEditingChangeRef.current = onEditingChange;
     // The texts this editor reported recently. The page hands them back as
     // `markdown`, possibly a keystroke behind; an echo must not be applied
     // over newer typing.
     const reportedRef = useRef([]);
+    // A table cell being edited holds its text until it is left; a newer copy
+    // from the page waits for that, so the cell is not taken away mid-typing.
+    const cellOpenRef = useRef(false);
+    const pendingSourceRef = useRef(null);
+    const createStateRef = useRef(null);
     const [toolbar, setToolbar] = useState({style: 'p', canUndo: false, canRedo: false});
+    const [cellOpen, setCellOpen] = useState(false);
+
+    const toolbarFor = (state) => ({
+        style: lineStyleOf(state),
+        canUndo: undoDepth(state) > 0,
+        canRedo: redoDepth(state) > 0,
+    });
+
+    // Take the page's copy as a fresh start: undo cannot step back into the
+    // text it replaced, which would save the old note over the newer one.
+    const takePageCopy = (view, text) => {
+        const head = Math.min(view.state.selection.main.head, text.length);
+        view.setState(createStateRef.current(text, head));
+        syncFocus(view);
+        reportedRef.current = [];
+        setToolbar(toolbarFor(view.state));
+    };
 
     useEffect(() => {
-        const view = new EditorView({
-            parent: hostRef.current,
-            state: EditorState.create({
-                doc: source,
-                extensions: [
-                    history(),
-                    markdown(),
-                    keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
-                    EditorView.lineWrapping,
-                    EditorView.contentAttributes.of({
-                        'aria-label': lang === 'zh' ? '笔记正文' : 'Note body',
-                        spellcheck: 'false',
-                    }),
-                    EditorView.updateListener.of((update) => {
-                        if (update.docChanged && !update.transactions.some((tr) => tr.annotation(fromPage))) {
-                            const text = update.state.doc.toString();
-                            reportedRef.current = [...reportedRef.current.slice(-19), text];
-                            onChangeRef.current?.(text);
-                        }
-                        if (update.docChanged || update.selectionSet) {
-                            setToolbar({
-                                style: lineStyleOf(update.state),
-                                canUndo: undoDepth(update.state) > 0,
-                                canRedo: redoDepth(update.state) > 0,
-                            });
-                        }
-                    }),
-                    editorTheme,
-                    noteLivePreview({taskId, apiBase}),
-                ],
+        const extensions = (text) => [
+            ...(lineSeparatorFor(text) ? [EditorState.lineSeparator.of(lineSeparatorFor(text))] : []),
+            history(),
+            markdown(),
+            keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+            EditorView.lineWrapping,
+            EditorView.contentAttributes.of({
+                'aria-label': lang === 'zh' ? '笔记正文' : 'Note body',
+                spellcheck: 'false',
             }),
-        });
+            EditorView.updateListener.of((update) => {
+                if (update.docChanged) {
+                    // The user's edit is made on the text shown; a newer copy
+                    // held back for an open cell is the page's to sort out
+                    // (its save names the version this text came from).
+                    pendingSourceRef.current = null;
+                    const text = update.state.sliceDoc();
+                    reportedRef.current = [...reportedRef.current.slice(-19), text];
+                    onChangeRef.current?.(text);
+                }
+                if (update.docChanged || update.selectionSet) setToolbar(toolbarFor(update.state));
+            }),
+            editorTheme,
+            noteLivePreview({
+                taskId,
+                apiBase,
+                onCellEditing: (open) => {
+                    cellOpenRef.current = open;
+                    setCellOpen(open);
+                    onEditingChangeRef.current?.(open);
+                    const view = viewRef.current;
+                    const pending = pendingSourceRef.current;
+                    if (open || !view || pending == null) return;
+                    pendingSourceRef.current = null;
+                    if (!reportedRef.current.includes(pending) && view.state.sliceDoc() !== pending) takePageCopy(view, pending);
+                },
+            }),
+        ];
+        createStateRef.current = (text, head = 0) => EditorState.create({doc: text, selection: {anchor: head}, extensions: extensions(text)});
+        const view = new EditorView({parent: hostRef.current, state: createStateRef.current(source)});
         viewRef.current = view;
-        return () => view.destroy();
+        return () => {
+            if (cellOpenRef.current) onEditingChangeRef.current?.(false);
+            view.destroy();
+        };
         // Built once per note (the page keys this component by task).
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -179,17 +214,13 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, taskId = '', 
     useEffect(() => {
         const view = viewRef.current;
         if (!view || reportedRef.current.includes(source)) return;
-        const current = view.state.doc.toString();
-        if (current === source) return;
-        // A newer copy from the page: take it whole, keep the cursor where it
-        // can still be, and do not report it as an edit.
-        const head = Math.min(view.state.selection.main.head, source.length);
-        view.dispatch({
-            changes: {from: 0, to: current.length, insert: source},
-            selection: {anchor: head},
-            annotations: [fromPage.of(true)],
-        });
-        reportedRef.current = [];
+        if (cellOpenRef.current) {
+            pendingSourceRef.current = source;
+            return;
+        }
+        if (view.state.sliceDoc() === source) return;
+        takePageCopy(view, source);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [source]);
 
     const run = (command) => { const view = viewRef.current; if (view) command(view); };
@@ -205,6 +236,7 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, taskId = '', 
                     id="note-line-style"
                     value={['h2', 'h3', 'h4'].includes(toolbar.style) ? toolbar.style : 'p'}
                     aria-label={labels.style}
+                    disabled={cellOpen}
                     onChange={(event) => run((view) => setLineStyle(view, event.target.value))}
                     className="h-8 w-[7.25rem] rounded-[8px] border border-outline-variant bg-surface-container-lowest py-0 pl-2 pr-7 text-[13px] leading-5 font-bold text-on-surface-variant outline-none transition focus:border-primary/60 focus:ring-2 focus:ring-primary/15"
                 >
@@ -214,13 +246,13 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, taskId = '', 
                     <option value="h4">{labels.heading3}</option>
                 </select>
                 <span className="h-5 w-px bg-outline-variant" aria-hidden="true"/>
-                <ToolbarButton icon="format_bold" label={labels.bold} onClick={() => run((view) => toggleInline(view, '**'))}/>
-                <ToolbarButton icon="format_italic" label={labels.italic} onClick={() => run((view) => toggleInline(view, '*'))}/>
-                <ToolbarButton icon="format_list_bulleted" label={labels.bulletList} onClick={() => run((view) => toggleList(view, 'bullet'))}/>
-                <ToolbarButton icon="format_list_numbered" label={labels.orderedList} onClick={() => run((view) => toggleList(view, 'ordered'))}/>
+                <ToolbarButton disabled={cellOpen} icon="format_bold" label={labels.bold} onClick={() => run((view) => toggleInline(view, '**'))}/>
+                <ToolbarButton disabled={cellOpen} icon="format_italic" label={labels.italic} onClick={() => run((view) => toggleInline(view, '*'))}/>
+                <ToolbarButton disabled={cellOpen} icon="format_list_bulleted" label={labels.bulletList} onClick={() => run((view) => toggleList(view, 'bullet'))}/>
+                <ToolbarButton disabled={cellOpen} icon="format_list_numbered" label={labels.orderedList} onClick={() => run((view) => toggleList(view, 'ordered'))}/>
                 {/* A narrow pane keeps the formatting buttons on one row; undo and redo stay on Ctrl+Z and Ctrl+Shift+Z there. */}
-                <ToolbarButton className="hidden @[25rem]:inline-flex" disabled={!toolbar.canUndo} icon="undo" label={labels.undo} onClick={() => run((view) => { undo(view); view.focus(); })}/>
-                <ToolbarButton className="hidden @[25rem]:inline-flex" disabled={!toolbar.canRedo} icon="redo" label={labels.redo} onClick={() => run((view) => { redo(view); view.focus(); })}/>
+                <ToolbarButton className="hidden @[25rem]:inline-flex" disabled={cellOpen || !toolbar.canUndo} icon="undo" label={labels.undo} onClick={() => run((view) => { undo(view); view.focus(); })}/>
+                <ToolbarButton className="hidden @[25rem]:inline-flex" disabled={cellOpen || !toolbar.canRedo} icon="redo" label={labels.redo} onClick={() => run((view) => { redo(view); view.focus(); })}/>
             </div>
             <div ref={hostRef} data-testid="note-editor" className="min-h-0 flex-1"/>
         </div>

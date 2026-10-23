@@ -320,11 +320,12 @@ const editingTableField = StateField.define({
 });
 
 class TableWidget extends WidgetType {
-    constructor(rows, from, quote) {
+    constructor(rows, from, quote, context = {}) {
         super();
         this.rows = rows;
         this.from = from;
         this.quote = quote;
+        this.context = context;
     }
 
     eq(other) {
@@ -372,6 +373,7 @@ class TableWidget extends WidgetType {
                 caretToEnd(cell);
                 justOpened = true;
                 view.dispatch({effects: setEditingTable.of(this.from)});
+                this.context.onCellEditing?.(true);
             });
             // The click that opened the cell would put the caret where it
             // landed in the formatted text, which is somewhere else in the source.
@@ -381,22 +383,44 @@ class TableWidget extends WidgetType {
                 caretToEnd(cell);
             });
             cell.addEventListener('keydown', (event) => {
+                // Enter while an input method is composing picks a candidate.
+                if (event.isComposing || event.keyCode === 229) return;
                 if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); cell.blur(); }
                 if (event.key === 'Escape') { event.preventDefault(); cell.textContent = text; cell.blur(); }
             });
             cell.addEventListener('blur', () => {
                 const next = cellSource(cell.textContent);
                 cell.innerHTML = renderInlineHtml(text);
-                const effects = setEditingTable.of(null);
-                if (next === cellSource(text)) { view.dispatch({effects}); return; }
-                const line = view.state.doc.line(view.state.doc.lineAt(this.from).number + rowLine(r));
-                const range = tableCellRange(line.text, c);
-                if (!range) { view.dispatch({effects}); return; }
-                // An empty cell gets a space on each side, as a typed one would.
-                const insert = range.empty && range.end > range.start ? ` ${next} ` : next;
-                const from = range.empty ? line.from + range.start : line.from + range.from;
-                const to = range.empty ? line.from + range.end : line.from + range.to;
-                view.dispatch({changes: {from, to, insert}, effects, userEvent: 'input.table'});
+                // The table is found where it is now: the note may have
+                // changed above it while the cell was open.
+                const commit = () => {
+                    const tableFrom = view.state.field(editingTableField, false);
+                    const effects = setEditingTable.of(null);
+                    const range = next === cellSource(text) || tableFrom == null ? null : (() => {
+                        const line = view.state.doc.line(view.state.doc.lineAt(tableFrom).number + rowLine(r));
+                        const found = tableCellRange(line.text, c);
+                        return found && {line, found};
+                    })();
+                    if (!range) {
+                        view.dispatch({effects});
+                    } else {
+                        const {line, found} = range;
+                        // An empty cell gets a space on each side, as a typed one would.
+                        const insert = found.empty && found.end > found.start ? ` ${next} ` : next;
+                        const from = found.empty ? line.from + found.start : line.from + found.from;
+                        const to = found.empty ? line.from + found.end : line.from + found.to;
+                        view.dispatch({changes: {from, to, insert}, effects, userEvent: 'input.table'});
+                    }
+                    this.context.onCellEditing?.(false);
+                };
+                // A cell taken off the page during an update blurs inside that
+                // update, where the editor cannot take another change yet.
+                try {
+                    commit();
+                } catch (error) {
+                    if (!/update is in progress/i.test(String(error?.message))) throw error;
+                    setTimeout(commit, 0);
+                }
             });
             return cell;
         };
@@ -602,7 +626,7 @@ const buildDecorations = (state, focused, context) => {
                     endsHere: meta.quote.block.end === table.end,
                 } : null;
                 out.push(Decoration.replace({
-                    widget: new TableWidget(table.rows, line.from, quote),
+                    widget: new TableWidget(table.rows, line.from, quote, context),
                     block: true,
                 }).range(line.from, doc.line(table.end + 1).to));
             }
@@ -696,6 +720,12 @@ const focusField = StateField.define({
         return value;
     },
 });
+
+// A state made fresh (the page's newer copy) starts unfocused; tell it
+// whether the editor has the focus, so the cursor's line shows its source.
+export const syncFocus = (view) => {
+    if (view.hasFocus) view.dispatch({effects: setFocused.of(true)});
+};
 
 export const noteLivePreview = (context = {}) => {
     const decorations = StateField.define({

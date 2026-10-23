@@ -4,6 +4,15 @@
 
 const HEADING_PREFIX = /^(#{1,6})\s+/;
 const LIST_PREFIX = /^(\s*)([-*+]|\d+[.)])\s+/;
+// The quote marks of a quote or callout line, any depth: markers go after them.
+const QUOTE_PREFIX = /^(?:\s*>\s?)*/;
+const TABLE_ROW = /^\s*\|/;
+
+// Where a line's own text starts, past its quote marks.
+const bodyOf = (line) => {
+    const quote = line.text.match(QUOTE_PREFIX)[0];
+    return {from: line.from + quote.length, text: line.text.slice(quote.length)};
+};
 
 const selectedLines = (state) => {
     const lines = [];
@@ -22,7 +31,7 @@ const selectedLines = (state) => {
 
 // 'p', or 'h2' / 'h3' / 'h4' for the line the cursor is on.
 export const lineStyleOf = (state) => {
-    const match = state.doc.lineAt(state.selection.main.head).text.match(HEADING_PREFIX);
+    const match = bodyOf(state.doc.lineAt(state.selection.main.head)).text.match(HEADING_PREFIX);
     return match ? `h${match[1].length}` : 'p';
 };
 
@@ -31,11 +40,14 @@ export const setLineStyle = (view, style) => {
     const level = style === 'p' ? 0 : Number(String(style).slice(1)) || 0;
     const prefix = level ? `${'#'.repeat(level)} ` : '';
     const changes = selectedLines(view.state).flatMap((line) => {
-        const current = line.text.match(HEADING_PREFIX);
-        const from = line.from;
-        const to = line.from + (current ? current[0].length : 0);
-        if (line.text.slice(0, to - from) === prefix) return [];
-        if (!line.text.trim() && !prefix) return [];
+        const body = bodyOf(line);
+        // A callout's title line and a table row are not headings.
+        if (TABLE_ROW.test(body.text) || /^\[!/.test(body.text)) return [];
+        const current = body.text.match(HEADING_PREFIX);
+        const from = body.from;
+        const to = body.from + (current ? current[0].length : 0);
+        if (body.text.slice(0, to - from) === prefix) return [];
+        if (!body.text.trim() && !prefix) return [];
         return [{from, to, insert: prefix}];
     });
     if (changes.length) view.dispatch({changes, userEvent: 'input.format'});
@@ -75,19 +87,22 @@ export const toggleInline = (view, mark) => {
 // Make the selected lines a bullet or numbered list, or take the marker off
 // when every one of them already is that kind of list.
 export const toggleList = (view, kind) => {
-    const lines = selectedLines(view.state).filter((line) => line.text.trim());
+    // A table row or a callout's title line cannot become a list item.
+    const lines = selectedLines(view.state)
+        .map((line) => ({line, body: bodyOf(line)}))
+        .filter(({body}) => body.text.trim() && !TABLE_ROW.test(body.text) && !/^\[!/.test(body.text));
     if (!lines.length) { view.focus(); return; }
     const isKind = (text) => {
         const match = text.match(LIST_PREFIX);
         if (!match) return false;
         return kind === 'bullet' ? /^[-*+]$/.test(match[2]) : /^\d+[.)]$/.test(match[2]);
     };
-    const remove = lines.every((line) => isKind(line.text));
-    const changes = lines.map((line, n) => {
-        const match = line.text.match(LIST_PREFIX);
-        const indent = match ? match[1] : (line.text.match(/^\s*/) || [''])[0];
-        const from = line.from;
-        const to = line.from + (match ? match[0].length : indent.length);
+    const remove = lines.every(({body}) => isKind(body.text));
+    const changes = lines.map(({body}, n) => {
+        const match = body.text.match(LIST_PREFIX);
+        const indent = match ? match[1] : (body.text.match(/^\s*/) || [''])[0];
+        const from = body.from;
+        const to = body.from + (match ? match[0].length : indent.length);
         if (remove) return {from, to, insert: indent};
         return {from, to, insert: `${indent}${kind === 'bullet' ? '- ' : `${n + 1}. `}`};
     });

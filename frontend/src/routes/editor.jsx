@@ -334,6 +334,19 @@ const Editor = () => {
     const [transcriptReviewMode, setTranscriptReviewMode] = useState('text');
     const [transcriptSaveStatus, setTranscriptSaveStatus] = useState('idle');
     const [summaryDraft, setSummaryDraft] = useState('');
+    // A table cell open in the note editor holds typing the page has not been
+    // told about yet. Like an unsaved edit, it makes a newer copy of the note
+    // wait: the poll skips a tick, and loading the latest note after a refused
+    // save waits until the cell is left.
+    const noteCellOpenRef = useRef(false);
+    const deferredNoteReloadRef = useRef(null);
+    const handleNoteEditingChange = useCallback((open) => {
+        noteCellOpenRef.current = open;
+        const reload = deferredNoteReloadRef.current;
+        if (open || !reload) return;
+        deferredNoteReloadRef.current = null;
+        reload();
+    }, []);
     const [summaryUnsaved, setSummaryUnsaved] = useState(false);
     const [summarySaveStatus, setSummarySaveStatus] = useState('idle');
     const [hydratingResult, setHydratingResult] = useState(false);
@@ -1081,7 +1094,9 @@ const Editor = () => {
                 .catch((err) => {
                     if (seq !== summarySaveSeqRef.current) return;
                     if (err?.stale) {
-                        reloadAfterStaleSave(result.task_id, err.message, () => setSummaryUnsaved(false));
+                        const reload = () => reloadAfterStaleSave(result.task_id, err.message, () => setSummaryUnsaved(false));
+                        if (noteCellOpenRef.current) deferredNoteReloadRef.current = reload;
+                        else reload();
                         return;
                     }
                     setSummarySaveStatus('failed');
@@ -1216,7 +1231,7 @@ const Editor = () => {
             if (!settled) return;
             // A note typed here and not yet saved is the user's; wait for the save
             // and take the server's copy on a later tick.
-            if (summaryUnsavedRef.current) return;
+            if (summaryUnsavedRef.current || noteCellOpenRef.current) return;
             setLastResult((prev) => (prev?.task_id === taskId ? mergeNoteFields(prev, fresh) : prev));
             if (!watch && autoExportPending(job)) {
                 // Keep this timer: the page now waits for the export instead.
@@ -1956,6 +1971,7 @@ const Editor = () => {
                                             lang={lang}
                                             markdown={summaryMarkdownForEditor}
                                             onChange={handleSummaryChange}
+                                            onEditingChange={handleNoteEditingChange}
                                             taskId={result?.task_id || ''}
                                             apiBase={API_BASE}
                                         />

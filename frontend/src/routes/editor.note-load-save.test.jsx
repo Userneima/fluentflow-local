@@ -8,6 +8,11 @@
 //     saved: not on load, not when the full task arrives, not on a poll, not
 //     when another task is opened.
 //   - Once the user types in the note, it is saved as usual.
+//   - A newer note taken in from elsewhere cannot be undone back to the older
+//     text (that would save the old note over the newer one).
+//   - A save refused because the note changed elsewhere brings the newer note
+//     in, but not while a table cell is being typed in: it waits until the
+//     cell is left, and then the newer note and a notice come.
 // The real note editor is mounted, since a mocked one cannot show it emitting
 // a change by itself.
 
@@ -16,12 +21,14 @@ import {act, cleanup, fireEvent, render, waitFor} from '@testing-library/react';
 import {useState} from 'react';
 import {MemoryRouter, Route, Routes} from 'react-router-dom';
 import {EditorView} from '@codemirror/view';
+import {undo} from '@codemirror/commands';
 
 let runtimeConfig = {allowedSttProviders: ['local'], defaultSttProvider: 'local', limits: {}, writesItsOwnNote: true};
 let jobs = {};
 let saves = [];
 let setResultFromTest = null;
 let releaseFullTask = null;
+let refuseSaves = 0;
 
 vi.mock('../app/AppContext.jsx', async () => {
     const React = await vi.importActual('react');
@@ -49,7 +56,14 @@ vi.mock('../app/shared.jsx', async () => {
                 answer();
             }),
             saveTranscriptEdit: async () => ({}),
-            saveSummaryEdit: async (taskId, payload) => { saves.push({taskId, ...payload}); return {}; },
+            saveSummaryEdit: async (taskId, payload) => {
+                saves.push({taskId, ...payload});
+                if (refuseSaves > 0) {
+                    refuseSaves -= 1;
+                    throw Object.assign(new Error('笔记在别处被改过，已换成最新的版本。'), {stale: true, status: 409});
+                }
+                return {};
+            },
             getCredentialsStatus: async () => ({visual_note_available: true}),
             getVisualNoteAvailability: async () => ({available: true, reason: null}),
         }),
@@ -144,6 +158,7 @@ beforeEach(() => {
     jobs = {t1: {task_id: 't1', status: 'completed', result: task()}};
     saves = [];
     releaseFullTask = null;
+    refuseSaves = 0;
     URL.createObjectURL = () => 'blob:x';
     URL.revokeObjectURL = () => {};
     globalThis.fetch = vi.fn(async () => new Response('x', {status: 206, headers: {'content-type': 'video/mp4'}}));
@@ -227,5 +242,48 @@ describe('the user editing the note', () => {
         expect(saves[0].summary_markdown).toMatch(/^## /m);
         expect(saves[0].summary_markdown.length).toBeGreaterThan(FULL_NOTE.length - 50);
         expect(saves[0].base_version).toBe(7);
+    });
+});
+
+describe('a newer note and the user\'s own edits', () => {
+    it('cannot undo a newer note back to the older one', async () => {
+        mount('/editor', task());
+        await waitFor(() => expect(noteBox()).toBeTruthy());
+        await settle(500);
+        const newer = `${FULL_NOTE}\n\n在 Obsidian 里加的一段。`;
+        await act(async () => { setResultFromTest((prev) => ({...prev, note_version: 8, summary_markdown: newer})); });
+        await waitFor(() => expect(noteText()).toBe(newer));
+        expect(document.querySelector('button[aria-label="撤销"]').disabled).toBe(true);
+        const editor = EditorView.findFromDOM(document.querySelector('.cm-editor'));
+        act(() => { undo(editor); });
+        await settle(1500);
+        expect(noteText()).toBe(newer);
+        expect(saves).toEqual([]);
+    });
+
+    it('brings in the newer note after a refused save only once the open table cell is left', async () => {
+        mount('/editor', task());
+        await waitFor(() => expect(noteBox()).toBeTruthy());
+        await settle(500);
+        refuseSaves = 1;
+        const newer = `${FULL_NOTE}\n\n在 Obsidian 里加的一段。`;
+        jobs.t1 = {task_id: 't1', status: 'completed', result: task({note_version: 9, summary_markdown: newer})};
+        // An edit whose save will be refused, then a table cell opened.
+        fireEvent.change(document.querySelector('#note-line-style'), {target: {value: 'h2'}});
+        const cell = [...document.querySelectorAll('.cm-ob-table-wrap td')].find((node) => node.textContent === '研究');
+        act(() => { fireEvent.focus(cell); });
+        await waitFor(() => expect(saves.length).toBe(1), {timeout: 4000});
+        await settle(800);
+        // The refusal came while the cell was open: the cell is still there and
+        // the note on the page is the user's.
+        expect(cell.isConnected).toBe(true);
+        expect(noteText()).not.toBe(newer);
+        cell.textContent = '探索';
+        act(() => { fireEvent.blur(cell); });
+        await waitFor(() => expect(noteText()).toBe(newer), {timeout: 4000});
+        expect(document.body.textContent).toContain('笔记在别处被改过，已换成最新的版本。');
+        await settle(1500);
+        // Nothing older was saved on top of the newer note's version.
+        expect(saves.filter((save) => save.base_version === 9)).toEqual([]);
     });
 });
