@@ -301,3 +301,25 @@ def test_the_agent_is_told_where_the_change_log_is(tmp_path):
     listed = _agent().get(f"/agent/v1/tasks/{task}/note/versions", headers=AGENT).json()
 
     assert Path(listed["change_log"]).read_text(encoding="utf-8") == _log(md)
+
+
+def test_a_document_synced_before_pushes_were_recorded_keeps_its_feishu_copy_before_a_push(tmp_path, monkeypatch):
+    """Synced before 2026-10-23 there is no record of the document as last
+    pushed, and a pull rewrites the one there is: an edit made in Feishu and
+    pulled in would look like none. Such a document is kept before a push."""
+    task, md = _task(tmp_path, NOTE)
+    doc = FakeDoc()
+    _in_feishu(task, doc, monkeypatch)
+    result = _result(task)
+    sync = {k: v for k, v in result["lark_response"]["sync"].items() if k != "pushed_sections"}
+    job_store.save_result_changes(task, result, {**result, "lark_response": {**result["lark_response"], "sync": sync}})
+
+    # The same chapter edited in Feishu, pulled in, then edited later on the page.
+    doc.edit("开场的话。", "开场的话，飞书里补的。")
+    feishu_sync.pull(task, modified_at=doc.modified, runner=doc)
+    _web_edit(task, _note(task).replace("开场的话，飞书里补的。", "开场，网页上改的。"))
+    feishu_sync.push(task, runner=doc)
+
+    kept = _feishu_side(md)
+    assert len(kept) == 1 and "飞书里补的" in kept[0].path.read_text(encoding="utf-8")
+    assert isinstance(_result(task)["lark_response"]["sync"].get("pushed_sections"), list), "recorded from now on"

@@ -81,8 +81,10 @@ def _as_pushed(result: dict[str, Any] | None, text: str) -> bool:
     sync = response.get("sync") if isinstance(response, dict) else None
     if not isinstance(sync, dict):
         return False
-    # Synced before 2026-10-23: only the chapters as last seen were recorded.
-    recorded = sync.get("pushed_sections") if "pushed_sections" in sync else sync.get("feishu_sections")
+    # Synced before 2026-10-23 and not pushed since: only the chapters as last
+    # seen are recorded, and a pull rewrites those, so an edit pulled in would
+    # read as none. Kept, then; the next push records pushed_sections.
+    recorded = sync.get("pushed_sections")
     if not isinstance(recorded, list):
         return False
     now = feishu_note.feishu_section_records(text)
