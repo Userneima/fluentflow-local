@@ -34,7 +34,7 @@ import {
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import {notePendingSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
-import RichNoteEditor from '../components/RichNoteEditor.jsx';
+import NoteEditor from '../components/NoteEditor.jsx';
 import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
@@ -1951,11 +1951,13 @@ const Editor = () => {
                                     </div>
                                 ) : hasEditableSummary ? (
                                     <>
-                                        <RichNoteEditor
+                                        <NoteEditor
                                             key={summaryResultKey}
                                             lang={lang}
                                             markdown={summaryMarkdownForEditor}
                                             onChange={handleSummaryChange}
+                                            taskId={result?.task_id || ''}
+                                            apiBase={API_BASE}
                                         />
                                         <div
                                             ref={summaryRef}

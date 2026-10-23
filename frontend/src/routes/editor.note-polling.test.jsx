@@ -35,9 +35,9 @@ vi.mock('../app/AppContext.jsx', () => ({
     useApp: () => useContext(AppState),
 }));
 
-// The rich editor is tiptap, which jsdom cannot type into. What matters here is
+// The note editor is CodeMirror; what matters here is what the page hands it and what it gets back. What matters here is
 // what the page hands it and what it gets back.
-vi.mock('../components/RichNoteEditor.jsx', () => ({
+vi.mock('../components/NoteEditor.jsx', () => ({
     default: ({markdown, onChange}) => (
         <textarea aria-label="note" value={markdown} onChange={(e) => onChange(e.target.value)}/>
     ),

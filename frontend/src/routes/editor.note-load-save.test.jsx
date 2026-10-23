@@ -15,6 +15,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {act, cleanup, fireEvent, render, waitFor} from '@testing-library/react';
 import {useState} from 'react';
 import {MemoryRouter, Route, Routes} from 'react-router-dom';
+import {EditorView} from '@codemirror/view';
 
 let runtimeConfig = {allowedSttProviders: ['local'], defaultSttProvider: 'local', limits: {}, writesItsOwnNote: true};
 let jobs = {};
@@ -154,7 +155,13 @@ afterEach(() => {
     cleanup();
 });
 
-const noteBox = () => document.querySelector('.ProseMirror');
+const noteBox = () => document.querySelector('.cm-content');
+// CodeMirror keeps only the visible lines in the page; the whole note is the
+// editor's document.
+const noteText = () => {
+    const editor = document.querySelector('.cm-editor');
+    return editor ? EditorView.findFromDOM(editor)?.state.doc.toString() || '' : '';
+};
 const settle = async (ms = 2500) => { await act(async () => { await new Promise((r) => setTimeout(r, ms)); }); };
 
 vi.setConfig({testTimeout: 15000});
@@ -168,7 +175,7 @@ describe('opening a task from the list, whose note is only a preview', () => {
         expect(noteBox()).toBeNull();
 
         await act(async () => { const pending = releaseFullTask; releaseFullTask = null; pending.forEach((answer) => answer()); });
-        await waitFor(() => expect(noteBox()?.textContent || '').toContain('第 60 段'));
+        await waitFor(() => expect(noteText()).toContain('第 60 段'));
         await settle();
         expect(saves).toEqual([]);
     });
@@ -179,8 +186,8 @@ describe('opening a task from the list, whose note is only a preview', () => {
         releaseFullTask = [];
         mount('/editor', listRow());
         await settle(800);
-        const toolbar = document.querySelector('section select');
-        if (toolbar) fireEvent.change(toolbar, {target: {value: 'blockquote'}});
+        const toolbar = document.querySelector('#note-line-style');
+        if (toolbar) fireEvent.change(toolbar, {target: {value: 'h2'}});
         await settle(1500);
         await act(async () => { const pending = releaseFullTask; releaseFullTask = null; pending.forEach((answer) => answer()); });
         await settle(1500);
@@ -189,7 +196,7 @@ describe('opening a task from the list, whose note is only a preview', () => {
 
     it('saves nothing when it is opened from the address, after a refresh', async () => {
         mount('/editor?task=t1');
-        await waitFor(() => expect(noteBox()?.textContent || '').toContain('第 60 段'));
+        await waitFor(() => expect(noteText()).toContain('第 60 段'));
         await settle();
         expect(saves).toEqual([]);
     });
@@ -199,6 +206,8 @@ describe('opening a task from the list, whose note is only a preview', () => {
         await waitFor(() => expect(noteBox()).toBeTruthy());
         await act(async () => { setResultFromTest((prev) => ({...prev, note_version: 8, summary_markdown: `${FULL_NOTE}\n\n新加的一段。`})); });
         await settle(1500);
+        // The newer note is what the editor shows (an Obsidian edit taken in).
+        expect(noteText()).toContain('新加的一段。');
         await act(async () => { setResultFromTest(task({task_id: 't2', summary_markdown: '# 另一篇\n\n正文。'})); });
         await settle();
         expect(saves).toEqual([]);
@@ -212,10 +221,10 @@ describe('the user editing the note', () => {
         await settle(500);
         // The user turns a paragraph into a heading from the toolbar (jsdom
         // cannot type into the editor; any change of the user's will do).
-        fireEvent.change(document.querySelector('select'), {target: {value: 'blockquote'}});
+        fireEvent.change(document.querySelector('#note-line-style'), {target: {value: 'h2'}});
         await waitFor(() => expect(saves.length).toBe(1), {timeout: 4000});
         expect(saves[0].taskId).toBe('t1');
-        expect(saves[0].summary_markdown).toContain('> ');
+        expect(saves[0].summary_markdown).toMatch(/^## /m);
         expect(saves[0].summary_markdown.length).toBeGreaterThan(FULL_NOTE.length - 50);
         expect(saves[0].base_version).toBe(7);
     });

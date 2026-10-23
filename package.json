@@ -9,11 +9,11 @@
     "start": "python3 -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000"
   },
   "dependencies": {
-    "@tiptap/extension-image": "^3.28.0",
-    "@tiptap/extension-table": "^3.28.0",
-    "@tiptap/pm": "^3.28.0",
-    "@tiptap/react": "^3.28.0",
-    "@tiptap/starter-kit": "^3.28.0",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
     "docx": "^9.7.1",
     "jszip": "^3.10.2",
     "lucide-react": "^1.21.0",

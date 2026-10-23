@@ -151,7 +151,7 @@ describe('the slim header', () => {
         mount('/editor', result);
         const header = await screen.findByTestId('editor-header');
         // The full note is on the page before anything about it is asserted.
-        await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy());
+        await waitFor(() => expect(document.querySelector('.cm-content')).toBeTruthy());
         expect(header.textContent).toContain('处理记录');
         expect(header.textContent).toContain('课程 t1');
         expect(screen.getByRole('button', {name: /打开文件夹/})).toBeTruthy();

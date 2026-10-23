@@ -27,8 +27,8 @@ vi.mock('../app/AppContext.jsx', async () => {
     return {AppCtx: Ctx, useApp: () => React.useContext(Ctx)};
 });
 
-// The rich editor is tiptap; what matters here is what the page saves.
-vi.mock('../components/RichNoteEditor.jsx', () => ({
+// The note editor is CodeMirror; what matters here is what the page saves.
+vi.mock('../components/NoteEditor.jsx', () => ({
     default: ({markdown, onChange}) => (
         <textarea aria-label="note" value={markdown} onChange={(e) => onChange(e.target.value)}/>
     ),
@@ -187,5 +187,21 @@ describe('opening a copy kept in the browser', () => {
         );
         expect(await screen.findByDisplayValue('first line here')).toBeTruthy();
         expect(screen.queryByDisplayValue('frist line here')).toBeNull();
+    });
+});
+
+describe('a save refused because the note changed elsewhere', () => {
+    it('loads the latest note into the editor and says so', async () => {
+        mount();
+        const note = await screen.findByLabelText('note');
+        // Meanwhile the note was changed in Obsidian.
+        jobs.t1 = {task_id: 't1', status: 'completed', result: task({summary_markdown: '# 笔记\n\n在 Obsidian 里改的。', note_version: 'n8'})};
+        fireEvent.change(note, {target: {value: '# 笔记\n\n页面上的改动。'}});
+        await waitFor(() => expect(noteSaves.length).toBe(1), {timeout: 3000});
+        await act(async () => {
+            noteSaves[0].reject(Object.assign(new Error('笔记在别处被改过，已换成最新的版本。'), {stale: true, status: 409}));
+        });
+        await waitFor(() => expect(screen.getByLabelText('note').value).toContain('在 Obsidian 里改的'));
+        expect(screen.getByText('笔记在别处被改过，已换成最新的版本。')).toBeTruthy();
     });
 });
