@@ -470,7 +470,11 @@ const QueueUploadBanner = ({upload, lang, onCancel}) => {
 // truncate, the cut block opens the processing report in place, and the right
 // side holds only two icon buttons in fixed slots. A finished record with
 // nothing wrong carries no badge, the same rule as the start page's recent list.
-const factBlock = 'inline-flex items-center gap-1 whitespace-nowrap rounded-[8px] bg-[#f2f1f1] px-2 py-0.5 text-[12px] font-semibold text-[#57585d] dark:bg-white/[0.07] dark:text-white/62';
+const factBlock = 'inline-flex items-center gap-1 whitespace-nowrap rounded-[8px] border border-transparent bg-[#f2f1f1] px-2 py-0.5 text-[12px] font-semibold text-[#57585d] dark:bg-white/[0.07] dark:text-white/62';
+// The cut block that opens a processing report: a white block with a visible
+// border, so it reads as a button without hovering over it (review 2026-10-23:
+// 12 of 127 records had one and only a small arrow told them apart).
+const openableFactBlock = '!border-[#b9b5b5] !bg-white text-[#111111] shadow-[0_1px_0_rgba(17,17,17,0.06)] dark:!border-white/30 dark:!bg-white/[0.04] dark:text-white';
 const iconButton = 'inline-flex size-9 items-center justify-center rounded-[12px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]';
 
 // Length and size, and for a link the platform it came from: where a downloaded
@@ -528,6 +532,13 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
     ].filter(Boolean);
     const menuBusy = deletingTaskId === taskId || cancellingTaskId === taskId;
     const cutText = `${zh ? '去气口' : 'Cut'} ${cutTile.value}${cutTile.hint ? `（${cutTile.hint}）` : ''}`;
+    // A failed or cancelled task shows only the steps it got to: its cut and
+    // note blocks otherwise read "未剪（旧任务）" and "等处理", which say it is
+    // an old task and still waiting when it is neither (review 2026-10-23).
+    const result = job?.result || {};
+    const noteChars = Number.isFinite(result.summary_chars) ? result.summary_chars : String(result.summary_markdown || '').trim().length;
+    const showCut = !failed || (result.debreath && typeof result.debreath === 'object') || reportAvailable;
+    const showNote = !failed || noteChars > 0;
     return (
         <article
             ref={highlightRef}
@@ -564,13 +575,13 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                     {terminal ? (
                         <>
                             {sizeAndLength ? <span className={factBlock}>{sizeAndLength}</span> : null}
-                            {reportAvailable ? (
+                            {!showCut ? null : reportAvailable ? (
                                 <button
                                     type="button"
                                     aria-expanded={reportOpen}
                                     onClick={() => setReportOpen((value) => !value)}
                                     title={zh ? (reportOpen ? '收起处理说明' : '看处理说明') : (reportOpen ? 'Hide processing report' : 'Processing report')}
-                                    className={`${factBlock} cursor-pointer transition hover:bg-[#e6e4e4] hover:text-[#111111] dark:hover:bg-white/[0.12] dark:hover:text-white ${reportOpen ? '!bg-[#111111] !text-white dark:!bg-white dark:!text-[#111111]' : ''}`}
+                                    className={`${factBlock} ${openableFactBlock} cursor-pointer transition hover:!bg-[#efeeee] dark:hover:!bg-white/[0.12] ${reportOpen ? '!border-[#111111] !bg-[#111111] !text-white dark:!border-white dark:!bg-white dark:!text-[#111111]' : ''}`}
                                 >
                                     {cutText}
                                     <ChevronDown className={`size-3.5 transition-transform ${reportOpen ? 'rotate-180' : ''}`} strokeWidth={2.4}/>
@@ -578,7 +589,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                             ) : (
                                 <span className={factBlock}>{cutText}</span>
                             )}
-                            <span className={factBlock}>{zh ? '笔记' : 'Note'} {noteTileValue(job, lang)}</span>
+                            {showNote ? <span className={factBlock}>{zh ? '笔记' : 'Note'} {noteTileValue(job, lang)}</span> : null}
                         </>
                     ) : (
                         <span className={factBlock}>{stageLabel(job, lang)} · {progressLabel}</span>

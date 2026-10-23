@@ -244,4 +244,68 @@ describe('the list of records', () => {
         fireEvent.click(screen.getByRole('menuitem', {name: '取消任务'}));
         expect(confirm).toHaveBeenCalledTimes(1);
     });
+
+    // Review 2026-10-23: the two layout promises had no test. A fact block is
+    // never cut short with an ellipsis, and a long title can always be read in
+    // full on hover.
+    it('never truncates a fact block, and keeps the full title on hover', () => {
+        const longTitle = '对罗福莉的3.5小时访谈：AI范式已然巨变！OpenClaw、智能体框架、Agent范式很吃Post-train、卡的分配比例、巨变下的组织';
+        tasks = [{...withFolder('a', {audio_duration_seconds: 12840, debreath: {status: 'completed', survey: {has_report: true, to_judge: 0}, plan: {cut_count: 9, removed_seconds: 685}}}), metadata: {display_title: longTitle}}];
+        mount();
+        const clipping = /(^|\s)(truncate|overflow-hidden|text-ellipsis|line-clamp-\d)(\s|$)/;
+        const facts = screen.getByTestId('task-facts');
+        expect(facts.className).not.toMatch(clipping);
+        expect(facts.parentElement.className).not.toMatch(clipping);
+        Array.from(facts.children).forEach((block) => {
+            expect(block.className).not.toMatch(clipping);
+        });
+        expect(screen.getByRole('heading', {level: 2}).getAttribute('title')).toBe(longTitle);
+    });
+
+    // Review 2026-10-23: the cut block that opens a report must look different
+    // from the ones that do not, without hovering over it.
+    it('marks the cut block that opens a report with a visible border', () => {
+        tasks = [
+            finished('a', {debreath: {status: 'completed', survey: {has_report: true}, plan: {cut_count: 3, removed_seconds: 223}}}),
+            finished('b', {debreath: {status: 'completed', plan: {cut_count: 3, removed_seconds: 46}}}),
+        ];
+        mount();
+        const openable = screen.getByRole('button', {name: /去气口 剪掉 3 分 43 秒/});
+        const plain = screen.getByText(/去气口 剪掉 46 秒/);
+        const visibleBorder = /(^|\s)!?border-\[#[0-9a-f]+\]/;
+        expect(openable.className).toMatch(visibleBorder);
+        expect(plain.className).not.toMatch(visibleBorder);
+    });
+});
+
+// Review 2026-10-23: a failed or cancelled task shows only the steps it got to.
+// Its cut and note blocks used to read "未剪（旧任务）" and "等处理": it is not
+// an old task, and it is not waiting for anything.
+describe('a failed or cancelled record', () => {
+    const failedLink = (id, status, result = null) => ({
+        task_id: id,
+        status,
+        source_type: 'video_link',
+        created_at: '2026-10-23T10:00:00Z',
+        updated_at: '2026-10-23T10:00:00Z',
+        error_reason: 'download failed',
+        metadata: {display_title: `抖音视频链接 ${id}`},
+        result,
+    });
+
+    it('does not claim the cut or the note is pending', () => {
+        tasks = [failedLink('f', 'failed'), failedLink('c', 'cancelled')];
+        mount();
+        screen.getAllByTestId('task-facts').forEach((facts) => {
+            expect(facts.textContent).not.toMatch(/去气口|笔记|旧任务|等处理/);
+        });
+    });
+
+    it('still shows a step it did finish', () => {
+        tasks = [failedLink('n', 'failed', {summary_chars: 800, debreath: {status: 'completed', plan: {cut_count: 2, removed_seconds: 30}}})];
+        mount();
+        const facts = screen.getByTestId('task-facts').textContent;
+        expect(facts).toMatch(/去气口 剪掉 30 秒/);
+        expect(facts).toMatch(/笔记 800 字/);
+    });
 });
