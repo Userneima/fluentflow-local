@@ -113,6 +113,9 @@ const SideNav = ({
                             </div>
                         )}
                     </Link>
+                    {/* No toggle while a narrow window holds the sidebar folded:
+                        it would do nothing. */}
+                    {onToggle ? (
                     <button
                         type="button"
                         onClick={onToggle}
@@ -122,6 +125,7 @@ const SideNav = ({
                     >
                         <CollapseIcon className={collapsed ? 'size-[14px]' : 'size-[18px]'} strokeWidth={1.9}/>
                     </button>
+                    ) : null}
                 </div>
 
                 <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden">

@@ -4,11 +4,14 @@
 // of 2026-10-22:
 // - the badge says what actually came out: a task whose note was not written
 //   does not wear a green 已完成 (item 9);
-// - "删除记录" is not a button beside "查看结果" at the same weight; it sits in a
-//   "更多" menu and still asks before deleting (item 14);
-// - "查看结果" opens the editor with the task in the address, and a task whose
+// - "删除记录" sits in a "更多" menu and still asks before deleting (item 14);
+// - the title opens the editor with the task in the address, and a task whose
 //   cut has places left to judge says so there, so the editor can take the
 //   owner to them (item 10; the editor side is the editor's own work).
+// Records page redesign, 2026-10-23: a finished record with nothing wrong has
+// no badge, the facts are small blocks without the processing time, the cut
+// block opens the processing report in place, and the row has no "查看结果"
+// button; the right side holds only the folder and "更多" icon buttons.
 
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
@@ -103,17 +106,25 @@ describe('a finished record', () => {
         await waitFor(() => expect(deleteJob).toHaveBeenCalledWith('a', {}));
     });
 
-    it('opens the editor with the task in the address', async () => {
+    it('carries no badge when nothing is wrong, the same as the start page', () => {
+        tasks = [finished('a', {})];
+        mount();
+        expect(screen.queryByTestId('task-outcome')).toBeNull();
+        expect(screen.queryByText('已完成')).toBeNull();
+    });
+
+    it('opens the editor from the title, with no separate 查看结果 button', async () => {
         tasks = [finished('a', {debreath: {status: 'completed', survey: {has_report: true, to_judge: 0}}})];
         mount();
-        fireEvent.click(screen.getByRole('button', {name: '查看结果'}));
+        expect(screen.queryByRole('button', {name: '查看结果'})).toBeNull();
+        fireEvent.click(screen.getByRole('button', {name: '录像 a'}));
         expect((await screen.findByTestId('editor-address')).textContent).toBe('/editor?task=a');
     });
 
     it('tells the editor there are places left to judge', async () => {
         tasks = [finished('b', {debreath: {status: 'completed', survey: {has_report: true, to_judge: 4}}})];
         mount();
-        fireEvent.click(screen.getByRole('button', {name: '查看结果'}));
+        fireEvent.click(screen.getByRole('button', {name: '录像 b'}));
         expect((await screen.findByTestId('editor-address')).textContent).toBe('/editor?task=b&review=cut');
     });
 });
@@ -124,13 +135,15 @@ describe('a finished record', () => {
 describe('the list of records', () => {
     const withFolder = (id, result) => finished(id, {output_folder: {path: `/Users/me/Movies/${id}/很长很长的产出文件夹路径`}, ...result});
 
-    it('puts a finished record on one line of facts and keeps the folder path behind a button', () => {
+    it('shows a finished record as fact blocks and keeps the folder path behind a button', () => {
         tasks = [withFolder('a', {audio_duration_seconds: 3110, debreath: {status: 'completed', plan: {cut_count: 501, removed_seconds: 1136}}})];
         mount();
         const facts = screen.getByTestId('task-facts').textContent;
         expect(facts).toMatch(/51 分 50 秒/);
         expect(facts).toMatch(/去气口 剪掉 18 分 56 秒/);
         expect(facts).toMatch(/笔记 1200 字/);
+        // How long processing took is not on the row any more.
+        expect(facts).not.toMatch(/处理|占原时长/);
         expect(screen.queryByText(/很长很长的产出文件夹路径/)).toBeNull();
         expect(screen.getByRole('button', {name: '打开文件夹'}).getAttribute('title')).toMatch(/很长很长的产出文件夹路径/);
     });
@@ -194,12 +207,41 @@ describe('the list of records', () => {
         expect(screen.getByText('没有符合的记录。')).toBeTruthy();
     });
 
-    it('opens the processing report from the 更多 menu', () => {
-        tasks = [finished('a', {debreath: {status: 'completed', survey: {has_report: true, to_judge: 0}}})];
+    it('opens the processing report in one click on the cut block, and closes it again', () => {
+        tasks = [finished('a', {debreath: {status: 'completed', survey: {has_report: true, to_judge: 0}, plan: {cut_count: 3, removed_seconds: 223}}})];
         mount();
         expect(screen.queryByTestId('cut-report-panel')).toBeNull();
-        fireEvent.click(screen.getByRole('button', {name: '更多'}));
-        fireEvent.click(screen.getByRole('menuitem', {name: '处理说明'}));
+        const cut = screen.getByRole('button', {name: /去气口 剪掉 3 分 43 秒/});
+        fireEvent.click(cut);
         expect(screen.getByTestId('cut-report-panel')).toBeTruthy();
+        expect(cut.getAttribute('aria-expanded')).toBe('true');
+        fireEvent.click(cut);
+        expect(screen.queryByTestId('cut-report-panel')).toBeNull();
+    });
+
+    it('has no page header with refresh or add task', () => {
+        tasks = [finished('a', {})];
+        mount();
+        expect(screen.queryByRole('heading', {level: 1})).toBeNull();
+        expect(screen.queryByRole('button', {name: '刷新'})).toBeNull();
+        expect(screen.queryByRole('link', {name: '添加任务'})).toBeNull();
+    });
+
+    it('keeps the 更多 button in the same slot whether or not a record has an output folder', () => {
+        tasks = [withFolder('a', {}), finished('b', {})];
+        mount();
+        const slots = screen.getAllByRole('button', {name: '更多'}).map((button) => button.closest('span')?.previousElementSibling?.className || '');
+        expect(slots).toHaveLength(2);
+        slots.forEach((className) => expect(className).toMatch(/size-9/));
+    });
+
+    it('cancels a running task from the 更多 menu, after asking', async () => {
+        tasks = [{task_id: 'r', status: 'running', stage: 'stt', progress: 40, created_at: '2026-10-22T10:00:00Z', metadata: {display_title: '在转的'}}];
+        mount();
+        expect(screen.queryByRole('button', {name: '取消'})).toBeNull();
+        fireEvent.click(screen.getByRole('button', {name: '更多'}));
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+        fireEvent.click(screen.getByRole('menuitem', {name: '取消任务'}));
+        expect(confirm).toHaveBeenCalledTimes(1);
     });
 });

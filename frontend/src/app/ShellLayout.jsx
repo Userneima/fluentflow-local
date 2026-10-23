@@ -6,8 +6,30 @@ import BackendStatusBanner from '../components/BackendStatusBanner.jsx';
 // Shared workspace frame: sidebar (with persisted collapse state) plus the
 // routed content area, and the app-level notice for tasks a service restart
 // interrupted (it has to appear on whichever page is open).
+// Below this window width the sidebar folds to icons on its own (records page
+// redesign, 2026-10-23).
+export const NARROW_SIDEBAR_WIDTH = 1000;
+const NARROW_QUERY = `(max-width: ${NARROW_SIDEBAR_WIDTH - 1}px)`;
+
+const useNarrowWindow = () => {
+    const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(NARROW_QUERY).matches);
+    useEffect(() => {
+        if (!window.matchMedia) return undefined;
+        const list = window.matchMedia(NARROW_QUERY);
+        const update = () => setNarrow(list.matches);
+        update();
+        list.addEventListener?.('change', update);
+        return () => list.removeEventListener?.('change', update);
+    }, []);
+    return narrow;
+};
+
 const ShellLayout = ({sideNavProps = {}, children}) => {
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('fluentflow_sidebar_collapsed') === '1');
+    // A narrow window folds the sidebar without touching the remembered choice,
+    // so widening the window brings back whatever the owner picked.
+    const narrowWindow = useNarrowWindow();
+    const collapsed = sidebarCollapsed || narrowWindow;
 
     useEffect(() => {
         localStorage.setItem('fluentflow_sidebar_collapsed', sidebarCollapsed ? '1' : '0');
@@ -16,9 +38,9 @@ const ShellLayout = ({sideNavProps = {}, children}) => {
     return (
         <div
             className="flex h-dvh w-full overflow-clip bg-surface dark:bg-[#101010]"
-            style={{'--sidebar-offset': sidebarCollapsed ? '4.5rem' : '14rem'}}
+            style={{'--sidebar-offset': collapsed ? '4.5rem' : '14rem'}}
         >
-            <SideNav collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((value) => !value)} {...sideNavProps}/>
+            <SideNav collapsed={collapsed} onToggle={narrowWindow ? null : () => setSidebarCollapsed((value) => !value)} {...sideNavProps}/>
             {/* clip, not hidden: a box with hidden overflow can still be scrolled by
                 the browser bringing a focused control into view, which slid the
                 whole page out of sight when a settings switch was clicked. Only
