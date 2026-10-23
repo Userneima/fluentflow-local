@@ -146,8 +146,12 @@ const withFolder = (extra = {}) => task('t1', {output_folder: {path: '/Users/me/
 
 describe('the slim header', () => {
     it('is one row: records / task name and the folder, nothing else', async () => {
-        mount('/editor', withFolder());
+        const result = withFolder();
+        jobs.t1 = {task_id: 't1', result};
+        mount('/editor', result);
         const header = await screen.findByTestId('editor-header');
+        // The full note is on the page before anything about it is asserted.
+        await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy());
         expect(header.textContent).toContain('处理记录');
         expect(header.textContent).toContain('课程 t1');
         expect(screen.getByRole('button', {name: /打开文件夹/})).toBeTruthy();
@@ -160,7 +164,43 @@ describe('the slim header', () => {
         expect(screen.getAllByRole('link', {name: '处理记录'})).toHaveLength(1);
         expect(screen.queryByTestId('editor-header-status')).toBeNull();
         expect(screen.queryByTestId('write-note')).toBeNull();
+        expect(screen.queryByTestId('lark-export-link')).toBeNull();
         await waitFor(() => expect(address()).toBe('/editor?task=t1'));
+    });
+
+    it('opens the Feishu document the note was exported to, named on hover', async () => {
+        const result = withFolder({lark_response: {url: 'https://feishu.example/doc'}, lark_doc_title: '课程 t1 笔记'});
+        jobs.t1 = {task_id: 't1', result};
+        mount('/editor', result);
+        const link = await screen.findByTestId('lark-export-link');
+        expect(link.getAttribute('href')).toBe('https://feishu.example/doc');
+        expect(link.getAttribute('title')).toContain('课程 t1 笔记');
+    });
+
+    it('offers 写笔记 for a note skipped on request too', async () => {
+        const result = withFolder({summary_markdown: '', summary_status: 'skipped', summary_skipped: true});
+        jobs.t1 = {task_id: 't1', result};
+        mount('/editor', result);
+        expect(await screen.findByTestId('write-note')).toBeTruthy();
+        expect((await screen.findByTestId('editor-header-status')).textContent).toBe('笔记没生成');
+    });
+
+    it('takes 笔记没生成 to the 写笔记 button', async () => {
+        const result = withFolder({summary_markdown: '', summary_status: 'failed', summary_error: 'AI summarization returned empty result'});
+        jobs.t1 = {task_id: 't1', result};
+        const scrolled = [];
+        Element.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.getAttribute('data-testid')); };
+        mount('/editor', result);
+        fireEvent.click(await screen.findByTestId('editor-header-status'));
+        expect(scrolled).toContain('write-note');
+        expect(document.activeElement?.getAttribute('data-testid')).toBe('write-note');
+    });
+
+    it('links a failed note to the task\'s processing steps', async () => {
+        const result = withFolder({summary_markdown: '', summary_status: 'failed', summary_error: 'AI summarization returned empty result'});
+        jobs.t1 = {task_id: 't1', result};
+        mount('/editor', result);
+        expect((await screen.findByTestId('task-steps-link')).getAttribute('href')).toBe('/tasks/t1/agent');
     });
 
     it('shows the cut places waiting for a judgement and opens them', async () => {
@@ -180,7 +220,11 @@ describe('the slim header', () => {
         expect((await screen.findByTestId('editor-header-status')).textContent).toBe('笔记没生成');
         fireEvent.click(await screen.findByTestId('write-note'));
         const dialog = await screen.findByRole('dialog');
-        expect(dialog.textContent).toContain('写笔记');
-        expect(dialog.textContent).toContain('开始写');
+        expect(dialog.textContent).toContain('edit.regenerateConfirmTitle');
+        // The dialog writes a note for a task that has none: it says so.
+        const {msgs} = await import('../app/shared.jsx');
+        expect(msgs.zh['edit.regenerateConfirmTitle']).toBe('写笔记');
+        expect(msgs.zh['edit.regenerateConfirmAction']).toBe('开始写');
+        expect(msgs.zh['edit.regenerateConfirmDesc']).not.toMatch(/重写|替换/);
     });
 });

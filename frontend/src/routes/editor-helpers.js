@@ -271,26 +271,20 @@ export const autoExportPending = (job) => autoExportRequested(job) && !larkExpor
 
 // What the regenerate dialog says about who will write the new note, and what
 // the user loses by it.
-// What "重写笔记" will do for this task, said before it does it.
-//
-// When Claude writes the notes it rewrites from the cut file's frames, which
-// not every task has (a subtitle file, a link transcribed from its subtitles, a
-// cut file that has since been cleaned up). `frameNote` is the service's answer
-// for this task: {available: true|false|null, reason}; null means it could not
-// say, and both ways are offered. When the frames are out of reach the text
-// model rewrites instead, and the dialog says why. When they are in reach the
-// text model is still offered as a second choice: it is the only rewrite that
-// reads the chosen prompt, so without it "更换提示词" would do nothing.
+// What 写笔记 will do for this task, said before it does it. The dialog opens
+// only for a task without a note (decision 6.33), so there is nothing to
+// replace. Claude writes from the cut file's frames when the task has them;
+// when the service cannot say, both ways are offered; when the frames are out
+// of reach the text model writes instead, and the dialog says why.
 //
 //   primary      'claude' | 'text': what the confirm button runs
 //   alternative  {label, disabled, hint} | null: the second choice
-export const TEXT_REWRITE_CHOICE_ZH = '改用文本模型按文字重写（会用你选的提示词，截图不保留）';
-const TEXT_REWRITE_CHOICE_EN = 'Rewrite from the text with the text model instead (uses your chosen prompt; screenshots are not kept)';
+export const TEXT_WRITE_CHOICE_ZH = '改用文本模型按文字写（笔记里不带截图）';
+const TEXT_WRITE_CHOICE_EN = 'Write from the text with the text model instead (no screenshots in the note)';
 
 export const regenerateDialogCopy = ({
     writerKind,
     writerLabel,
-    currentNoteFromClaude,
     frameNote = null,
     textWriterLabel = '',
     textWriterReady = true,
@@ -300,12 +294,12 @@ export const regenerateDialogCopy = ({
         ? '还没有填文本模型的 Key，没法改用文本模型。'
         : 'No text-model key yet, so the text model cannot be used.';
     if (frameNote?.running) {
-        // A rewrite is already under way. Starting another one, by either
+        // A note is already being written. Starting another, by either
         // writer, would race it for the same note.
         return {
             desc: zh
-                ? '这个任务的笔记正在重写，写好会自动出现在右侧。等它写完再重写。'
-                : 'This note is already being rewritten and will appear on the right when it is done. Wait for it before regenerating.',
+                ? '这个任务的笔记正在写，写好会自动出现在右侧。'
+                : 'This note is already being written and will appear on the right when it is done.',
             warning: '',
             primary: writerKind === 'claude' ? 'claude' : 'text',
             confirmDisabled: true,
@@ -318,11 +312,11 @@ export const regenerateDialogCopy = ({
         const label = textWriterLabel || (zh ? '文本模型' : 'the text model');
         return {
             desc: zh
-                ? `这个任务没法让 Claude 结合画面重写：${reason}。这次会改用 ${label} 按当前转录和你选的提示词重写，笔记里的截图不会保留。`
-                : `Claude cannot rewrite this task from the frames: ${reason}. ${label} will rewrite it from the current transcript with your chosen prompt instead; screenshots in the note are not kept.`,
+                ? `这个任务没法让 Claude 结合画面写：${reason}。这次改用 ${label} 按当前转录写，笔记里不带截图。`
+                : `Claude cannot write this note from the frames: ${reason}. ${label} will write it from the current transcript instead, without screenshots.`,
             warning: textWriterReady ? '' : (zh
-                ? '还没有填文本模型的 Key，这个任务现在重写不了。去设置填写后再试。'
-                : 'No text-model key yet, so this task cannot be regenerated now. Add one in Settings and try again.'),
+                ? '还没有填文本模型的 Key，这个任务现在写不了笔记。去设置填写后再试。'
+                : 'No text-model key yet, so this note cannot be written now. Add one in Settings and try again.'),
             primary: 'text',
             confirmDisabled: !textWriterReady,
             alternative: null,
@@ -331,13 +325,13 @@ export const regenerateDialogCopy = ({
     if (writerKind === 'claude') {
         return {
             desc: zh
-                ? `将由 ${writerLabel} 结合剪后视频的画面和当前转录重写笔记，写好后替换右侧笔记，被替换的笔记可以恢复。需要几分钟，期间可以离开这个页面。`
-                : `${writerLabel} will rewrite the note from the cut video's frames and the current transcript, then replace the note on the right. The replaced note can be restored. This takes a few minutes; you can leave this page meanwhile.`,
+                ? `将由 ${writerLabel} 结合剪后视频的画面和当前转录写笔记，写好会出现在右侧。需要几分钟，期间可以离开这个页面。`
+                : `${writerLabel} will write the note from the cut video's frames and the current transcript; it appears on the right when done. This takes a few minutes; you can leave this page meanwhile.`,
             warning: '',
             primary: 'claude',
             confirmDisabled: false,
             alternative: {
-                label: zh ? TEXT_REWRITE_CHOICE_ZH : TEXT_REWRITE_CHOICE_EN,
+                label: zh ? TEXT_WRITE_CHOICE_ZH : TEXT_WRITE_CHOICE_EN,
                 disabled: !textWriterReady,
                 hint: textWriterReady ? '' : noTextKey,
             },
@@ -345,31 +339,25 @@ export const regenerateDialogCopy = ({
     }
     return {
         desc: zh
-            ? `将由 ${writerLabel} 基于当前转录重写笔记，并替换右侧笔记正文；不会重新转录音频。`
-            : `${writerLabel} will rewrite the note from the current transcript and replace the note on the right. The audio is not transcribed again.`,
-        warning: currentNoteFromClaude
-            ? (zh
-                ? '当前这份笔记是 Claude 结合画面写的。这次只按文字重写，笔记里的截图不会保留。'
-                : 'The current note was written by Claude from the frames. This rewrite reads text only, so the screenshots in the note will not be kept.')
-            : '',
+            ? `将由 ${writerLabel} 按当前转录写笔记；不会重新转录音频。`
+            : `${writerLabel} will write the note from the current transcript. The audio is not transcribed again.`,
+        warning: '',
         primary: 'text',
         confirmDisabled: false,
         alternative: null,
     };
 };
 
-// A refusal from the Claude rewrite, in words the user can act on. Every 409
-// carries the backend's own reason; the busy queue is the common one.
 export const visualNoteStartErrorMessage = (err, lang = 'zh') => {
     const zh = lang === 'zh';
     const detail = String(err?.message || '').trim();
     if (err?.status === 409) {
         if (!detail || detail.includes('队列')) {
             return zh
-                ? '队列里还有任务在处理，等它处理完再重写笔记。'
-                : 'Another task is still being processed. Regenerate the note once the queue is empty.';
+                ? '队列里还有任务在处理，等它处理完再写笔记。'
+                : 'Another task is still being processed. Write the note once the queue is empty.';
         }
-        return zh ? `这次没法用 Claude 重写笔记：${detail}` : `Claude cannot rewrite this note: ${detail}`;
+        return zh ? `这次没法用 Claude 写笔记：${detail}` : `Claude cannot write this note: ${detail}`;
     }
-    return detail || (zh ? '重写笔记没能开始' : 'The note rewrite did not start');
+    return detail || (zh ? '写笔记没能开始' : 'Writing the note did not start');
 };

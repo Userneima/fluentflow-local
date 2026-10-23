@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {diagnoseTaskError, friendlyTaskError, larkExportToastText, noteGenerationDiagnosis, taskErrorContextForJob} from './format.js';
+import {diagnoseTaskError, friendlyTaskError, noteGenerationDiagnosis, taskErrorContextForJob} from './format.js';
 
 // Written from what a person using FluentFlow Local should read, not from the
 // rule table. This edition has no accounts and no hosted quota: every failure
@@ -147,18 +147,6 @@ describe('a Feishu export failure', () => {
         const d = diagnoseTaskError('Feishu create-doc error: document locked by admin', 'zh');
         expect(d.code).toBe('feishu_export_failed');
         expect(d.detail).toContain('document locked by admin');
-    });
-});
-
-describe('the export toast', () => {
-    const t = (key) => ({'edit.exportDone': '已导出到飞书', 'edit.exportImagesMissing': '{n} 张截图没传上去'}[key] || key);
-
-    it('says the export landed', () => {
-        expect(larkExportToastText({url: 'u', image_count: 2, image_upload_count: 2}, t)).toBe('已导出到飞书');
-    });
-
-    it('counts the screenshots that did not upload', () => {
-        expect(larkExportToastText({url: 'u', image_count: 5, image_upload_count: 2}, t)).toBe('已导出到飞书 · 3 张截图没传上去');
     });
 });
 

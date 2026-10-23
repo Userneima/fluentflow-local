@@ -51,3 +51,21 @@ describe('old cloud transcription settings', () => {
         expect(sensitivePatchFromSettings(stored)).not.toHaveProperty('elevenlabs_api_key');
     });
 });
+
+// Decision 6.33 (2026-10-23): nothing on the page edits a prompt any more, so
+// a prompt kept in this browser is dropped when the settings are read, and no
+// note is written with it.
+describe('a prompt kept in this browser', () => {
+    it('is dropped when the settings are read', () => {
+        const stored = {
+            promptPreset: 'custom', customPromptText: '只列三条要点', defaultPromptOverride: 'x',
+            hiddenPromptPresets: ['meeting'], promptOverrides: {meeting: 'y'}, userPromptPresets: [{id: 'u1', prompt: 'z'}],
+            noteMode: 'auto',
+        };
+        const clean = sanitizeSettings(stored);
+        for (const key of ['promptPreset', 'customPromptText', 'defaultPromptOverride', 'hiddenPromptPresets', 'promptOverrides', 'userPromptPresets']) {
+            expect(clean, key).not.toHaveProperty(key);
+        }
+        expect(clean.noteMode).toBe('auto');
+    });
+});

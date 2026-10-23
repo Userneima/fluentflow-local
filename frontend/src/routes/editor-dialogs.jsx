@@ -8,9 +8,7 @@ import {CutReport} from '../components/CutReport.jsx';
 
 const modalOptions = {closeOnOutsideClick: false, trapFocus: true};
 
-// title / confirmLabel: the slim header's 写笔记 for a task without a note
-// asks to write one, not to rewrite it.
-export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, confirmDisabled = false, alternative = null, onAlternative, onCancel, onConfirm, title = '', confirmLabel = ''}) => {
+export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, confirmDisabled = false, alternative = null, onAlternative, onCancel, onConfirm}) => {
     const {t, lang} = useI18n();
     const dialogRef = useDismissable(true, onCancel, modalOptions);
     return (
@@ -22,7 +20,7 @@ export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, 
                     </div>
                     <div className="min-w-0">
                         <h2 id="regenerate-confirm-title" className="font-headline text-xl font-extrabold text-[#111111] dark:text-white">
-                            {title || t('edit.regenerateConfirmTitle')}
+                            {t('edit.regenerateConfirmTitle')}
                         </h2>
                         <p className="mt-2 text-sm font-medium leading-relaxed text-[#666] dark:text-white/60">
                             {description || t('edit.regenerateConfirmDesc')}
@@ -69,7 +67,7 @@ export const RegenerateConfirmDialog = ({transcriptTitle, description, warning, 
                         className="inline-flex items-center justify-center gap-2 rounded-[13px] bg-[#111111] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
                     >
                         <SvgIcon name="refresh" className="text-base"/>
-                        {confirmLabel || t('edit.regenerateConfirmAction')}
+                        {t('edit.regenerateConfirmAction')}
                     </button>
                 </div>
             </div>

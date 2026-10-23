@@ -44,7 +44,7 @@ export default function OutputFolderLine({taskId, result, lang = 'zh', className
                     disabled={busy}
                     aria-label={label}
                     title={error || `${label}：${path}`}
-                    className="inline-flex size-9 items-center justify-center rounded-[12px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]"
+                    className="inline-flex size-7 items-center justify-center rounded-[10px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]"
                 >
                     <SvgIcon name="folder_open" className="text-base"/>
                 </button>

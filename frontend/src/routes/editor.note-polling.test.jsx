@@ -269,7 +269,7 @@ const openRegenerateDialog = async () => {
 };
 const confirmRegenerate = async () => {
     await act(async () => {
-        fireEvent.click(screen.getByText('开始写'));
+        fireEvent.click(screen.getByText('edit.regenerateConfirmAction'));
     });
 };
 
@@ -320,7 +320,7 @@ describe('重写笔记 when Claude writes the notes', () => {
         mount(finishedTask());
         await openRegenerateDialog();
         await confirmRegenerate();
-        expect(screen.getByText('队列里还有任务在处理，等它处理完再重写笔记。')).toBeTruthy();
+        expect(screen.getByText('队列里还有任务在处理，等它处理完再写笔记。')).toBeTruthy();
         // Nothing started, so nothing is polled and the button is usable again.
         await advance(30000);
         expect(api.getJob).not.toHaveBeenCalled();
@@ -335,7 +335,7 @@ describe('重写笔记 when Claude writes the notes', () => {
         await openRegenerateDialog();
         await confirmRegenerate();
         await advance(5000);
-        expect(screen.getByText(/Claude 重写笔记失败：剪后文件读不到了/)).toBeTruthy();
+        expect(screen.getByText(/Claude 写笔记没成功：剪后文件读不到了/)).toBeTruthy();
         expect(screen.getByTestId('write-note')).toBeTruthy();
     });
 });
@@ -364,6 +364,7 @@ describe('重写笔记 when a text model writes the notes', () => {
 
 describe('重写笔记 decided per task when Claude writes the notes', () => {
     // Claude writes the notes, and a DeepSeek key is there for the text model.
+    // A prompt left in this browser from before is not sent (decision 6.33).
     const claudeWithTextKey = () => {
         runtimeConfig = {...runtimeConfig, writesItsOwnNote: true};
         credentialStatus = {visual_note_available: true, deepseek_api_key_configured: true};
@@ -379,7 +380,7 @@ describe('重写笔记 decided per task when Claude writes the notes', () => {
         return fetchSpy;
     };
 
-    it('rewrites a task without frames with the text model and the chosen prompt, and says why', async () => {
+    it('writes a task without frames with the text model, says why, and sends no stored prompt', async () => {
         claudeWithTextKey();
         api.getVisualNoteAvailability.mockImplementation(async () => ({available: false, reason: '这是字幕文件，没有剪后视频。'}));
         const fetchSpy = stubTextRewrite();
@@ -388,7 +389,7 @@ describe('重写笔记 decided per task when Claude writes the notes', () => {
         const dialog = await openRegenerateDialog();
         expect(dialog.textContent).toMatch(/这是字幕文件，没有剪后视频/);
         expect(dialog.textContent).toMatch(/DeepSeek/);
-        expect(dialog.textContent).toMatch(/提示词/);
+        expect(dialog.textContent).not.toMatch(/提示词/);
         // Only one way is possible here, so no second choice is offered.
         expect(screen.queryByTestId('regenerate-alternative')).toBeNull();
         await confirmRegenerate();
@@ -397,24 +398,25 @@ describe('重写笔记 decided per task when Claude writes the notes', () => {
         expect(api.startJobVisualNote).not.toHaveBeenCalled();
         const call = textRewriteCall(fetchSpy);
         expect(call).toBeTruthy();
-        expect(call[1].body.get('system_prompt')).toBe('只列三条要点');
-        expect(call[1].body.get('prompt_preset')).toBe('custom');
+        expect(call[1].body.get('system_prompt')).toBeNull();
+        expect(call[1].body.get('prompt_preset')).toBeNull();
         expect(screen.getByLabelText('note').value).toBe('text-only note');
     });
 
-    it('offers the text model as a second choice when the frames are there, and that choice uses the prompt', async () => {
+    it('offers the text model as a second choice when the frames are there', async () => {
         claudeWithTextKey();
         const fetchSpy = stubTextRewrite();
         mount(finishedTask());
 
         await openRegenerateDialog();
         const choice = screen.getByTestId('regenerate-alternative');
-        expect(choice.textContent).toBe('改用文本模型按文字重写（会用你选的提示词，截图不保留）');
+        expect(choice.textContent).toBe('改用文本模型按文字写（笔记里不带截图）');
         await act(async () => { fireEvent.click(choice); });
         await advance(0);
 
         expect(api.startJobVisualNote).not.toHaveBeenCalled();
-        expect(textRewriteCall(fetchSpy)[1].body.get('system_prompt')).toBe('只列三条要点');
+        expect(textRewriteCall(fetchSpy)).toBeTruthy();
+        expect(textRewriteCall(fetchSpy)[1].body.get('system_prompt')).toBeNull();
     });
 
     it('still lets Claude rewrite from the frames when the task has them', async () => {
@@ -553,9 +555,10 @@ describe('a task with automatic Feishu export', () => {
         mount(task());
         await advance(5000);
         expect(screen.getByLabelText('note').value).toBe('# note');
+        expect(screen.queryByTestId('lark-export-link')).toBeNull();
         await advance(10000);
+        expect(screen.getByTestId('lark-export-link').getAttribute('href')).toBe('https://feishu.example/doc');
         await advance(30000);
-        // The third answer carries the link; nothing is asked after it.
         expect(api.getJob).toHaveBeenCalledTimes(3);
     });
 
@@ -586,6 +589,7 @@ describe('a task with automatic Feishu export', () => {
         fireEvent.change(screen.getByLabelText('note'), {target: {value: 'my edit'}});
         await advance(5000);
         expect(screen.getByLabelText('note').value).toBe('my edit');
+        expect(screen.getByTestId('lark-export-link')).toBeTruthy();
     });
 
     it('gives up after ten minutes', async () => {

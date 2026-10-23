@@ -527,7 +527,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "empty_ai_note",
             "AI 返回了空笔记",
             "AI 没有生成可用内容。",
-            "点「写笔记」再试；如果重复出现，调整提示词或更换模型。",
+            "点「写笔记」再试；如果重复出现，换一个写笔记的模型，或交给你的 agent 写。",
         )
     if "失去了访问自己程序文件夹的权限" in raw or (
         "operation not permitted" in lowered and "/" not in raw

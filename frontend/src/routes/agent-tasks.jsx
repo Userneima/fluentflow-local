@@ -475,7 +475,7 @@ const factBlock = 'inline-flex items-center gap-1 whitespace-nowrap rounded-[8px
 // border, so it reads as a button without hovering over it (review 2026-10-23:
 // 12 of 127 records had one and only a small arrow told them apart).
 const openableFactBlock = '!border-[#b9b5b5] !bg-white text-[#111111] shadow-[0_1px_0_rgba(17,17,17,0.06)] dark:!border-white/30 dark:!bg-white/[0.04] dark:text-white';
-const iconButton = 'inline-flex size-9 items-center justify-center rounded-[12px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]';
+const iconButton = 'inline-flex size-7 items-center justify-center rounded-[10px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]';
 
 // Length and size, and for a link the platform it came from: where a downloaded
 // video came from is not visible anywhere else on the row.
@@ -489,7 +489,7 @@ const sizeAndLengthLabel = (job, lang) => {
     return parts.join(' · ');
 };
 
-const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highlighted = false, cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onRetry}) => {
+const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highlighted = false, cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onOpenSteps, onRetry}) => {
     const zh = lang === 'zh';
     const taskId = taskIdForJob(job);
     const highlightRef = useRef(null);
@@ -528,6 +528,8 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
         : `${progress}%`;
     const menuItems = [
         cancellableLive ? {label: zh ? '取消任务' : 'Cancel task', disabled: cancellingTaskId === taskId, onClick: () => onCancel(job)} : null,
+        // Step-by-step state and the failure diagnosis of this one task.
+        taskId ? {label: zh ? '处理过程' : 'Processing steps', onClick: () => onOpenSteps(job)} : null,
         terminal && taskId ? {icon: 'delete', label: zh ? '删除记录' : 'Delete record', onClick: () => onDelete(job)} : null,
     ].filter(Boolean);
     const menuBusy = deletingTaskId === taskId || cancellingTaskId === taskId;
@@ -1015,12 +1017,14 @@ const AgentTasks = () => {
     // render; the cards receive stable wrappers that look them up through a ref,
     // which is what lets a card skip rendering when its row did not change.
     const handlersRef = useRef({});
-    handlersRef.current = {cancelLiveJob, deleteTerminalJob, downloadCutFile, openResult, retryTerminalJob};
+    const openSteps = (job) => navigate(`/tasks/${encodeURIComponent(taskIdForJob(job))}/agent`);
+    handlersRef.current = {cancelLiveJob, deleteTerminalJob, downloadCutFile, openResult, openSteps, retryTerminalJob};
     const cardHandlers = useMemo(() => ({
         onCancel: (job) => handlersRef.current.cancelLiveJob(job),
         onDelete: (job) => handlersRef.current.deleteTerminalJob(job),
         onDownloadCut: (job) => handlersRef.current.downloadCutFile(job),
         onOpenResult: (job) => handlersRef.current.openResult(job),
+        onOpenSteps: (job) => handlersRef.current.openSteps(job),
         onRetry: (job) => handlersRef.current.retryTerminalJob(job),
     }), []);
 

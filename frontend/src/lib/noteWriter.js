@@ -82,17 +82,6 @@ export const noteWriterBatchClause = (writer, lang = 'zh') => {
     return zh ? `，并由 ${noteWriterLabel(writer, lang)} 各写一份笔记` : `, and ${noteWriterLabel(writer, lang)} writes a note for each`;
 };
 
-// Said beside "更换提示词" when Claude writes the note from the frames. The
-// prompt templates and the note mode feed the text-model note only; the frame
-// note has its own instructions, so changing them does nothing to it until the
-// note is rewritten with a text model. Empty for every other writer.
-export const notePromptScopeSentence = (writer, lang = 'zh') => {
-    if (writer?.kind !== 'claude') return '';
-    return lang === 'zh'
-        ? '当前由 Claude 结合画面写笔记，不读提示词和笔记模式。要按提示词写，把笔记交给你的 agent 按提示词重写。'
-        : 'Claude is writing notes from the video frames and does not read the prompt or note mode. To use the prompt, hand the note to your agent to rewrite with it.';
-};
-
 // Whether this task's note was written by the text model because the frame
 // note could not run (local_intake_flow._write_text_note_instead). The person
 // expected a note with screenshots and has to be told why there are none.

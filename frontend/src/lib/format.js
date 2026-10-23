@@ -910,7 +910,7 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 titleEn: 'AI returned an empty note',
                 detailZh: 'AI 返回了空笔记，没有生成可用内容。',
                 detailEn: 'The AI returned an empty note and produced no usable content.',
-                nextZh: '点「写笔记」再试；如果重复出现，换用直接生成模式或调整提示词。',
+                nextZh: '点「写笔记」再试；如果重复出现，换一个写笔记的模型，或交给你的 agent 写。',
                 nextEn: 'Regenerate the note; if it repeats, use direct mode or adjust the prompt.',
             }),
         ],
@@ -1108,14 +1108,4 @@ export const timeAgo = (ts, t) => {
     if(m<60) return `${m} ${t('dash.mAgo')}`;
     if(h<24) return `${h} ${t('dash.hAgo')}`;
     return `${dy} ${t('dash.dAgo')}`;
-};
-
-// What the editor says after a manual Feishu export: that it landed, and how
-// many screenshots did not make it into the document.
-export const larkExportToastText = (response={}, t=(key)=>key) => {
-    const total = Number(response?.image_count || 0);
-    const uploaded = Number(response?.image_upload_count || 0);
-    const missing = Math.max(0, total - uploaded);
-    const done = t('edit.exportDone');
-    return missing > 0 ? `${done} · ${t('edit.exportImagesMissing').replace('{n}', String(missing))}` : done;
 };

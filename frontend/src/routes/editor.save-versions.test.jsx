@@ -164,7 +164,7 @@ describe('after the text model writes the note', () => {
             </MemoryRouter>,
         );
         fireEvent.click(await screen.findByTestId('write-note'));
-        await act(async () => { fireEvent.click(await screen.findByText('开始写')); });
+        await act(async () => { fireEvent.click(await screen.findByText('edit.regenerateConfirmAction')); });
         await waitFor(() => expect(screen.getByLabelText('note').value).toContain('重写的正文'));
 
         fireEvent.change(screen.getByLabelText('note'), {target: {value: '# 新笔记\n\n重写的正文。我补一句。'}});

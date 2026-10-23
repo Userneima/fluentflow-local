@@ -78,6 +78,7 @@ const mount = () => render(
         <Routes>
             <Route path="/agent" element={<AgentTasks/>}/>
             <Route path="/editor" element={<EditorAddress/>}/>
+            <Route path="/tasks/:taskId/agent" element={<EditorAddress/>}/>
         </Routes>
     </MemoryRouter>,
 );
@@ -119,6 +120,16 @@ describe('a finished record', () => {
         expect(screen.queryByRole('button', {name: '查看结果'})).toBeNull();
         fireEvent.click(screen.getByRole('button', {name: '录像 a'}));
         expect((await screen.findByTestId('editor-address')).textContent).toBe('/editor?task=a');
+    });
+
+    // The task's processing page (steps and the failure diagnosis) is reached
+    // from the record's 更多 menu (lane-two review, 2026-10-23).
+    it('opens the processing steps from the 更多 menu', async () => {
+        tasks = [finished('a', {})];
+        mount();
+        fireEvent.click(screen.getByRole('button', {name: '更多'}));
+        fireEvent.click(screen.getByRole('menuitem', {name: '处理过程'}));
+        expect((await screen.findByTestId('editor-address')).textContent).toBe('/tasks/a/agent');
     });
 
     it('tells the editor there are places left to judge', async () => {

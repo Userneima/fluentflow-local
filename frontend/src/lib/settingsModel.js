@@ -6,7 +6,10 @@ export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashsc
 // skipAiSummary: the page's "transcript only" switch, gone from the page; a
 // value left in a browser silently stopped every note. An agent still asks for
 // a transcript only per task (skip_summary, decision 1.1).
-export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi', 'elevenLabsApiKey', 'skipAiSummary'];
+// The prompt keys: nothing on the page edits a prompt any more, and a copy
+// left in this browser would still be sent with every note (decision 6.33).
+export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi', 'elevenLabsApiKey', 'skipAiSummary',
+    'promptPreset', 'customPromptText', 'defaultPromptOverride', 'hiddenPromptPresets', 'promptOverrides', 'userPromptPresets'];
 // What this build would use if the service could not say; the service's own
 // table (backend model_defaults, GET /models/defaults) is what the page shows.
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-flash';

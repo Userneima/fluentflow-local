@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { claudeRewriteSettled, cutItemsToJudge, findSegmentAt, sizeTextareas, mergeNoteFields, noteCameFromClaude, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+import { claudeRewriteSettled, cutFlowSummary, isAutoCutFlow, cutItemsToJudge, findSegmentAt, sizeTextareas, mergeNoteFields, noteCameFromClaude, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
 
 describe('shouldKeepVideoReviewMounted', () => {
     it('keeps the player mounted while playback is between subtitle segments', () => {
@@ -112,7 +112,7 @@ describe('regenerating while a rewrite is already running', () => {
             }, 'zh');
             expect(copy.confirmDisabled).toBe(true);
             expect(copy.alternative).toBe(null);
-            expect(copy.desc).toContain('正在重写');
+            expect(copy.desc).toContain('正在写');
         }
     });
 });
@@ -201,5 +201,74 @@ describe('sizeTextareas', () => {
         });
         sizeTextareas(boxes);
         expect(boxes.map((b) => b.style.height)).toEqual(['10px', '40px', '25px']);
+    });
+});
+
+// Whether the page is about the cut file: the header says 「剪后文件读不到了」
+// only for such a task (decision 6.20, 6.33). A task whose automatic cut was
+// declined is about the original and must never be told its cut file is gone.
+const autoResult = (extra = {}) => ({
+    task_id: 't1',
+    transcript_media: 'debreath_media',
+    debreath: {
+        status: 'completed',
+        ran_before_transcription: true,
+        used_for_transcription: true,
+        rendered: true,
+        render_verified: true,
+        plan: {cut_count: 4, removed_seconds: 6.4, removed_percent: 46, source_duration_seconds: 13.9, kept_seconds: 7.5},
+    },
+    artifacts: {debreath_media: {filename: 'debreath/lecture_debreath.mp4'}},
+    ...extra,
+});
+
+describe('isAutoCutFlow', () => {
+    it('recognises a task that cut itself before transcribing', () => {
+        expect(isAutoCutFlow(autoResult())).toBe(true);
+    });
+
+    it('does not claim the flow for a task cut after it was transcribed', () => {
+        expect(isAutoCutFlow({
+            task_id: 't1',
+            transcript_media: 'source',
+            debreath: {status: 'completed', rendered: true, plan: {cut_count: 4}},
+        })).toBe(false);
+    });
+
+    it('does not claim it when the automatic cut declined and the original was used', () => {
+        // The manual entries must stay visible here: the page is about the recording.
+        expect(isAutoCutFlow(autoResult({
+            transcript_media: 'source',
+            debreath: {ran_before_transcription: true, used_for_transcription: false},
+        }))).toBe(false);
+    });
+
+    it('leaves old results alone', () => {
+        expect(isAutoCutFlow({task_id: 't1'})).toBe(false);
+        expect(isAutoCutFlow(null)).toBe(false);
+    });
+});
+
+describe('cutFlowSummary', () => {
+    it('carries the numbers of the cut and the cut file', () => {
+        expect(cutFlowSummary(autoResult())).toEqual({
+            cutCount: 4,
+            removedSeconds: 6.4,
+            removedPercent: 46,
+            sourceSeconds: 13.9,
+            keptSeconds: 7.5,
+            mediaArtifact: {filename: 'debreath/lecture_debreath.mp4'},
+            renderVerified: true,
+        });
+    });
+
+    it('is null for anything that did not go through the automatic flow', () => {
+        expect(cutFlowSummary({task_id: 't1', transcript_media: 'source'})).toBeNull();
+    });
+
+    it('still summarises when the cut file record is gone, so the header can say so', () => {
+        const summary = cutFlowSummary(autoResult({artifacts: {}}));
+        expect(summary.mediaArtifact).toBeNull();
+        expect(summary.cutCount).toBe(4);
     });
 });

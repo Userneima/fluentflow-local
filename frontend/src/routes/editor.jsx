@@ -1,11 +1,6 @@
 import {memo,useState,useEffect,useRef,useCallback,useMemo} from 'react';
 import {Link, useSearchParams} from 'react-router-dom';
 import {AlertCircle} from 'lucide-react';
-import {
-    DEFAULT_PROMPT_PRESET,
-    presetDisplayLabel,
-    resolveSystemPromptFromSettings,
-} from '../lib/promptPresets.js';
 import SvgIcon from '../components/SvgIcon.jsx';
 import EditorSplitHandle from '../components/EditorSplitHandle.jsx';
 import {
@@ -64,7 +59,6 @@ import {
     noteIsBeingWritten,
     noteWritingSettled,
     claudeRewriteSettled,
-    noteCameFromClaude,
     mergeNoteFields,
     mergeLarkFields,
     AUTO_EXPORT_WAIT_MS,
@@ -1128,7 +1122,6 @@ const Editor = () => {
         getJob(taskId, resultJobOptionsRef.current).then(done).catch(() => done(null));
     }, [getJob, setLastResult, showToast]);
     const buildAiOptions = (settings) => ({
-        systemPrompt: resolveSystemPromptFromSettings(settings)||null,
         noteMode: settings.noteMode||'auto',
         generateVisuals: !!settings.autoIllustrate,
         sttProvider: effectiveSttProvider(settings, runtimeConfig),
@@ -1238,8 +1231,8 @@ const Editor = () => {
                 if (fresh.visual_note?.status === 'failed') {
                     const reason = String(fresh.visual_note?.error || '').trim();
                     showToast(zh
-                        ? `Claude 重写笔记失败${reason ? `：${reason}` : ''}，原来的笔记没有动。`
-                        : `Claude could not rewrite the note${reason ? `: ${reason}` : ''}. The previous note is unchanged.`, false);
+                        ? `Claude 写笔记没成功${reason ? `：${reason}` : ''}。`
+                        : `Claude could not write the note${reason ? `: ${reason}` : ''}.`, false);
                 } else {
                     showToast(tRef.current('edit.regenDone'));
                 }
@@ -1286,13 +1279,11 @@ const Editor = () => {
         [runtimeConfig, credentialStatus],
     );
 
-    const currentNoteFromClaude = noteCameFromClaude(result);
     const regenerateCopy = regenerateDialogCopy({
         writerKind: noteWriter.kind,
         writerLabel: noteWriter.kind === 'claude' || noteWriter.kind === 'text_model'
             ? noteWriterLabel(noteWriter, lang)
             : (lang === 'zh' ? '设置里选择的模型' : 'the model chosen in settings'),
-        currentNoteFromClaude,
         frameNote,
         textWriterLabel: textWriter.kind === 'text_model' ? noteWriterLabel(textWriter, lang) : '',
         textWriterReady: textWriter.kind === 'text_model',
@@ -1309,7 +1300,7 @@ const Editor = () => {
             await startJobVisualNote(taskId, {replace_note: true}, resultJobOptions);
             setNoteWatch({taskId, requestedAtMs, sawRunning: false});
             showToast(lang === 'zh'
-                ? 'Claude 正在结合画面重写笔记，写好后会自动替换右侧笔记。'
+                ? 'Claude 正在结合画面写笔记，写好会自动出现在右侧。'
                 : 'Claude is rewriting the note from the frames; it replaces the note on the right when done.');
         } catch (err) {
             setRegenerating(false);
@@ -1336,10 +1327,7 @@ const Editor = () => {
             if(result.filename) fd.append('source_filename', result.filename);
             if(durSec > 0) fd.append('source_duration_seconds', String(durSec));
             if(settings.noteMode) fd.append('note_mode', settings.noteMode);
-            const activePrompt = resolveSystemPromptFromSettings(settings);
-            if(activePrompt) fd.append('system_prompt', activePrompt);
-            fd.append('prompt_preset', settings.promptPreset || DEFAULT_PROMPT_PRESET);
-            fd.append('prompt_preset_label', presetDisplayLabel(settings.promptPreset || DEFAULT_PROMPT_PRESET, settings, lang));
+            // Written the default way; no prompt from this browser (decision 6.33).
             const r = await apiFetch(`${API_BASE}/regenerate-summary`, {method:'POST', body:fd});
             if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||'Regeneration failed');
             const data = await r.json();
@@ -1365,8 +1353,8 @@ const Editor = () => {
                         note_mode_covered_important_evidence_count: data.note_mode_covered_important_evidence_count||null,
                         note_mode_coverage_missing_count: data.note_mode_coverage_missing_count||null,
                         chapter_coverage: data.chapter_coverage||null,
-                        prompt_preset: data.prompt_preset || settings.promptPreset || DEFAULT_PROMPT_PRESET,
-                        prompt_preset_label: data.prompt_preset_label || presetDisplayLabel(settings.promptPreset || DEFAULT_PROMPT_PRESET, settings, lang),
+                        prompt_preset: data.prompt_preset || null,
+                        prompt_preset_label: data.prompt_preset_label || null,
                         });
             // The rewritten note has a new version, which this answer does not
             // carry. Until the task is read again the note is not editable, so
@@ -1554,7 +1542,9 @@ const Editor = () => {
 
     // The one thing in the slim header that needs the user, if anything, and
     // where clicking it takes them.
-    const autoExportError = !result?.lark_response?.url && result?.lark_error ? String(result.lark_error) : '';
+    const larkDocUrl = result?.lark_response?.url || '';
+    const larkDocTitle = result?.lark_doc_title || resultTitle || '';
+    const autoExportError = !larkDocUrl && result?.lark_error ? String(result.lark_error) : '';
     const noteMissing = !!result && !hasEditableSummary && (result.summary_skipped || result.summary_status === 'failed' || !!result.summary_error);
     const noteBeingWritten = regenerating || noteIsBeingWritten(result);
     const headerStatus = cutFileUnavailable
@@ -1582,8 +1572,6 @@ const Editor = () => {
         )}
         {regenerateConfirmOpen && (
             <RegenerateConfirmDialog
-                title={noteMissing ? (lang === 'zh' ? '写笔记' : 'Write the note') : ''}
-                confirmLabel={noteMissing ? (lang === 'zh' ? '开始写' : 'Start writing') : ''}
                 transcriptTitle={rawEditorTitle}
                 description={regenerateCopy.desc}
                 warning={regenerateCopy.warning}
@@ -1666,7 +1654,21 @@ const Editor = () => {
                                 {headerStatus.label}
                             </button>
                         )}
-                        <div className="ml-auto flex shrink-0 items-center">
+                        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                            {/* The Feishu document this note was exported to, when there is one. */}
+                            {larkDocUrl && (
+                                <a
+                                    href={larkDocUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    data-testid="lark-export-link"
+                                    aria-label={lang === 'zh' ? '打开飞书文档' : 'Open the Feishu document'}
+                                    title={`${lang === 'zh' ? '打开飞书文档' : 'Open the Feishu document'}：${larkDocTitle}`}
+                                    className="inline-flex size-7 items-center justify-center rounded-[10px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]"
+                                >
+                                    <SvgIcon name="open_in_new" className="text-base"/>
+                                </a>
+                            )}
                             <OutputFolderLine taskId={activeTaskId} result={result} lang={lang} compact/>
                         </div>
                     </div>
@@ -2000,6 +2002,14 @@ const Editor = () => {
                                             {summaryFailureHint && (
                                                 <p className="rounded-[14px] border border-error/20 bg-error-container px-3 py-2 text-xs font-semibold leading-relaxed text-on-error-container">
                                                     {summaryFailureHint}
+                                                    {result?.task_id && (
+                                                        <>
+                                                            {' '}
+                                                            <Link data-testid="task-steps-link" to={`/tasks/${encodeURIComponent(result.task_id)}/agent`} className="underline hover:no-underline">
+                                                                {lang === 'zh' ? '处理过程' : 'Processing steps'}
+                                                            </Link>
+                                                        </>
+                                                    )}
                                                 </p>
                                             )}
                                             <AgentNotePrompt result={result} lang={lang}/>

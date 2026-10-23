@@ -206,7 +206,7 @@ describe('cut places waiting for a judgement, in the editor', () => {
         mount('/editor', task('t1', {debreath: judgedCut({a: 'agree', b: 'agree'})}));
 
         await screen.findByRole('heading', {name: '课程 t1'});
-        expect(screen.queryByTestId('cut-judge-entry')).toBeNull();
+        expect(screen.queryByTestId('editor-header-status')).toBeNull();
     });
 
     it('opens the places straight away from the records page link, once', async () => {

@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {noteExplanation, notePromptScopeSentence, noteWriterBatchClause, noteWriterLabel, resolveNoteWriter} from './noteWriter.js';
+import {noteExplanation, noteWriterBatchClause, noteWriterLabel, resolveNoteWriter} from './noteWriter.js';
 
 // Requirement: every screen names the same writer, and it is the one the
 // backend will actually use (local_intake_flow.auto_note_will_run).
@@ -56,31 +56,6 @@ describe('who writes the note', () => {
     });
 });
 
-// Requirement: the prompt templates and the note mode only shape the text-model
-// note. When Claude writes from the frames, the person changing them is told so
-// before expecting a different note; for a text-model writer nothing is added.
-describe('what the prompt button says about who uses the prompt', () => {
-    it('says Claude does not read the prompt and points to the user\'s agent', () => {
-        const writer = resolveNoteWriter({
-            runtimeConfig: {writesItsOwnNote: true},
-            credentialStatus: {visual_note_available: true},
-        });
-        const zh = notePromptScopeSentence(writer, 'zh');
-        expect(zh).toMatch(/Claude 结合画面写笔记/);
-        expect(zh).toMatch(/交给你的 agent 按提示词重写/);
-        expect(notePromptScopeSentence(writer, 'en')).toMatch(/hand the note to your agent/);
-    });
-
-    it('says nothing extra when a text model writes the note, since the prompt applies directly', () => {
-        const writer = resolveNoteWriter({
-            runtimeConfig: {writesItsOwnNote: false},
-            credentialStatus: {deepseek_api_key_configured: true},
-            settings: {aiProvider: 'deepseek'},
-        });
-        expect(writer.kind).toBe('text_model');
-        expect(notePromptScopeSentence(writer, 'zh')).toBe('');
-    });
-});
 
 
 describe('noteExplanation', () => {

@@ -157,8 +157,6 @@ describe('every entry sends the same settings', () => {
 
         // And that set is the user's settings kept in this browser.
         expect(upload).toMatchObject({
-            system_prompt: '只列三条要点',
-            prompt_preset: 'custom',
             generate_visuals: 'true',
             voice_enhance: 'true',
         });
@@ -172,6 +170,18 @@ describe('every entry sends the same settings', () => {
         await submitThroughEveryEntry();
         for (const entry of ['upload', 'paths', 'folder', 'link']) {
             for (const field of ['ai_provider', 'ai_model', 'speaker_diarization', 'export_to_lark']) {
+                expect(sent[entry][field], `${entry} ${field}`).toBeUndefined();
+            }
+        }
+    });
+
+    // Decision 6.33 (2026-10-23): nothing on the page edits a prompt any more,
+    // so a prompt left in this browser is not sent; the note is written the
+    // default way and changing it is the agent's job.
+    it('sends no prompt kept in this browser from any entry', async () => {
+        await submitThroughEveryEntry();
+        for (const entry of ['upload', 'paths', 'folder', 'link']) {
+            for (const field of ['system_prompt', 'prompt_preset', 'prompt_preset_label']) {
                 expect(sent[entry][field], `${entry} ${field}`).toBeUndefined();
             }
         }
@@ -273,4 +283,5 @@ describe('what the page asks the service', () => {
         vi.stubGlobal('fetch', vi.fn(async () => json({detail: 'no'}, 500)));
         expect(await api.getVisualNoteAvailability('t1')).toEqual({available: null, reason: null});
     });
+
 });

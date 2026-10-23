@@ -2,11 +2,6 @@ import {useEffect, useMemo, useRef, useState} from 'react';
 import {Link, useNavigate, useSearchParams} from 'react-router-dom';
 import {XCircle} from 'lucide-react';
 import {
-    DEFAULT_PROMPT_PRESET,
-    presetDisplayLabel,
-    resolveSystemPromptFromSettings,
-} from '../lib/promptPresets.js';
-import {
     createTaskId,
     effectiveSttProvider,
     submittedSttProvider,
@@ -220,11 +215,10 @@ const MediaText = () => {
         setSourceMode(next);
     };
 
+    // No prompt is sent: the note is written the default way, and changing how
+    // is the user's agent's job (decision 6.33).
     const buildAiOptions = (settings) => ({
-        systemPrompt: resolveSystemPromptFromSettings(settings) || null,
         noteMode: settings.noteMode || 'auto',
-        promptPreset: settings.promptPreset || DEFAULT_PROMPT_PRESET,
-        promptPresetLabel: presetDisplayLabel(settings.promptPreset || DEFAULT_PROMPT_PRESET, settings, lang),
         generateVisuals: !!settings.autoIllustrate,
         sttProvider: effectiveSttProvider(settings, runtimeConfig),
         cookiesFromBrowser: settings.videoCookiesBrowser || '',
