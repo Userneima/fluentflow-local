@@ -253,7 +253,7 @@ export const resultToHistoryEntry = (sourceResult, fallback={}) => {
     const durSec = result.audio_duration_seconds || 0;
     const hasTranscript = hasTranscriptResult(result);
     const displayTitle = resultDisplayTitle(result, fallback);
-    const rawTitle = result.raw_title || fallback.rawTitle || result.filename || fallback.name || 'Untitled';
+    const rawTitle = result.raw_title || fallback.rawTitle || result.filename || fallback.name || '未命名任务';
     const rawFilename = result.filename || fallback.rawFilename || fallback.name || '';
     const segments = result.raw_segments || [];
     return {

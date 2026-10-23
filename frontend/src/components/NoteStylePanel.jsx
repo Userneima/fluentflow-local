@@ -1,7 +1,8 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {inputClass, saveButtonClass, cellBase} from './settingsPrimitives.jsx';
+import {inputClass, cellBase} from './settingsPrimitives.jsx';
 import {useApi} from '../app/shared.jsx';
 import {simpleMd} from '../lib/markdown.js';
+import {button, linkButton} from '../lib/ui.js';
 
 // 「我的笔记风格」 on the settings page.
 //
@@ -13,7 +14,7 @@ import {simpleMd} from '../lib/markdown.js';
 const POLL_MS = 5000;
 const EXAMPLE_SEPARATOR = /\n\s*={3,}\s*\n/;
 
-const ghostButton = 'rounded-[12px] border border-[#dedada] px-3 py-2 text-xs font-bold text-[#333] transition hover:bg-[#f2f1f1] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.15] dark:text-white/80 dark:hover:bg-white/[0.08]';
+
 
 const NotePreview = ({title, markdown}) => (
     <div className="min-w-0 rounded-[14px] border border-[#ece8e8] bg-white dark:border-white/[0.1] dark:bg-white/[0.03]">
@@ -99,7 +100,7 @@ export const NoteStylePanel = () => {
                 <span>
                     现在用的是：<b>{skill.is_default ? 'FluentFlow 默认写法' : '你自己的写法'}</b>
                 </span>
-                <button type="button" className="text-xs font-semibold text-primary underline" onClick={() => setShowSkill((open) => !open)}>
+                <button type="button" className={linkButton('blue', 'sm')} onClick={() => setShowSkill((open) => !open)}>
                     {showSkill ? '收起写法全文' : '查看写法全文'}
                 </button>
             </div>
@@ -152,12 +153,12 @@ export const NoteStylePanel = () => {
                     )}
                     <div className="flex flex-wrap gap-2">
                         {proposal.status === 'ready' && (
-                            <button type="button" className={saveButtonClass} disabled={!!busy} onClick={() => act('apply', noteStyle.apply)}>
+                            <button type="button" className={button('primary', 'lg')} disabled={!!busy} onClick={() => act('apply', noteStyle.apply)}>
                                 用新写法
                             </button>
                         )}
                         {proposal.status !== 'running' && (
-                            <button type="button" className={ghostButton} disabled={!!busy} onClick={() => act('discard', noteStyle.discard)}>
+                            <button type="button" className={button('secondary', 'md')} disabled={!!busy} onClick={() => act('discard', noteStyle.discard)}>
                                 {proposal.status === 'ready' ? '不用，保持现在的写法' : '关掉'}
                             </button>
                         )}
@@ -167,7 +168,7 @@ export const NoteStylePanel = () => {
                 <>
                     <div className="grid gap-2">
                         {unreadEdits > 0 ? (
-                            <button type="button" className={`${saveButtonClass} justify-self-start`} disabled={!!busy} onClick={() => act('edits', noteStyle.fromEdits)}>
+                            <button type="button" className={`${button('primary', 'lg')} justify-self-start`} disabled={!!busy} onClick={() => act('edits', noteStyle.fromEdits)}>
                                 {busy === 'edits' ? '正在读你改过的笔记…' : `从我改过的 ${unreadEdits} 份笔记里找规则`}
                             </button>
                         ) : (
@@ -176,13 +177,13 @@ export const NoteStylePanel = () => {
                             </p>
                         )}
                         {!examplesOpen ? (
-                            <button type="button" className="justify-self-start text-xs font-semibold text-primary underline" onClick={() => setExamplesOpen(true)}>
+                            <button type="button" className={`justify-self-start ${linkButton('blue', 'sm')}`} onClick={() => setExamplesOpen(true)}>
                                 用几份我满意的笔记起步
                             </button>
                         ) : (
                             <div className="grid gap-2">
                                 <textarea
-                                    className={`${inputClass} min-h-[140px] font-normal`}
+                                    className={`${inputClass} h-auto min-h-[140px] py-2 font-normal`}
                                     placeholder={'粘贴你满意的笔记，Markdown 或纯文本都行。多份之间单独一行写 ===。'}
                                     value={examples}
                                     onChange={(event) => setExamples(event.target.value)}
@@ -190,7 +191,7 @@ export const NoteStylePanel = () => {
                                 <div className="flex gap-2">
                                     <button
                                         type="button"
-                                        className={saveButtonClass}
+                                        className={button('primary', 'lg')}
                                         disabled={!!busy || !examples.trim()}
                                         onClick={() => act('examples', async () => {
                                             await noteStyle.fromExamples(examples.split(EXAMPLE_SEPARATOR));
@@ -200,7 +201,7 @@ export const NoteStylePanel = () => {
                                     >
                                         {busy === 'examples' ? '正在提炼…' : '提炼写法规则'}
                                     </button>
-                                    <button type="button" className={ghostButton} onClick={() => setExamplesOpen(false)}>取消</button>
+                                    <button type="button" className={button('secondary', 'md')} onClick={() => setExamplesOpen(false)}>取消</button>
                                 </div>
                             </div>
                         )}
@@ -219,7 +220,7 @@ export const NoteStylePanel = () => {
                                     </span>
                                     <button
                                         type="button"
-                                        className="text-xs font-semibold text-on-surface-variant underline"
+                                        className={linkButton('muted', 'sm')}
                                         onClick={(event) => { event.preventDefault(); act('dismiss', () => noteStyle.dismiss(item.id)); }}
                                     >
                                         不要
@@ -243,7 +244,7 @@ export const NoteStylePanel = () => {
                                 {candidates.length > 0 && (
                                     <button
                                         type="button"
-                                        className={saveButtonClass}
+                                        className={button('primary', 'lg')}
                                         disabled={!!busy || noTask || !picked.length}
                                         onClick={() => propose({candidate_ids: picked})}
                                     >
@@ -256,13 +257,13 @@ export const NoteStylePanel = () => {
                                             <option value="">退回到以前的写法…</option>
                                             {history.map((item) => <option key={item.name} value={item.name}>{item.saved_at}</option>)}
                                         </select>
-                                        <button type="button" className={ghostButton} disabled={!!busy || noTask || !restore} onClick={() => propose({restore})}>
+                                        <button type="button" className={button('secondary', 'md')} disabled={!!busy || noTask || !restore} onClick={() => propose({restore})}>
                                             对比这个旧版本
                                         </button>
                                     </>
                                 )}
                                 {!skill.is_default && (
-                                    <button type="button" className={ghostButton} disabled={!!busy || noTask} onClick={() => propose({use_default: true})}>
+                                    <button type="button" className={button('secondary', 'md')} disabled={!!busy || noTask} onClick={() => propose({use_default: true})}>
                                         对比默认写法
                                     </button>
                                 )}

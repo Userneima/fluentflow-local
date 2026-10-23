@@ -27,6 +27,7 @@ import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {NoteStylePanel} from '../components/NoteStylePanel.jsx';
 import LocalAgentAccessPanel from '../components/LocalAgentAccessPanel.jsx';
 import {dismissNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
+import {linkButton, rowButton, surfaceCard} from '../lib/ui.js';
 
 // The settings page (decision 6.24): one card per step a recording goes
 // through, each saying first who does that step now and in what state; its
@@ -34,14 +35,13 @@ import {dismissNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 // kept together under 账号和 Key and linked from the steps that use them.
 // Something that needs the person is said once at the top.
 
-const linkClass = 'text-xs font-semibold text-primary underline underline-offset-2';
 
 const StepCard = ({step, open, onToggle, lang, children}) => {
     const zh = lang === 'zh';
     const attention = step.level === 'attention';
     return (
-        <section id={step.id} className="scroll-mt-7 rounded-[16px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
-            <button type="button" aria-expanded={open} onClick={onToggle} className="grid w-full gap-1 px-5 py-4 text-left md:grid-cols-[112px_minmax(0,1fr)_auto] md:items-center md:gap-4">
+        <section id={step.id} className={`scroll-mt-7 ${surfaceCard}`}>
+            <button type="button" aria-expanded={open} onClick={onToggle} className={`${rowButton} grid gap-1 md:grid-cols-[112px_minmax(0,1fr)_auto] md:items-center md:gap-4 px-5 py-4`}>
                 <h2 className="text-[13px] font-extrabold text-[#676970] dark:text-white/55">{step.title}</h2>
                 <p className={`text-sm font-semibold leading-relaxed ${attention ? 'text-amber-700 dark:text-amber-300' : 'text-[#111111] dark:text-white'}`}>
                     {step.summary}
@@ -129,7 +129,7 @@ const Settings = () => {
         );
     };
     const toAccounts = (text) => (
-        <button type="button" className={linkClass} onClick={() => goTo('accounts')}>{text}</button>
+        <button type="button" className={linkButton('blue', 'sm')} onClick={() => goTo('accounts')}>{text}</button>
     );
 
     return (
@@ -147,11 +147,11 @@ const Settings = () => {
                             <li key={item.id} className="flex flex-wrap items-baseline justify-between gap-2 text-sm font-semibold text-amber-900 dark:text-amber-100">
                                 <span>{pick(item.text)}</span>
                                 {item.action === 'turn_off_speakers' ? (
-                                    <button type="button" className={linkClass} onClick={() => state.updateSettingNow({speakerDiarization: false})}>
+                                    <button type="button" className={linkButton('blue', 'sm')} onClick={() => state.updateSettingNow({speakerDiarization: false})}>
                                         {zh ? '关掉区分讲话人' : 'Turn speaker labels off'}
                                     </button>
                                 ) : (
-                                    <button type="button" className={linkClass} onClick={() => goTo(item.target)}>{zh ? '去处理' : 'Fix'}</button>
+                                    <button type="button" className={linkButton('blue', 'sm')} onClick={() => goTo(item.target)}>{zh ? '去处理' : 'Fix'}</button>
                                 )}
                             </li>
                         ))}
@@ -204,8 +204,8 @@ const Settings = () => {
 
             {card('agent', <LocalAgentAccessPanel embedded/>)}
 
-            <section id="accounts" className="scroll-mt-7 rounded-[16px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
-                <button type="button" aria-expanded={accountsOpen} onClick={() => setAccountsOpen(!accountsOpen)} className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left">
+            <section id="accounts" className={`scroll-mt-7 ${surfaceCard}`}>
+                <button type="button" aria-expanded={accountsOpen} onClick={() => setAccountsOpen(!accountsOpen)} className={`${rowButton} flex items-center justify-between gap-4 px-5 py-4`}>
                     <span>
                         <h2 className="text-sm font-extrabold">{zh ? '账号和 Key' : 'Accounts and keys'}</h2>
                         <p className="mt-0.5 text-xs text-on-surface-variant">{claudeWritesNote
@@ -236,7 +236,7 @@ const Settings = () => {
                                             onUseTextProvider={state.updateSettingNow}
                                         />
                                     ) : (
-                                        <button type="button" onClick={() => setKeySetupOpen(true)} className={linkClass}>
+                                        <button type="button" onClick={() => setKeySetupOpen(true)} className={linkButton('blue', 'sm')}>
                                             {zh ? '第一次填 Key？看看 Key 是什么、去哪里申请、大概花多少钱' : 'First time? What a key is, where to get one, and roughly what it costs'}
                                         </button>
                                     )}

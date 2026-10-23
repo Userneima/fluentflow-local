@@ -1,6 +1,7 @@
 import {useState} from 'react';
 import {agentNotePrompt} from '../lib/noteWriter.js';
 import {useApp} from '../app/AppContext.jsx';
+import {button} from '../lib/ui.js';
 
 // Shown where a finished task has no note. With no model key configured this is
 // the normal state, not a failure: the person's own agent writes the note from
@@ -29,7 +30,7 @@ export default function AgentNotePrompt({result, lang = 'zh'}) {
             <button
                 type="button"
                 onClick={copy}
-                className="inline-flex h-8 items-center justify-center rounded-[12px] border border-[#dedada] bg-white px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]"
+                className={button('secondary', 'sm')}
             >
                 {copied ? (zh ? '已复制' : 'Copied') : (zh ? '复制这句' : 'Copy')}
             </button>

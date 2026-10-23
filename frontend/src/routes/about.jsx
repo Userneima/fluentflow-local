@@ -1,7 +1,8 @@
-import {Link, NavLink, useParams} from 'react-router-dom';
+import {NavLink, useParams} from 'react-router-dom';
 import {useEffect, useState} from 'react';
 import {useI18n} from '../app/shared.jsx';
 import SvgIcon from '../components/SvgIcon.jsx';
+import {segmentGroup, segmentItem} from '../lib/ui.js';
 
 const UPDATED_AT = '2026-10-09';
 const CHANGELOG_UPDATED_AT = globalThis.window?.FLUENTFLOW_CONFIG?.version?.changelogUpdatedAt
@@ -183,13 +184,13 @@ export const parseChangelog = (markdown) => (
 );
 
 const SectionList = ({sections}) => (
-    <div className="overflow-hidden rounded-[22px] border border-[#dedada] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
+    <div className="overflow-hidden rounded-[16px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.04]">
         {sections.map((section, index) => (
             <section key={section.title} className={`grid gap-3 px-5 py-5 md:grid-cols-[180px_minmax(0,1fr)] md:gap-8 ${index > 0 ? 'border-t border-[#ece8e8] dark:border-white/[0.10]' : ''}`}>
                 <h2 className="text-sm font-extrabold text-[#111111] dark:text-white">{section.title}</h2>
                 <div className="space-y-3">
                     {section.body.map((text) => (
-                        <p key={text} className="max-w-[70ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/58">
+                        <p key={text} className="max-w-[70ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/60">
                             {text}
                         </p>
                     ))}
@@ -230,7 +231,7 @@ const ChangelogPage = ({zh, onLoaded}) => {
     }, [onLoaded]);
 
     return (
-        <div className="overflow-hidden rounded-[22px] border border-[#dedada] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
+        <div className="overflow-hidden rounded-[16px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.04]">
             <section className="px-5 py-5">
                 <h2 className="mb-4 text-sm font-extrabold text-[#111111] dark:text-white">{zh ? '最近记录' : 'Recent entries'}</h2>
                 <div className="space-y-3">
@@ -239,7 +240,7 @@ const ChangelogPage = ({zh, onLoaded}) => {
                             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                                 <p className="text-sm font-extrabold text-[#111111] dark:text-white">{formatChangelogTitle(release.title, zh)}</p>
                                 {!release.date && (
-                                    <p className="text-xs font-semibold text-[#85868c] dark:text-white/42">
+                                    <p className="text-xs font-semibold text-[#85868c] dark:text-white/40">
                                         {zh ? '更新于' : 'Updated'} {release.updatedAt || formatDateTimeMinute(CHANGELOG_UPDATED_AT, zh)}
                                     </p>
                                 )}
@@ -247,7 +248,7 @@ const ChangelogPage = ({zh, onLoaded}) => {
                             {release.items.length > 0 && (
                                 <ul className="mt-2 space-y-1.5">
                                     {release.items.map((item) => (
-                                        <li key={item} className="text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/58">
+                                        <li key={item} className="text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/60">
                                             {item}
                                         </li>
                                     ))}
@@ -304,34 +305,26 @@ const About = () => {
                         <p className="mb-2 text-xs font-extrabold text-[#85868c] dark:text-white/45">
                             {zh ? '关于与协议' : 'About and terms'}
                         </p>
-                        <h1 className="font-headline text-2xl font-extrabold tracking-tight text-[#111111] dark:text-white">
+                        <h1 className="font-headline text-[20px] font-extrabold text-[#111111] dark:text-white">
                             {title}
                         </h1>
-                        <p className="mt-2 max-w-[68ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/58">
+                        <p className="mt-2 max-w-[68ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/60">
                             {intro}
                         </p>
                         <p className="mt-2 text-xs font-semibold text-[#85868c] dark:text-white/45">
                             {zh ? `最后更新：${headerUpdatedAt}` : `Last updated: ${headerUpdatedAt}`}
                         </p>
                     </div>
-                    <Link to="/media-text" className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-[14px] border border-[#dedada] bg-white px-4 text-sm font-extrabold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]">
-                        <SvgIcon name="arrow_back" className="text-[18px]"/>
-                        {zh ? '返回开始处理' : 'Back to start'}
-                    </Link>
                 </header>
 
-                <nav className="mb-5 flex flex-wrap gap-2" aria-label={zh ? '关于与协议页面' : 'About and terms pages'}>
+                <nav className={`mb-5 ${segmentGroup}`} aria-label={zh ? '关于与协议页面' : 'About and terms pages'}>
                     {legalNav.map((item) => (
                         <NavLink
                             key={item.key}
                             to={`/about/${item.key}`}
-                            className={({isActive}) => `inline-flex h-10 items-center gap-2 rounded-[14px] border px-4 text-sm font-extrabold transition active:translate-y-px ${
-                                isActive || activePage === item.key
-                                    ? 'border-[#111111] bg-[#111111] text-white dark:border-white dark:bg-white dark:text-[#111111]'
-                                    : 'border-[#dedada] bg-white text-[#111111] hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]'
-                            }`}
+                            className={({isActive}) => `${segmentItem(isActive || activePage === item.key)} gap-1.5`}
                         >
-                            <SvgIcon name={item.icon} className="text-[17px]"/>
+                            <SvgIcon name={item.icon} className="text-[15px]"/>
                             {zh ? item.zh : item.en}
                         </NavLink>
                     ))}

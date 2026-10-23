@@ -6,6 +6,7 @@ import {markdown, markdownKeymap} from '@codemirror/lang-markdown';
 import SvgIcon from './SvgIcon.jsx';
 import {noteLivePreview, syncFocus} from '../lib/noteLivePreview.js';
 import {lineStyleOf, setLineStyle, toggleInline, toggleList} from '../lib/noteEditorCommands.js';
+import {toolbarButton} from '../lib/ui.js';
 
 // The note editor (decision 5.34): the note's markdown source edited in place,
 // shown the way Obsidian's live preview shows it. Nothing is converted on the
@@ -117,7 +118,7 @@ const ToolbarButton = ({className = 'inline-flex', disabled = false, icon, label
         disabled={disabled}
         onMouseDown={(event) => event.preventDefault()}
         onClick={onClick}
-        className={`${className} size-8 shrink-0 items-center justify-center rounded-[8px] text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-30`}
+        className={`${className} ${toolbarButton()}`}
     >
         <SvgIcon name={icon} className="text-[17px]"/>
     </button>

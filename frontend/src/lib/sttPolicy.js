@@ -47,6 +47,6 @@ export const sttRouteOptions = ({lang, t}) => [{
 // show their own fallback copy).
 export const sttProviderLabel = (provider, lang) => (
     String(provider || '') === LOCAL_PROVIDER
-        ? (lang === 'zh' ? '本地转写' : 'Local STT')
+        ? (lang === 'zh' ? '本机转录' : 'Local STT')
         : null
 );

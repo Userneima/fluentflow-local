@@ -18,6 +18,7 @@ import {
     useApi,
     useI18n,
 } from '../app/shared.jsx';
+import {button} from '../lib/ui.js';
 
 // The individual settings controls. Each row takes the page state (see
 // routes/settings-state.js) and renders one control; which rows the page shows,
@@ -31,8 +32,8 @@ export const SettingsPageShell = ({banner = null, overlays = null, intro = null,
         <div className="ml-[var(--sidebar-offset)] min-h-screen bg-[#f8f7fb] pb-8 text-[#111111] transition-[margin] duration-200 ease-out dark:bg-[#101010] dark:text-white/[0.92]">
             <main className="mx-auto h-dvh max-w-[1040px] overflow-y-auto px-8 py-7 hide-scrollbar">
                 <header className="mb-6">
-                    <h1 className="font-headline text-2xl font-extrabold tracking-tight text-[#111111] dark:text-white">{t('set.title')}</h1>
-                    <p className="mt-2 max-w-[62ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/58">
+                    <h1 className="font-headline text-[20px] font-extrabold text-[#111111] dark:text-white">{t('set.title')}</h1>
+                    <p className="mt-2 max-w-[62ch] text-sm font-semibold leading-relaxed text-[#676970] dark:text-white/60">
                         {intro || (lang === 'zh'
                             ? '这里放长期偏好和凭证。每个任务是怎么处理的，写在它自己的处理记录里。'
                             : 'Long-term preferences and credentials live here. How each task was handled is written in its own processing record.')}
@@ -148,7 +149,7 @@ export const VideoCookiesRow = ({state}) => {
                         type="button"
                         disabled={cookieChecking}
                         onClick={runCookieCheck}
-                        className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[12px] border border-[#dedada] bg-white px-4 text-xs font-bold text-[#111111] transition hover:bg-[#f4f3f3] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.10]"
+                        className={button('secondary', 'lg')}
                     >
                         {cookieChecking ? (lang === 'zh' ? '检测中…' : 'Checking…') : (lang === 'zh' ? '检测登录态' : 'Check login')}
                     </button>
@@ -695,7 +696,7 @@ export const PyannoteTokenRow = ({state, keyGroup}) => {
                     <SecretRemove state={state} group={keyGroup.group} keys={['pyannote_auth_token']} label={lang === 'zh' ? 'pyannote 令牌' : 'pyannote token'} lang={lang}/>
                 )}
                 {pyannoteTokenConfigured && !pyannoteTokenEditing && (
-                    <button type="button" onClick={()=>setPyannoteTokenEditing(true)} className="shrink-0 rounded-[10px] border border-[#dedada] px-3 py-2 text-xs font-bold hover:bg-[#efeeee] dark:border-white/[0.12] dark:hover:bg-white/[0.12]">
+                    <button type="button" onClick={()=>setPyannoteTokenEditing(true)} className={button('secondary', 'md')}>
                         {lang === 'zh' ? '更换' : 'Replace'}
                     </button>
                 )}
@@ -704,7 +705,7 @@ export const PyannoteTokenRow = ({state, keyGroup}) => {
                 <div className="flex flex-col gap-2 md:flex-row">
                     <SecretInput state={state} name="pyannote_auth_token" {...keyGroup} placeholder={lang === 'zh' ? '粘贴 Hugging Face hf_... token' : 'Paste Hugging Face hf_... token'}/>
                     {pyannoteTokenConfigured && (
-                        <button type="button" onClick={()=>{setPyannoteTokenEditing(false); setSecretDraft(d=>({...d, pyannote_auth_token: ''}));}} className="rounded-[14px] border border-[#dedada] px-3 py-3 text-sm font-extrabold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px dark:border-white/[0.12] dark:text-white dark:hover:bg-white/[0.10]">
+                        <button type="button" onClick={()=>{setPyannoteTokenEditing(false); setSecretDraft(d=>({...d, pyannote_auth_token: ''}));}} className={button('secondary', 'lg')}>
                             {lang === 'zh' ? '取消' : 'Cancel'}
                         </button>
                     )}

@@ -1,9 +1,10 @@
 import SvgIcon from './SvgIcon.jsx';
+import {optionCard, button, linkButton, surfaceCard} from '../lib/ui.js';
 
 // Building blocks for the settings page, used together with the rows in
 // settingsRows.jsx.
 export const Section = ({id, title, description, children}) => (
-    <section id={id} className="scroll-mt-7 rounded-[18px] border border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.06]">
+    <section id={id} className={`scroll-mt-7 ${surfaceCard}`}>
         <div className="border-b border-[#ece8e8] px-5 py-4 dark:border-white/[0.1]">
             <h2 className="font-headline text-base font-extrabold">{title}</h2>
             {description && <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">{description}</p>}
@@ -31,22 +32,13 @@ export const SettingCheckbox = ({id, checked, disabled, onChange}) => (
     </span>
 );
 
-export const inputClass = 'w-full rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-4 py-3 text-sm font-semibold text-[#111111] outline-none transition placeholder:text-[#aaa] focus:border-[#111111] focus:bg-white dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/30 dark:focus:border-white/40';
+export const inputClass = 'h-10 w-full rounded-[10px] border border-[#dedada] bg-[#fbfbfb] px-3 text-[13px] font-semibold text-[#111111] outline-none transition placeholder:text-[#aaa] focus:border-[#111111] focus:bg-white dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/30 dark:focus:border-white/40';
 export const fieldLabelClass = 'text-[11px] font-extrabold uppercase tracking-wider text-[#676970] dark:text-white/50';
-export const saveButtonClass = 'shrink-0 whitespace-nowrap rounded-[14px] bg-[#111111] px-4 py-3 text-sm font-extrabold text-white transition hover:bg-[#2a2a2a] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/[0.88]';
-export const cellBase = 'rounded-[14px] border border-[#ece8e8] bg-[#fbfbfb] px-4 py-3.5 dark:border-white/[0.1] dark:bg-white/[0.02]';
+export const cellBase = 'rounded-[12px] border border-[#ece8e8] bg-[#fbfbfb] px-4 py-3.5 dark:border-white/[0.1] dark:bg-white/[0.02]';
 
 const radioClass = (active) => [
     'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full border-2 transition',
     active ? 'border-primary' : 'border-[#c9c9c9] dark:border-white/30',
-].join(' ');
-
-const routeButtonClass = (active, disabled) => [
-    'flex min-h-[74px] flex-1 items-start gap-3 rounded-[14px] border px-4 py-3 text-left transition',
-    active
-        ? 'border-primary bg-primary/10 text-[#111111] dark:text-white'
-        : 'border-[#dedada] bg-[#f8f7f7] text-[#555] hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.1]',
-    disabled ? 'cursor-not-allowed opacity-45 hover:bg-[#f8f7f7] dark:hover:bg-white/[0.06]' : 'cursor-pointer active:translate-y-px',
 ].join(' ');
 
 // One card in a radio group of routes (transcription route, default source).
@@ -55,7 +47,7 @@ export const RouteCard = ({label, description, active, disabled = false, onClick
         type="button"
         disabled={disabled}
         aria-pressed={active}
-        className={routeButtonClass(active, disabled)}
+        className={optionCard(active, disabled)}
         onClick={() => { if (!disabled) onClick(); }}
     >
         <span className={radioClass(active)} aria-hidden="true">
@@ -97,7 +89,7 @@ export const SecretSaveBar = ({state, group, keys, lang}) => {
     const pending = secretsPending(keys);
     return (
         <div className="flex flex-wrap items-center gap-3">
-            <button type="button" disabled={secretSaving || !pending} onClick={() => saveSecrets(group, keys)} className={saveButtonClass}>
+            <button type="button" disabled={secretSaving || !pending} onClick={() => saveSecrets(group, keys)} className={button('primary', 'lg')}>
                 {secretSaving ? (lang === 'zh' ? '保存中…' : 'Saving…') : (lang === 'zh' ? '保存' : 'Save')}
             </button>
             {pending && !secretSaving && (
@@ -136,7 +128,7 @@ export const SecretRemove = ({state, group, keys, label, lang}) => {
         if (ok) removeSecrets(group, keys);
     };
     return (
-        <button type="button" disabled={secretSaving} onClick={remove} className="text-xs font-semibold text-on-surface-variant underline underline-offset-2 hover:text-red-600 disabled:opacity-40">
+        <button type="button" disabled={secretSaving} onClick={remove} className={linkButton('muted', 'sm')}>
             {zh ? '移除' : 'Remove'}
         </button>
     );

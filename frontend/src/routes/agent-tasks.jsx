@@ -50,6 +50,7 @@ import {
 } from '../lib/taskState.js';
 import {useJobPolling} from '../lib/useJobPolling.js';
 import {extraUrlsIgnoredNotice, retryInputForJob, retryOptionsForJob} from '../lib/linkRetry.js';
+import {factBlock, factToggle, button, iconButton, linkButton, chip, textButton} from '../lib/ui.js';
 
 const taskIdForJob = (job) => String(job?.task_id || job?.result?.task_id || '').trim();
 
@@ -266,19 +267,19 @@ const sourceLabel = (job, lang) => {
         if (host.includes('douyin.com')) return isZh ? '抖音' : 'Douyin';
         return isZh ? '视频平台链接' : 'Video platform link';
     }
-    if (sourceType === 'transcript_file') return isZh ? '本地字幕文件' : 'Local subtitle file';
-    if (sourceType === 'queue_upload' || sourceType === 'video_file') return isZh ? '本地视频文件' : 'Local video file';
-    if (sourceType === 'audio_file') return isZh ? '本地音频文件' : 'Local audio file';
+    if (sourceType === 'transcript_file') return isZh ? '本机字幕文件' : 'Local subtitle file';
+    if (sourceType === 'queue_upload' || sourceType === 'video_file') return isZh ? '本机视频文件' : 'Local video file';
+    if (sourceType === 'audio_file') return isZh ? '本机音频文件' : 'Local audio file';
     const filename = String(job?.source_filename || job?.result?.filename || '').toLowerCase();
-    if (/\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(filename)) return isZh ? '本地视频文件' : 'Local video file';
-    if (/\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i.test(filename)) return isZh ? '本地音频文件' : 'Local audio file';
-    if (/\.(srt|vtt|txt|md)$/i.test(filename)) return isZh ? '本地字幕文件' : 'Local subtitle file';
-    return isZh ? '本地文件' : 'Local file';
+    if (/\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(filename)) return isZh ? '本机视频文件' : 'Local video file';
+    if (/\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i.test(filename)) return isZh ? '本机音频文件' : 'Local audio file';
+    if (/\.(srt|vtt|txt|md)$/i.test(filename)) return isZh ? '本机字幕文件' : 'Local subtitle file';
+    return isZh ? '本机文件' : 'Local file';
 };
 
 // What the cut actually did to this recording, or why it did not.
 //
-// This replaced the "处理路线" tile, which said "本地转写" on every card in an
+// This replaced the "处理路线" tile, which said "本机转录" on every card in an
 // edition that only transcribes locally — a column of identical words. The cut is
 // the opposite: it is different per recording, it is the reason the result is
 // shorter than the upload, and it is the number worth seeing at a glance.
@@ -427,17 +428,17 @@ const QueueUploadBanner = ({upload, lang, onCancel}) => {
     const progress = Math.max(0, Math.min(100, Number(upload.progress) || 2));
     const totalSize = upload.fileSizeMb ? fmtFileSize(upload.fileSizeMb) : '';
     return (
-        <section className="rounded-[20px] border border-blue-200 bg-blue-50/80 p-4 shadow-[0_16px_42px_-36px_rgba(17,17,17,.45)] dark:border-blue-400/20 dark:bg-blue-400/10 dark:shadow-none">
+        <section className="rounded-[16px] border border-blue-200 bg-blue-50/80 p-4 dark:border-blue-400/20 dark:bg-blue-400/10">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                     <p className="inline-flex items-center gap-2 text-[12px] font-extrabold text-blue-700 dark:text-blue-200">
                         <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/>
                         {lang === 'zh' ? '正在接收上传批次' : 'Receiving upload batch'}
                     </p>
-                    <h2 className="mt-2 font-headline text-[18px] font-extrabold text-[#111111] dark:text-white">
+                    <h2 className="mt-2 font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
                         {lang === 'zh' ? `${count} 个文件正在上传` : `${count} files are uploading`}
                     </h2>
-                    <p className="mt-1 text-[13px] font-semibold leading-5 text-[#57585d] dark:text-white/64">
+                    <p className="mt-1 text-[13px] font-semibold leading-5 text-[#57585d] dark:text-white/65">
                         {lang === 'zh'
                             ? '每个文件的进程卡已显示在下方，上传提交完成后会切换为真实任务记录。'
                             : 'Each file is shown below; after upload is submitted, the cards switch to real task records.'}
@@ -452,7 +453,7 @@ const QueueUploadBanner = ({upload, lang, onCancel}) => {
                     <span className="rounded-full border border-blue-200 bg-white/70 px-3 py-1 text-[12px] font-extrabold tabular-nums text-blue-700 dark:border-blue-400/20 dark:bg-white/[0.08] dark:text-blue-100">
                         {progress}%
                     </span>
-                    <button type="button" onClick={onCancel} className="inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-red-200 bg-white/70 px-2.5 text-[12px] font-extrabold text-red-700 transition hover:bg-red-50 dark:border-red-400/30 dark:bg-white/[0.08] dark:text-red-200 dark:hover:bg-red-400/10">
+                    <button type="button" onClick={onCancel} className={button('danger', 'sm')}>
                         <XCircle className="size-3.5" strokeWidth={2.15}/>
                         {lang === 'zh' ? '取消上传' : 'Cancel upload'}
                     </button>
@@ -470,13 +471,6 @@ const QueueUploadBanner = ({upload, lang, onCancel}) => {
 // truncate, the cut block opens the processing report in place, and the right
 // side holds only two icon buttons in fixed slots. A finished record with
 // nothing wrong carries no badge, the same rule as the start page's recent list.
-const factBlock = 'inline-flex items-center gap-1 whitespace-nowrap rounded-[8px] border border-transparent bg-[#f2f1f1] px-2 py-0.5 text-[12px] font-semibold text-[#57585d] dark:bg-white/[0.07] dark:text-white/62';
-// The cut block that opens a processing report: a white block with a visible
-// border, so it reads as a button without hovering over it (review 2026-10-23:
-// 12 of 127 records had one and only a small arrow told them apart).
-const openableFactBlock = '!border-[#b9b5b5] !bg-white text-[#111111] shadow-[0_1px_0_rgba(17,17,17,0.06)] dark:!border-white/30 dark:!bg-white/[0.04] dark:text-white';
-const iconButton = 'inline-flex size-7 items-center justify-center rounded-[10px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]';
-
 // Length and size, and for a link the platform it came from: where a downloaded
 // video came from is not visible anywhere else on the row.
 const sizeAndLengthLabel = (job, lang) => {
@@ -560,7 +554,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                                 type="button"
                                 disabled={opening}
                                 onClick={() => onOpenResult(job)}
-                                className="line-clamp-2 break-words text-left hover:underline disabled:cursor-wait disabled:opacity-60"
+                                className={`${textButton} line-clamp-2 break-words`}
                             >
                                 {displayTitle}
                             </button>
@@ -583,7 +577,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                                     aria-expanded={reportOpen}
                                     onClick={() => setReportOpen((value) => !value)}
                                     title={zh ? (reportOpen ? '收起处理说明' : '看处理说明') : (reportOpen ? 'Hide processing report' : 'Processing report')}
-                                    className={`${factBlock} ${openableFactBlock} cursor-pointer transition hover:!bg-[#efeeee] dark:hover:!bg-white/[0.12] ${reportOpen ? '!border-[#111111] !bg-[#111111] !text-white dark:!border-white dark:!bg-white dark:!text-[#111111]' : ''}`}
+                                    className={factToggle(reportOpen)}
                                 >
                                     {cutText}
                                     <ChevronDown className={`size-3.5 transition-transform ${reportOpen ? 'rotate-180' : ''}`} strokeWidth={2.4}/>
@@ -607,7 +601,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                         {menuItems.length ? (
                             <DropdownMenu
                                 trigger={(
-                                    <button type="button" disabled={menuBusy} aria-label={zh ? '更多' : 'More'} title={zh ? '更多' : 'More'} className={iconButton}>
+                                    <button type="button" disabled={menuBusy} aria-label={zh ? '更多' : 'More'} title={zh ? '更多' : 'More'} className={iconButton()}>
                                         {menuBusy ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <MoreHorizontal className="size-4" strokeWidth={2.15}/>}
                                     </button>
                                 )}
@@ -622,7 +616,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                     <div className={`h-2 overflow-hidden rounded-full bg-[#efeeee] dark:bg-white/[0.12] ${progressUnknown && live ? 'progress-indeterminate' : ''}`}>
                         {!progressUnknown && <div className="h-full rounded-full bg-[#111111] transition-all duration-500 dark:bg-white" style={{width: `${progress}%`}}/>}
                     </div>
-                    <p className="mt-2 text-[12px] font-semibold leading-5 text-[#57585d] dark:text-white/62">
+                    <p className="mt-2 text-[12px] font-semibold leading-5 text-[#57585d] dark:text-white/60">
                         {liveStageDetail(job, lang, aheadName)}
                     </p>
                 </div>
@@ -632,12 +626,12 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                     <AlertCircle className="mt-0.5 size-4 shrink-0" strokeWidth={2.15}/>
                     <span className="min-w-0 flex-1 break-words">{diagnosis.detail}</span>
                     {diagnosis.settingsTarget ? (
-                        <Link to={diagnosis.settingsTarget} className="shrink-0 font-extrabold underline hover:no-underline">
+                        <Link to={diagnosis.settingsTarget} className={`shrink-0 ${linkButton()}`}>
                             {zh ? '去设置修改' : 'Change it in Settings'}
                         </Link>
                     ) : null}
                     {!retryUseless ? (
-                        <button type="button" disabled={retryingTaskId === taskId} onClick={() => onRetry(job)} className="shrink-0 font-extrabold underline hover:no-underline disabled:opacity-50">
+                        <button type="button" disabled={retryingTaskId === taskId} onClick={() => onRetry(job)} className={`shrink-0 ${linkButton()}`}>
                             {retryingTaskId === taskId ? (zh ? '正在入队…' : 'Queuing…') : (zh ? '重新提交' : 'Submit again')}
                         </button>
                     ) : null}
@@ -665,7 +659,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                             type="button"
                             disabled={downloadingTaskId === taskId}
                             onClick={() => onDownloadCut?.(job)}
-                            className="ml-auto inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[10px] border border-current/25 bg-white/70 px-2.5 text-[12px] font-extrabold transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/[0.10] dark:hover:bg-white/[0.16]"
+                            className={`ml-auto ${button('secondary', 'sm')}`}
                         >
                             {zh ? '下载剪后文件' : 'Download the cut file'}
                         </button>
@@ -1041,7 +1035,7 @@ const AgentTasks = () => {
                 {extraUrlsIgnored ? (
                     <div data-testid="extra-urls-ignored" className="flex items-start justify-between gap-3 rounded-[16px] border border-[#f5c86b] bg-[#fffaf0] px-4 py-3 text-sm font-semibold text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]">
                         <span>{extraUrlsIgnoredNotice(lang)}</span>
-                        <button type="button" onClick={() => setExtraUrlsIgnored(false)} className="shrink-0 text-[12px] font-extrabold underline">
+                        <button type="button" onClick={() => setExtraUrlsIgnored(false)} className={`shrink-0 ${linkButton('inherit', 'sm')}`}>
                             {lang === 'zh' ? '知道了' : 'Got it'}
                         </button>
                     </div>
@@ -1050,7 +1044,7 @@ const AgentTasks = () => {
                 {duplicateNotice ? (
                     <div data-testid="duplicate-link-notice" className="flex items-start justify-between gap-3 rounded-[16px] border border-[#c7d2fe] bg-[#eef2ff] px-4 py-3 text-sm font-semibold text-[#3730a3] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/80">
                         <span>{lang === 'zh' ? '这个链接已经在处理中，没有重复提交。' : 'This link is already being processed; it was not submitted again.'}</span>
-                        <button type="button" onClick={() => setDuplicateNotice(false)} className="shrink-0 text-[12px] font-extrabold underline">
+                        <button type="button" onClick={() => setDuplicateNotice(false)} className={`shrink-0 ${linkButton('inherit', 'sm')}`}>
                             {lang === 'zh' ? '知道了' : 'Got it'}
                         </button>
                     </div>
@@ -1073,9 +1067,7 @@ const AgentTasks = () => {
                                     type="button"
                                     aria-pressed={active}
                                     onClick={() => setFilter(item.id)}
-                                    className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12px] font-extrabold transition ${active
-                                        ? 'border-[#111111] bg-[#111111] text-white dark:border-white dark:bg-white dark:text-[#111111]'
-                                        : 'border-[#dedada] bg-white text-[#57585d] hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]'}`}
+                                    className={chip(active)}
                                 >
                                     {lang === 'zh' ? item.zh : item.en}
                                     {loading && item.id === 'all' ? null : <span className="tabular-nums opacity-70">{count}</span>}
@@ -1098,20 +1090,20 @@ const AgentTasks = () => {
                             value={query}
                             onChange={(event) => setQuery(event.target.value)}
                             placeholder={lang === 'zh' ? '搜索标题' : 'Search titles'}
-                            className="h-9 w-full rounded-[12px] border border-[#dedada] bg-white pl-9 pr-3 text-[13px] font-semibold text-[#111111] outline-none placeholder:text-[#a2a3a8] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:focus:border-white/40"
+                            className="h-8 w-full rounded-[10px] border border-[#dedada] bg-white pl-9 pr-3 text-[13px] font-semibold text-[#111111] outline-none placeholder:text-[#a2a3a8] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:focus:border-white/40"
                         />
                     </label>
                 </section>
 
                 <section className="space-y-2">
                     {loading && !displayJobs.length && !queueUploadJob && (
-                        <div className="flex h-48 items-center justify-center rounded-[22px] border border-[#dedada] bg-white text-sm font-semibold text-[#676970] dark:border-white/[0.10] dark:bg-white/[0.055] dark:text-white/60">
+                        <div className="flex h-48 items-center justify-center rounded-[16px] border border-[#e4e0e0] bg-white text-sm font-semibold text-[#676970] dark:border-white/[0.10] dark:bg-white/[0.055] dark:text-white/60">
                             <LoaderCircle className="mr-2 size-4 animate-spin" strokeWidth={2.15}/>
-                            {lang === 'zh' ? '正在读取任务...' : 'Loading tasks...'}
+                            {lang === 'zh' ? '正在读取处理记录…' : 'Loading records…'}
                         </div>
                     )}
                     {!loading && displayJobs.length === 0 && !queueUploadJob && (
-                        <div className="rounded-[24px] border border-[#dedada] bg-white p-8 text-center dark:border-white/[0.10] dark:bg-white/[0.055]">
+                        <div className="rounded-[16px] border border-[#e4e0e0] bg-white p-8 text-center dark:border-white/[0.10] dark:bg-white/[0.055]">
                             <History className="mx-auto size-9 text-[#85868c] dark:text-white/45" strokeWidth={2.15}/>
                             <h2 className="mt-3 font-headline text-[18px] font-extrabold text-[#111111] dark:text-white">
                                 {lang === 'zh' ? '当前没有处理记录' : 'No processing records'}
@@ -1120,7 +1112,7 @@ const AgentTasks = () => {
                                 {lang === 'zh' ? '开始一个新任务后，处理进度会直接作为记录显示在这里。' : 'Start a task and its processing record will appear here.'}
                             </p>
                             <div className="mt-5 flex flex-wrap justify-center gap-2">
-                                <Link to="/media-text?mode=media" className="inline-flex h-10 items-center gap-2 rounded-[14px] bg-[#111111] px-4 text-[13px] font-extrabold text-white transition hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111]">
+                                <Link to="/media-text?mode=media" className={button('primary', 'lg')}>
                                     <Plus className="size-4" strokeWidth={2.15}/>
                                     {lang === 'zh' ? '开始处理' : 'Start'}
                                 </Link>

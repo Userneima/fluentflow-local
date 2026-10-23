@@ -2,6 +2,7 @@ import {useEffect, useState} from 'react';
 import {AlertCircle, Check, CheckCircle2, ChevronDown, ChevronRight, FileSearch, LoaderCircle, Play, RotateCcw, Scissors, Undo2} from 'lucide-react';
 import {API_BASE, apiFetch} from '../app/shared.jsx';
 import {fmtDuration} from '../lib/format.js';
+import {button, linkButton, textButton, statusButton} from '../lib/ui.js';
 
 // What the cut did to this recording, organised for reading (cut_report on the
 // backend): groups, what is open and what is folded, one sentence per item.
@@ -39,16 +40,11 @@ const post = async (url, body) => {
 
 // Lengths in the shared wording; a gap under ten seconds keeps its tenths,
 // since "0 秒" would hide what was cut.
-const length = (seconds) => {
-    const value = Number(seconds) || 0;
-    return value < 10 ? `${value.toFixed(1)} 秒` : fmtDuration(value);
-};
+const length = (seconds) => fmtDuration(seconds, 'zh', {tenths: true});
 
 const surveyOf = (job) => job?.result?.debreath?.survey;
 export const hasReport = (job) => !!surveyOf(job)?.has_report || !!surveyOf(job)?.report;
 
-const smallButton = 'inline-flex h-7 shrink-0 items-center gap-1 rounded-[9px] border border-[#dedada] bg-white px-2.5 text-[12px] font-bold text-[#57585d] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]';
-const linkButton = 'text-[12px] font-extrabold text-[#85868c] underline hover:no-underline disabled:opacity-50 dark:text-white/55';
 const okText = 'inline-flex items-center gap-1 text-[12px] font-extrabold text-emerald-700 dark:text-emerald-300';
 
 const RERENDER_NOTE = '会按你的改动重新导出剪后视频、重写笔记，要等几分钟。';
@@ -56,8 +52,8 @@ const RERENDER_NOTE = '会按你的改动重新导出剪后视频、重写笔记
 const Confirm = ({label, onYes, onNo}) => (
     <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[10px] bg-[#fffaf0] px-2.5 py-2 text-[12px] font-semibold text-[#8a5a00] dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]">
         <span>{RERENDER_NOTE}</span>
-        <button type="button" className={smallButton} onClick={onYes}>{label}</button>
-        <button type="button" className={linkButton} onClick={onNo}>取消</button>
+        <button type="button" className={button('secondary', 'sm')} onClick={onYes}>{label}</button>
+        <button type="button" className={linkButton('muted')} onClick={onNo}>取消</button>
     </div>
 );
 
@@ -116,17 +112,17 @@ const Item = ({item, taskId, mode, busy, onAgree, onFlip}) => {
             ) : null}
             {timed ? (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <button type="button" className={smallButton} onClick={() => setListening((on) => !on)}>
+                    <button type="button" className={button('secondary', 'sm')} onClick={() => setListening((on) => !on)}>
                         <Play className="size-3" strokeWidth={2.15}/>
                         {listening ? '收起' : '在原片里听'}
                     </button>
                     {mode === 'judge' ? (
                         <>
-                            <button type="button" className={smallButton} disabled={busy} onClick={() => onAgree([item.key], 'agree')}>
+                            <button type="button" className={button('secondary', 'sm')} disabled={busy} onClick={() => onAgree([item.key], 'agree')}>
                                 <Check className="size-3" strokeWidth={2.15}/>
                                 {removed ? '剪得对' : '确实该保留'}
                             </button>
-                            <button type="button" className={smallButton} disabled={busy} onClick={() => setConfirming(true)}>
+                            <button type="button" className={button('secondary', 'sm')} disabled={busy} onClick={() => setConfirming(true)}>
                                 {removed ? <Undo2 className="size-3" strokeWidth={2.15}/> : <Scissors className="size-3" strokeWidth={2.15}/>}
                                 {removed ? '这段不该剪' : '这段应该剪掉'}
                             </button>
@@ -135,12 +131,12 @@ const Item = ({item, taskId, mode, busy, onAgree, onFlip}) => {
                         <span className={okText}>
                             <CheckCircle2 className="size-3.5" strokeWidth={2.15}/>
                             {removed ? '你确认了剪得对' : '你确认了该保留'}
-                            <button type="button" className={`ml-1 ${linkButton}`} disabled={busy} onClick={() => onAgree([item.key], 'pending')}>撤回</button>
+                            <button type="button" className={`ml-1 ${linkButton('muted')}`} disabled={busy} onClick={() => onAgree([item.key], 'pending')}>撤回</button>
                         </span>
                     ) : theirs ? (
                         <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">你改的，要改回去在下面"你改过的地方"里撤销</span>
                     ) : (
-                        <button type="button" className={linkButton} disabled={busy} onClick={() => setConfirming(true)}>
+                        <button type="button" className={linkButton('muted')} disabled={busy} onClick={() => setConfirming(true)}>
                             {removed ? '改成保留' : '改成剪掉'}
                         </button>
                     )}
@@ -165,11 +161,11 @@ const Section = ({taskId, title, items, folded, mode, busy, onAgree, onFlip, act
             <div className="flex flex-wrap items-center gap-2">
                 <button
                     type="button"
-                    className="flex items-center gap-1.5 text-left text-[13px] font-extrabold text-[#111111] dark:text-white"
+                    className={`${textButton} flex items-center gap-1.5`}
                     onClick={() => setOpen((value) => !value)}
                 >
                     <Chevron className="size-4 shrink-0 text-[#85868c]" strokeWidth={2.15}/>
-                    {title}
+                    <span className="text-[13px] font-extrabold text-[#111111] dark:text-white">{title}</span>
                     <span className="text-[12px] font-semibold text-[#85868c] dark:text-white/55">{items.length} 条</span>
                 </button>
                 {action}
@@ -198,7 +194,7 @@ const Change = ({change, index, busy, onUndo}) => {
                 {undone ? (
                     <span className="text-[12px] font-bold text-[#85868c] dark:text-white/55">已撤销</span>
                 ) : (
-                    <button type="button" className={smallButton} disabled={busy} onClick={() => setConfirming(true)}>
+                    <button type="button" className={button('secondary', 'sm')} disabled={busy} onClick={() => setConfirming(true)}>
                         <RotateCcw className="size-3" strokeWidth={2.15}/>
                         撤销这次改动
                     </button>
@@ -302,9 +298,7 @@ export const CutReport = ({job, embedded = false}) => {
         <div className={embedded ? '' : 'mt-3'}>
             {embedded ? null : <button
                 type="button"
-                className={toJudge && !open
-                    ? `${smallButton} border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]`
-                    : smallButton}
+                className={toJudge && !open ? statusButton('warning') : button('secondary', 'sm')}
                 onClick={toggle}
             >
                 {toJudge && !open ? <AlertCircle className="size-3.5" strokeWidth={2.15}/> : <FileSearch className="size-3.5" strokeWidth={2.15}/>}
@@ -313,7 +307,7 @@ export const CutReport = ({job, embedded = false}) => {
             {open ? (
                 <div className={embedded ? '' : 'mt-2 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 py-3 dark:border-white/[0.10] dark:bg-white/[0.04]'}>
                     {loading ? (
-                        <p className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#57585d] dark:text-white/62">
+                        <p className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#57585d] dark:text-white/60">
                             <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.15}/>
                             正在读取…
                         </p>
@@ -324,7 +318,7 @@ export const CutReport = ({job, embedded = false}) => {
                             </p>
                             {report.summary ? <p className="mt-1 text-[13px] font-semibold leading-5 text-[#57585d] dark:text-white/70">{report.summary}</p> : null}
                             {rerendering ? (
-                                <p className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-extrabold text-[#57585d] dark:text-white/62">
+                                <p className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-extrabold text-[#57585d] dark:text-white/60">
                                     <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.15}/>
                                     按你的改动重新导出剪后视频，导完这份说明会更新，笔记也会重写…
                                 </p>
@@ -346,7 +340,7 @@ export const CutReport = ({job, embedded = false}) => {
                                                 onAgree={agree}
                                                 onFlip={flip}
                                                 action={(
-                                                    <button type="button" className={smallButton} disabled={busy} onClick={() => agree(waiting.map((item) => item.key), 'agree')}>
+                                                    <button type="button" className={button('secondary', 'sm')} disabled={busy} onClick={() => agree(waiting.map((item) => item.key), 'agree')}>
                                                         <Check className="size-3" strokeWidth={2.15}/>
                                                         剩下的都没问题
                                                     </button>
@@ -412,7 +406,7 @@ export const CutReport = ({job, embedded = false}) => {
                     ) : error ? (
                         <p className="text-[12px] font-semibold text-red-700 dark:text-red-300">{error}</p>
                     ) : (
-                        <p className="text-[12px] font-semibold text-[#57585d] dark:text-white/62">这条视频没有处理说明。</p>
+                        <p className="text-[12px] font-semibold text-[#57585d] dark:text-white/60">这条视频没有处理说明。</p>
                     )}
                 </div>
             ) : null}

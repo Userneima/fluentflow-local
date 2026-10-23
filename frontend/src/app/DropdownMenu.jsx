@@ -1,6 +1,7 @@
 import {cloneElement, isValidElement, useRef, useState} from 'react';
 import {Download, ExternalLink, FileText, Trash2} from 'lucide-react';
 import {useDismissable} from '../lib/useDismissable.js';
+import {bareButton, menuItem, floatingLayer} from '../lib/ui.js';
 
 const dropdownIconMap = {
     download: Download,
@@ -27,7 +28,7 @@ export const DropdownMenu = ({trigger, items, align='right'}) => {
             onClick: (event) => { trigger.props.onClick?.(event); if (!event.defaultPrevented) toggle(); },
         })
         : (
-            <button type="button" onClick={toggle} {...menuAttrs} className="block appearance-none border-0 bg-transparent p-0 text-left">
+            <button type="button" onClick={toggle} {...menuAttrs} className={bareButton}>
                 {trigger}
             </button>
         );
@@ -35,11 +36,11 @@ export const DropdownMenu = ({trigger, items, align='right'}) => {
         <div className="relative" ref={wrapperRef}>
             {triggerNode}
             {open && (
-                <div ref={menuRef} role="menu" className={`absolute top-full mt-1 ${align==='right'?'right-0':'left-0'} z-50 bg-white rounded-lg shadow-xl border border-slate-200 py-1 min-w-[180px] animate-[fadeIn_0.15s_ease-out]`}>
+                <div ref={menuRef} role="menu" className={`absolute top-full mt-1 ${align==='right'?'right-0':'left-0'} z-50 min-w-[180px] p-1 ${floatingLayer}`}>
                     {items.map((it,i) => it.divider ? (
                         <div key={i} role="separator" className="border-t border-slate-100 my-1"/>
                     ) : (
-                        <button key={i} type="button" role="menuitem" onClick={()=>{close(); it.onClick?.();}} disabled={it.disabled} className="w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 flex items-center gap-3 text-on-surface disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                        <button key={i} type="button" role="menuitem" onClick={()=>{close(); it.onClick?.();}} disabled={it.disabled} className={menuItem(it.danger ? 'danger' : 'default')}>
                             {it.icon && (() => {
                                 const Icon = dropdownIconMap[it.icon] || FileText;
                                 return <Icon className="size-4 text-slate-400" strokeWidth={2.15}/>;

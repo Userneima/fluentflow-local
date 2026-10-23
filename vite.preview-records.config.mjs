@@ -1,4 +1,4 @@
-import base from './vite.preview-lane3.config.mjs';
+import base from './vite.local.config.mjs';
 
 // A read-only preview of the frontend against the real data on 8000, on its own
 // port (5197): look at pages without restarting 8000. Every write to the
@@ -33,6 +33,8 @@ export default {
     server: {
         ...base.server,
         port: 5197,
-        proxy: {...base.server.proxy, '/workflow-status': {target, changeOrigin: false}},
+        // Everything that is not the app's own source, page or static file goes
+        // to the service. Page addresses were rewritten to /local.html above.
+        proxy: {'^/(?!src/|@|node_modules/|assets/|local\\.html|favicon)': {target, changeOrigin: false}},
     },
 };

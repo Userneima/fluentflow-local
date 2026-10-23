@@ -3,6 +3,7 @@ import {AlertCircle, CheckCircle2, LoaderCircle, RotateCcw} from 'lucide-react';
 import {friendlyTaskError, useApi, useI18n} from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import {markBackendJob} from '../lib/taskState.js';
+import {button} from '../lib/ui.js';
 
 // How often an open window asks whether the service restarted under it. The
 // usual restart happens while the page stays open, so asking only on load
@@ -195,7 +196,7 @@ const InterruptedTasksDialog = () => {
 
     return (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="interruptedTasksTitle">
-            <div className="flex max-h-[85dvh] w-full max-w-[520px] flex-col rounded-[22px] border border-[#dedada] bg-white p-5 shadow-[0_28px_90px_-52px_rgba(17,17,17,.72)] dark:border-white/[0.12] dark:bg-[#151515]">
+            <div className="flex max-h-[85dvh] w-full max-w-[520px] flex-col rounded-[16px] border border-[#e4e0e0] bg-white p-5 shadow-[0_24px_60px_-30px_rgba(17,17,17,0.45)] dark:border-white/[0.12] dark:bg-[#151515]">
                 <div className="flex items-start gap-3">
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">
                         <RotateCcw className="size-5" strokeWidth={2.15}/>
@@ -217,21 +218,21 @@ const InterruptedTasksDialog = () => {
                 ) : null}
                 <div className="mt-5 flex justify-end gap-2">
                     {finished ? (
-                        <button type="button" onClick={close} className="inline-flex h-10 items-center rounded-[12px] bg-[#111111] px-4 text-xs font-bold text-white transition hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/[0.88]">
+                        <button type="button" onClick={close} className={button('primary', 'md')}>
                             {text.done}
                         </button>
                     ) : retryableCount ? (
                         <>
-                            <button type="button" disabled={busy} onClick={dismiss} className="inline-flex h-10 items-center rounded-[12px] border border-[#dedada] px-4 text-xs font-bold hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:hover:bg-white/[0.12]">
+                            <button type="button" disabled={busy} onClick={dismiss} className={button('secondary', 'md')}>
                                 {text.later}
                             </button>
-                            <button type="button" disabled={busy} onClick={retryAll} className="inline-flex h-10 items-center gap-2 rounded-[12px] bg-[#111111] px-4 text-xs font-bold text-white transition hover:bg-[#2a2a2a] disabled:opacity-60 dark:bg-white dark:text-[#111111] dark:hover:bg-white/[0.88]">
+                            <button type="button" disabled={busy} onClick={retryAll} className={button('primary', 'md')}>
                                 {busy ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : null}
                                 {text.retryAll(retryableCount)}
                             </button>
                         </>
                     ) : (
-                        <button type="button" disabled={busy} onClick={dismiss} className="inline-flex h-10 items-center rounded-[12px] bg-[#111111] px-4 text-xs font-bold text-white transition hover:bg-[#2a2a2a] disabled:opacity-60 dark:bg-white dark:text-[#111111] dark:hover:bg-white/[0.88]">
+                        <button type="button" disabled={busy} onClick={dismiss} className={button('primary', 'md')}>
                             {text.done}
                         </button>
                     )}

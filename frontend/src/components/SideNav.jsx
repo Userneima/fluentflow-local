@@ -18,10 +18,11 @@ import {
 } from 'lucide-react';
 import {useI18n, useSettings} from '../app/shared.jsx';
 import {useDismissable} from '../lib/useDismissable.js';
+import {iconButton, navItem, menuItem, rowButton, floatingLayer} from '../lib/ui.js';
 
 const FluentFlowLogo = ({compact = false}) => (
-    <div className={`relative flex shrink-0 items-center justify-center bg-[#111111] text-white shadow-[0_18px_42px_-26px_rgba(17,17,17,.75)] [--ff-logo-line:#111111] dark:bg-white dark:text-[#111111] dark:[--ff-logo-line:#ffffff] ${compact ? 'size-6 rounded-[9px]' : 'size-10 rounded-[14px]'}`}>
-        <svg viewBox="0 0 64 64" className={compact ? 'size-[18px]' : 'size-[30px]'} fill="none" aria-hidden="true">
+    <div className={`relative flex shrink-0 items-center justify-center bg-[#111111] text-white [--ff-logo-line:#111111] dark:bg-white dark:text-[#111111] dark:[--ff-logo-line:#ffffff] ${compact ? 'size-6 rounded-[9px]' : 'size-8 rounded-[10px]'}`}>
+        <svg viewBox="0 0 64 64" className={compact ? 'size-[18px]' : 'size-[24px]'} fill="none" aria-hidden="true">
             <rect x="17" y="19" width="28" height="26" rx="8" fill="currentColor"/>
             <rect x="43" y="25" width="8" height="14" rx="4" fill="currentColor"/>
             <path d="M24 29h13M24 36h9" stroke="var(--ff-logo-line, #111111)" strokeWidth="4.2" strokeLinecap="round"/>
@@ -101,15 +102,15 @@ const SideNav = ({
                 <div className={`flex h-16 items-center ${collapsed ? 'mb-3 flex-col justify-center gap-1' : 'mb-3 justify-between gap-2'}`}>
                     <Link
                         to="/media-text"
-                        className={`flex min-w-0 items-center rounded-[14px] transition hover:bg-surface-container-low focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${collapsed ? 'h-8 w-10 justify-center p-0' : 'gap-2.5 w-full px-2.5 py-2'}`}
-                        aria-label="FluentFlow"
-                        title={collapsed ? 'FluentFlow' : undefined}
+                        className={`${rowButton} flex min-w-0 items-center ${collapsed ? 'justify-center' : 'gap-2.5'}`}
+                        aria-label="FluentFlow Local"
+                        title={collapsed ? 'FluentFlow Local' : undefined}
                     >
                         <FluentFlowLogo compact={collapsed}/>
                         {!collapsed && (
                             <div className="min-w-0">
-                                <h1 className="truncate font-headline text-[16px] font-extrabold leading-tight">FluentFlow</h1>
-                                <p className="truncate text-[10px] font-bold text-on-surface-variant">{t('nav.subtitle')}</p>
+                                <h1 className="whitespace-nowrap font-headline text-[14px] font-extrabold leading-tight">FluentFlow Local</h1>
+                                <p className="whitespace-nowrap text-[11px] font-semibold text-on-surface-variant">{t('nav.subtitle')}</p>
                             </div>
                         )}
                     </Link>
@@ -119,11 +120,11 @@ const SideNav = ({
                     <button
                         type="button"
                         onClick={onToggle}
-                        className={`flex shrink-0 items-center justify-center text-[#5f6368] transition hover:bg-[#efeeee] hover:text-[#111111] active:translate-y-px focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary dark:text-white/70 dark:hover:bg-white/[0.08] dark:hover:text-white ${collapsed ? 'h-5 w-10 rounded-[10px]' : 'h-8 w-8 rounded-xl'}`}
+                        className={iconButton('quiet', 'sm')}
                         aria-label={collapsed ? (lang === 'zh' ? '展开侧边栏' : 'Expand sidebar') : (lang === 'zh' ? '收起侧边栏' : 'Collapse sidebar')}
                         title={collapsed ? (lang === 'zh' ? '展开侧边栏' : 'Expand sidebar') : (lang === 'zh' ? '收起侧边栏' : 'Collapse sidebar')}
                     >
-                        <CollapseIcon className={collapsed ? 'size-[14px]' : 'size-[18px]'} strokeWidth={1.9}/>
+                        <CollapseIcon className="size-4" strokeWidth={1.9}/>
                     </button>
                     ) : null}
                 </div>
@@ -137,11 +138,8 @@ const SideNav = ({
                                 key={it.path}
                                 to={it.path}
                                 title={collapsed ? (it.label || t(it.k)) : undefined}
-                                className={`flex items-center rounded-[16px] text-[14px] font-semibold tracking-normal transition ${
-                                    active
-                                        ? 'bg-[#e8e5e5] text-[#111111] dark:bg-white/[0.12] dark:text-white'
-                                        : 'text-[#111111] hover:bg-[#efeeee] dark:text-white/[0.72] dark:hover:bg-white/[0.08] dark:hover:text-white'
-                                } ${collapsed ? 'mx-auto h-10 w-12 justify-center rounded-[16px] p-0' : 'gap-3 px-3.5 py-2.5'}`}
+                                aria-current={active ? 'page' : undefined}
+                                className={navItem(active, collapsed)}
                             >
                                 <Icon className="size-5 shrink-0" strokeWidth={2.15}/>
                                 <span className={collapsed ? 'sr-only' : 'truncate'}>{it.label || t(it.k)}</span>
@@ -156,12 +154,10 @@ const SideNav = ({
                         onClick={() => setMenuOpen((v) => !v)}
                         aria-haspopup="menu"
                         aria-expanded={menuOpen}
-                        className={`w-full rounded-[14px] border border-[#e5e5e5] bg-white text-left shadow-[0_1px_2px_rgba(17,17,17,0.03)] transition hover:border-[#d9d9d9] hover:bg-[#f7f7f7] dark:border-white/[0.12] dark:bg-white/[0.06] dark:hover:border-white/[0.18] dark:hover:bg-white/[0.09] ${collapsed ? 'mx-auto flex size-12 justify-center px-0 py-2' : 'flex items-center gap-2.5 px-2.5 py-2'}`}
+                        className={`${navItem(menuOpen, collapsed)} text-left`}
                         title={collapsed ? entryTitle : undefined}
                     >
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-[#efeeee] text-[#6b6c72] dark:bg-white/[0.12] dark:text-white/70">
-                            <Menu className="size-4" strokeWidth={2.15}/>
-                        </span>
+                        <Menu className="size-5 shrink-0" strokeWidth={2.15}/>
                         {!collapsed && (
                             <span className="min-w-0">
                                 <span className="block truncate text-[13px] font-semibold leading-4 text-[#111111] dark:text-white">{entryTitle}</span>
@@ -171,12 +167,12 @@ const SideNav = ({
                     </button>
 
                     {menuOpen && (
-                        <div ref={menuPanelRef} role="menu" className="absolute bottom-0 left-full z-50 ml-2 w-52 rounded-[14px] border border-[#e5e5e5] bg-white p-2 shadow-[0_12px_40px_-18px_rgba(17,17,17,.35)] dark:border-white/[0.12] dark:bg-[#101010]">
+                        <div ref={menuPanelRef} role="menu" className={`absolute bottom-0 left-full z-50 ml-2 w-52 p-1 ${floatingLayer}`}>
                             <div className="flex flex-col gap-0.5">
                                 <button
                                     type="button"
                                     onClick={toggleLang}
-                                    className="flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] font-semibold text-[#111111] transition hover:bg-[#efeeee] dark:text-white dark:hover:bg-white/[0.08]"
+                                    className={menuItem()}
                                 >
                                     <Languages className="size-[18px] shrink-0 text-[#6b6c72] dark:text-white/70" strokeWidth={2.15}/>
                                     <span className="flex-1 text-left">{lang === 'zh' ? '界面语言' : 'Language'}</span>
@@ -185,7 +181,7 @@ const SideNav = ({
                                 <button
                                     type="button"
                                     onClick={toggleTheme}
-                                    className="flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] font-semibold text-[#111111] transition hover:bg-[#efeeee] dark:text-white dark:hover:bg-white/[0.08]"
+                                    className={menuItem()}
                                 >
                                     <ThemeIcon className="size-[18px] shrink-0 text-[#6b6c72] dark:text-white/70" strokeWidth={2.15}/>
                                     <span className="flex-1 text-left">{isDark ? (lang === 'zh' ? '浅色模式' : 'Light mode') : (lang === 'zh' ? '暗色模式' : 'Dark mode')}</span>
@@ -196,7 +192,7 @@ const SideNav = ({
                                 <button
                                     type="button"
                                     onClick={() => { setMenuOpen(false); setAgentAccessOpen(true); }}
-                                    className="flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] font-semibold text-[#111111] transition hover:bg-[#efeeee] dark:text-white dark:hover:bg-white/[0.08]"
+                                    className={menuItem()}
                                 >
                                     <SlidersHorizontal className="size-[18px] shrink-0 text-[#6b6c72] dark:text-white/70" strokeWidth={2.15}/>
                                     <span className="flex-1 text-left">{lang === 'zh' ? 'Agent 接入' : 'Agent access'}</span>
@@ -208,14 +204,14 @@ const SideNav = ({
                                     onClick={() => setLegalMenuOpen((value) => !value)}
                                     aria-haspopup="menu"
                                     aria-expanded={legalMenuOpen}
-                                    className={`flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] font-semibold text-[#111111] transition hover:bg-[#efeeee] dark:text-white dark:hover:bg-white/[0.08] ${legalMenuOpen ? 'bg-[#efeeee] dark:bg-white/[0.08]' : ''}`}
+                                    className={menuItem('default', legalMenuOpen)}
                                 >
                                     <FileText className="size-[18px] shrink-0 text-[#6b6c72] dark:text-white/70" strokeWidth={2.15}/>
                                     <span className="flex-1 text-left">{lang === 'zh' ? '关于与协议' : 'About & terms'}</span>
                                     <ChevronRight className="size-4 shrink-0 text-[#6b6c72] dark:text-white/70" strokeWidth={2.15}/>
                                 </button>
                                 {legalMenuOpen && (
-                                    <div ref={legalPanelRef} role="menu" className="absolute left-full top-0 z-[60] ml-3 w-52 rounded-[14px] border border-[#e5e5e5] bg-white p-2 shadow-[0_12px_40px_-18px_rgba(17,17,17,.35)] dark:border-white/[0.12] dark:bg-[#101010]">
+                                    <div ref={legalPanelRef} role="menu" className={`absolute left-full top-0 z-[60] ml-3 w-52 p-1 ${floatingLayer}`}>
                                         {legalLinks.map((item) => {
                                             const Icon = item.icon;
                                             return (
@@ -223,7 +219,7 @@ const SideNav = ({
                                                     key={item.path}
                                                     to={item.path}
                                                     onClick={() => setMenuOpen(false)}
-                                                    className="flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] font-semibold text-[#111111] transition hover:bg-[#efeeee] dark:text-white dark:hover:bg-white/[0.08]"
+                                                    className={menuItem()}
                                                 >
                                                     <Icon className="size-[18px] shrink-0 text-[#6b6c72] dark:text-white/70" strokeWidth={2.15}/>
                                                     <span>{item.label}</span>
@@ -253,7 +249,7 @@ const SideNav = ({
                         role="dialog"
                         aria-modal="true"
                         aria-labelledby="agent-access-title"
-                        className="flex max-h-[min(860px,calc(100dvh-48px))] w-full max-w-[1120px] flex-col overflow-hidden rounded-[18px] border border-[#dedada] bg-white text-[#111111] shadow-[0_24px_80px_-28px_rgba(17,17,17,.45)] dark:border-white/[0.14] dark:bg-[#101010] dark:text-white/[0.92]"
+                        className="flex max-h-[min(860px,calc(100dvh-48px))] w-full max-w-[1120px] flex-col overflow-hidden rounded-[16px] border border-[#e4e0e0] bg-white text-[#111111] shadow-[0_24px_60px_-30px_rgba(17,17,17,0.45)] dark:border-white/[0.14] dark:bg-[#101010] dark:text-white/[0.92]"
                     >
                         <AgentAccessPanel compact onClose={() => setAgentAccessOpen(false)}/>
                     </section>

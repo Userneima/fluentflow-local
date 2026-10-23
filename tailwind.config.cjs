@@ -52,10 +52,13 @@ module.exports = {
         "inverse-surface": "var(--c-inverse-surface)",
         "inverse-on-surface": "var(--c-inverse-on-surface)"
       },
+      // One sans family everywhere. Headlines named Manrope, which the app
+      // never ships, so every headline fell back to the browser's serif
+      // (2026-10-23 walkthrough). Chinese falls through to the system's sans.
       fontFamily: {
-        "headline": ["Manrope"],
-        "body": ["Inter"],
-        "label": ["Inter"]
+        "headline": ["Inter", "-apple-system", "BlinkMacSystemFont", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "sans-serif"],
+        "body": ["Inter", "-apple-system", "BlinkMacSystemFont", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "sans-serif"],
+        "label": ["Inter", "-apple-system", "BlinkMacSystemFont", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "sans-serif"]
       },
       borderRadius: {
         "DEFAULT": "0.125rem",

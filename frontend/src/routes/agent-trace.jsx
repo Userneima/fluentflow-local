@@ -13,6 +13,8 @@ import {API_BASE, apiFetch, localExecutionHeaders, noteModeLabel, useI18n, noteG
 import {useApp} from '../app/AppContext.jsx';
 import TaskProgressOverview from '../components/TaskProgressOverview.jsx';
 import {normalizeTaskState} from '../lib/taskState.js';
+import {fmtDuration} from '../lib/format.js';
+import {button} from '../lib/ui.js';
 
 const statusText = (status, lang) => {
     const isZh = lang === 'zh';
@@ -237,7 +239,7 @@ function fallbackDecisionEntries(packageData, lang) {
             decision: noteModeLabel(noteMode, lang),
             reason: plan.note_strategy?.reason || (lang === 'zh' ? '按当前自动模式和材料信息选择。' : 'Chosen from automatic mode and material signals.'),
             evidence: compactValues([
-                material.duration_seconds ? `${lang === 'zh' ? '时长' : 'Duration'}：${Math.round(Number(material.duration_seconds) / 60)} min` : '',
+                material.duration_seconds ? `${lang === 'zh' ? '时长' : 'Duration'}：${fmtDuration(material.duration_seconds, lang)}` : '',
                 plan.note_strategy?.confidence ? `${lang === 'zh' ? '置信度' : 'Confidence'}：${plan.note_strategy.confidence}` : '',
             ]),
             impact: lang === 'zh' ? '影响生成速度、结构完整度和证据覆盖。' : 'Affects speed, structure, and evidence coverage.',
@@ -282,7 +284,7 @@ const DecisionEntry = ({entry, index, isLast, lang}) => {
                     <Icon className={`size-[18px] ${entry.status === 'running' ? 'animate-spin' : ''}`} strokeWidth={2.15}/>
                 </div>
             </div>
-            <div className="min-w-0 rounded-[18px] border border-[#dedada] bg-white px-4 py-3.5 shadow-[0_18px_44px_-38px_rgba(17,17,17,.42)] dark:border-white/[0.14] dark:bg-white/[0.07] dark:shadow-none">
+            <div className="min-w-0 rounded-[16px] border border-[#e4e0e0] bg-white px-4 py-3.5 dark:border-white/[0.12] dark:bg-white/[0.04]">
                 <div className="flex flex-wrap items-center gap-2">
                     <p className="text-[12px] font-extrabold text-[#676970] dark:text-white/[0.76]">
                         {entry.title || (lang === 'zh' ? `原始判断 ${index + 1}` : `Raw decision ${index + 1}`)}
@@ -329,9 +331,9 @@ const ChapterCoverageEvidence = ({coverage, lang}) => {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div>
                     <p className="text-[12px] font-extrabold text-[#85868c] dark:text-white/[0.72]">
-                        {isZh ? 'Chapter Coverage 证据表' : 'Chapter coverage evidence'}
+                        {isZh ? '每章的原文依据' : 'Chapter coverage evidence'}
                     </p>
-                    <h2 className="font-headline text-[20px] font-extrabold text-[#111111] dark:text-white">
+                    <h2 className="font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
                         {isZh ? '这份笔记覆盖了哪些原文证据' : 'Source evidence behind this note'}
                     </h2>
                 </div>
@@ -769,7 +771,7 @@ const AgentTrace = () => {
             <main className="ml-[var(--sidebar-offset)] flex min-h-dvh flex-1 items-center justify-center bg-[#f8f7fb] p-8 transition-[margin] duration-200 ease-out dark:bg-[#101010]">
                 <div className="flex items-center gap-2.5 text-sm font-semibold text-on-surface-variant">
                     <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/>
-                    {isZh ? '加载判断推进...' : 'Loading decision flow...'}
+                    {isZh ? '正在读取处理过程…' : 'Loading the processing steps…'}
                 </div>
             </main>
         );
@@ -779,7 +781,7 @@ const AgentTrace = () => {
         return (
             <main className="ml-[var(--sidebar-offset)] flex min-h-dvh flex-1 flex-col items-center justify-center gap-4 bg-[#f8f7fb] p-8 transition-[margin] duration-200 ease-out dark:bg-[#101010]">
                 <div className="rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">{error}</div>
-                <button type="button" onClick={() => navigate('/agent')} className="inline-flex h-9 items-center gap-2 rounded-[12px] border border-[#dedada] bg-white px-4 text-sm font-bold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]">
+                <button type="button" onClick={() => navigate('/agent')} className={button('secondary', 'md')}>
                     <ArrowLeft className="size-4" strokeWidth={2.15}/>
                     {isZh ? '返回处理记录' : 'Back to records'}
                 </button>
@@ -798,7 +800,7 @@ const AgentTrace = () => {
                                 {isZh ? '处理记录' : 'Processing records'}
                             </Link>
                             <span className="text-[#a2a3a8] dark:text-white/[0.55]">/</span>
-                            <h1 className="font-headline text-[22px] font-extrabold leading-tight text-[#111111] dark:text-white">
+                            <h1 className="font-headline text-[20px] font-extrabold leading-tight text-[#111111] dark:text-white">
                                 {isZh ? '处理详情' : 'Task details'}
                             </h1>
                         </div>
@@ -808,9 +810,9 @@ const AgentTrace = () => {
                     </div>
                     {canOpenResult && (
                         <div className="flex flex-wrap gap-2 lg:justify-end">
-                            <button type="button" onClick={openResult} disabled={openingResult} className="inline-flex h-9 items-center gap-2 rounded-[12px] bg-[#111111] px-4 text-[13px] font-extrabold text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-55 dark:bg-white dark:text-[#111111] dark:hover:bg-white/[0.88]">
+                            <button type="button" onClick={openResult} disabled={openingResult} className={button('primary', 'md')}>
                                 {openingResult ? <LoaderCircle className="size-4 animate-spin" strokeWidth={2.15}/> : <FileText className="size-4" strokeWidth={2.15}/>}
-                                {openingResult ? (isZh ? '打开中...' : 'Opening...') : (isZh ? '查看结果' : 'View result')}
+                                {openingResult ? (isZh ? '正在打开…' : 'Opening…') : (isZh ? '查看结果' : 'View result')}
                             </button>
                         </div>
                     )}
@@ -823,7 +825,7 @@ const AgentTrace = () => {
                 {/* What the pipeline decided, for diagnosing a task. Not part of
                     reading the result, so folded away by default. */}
                 {decisions.length > 0 && (
-                    <details data-testid="trace-details" className="min-w-0 rounded-[18px] border border-[#dedada] bg-white px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
+                    <details data-testid="trace-details" className="min-w-0 rounded-[16px] border border-[#e4e0e0] bg-white px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.04]">
                         <summary className="cursor-pointer text-[13px] font-extrabold text-[#676970] dark:text-white/[0.76]">
                             {isZh ? '排查信息' : 'Diagnostics'}
                         </summary>

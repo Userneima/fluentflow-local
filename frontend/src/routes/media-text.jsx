@@ -36,6 +36,7 @@ import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {dismissNoteKeyOnboarding, noteKeyOnboardingDismissed, shouldAutoOpenNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 import {taskOutcome} from '../lib/taskState.js';
 import {fmtDuration} from '../lib/format.js';
+import {dropZone, tileButton, button, linkButton, segmentGroup, segmentItem, floatingLayer, surfaceCard} from '../lib/ui.js';
 
 const mediaExts = /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i;
 const transcriptExts = /\.(srt|vtt|txt|md)$/i;
@@ -43,10 +44,10 @@ const transcriptExts = /\.(srt|vtt|txt|md)$/i;
 const LOCAL_PATHS_PER_BATCH = 30;
 
 const platformItems = [
-    {label: '抖音', tone: 'bg-[#111111] text-white', icon: 'douyin'},
+    {label: '抖音', tone: 'bg-[#111111] text-white dark:bg-white/[0.14]', icon: 'douyin'},
     {label: 'Bilibili', tone: 'bg-[#00aeec] text-white', icon: 'bilibili'},
     {label: 'YouTube', tone: 'bg-[#ff0033] text-white', icon: 'youtube'},
-    {label: '本地文件', tone: 'bg-[#efeeee] text-[#111111]', icon: 'local-file'},
+    {label: '本机文件', tone: 'bg-[#efeeee] text-[#111111]', icon: 'local-file'},
 ];
 
 const RECENT_BADGE_TONE = {
@@ -745,10 +746,10 @@ const MediaText = () => {
                         <span>{noteAttention.map((item) => (lang === 'zh' ? item.text.zh : item.text.en)).join(' ')}</span>
                         {noNoteKey && (
                             <span className="flex shrink-0 items-center gap-4">
-                                <button type="button" onClick={() => setKeySetupOpen(true)} className="font-extrabold underline">
+                                <button type="button" onClick={() => setKeySetupOpen(true)} className={linkButton()}>
                                     {lang === 'zh' ? '怎么拿 Key？' : 'How do I get a key?'}
                                 </button>
-                                <Link to="/settings#notes" className="font-extrabold underline">{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>
+                                <Link to="/settings#notes" className={linkButton()}>{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>
                             </span>
                         )}
                     </div>
@@ -757,7 +758,7 @@ const MediaText = () => {
                 {subtitleNeedsTextKey && (
                     <div data-testid="subtitle-key-notice" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-[#ecd9a8] bg-[#fff8e6] px-4 py-3 text-sm text-[#5c4a1a] dark:border-[#6b5a2a] dark:bg-[#2a2415] dark:text-[#f0dfb0]">
                         <span>{lang === 'zh' ? '用字幕生成笔记需要一个文本模型的 Key（例如 DeepSeek）。' : 'Turning subtitles into a note needs a text-model key (for example DeepSeek).'}</span>
-                        <Link to="/settings#notes" className="shrink-0 font-extrabold underline">{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>
+                        <Link to="/settings#notes" className={`shrink-0 ${linkButton()}`}>{lang === 'zh' ? '去设置填写' : 'Add one in Settings'}</Link>
                     </div>
                 )}
 
@@ -774,7 +775,7 @@ const MediaText = () => {
                 </div>
 
                 <section
-                    className="rounded-[24px] border border-[#dedada] bg-white p-8 shadow-[0_26px_70px_-46px_rgba(17,17,17,.5)] dark:border-white/[0.12] dark:bg-[#1d1f22] dark:shadow-none"
+                    className={`p-8 ${surfaceCard}`}
                     onDrop={handleDrop}
                     onDragOver={(e) => e.preventDefault()}
                 >
@@ -782,7 +783,7 @@ const MediaText = () => {
                         {/* One switch for the three ways in. It was two stacked
                             switches (视频/字幕, then 链接/本机文件), and the second
                             only meant anything under the first. */}
-                        <div className="mb-6 inline-flex max-w-full rounded-[18px] border border-[#dedada] bg-[#f4f3f3] p-1 dark:border-white/[0.12] dark:bg-white/[0.08]" role="tablist" aria-label={lang === 'zh' ? '从哪里来' : 'Source'}>
+                        <div className={`mb-6 max-w-full ${segmentGroup}`} role="tablist" aria-label={lang === 'zh' ? '从哪里来' : 'Source'}>
                             {ENTRY_TABS.map((item) => {
                                 const active = entry === item.id;
                                 return (
@@ -792,7 +793,7 @@ const MediaText = () => {
                                         role="tab"
                                         aria-selected={active}
                                         onClick={() => chooseEntry(item.id)}
-                                        className={`h-10 whitespace-nowrap rounded-[14px] px-4 text-sm font-extrabold transition ${active ? 'bg-white text-[#111111] shadow-sm dark:bg-white/[0.16] dark:text-white' : 'text-[#777] hover:text-[#111111] dark:text-white/55 dark:hover:text-white'}`}
+                                        className={segmentItem(active)}
                                     >
                                         {lang === 'zh' ? item.zh : item.en}
                                     </button>
@@ -808,7 +809,7 @@ const MediaText = () => {
                                             aria-label={lang === 'zh' ? '视频链接' : 'Video link'}
                                             value={videoLinkInput}
                                             onChange={(e) => setVideoLinkInput(e.target.value)}
-                                            className="min-h-[116px] w-full resize-none rounded-[18px] border border-[#dedada] bg-[#fbfbfb] px-5 py-4 text-[15px] font-semibold text-[#111111] outline-none placeholder:text-[#aaa] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/30 dark:focus:border-white/[0.4]"
+                                            className="min-h-[116px] w-full resize-none rounded-[12px] border border-[#dedada] bg-[#fbfbfb] px-4 py-3 text-[14px] font-semibold text-[#111111] outline-none placeholder:text-[#aaa] focus:border-[#111111] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/30 dark:focus:border-white/[0.4]"
                                             placeholder={lang === 'zh' ? '粘贴一个抖音、Bilibili 或 YouTube 的视频链接（分享文本也行），或 .mp4 直链' : 'Paste one Douyin, Bilibili, or YouTube video link (share text works too), or a direct .mp4 link'}
                                         />
                                     </div>
@@ -820,10 +821,10 @@ const MediaText = () => {
                                         type="button"
                                         onClick={handleChooseFromComputer}
                                         disabled={submitting || choosing || backendDown}
-                                        className="flex min-h-[180px] w-full flex-col items-center justify-center rounded-[20px] py-8 border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
+                                        className={`${dropZone} min-h-[180px]`}
                                     >
                                         <SvgIcon name={choosing ? 'sync' : 'upload-file'} className={`mb-3 size-8 text-[#111111] dark:text-white ${choosing ? 'animate-spin' : ''}`}/>
-                                        <span className="text-lg font-extrabold">{lang === 'zh' ? '拖放或选择音视频文件' : 'Drop or choose media files'}</span>
+                                        <span className="text-[16px] font-extrabold">{lang === 'zh' ? '拖放或选择音视频文件' : 'Drop or choose media files'}</span>
                                         <span className="mt-2 text-sm font-semibold text-[#777] dark:text-white/55">MP4 / MOV / MP3 / WAV / M4A</span>
                                         {/* Said once, where the choice is made: the owner
                                             otherwise does not know a folder appears. */}
@@ -845,7 +846,7 @@ const MediaText = () => {
                                         type="button"
                                         onClick={handleChooseFolder}
                                         disabled={submitting || choosing || backendDown}
-                                        className="mt-3 inline-flex h-12 w-full items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] transition hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]"
+                                        className={`mt-3 w-full ${button('secondary', 'lg')}`}
                                     >
                                         <SvgIcon name="folder" className="size-4"/>
                                         {lang === 'zh' ? '处理整个文件夹' : 'Process a whole folder'}
@@ -859,23 +860,23 @@ const MediaText = () => {
                                 type="button"
                                 onClick={() => subtitleInputRef.current?.click()}
                                 disabled={backendDown || subtitleNeedsTextKey}
-                                className="flex min-h-[220px] w-full flex-col items-center justify-center rounded-[20px] border border-dashed border-[#cfcaca] bg-[#fbfbfb] px-6 text-center transition hover:border-[#111111] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.16] dark:bg-white/[0.04] dark:hover:border-white/[0.4] dark:hover:bg-white/[0.08]"
+                                className={`${dropZone} min-h-[220px]`}
                             >
                                 <SvgIcon name="subtitles" className="mb-3 size-8 text-[#111111] dark:text-white"/>
-                                <span className="text-lg font-extrabold">{lang === 'zh' ? '拖放或选择字幕 / 文本文件' : 'Drop or choose subtitle files'}</span>
+                                <span className="text-[16px] font-extrabold">{lang === 'zh' ? '拖放或选择字幕 / 文本文件' : 'Drop or choose subtitle files'}</span>
                                 <span className="mt-2 text-sm font-semibold text-[#777] dark:text-white/55">SRT / VTT / TXT / MD</span>
                             </button>
                         )}
 
                         <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-end">
                             {mode === 'subtitle' && (
-                                <button type="button" onClick={() => subtitleInputRef.current?.click()} disabled={submitting || backendDown || subtitleNeedsTextKey} className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-5 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
+                                <button type="button" onClick={() => subtitleInputRef.current?.click()} disabled={submitting || backendDown || subtitleNeedsTextKey} className={button('primary', 'lg')}>
                                     <SvgIcon name="subtitles" className="size-4"/>
                                     {lang === 'zh' ? '选择字幕文件' : 'Choose subtitle file'}
                                 </button>
                             )}
                             {mode === 'media' && sourceMode === 'link' && (
-                                <button type="button" onClick={handleVideoLinkSubmit} disabled={submitting || backendDown} data-testid="submit-video-link" className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-[#dedada] bg-white px-7 text-sm font-extrabold text-[#111111] hover:bg-[#f4f3f3] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]">
+                                <button type="button" onClick={handleVideoLinkSubmit} disabled={submitting || backendDown} data-testid="submit-video-link" className={button('primary', 'lg')}>
                                     {submitting ? <SvgIcon name="sync" className="size-4 animate-spin"/> : <SvgIcon name="arrow-right" className="size-4"/>}
                                     {lang === 'zh' ? '开始生成笔记' : 'Start'}
                                 </button>
@@ -896,19 +897,19 @@ const MediaText = () => {
                             </div>
                         )}
                         {uploadError && <div className="mt-5 rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-300">{uploadError}</div>}
-                        {processingResult && <div className="mt-5 rounded-[16px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">{t('dash.done')} <button type="button" onClick={() => navigate('/editor')} className="underline hover:no-underline">{t('dash.viewEditor')}</button></div>}
+                        {processingResult && <div className="mt-5 rounded-[16px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">{t('dash.done')} <button type="button" onClick={() => navigate('/editor')} className={linkButton()}>{t('dash.viewEditor')}</button></div>}
                     </div>
                 </section>
 
                 {currentJob && currentJob.stage !== 'done' && currentJob.sourceType !== 'video_link' && (
-                    <section className="mt-6 rounded-[22px] border border-[#dedada] bg-white p-5 dark:border-white/[0.12] dark:bg-white/[0.06]">
+                    <section className={`mt-6 p-5 ${surfaceCard}`}>
                         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div className="min-w-0">
                                 <p className="text-xs font-extrabold text-[#777] dark:text-white/55">{lang === 'zh' ? '当前任务' : 'Active task'}</p>
-                                <h2 className="mt-1 truncate text-xl font-extrabold">{currentJob.fileName}</h2>
+                                <h2 className="mt-1 truncate text-[15px] font-extrabold">{currentJob.fileName}</h2>
                                 <p className="mt-1 text-sm font-semibold text-[#666] dark:text-white/55">{t(`status.${currentJob.stage}`)}</p>
                             </div>
-                            <button type="button" onClick={handleCancel} className="inline-flex h-10 items-center justify-center gap-2 rounded-[14px] border border-red-200 bg-red-50 px-3 text-xs font-extrabold text-red-600 hover:bg-red-100 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-300 dark:hover:bg-red-400/20">
+                            <button type="button" onClick={handleCancel} className={button('danger', 'md')}>
                                 <XCircle className="size-4" strokeWidth={2.15}/>
                                 {t('dash.cancel')}
                             </button>
@@ -932,16 +933,13 @@ const MediaText = () => {
                     </section>
                 )}
 
-                <section className="mt-7 rounded-[24px] border border-[#dedada] bg-white p-6 shadow-[0_18px_44px_-38px_rgba(17,17,17,.45)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
-                    <div className="mb-5 flex items-center justify-between gap-4">
-                        <div>
-                            <h2 className="text-[22px] font-extrabold">{t('dash.recent')}</h2>
-                            <p className="mt-1 text-sm font-semibold text-[#777] dark:text-white/55">{lang === 'zh' ? '最近完成和处理中任务会显示在这里。' : 'Recent completed and active tasks appear here.'}</p>
-                        </div>
-                        <Link to="/agent" className="rounded-full bg-[#efeeee] px-4 py-2 text-xs font-extrabold text-[#111111] hover:bg-[#e8e5e5] dark:bg-white/[0.12] dark:text-white dark:hover:bg-white/[0.18]">{t('dash.viewAll')}</Link>
+                <section className={`mt-6 p-6 ${surfaceCard}`}>
+                    <div className="mb-4 flex items-center justify-between gap-4">
+                        <h2 className="text-[15px] font-extrabold">{t('dash.recent')}</h2>
+                        <Link to="/agent" className={button('secondary', 'sm')}>{t('dash.viewAll')}</Link>
                     </div>
                     {recent.length === 0 ? (
-                        <div className="rounded-[18px] border border-dashed border-[#dedada] bg-[#fbfbfb] px-4 py-12 text-center text-sm font-semibold text-[#999] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-white/40">
+                        <div className="rounded-[12px] border border-dashed border-[#dedada] bg-[#fbfbfb] px-4 py-12 text-center text-sm font-semibold text-[#999] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-white/40">
                             {t('dash.noActivity')}
                         </div>
                     ) : (
@@ -949,7 +947,7 @@ const MediaText = () => {
                             {recent.map((item) => {
                                 const outcome = recentOutcome(item);
                                 return (
-                                    <button key={item.taskId || item.id} type="button" onClick={() => openRecentTask(item)} className="min-w-0 rounded-[18px] bg-[#f4f3f3] p-4 text-left transition hover:bg-[#efeeee] dark:bg-white/[0.08] dark:hover:bg-white/[0.12]">
+                                    <button key={item.taskId || item.id} type="button" onClick={() => openRecentTask(item)} className={tileButton}>
                                         <div className="mb-2 flex items-center justify-between gap-2">
                                             <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold">{item.name}</h3>
                                             {outcome.tone !== 'done' && (
@@ -966,20 +964,20 @@ const MediaText = () => {
             </section>
             {duplicateLink && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm">
-                    <div role="dialog" aria-modal="true" aria-labelledby="duplicate-link-title" className="w-full max-w-md rounded-[24px] border border-[#e4e0e0] bg-white p-6 shadow-[0_24px_70px_-35px_rgba(17,17,17,.65)] dark:border-white/[0.12] dark:bg-[#151515]">
+                    <div role="dialog" aria-modal="true" aria-labelledby="duplicate-link-title" className={`w-full max-w-md p-6 ${floatingLayer}`}>
                         <p id="duplicate-link-title" className="text-sm font-bold leading-relaxed text-[#111111] dark:text-white">
                             {lang === 'zh'
                                 ? `这个链接已经处理过了（任务 ${duplicateLink.existingTaskId}）。要再处理一次吗？`
                                 : `This link was already processed (task ${duplicateLink.existingTaskId}). Process it again?`}
                         </p>
                         <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                            <button type="button" onClick={() => setDuplicateLink(null)} className="rounded-[13px] px-4 py-2 text-sm font-bold text-[#666] hover:bg-[#efeeee] dark:text-white/60 dark:hover:bg-white/[0.08]">
+                            <button type="button" onClick={() => setDuplicateLink(null)} className={button('quiet', 'md')}>
                                 {lang === 'zh' ? '取消' : 'Cancel'}
                             </button>
-                            <button type="button" onClick={handleProcessLinkAgain} className="rounded-[13px] bg-[#efeeee] px-4 py-2 text-sm font-bold text-[#111111] hover:bg-[#e4e0e0] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]">
+                            <button type="button" onClick={handleProcessLinkAgain} className={button('secondary', 'md')}>
                                 {lang === 'zh' ? '再处理一次' : 'Process again'}
                             </button>
-                            <button type="button" onClick={handleOpenExistingLinkTask} className="rounded-[13px] bg-[#111111] px-4 py-2 text-sm font-bold text-white hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
+                            <button type="button" onClick={handleOpenExistingLinkTask} className={button('primary', 'md')}>
                                 {lang === 'zh' ? '打开已有的' : 'Open the existing one'}
                             </button>
                         </div>

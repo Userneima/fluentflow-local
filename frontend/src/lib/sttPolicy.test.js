@@ -41,7 +41,7 @@ describe('local transcription policy', () => {
         expect(options).toHaveLength(1);
         expect(options[0].value).toBe('local');
         expect(options[0].disabled).toBe(false);
-        expect(sttProviderLabel('local', 'zh')).toBe('本地转写');
+        expect(sttProviderLabel('local', 'zh')).toBe('本机转录');
         // Unknown providers get no label; pages show their own fallback copy.
         expect(sttProviderLabel('cloud', 'zh')).toBe(null);
     });

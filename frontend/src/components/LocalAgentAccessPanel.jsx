@@ -2,6 +2,7 @@ import {API_BASE, apiFetch, setAccessToken} from '../app/shared.jsx';
 import {useEffect, useMemo, useState} from 'react';
 import {ClipboardCopy, Rocket, Terminal} from 'lucide-react';
 import {useApp} from '../app/AppContext.jsx';
+import {button} from '../lib/ui.js';
 
 const ACCESS_TOKEN_KEY = 'fluentflow_access_token';
 
@@ -55,7 +56,7 @@ const CodeBlock = ({label, value, copied, onCopy}) => (
     <div className="rounded-[14px] border border-[#e5e5e5] bg-white p-3 dark:border-white/[0.12] dark:bg-white/[0.05]">
         <div className="mb-2 flex items-center justify-between gap-3">
             <span className="text-[11px] font-extrabold uppercase tracking-[0.08em] text-[#85868c] dark:text-white/50">{label}</span>
-            <button type="button" onClick={() => onCopy(value)} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] border border-[#dedada] px-2.5 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.14] dark:text-white dark:hover:bg-white/[0.08]">
+            <button type="button" onClick={() => onCopy(value)} className={button('secondary', 'sm')}>
                 <ClipboardCopy className="size-3.5" strokeWidth={2.1}/>{copied ? '已复制' : '复制'}
             </button>
         </div>
@@ -169,10 +170,10 @@ const LocalAgentAccessPanel = ({compact = false, onClose = null, embedded = fals
             <header className={`${compact ? 'border-b border-[#e5e5e5] px-5 py-4 dark:border-white/[0.12]' : 'mb-6'} flex items-start justify-between gap-4`}>
                 <div className="min-w-0">
                     <p className="text-[11px] font-extrabold uppercase tracking-[0.08em] text-[#85868c] dark:text-white/50">FluentFlow MCP</p>
-                    <h1 id={compact ? 'agent-access-title' : undefined} className={`${compact ? 'text-[18px] leading-6' : 'text-[28px] leading-8'} mt-1 font-extrabold text-[#111111] dark:text-white`}>连接本机 AI 工具</h1>
+                    <h1 id={compact ? 'agent-access-title' : undefined} className={`${compact ? 'text-[16px] leading-6' : 'text-[20px] leading-7'} mt-1 font-extrabold text-[#111111] dark:text-white`}>连接本机 AI 工具</h1>
                     <p className="mt-2 max-w-[68ch] text-[14px] font-semibold leading-6 text-[#686a70] dark:text-white/60">配置后，Codex 或 Claude Code 可以在这台电脑上提交视频、等待处理并读取笔记。</p>
                 </div>
-                {onClose && <button type="button" onClick={onClose} className="h-9 shrink-0 rounded-[12px] border border-[#dedada] px-3 text-[13px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] active:translate-y-px dark:border-white/[0.14] dark:text-white dark:hover:bg-white/[0.08]">关闭</button>}
+                {onClose && <button type="button" onClick={onClose} className={button('secondary', 'md')}>关闭</button>}
             </header>
             {compact ? <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">{content}</div> : content}
         </section>

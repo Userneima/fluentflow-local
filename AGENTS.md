@@ -26,6 +26,10 @@ Why things are the way they are is in `docs/02-决策记录.md`, grouped by prod
 
 A change is finished when every document it affects says what is true now, in the same push, without being asked: besides the to-do, the decision log and the changelog, `README.md` (what a user does and gets: where outputs land, what to click, what to expect), `AGENT_INSTALL.md`, `agent/skills/fluentflow/SKILL.md` and the MCP tool descriptions in `scripts/fluentflow_mcp_server.py` (what an agent is told), and `docs/04-维护手册.md` (settings, environment variables, checks). Before pushing, search these for the feature or behaviour you changed and fix what no longer holds (2026-10-19: the output folder and Obsidian editing shipped with the decision log updated and the README silent).
 
+## Interface rules
+
+Before changing any page, read `docs/06-界面规矩.md`: FluentFlow's words, which formatter writes each quantity, button tiers and sizes, colours, corners, type sizes and the three window widths to check. Button and card styles live only in `frontend/src/lib/ui.js`; `frontend/src/ui-rules.test.js` fails when a page writes its own. The rules that hold for any tool product are in the `tool-product-ui` skill.
+
 ## Validation
 
 Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests and `python3 -m ruff check backend/ scripts/` (CI runs it; the test suite does not catch unused imports). Push finished, checked work to `main` as it is done, without asking; do not deploy, tag, or change a release version unless explicitly requested. Users install the latest release tag, not `main`, with three exceptions that reach every user the moment they are pushed: `install.sh` and `install.ps1` (fetched from `main`, then they download the release) and `backend/core/recommended_models.json` (every installed copy reads it from `main` daily). Changes to these three must work with the latest release.

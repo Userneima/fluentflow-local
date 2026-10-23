@@ -139,9 +139,12 @@ export const fmtElapsed = (sec) => {
 // wording on every page (owner's walkthrough, 2026-10-22, found "12min43s",
 // "11m 24s", "3:34:38" and "02m28s" side by side). Clock form (fmtElapsed) is
 // for positions in a recording, not for lengths. Seconds stop mattering past
-// an hour.
-export const fmtDuration = (sec, lang = 'zh') => {
-    const n = Math.max(0, Math.round(Number(sec) || 0));
+// an hour. `tenths` keeps one decimal under ten seconds, where "0 秒" would
+// hide a short cut.
+export const fmtDuration = (sec, lang = 'zh', {tenths = false} = {}) => {
+    const raw = Math.max(0, Number(sec) || 0);
+    if (tenths && raw < 10) return lang === 'zh' ? `${raw.toFixed(1)} 秒` : `${raw.toFixed(1)}s`;
+    const n = Math.round(raw);
     const h = Math.floor(n / 3600);
     const m = Math.floor((n % 3600) / 60);
     const s = n % 60;

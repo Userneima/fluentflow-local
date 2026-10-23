@@ -5,6 +5,7 @@ import SvgIcon from './SvgIcon.jsx';
 import {useDismissable} from '../lib/useDismissable.js';
 import {noteExplanation} from '../lib/noteWriter.js';
 import {useApp} from '../app/AppContext.jsx';
+import {button, iconButton, statusButton, floatingLayer} from '../lib/ui.js';
 
 // 笔记说明: who wrote the note and from what, asked for instead of shown. The
 // paragraph it replaces sat above every fallback note and took a third of a
@@ -53,10 +54,6 @@ const NoteExplanation = ({result, lang}) => {
         }
     };
 
-    const tone = explanation.attention
-        ? 'border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] hover:bg-[#fff3d6] dark:border-[#fdb022]/40 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]'
-        : 'border-[#e4e0e0] bg-white text-[#111111] hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]';
-
     return (
         <div className="relative" ref={wrapperRef}>
             <button
@@ -66,7 +63,7 @@ const NoteExplanation = ({result, lang}) => {
                 aria-haspopup="dialog"
                 aria-expanded={open}
                 onClick={() => setOpen((value) => !value)}
-                className={`relative inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border px-3 text-xs font-bold transition ${tone}`}
+                className={`relative ${explanation.attention ? statusButton('warning') : button('secondary', 'sm')}`}
             >
                 <SvgIcon name={explanation.attention ? 'warning' : 'info'} className="text-sm"/>
                 {zh ? '笔记说明' : 'About this note'}
@@ -81,11 +78,11 @@ const NoteExplanation = ({result, lang}) => {
                     aria-label={zh ? '笔记说明' : 'About this note'}
                     data-testid="note-explanation-panel"
                     style={position ? {top: position.top, left: position.left, width: position.width} : {visibility: 'hidden'}}
-                    className="fixed z-[100] max-h-[70vh] overflow-y-auto rounded-[16px] border border-[#e4e0e0] bg-white p-4 text-left shadow-xl animate-[fadeIn_0.15s_ease-out] dark:border-white/[0.12] dark:bg-[#1c1c1c]"
+                    className={`fixed z-[100] max-h-[70vh] overflow-y-auto p-4 text-left ${floatingLayer}`}
                 >
                     <div className="mb-3 flex items-center justify-between gap-2">
                         <p className="text-sm font-bold text-[#111111] dark:text-white">{zh ? '这篇笔记是怎么写的' : 'How this note was written'}</p>
-                        <button type="button" onClick={() => setOpen(false)} aria-label={zh ? '关闭' : 'Close'} className="rounded-full p-1 text-[#666] hover:bg-[#efeeee] dark:text-white/60 dark:hover:bg-white/[0.1]">
+                        <button type="button" onClick={() => setOpen(false)} aria-label={zh ? '关闭' : 'Close'} className={iconButton('quiet', 'sm')}>
                             <SvgIcon name="close" className="text-sm"/>
                         </button>
                     </div>
@@ -112,7 +109,7 @@ const NoteExplanation = ({result, lang}) => {
                                             : 'Send this to Claude Code, Codex, WorkBuddy or similar. It writes on the subscription you already have, no key needed, and connects to FluentFlow itself if it has not yet.'}
                                     </p>
                                     <p className="max-h-40 select-text overflow-y-auto whitespace-pre-line break-all rounded-[8px] bg-white p-2 text-[11px] text-[#555] dark:bg-white/[0.06] dark:text-white/60">{explanation.agentPrompt}</p>
-                                    <button type="button" onClick={copyPrompt} className="inline-flex h-8 w-full items-center justify-center rounded-[10px] bg-[#111111] text-xs font-bold text-white transition hover:bg-black dark:bg-white dark:text-[#111111]">
+                                    <button type="button" onClick={copyPrompt} className={`${button('primary', 'md')} w-full`}>
                                         {copied ? (zh ? '已复制，去发给你的 agent' : 'Copied — send it to your agent') : (zh ? '复制这段话' : 'Copy')}
                                     </button>
                                 </div>

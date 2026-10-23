@@ -1,6 +1,7 @@
 import {useState} from 'react';
 import SvgIcon from './SvgIcon.jsx';
 import {useApi} from '../app/shared.jsx';
+import {button, iconButton} from '../lib/ui.js';
 
 // Where this task's outputs went, and a way there. A link video's folder sits
 // under the Videos folder and a recording's beside it, but the page only said
@@ -13,7 +14,9 @@ export const outputFolderPath = (result) => {
 // compact: only a square folder icon, with the path on hover, for a list row
 // where a full path per record is a column of long text (walkthrough
 // 2026-10-22; an icon since the records page redesign, 2026-10-23).
-export default function OutputFolderLine({taskId, result, lang = 'zh', className = '', compact = false}) {
+// labelled: the same button with the words 打开文件夹 beside the icon, where
+// there is room and it is the only action (the editor's top bar).
+export default function OutputFolderLine({taskId, result, lang = 'zh', className = '', compact = false, labelled = false}) {
     const zh = lang === 'zh';
     const {openOutputFolder} = useApi();
     const [error, setError] = useState('');
@@ -44,9 +47,10 @@ export default function OutputFolderLine({taskId, result, lang = 'zh', className
                     disabled={busy}
                     aria-label={label}
                     title={error || `${label}：${path}`}
-                    className="inline-flex size-7 items-center justify-center rounded-[10px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]"
+                    className={labelled ? button('secondary', 'sm') : iconButton('secondary', 'sm')}
                 >
                     <SvgIcon name="folder_open" className="text-base"/>
+                    {labelled && label}
                 </button>
                 {error && <span role="alert" className="absolute right-0 top-full z-10 mt-1 w-64 rounded-[10px] border border-red-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-error shadow-sm dark:border-red-500/20 dark:bg-[#1d1f22]">{error}</span>}
             </span>
@@ -62,7 +66,7 @@ export default function OutputFolderLine({taskId, result, lang = 'zh', className
                 type="button"
                 onClick={open}
                 disabled={busy}
-                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-[10px] border border-[#e4e0e0] bg-white px-2.5 text-[11px] font-bold text-[#111111] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.1]"
+                className={button('secondary', 'sm')}
             >
                 {zh ? '打开文件夹' : 'Open folder'}
             </button>

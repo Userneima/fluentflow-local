@@ -1,6 +1,7 @@
 import {useState} from 'react';
 import {Bot, LoaderCircle} from 'lucide-react';
 import {API_BASE, apiFetch} from '../app/shared.jsx';
+import {button} from '../lib/ui.js';
 
 // The task stopped after transcription for the user's own agent to judge
 // what to cut (backend/core/agent_cut.py). The page says so, and offers to
@@ -59,7 +60,7 @@ const AgentCutWait = ({job}) => {
                     type="button"
                     disabled={busy}
                     onClick={selfJudge}
-                    className="inline-flex h-7 shrink-0 items-center gap-1 rounded-[9px] border border-[#dedada] bg-white px-2.5 text-[12px] font-bold text-[#57585d] transition hover:bg-[#efeeee] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]"
+                    className={button('secondary', 'sm')}
                 >
                     {busy ? <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.15}/> : null}
                     让 FluentFlow 自己判断

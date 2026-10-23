@@ -16,6 +16,7 @@ import {
 import {fmtDuration} from '../lib/format.js';
 import {taskOutcome} from '../lib/taskState.js';
 import {useApp} from '../app/AppContext.jsx';
+import {button} from '../lib/ui.js';
 
 const stageLabel = (stage, lang, {audioOnly = false} = {}) => {
     const isZh = lang === 'zh';
@@ -166,9 +167,9 @@ const sourcePlatformLabel = (source, isZh) => {
 
 const localFileKindLabel = (filename, isZh) => {
     const name = String(filename || '').toLowerCase();
-    if (/\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(name)) return isZh ? '本地视频文件' : 'local video file';
-    if (/\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i.test(name)) return isZh ? '本地音频文件' : 'local audio file';
-    if (/\.(srt|vtt|txt|md)$/i.test(name)) return isZh ? '本地字幕文件' : 'local subtitle file';
+    if (/\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(name)) return isZh ? '本机视频文件' : 'local video file';
+    if (/\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i.test(name)) return isZh ? '本机音频文件' : 'local audio file';
+    if (/\.(srt|vtt|txt|md)$/i.test(name)) return isZh ? '本机字幕文件' : 'local subtitle file';
     return '';
 };
 
@@ -176,11 +177,11 @@ const sourceKindLabel = (source, isZh) => {
     const value = String(source?.sourceType || '').toLowerCase();
     const platform = sourcePlatformLabel(source, isZh);
     if (value === 'video_link') return platform || (isZh ? '视频平台链接' : 'video platform link');
-    if (value === 'transcript_file') return isZh ? '本地字幕文件' : 'local subtitle file';
-    if (value === 'audio_file' || value === 'audio') return isZh ? '本地音频文件' : 'local audio file';
-    if (value === 'video_file' || value === 'video' || value === 'queue_upload') return isZh ? '本地视频文件' : 'local video file';
+    if (value === 'transcript_file') return isZh ? '本机字幕文件' : 'local subtitle file';
+    if (value === 'audio_file' || value === 'audio') return isZh ? '本机音频文件' : 'local audio file';
+    if (value === 'video_file' || value === 'video' || value === 'queue_upload') return isZh ? '本机视频文件' : 'local video file';
     if (value === 'text') return isZh ? '文本材料' : 'text material';
-    return platform || localFileKindLabel(source?.sourceFilename, isZh) || (isZh ? '本地文件' : 'local file');
+    return platform || localFileKindLabel(source?.sourceFilename, isZh) || (isZh ? '本机文件' : 'local file');
 };
 
 const routeLabel = (route, isZh) => {
@@ -192,14 +193,14 @@ const routeLabel = (route, isZh) => {
     // Every transcription in this app runs on this machine, including records
     // whose stored provider still names an old cloud engine.
     if (transcription || provider) {
-        return [isZh ? '本地转写' : 'local transcription', modelText].filter(Boolean).join(isZh ? ' · ' : ' · ');
+        return [isZh ? '本机转录' : 'local transcription', modelText].filter(Boolean).join(isZh ? ' · ' : ' · ');
     }
     return '';
 };
 
 const currentJobRouteLabel = (job, isZh) => {
     if (!job || job.sourceType === 'transcript_file') return isZh ? '导入字幕整理' : 'subtitle import';
-    const route = isZh ? '本地转写' : 'local transcription';
+    const route = isZh ? '本机转录' : 'local transcription';
     const model = job.sttModel ? `${job.sttModel}${isZh ? ' 模型' : ' model'}` : '';
     return [route, model, job.sttSpeed].filter(Boolean).join(' / ');
 };
@@ -364,7 +365,7 @@ const TaskProgressOverview = ({pageData}) => {
         {label: isZh ? '转录路线' : 'Route', value: activeJobRoute || route || currentStageLabel},
         {label: isZh ? '摘要模式' : 'Summary mode', value: activeJobSummaryMode},
     ] : [
-        // Where it came from and how big it is. The route ("本地转写 · large-v3")
+        // Where it came from and how big it is. The route ("本机转录 · large-v3")
         // and the material classification were internal readings, dropped from
         // the records card earlier for the same reason.
         {label: isZh ? '来源' : 'Source', value: source},
@@ -372,10 +373,10 @@ const TaskProgressOverview = ({pageData}) => {
     ];
 
     return (
-        <section className={`rounded-[26px] border p-5 shadow-[0_18px_44px_-38px_rgba(17,17,17,.45)] dark:shadow-none ${
+        <section className={`rounded-[16px] border p-5 ${
             failed
                 ? 'border-red-200 bg-red-50 dark:border-red-500/20 dark:bg-red-500/10'
-                : 'border-[#dedada] bg-white dark:border-white/[0.12] dark:bg-white/[0.07]'
+                : 'border-[#e4e0e0] bg-white dark:border-white/[0.12] dark:bg-white/[0.04]'
         }`}>
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0 flex-1">
@@ -396,7 +397,7 @@ const TaskProgressOverview = ({pageData}) => {
                             </span>
                         )}
                     </div>
-                    <h2 className="mt-3 max-w-[48rem] truncate font-headline text-[26px] font-extrabold leading-tight text-[#111111] dark:text-white" title={overviewTitle || undefined}>
+                    <h2 className="mt-3 max-w-[48rem] truncate font-headline text-[20px] font-extrabold leading-tight text-[#111111] dark:text-white" title={overviewTitle || undefined}>
                         {overviewTitle || headline}
                     </h2>
                     <p className="mt-2 text-[14px] font-semibold leading-6 text-[#676970] dark:text-white/[0.62]">
@@ -407,7 +408,7 @@ const TaskProgressOverview = ({pageData}) => {
                     <div className="flex shrink-0 flex-wrap gap-2">
                         <Link
                             to="/media-text?mode=media"
-                            className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-[#dedada] bg-[#fbfbfb] px-3 text-[12px] font-extrabold text-[#111111] transition hover:bg-[#efeeee] dark:border-white/[0.14] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]"
+                            className={button('secondary', 'md')}
                         >
                             <ListPlus className="size-4" strokeWidth={2.2}/>
                             {isZh ? '添加新任务' : 'Add new task'}
@@ -416,7 +417,7 @@ const TaskProgressOverview = ({pageData}) => {
                             type="button"
                             onClick={handleCancel}
                             disabled={cancelBusy}
-                            className="inline-flex h-10 items-center gap-2 rounded-[14px] border border-red-200 bg-red-50 px-3 text-[12px] font-extrabold text-red-600 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
+                            className={button('danger', 'md')}
                         >
                             <XCircle className="size-4" strokeWidth={2.15}/>
                             {cancelBusy ? (isZh ? '取消中...' : 'Cancelling...') : (isZh ? '取消任务' : 'Cancel task')}
@@ -433,11 +434,11 @@ const TaskProgressOverview = ({pageData}) => {
                         <p className="text-[12px] font-extrabold text-[#676970] dark:text-white/[0.60]">
                             {isZh ? '当前阶段' : 'Current stage'}
                         </p>
-                        <p className="text-[22px] font-extrabold text-[#111111] dark:text-white">
+                        <p className="text-[16px] font-extrabold text-[#111111] dark:text-white">
                             {currentStageLabel}
                         </p>
                     </div>
-                    <p className="font-headline text-[30px] font-extrabold tabular-nums text-[#111111] dark:text-white">
+                    <p className="font-headline text-[20px] font-extrabold tabular-nums text-[#111111] dark:text-white">
                         {failed ? '-' : progressText}
                     </p>
                 </div>
@@ -450,7 +451,7 @@ const TaskProgressOverview = ({pageData}) => {
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[12px] font-semibold text-[#676970] dark:text-white/[0.62]">
                         <span>{activeJobTranscriptLine}</span>
                         <span className="font-extrabold text-[#111111] dark:text-white">
-                            {sttUnknown ? (isZh ? 'STT 计算中' : 'STT measuring') : `STT ${activeJobSttProgress}%`}
+                            {sttUnknown ? (isZh ? '转录进度计算中' : 'Measuring progress') : `${isZh ? '转录' : 'Transcribed'} ${activeJobSttProgress}%`}
                         </span>
                     </div>
                 )}

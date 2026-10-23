@@ -1,9 +1,10 @@
 import {useEffect, useRef, useState} from 'react';
 import SvgIcon from './SvgIcon.jsx';
-import {inputClass, saveButtonClass} from './settingsPrimitives.jsx';
+import {inputClass} from './settingsPrimitives.jsx';
 import {useApi} from '../app/shared.jsx';
 import {resolveNoteWriter} from '../lib/noteWriter.js';
 import {NOTE_KEY_DONE, NOTE_KEY_INTRO, agentSetupPrompt, noteKeyChoices} from '../lib/noteKeyOnboarding.js';
+import {button, iconButton, linkButton, rowButton} from '../lib/ui.js';
 
 // The first-run note setup (see lib/noteKeyOnboarding.js for when it opens).
 //
@@ -128,7 +129,7 @@ export const NoteKeyOnboarding = ({
         <section
             data-testid="note-key-onboarding"
             aria-label="设置写笔记的模型"
-            className="mb-5 rounded-[20px] border border-[#dedada] bg-white p-6 text-[#111111] dark:border-white/[0.12] dark:bg-[#1d1f22] dark:text-white/[0.92]"
+            className="mb-5 rounded-[16px] border border-[#e4e0e0] bg-white p-6 text-[#111111] dark:border-white/[0.12] dark:bg-[#1d1f22] dark:text-white/[0.92]"
         >
             <div className="flex items-start justify-between gap-4">
                 <div>
@@ -139,7 +140,7 @@ export const NoteKeyOnboarding = ({
                     <button
                         type="button"
                         onClick={() => onClose?.({completed: false})}
-                        className="shrink-0 rounded-full p-1.5 text-on-surface-variant transition hover:bg-black/5 dark:hover:bg-white/10"
+                        className={iconButton('quiet', 'md')}
                         aria-label="关闭"
                     >
                         <SvgIcon name="close" className="text-lg"/>
@@ -157,7 +158,7 @@ export const NoteKeyOnboarding = ({
                             在 Claude Code、Codex、WorkBuddy 这类 agent 里用 FluentFlow，它用你已有的订阅结合画面写笔记，不用申请 Key。把下面这段发给它，它会自己接上 FluentFlow：
                         </p>
                         <p className="select-all whitespace-pre-line break-all rounded-[10px] bg-white px-3 py-2 text-[12px] leading-relaxed dark:bg-white/[0.06]">{agentPrompt}</p>
-                        <button type="button" onClick={copyAgentPrompt} className={saveButtonClass}>
+                        <button type="button" onClick={copyAgentPrompt} className={button('primary', 'lg')}>
                             {copied ? '已复制，去发给你的 agent' : '复制这段话'}
                         </button>
                     </div>
@@ -176,7 +177,7 @@ export const NoteKeyOnboarding = ({
                                         role="radio"
                                         aria-checked={selected}
                                         onClick={() => pickChoice(item.id)}
-                                        className="w-full text-left"
+                                        className={rowButton}
                                     >
                                         <span className="text-sm font-extrabold">{item.title}</span>
                                         <span className="mt-1 block text-xs leading-relaxed text-on-surface-variant">{item.what}</span>
@@ -211,12 +212,12 @@ export const NoteKeyOnboarding = ({
                             <button
                                 type="button"
                                 onClick={paste}
-                                className="shrink-0 rounded-[14px] border border-[#dedada] px-4 py-3 text-sm font-extrabold transition hover:bg-black/5 dark:border-white/[0.12] dark:hover:bg-white/10"
+                                className={button('secondary', 'lg')}
                             >
                                 粘贴
                             </button>
                         )}
-                        <button type="button" disabled={busy || !draft.trim()} onClick={checkAndSave} className={saveButtonClass}>
+                        <button type="button" disabled={busy || !draft.trim()} onClick={checkAndSave} className={button('primary', 'lg')}>
                             {busy ? '正在检查…' : '检查并保存'}
                         </button>
                     </div>
@@ -226,7 +227,7 @@ export const NoteKeyOnboarding = ({
                     <button
                         type="button"
                         onClick={() => onClose?.({completed: false})}
-                        className="mt-4 text-xs font-semibold text-on-surface-variant underline"
+                        className={`mt-4 ${linkButton('muted', 'sm')}`}
                     >
                         以后再说，先只要转录稿
                     </button>

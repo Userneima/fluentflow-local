@@ -68,6 +68,7 @@ import {
     regenerateDialogCopy,
     visualNoteStartErrorMessage,
 } from './editor-helpers.js';
+import {timestampButton, button, iconButton, linkButton, segmentGroup, segmentItem, chip, statusButton, surfaceCard} from '../lib/ui.js';
 
 // The records worth showing: a changed sentence whose current text is still the
 // changed version. Shared by the records dialog and the save payload.
@@ -99,8 +100,8 @@ const SIZES_ITSELF = textareaSizesItself();
 // transitions there fired about 28,000 transitionend events per switch.
 const OFFSCREEN_SKIP = {contentVisibility: 'auto', containIntrinsicSize: 'auto 3rem'};
 
-const SentenceTime = memo(({seg, active, className, onSeek, children}) => (
-    <button type="button" onClick={() => onSeek(seg)} className={className(active)}>
+const SentenceTime = memo(({seg, active, layout = '', onSeek, children}) => (
+    <button type="button" onClick={() => onSeek(seg)} className={`${layout} ${timestampButton(active)}`}>
         {children}
     </button>
 ));
@@ -116,7 +117,7 @@ const TranscriptLine = memo(({index, seg, active, onSeek, onEdit, onFocusLine, r
             seg={seg}
             active={active}
             onSeek={onSeek}
-            className={(on) => `pt-[1px] text-left font-mono text-xs font-bold tabular-nums ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`}
+            layout="pt-[1px] text-left"
         >
             {fmtTime(seg.start)}
         </SentenceTime>
@@ -145,9 +146,7 @@ const BilingualLine = memo(({index, seg, active, review, onSeek, registerNode}) 
             seg={seg}
             active={active}
             onSeek={onSeek}
-            className={(on) => (review
-                ? `pt-[1px] text-left font-mono text-xs font-bold tabular-nums ${on ? 'text-primary dark:text-white' : 'text-[#8a8a8a] hover:text-primary dark:text-white/42 dark:hover:text-white'}`
-                : `flex flex-col items-start justify-start pt-[1px] font-mono text-xs tabular-nums ${on ? 'font-bold text-primary' : 'text-[#777] hover:text-primary dark:text-white/45'}`)}
+            layout={review ? 'pt-[1px] text-left' : 'flex flex-col items-start justify-start pt-[1px]'}
         >
             {review ? fmtTime(seg.start) : (
                 <>
@@ -160,7 +159,7 @@ const BilingualLine = memo(({index, seg, active, review, onSeek, registerNode}) 
             <p className={`whitespace-pre-wrap text-sm leading-snug text-[#111111] dark:text-white ${review ? 'font-semibold' : 'font-medium'}`}>
                 {seg.text}
             </p>
-            <p className={`mt-1.5 border-l-2 border-primary/25 pl-3 text-sm leading-snug text-[#666] ${review ? 'font-semibold dark:text-white/68' : 'font-medium dark:text-white/65'}`}>
+            <p className={`mt-1.5 border-l-2 border-primary/25 pl-3 text-sm leading-snug text-[#666] ${review ? 'font-semibold dark:text-white/70' : 'font-medium dark:text-white/65'}`}>
                 {seg.text_zh}
             </p>
         </div>
@@ -243,7 +242,7 @@ const TranscriptParagraph = memo(({paragraph, segments, activeIndex, onSeek, onE
             <button
                 type="button"
                 onClick={() => onSeek(paragraph)}
-                className={`font-mono text-xs tabular-nums ${activeIndex >= 0 ? 'font-bold text-primary' : 'text-[#8a8a8a] hover:text-primary dark:text-white/40'}`}
+                className={timestampButton(activeIndex >= 0)}
             >
                 {fmtTime(paragraph.start)}
             </button>
@@ -1684,11 +1683,11 @@ const Editor = () => {
     if(!result || urlTaskMissing) return (
         <div className="ml-[var(--sidebar-offset)] min-h-dvh bg-[#f8f7fb] pb-8 text-[#111111] dark:bg-[#101010] dark:text-white/[0.92]">
             <main className="flex h-[calc(100vh-2rem)] items-center justify-center px-8">
-                <div className="w-full max-w-xl rounded-[28px] border border-[#e4e0e0] bg-white px-8 py-10 text-center shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
-                    <SvgIcon name="edit_note" className="mb-4 text-6xl text-[#8a8a8a] dark:text-white/40"/>
-                    <h2 className="mb-2 font-headline text-2xl font-extrabold text-[#111111] dark:text-white">{urlTaskMissing ? (lang === 'zh' ? '找不到这条记录' : 'Record not found') : t('edit.noResult')}</h2>
+                <div className={`w-full max-w-xl px-8 py-10 text-center ${surfaceCard}`}>
+                    <SvgIcon name="edit_note" className="mb-4 text-5xl text-[#8a8a8a] dark:text-white/40"/>
+                    <h2 className="mb-2 font-headline text-[18px] font-extrabold text-[#111111] dark:text-white">{urlTaskMissing ? (lang === 'zh' ? '找不到这条记录' : 'Record not found') : t('edit.noResult')}</h2>
                     <p className="mb-6 text-sm font-semibold leading-relaxed text-[#666] dark:text-white/60">{urlTaskMissing ? (lang === 'zh' ? '它可能已被删除。从处理记录选一条打开。' : 'It may have been deleted. Open one from the records.') : t('edit.noResultDesc')}</p>
-                    <Link to="/agent" className="inline-flex items-center gap-2 rounded-[14px] bg-[#111111] px-6 py-3 text-sm font-bold text-white transition-colors hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
+                    <Link to="/agent" className={button('primary', 'lg')}>
                         <SvgIcon name="monitoring" className="text-lg"/>{t('edit.chooseRecord')}
                     </Link>
                                             </div>
@@ -1799,11 +1798,7 @@ const Editor = () => {
                                 title={headerStatus.title || undefined}
                                 onClick={headerStatus.onClick}
                                 disabled={!headerStatus.onClick}
-                                className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[10px] border px-2.5 text-[12px] font-bold disabled:cursor-default ${headerStatus.tone === 'error'
-                                    ? 'border-[#fda29b] bg-[#fef3f2] text-[#b42318] hover:bg-[#fee4e2] dark:border-[#f04438]/40 dark:bg-[#f04438]/[0.14] dark:text-[#f97066]'
-                                    : headerStatus.tone === 'busy'
-                                        ? 'border-[#e4e0e0] bg-white text-[#666] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65'
-                                        : 'border-[#f5c86b] bg-[#fffaf0] text-[#8a5a00] hover:bg-[#fff3dc] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]'}`}
+                                className={statusButton(headerStatus.tone === 'error' ? 'error' : headerStatus.tone === 'busy' ? 'busy' : 'warning')}
                             >
                                 {headerStatus.tone === 'busy'
                                     ? <SvgIcon name="sync" className="text-[13px] animate-spin"/>
@@ -1821,24 +1816,24 @@ const Editor = () => {
                                     data-testid="lark-export-link"
                                     aria-label={lang === 'zh' ? '打开飞书文档' : 'Open the Feishu document'}
                                     title={`${lang === 'zh' ? '打开飞书文档' : 'Open the Feishu document'}：${larkDocTitle}`}
-                                    className="inline-flex size-7 items-center justify-center rounded-[10px] border border-[#dedada] bg-white text-[#57585d] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.10]"
+                                    className={iconButton('secondary', 'sm')}
                                 >
                                     <SvgIcon name="open_in_new" className="text-base"/>
                                 </a>
                             )}
-                            <OutputFolderLine taskId={activeTaskId} result={result} lang={lang} compact/>
+                            <OutputFolderLine taskId={activeTaskId} result={result} lang={lang} compact labelled/>
                         </div>
                     </div>
 
 
                         <div ref={splitContainerRef} className="flex min-h-0 flex-1 gap-0 overflow-hidden">
-                            <section style={paneStyles.left} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
+                            <section style={paneStyles.left} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${surfaceCard}`}>
                                 <div className="border-b border-[#e4e0e0] px-4 py-3 dark:border-white/[0.12]">
                                     <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                                         <div className="min-w-0">
                                             <div className="flex items-center gap-2">
                                                 <SvgIcon name="subject" className="text-[18px] text-[#111111] dark:text-white"/>
-                                                <h2 className="truncate font-headline text-base font-extrabold text-[#111111] dark:text-white">
+                                                <h2 className="truncate font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
                                                     {lang === 'zh' ? '转录原文' : 'Transcript'}
                                                 </h2>
                                                 {(transcriptDirty || transcriptSaveStatus !== 'idle') && (
@@ -1868,15 +1863,11 @@ const Editor = () => {
                                         </div>
                                         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                                             {canShowVideoReview && segments.length > 0 && (
-                                                <div className="inline-flex h-9 items-center gap-1 rounded-[13px] border border-[#e4e0e0] bg-[#f8f7fb] p-0.5 dark:border-white/[0.12] dark:bg-white/[0.06]">
+                                                <div className={segmentGroup}>
                                                     <button
                                                         type="button"
                                                         onClick={()=>switchReviewMode('text')}
-                                                        className={`inline-flex h-full items-center justify-center rounded-[10px] px-2.5 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
-                                                            activeReviewMode === 'text'
-                                                                ? 'bg-[#111111] text-white dark:bg-white dark:text-[#111111]'
-                                                                : 'text-[#666] hover:bg-white hover:text-[#111111] dark:text-white/60 dark:hover:bg-white/[0.08] dark:hover:text-white'
-                                                        }`}
+                                                        className={segmentItem(activeReviewMode === 'text', 'sm')}
                                                     >
                                                         {lang === 'zh' ? '文本校对' : 'Text review'}
                                                     </button>
@@ -1885,37 +1876,25 @@ const Editor = () => {
                                                         onClick={()=>{ if (canUseVideoReview) switchReviewMode('video'); }}
                                                         disabled={!canUseVideoReview}
                                                         title={!canUseVideoReview ? (lang === 'zh' ? '选择原视频并保留时间戳后可用' : 'Available after choosing source video with timestamps') : undefined}
-                                                        className={`inline-flex h-full items-center justify-center rounded-[10px] px-2.5 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:text-[#9a9a9a] disabled:hover:bg-transparent disabled:hover:text-[#9a9a9a] dark:disabled:text-white/28 dark:disabled:hover:text-white/28 ${
-                                                            activeReviewMode === 'video'
-                                                                ? 'bg-[#111111] text-white dark:bg-white dark:text-[#111111]'
-                                                                : 'text-[#666] hover:bg-white hover:text-[#111111] dark:text-white/60 dark:hover:bg-white/[0.08] dark:hover:text-white'
-                                                        }`}
+                                                        className={segmentItem(activeReviewMode === 'video', 'sm')}
                                                     >
                                                         {lang === 'zh' ? '视频复查' : 'Video review'}
                                                     </button>
                                                 </div>
                                             )}
                                             {hasBilingualTranscript && segments.length > 0 && (
-                                                <div className="inline-flex h-9 overflow-hidden rounded-[13px] border border-[#e4e0e0] bg-[#f8f7fb] p-0.5 dark:border-white/[0.12] dark:bg-white/[0.06]">
+                                                <div className={segmentGroup}>
                                                     <button
                                                         type="button"
                                                         onClick={()=>setTranscriptView('bilingual')}
-                                                        className={`inline-flex items-center justify-center px-2.5 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
-                                                            visibleTranscriptView === 'bilingual'
-                                                                ? 'bg-[#111111] text-white dark:bg-white dark:text-[#111111]'
-                                                                : 'text-[#666] hover:bg-white hover:text-[#111111] dark:text-white/60 dark:hover:bg-white/[0.08] dark:hover:text-white'
-                                                        }`}
+                                                        className={segmentItem(visibleTranscriptView === 'bilingual', 'sm')}
                                                     >
                                                         {lang === 'zh' ? '中英对照' : 'Bilingual'}
                                                     </button>
                                                     <button
                                                         type="button"
                                                         onClick={()=>setTranscriptView('raw')}
-                                                        className={`inline-flex items-center justify-center px-2.5 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
-                                                            visibleTranscriptView === 'raw'
-                                                                ? 'bg-[#111111] text-white dark:bg-white dark:text-[#111111]'
-                                                                : 'text-[#666] hover:bg-white hover:text-[#111111] dark:text-white/60 dark:hover:bg-white/[0.08] dark:hover:text-white'
-                                                        }`}
+                                                        className={segmentItem(visibleTranscriptView === 'raw', 'sm')}
                                                     >
                                                         {lang === 'zh' ? '原始字幕' : 'Original'}
                                                     </button>
@@ -1925,7 +1904,7 @@ const Editor = () => {
                                                 <button
                                                     type="button"
                                                     onClick={()=>setEditRecordsOpen(true)}
-                                                    className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#666] transition hover:bg-[#efeeee] hover:text-[#111111] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/65 dark:hover:bg-white/[0.1] dark:hover:text-white"
+                                                    className={button('secondary', 'sm')}
                                                 >
                                                     <SvgIcon name="edit_note" className="text-[17px]"/>
                                                     <span>{t('edit.editRecords')}</span>
@@ -1945,7 +1924,7 @@ const Editor = () => {
                                 ref={mediaRef}
                                 src={mediaUrl || undefined}
                                 controls={shouldShowVideoReview}
-                                className={shouldShowVideoReview ? 'max-h-[min(58vh,36rem)] w-full shrink-0 rounded-[18px] bg-black object-contain' : 'hidden'}
+                                className={shouldShowVideoReview ? 'max-h-[min(58vh,36rem)] w-full shrink-0 rounded-[12px] bg-black object-contain' : 'hidden'}
                                 onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
                                 onLoadedMetadata={(e)=>restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0)}
                                 onSeeked={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true})}
@@ -1958,7 +1937,7 @@ const Editor = () => {
                                 onCompositionStart={() => { transcriptComposingRef.current = true; }}
                                 onCompositionEnd={() => { transcriptComposingRef.current = false; }}
                                 className={shouldShowVideoReview
-                                    ? 'hide-scrollbar min-h-[10rem] flex-1 overflow-y-auto rounded-[18px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]'
+                                    ? 'hide-scrollbar min-h-[10rem] flex-1 overflow-y-auto rounded-[12px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]'
                                     : 'hide-scrollbar min-h-0 flex-1 overflow-y-auto p-3'}
                             >
                                 <div className={shouldShowVideoReview ? 'divide-y divide-[#e4e0e0] dark:divide-white/[0.08]' : 'space-y-1.5'}>
@@ -2031,10 +2010,10 @@ const Editor = () => {
                                 <div className="border-t border-[#e4e0e0] bg-[#fbfbfb]/90 p-4 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                     {mediaUrl ? (
                                         <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
-                                                <button type="button" onClick={togglePlayback} className="flex h-9 w-9 items-center justify-center rounded-[13px] bg-[#111111] text-white transition hover:bg-[#2a2a2a] dark:bg-white dark:text-[#111111] dark:hover:bg-white/85">
+                                                <button type="button" onClick={togglePlayback} aria-label={mediaPlaying ? (lang === 'zh' ? '暂停' : 'Pause') : (lang === 'zh' ? '播放' : 'Play')} className={iconButton('primary', 'md')}>
                                                     <SvgIcon name={mediaPlaying ? 'pause' : 'play_arrow'} className="text-lg"/>
                                                 </button>
-                                                <button type="button" onClick={()=>setFollowPlayback(v=>!v)} className={`rounded-[12px] px-2.5 py-1.5 text-xs font-bold transition ${followPlayback?'bg-[#eef2ff] text-primary dark:bg-white/[0.1] dark:text-white':'bg-[#efeeee] text-[#666] dark:bg-white/[0.08] dark:text-white/60'}`}>
+                                                <button type="button" onClick={()=>setFollowPlayback(v=>!v)} aria-pressed={followPlayback} className={chip(followPlayback)}>
                                                     {t('edit.followPlayback')}
                                                 </button>
                                                 {/* Which of the two files is playing. Both exist for a
@@ -2051,7 +2030,7 @@ const Editor = () => {
                                     ) : (
                                         <div className="flex items-center justify-between gap-3">
                                             <p className="text-xs font-semibold text-[#666] dark:text-white/60">{mediaLoading ? t('edit.sourceLoading') : (mediaError || t('edit.audioUnavailable'))}</p>
-                                            <button type="button" onClick={()=>mediaInputRef.current?.click()} className="inline-flex items-center gap-1.5 rounded-[13px] bg-[#efeeee] px-3 py-2 text-xs font-bold text-[#111111] transition hover:bg-[#e4e0e0] dark:bg-white/[0.08] dark:text-white dark:hover:bg-white/[0.12]">
+                                            <button type="button" onClick={()=>mediaInputRef.current?.click()} className={button('secondary', 'sm')}>
                                                 <SvgIcon name="audio_file" className="text-sm"/>{t('edit.chooseAudio')}
                                             </button>
                                         </div>
@@ -2079,9 +2058,9 @@ const Editor = () => {
                                 lang={lang}
                             />
 
-                            <section style={paneStyles.right} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4e0e0] bg-white shadow-[0_18px_44px_-34px_rgba(17,17,17,.55)] xl:w-[38rem] xl:flex-none 2xl:w-[42rem] dark:border-white/[0.12] dark:bg-white/[0.06] dark:shadow-none">
+                            <section style={paneStyles.right} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden xl:w-[38rem] xl:flex-none 2xl:w-[42rem] ${surfaceCard}`}>
                                 <div className="flex items-center justify-between gap-3 border-b border-[#e4e0e0] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.04]">
-                                    <h2 className="flex items-center gap-2 font-headline text-base font-extrabold text-[#111111] dark:text-white">
+                                    <h2 className="flex items-center gap-2 font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
                                         <SvgIcon name="psychology" className="text-[#111111] dark:text-white"/>
                                         {lang === 'zh' ? '笔记正文' : 'Note'}
                                     </h2>
@@ -2099,7 +2078,7 @@ const Editor = () => {
                                             <button
                                                 type="button"
                                                 onClick={()=>setVisualEvidenceVisible((value)=>!value)}
-                                                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[13px] border border-[#e4e0e0] bg-white px-3 text-xs font-bold text-[#555] transition hover:bg-[#efeeee] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-white/70 dark:hover:bg-white/[0.08]"
+                                                className={button('secondary', 'sm')}
                                                 title={lang === 'zh' ? `当前笔记包含 ${inlineVisualEvidenceCount} 张关键截图` : `${inlineVisualEvidenceCount} key screenshots in this note`}
                                             >
                                                 <SvgIcon name={visualEvidenceVisible ? 'visibility_off' : 'visibility'} className="text-sm"/>
@@ -2140,7 +2119,7 @@ const Editor = () => {
                                     <div className="hide-scrollbar min-h-0 flex-1 overflow-y-auto p-6 text-[#111111] dark:text-white">
                                     {result.summary_skipped ? (
                                         <>
-                                            <p className="text-sm italic text-[#666] dark:text-white/60">{t(result.summary_skipped_reason === 'no_model_key' ? 'edit.summaryNoKey' : 'edit.summarySkipped')}</p>
+                                            <p className="text-sm text-[#666] dark:text-white/60">{t(result.summary_skipped_reason === 'no_model_key' ? 'edit.summaryNoKey' : 'edit.summarySkipped')}</p>
                                             {!noteBeingWritten && (
                                                 <button
                                                     ref={writeNoteButtonRef}
@@ -2148,7 +2127,7 @@ const Editor = () => {
                                                     data-testid="write-note"
                                                     onClick={()=>setRegenerateConfirmOpen(true)}
                                                     disabled={!transcript}
-                                                    className="my-3 inline-flex h-8 items-center gap-1.5 rounded-[12px] bg-[#111111] px-3 text-[13px] font-bold not-italic text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
+                                                    className={`my-3 ${button('primary', 'md')}`}
                                                 >
                                                     <SvgIcon name="edit_note" className="text-[15px]"/>
                                                     {lang === 'zh' ? '写笔记' : 'Write the note'}
@@ -2157,8 +2136,8 @@ const Editor = () => {
                                             <AgentNotePrompt result={result} lang={lang}/>
                                         </>
                                     ) : result.summary_status === 'failed' || result.summary_error ? (
-                                        <div className="space-y-2 text-sm text-[#666] dark:text-white/60">
-                                            <p className="italic">{t('edit.summaryFailed')}</p>
+                                        <div className="space-y-3 text-sm text-[#666] dark:text-white/60">
+                                            <p>{t('edit.summaryFailed')}</p>
                                             {!noteBeingWritten && (
                                                 <button
                                                     ref={writeNoteButtonRef}
@@ -2166,19 +2145,19 @@ const Editor = () => {
                                                     data-testid="write-note"
                                                     onClick={()=>setRegenerateConfirmOpen(true)}
                                                     disabled={!transcript}
-                                                    className="inline-flex h-8 items-center gap-1.5 rounded-[12px] bg-[#111111] px-3 text-[13px] font-bold not-italic text-white transition hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-[#111111] dark:hover:bg-white/85"
+                                                    className={button('primary', 'md')}
                                                 >
                                                     <SvgIcon name="edit_note" className="text-[15px]"/>
                                                     {lang === 'zh' ? '写笔记' : 'Write the note'}
                                                 </button>
                                             )}
                                             {summaryFailureHint && (
-                                                <p className="rounded-[14px] border border-error/20 bg-error-container px-3 py-2 text-xs font-semibold leading-relaxed text-on-error-container">
+                                                <p data-testid="note-failure-reason" className="rounded-[12px] border border-[#fda29b] bg-[#fef3f2] px-3 py-2 text-[13px] font-semibold leading-relaxed text-[#b42318] dark:border-[#f04438]/40 dark:bg-[#f04438]/[0.12] dark:text-[#f97066]">
                                                     {summaryFailureHint}
                                                     {result?.task_id && (
                                                         <>
                                                             {' '}
-                                                            <Link data-testid="task-steps-link" to={`/tasks/${encodeURIComponent(result.task_id)}/agent`} className="underline hover:no-underline">
+                                                            <Link data-testid="task-steps-link" to={`/tasks/${encodeURIComponent(result.task_id)}/agent`} className={linkButton()}>
                                                                 {lang === 'zh' ? '处理过程' : 'Processing steps'}
                                                             </Link>
                                                         </>
