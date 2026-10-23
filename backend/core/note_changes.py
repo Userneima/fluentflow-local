@@ -48,6 +48,11 @@ SHORT_PARAGRAPH = 120
 CONTEXT = 25
 # Changes this close together in one paragraph are shown as one.
 JOIN_GAP = 40
+# A paragraph longer than this is not compared word by word, which takes time
+# growing with the square of its length (1.5 to 1.9 seconds for one paragraph
+# of 20,000 characters, measured 2026-10-23, in the thread saving the note):
+# what lies between the words it starts and ends with is the change.
+LONGEST_COMPARED = 3000
 # Longest text shown for one side of one change.
 SHOWN_CHARS = 300
 # Changes listed in one entry; the rest are counted.
@@ -92,10 +97,23 @@ def _one_line(text: str) -> str:
     return " / ".join(part.strip() for part in text.split("\n") if part.strip())
 
 
-def _within(old: str, new: str) -> list[tuple[str, str]]:
-    """The changed words of one paragraph, each with some words around it."""
-    if len(old) <= SHORT_PARAGRAPH and len(new) <= SHORT_PARAGRAPH:
-        return [(old, new)]
+def _ends(old: str, new: str) -> tuple[int, int]:
+    """How many characters the two start with and end with alike."""
+    start = 0
+    limit = min(len(old), len(new))
+    while start < limit and old[start] == new[start]:
+        start += 1
+    end = 0
+    while end < limit - start and old[-1 - end] == new[-1 - end]:
+        end += 1
+    return start, end
+
+
+def _spans(old: str, new: str) -> list[list[int]]:
+    """Where two versions of one paragraph differ, as [i1, i2, j1, j2]."""
+    if max(len(old), len(new)) > LONGEST_COMPARED:
+        start, end = _ends(old, new)
+        return [[start, len(old) - end, start, len(new) - end]]
     spans: list[list[int]] = []
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes():
         if tag == "equal":
@@ -104,6 +122,14 @@ def _within(old: str, new: str) -> list[tuple[str, str]]:
             spans[-1][1], spans[-1][3] = i2, j2
         else:
             spans.append([i1, i2, j1, j2])
+    return spans
+
+
+def _within(old: str, new: str) -> list[tuple[str, str]]:
+    """The changed words of one paragraph, each with some words around it."""
+    if len(old) <= SHORT_PARAGRAPH and len(new) <= SHORT_PARAGRAPH:
+        return [(old, new)]
+    spans = _spans(old, new)
     found = []
     for i1, i2, j1, j2 in spans:
         start_old, start_new = max(0, i1 - CONTEXT), max(0, j1 - CONTEXT)
@@ -144,8 +170,10 @@ def changes(before: str, after: str) -> list[dict[str, str | None]]:
 
 
 def _changed_share(before: str, after: str) -> float:
-    """How much of the note changed, in characters: a paragraph changed in a
-    few words counts those words, not the paragraph."""
+    """How much of the earlier note was changed or removed, in characters:
+    a paragraph changed in a few words counts those words, and words added
+    count nothing, so a chapter added to a short note is not the note
+    replaced (review, 2026-10-23)."""
     old, new = before.split("\n"), after.split("\n")
     changed = 0
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes():
@@ -153,12 +181,9 @@ def _changed_share(before: str, after: str) -> float:
             continue
         if i2 - i1 == j2 - j1:
             for a, b in zip(old[i1:i2], new[j1:j2]):
-                matcher = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
-                changed += sum(
-                    max(k2 - k1, l2 - l1) for op, k1, k2, l1, l2 in matcher.get_opcodes() if op != "equal"
-                )
+                changed += sum(k2 - k1 for k1, k2, _l1, _l2 in _spans(a, b))
         else:
-            changed += max(sum(len(line) for line in old[i1:i2]), sum(len(line) for line in new[j1:j2]))
+            changed += sum(len(line) for line in old[i1:i2])
     total = sum(len(line) for line in old) or 1
     return changed / total
 

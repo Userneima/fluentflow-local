@@ -323,3 +323,72 @@ def test_a_document_synced_before_pushes_were_recorded_keeps_its_feishu_copy_bef
     kept = _feishu_side(md)
     assert len(kept) == 1 and "飞书里补的" in kept[0].path.read_text(encoding="utf-8")
     assert isinstance(_result(task)["lark_response"]["sync"].get("pushed_sections"), list), "recorded from now on"
+
+
+def test_a_chapter_added_to_a_short_note_is_listed_as_added_not_as_the_note_replaced(tmp_path):
+    """Review, 2026-10-23: a 1006-character note with a chapter appended read
+    as 整篇换掉. Only a rewrite is folded into one line."""
+    task, md = _task(tmp_path, NOTE)
+    added = "## 三、新加的一章\n\n" + "补上的内容，讲清楚了来龙去脉。" * 20
+
+    _web_edit(task, _note(task).rstrip("\n") + "\n\n" + added + "\n")
+
+    entry = _entries(md)[0]
+    assert "整篇换掉" not in entry
+    assert "新增：## 三、新加的一章" in entry
+
+
+def test_a_very_long_paragraph_changed_in_one_place_is_shown_there_and_quickly(tmp_path):
+    long = "这是一段没有换行的长转述，" * 1600  # about 20,000 characters
+    task, md = _task(tmp_path, NOTE.replace("开场的话。", long + "中间那句话。" + long))
+
+    started = time.perf_counter()
+    _web_edit(task, _note(task).replace("中间那句话。", "中间改过的那句话。"))
+    took = time.perf_counter() - started
+
+    entry = _entries(md)[0]
+    assert "改成：" in entry and "中间改过的那句话" in entry
+    assert len(entry) < 400, "only the changed place, not the paragraph"
+    assert took < 1.0, f"the save took {took:.2f} s"
+
+
+def test_a_note_with_no_folder_still_keeps_its_feishu_copy(monkeypatch):
+    """With no output folder no md version is kept when the note changes, so
+    the Feishu copy is the only earlier version: kept even when nobody edited
+    it in Feishu."""
+    import uuid
+
+    from backend.core.local_request_scope import LOCAL_OWNER_ID
+
+    task = f"nc-{uuid.uuid4().hex[:8]}"
+    note = NOTE.format(task=task)
+    job_store.upsert_job(task_id=task, status="completed", client_id=LOCAL_OWNER_ID,
+                         result={"summary_markdown": note, "summary_status": "completed"})
+    try:
+        doc = FakeDoc()
+        _in_feishu(task, doc, monkeypatch)
+        _web_edit(task, _note(task).replace("开场的话。", "开场。"))
+        feishu_sync.push(task, runner=doc)
+
+        md = note_versions.md_for(task, _result(task))
+        kept = [v for v in note_versions.kept(md) if v.side == note_versions.FEISHU]
+        assert len(kept) == 1 and "开场的话" in kept[0].path.read_text(encoding="utf-8")
+    finally:
+        job_store.delete_jobs([task])
+
+
+def test_the_first_note_written_adds_no_entry(tmp_path):
+    import uuid
+
+    task = f"nc-{uuid.uuid4().hex[:8]}"
+    job_store.upsert_job(task_id=task, status="running", result={"summary_markdown": "", "transcript_text": "一句。"})
+    try:
+        fields = note_versions.declare({**_result(task), "summary_markdown": NOTE, "summary_status": "completed"},
+                                       note_versions.GENERATED)
+        job_store.update_job_result(task, fields)
+
+        log = note_versions.folder_for(note_versions.md_for(task, _result(task))).parent / note_changes.FILENAME
+        assert _note(task) == NOTE
+        assert not log.exists()
+    finally:
+        job_store.delete_jobs([task])
