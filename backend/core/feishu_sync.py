@@ -59,11 +59,37 @@ def recorded_sync(result: dict[str, Any] | None) -> dict[str, Any] | None:
     response = result.get("lark_response")
     if not isinstance(response, dict) or response.get("via") != "lark_cli":
         return None
+    from backend.core.lark_cli_exporter import sections_unread
+
     sync = response.get("sync")
-    if not isinstance(sync, dict) or not sync.get("doc_id") or not isinstance(sync.get("sections"), list):
+    if not isinstance(sync, dict) or not sync.get("doc_id") or sync.get("stopped"):
         return None
-    if sync.get("stopped"):
+    # Chapters that could not be read back after a push are read again before
+    # the next write; the note stays in sync meanwhile.
+    if not isinstance(sync.get("sections"), list) and not sections_unread(sync):
         return None
+    return sync
+
+
+def _with_sections(task_id: str, result: dict[str, Any], sync: dict[str, Any], runner: Any) -> dict[str, Any] | None:
+    """``sync`` with its chapters, read again and recorded when the last push
+    could not read them back. None, with the reason on the task, when they
+    still cannot be read."""
+    from backend.core.lark_cli_exporter import reread_sections, sections_unread
+    from backend.core.storage_paths import _artifact_storage_dir
+
+    if not sections_unread(sync):
+        return sync
+    _cli_module, bin_path = _cli()
+    try:
+        sync = reread_sections(sync, task_id=task_id, artifact_root=_artifact_storage_dir(),
+                               bin_path=bin_path, runner=runner)
+    except Exception as exc:  # noqa: BLE001 - the note itself is fine
+        logger.warning("chapters of the Feishu copy of %s not read again: %s", task_id, exc)
+        _record(task_id, lark_sync_error=f"飞书那份没更新：读不到它的章节目录（{exc}）。笔记本身没受影响，下次改动时会再试。")
+        return None
+    response = result.get("lark_response") if isinstance(result.get("lark_response"), dict) else {}
+    _record(task_id, lark_response={**response, "sync": sync})
     return sync
 
 
@@ -165,6 +191,9 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
     if not note.strip() or (previous is None and note_digest(note) == sync.get("note_digest")):
         return None
     if previous is None:
+        sync = _with_sections(task_id, result, sync, runner)
+        if sync is None:
+            return None
         # Edits made in Feishu since the last push come in first; writing over
         # the document now would record them as pushed and never bring them back.
         cli, bin_path = _cli()
@@ -185,7 +214,11 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
         _record(task_id, lark_sync_error=f"飞书那份没更新（{exc}）。笔记本身没受影响，下次改动时会再试。")
         return None
     response_before = result.get("lark_response") if isinstance(result.get("lark_response"), dict) else {}
-    _record(task_id, lark_response={**response_before, **response}, lark_sync_error=None,
+    pushed = response.get("sync") if isinstance(response.get("sync"), dict) else {}
+    unread = None
+    if pushed.get("doc_id") and pushed.get("sections") is None:
+        unread = "飞书那份已更新，但没读到它的章节目录。下次改动时会重读，不影响同步。"
+    _record(task_id, lark_response={**response_before, **response}, lark_sync_error=unread,
             lark_synced_at=datetime.now(timezone.utc).isoformat())
     return response
 
@@ -290,6 +323,11 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     sync = recorded_sync(result)
     if result is None or sync is None:
         return None
+    sync = _with_sections(task_id, result, sync, runner)
+    if sync is None:
+        return None
+    job = job_store.get_job(task_id)
+    result = job.get("result") if isinstance(job, dict) and isinstance(job.get("result"), dict) else result
     cli, bin_path = _cli()
     doc_id = str(sync["doc_id"])
     shown = cli._run(runner, [bin_path, "docs", "+fetch", "--doc", doc_id, "--doc-format", "markdown", "--as", "user"],

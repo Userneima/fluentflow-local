@@ -297,6 +297,9 @@ def export_markdown_via_lark_cli(
         raise LarkCliError(
             f"{LARK_CLI_NOT_FOUND}. Install @larksuite/cli globally or set FLUENTFLOW_LARK_CLI_BIN."
         )
+    if previous and previous.get("doc_id") and sections_unread(previous):
+        previous = reread_sections(previous, task_id=task_id, artifact_root=artifact_root,
+                                   bin_path=bin_path, runner=runner)
     if previous and previous.get("doc_id") and isinstance(previous.get("sections"), list):
         return _update(
             markdown, previous, bin_path=bin_path, timeout=timeout, task_id=task_id,
@@ -366,6 +369,47 @@ def pushed_note_path(artifact_root: Optional[Path], task_id: Optional[str]) -> O
     if artifact_root is None or not task_id:
         return None
     return Path(artifact_root) / task_id / PUSHED_NOTE
+
+
+def sections_unread(sync: Optional[dict[str, Any]]) -> bool:
+    """A document that was pushed but whose chapters could not be read back
+    afterwards (``_finish``). A stopped sync also has no chapters, on purpose:
+    exporting it again makes a new document."""
+    return (
+        isinstance(sync, dict) and bool(sync.get("doc_id")) and not sync.get("stopped")
+        and "sections" in sync and sync["sections"] is None
+    )
+
+
+def reread_sections(
+    sync: dict[str, Any],
+    *,
+    task_id: Optional[str],
+    artifact_root: Optional[Path],
+    bin_path: str,
+    runner: Runner,
+) -> dict[str, Any]:
+    """``sync`` with its chapters read again: the note as last pushed, matched
+    to the document's headings now. Raises when either cannot be read, so the
+    caller writes nothing rather than a second document."""
+    path = pushed_note_path(artifact_root, task_id)
+    if path is None or not path.is_file():
+        raise LarkCliError("飞书那份的章节对不上了：找不到上次推送的笔记。")
+    pushed = path.read_text(encoding="utf-8")
+    outline = _run(
+        runner,
+        [bin_path, "docs", "+fetch", "--doc", str(sync["doc_id"]), "--scope", "outline",
+         "--detail", "with-ids", "--as", "user"],
+        timeout=60,
+    )
+    fetched = outline.get("document") if isinstance(outline.get("document"), dict) else outline
+    content = str(fetched.get("content") or "")
+    parts = feishu_note.sections(pushed)
+    return {
+        **sync,
+        "headings": feishu_note.headings(content),
+        "sections": feishu_note.section_records(parts, feishu_note.heading_list(content)),
+    }
 
 
 def save_pushed_note(artifact_root: Optional[Path], task_id: Optional[str], markdown: str) -> None:
@@ -595,8 +639,10 @@ def _finish(
     except LarkCliError as exc:
         logger.warning("lark-cli outline fetch failed for %s: %s", doc_id, exc)
         sync["link_errors"] = [link.label for link in links]
-        # Without the headings' ids no chapter can be matched next time: the
-        # next export updates nothing in place and writes a new document.
+        # The document was written; only its headings' ids are not known. The
+        # next export reads them again (``reread_sections``) before writing,
+        # rather than the note dropping out of sync (owner, 2026-10-24: a
+        # failed read here once left a note unsynced with no error shown).
         sync["sections"] = None
         return
     fetched = outline.get("document") if isinstance(outline.get("document"), dict) else outline

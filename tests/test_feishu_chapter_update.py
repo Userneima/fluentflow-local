@@ -12,6 +12,10 @@ Requirements (owner, 2026-10-21):
    if it cannot be read, nothing is written.
 5. Nothing changed, nothing written.
 6. A note kept in Feishu is pushed when it changes; a note that is not, is not.
+7. (owner, 2026-10-24) A push whose chapters cannot be read back afterwards
+   does not end the sync: the task says so, and the next change still updates
+   the same document chapter by chapter, with no second document. If the
+   chapters still cannot be read, nothing is written and the task says why.
 """
 
 from __future__ import annotations
@@ -52,6 +56,7 @@ class FakeDoc:
         self.writes: list[str] = []
         self.calls: list[list[str]] = []
         self.fail_markdown_fetch = False
+        self.fail_outline = False
         self.gone = False
         self.modified = 1700000000
         self._next = 0
@@ -142,6 +147,8 @@ class FakeDoc:
             self.writes.append("create")
             return _ok({"document": {"document_id": DOC, "url": URL, "revision_id": self.revision}})
         if verb == "+fetch":
+            if "--scope" in cmd and self.fail_outline:
+                return _fail("request timed out")
             if "--doc-format" in cmd and _flag(cmd, "--doc-format") == "markdown":
                 if self.fail_markdown_fetch:
                     return _fail("cannot read")
@@ -353,3 +360,95 @@ def test_a_chapter_whose_body_shows_nothing_in_feishu_is_not_written_empty():
     _export(doc, note, previous=forced, kept=[])
 
     assert "框架的话。" in doc.texts()
+
+
+# ── chapters not read back after a push ─────────────────────────────────────
+
+def _export_kept(doc: FakeDoc, note: str, root, task_id: str, previous=None) -> dict:
+    return cli.export_markdown_via_lark_cli(
+        "访谈", note, task_id=task_id, artifact_root=root, previous=previous, keep_feishu=lambda _t: None, runner=doc,
+    )
+
+
+def test_a_push_whose_chapters_were_not_read_back_is_followed_by_an_update_in_place(tmp_path):
+    doc = FakeDoc()
+    sync = _export_kept(doc, NOTE, tmp_path, "t1")["sync"]
+    doc.fail_outline = True
+    sync = _export_kept(doc, NOTE.replace("开场的话", "开场改过"), tmp_path, "t1", previous=sync)["sync"]
+    assert sync["sections"] is None
+    before = _ids(doc)
+    doc.fail_outline = False
+
+    result = _export_kept(doc, NOTE.replace("开场的话", "开场改过").replace("结尾的话", "新结尾"), tmp_path, "t1", previous=sync)
+
+    assert doc.writes.count("create") == 1, "the same document is updated"
+    assert result["sections_rewritten"] == 1, "only the chapter changed since the last push"
+    after = _ids(doc)
+    for kept in ("访谈", "一、开场", "开场改过。", "二、框架", "三、结尾"):
+        assert after[kept] == before[kept], f"{kept} was not touched"
+    assert "新结尾。" in doc.texts()
+    assert isinstance(result["sync"]["sections"], list)
+
+
+def test_chapters_that_still_cannot_be_read_mean_nothing_is_written(tmp_path):
+    doc = FakeDoc()
+    sync = _export_kept(doc, NOTE, tmp_path, "t2")["sync"]
+    stuck = {**sync, "sections": None}
+    doc.fail_outline = True
+    writes_before = len(doc.writes)
+
+    with pytest.raises(cli.LarkCliError):
+        _export_kept(doc, NOTE.replace("结尾的话", "新结尾"), tmp_path, "t2", previous=stuck)
+    assert len(doc.writes) == writes_before, "no second document, nothing written"
+
+
+def _synced_task(monkeypatch, tmp_path, doc: FakeDoc, sync: dict) -> str:
+    monkeypatch.setattr(cli, "export_markdown_via_lark_cli",
+                        lambda *a, real=cli.export_markdown_via_lark_cli, **k: real(*a, **{**k, "runner": doc}))
+    monkeypatch.setattr("backend.core.storage_paths._artifact_storage_dir", lambda: tmp_path)
+    monkeypatch.setattr(feishu_sync, "_cli", lambda: (cli, "/usr/local/bin/lark-cli"))
+    task_id = _task(sync)
+    cli.save_pushed_note(tmp_path, task_id, NOTE)
+    return task_id
+
+
+def test_a_note_whose_chapters_were_not_read_back_stays_in_sync_and_is_pushed(monkeypatch, tmp_path):
+    scheduled: list[str] = []
+    doc = FakeDoc()
+    sync = _export_kept(doc, NOTE, tmp_path, "seed")["sync"]
+    task_id = _synced_task(monkeypatch, tmp_path, doc, {**sync, "sections": None})
+    assert feishu_sync.recorded_sync(job_store.get_job(task_id)["result"]) is not None
+    monkeypatch.setattr(feishu_sync, "schedule_push_when_quiet", lambda t, delay=None: scheduled.append(t))
+    result = job_store.get_job(task_id)["result"]
+    job_store.update_job_result(task_id, {**result, "summary_markdown": NOTE.replace("结尾的话", "新结尾")})
+    assert scheduled == [task_id], "a change is still pushed"
+
+    feishu_sync.push(task_id, runner=doc)
+
+    stored = job_store.get_job(task_id)["result"]
+    assert doc.writes.count("create") == 1
+    assert "新结尾。" in doc.texts()
+    assert isinstance(stored["lark_response"]["sync"]["sections"], list)
+    assert not stored.get("lark_sync_error")
+
+
+def test_a_push_that_cannot_read_its_chapters_back_says_so_on_the_task(monkeypatch, tmp_path):
+    doc = FakeDoc()
+    sync = _export_kept(doc, NOTE, tmp_path, "seed")["sync"]
+    task_id = _synced_task(monkeypatch, tmp_path, doc, sync)
+    result = job_store.get_job(task_id)["result"]
+    monkeypatch.setattr(feishu_sync, "schedule_push_when_quiet", lambda t, delay=None: None)
+    job_store.update_job_result(task_id, {**result, "summary_markdown": NOTE.replace("结尾的话", "新结尾")})
+    doc.fail_outline = True
+
+    feishu_sync.push(task_id, runner=doc)
+
+    stored = job_store.get_job(task_id)["result"]
+    assert "新结尾。" in doc.texts()
+    assert "章节目录" in (stored.get("lark_sync_error") or "")
+    assert feishu_sync.recorded_sync(stored) is not None, "still in sync"
+
+
+def test_a_stopped_document_is_not_in_sync():
+    assert feishu_sync.recorded_sync({"lark_response": {"via": "lark_cli", "sync": {
+        "doc_id": DOC, "sections": None, "stopped": "飞书那份已被删除"}}}) is None
