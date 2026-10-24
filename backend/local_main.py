@@ -321,9 +321,11 @@ async def lifespan(app: FastAPI):
     # An md note edited in Obsidian comes back into its task; a note kept in
     # Feishu follows it there; each change of a note is written in its change
     # log (each import registers its listener).
-    from backend.core import feishu_sync, note_changes, output_folder  # noqa: F401
+    from backend.core import feishu_sync, note_changes, note_section_times, output_folder  # noqa: F401
 
     feishu_sync.start_watch()
+    # A saved note gets the recording time of each section (decision 6.37).
+    note_section_times.start()
 
     output_folder.start_edit_watch()
     yield

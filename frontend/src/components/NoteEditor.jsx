@@ -6,6 +6,7 @@ import {markdown, markdownKeymap} from '@codemirror/lang-markdown';
 import SvgIcon from './SvgIcon.jsx';
 import {noteLivePreview, syncFocus} from '../lib/noteLivePreview.js';
 import {lineStyleOf, setLineStyle, toggleInline, toggleList} from '../lib/noteEditorCommands.js';
+import {noteFollow, revealSection, setNoteFollow} from '../lib/noteFollowEditor.js';
 import {toolbarButton} from '../lib/ui.js';
 
 // The note editor (decision 5.34): the note's markdown source edited in place,
@@ -17,6 +18,11 @@ import {toolbarButton} from '../lib/ui.js';
 // (onChange). What it takes: a newer note handed down by the page (an Obsidian
 // edit taken in, a Feishu pull, a poll) replaces the text and is not reported
 // back, so it is never saved again as if the user had typed it.
+//
+// `follow` (the note-follows-playback mock-up, decision 6.37): the times of
+// the sections, the section playing now and whether to keep it in view. It
+// only adds decorations; the user scrolling or typing in the note reports
+// `onUserScroll`, so the page can stop following.
 
 const calloutColors = {
     question: '236, 117, 0',
@@ -127,13 +133,22 @@ const ToolbarButton = ({className = 'inline-flex', disabled = false, icon, label
 // A note written with Windows line ends keeps them; any other note uses \n.
 const lineSeparatorFor = (text) => (text.includes('\r\n') ? '\r\n' : undefined);
 
-const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChange, taskId = '', apiBase = ''}) => {
+const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChange, taskId = '', apiBase = '', follow = null}) => {
     const hostRef = useRef(null);
     const viewRef = useRef(null);
     const onChangeRef = useRef(onChange);
     onChangeRef.current = onChange;
     const onEditingChangeRef = useRef(onEditingChange);
     onEditingChangeRef.current = onEditingChange;
+    const followRef = useRef(follow);
+    followRef.current = follow;
+    // Whether this note follows playback is fixed when the editor is built
+    // (the page builds one per note).
+    const followOnRef = useRef(!!follow);
+    const pushFollow = (view) => {
+        if (!followOnRef.current || !view) return;
+        view.dispatch({effects: setNoteFollow.of({times: followRef.current?.times || null, activeKey: followRef.current?.activeKey || null})});
+    };
     // The texts this editor reported recently. The page hands them back as
     // `markdown`, possibly a keystroke behind; an echo must not be applied
     // over newer typing.
@@ -158,6 +173,7 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
         const head = Math.min(view.state.selection.main.head, text.length);
         view.setState(createStateRef.current(text, head));
         syncFocus(view);
+        pushFollow(view);
         reportedRef.current = [];
         setToolbar(toolbarFor(view.state));
     };
@@ -186,6 +202,7 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
                 if (update.docChanged || update.selectionSet) setToolbar(toolbarFor(update.state));
             }),
             editorTheme,
+            ...(followOnRef.current ? [noteFollow({lang, onSeek: (seconds) => followRef.current?.onSeek?.(seconds)})] : []),
             noteLivePreview({
                 taskId,
                 apiBase,
@@ -204,7 +221,19 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
         createStateRef.current = (text, head = 0) => EditorState.create({doc: text, selection: {anchor: head}, extensions: extensions(text)});
         const view = new EditorView({parent: hostRef.current, state: createStateRef.current(source)});
         viewRef.current = view;
+        pushFollow(view);
+        // Scrolling or typing in the note means the reader is busy here:
+        // the page stops pulling the note along with the playback.
+        const userScrolled = () => followRef.current?.onUserScroll?.();
+        if (followOnRef.current) {
+            view.scrollDOM.addEventListener('wheel', userScrolled, {passive: true});
+            view.scrollDOM.addEventListener('touchmove', userScrolled, {passive: true});
+            view.contentDOM.addEventListener('keydown', userScrolled);
+        }
         return () => {
+            view.scrollDOM.removeEventListener('wheel', userScrolled);
+            view.scrollDOM.removeEventListener('touchmove', userScrolled);
+            view.contentDOM.removeEventListener('keydown', userScrolled);
             if (cellOpenRef.current) onEditingChangeRef.current?.(false);
             view.destroy();
         };
@@ -223,6 +252,15 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
         takePageCopy(view, source);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [source]);
+
+    useEffect(() => {
+        pushFollow(viewRef.current);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [follow?.times, follow?.activeKey]);
+
+    useEffect(() => {
+        if (follow?.following && follow?.activeKey) revealSection(viewRef.current, follow.activeKey);
+    }, [follow?.following, follow?.activeKey, follow?.revealToken]);
 
     const run = (command) => { const view = viewRef.current; if (view) command(view); };
     const labels = lang === 'zh'

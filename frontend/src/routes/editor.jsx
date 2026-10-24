@@ -40,6 +40,7 @@ import NoteExplanation from '../components/NoteExplanation.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
 import {probeMedia} from '../lib/probeMedia.js';
 import {createPlaybackClock, usePlaybackTime} from '../lib/playbackClock.js';
+import {useNoteFollow} from '../lib/useNoteFollow.js';
 import {RegenerateConfirmDialog, RetranscribeConfirmDialog, EditRecordsDialog, CutReviewDialog} from './editor-dialogs.jsx';
 import {
     jobOptionsForResult,
@@ -334,6 +335,9 @@ const Editor = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const urlTaskId = searchParams.get('task') || '';
     const urlWantsCutReview = searchParams.get('review') === 'cut';
+    // Mock-up of the note following playback (decision 6.37), off unless the
+    // address asks for it.
+    const followMockup = searchParams.get('follow') === 'on';
     const [urlTask, setUrlTask] = useState({id: '', state: 'idle'});
     const urlTaskIdRef = useRef(urlTaskId);
     urlTaskIdRef.current = urlTaskId;
@@ -964,6 +968,17 @@ const Editor = () => {
         updateMediaCurrentTime(next, {duration, force: true});
         if (follow) setFollowPlayback(true);
     }, [playbackDuration, updateMediaCurrentTime]);
+    const noteFollow = useNoteFollow({
+        enabled: followMockup,
+        taskId: result?.task_id || '',
+        noteReady,
+        playingCut: playingCutVersion,
+        hasMedia: !!mediaUrl,
+        clock: playbackClock,
+        apiFetch,
+        apiBase: API_BASE,
+        seek: seekMediaTo,
+    });
 
     const persistMediaPosition = useCallback(() => {
         const media = mediaRef.current;
@@ -2058,14 +2073,14 @@ const Editor = () => {
                                 lang={lang}
                             />
 
-                            <section style={paneStyles.right} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden xl:w-[38rem] xl:flex-none 2xl:w-[42rem] ${surfaceCard}`}>
-                                <div className="flex items-center justify-between gap-3 border-b border-[#e4e0e0] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.04]">
-                                    <h2 className="flex items-center gap-2 font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
+                            <section style={paneStyles.right} className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden xl:w-[38rem] xl:flex-none 2xl:w-[42rem] ${surfaceCard}`}>
+                                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-[#e4e0e0] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.04]">
+                                    <h2 className="flex shrink-0 items-center gap-2 whitespace-nowrap font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
                                         <SvgIcon name="psychology" className="text-[#111111] dark:text-white"/>
                                         {lang === 'zh' ? '笔记正文' : 'Note'}
                                     </h2>
                                     {summarySaveLabel && (
-                                        <span className={`mr-auto rounded-full border px-2 py-1 text-[11px] font-bold ${
+                                        <span className={`mr-auto whitespace-nowrap rounded-full border px-2 py-1 text-[11px] font-bold ${
                                             summarySaveStatus === 'failed'
                                                 ? 'border-error/25 bg-error-container text-on-error-container'
                                                 : 'border-[#e4e0e0] bg-white text-[#666] dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-white/60'
@@ -2074,6 +2089,16 @@ const Editor = () => {
                                         </span>
                                     )}
                                     <div className="flex shrink-0 items-center gap-2">
+                                        {noteFollow.available && (
+                                            <button type="button" data-testid="note-follow-toggle" onClick={noteFollow.toggle} aria-pressed={noteFollow.following} className={chip(noteFollow.following)}>
+                                                {t('edit.followPlayback')}
+                                            </button>
+                                        )}
+                                        {noteFollow.aligning && (
+                                            <span className="text-[12px] font-semibold text-[#666] dark:text-white/60">
+                                                {lang === 'zh' ? '正在对章节时间' : 'Matching sections to the recording'}
+                                            </span>
+                                        )}
                                         {hasInlineVisualEvidence && (
                                             <button
                                                 type="button"
@@ -2108,7 +2133,16 @@ const Editor = () => {
                                             onEditingChange={handleNoteEditingChange}
                                             taskId={result?.task_id || ''}
                                             apiBase={API_BASE}
+                                            follow={noteFollow.editorProps}
                                         />
+                                        {noteFollow.available && !noteFollow.following && noteFollow.activeKey && mediaPlaying && (
+                                            <div className="absolute bottom-5 left-1/2 z-10 -translate-x-1/2 rounded-[10px] shadow-[0_12px_32px_-12px_rgba(17,17,17,0.5)]">
+                                                <button type="button" data-testid="note-follow-resume" onClick={noteFollow.resume} className={button('primary', 'sm')}>
+                                                    <SvgIcon name="graphic_eq" className="text-[15px]"/>
+                                                    {lang === 'zh' ? '回到正在播的一节' : 'Back to the section playing'}
+                                                </button>
+                                            </div>
+                                        )}
                                         <div
                                             ref={summaryRef}
                                             className="fixed left-[-10000px] top-0 w-[720px] bg-white p-6 text-black"
