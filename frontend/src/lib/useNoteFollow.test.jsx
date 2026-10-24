@@ -128,9 +128,10 @@ describe('useNoteFollow', () => {
         expect(calls.filter((call) => call === 'GET')).toHaveLength(3);
     });
 
-    it('says why there are no times when matching failed', async () => {
-        const {result} = setup({statuses: [{state: 'failed', sections: [], timeline: null, error: '这台电脑上用不了 Claude，章节时间没有对上。'}]});
+    it('says why there are no times when matching failed, and asks again (the service decides when)', async () => {
+        const {result, calls} = setup({statuses: [{state: 'failed', sections: [], timeline: null, error: '这台电脑上用不了 Claude，章节时间没有对上。'}]});
         await settle();
+        expect(calls).toEqual(['GET', 'POST']);
         expect(result.current.available).toBe(false);
         expect(result.current.failedReason).toContain('用不了 Claude');
     });

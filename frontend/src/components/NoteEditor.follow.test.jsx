@@ -98,6 +98,17 @@ describe('finding each row its section', () => {
         expect(headingIds(inserted).filter(([heading]) => heading === '小结')).toEqual([['小结', null], ['小结', 'r9']]);
     });
 
+    it('gives no time to any of several same-name empty sections once one is inserted', () => {
+        const note = ['## 讨论', '', '## 讨论', '', '## 结论', '', '定了。'].join('\n');
+        const rows = normalizeRows(noteSections(note).map((section, i) => ({
+            id: `d${i}`, heading: section.heading, level: 2, body_hash: section.bodyHash, primary: [i * 100, i * 100 + 50], others: [],
+        })));
+        const inserted = `## 讨论\n\n${note}`;
+        const sections = noteSections(inserted);
+        const matched = matchRows(rows, sections);
+        expect(sections.map((s) => matched.get(s.index)?.id || null)).toEqual([null, null, null, 'd2']);
+    });
+
     it('keeps a section matched when only its body changed', () => {
         expect(headingIds(NOTE.replace('两周一个 Sprint。', '两周一个 Sprint，改过。'))[2]).toEqual(['二、计划方式', 'r2']);
     });

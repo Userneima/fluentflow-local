@@ -279,6 +279,60 @@ def test_a_failed_try_is_kept_with_its_reason_and_tried_again_on_a_later_opening
     assert queued == [(task_id, 0.0)]
 
 
+class DropsLast(FakeModel):
+    """Leaves the last asked section out of its answer."""
+
+    def __call__(self, system, prompt):
+        answer = json.loads(super().__call__(system, prompt).split("\n", 1)[1])
+        answer["sections"] = answer["sections"][:-1]
+        return json.dumps(answer, ensure_ascii=False)
+
+
+def test_sections_the_model_left_without_a_time_wait_like_a_failure(monkeypatch):
+    queued: list[str] = []
+    monkeypatch.setattr(note_section_times, "schedule_soon", lambda task_id, delay=0.0: queued.append(task_id))
+    task_id = _task()
+    assert note_section_times.align(task_id, chat=_chat(DropsLast()))["state"] == "ready"
+    result = _job(task_id)["result"]
+    assert note_section_times.status(result)["state"] == "partial"
+
+    # An open page asks on every look: no new run for the same left-out section.
+    for _ in range(3):
+        note_section_times.request(_job(task_id)["result"])
+    assert queued == []
+
+    # A heading renamed meanwhile is asked about at once.
+    _save_note(task_id, NOTE.replace("## 二、计划方式", "## 二、计划改成 Sprint"))
+    note_section_times.request(_job(task_id)["result"])
+    assert queued == [task_id]
+
+    # And after the wait, the left-out one is tried again.
+    queued.clear()
+    _save_note(task_id, NOTE)
+    stale = _job(task_id)["result"]
+    stale = {**stale, "note_section_times": {**stale["note_section_times"], "unanswered_at": "2001-01-01T00:00:00+00:00"}}
+    note_section_times.request(stale)
+    assert queued == [task_id]
+
+
+def test_same_name_sections_with_the_same_body_are_not_guessed_after_one_is_inserted():
+    others = "".join(f"## 第{n}件事\n\n第{n}件事的话。\n\n" for n in range(1, 6))
+    note = "## 讨论\n\n## 讨论\n\n" + others
+    task_id = _task(note=note)
+    model = FakeModel()
+    note_section_times.align(task_id, chat=_chat(model))
+    old = [row for row in _job(task_id)["result"]["note_section_times"]["sections"] if row["heading"] == "讨论"]
+
+    _save_note(task_id, "## 讨论\n\n" + note)
+    note_section_times.align(task_id, chat=_chat(model))
+
+    # Which of three empty 讨论 is new cannot be told: all three are asked,
+    # none keeps an old time it might not own; the other sections keep theirs.
+    assert model.tagged() == ["## 讨论", "## 讨论", "## 讨论"]
+    now = [row for row in _job(task_id)["result"]["note_section_times"]["sections"] if row["heading"] == "讨论"]
+    assert not {row["id"] for row in now} & {row["id"] for row in old}
+
+
 def test_a_note_still_being_written_is_not_matched():
     task_id = _task(summary_status="running")
     model = FakeModel()

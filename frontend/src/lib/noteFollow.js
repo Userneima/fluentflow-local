@@ -4,7 +4,8 @@
 // stable `id`). How a row finds its section in the note as it is now is the
 // service's rule (backend/core/note_section_times.py `match_rows`): level and
 // heading text; among headings with the same text, the hash of the section's
-// own body; what is left over pairs in order only when the counts agree.
+// own body (several with one hash pair in order only when the counts agree);
+// what is left over pairs in order only when the counts agree.
 
 const PART_MARKER = /<!--\s*第\s*\d+\/\d+\s*部分.*?-->/g;
 const HEADING = /^(#{2,3})\s+(.*?)\s*#*\s*$/;
@@ -66,12 +67,17 @@ export const matchRows = (rows, sections) => {
     });
     const matched = new Map();
     groups.forEach(({rows: groupRows, sections: groupSections}) => {
-        const rowsLeft = [...groupRows];
-        const sectionsLeft = [];
-        groupSections.forEach((section) => {
-            const at = rowsLeft.findIndex((row) => row.bodyHash === section.bodyHash);
-            if (at >= 0) matched.set(section.index, rowsLeft.splice(at, 1)[0]);
-            else sectionsLeft.push(section);
+        let rowsLeft = [...groupRows];
+        let sectionsLeft = [...groupSections];
+        // Same heading and same body: in order only when as many rows as
+        // sections share it; otherwise none of them keeps a time.
+        new Set(groupSections.map((section) => section.bodyHash)).forEach((digest) => {
+            const sameRows = rowsLeft.filter((row) => row.bodyHash === digest);
+            const sameSections = sectionsLeft.filter((section) => section.bodyHash === digest);
+            if (!sameRows.length) return;
+            if (sameRows.length === sameSections.length) sameSections.forEach((section, i) => matched.set(section.index, sameRows[i]));
+            rowsLeft = rowsLeft.filter((row) => row.bodyHash !== digest);
+            sectionsLeft = sectionsLeft.filter((section) => section.bodyHash !== digest);
         });
         if (rowsLeft.length === sectionsLeft.length) sectionsLeft.forEach((section, i) => matched.set(section.index, rowsLeft[i]));
     });

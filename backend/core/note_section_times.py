@@ -128,14 +128,23 @@ def match_rows(rows: list[dict[str, Any]], sections: list[dict[str, Any]]) -> di
     matched: dict[int, dict[str, Any]] = {}
     for group_rows, group_sections in groups.values():
         rows_left = list(group_rows)
-        sections_left = []
-        for section in group_sections:
-            same = next((row for row in rows_left if row.get("body_hash") == section["body_hash"]), None)
-            if same is not None:
-                matched[section["index"]] = same
-                rows_left.remove(same)
-            else:
-                sections_left.append(section)
+        sections_left = list(group_sections)
+        # Same heading and same body: pair in order only when as many rows as
+        # sections share it. Otherwise one was inserted or deleted and which
+        # one cannot be told (typically empty sections): none of them keeps a
+        # time, so none gets a wrong one; they are asked about again.
+        for digest in {section["body_hash"] for section in group_sections}:
+            same_rows = [row for row in rows_left if row.get("body_hash") == digest]
+            same_sections = [section for section in sections_left if section["body_hash"] == digest]
+            if same_rows and len(same_rows) == len(same_sections):
+                for row, section in zip(same_rows, same_sections):
+                    matched[section["index"]] = row
+                    rows_left.remove(row)
+                    sections_left.remove(section)
+            elif same_rows:
+                for row in same_rows:
+                    rows_left.remove(row)
+                sections_left = [section for section in sections_left if section["body_hash"] != digest]
         if len(rows_left) == len(sections_left):
             for row, section in zip(rows_left, sections_left):
                 matched[section["index"]] = row
@@ -350,8 +359,13 @@ def align(task_id: str, *, chat: tuple[Chat, str, str] | None = None) -> dict[st
         elif section["index"] in kept:
             old = kept[section["index"]]
             rows.append(_row(section, {"primary": old["primary"], "others": old.get("others") or []}, old.get("id")))
+    # Sections asked about and not answered (left out, or a time that did not
+    # read): kept with the time, so an open page asking again every look does
+    # not send the whole transcript every 20 seconds for them.
+    unanswered = [_identity(section) for section in ask if section["index"] not in spans]
     saved = {
         **_timeline(result),
+        **({"unanswered": unanswered, "unanswered_at": _now()} if unanswered else {}),
         "aligned_by": channel,
         "model": model,
         "aligned_at": _now(),
@@ -363,6 +377,10 @@ def align(task_id: str, *, chat: tuple[Chat, str, str] | None = None) -> dict[st
     # stays; the listener then matches whatever that save changed.
     _save(task_id, result, saved)
     return {"state": "ready", "asked": len(ask), "answered": len(spans), "whole": whole}
+
+
+def _identity(section: dict[str, Any]) -> list[Any]:
+    return [section["level"], section["heading"], section["body_hash"]]
 
 
 def _save(task_id: str, before: dict[str, Any], table: dict[str, Any]) -> None:
@@ -401,16 +419,26 @@ def status(result: dict[str, Any] | None) -> dict[str, Any]:
 def request(result: dict[str, Any]) -> dict[str, Any]:
     """The editor has the note open and some of its sections have no time:
     queue a match. A note saved in the editor less than ``QUIET_SECONDS`` ago
-    waits for the rest of that time; after a failure, ``RETRY_AFTER_SECONDS``
+    waits for the rest of that time; after a failure, and for sections the
+    model was asked about and left without a time, ``RETRY_AFTER_SECONDS``
     pass before the next try. Asking again while one waits or runs changes
     nothing, so the page may ask on every look."""
     task_id = str(result.get("task_id") or "")
     current = status(result)
     if not task_id or current["state"] not in {"missing", "partial", "failed"}:
         return current
+    table = stored_table(result) or {}
     if current["state"] == "failed":
-        age = _age_seconds((stored_table(result) or {}).get("failed_at"))
+        age = _age_seconds(table.get("failed_at"))
         if age is not None and age < RETRY_AFTER_SECONDS:
+            return current
+    if current["state"] == "partial" and table.get("unanswered"):
+        # The model was asked about exactly these and gave no time: the same
+        # wait as after a failure. A section that changed since is asked at once.
+        age = _age_seconds(table.get("unanswered_at"))
+        unanswered = {tuple(item) for item in table["unanswered"] if isinstance(item, list)}
+        ask, _whole = missing_sections(result)
+        if age is not None and age < RETRY_AFTER_SECONDS and all(tuple(_identity(section)) in unanswered for section in ask):
             return current
     edited = _age_seconds(result.get("summary_edited_at"))
     wait = QUIET_SECONDS - edited if edited is not None and edited < QUIET_SECONDS else 0.0
