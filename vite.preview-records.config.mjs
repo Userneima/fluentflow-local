@@ -26,6 +26,12 @@ const readOnlyLocalPreview = {
 };
 
 const target = process.env.PREVIEW_API || 'http://127.0.0.1:8000';
+// A branch's new read routes that the running 8000 does not have yet (8000 is
+// not restarted for a preview): set PREVIEW_NEW_READS_API to a second service
+// that serves only those GET routes, and list their paths here.
+const newReads = process.env.PREVIEW_NEW_READS_API
+    ? {'^/jobs/[^/]+/note/section-times': {target: process.env.PREVIEW_NEW_READS_API, changeOrigin: false}}
+    : {};
 
 export default {
     ...base,
@@ -35,6 +41,6 @@ export default {
         port: 5197,
         // Everything that is not the app's own source, page or static file goes
         // to the service. Page addresses were rewritten to /local.html above.
-        proxy: {'^/(?!src/|@|node_modules/|assets/|local\\.html|favicon)': {target, changeOrigin: false}},
+        proxy: {...newReads, '^/(?!src/|@|node_modules/|assets/|local\\.html|favicon)': {target, changeOrigin: false}},
     },
 };

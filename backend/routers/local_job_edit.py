@@ -170,3 +170,17 @@ def update_job_summary(
     if not updated:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"ok": True, "job": updated, "result": updated.get("result")}
+
+
+@router.post("/jobs/{task_id}/note/section-times")
+def request_note_section_times(request: Request, task_id: str) -> dict[str, Any]:
+    """The editor has a note open (``?follow=on``) and some of its sections
+    have no time: an older note, a heading renamed, an earlier try that
+    failed. Queues one match; the page may ask on every look. Writes only the
+    table, never the note."""
+    from backend.core import note_section_times
+
+    job = get_job(task_id, client_id=_local_client_scope(request))
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return note_section_times.request(job.get("result") or {})

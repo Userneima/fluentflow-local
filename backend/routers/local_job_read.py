@@ -132,3 +132,17 @@ def download_job_artifact(request: Request, task_id: str, kind: str) -> FileResp
     if not matches:
         raise HTTPException(status_code=404, detail="Artifact not found")
     return FileResponse(path=str(matches[0]), filename=matches[0].name)
+
+
+@router.get("/jobs/{task_id}/note/section-times")
+def read_note_section_times(request: Request, task_id: str) -> dict:
+    """Which span of the recording each note section came from (decision
+    6.37), and whether that covers the note as it is now. Small on purpose:
+    the editor asks again while a match is being made, and the task itself
+    can be megabytes."""
+    from backend.core import note_section_times
+
+    job = get_job(task_id, client_id=_local_client_scope(request))
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return note_section_times.status(job.get("result") or {})
