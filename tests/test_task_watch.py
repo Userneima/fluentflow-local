@@ -181,6 +181,14 @@ def test_a_query_inside_a_measured_phase_keeps_its_answer(monkeypatch):
         def wait(self, timeout=None):
             return 0
 
+    from backend.core import device_profile
+
+    # Not what this test is about, and both would otherwise reach the fake
+    # Popen: the thread budget is read from the machine on first use (so the
+    # test passed only after another test had read it), and pid 0 is this
+    # process.
+    monkeypatch.setattr(device_profile, "limit_ffmpeg_threads", lambda argv, profile=None: [str(a) for a in argv])
+    monkeypatch.setattr(device_profile, "lower_priority", lambda pid: None)
     monkeypatch.setattr(sp, "Popen", FakePopen)
     watch = TaskWatch()
     with watch.phase("压缩", 100):

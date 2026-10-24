@@ -153,6 +153,8 @@ def test_text_with_no_link_in_it_is_told_so(monkeypatch):
 
 def test_the_missing_tool_itself_is_reported_as_a_setup_problem_not_a_bad_link(monkeypatch):
     _yt_dlp_fails_with(monkeypatch, "/usr/bin/python3: No module named yt_dlp")
+    # The real wait for a daily upgrade to finish is 20 seconds of sleep here.
+    monkeypatch.setattr(vs, "YT_DLP_UPGRADE_WAIT_SECONDS", 0)
 
     with pytest.raises(vs.VideoSourceResolutionError) as caught:
         vs.resolve_video(YOUTUBE)
