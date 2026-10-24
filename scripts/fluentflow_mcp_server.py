@@ -870,6 +870,21 @@ def restore_note_version(
     )
 
 
+def list_subtitle_corrections(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    """The words fixed from the subtitles burned into the picture."""
+    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/subtitle-corrections", api_base=api_base, client_id=client_id)
+
+
+def revert_subtitle_corrections(
+    task_id: str, ids: list[str] | None = None, api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    """Put subtitle corrections back to what the transcript said."""
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/subtitle-corrections/revert",
+        api_base=api_base, client_id=client_id, payload={"ids": ids or []},
+    )
+
+
 TOOL_FUNCTIONS = {
     "submit_video_link": submit_video_link,
     "submit_transcript": submit_transcript,
@@ -899,6 +914,8 @@ TOOL_FUNCTIONS = {
     "list_note_versions": list_note_versions,
     "read_note_version": read_note_version,
     "restore_note_version": restore_note_version,
+    "list_subtitle_corrections": list_subtitle_corrections,
+    "revert_subtitle_corrections": revert_subtitle_corrections,
 }
 
 
@@ -1589,6 +1606,41 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Feishu folder for the app route; default: the user's setting.",
                 },
+                "api_base": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "list_subtitle_corrections",
+        "description": (
+            "Words in the task's transcript that FluentFlow replaced from the subtitles burned into the "
+            "video picture, right after transcription and before the note was written. Each has an id, the "
+            "time, from (what the transcript said), to (the subtitle's spelling), and the subtitle line it "
+            "rests on. subtitle_correction says how the step went: skipped with its reason (no subtitles in "
+            "the picture, no text recognition on this machine, no picture, no model), no_changes or completed. "
+            "Show the user these when they say a name or term in the transcript or note was changed wrongly."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "revert_subtitle_corrections",
+        "description": (
+            "Undo subtitle corrections: each named one (ids from list_subtitle_corrections, or all when ids "
+            "is empty) goes back to what the transcript said. Ask the user first. The task's transcript, "
+            "its subtitle files and the output folder follow; a note already written is not rewritten "
+            "(regenerate_note does that if the user wants it). not_found lists ids whose sentence was "
+            "edited since and could not be found."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "ids": {"type": "array", "items": {"type": "string"}},
                 "api_base": {"type": "string"},
             },
             "required": ["task_id"],

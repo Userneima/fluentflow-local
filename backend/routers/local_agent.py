@@ -29,6 +29,7 @@ from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import (
+    save_result_changes,
     append_job_result_list_item,
     NOTE_BASIS_FIELDS,
     finalize_note_if_unchanged,
@@ -43,6 +44,7 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
+from backend.core import subtitle_correction
 from backend.core import agent_cut, agent_note, debreath_job, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
@@ -945,6 +947,39 @@ def restore_note_version(
         note_history.restore_version, task_id, version_id,
         base_version=(payload or {}).get("base_version"), client_id=_local_client_scope(request),
     )
+
+
+@router.get("/tasks/{task_id}/subtitle-corrections")
+def list_subtitle_corrections(request: Request, task_id: str) -> dict[str, Any]:
+    """The words fixed from the subtitles in the picture, and how the step went."""
+    result = _job_for_request(request, task_id).get("result") or {}
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "subtitle_correction": result.get("subtitle_correction"),
+        "corrections": result.get("subtitle_corrections") or [],
+    }
+
+
+@router.post("/tasks/{task_id}/subtitle-corrections/revert")
+def revert_subtitle_corrections(
+    request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """Put the named corrections (all, without ids) back to what the
+    transcript said; the subtitle files and the output folder follow."""
+    client_id = _local_client_scope(request)
+    before = dict(_job_for_request(request, task_id).get("result") or {})
+    ids = (payload or {}).get("ids")
+    try:
+        result, reverted, missing = subtitle_correction.revert(
+            before, [str(i) for i in ids] if isinstance(ids, list) else None,
+        )
+    except subtitle_correction.RevertError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if reverted:
+        result = _attach_result_artifacts(task_id, result, parts=("transcript",))
+    save_result_changes(task_id, before, result, client_id=client_id)
+    return {"ok": True, "task_id": task_id, "reverted": reverted, "not_found": missing}
 
 
 def _feedback_call(action, *args, **kwargs):

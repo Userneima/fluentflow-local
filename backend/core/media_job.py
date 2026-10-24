@@ -38,7 +38,8 @@ from backend.core.ai_summarizer import (
 )
 from backend.core.media_probe import media_duration_seconds
 from backend.core.runtime_env import truthy
-from backend.core.ai_client import _normalize_provider, _provider_api_key
+from backend.core.ai_client import _chat, _get_client, _normalize_model, _normalize_provider, _provider_api_key
+from backend.core import subtitle_correction
 from backend.core.claude_text import claude_chat
 from backend.core.media_job_stages import (
     clean_transcript,
@@ -368,6 +369,53 @@ async def _run_transcript_correction_stage(
         ),
     )
     return fields, note_transcript_text, note_segments
+
+
+def _subtitle_chat(ai_kwargs: dict[str, Any], secret_resolver: Any) -> tuple[Any, str | None]:
+    """The writer that reads the transcript for misheard words, picked as the
+    subtitle translation picks it; ``(None, None)`` when there is none."""
+    kwargs = _translation_ai_kwargs(ai_kwargs)
+    try:
+        writer, channel = _translation_writer(kwargs, secret_resolver)
+        if writer is not None:
+            return writer, channel
+        provider = _normalize_provider(kwargs.get("provider") or None)
+        client = _get_client(provider=provider, api_key=kwargs.get("api_key"))
+    except Exception:  # noqa: BLE001 - no model means the step is skipped
+        return None, None
+    model = _normalize_model(provider, kwargs.get("model"))
+    return (lambda system, user: _chat(client, model, system, user, temperature=0.1)), channel
+
+
+async def _run_subtitle_correction_stage(
+    ctx: "MediaJobContext", *, video: Path, segments: list[dict[str, Any]], ai_kwargs: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Correct misheard words from the subtitles burned into the picture.
+
+    Returns the segments to carry on with and the fields for the result. Never
+    fails the task: without text recognition, a picture, subtitles or a model
+    the transcript goes on as it was."""
+    if not subtitle_correction.enabled():
+        return segments, {}
+    chat, channel = _subtitle_chat(ai_kwargs or {}, ctx.secret_resolver) if ai_kwargs is not None else (None, None)
+    outcome = await ctx.loop.run_in_executor(
+        None, lambda: subtitle_correction.correct_from_subtitles(video, segments, chat),
+    )
+    log_event(
+        task_id=ctx.task_id_value,
+        event_name="subtitle_correction_completed" if outcome.status != "failed" else "subtitle_correction_failed",
+        source_type=ctx.source_type,
+        source_filename=ctx.source_filename,
+        stage="subtitle_correction",
+        duration_seconds=round(outcome.seconds, 3),
+        success=outcome.status != "failed",
+        error_reason=outcome.reason if outcome.status == "failed" else None,
+        metadata=event_metadata(route=ctx.event_route, **outcome.meta(channel)),
+    )
+    fields: dict[str, Any] = {"subtitle_correction": outcome.meta(channel)}
+    if outcome.corrections:
+        fields["subtitle_corrections"] = outcome.corrections
+    return outcome.segments, fields
 
 
 @dataclass
@@ -893,6 +941,26 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             duration_sec=duration_sec,
             audio_path=out_audio,
         )
+        subtitle_fields: dict[str, Any] = {}
+        if subtitle_correction.enabled() and segments_payload:
+            current_stage = "subtitle_correction"
+            upsert_job(task_id=task_id_value, status="running", stage="subtitle_correction", progress=60)
+            yield _sse({"stage": "subtitle_correction", "progress": 60})
+            segments_payload, subtitle_fields = await _run_subtitle_correction_stage(
+                ctx,
+                video=Path(in_path),
+                segments=segments_payload,
+                ai_kwargs=ai_kwargs_builder(
+                    deepseek_api_key=deepseek_api_key,
+                    openai_api_key=openai_api_key,
+                    qwen_api_key=qwen_api_key,
+                    ai_provider=ai_provider,
+                    ai_model=ai_model,
+                    system_prompt=None,
+                ) if ai_kwargs_builder is not None else None,
+            )
+            if subtitle_fields.get("subtitle_corrections"):
+                transcript_text = subtitle_correction.joined(segments_payload)
         source_language = _normalized_source_language(getattr(tr, "language", None)) or _normalized_source_language(language)
         bilingual_segments: list[dict[str, Any]] = []
         translation_status = "not_applicable"
@@ -999,6 +1067,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             "source": source_type,
             "summary_skipped": summary_disabled,
         })
+        base_result.update(subtitle_fields)
         note_transcript_text = transcript_text
         note_segments_payload = segments_payload
         if not summary_disabled and transcript_correction_enabled():

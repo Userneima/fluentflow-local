@@ -27,6 +27,10 @@ If the tools fail because nothing answers at `127.0.0.1:8000`, ask the user to o
 
 Every save of a note (`save_agent_note`, `regenerate_note`, `write_note_from_cut_media`) takes the `note_version` you read the note at as `base_version` (from `get_task`, `get_task_package` or `get_agent_note_material`). When the user changed the note meanwhile (on the page, in Obsidian, in Feishu), the save is refused with code `stale` and nothing is replaced: read the note again with `get_task_package`, carry your change into that version without dropping theirs, and save again with its `note_version`. Do not retry without `base_version` to get past it.
 
+## Words fixed from on-screen subtitles
+
+When the video has subtitles burned into the picture, FluentFlow (on macOS) corrects misheard names, model names, English terms and numbers in the transcript right after transcription, before any note is written: a model picks the doubtful words, FluentFlow reads the subtitle line under the picture at those moments, and a word is replaced only when that line spells it out. The transcript itself changes, so the note, the subtitle files and the editor all read the corrected one. When the user asks what was changed, or says a name or term is now wrong: `list_subtitle_corrections` (each change with its time, from, to and the subtitle line it rests on; `subtitle_correction` says whether the step ran or why it was skipped), show them, and after they agree `revert_subtitle_corrections` with the ids (none for all). A note already written is not rewritten by a revert; offer `regenerate_note` if they want it.
+
 ## Speaker separation
 
 Speaker separation labels who said each line (说话人 A, B, ...). Left out, a task follows what the user saved in FluentFlow's Settings (off unless they turned it on), as does the text model that writes the note and the automatic Feishu export; `get_status` says what is saved. Pass `speaker_diarization=true` to `submit_local_media` or `submit_video_link` when the user says the recording is a meeting, interview or panel, or `false` to leave it off for one recording.
