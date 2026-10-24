@@ -1,7 +1,7 @@
 import {StateEffect, StateField} from '@codemirror/state';
 import {Decoration, EditorView, WidgetType} from '@codemirror/view';
 import {fmtElapsed} from './format.js';
-import {noteSections} from './noteFollow.js';
+import {matchRows, noteSections} from './noteFollow.js';
 
 // The note editor's side of following playback (decision 6.37): a time beside
 // each heading the service matched to the recording, and the section playing
@@ -11,7 +11,7 @@ import {noteSections} from './noteFollow.js';
 export const setNoteFollow = StateEffect.define();
 
 const followField = StateField.define({
-    create: () => ({times: null, activeKey: null}),
+    create: () => ({rows: null, activeKey: null}),
     update(value, tr) {
         let next = value;
         for (const effect of tr.effects) if (effect.is(setNoteFollow)) next = {...next, ...effect.value};
@@ -20,14 +20,15 @@ const followField = StateField.define({
 });
 
 class TimeWidget extends WidgetType {
-    constructor(seconds, label, onSeek) {
+    constructor(rowId, seconds, label, onSeek) {
         super();
+        this.rowId = rowId;
         this.seconds = seconds;
         this.label = label;
         this.onSeek = onSeek;
     }
 
-    eq(other) { return other.seconds === this.seconds && other.label === this.label; }
+    eq(other) { return other.rowId === this.rowId && other.seconds === this.seconds && other.label === this.label; }
 
     toDOM() {
         const button = document.createElement('button');
@@ -42,7 +43,7 @@ class TimeWidget extends WidgetType {
         button.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
-            this.onSeek?.(this.seconds);
+            this.onSeek?.(this.seconds, this.rowId);
         });
         return button;
     }
@@ -59,15 +60,16 @@ const sectionEnd = (sections, index, lastLine) => {
 };
 
 const buildDecorations = (state, {lang, onSeek}) => {
-    const {times, activeKey} = state.field(followField);
-    if (!times?.size) return Decoration.none;
+    const {rows, activeKey} = state.field(followField);
+    if (!rows?.length) return Decoration.none;
     const doc = state.doc;
     const sections = noteSections(doc.toString());
+    const matched = matchRows(rows, sections);
     const out = [];
     sections.forEach((section, index) => {
-        const entry = times.get(section.key);
+        const entry = matched.get(section.index);
         const line = doc.line(section.line);
-        if (section.key === activeKey) {
+        if (entry && entry.id === activeKey) {
             const last = Math.min(sectionEnd(sections, index, doc.lines), doc.lines);
             out.push(Decoration.line({class: 'cm-follow-active cm-follow-active-heading'}).range(line.from));
             for (let n = section.line + 1; n <= last; n += 1) out.push(Decoration.line({class: 'cm-follow-active'}).range(doc.line(n).from));
@@ -76,7 +78,7 @@ const buildDecorations = (state, {lang, onSeek}) => {
             const label = lang === 'zh'
                 ? `从 ${fmtElapsed(entry.primary[0])} 播放这一节讲得最多的那一段`
                 : `Play from ${fmtElapsed(entry.primary[0])}, where this section is discussed most`;
-            out.push(Decoration.widget({widget: new TimeWidget(entry.primary[0], label, onSeek), side: 1}).range(line.to));
+            out.push(Decoration.widget({widget: new TimeWidget(entry.id, entry.primary[0], label, onSeek), side: 1}).range(line.to));
         }
     });
     return Decoration.set(out, true);
@@ -98,7 +100,7 @@ export const followTheme = EditorView.theme({
     '.cm-follow-active-heading .cm-follow-time': {color: '#3B82F6', borderColor: 'rgba(59, 130, 246, 0.5)'},
 });
 
-// `context.onSeek(seconds)` is called when a time is clicked. Read through a
+// `context.onSeek(seconds, rowId)` is called when a time is clicked. Read through a
 // ref by the caller, so the extension is built once per note.
 export const noteFollow = (context = {}) => {
     const decorations = StateField.define({
@@ -112,10 +114,14 @@ export const noteFollow = (context = {}) => {
     return [followField, decorations, followTheme];
 };
 
-// Bring a section's heading into view unless it already is.
-export const revealSection = (view, key) => {
-    if (!view || !key) return false;
-    const section = noteSections(view.state.doc.toString()).find((item) => item.key === key);
+// Bring the heading of the section that has row `rowId` into view unless it
+// already is.
+export const revealSection = (view, rowId) => {
+    if (!view || !rowId) return false;
+    const {rows} = view.state.field(followField);
+    const sections = noteSections(view.state.doc.toString());
+    const matched = matchRows(rows || [], sections);
+    const section = sections.find((item) => matched.get(item.index)?.id === rowId);
     if (!section) return false;
     const pos = view.state.doc.line(section.line).from;
     const block = view.lineBlockAt(pos);

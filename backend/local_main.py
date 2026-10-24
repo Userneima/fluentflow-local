@@ -324,7 +324,8 @@ async def lifespan(app: FastAPI):
     from backend.core import feishu_sync, note_changes, note_section_times, output_folder  # noqa: F401
 
     feishu_sync.start_watch()
-    # A saved note gets the recording time of each section (decision 6.37).
+    # With FLUENTFLOW_NOTE_SECTION_TIMES on, a saved note gets the recording
+    # time of each section (decision 6.37, mock-up).
     note_section_times.start()
 
     output_folder.start_edit_watch()

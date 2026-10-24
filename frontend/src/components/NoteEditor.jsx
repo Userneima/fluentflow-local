@@ -19,10 +19,13 @@ import {toolbarButton} from '../lib/ui.js';
 // edit taken in, a Feishu pull, a poll) replaces the text and is not reported
 // back, so it is never saved again as if the user had typed it.
 //
-// `follow` (the note-follows-playback mock-up, decision 6.37): the times of
-// the sections, the section playing now and whether to keep it in view. It
-// only adds decorations; the user scrolling or typing in the note reports
-// `onUserScroll`, so the page can stop following.
+// `follow` (the note-follows-playback mock-up, decision 6.37): the sections'
+// rows of times, the row playing now and whether to keep it in view. It only
+// adds decorations. The reader scrolling (wheel, touch, keys) or pressing in
+// the note (the scrollbar dragged, text selected, the cursor placed) reports
+// `onUserScroll`, so the page stops pulling the note along. Only those, not
+// every scroll event: the editor scrolls itself too (keeping its place while
+// images load, taking in a newer note), and that is not the reader.
 
 const calloutColors = {
     question: '236, 117, 0',
@@ -147,7 +150,7 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
     const followOnRef = useRef(!!follow);
     const pushFollow = (view) => {
         if (!followOnRef.current || !view) return;
-        view.dispatch({effects: setNoteFollow.of({times: followRef.current?.times || null, activeKey: followRef.current?.activeKey || null})});
+        view.dispatch({effects: setNoteFollow.of({rows: followRef.current?.rows || null, activeKey: followRef.current?.activeKey || null})});
     };
     // The texts this editor reported recently. The page hands them back as
     // `markdown`, possibly a keystroke behind; an echo must not be applied
@@ -202,7 +205,7 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
                 if (update.docChanged || update.selectionSet) setToolbar(toolbarFor(update.state));
             }),
             editorTheme,
-            ...(followOnRef.current ? [noteFollow({lang, onSeek: (seconds) => followRef.current?.onSeek?.(seconds)})] : []),
+            ...(followOnRef.current ? [noteFollow({lang, onSeek: (seconds, rowId) => followRef.current?.onSeek?.(seconds, rowId)})] : []),
             noteLivePreview({
                 taskId,
                 apiBase,
@@ -228,11 +231,13 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
         if (followOnRef.current) {
             view.scrollDOM.addEventListener('wheel', userScrolled, {passive: true});
             view.scrollDOM.addEventListener('touchmove', userScrolled, {passive: true});
+            view.scrollDOM.addEventListener('pointerdown', userScrolled);
             view.contentDOM.addEventListener('keydown', userScrolled);
         }
         return () => {
             view.scrollDOM.removeEventListener('wheel', userScrolled);
             view.scrollDOM.removeEventListener('touchmove', userScrolled);
+            view.scrollDOM.removeEventListener('pointerdown', userScrolled);
             view.contentDOM.removeEventListener('keydown', userScrolled);
             if (cellOpenRef.current) onEditingChangeRef.current?.(false);
             view.destroy();
@@ -256,7 +261,7 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
     useEffect(() => {
         pushFollow(viewRef.current);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [follow?.times, follow?.activeKey]);
+    }, [follow?.rows, follow?.activeKey]);
 
     useEffect(() => {
         if (follow?.following && follow?.activeKey) revealSection(viewRef.current, follow.activeKey);

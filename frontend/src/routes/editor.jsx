@@ -972,6 +972,7 @@ const Editor = () => {
         enabled: followMockup,
         taskId: result?.task_id || '',
         noteReady,
+        markdown: summaryMarkdownForEditor,
         playingCut: playingCutVersion,
         hasMedia: !!mediaUrl,
         clock: playbackClock,
@@ -2029,7 +2030,8 @@ const Editor = () => {
                                                     <SvgIcon name={mediaPlaying ? 'pause' : 'play_arrow'} className="text-lg"/>
                                                 </button>
                                                 <button type="button" onClick={()=>setFollowPlayback(v=>!v)} aria-pressed={followPlayback} className={chip(followPlayback)}>
-                                                    {t('edit.followPlayback')}
+                                                    {/* With the note following too, each switch names what it moves. */}
+                                                    {followMockup ? (lang === 'zh' ? '转录稿跟随' : 'Transcript follows') : t('edit.followPlayback')}
                                                 </button>
                                                 {/* Which of the two files is playing. Both exist for a
                                                     cut task and they are different lengths, so leaving
@@ -2091,8 +2093,13 @@ const Editor = () => {
                                     <div className="flex shrink-0 items-center gap-2">
                                         {noteFollow.available && (
                                             <button type="button" data-testid="note-follow-toggle" onClick={noteFollow.toggle} aria-pressed={noteFollow.following} className={chip(noteFollow.following)}>
-                                                {t('edit.followPlayback')}
+                                                {lang === 'zh' ? '笔记跟随' : 'Note follows'}
                                             </button>
+                                        )}
+                                        {noteFollow.failedReason && (
+                                            <span data-testid="note-follow-failed" title={noteFollow.failedReason} className="text-[12px] font-semibold text-[#666] dark:text-white/60">
+                                                {lang === 'zh' ? '章节时间没对上' : 'No section times'}
+                                            </span>
                                         )}
                                         {noteFollow.aligning && (
                                             <span className="text-[12px] font-semibold text-[#666] dark:text-white/60">
