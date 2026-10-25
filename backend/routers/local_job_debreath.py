@@ -32,7 +32,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 
-from backend.core import agent_cut, debreath_job, local_intake_flow, original_locator, silence_cuts, survey_cut, visual_note_job
+from backend.core import agent_cut, debreath_job, local_intake_flow, original_locator, silence_cuts, survey_cut, task_activity, task_steps
 from backend.core.job_store import get_job
 from backend.core.result_artifacts import TRANSCRIPT_MEDIA_CUT
 from backend.core.request_scope import local_client_scope
@@ -76,6 +76,16 @@ def parse_debreath_settings(body: Any) -> dict[str, float]:
 router = APIRouter()
 
 
+def _still_working(job: dict[str, Any]) -> str | None:
+    """What the task is still doing, as the start of a refusal, or None."""
+    current = task_activity.activity(job)
+    if not current.busy:
+        return None
+    if task_steps.NOTE in current.open_steps:
+        return "这个任务的笔记正在写，等笔记写完再去气口"
+    return f"这个任务{current.label or '还在处理'}，等它结束再去气口"
+
+
 def note_or_transcript_conflict(job: dict[str, Any]) -> str | None:
     """Why this finished task must not be cut now, or None.
 
@@ -85,9 +95,9 @@ def note_or_transcript_conflict(job: dict[str, Any]) -> str | None:
     that file: cutting it again moves every gap without moving them.
     """
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
-    summary_status = str(result.get("summary_status") or job.get("summary_status") or "")
-    if visual_note_job.is_running(result) or summary_status == "pending":
-        return "这个任务的笔记正在写，等笔记写完再去气口，免得两边的结果互相覆盖。"
+    working = _still_working(job)
+    if working:
+        return working + "，免得两边的结果互相覆盖。"
     state = result.get("debreath") if isinstance(result.get("debreath"), dict) else {}
     # Refused only when the transcript really was made from the cut file. A
     # declined automatic cut followed by a manual one leaves a transcript made
@@ -207,8 +217,11 @@ def _accept_rerender(task_id: str, client_id: str | None, background_tasks: Back
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     if debreath_job.is_running(result):
         raise HTTPException(status_code=409, detail="这个任务正在重新导出，等这次导完")
-    if visual_note_job.is_running(result) or str(result.get("summary_status") or "") == "pending":
+    current = task_activity.activity(job)
+    if current.busy and task_steps.NOTE in current.open_steps:
         raise HTTPException(status_code=409, detail="笔记正在写，等写完再改，免得两边的结果互相覆盖。")
+    if current.busy:
+        raise HTTPException(status_code=409, detail=f"这个任务{current.label or '还在处理'}，等它结束再改。")
     if queue_is_busy():
         raise HTTPException(status_code=409, detail="有任务正在处理中，等队列空下来再改。")
     with _accepted_lock:

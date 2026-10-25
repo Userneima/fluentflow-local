@@ -83,3 +83,34 @@ describe('a finished task whose cut is being redone', () => {
         expect(outcome.label).toBe('正在剪气口');
     });
 });
+
+// Step list (docs/方案/2026-10-25-任务步骤清单和模型用量记账.md): the backend
+// says per task whether it is still working and on what, from its steps. A
+// task whose transcript is stored but whose cut, note, compressed copy or
+// Feishu export is still to come reads as in progress, in those words.
+describe('a task the backend says is still working', () => {
+    const working = (label, openSteps) => ({
+        status: 'completed',
+        result: {summary_status: 'skipped'},
+        activity: {busy: true, label, current_step: openSteps[0], open_steps: openSteps, waiting_for_agent: false, failed_steps: []},
+    });
+
+    it('reads what it is doing, not 已完成', () => {
+        expect(taskStatusLabel(working('正在剪辑', ['cut', 'note']), 'zh')).toBe('正在剪辑');
+        expect(taskOutcome(working('正在压缩副本', ['compress']), 'zh')).toMatchObject({kind: 'live', label: '正在压缩副本'});
+    });
+
+    it('reads 写笔记中 while the note step is open', () => {
+        expect(taskStatusLabel(working('正在写笔记', ['note']), 'zh')).toBe('写笔记中');
+    });
+
+    it('is finished once the backend says nothing is left, whatever an old field says', () => {
+        const done = {
+            status: 'completed',
+            result: {summary_status: 'pending', summary_chars: 900},
+            activity: {busy: false, label: null, open_steps: [], waiting_for_agent: false, failed_steps: []},
+        };
+        expect(taskStatusLabel(done, 'zh')).toBe('已完成');
+        expect(taskOutcome(done, 'zh').kind).toBe('done');
+    });
+});

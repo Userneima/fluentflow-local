@@ -20,7 +20,6 @@ import math
 import threading
 import time
 from copy import deepcopy
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
@@ -45,8 +44,8 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import correction_notes, glossary_correction, subtitle_correction, task_activity
-from backend.core import agent_cut, agent_note, debreath_job, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
+from backend.core import correction_notes, glossary_correction, subtitle_correction, task_activity, task_steps
+from backend.core import agent_cut, agent_note, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_request_scope import (
@@ -88,83 +87,26 @@ def _local_client_scope(request: Request) -> Optional[str]:
 
 
 _TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "cancelled"})
-_TERMINAL_NOTE_STATUSES = frozenset({"completed", "failed", "skipped"})
-# How long a just-completed task whose note was deferred to the frame note may
-# still show the pipeline's "skipped" before the note step marks it pending.
-# That hand-over takes well under a second; the bound only stops a task whose
-# note step never started (the service stopped in between) from holding an
-# agent forever.
-_DEFERRED_NOTE_HANDOVER_SECONDS = 120
-
-
-def _seconds_since(stamp: Any) -> float | None:
-    try:
-        moment = datetime.fromisoformat(str(stamp))
-    except (TypeError, ValueError):
-        return None
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - moment).total_seconds()
-
-
-def _deferred_note_about_to_start(job: dict[str, Any], result: dict[str, Any]) -> bool:
-    """The pipeline stored the transcript as "skipped" and the note step has not
-    marked it pending yet: the note is owed, not skipped."""
-    if not result.get("note_deferred_to_visual_note"):
-        return False
-    if str(result.get("summary_markdown") or "").strip():
-        return False
-    if not (result.get("transcript_text") or result.get("raw_segments")):
-        return False
-    age = _seconds_since(job.get("updated_at"))
-    return age is not None and age < _DEFERRED_NOTE_HANDOVER_SECONDS
 
 
 def _note_pending(job: dict[str, Any]) -> bool:
-    """Whether a completed task's note is still being written.
-
-    A task turns ``completed`` as soon as its transcript is stored; the note
-    is written after that, from the cut media. An agent that stopped waiting
-    at ``completed`` would read an empty note, so every "is it done" answer on
-    this surface goes through here.
-
-    A running note rewrite wins over everything (a redo keeps the old note's
-    ``completed`` while the new one is written). Otherwise the note's own
-    terminal status wins over the job's stage, because the startup recovery
-    fails a stranded note in the result without moving the job's ``note``
-    stage, and that task must not read as pending forever.
-    """
-    if str(job.get("status") or "") != "completed":
-        return False
-    result = job.get("result") if isinstance(job.get("result"), dict) else {}
-    if visual_note_job.is_running(result):
-        return True
-    summary_status = str(result.get("summary_status") or job.get("summary_status") or "").lower()
-    if summary_status == "skipped" and (
-        _deferred_note_about_to_start(job, result)
-        or (_cut_running(job) and result.get("note_deferred_to_visual_note") and not str(result.get("summary_markdown") or "").strip())
-    ):
-        return True
-    if summary_status in _TERMINAL_NOTE_STATUSES:
-        return False
-    if summary_status == "pending":
-        return True
-    return str(job.get("stage") or "").lower() == "note"
+    """Whether a task's note is still to come: being written, or waiting for
+    the cut before it. A task reads ``completed`` as soon as its transcript is
+    stored, and an agent that stopped waiting there would read an empty note,
+    so every "is it done" answer on this surface goes through
+    ``task_activity``, which reads the task's steps."""
+    current = task_activity.activity(job)
+    return current.busy and task_steps.NOTE in current.open_steps
 
 
 def _cut_running(job: dict[str, Any]) -> bool:
-    """Whether the recording is being cut after its transcript was stored
-    (the survey-first flow: the model's judgement, then the render). The task
-    reads ``completed`` by then and the note waits for the cut, and a render
-    can go minutes without touching the task, so this is asked directly
-    rather than inferred from how recently the task changed."""
-    if str(job.get("status") or "") != "completed":
-        return False
-    return debreath_job.is_running(job.get("result") if isinstance(job.get("result"), dict) else {})
+    """Whether the recording is being cut after its transcript was stored."""
+    current = task_activity.activity(job)
+    return current.busy and task_steps.CUT in current.open_steps
 
 
 def _task_done(job: dict[str, Any]) -> bool:
-    return job.get("status") in _TERMINAL_TASK_STATUSES and not _note_pending(job) and not _cut_running(job)
+    return job.get("status") in _TERMINAL_TASK_STATUSES and not task_activity.activity(job).busy
 
 
 def _task_package_response(job: dict[str, Any]) -> dict[str, Any]:

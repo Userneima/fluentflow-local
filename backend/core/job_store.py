@@ -1018,8 +1018,8 @@ def cancel_job_steps(
         cursor = conn.execute(
             """
             UPDATE job_steps
-            SET status='cancelled', updated_at=?, finished_at=?, locked_at=NULL, lock_id=NULL
-            WHERE task_id = ? AND status IN ('queued', 'running')
+            SET status='stopped', updated_at=?, finished_at=?, locked_at=NULL, lock_id=NULL
+            WHERE task_id = ? AND status IN ('pending', 'running')
             """,
             (now, now, task_id),
         )
@@ -1053,6 +1053,100 @@ def list_job_steps(
             [*params, safe_limit],
         ).fetchall()
     return [_step_row_to_dict(row) for row in rows]
+
+
+TASK_STEP_PREFIX = "step:"
+
+
+def write_task_step(
+    task_id: str,
+    name: str,
+    status: str,
+    *,
+    order: int = 100,
+    error: str | None = None,
+    detail: dict[str, Any] | None = None,
+    started: bool = False,
+    finished: bool = False,
+    reset: bool = False,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> None:
+    """Record one step of a task (``task_steps``): one row per task and step.
+
+    ``reset`` clears what an earlier run of the step recorded (its times and
+    error), for a task planned afresh.
+    """
+    ensure_job_db(db_path)
+    now = _now_iso()
+    key = f"{task_id}:{name}"
+    with sqlite_connection(Path(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO job_steps (
+                task_id, step_key, step_type, status, priority, error_reason, result_json,
+                created_at, updated_at, started_at, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(step_key) DO UPDATE SET
+                status = excluded.status,
+                priority = excluded.priority,
+                error_reason = CASE WHEN ? THEN excluded.error_reason
+                                    ELSE COALESCE(excluded.error_reason, job_steps.error_reason) END,
+                result_json = CASE WHEN ? THEN excluded.result_json
+                                   ELSE COALESCE(excluded.result_json, job_steps.result_json) END,
+                updated_at = excluded.updated_at,
+                started_at = CASE WHEN ? THEN excluded.started_at
+                                  ELSE COALESCE(excluded.started_at, job_steps.started_at) END,
+                finished_at = CASE WHEN ? THEN excluded.finished_at
+                                   ELSE COALESCE(excluded.finished_at, job_steps.finished_at) END
+            """,
+            (
+                task_id, key, TASK_STEP_PREFIX + name, status, order, error,
+                _json_dumps(detail) if detail is not None else None,
+                now, now, now if started else None, now if finished else None,
+                reset, reset, reset or started, reset or finished,
+            ),
+        )
+        # A page polling for changed tasks (``updated_since``) must see the
+        # task again when one of its steps moves.
+        conn.execute("UPDATE jobs SET updated_at = ? WHERE task_id = ?", (now, task_id))
+
+
+def list_task_steps(
+    task_ids: list[str] | tuple[str, ...],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, list[dict[str, Any]]]:
+    """Every recorded step of these tasks, in order, keyed by task id."""
+    ids = [str(task_id) for task_id in task_ids if str(task_id or "").strip()]
+    found: dict[str, list[dict[str, Any]]] = {}
+    if not ids:
+        return found
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"SELECT * FROM job_steps WHERE task_id IN ({placeholders})"
+                " AND step_type LIKE ? ORDER BY priority ASC, id ASC",
+                [*chunk, TASK_STEP_PREFIX + "%"],
+            ).fetchall()
+            for row in rows:
+                found.setdefault(str(row["task_id"]), []).append(_step_row_to_dict(row))
+    return found
+
+
+def task_ids_with_open_steps(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[str]:
+    """Tasks with a step not yet at an end (``task_steps.recover_after_restart``)."""
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT task_id FROM job_steps WHERE step_type LIKE ?"
+            " AND status IN ('pending', 'running')",
+            (TASK_STEP_PREFIX + "%",),
+        ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 def repair_truncated_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> int:

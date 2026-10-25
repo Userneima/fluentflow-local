@@ -50,6 +50,7 @@ from backend.core import (
     local_folder_intake,
     local_intake_flow,
     open_folder,
+    task_steps,
     visual_note_channel,
     visual_note_job,
 )
@@ -572,7 +573,10 @@ async def _write_note_after_transcript(
     note belongs.
     """
     if not local_intake_flow.note_is_wanted(task_id, client_id):
+        # No note to write here: the pipeline wrote it, or none was asked for.
+        task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
         return
+    task_steps.start(task_id, task_steps.NOTE)
     local_intake_flow.mark_note_running(task_id, client_id)
     abandoned = threading.Event()
     future = asyncio.get_running_loop().run_in_executor(
@@ -589,6 +593,10 @@ async def _write_note_after_transcript(
         # nobody wants any more, and releases what it holds itself.
         abandoned.set()
         raise
+    except Exception as exc:
+        task_steps.finish(task_id, task_steps.NOTE, task_steps.FAILED, friendly_error(exc))
+        raise
+    task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
 
 
 async def _run_pipeline(ctx: MediaJobContext) -> None:
@@ -637,8 +645,15 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
                 compressing.append(asyncio.ensure_future(_compress_then_release(ctx, done)))
         loop.call_soon_threadsafe(start)
 
+    task_id = ctx.task_id_value
+    stopped = False
+    task_steps.plan(task_id)
+    task_steps.start(task_id, task_steps.TRANSCRIBE)
     try:
         await _run_pipeline(ctx)
+        task_steps.settle(task_id, task_steps.TRANSCRIBE, task_steps.transcribe_outcome(
+            get_job(task_id, client_id=ctx.client_id),
+        ))
         if await _agent_judges_cut(ctx):
             # The queue moves on while the user's agent judges; this task
             # takes a new place in line once it has a decision.
@@ -653,9 +668,10 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
         if compressing:
             # Delivered after the copy exists, so the folder lists it.
             await compressing[0]
-        await _export_note_written_after_pipeline(ctx)
+        await _feishu_step(ctx)
         await _deliver_to_output_folder(ctx)
     except asyncio.CancelledError:
+        stopped = True
         for step in compressing:
             step.cancel()
         raise
@@ -664,6 +680,8 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
         # when the note ended before reaching its hand-off. The remote slot is
         # not released here: the note thread owns it (`_write_note_holding_slot`).
         done.set()
+        # Nothing runs this task's steps once this returns.
+        task_steps.close_open(task_id, stopped=stopped)
 
 
 async def _cut_then_note(ctx: Any, hand_off: Any, **cut: Any) -> None:
@@ -712,7 +730,19 @@ async def continue_after_agent(task_id: str, client_id: Optional[str], ctx: Any 
     """Wait for the agent's decision (or for the agent to be given up on),
     then cut, write the note and deliver, in the queue. ``ctx`` is the
     pipeline's context; without it (resumed after a restart) the note is not
-    exported to Feishu automatically."""
+    exported to Feishu automatically. The cut step is open from the start:
+    the task is not finished while it waits for the agent."""
+    task_steps.start(task_id, task_steps.CUT)
+    try:
+        await _cut_note_and_export_after_agent(task_id, client_id, ctx)
+    except asyncio.CancelledError:
+        task_steps.close_open(task_id, stopped=True)
+        raise
+    finally:
+        task_steps.close_open(task_id)
+
+
+async def _cut_note_and_export_after_agent(task_id: str, client_id: Optional[str], ctx: Any) -> None:
     loop = asyncio.get_running_loop()
     while True:
         state = await loop.run_in_executor(None, agent_cut.check, task_id, client_id)
@@ -729,7 +759,7 @@ async def continue_after_agent(task_id: str, client_id: Optional[str], ctx: Any 
         await _cut_then_note(step, lambda: loop.call_soon_threadsafe(turn.set), **cut)
         await loop.run_in_executor(None, agent_cut.finished, task_id, client_id)
         if ctx is not None:
-            await _export_note_written_after_pipeline(ctx)
+            await _feishu_step(ctx)
         try:
             output_folder.schedule_sync(task_id)
         except Exception as exc:  # noqa: BLE001 - the task's own results stand
@@ -738,14 +768,20 @@ async def continue_after_agent(task_id: str, client_id: Optional[str], ctx: Any 
         turn.set()
 
 
+def agent_cut_unfinished(job: Any) -> bool:
+    """Whether a task's agent-judged cut was left between waiting and done;
+    ``resume_agent_cuts`` carries such a task on after a restart."""
+    result = (job or {}).get("result") if isinstance((job or {}).get("result"), dict) else {}
+    state = agent_cut.state_of(result)
+    return state.get("status") in (agent_cut.WAITING, agent_cut.DECIDED, agent_cut.FALLBACK) and not state.get("finished_at")
+
+
 async def resume_agent_cuts() -> int:
     """At startup: every task a restart left waiting for its agent, or
     between the agent's decision and its cut, goes on waiting or is cut."""
     resumed = 0
     for job in list_jobs_by_statuses(("completed",), include_result=True):
-        result = job.get("result") if isinstance(job.get("result"), dict) else {}
-        state = agent_cut.state_of(result)
-        if state.get("status") not in (agent_cut.WAITING, agent_cut.DECIDED, agent_cut.FALLBACK) or state.get("finished_at"):
+        if not agent_cut_unfinished(job):
             continue
         task_id, client_id = str(job.get("task_id")), job.get("client_id")
         if await JOB_EVENTS.start(task_id, functools.partial(continue_after_agent, task_id, client_id)):
@@ -757,8 +793,10 @@ async def _compress_then_release(ctx: MediaJobContext, done: asyncio.Event) -> N
     """Make the uncut compressed copy (``local_intake_flow.compress_original``),
     then hand the queue on. Cancelled with its task, it stops the encode."""
     watch = TaskWatch()
+    task_steps.start(ctx.task_id_value, task_steps.COMPRESS)
+    state: Any = None
     try:
-        await asyncio.get_running_loop().run_in_executor(
+        state = await asyncio.get_running_loop().run_in_executor(
             None, functools.partial(local_intake_flow.compress_original, ctx.task_id_value, ctx.client_id, watch),
         )
     except asyncio.CancelledError:
@@ -766,8 +804,10 @@ async def _compress_then_release(ctx: MediaJobContext, done: asyncio.Event) -> N
         raise
     except Exception as exc:  # noqa: BLE001 - the task's own results stand
         logger.warning("compressed copy skipped for %s: %s", ctx.task_id_value, exc)
+        state = {"compressed": False, "compress_error": str(exc)}
     finally:
         done.set()
+    task_steps.settle(ctx.task_id_value, task_steps.COMPRESS, task_steps.compress_outcome(state))
 
 
 def _note_can_start_before_the_cut(ctx: MediaJobContext) -> bool:
@@ -863,10 +903,18 @@ async def _trim_recorded_tail(ctx: MediaJobContext, *, on_plan: Any = None, **cu
         work = functools.partial(survey_cut.survey_and_cut, ctx.task_id_value, ctx.client_id, on_plan=on_plan, **cut)
     else:
         work = functools.partial(tail_trim.trim_tail, ctx.task_id_value, ctx.client_id)
+    task_steps.start(ctx.task_id_value, task_steps.CUT)
     try:
         await asyncio.get_running_loop().run_in_executor(None, work)
     except Exception as exc:  # noqa: BLE001 - the task's own results stand
         logger.warning("tail trim skipped for %s: %s", ctx.task_id_value, exc)
+        task_steps.finish(ctx.task_id_value, task_steps.CUT, task_steps.FAILED, friendly_error(exc))
+        return
+    # A cut made before transcription (not the survey flow) recorded itself in
+    # the pipeline; either way the result says what came of it.
+    task_steps.settle(ctx.task_id_value, task_steps.CUT, task_steps.cut_outcome(
+        get_job(ctx.task_id_value, client_id=ctx.client_id),
+    ))
 
 
 async def _deliver_to_output_folder(ctx: MediaJobContext) -> None:
@@ -881,6 +929,21 @@ async def _deliver_to_output_folder(ctx: MediaJobContext) -> None:
         output_folder.schedule_sync(ctx.task_id_value)
     except Exception as exc:  # noqa: BLE001 - the task's own results stand
         logger.warning("output folder not scheduled for %s: %s", ctx.task_id_value, exc)
+
+
+async def _feishu_step(ctx: Any) -> None:
+    """The Feishu export as a step of the task: skipped unless asked for;
+    otherwise what came of it, whether the pipeline exported the note it wrote
+    or ``_export_note_written_after_pipeline`` exports the one written after."""
+    task_id = ctx.task_id_value
+    if not getattr(ctx, "do_lark", False):
+        task_steps.finish(task_id, task_steps.FEISHU, task_steps.SKIPPED)
+        return
+    task_steps.start(task_id, task_steps.FEISHU)
+    await _export_note_written_after_pipeline(ctx)
+    task_steps.settle(task_id, task_steps.FEISHU, task_steps.feishu_outcome(
+        get_job(task_id, client_id=ctx.client_id),
+    ))
 
 
 async def _export_note_written_after_pipeline(ctx: MediaJobContext) -> None:

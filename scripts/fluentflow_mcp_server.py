@@ -389,8 +389,9 @@ def wait_task(
 ) -> dict[str, Any]:
     """Wait for a task, note included, or return the current state.
 
-    ``done`` stays false while a completed task's note is still being written
-    (``note_pending``); the server decides, this only relays.
+    ``done`` stays false while any step of a completed task is still to come
+    (cut, note, compressed copy, Feishu export; ``note_pending`` for the note);
+    the server decides from the task's steps, this only relays.
     """
     return _watching(_agent_request(
         "POST",
@@ -1038,8 +1039,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "get_task",
         "description": (
-            "Read lightweight task status from FluentFlow. done is true only once the "
-            "note is finished too; note_pending says it is still being written. note_version "
+            "Read lightweight task status from FluentFlow. done is true only once every step "
+            "after the transcript has ended too (cut, note, compressed copy, Feishu export); "
+            "note_pending says the note is still to come. note_version "
             "is the version of the note now: read it before you change the note, and pass it as "
             "base_version when you save (save_agent_note, regenerate_note, write_note_from_cut_media)."
         ),
@@ -1054,7 +1056,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "description": (
             "Wait for a task, cut and note included: a task reads completed once its transcript "
             "is stored, but done stays false while the recording is being cut (cut_running=true) "
-            "and until the note is written, failed or skipped (note_pending=true). When done, task says where things stand (note status "
+            "and until the note is written, failed or skipped (note_pending=true), and while the "
+            "compressed copy or the Feishu export is still running. When done, task says where things stand (note status "
             "and length, who wrote it, the output folder, next actions); read the note itself "
             "with get_task_package. Otherwise the current state; call again until done. When the "
             "task is waiting for you to judge its cut it returns at once with agent_cut (status "

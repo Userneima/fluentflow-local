@@ -40,7 +40,7 @@ hf_endpoint.apply_at_startup()
 onnx_quiet.quiet()
 
 from backend.core.app_factory import create_app
-from backend.core import claude_code_note, visual_note_channel  # noqa: E402
+from backend.core import claude_code_note, task_steps, visual_note_channel  # noqa: E402
 from backend.core.event_context import event_metadata  # noqa: E402
 from backend.core.event_logger import log_event  # noqa: E402
 from backend.core.claude_code_note import stop_running_notes
@@ -289,6 +289,14 @@ async def lifespan(app: FastAPI):
     recovered = recover_stale_jobs()
     if recovered:
         logger.info("Startup recovery marked %s stranded local jobs as failed", recovered)
+    # Before anything is re-queued (a re-run plans its steps afresh): the steps
+    # the stopped service was running did not finish. A task waiting for the
+    # user's agent goes on by itself (``resume_agent_cuts`` below).
+    from backend.routers.local_processing import agent_cut_unfinished
+
+    closed = task_steps.recover_after_restart(keep=lambda task_id: agent_cut_unfinished(get_job(task_id)))
+    if closed:
+        logger.info("Startup closed the open steps of %s tasks the restart cut off", closed)
     resume = None
     if interrupted:
         # Off the startup path: each re-queue probes its file, and the page

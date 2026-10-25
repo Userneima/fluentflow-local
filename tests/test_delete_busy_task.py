@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.core import job_store
+from backend.core import job_store, task_steps
 from backend.routers import local_job_mutation
 
 
@@ -37,7 +37,6 @@ def _task(result):
 @pytest.mark.parametrize("result, words", [
     ({"summary_status": "pending"}, "笔记还在写"),
     ({"debreath": {"status": "running"}}, "剪辑或导出"),
-    ({"summary_status": "skipped", "note_deferred_to_visual_note": True, "transcript_text": "x"}, "笔记马上要开始写"),
 ])
 def test_a_task_still_being_worked_on_is_not_deleted(client, result, words):
     task = _task(result)
@@ -46,6 +45,19 @@ def test_a_task_still_being_worked_on_is_not_deleted(client, result, words):
 
     assert response.status_code == 409 and words in response.json()["detail"]
     assert job_store.get_job(task) is not None
+    job_store.delete_jobs([task])
+
+
+def test_a_task_whose_cut_and_note_are_still_to_come_is_not_deleted(client):
+    # The transcript is stored and the later steps have not started yet: the
+    # refusal names the first of them.
+    task = _task({"summary_status": "skipped", "note_deferred_to_visual_note": True, "transcript_text": "x"})
+    task_steps.plan(task)
+    task_steps.finish(task, task_steps.TRANSCRIBE, task_steps.DONE)
+
+    response = client.delete(f"/jobs/{task}")
+
+    assert response.status_code == 409 and "剪辑或导出" in response.json()["detail"]
     job_store.delete_jobs([task])
 
 

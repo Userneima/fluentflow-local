@@ -21,7 +21,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.core import job_store
+from backend.core import job_store, task_steps
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.routers.local_agent as local_agent
 from backend.routers.local_agent import router as agent_router
@@ -166,13 +166,20 @@ def test_a_note_stranded_by_a_restart_does_not_keep_the_agent_waiting(jobs_db):
     assert waited["note_status"] == "failed"
 
 
+def _steps_after_transcript(task_id: str) -> None:
+    """The task's steps as the flow leaves them once the transcript is stored."""
+    task_steps.plan(task_id)
+    task_steps.finish(task_id, task_steps.TRANSCRIBE, task_steps.DONE)
+
+
 def test_a_deferred_note_that_has_not_started_yet_is_not_read_as_skipped(jobs_db):
     # The pipeline stores the transcript as "skipped" when the frame note will
-    # follow; the note step marks it pending a moment later.
+    # follow; the note step is still to come.
     _store(jobs_db, "t-handover", stage="done", summary_status="skipped", result={
         **_TRANSCRIPT, "summary_markdown": "", "summary_skipped": True, "summary_status": "skipped",
         "note_deferred_to_visual_note": True,
     })
+    _steps_after_transcript("t-handover")
 
     waited = _wait(_client(), "t-handover", timeout_seconds=0)
 
@@ -180,12 +187,15 @@ def test_a_deferred_note_that_has_not_started_yet_is_not_read_as_skipped(jobs_db
     assert waited["note_pending"] is True
 
 
-def test_a_deferred_note_that_never_started_stops_holding_the_agent(jobs_db, monkeypatch):
+def test_a_deferred_note_that_never_started_stops_holding_the_agent(jobs_db):
+    # The service stopped between the transcript and the note; the restart
+    # closes the steps nothing will run.
     _store(jobs_db, "t-never", stage="done", summary_status="skipped", result={
         **_TRANSCRIPT, "summary_markdown": "", "summary_skipped": True, "summary_status": "skipped",
         "note_deferred_to_visual_note": True,
     })
-    monkeypatch.setattr(local_agent, "_DEFERRED_NOTE_HANDOVER_SECONDS", -1)
+    _steps_after_transcript("t-never")
+    task_steps.close_open("t-never", error=task_steps.RESTART_ERROR)
 
     waited = _wait(_client(), "t-never", timeout_seconds=0)
 
@@ -200,7 +210,7 @@ def test_a_task_that_ended_without_a_transcript_is_done(jobs_db, status):
     assert _wait(_client(), f"t-{status}", timeout_seconds=0)["done"] is True
 
 
-def test_wait_is_not_done_while_the_recording_is_cut_after_its_transcript(jobs_db, monkeypatch):
+def test_wait_is_not_done_while_the_recording_is_cut_after_its_transcript(jobs_db):
     """Survey-first flow (review of the Codex run, 2026-10-16): the task reads
     completed once the transcript is stored, then the recording is judged and
     rendered, then the note is written. A render can go minutes without the
@@ -210,8 +220,8 @@ def test_wait_is_not_done_while_the_recording_is_cut_after_its_transcript(jobs_d
         "note_deferred_to_visual_note": True,
         "debreath": {"status": "running", "stage": "rendering"},
     })
-    # Older than the hand-over bound, as a long render leaves it.
-    monkeypatch.setattr(local_agent, "_seconds_since", lambda stamp: 3600.0)
+    _steps_after_transcript("t-cutting")
+    task_steps.start("t-cutting", task_steps.CUT)
     client = _client()
     waited = _wait(client, "t-cutting", timeout_seconds=0)
     task = client.get("/agent/v1/tasks/t-cutting", headers=_HEADERS).json()["task"]

@@ -80,12 +80,16 @@ def test_local_job_read_uses_local_snapshot(monkeypatch):
 
 def test_local_job_detail_uses_local_projection(monkeypatch):
     monkeypatch.setattr(local_jobs, "get_job", lambda task_id, client_id=None: dict(_JOB))
-    monkeypatch.setattr(local_jobs, "list_job_steps", lambda *, task_id, limit: [])
 
     response = _client().get("/jobs/local-1/detail", headers={"x-fluentflow-client-id": "desktop-a"})
 
     assert response.status_code == 200
-    assert response.json() == local_task_detail.build_task_detail(_JOB, job_steps=[])
+    detail = response.json()
+    assert detail["steps"] == []
+    assert detail["activity"]["busy"] is False
+    for key in ("steps", "activity"):
+        detail.pop(key)
+    assert detail == local_task_detail.build_task_detail(_JOB)
 
 
 def test_local_job_missing_returns_404(monkeypatch):

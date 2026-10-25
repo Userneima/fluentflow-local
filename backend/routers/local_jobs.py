@@ -9,11 +9,11 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
+from backend.core import task_activity, task_steps
 from backend.core.job_store import (
     RESTART_INTERRUPTION_KEY,
     acknowledge_restart_interruptions,
     get_job,
-    list_job_steps,
     list_job_summaries,
     list_jobs,
     list_unacknowledged_restart_interruptions,
@@ -41,7 +41,15 @@ def get_jobs(
         if include_result
         else list_job_summaries(limit=limit_value, client_id=client_id, updated_since=updated_since)
     )
-    return {"jobs": [{**job, "task_snapshot": build_task_snapshot(job)} for job in jobs]}
+    steps = task_steps.steps_of(str(job.get("task_id") or "") for job in jobs)
+    return {"jobs": [
+        {
+            **job,
+            "task_snapshot": build_task_snapshot(job),
+            "activity": task_activity.activity(job, steps.get(str(job.get("task_id") or ""), [])).as_dict(),
+        }
+        for job in jobs
+    ]}
 
 
 def _text(value: Any) -> str:
@@ -106,7 +114,7 @@ def get_job_detail(request: Request, task_id: str) -> dict[str, Any]:
     job = get_job(task_id, client_id=local_client_scope(request))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return {**job, "task_snapshot": build_task_snapshot(job)}
+    return {**job, "task_snapshot": build_task_snapshot(job), "activity": task_activity.activity(job).as_dict()}
 
 
 @router.get("/jobs/{task_id}/detail")
@@ -114,5 +122,11 @@ def get_job_processing_detail(request: Request, task_id: str) -> dict[str, Any]:
     job = get_job(task_id, client_id=local_client_scope(request))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    steps = list_job_steps(task_id=task_id, limit=100)
-    return build_task_detail(job, job_steps=steps)
+    steps = task_steps.steps_of([task_id]).get(task_id, [])
+    # The timeline is still read from the event log; the steps are given
+    # beside it, with what they mean for the task as a whole.
+    return {
+        **build_task_detail(job),
+        "steps": steps,
+        "activity": task_activity.activity(job, steps).as_dict(),
+    }

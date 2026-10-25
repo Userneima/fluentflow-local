@@ -60,7 +60,13 @@ def is_busy(job: dict) -> bool:
     """A task is marked completed once its transcript is stored; the cut and
     the note run after that, for many minutes on a long recording. A restart
     then interrupted both while this counted nothing (2026-10-16, a 58-minute
-    recording's render and note cut off by another session's restart)."""
+    recording's render and note cut off by another session's restart).
+
+    The service says it per task (``activity.busy``, read from the task's
+    steps); a service from before that answer existed is read as before."""
+    activity = job.get("activity")
+    if isinstance(activity, dict) and isinstance(activity.get("busy"), bool):
+        return activity["busy"]
     if str(job.get("status") or "") in LIVE_STATUSES:
         return True
     if str(job.get("summary_status") or "") == "pending":

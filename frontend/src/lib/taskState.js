@@ -50,8 +50,20 @@ export const normalizeTaskState = (job={}) => {
 export const isNoteStillBeingWritten = (job = {}) => {
     const state = normalizeTaskState(job);
     if (state !== TASK_STATE_COMPLETED) return false;
+    if (hasActivity(job)) return Boolean(job.activity.busy) && job.activity.current_step === 'note';
     const pending = (value) => String(value || '').toLowerCase() === 'pending';
     return pending(job?.result?.summary_status) || pending(job?.summary_status);
+};
+
+// What the backend says the task is still doing, read from its steps
+// (backend/core/task_activity.py). Records cached before it existed have none.
+const hasActivity = (job = {}) => Boolean(job?.activity) && typeof job.activity.busy === 'boolean';
+
+// A finished-transcript task whose later steps (cut, note, compressed copy,
+// Feishu) are still running, with what it is doing in the user's words.
+export const stillWorkingLabel = (job = {}) => {
+    if (normalizeTaskState(job) !== TASK_STATE_COMPLETED || !hasActivity(job) || !job.activity.busy) return '';
+    return String(job.activity.label || '');
 };
 
 export const taskStatusLabel = (job, lang = 'zh') => {
@@ -60,6 +72,8 @@ export const taskStatusLabel = (job, lang = 'zh') => {
     if (state === TASK_STATE_UPLOADING) return zh ? '上传中' : 'Uploading';
     if (state === TASK_STATE_QUEUED) return zh ? '排队中' : 'Queued';
     if (isNoteStillBeingWritten(job)) return zh ? '写笔记中' : 'Writing note';
+    const working = stillWorkingLabel(job);
+    if (working) return zh ? working : 'Working';
     if (state === TASK_STATE_COMPLETED || state === TASK_STATE_CACHED_ONLY) return zh ? '已完成' : 'Completed';
     if (state === TASK_STATE_FAILED) return zh ? '失败' : 'Failed';
     if (state === TASK_STATE_CANCELLED) return zh ? '已取消' : 'Cancelled';
@@ -80,7 +94,7 @@ export const taskOutcome = (job = {}, lang = 'zh') => {
     const state = normalizeTaskState(job);
     if (state === TASK_STATE_FAILED) return {kind: 'failed', tone: 'failed', label: zh ? '失败' : 'Failed'};
     if (state === TASK_STATE_CANCELLED) return {kind: 'cancelled', tone: 'failed', label: zh ? '已取消' : 'Cancelled'};
-    if (![TASK_STATE_COMPLETED, TASK_STATE_CACHED_ONLY].includes(state) || isNoteStillBeingWritten(job)) {
+    if (![TASK_STATE_COMPLETED, TASK_STATE_CACHED_ONLY].includes(state) || isNoteStillBeingWritten(job) || stillWorkingLabel(job)) {
         return {kind: 'live', tone: 'live', label: taskStatusLabel(job, lang)};
     }
     const result = job?.result || {};

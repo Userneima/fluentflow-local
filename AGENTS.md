@@ -63,6 +63,7 @@ one of them failed, and in practice every "服务重启中断了这个任务" fa
 record came from an agent restarting the service to load new code while its own
 batch was still queued. Before stopping or restarting the backend on port 8000,
 run `python3 launchers/macos/count_active_jobs.py http://127.0.0.1:8000`; restart
-only when it prints `0`. It counts a task whose cut is still rendering or whose
-note is still being written, though the task itself already reads completed.
+only when it prints `0`. It counts every task with a step still to come (cut,
+note, compressed copy, Feishu export), though the task itself already reads
+completed; the service answers that per task from its steps (`activity.busy`).
 Otherwise wait for the queue to drain, or test the new code on another port.
