@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Callable
 
 from backend.core import claude_code_note, claude_vision
-from backend.core.visual_note_channel import CHANNEL_SUBSCRIPTION, resolve_channel
+from backend.core.visual_note_channel import CHANNEL_SUBSCRIPTION, preferred_channel, resolve_channel
 
 TEXT_MAX_TOKENS = 16_000
 
@@ -81,4 +81,20 @@ def claude_chat(api_key: str | None = None, *, runner: Callable | None = None) -
     return _api_key_chat(api_key, claude_vision.latest_model(api_key)), channel.name
 
 
-__all__ = ["Chat", "claude_chat"]
+def subscription_chat(*, runner: Callable | None = None) -> tuple[Chat, str] | None:
+    """Claude through the subscription, only when this machine opted into it
+    and is logged in; ``None`` otherwise.
+
+    For the errands that would otherwise go to a text-model key first
+    (subtitle check, translation, coverage check, where a recording ends).
+    A subscription that is already paid for costs nothing more per call, so
+    when the user chose it, it comes before a key billed per token (owner,
+    2026-10-25: his DeepSeek balance ran out on the subtitle check while his
+    subscription sat idle). A user who never opted in is never sent to it.
+    """
+    if preferred_channel() != CHANNEL_SUBSCRIPTION:
+        return None
+    return claude_chat(None, runner=runner)
+
+
+__all__ = ["Chat", "claude_chat", "subscription_chat"]

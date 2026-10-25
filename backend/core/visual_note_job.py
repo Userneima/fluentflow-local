@@ -1055,13 +1055,20 @@ def _checked_draft(write, part, frames, *, api_key, rules=None):
 def coverage_checker(api_key: str | None = None) -> tuple[note_coverage.Chat, str] | None:
     """Who checks a written note for missing points, and their name.
 
-    The configured text model when there is one: the check is a comparison, not
-    writing, and it is the cheapest request this machine can make. Otherwise
-    Claude through the note's own channel. ``None`` when neither is reachable.
+    The Claude subscription when this machine opted into it (already paid
+    for). Otherwise the configured text model when there is one: the check is
+    a comparison, not writing, and it is the cheapest billed request this
+    machine can make. Otherwise Claude through the note's own channel.
+    ``None`` when none is reachable.
     """
     from backend.core import ai_summarizer, claude_text
     from backend.core.local_entry_guards import local_ai_kwargs
 
+    # A subscription the user opted into is already paid for: it goes before
+    # a key billed per token (owner, 2026-10-25).
+    subscribed = claude_text.subscription_chat()
+    if subscribed is not None:
+        return subscribed
     settings = local_ai_kwargs()
     chat = ai_summarizer.text_model_chat(**settings)
     if chat is not None:

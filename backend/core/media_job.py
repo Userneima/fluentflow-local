@@ -40,7 +40,7 @@ from backend.core.media_probe import media_duration_seconds
 from backend.core.runtime_env import truthy
 from backend.core.ai_client import _chat, _get_client, _normalize_model, _normalize_provider, _provider_api_key
 from backend.core import subtitle_correction
-from backend.core.claude_text import claude_chat
+from backend.core.claude_text import claude_chat, subscription_chat
 from backend.core.media_job_stages import (
     clean_transcript,
     export_note_to_lark,
@@ -288,13 +288,18 @@ def _translation_ai_kwargs(ai_kwargs: dict[str, Any]) -> dict[str, Any]:
 def _translation_writer(
     translation_kwargs: dict[str, Any], secret_resolver: Any,
 ) -> tuple[Any, str]:
-    """Who translates an English recording's subtitles: the chosen text model
-    when it has a key, otherwise Claude through the note's channel.
+    """Who translates an English recording's subtitles: the Claude
+    subscription when this machine opted into it (already paid for), else the
+    chosen text model when it has a key, otherwise Claude through the note's
+    channel.
 
     Someone whose notes are written by Claude often has no DeepSeek key, and
     every English recording they processed came back without Chinese subtitles.
     With neither, the text model is kept so the error names the key to add.
     """
+    subscribed = subscription_chat()
+    if subscribed is not None:
+        return subscribed
     provider = str(translation_kwargs.get("provider") or "")
     try:
         _provider_api_key(_normalize_provider(provider or None), translation_kwargs.get("api_key"))
