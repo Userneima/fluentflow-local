@@ -36,6 +36,7 @@ ALLOWED_PENDING_NOTE = {
     "backend/core/task_activity.py": "the one place that judges whether a task is busy",
     "backend/core/visual_note_job.py": "its own state, and clearing notes a restart stranded",
     "launchers/macos/count_active_jobs.py": "reading a service from before tasks carried their activity",
+    "backend/core/task_actions.py": "a stopped note's \"pending\" is cleared at once, not read to judge busy",
 }
 
 
