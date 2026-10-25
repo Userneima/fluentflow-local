@@ -33,6 +33,7 @@ exists and that no other file judges whether a task is still busy.
 - What runs once a task's turn comes (pipeline, cut, note, compressed copy, Feishu): `backend/core/task_flow.py`
 - Turning a submission into a queued task (options, context, by path, retry): `backend/core/task_submission.py`; a video link: `backend/core/link_submission.py`
 - Cutting again or rewriting the note of a finished task on request: `backend/core/task_reruns.py`
+- A note from a transcript file (an uploaded .srt/.vtt/.txt, or a link's captions): `backend/core/transcript_note.py`
 - Storing and reading task records: `backend/core/job_store.py`
 - What to cut, read from the whole timeline: `backend/core/survey_cut.py`
 - Which model judges the cut: `backend/core/cut_judge.py`; the user's agent judging it: `backend/core/agent_cut.py`
