@@ -76,8 +76,8 @@ class Edges:
         self.checkpoints.append(ctx.transcribe_checkpoint)
         if self.hold_pipeline:
             await asyncio.sleep(30)
-        job_store.upsert_job(task_id=self.task_id, status="completed", stage="done", progress=100,
-                             result={"task_id": self.task_id, "transcript_text": "大家好"})
+        job_store.upsert_job(task_id=ctx.task_id_value, status="completed", stage="done", progress=100,
+                             result={"task_id": ctx.task_id_value, "transcript_text": "大家好"})
 
     def survey_and_cut(self, task_id, client_id, on_plan=None):
         self.ran.append("cut")
@@ -373,3 +373,115 @@ def test_the_detail_timeline_is_the_tasks_steps(task_id):
     assert by_id["transcribe"]["title"] == "转录" and by_id["transcribe"]["status"] == "completed"
     assert by_id["cut"]["status"] == "stopped"
     assert by_id["note"]["status"] == "failed" and by_id["note"]["error_reason"] == "额度用完了"
+
+
+# ── review of batch 2 (2026-10-25) ───────────────────────────────────────────
+
+def test_starting_the_service_carries_cut_off_tasks_on_without_new_tasks(monkeypatch, task_id, tmp_path):
+    """Requirement, in the owner's words: 重启后不再新建一条任务. Through the
+    service's own startup: a task cut off during its cut and one still waiting
+    its turn are both carried on in place; the number of tasks does not
+    change and neither is handed to the old re-run-as-a-new-task path."""
+    from fastapi.testclient import TestClient
+
+    from backend import local_main
+
+    cutting, waiting = task_id, task_id + "-w"
+    _in_place_task(cutting, tmp_path)
+    _cut_off_during_the_cut(cutting)
+    _in_place_task(waiting, tmp_path, status="queued", result={})
+    task_steps.plan(waiting)
+    edges = Edges(cutting)
+    _wire(monkeypatch, edges)
+    # Only this test's tasks count as cut off; leftovers of other tests in
+    # the same store are not carried into it.
+    monkeypatch.setattr(task_steps, "interrupted", lambda: [cutting, waiting])
+    rerun_as_new: list = []
+
+    async def old_path(task_ids):
+        rerun_as_new.extend(task_ids)
+        return 0
+
+    monkeypatch.setattr(local_main, "resume_interrupted_jobs", old_path)
+    before = len(job_store.list_jobs(limit=None, include_result=False))
+
+    with TestClient(local_main.create_local_app()):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not (_ended(cutting) and _ended(waiting)):
+            time.sleep(0.05)
+
+    assert _ended(cutting) and _ended(waiting), (_statuses(cutting), _statuses(waiting))
+    assert cutting not in rerun_as_new and waiting not in rerun_as_new
+    assert len(job_store.list_jobs(limit=None, include_result=False)) == before
+    assert _statuses(cutting)[task_steps.CUT] == task_steps.DONE
+    assert job_store.get_job(waiting)["status"] == "completed"
+
+
+def test_a_stopped_agent_cut_stays_stopped_after_a_restart(monkeypatch, task_id):
+    """Review: a task waiting for the user's agent that the user stopped does
+    not start waiting (and then cut and write, spending money) after a
+    restart; one whose cut step is still open goes on as before."""
+    from backend.core import agent_cut
+
+    waiting_result = {"task_id": task_id, "transcript_text": "x", agent_cut.KEY: {"status": agent_cut.WAITING}}
+    job_store.upsert_job(task_id=task_id, status="completed", result=waiting_result)
+    task_steps.plan(task_id)
+    for name in task_steps.BEFORE_TRANSCRIPT:
+        task_steps.finish(task_id, name, task_steps.DONE)
+    task_steps.start(task_id, task_steps.CUT)
+    task_steps.close_open(task_id, stopped=True)
+    other = task_id + "-open"
+    job_store.upsert_job(task_id=other, status="completed", result={**waiting_result, "task_id": other})
+    task_steps.plan(other)
+    task_steps.start(other, task_steps.CUT)
+
+    started: list = []
+
+    async def start(task, runner):
+        started.append(task)
+        return True
+
+    monkeypatch.setattr(tf.JOB_EVENTS, "start", start)
+    monkeypatch.setattr(tf.agent_cut, "check", lambda *a: pytest.fail("the agent's judgement was asked for"))
+    asyncio.run(tf.resume_agent_cuts())
+
+    assert task_id not in started
+    assert other in started
+    assert task_id not in task_actions.stepped_tasks_cut_off()
+
+
+def test_a_task_stopped_while_waiting_its_turn_reads_stopped_at_once(monkeypatch, task_id, tmp_path):
+    """Review: a task stopped while it waits behind another reads stopped (as a
+    cancel does) at once, not when the task ahead is done; carrying it on
+    meanwhile says why it has to wait."""
+    from backend.core import task_queue
+
+    ahead_done = asyncio.Event
+
+    async def scenario():
+        ahead = asyncio.Event()
+        task_queue._QUEUE_RECENT.clear()
+        task_queue._queue_tail_record("someone-ahead", ahead)
+        monkeypatch.setattr(task_queue.JOB_EVENTS, "has_running_task", lambda _t: _true())
+        _in_place_task(task_id, tmp_path, status="queued", result={})
+        edges = Edges(task_id)
+        _wire(monkeypatch, edges)
+        await task_actions._carry_on(job_store.get_job(task_id), task_steps.FETCH, route="/test")
+        await asyncio.sleep(0.1)
+        await task_actions.stop_step(task_id, None)
+        job = job_store.get_job(task_id)
+        assert job["status"] == "cancelled"
+        assert task_activity.activity(job).label != "在排队"
+        with pytest.raises(task_actions.Refused) as refused:
+            await task_actions.resume_task(task_id, None)
+        assert refused.value.code == "still_stopping"
+        ahead.set()
+        assert await _until(lambda: not task_actions.JOB_EVENTS.is_running(task_id))
+        assert edges.ran == []
+        task_queue._QUEUE_RECENT.clear()
+
+    async def _true():
+        return True
+
+    del ahead_done
+    asyncio.run(scenario())

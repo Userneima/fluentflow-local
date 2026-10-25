@@ -491,12 +491,24 @@ def agent_cut_unfinished(job: Any) -> bool:
     return state.get("status") in (agent_cut.WAITING, agent_cut.DECIDED, agent_cut.FALLBACK) and not state.get("finished_at")
 
 
+def agent_cut_goes_on(job: Any) -> bool:
+    """Whether a restart carries this task's agent-judged cut on: the cut is
+    unfinished and its step is still open (a task from before steps were
+    recorded has none and goes on as before). A cut the user stopped stays
+    stopped until they carry it on."""
+    if not agent_cut_unfinished(job):
+        return False
+    task_id = str((job or {}).get("task_id") or "")
+    named = task_steps.statuses(task_steps.steps_of([task_id]).get(task_id, []))
+    return not named or named.get(task_steps.CUT) in task_steps.OPEN
+
+
 async def resume_agent_cuts() -> int:
     """At startup: every task a restart left waiting for its agent, or
     between the agent's decision and its cut, goes on waiting or is cut."""
     resumed = 0
     for job in list_jobs_by_statuses(("completed",), include_result=True):
-        if not agent_cut_unfinished(job):
+        if not agent_cut_goes_on(job):
             continue
         task_id, client_id = str(job.get("task_id")), job.get("client_id")
         if await JOB_EVENTS.start(task_id, functools.partial(continue_after_agent, task_id, client_id)):

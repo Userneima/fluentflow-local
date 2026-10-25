@@ -36,7 +36,10 @@ _CREATED: list[str] = []
 @pytest.fixture(autouse=True)
 def _fresh_chain(monkeypatch):
     hub = JobEventHub()
-    monkeypatch.setattr(lp, "JOB_EVENTS", hub)
+    # The queue and the flow publish and start runners on their own hub
+    # reference; each one gets this test's.
+    for module in (lp, tq, tf, ts):
+        monkeypatch.setattr(module, "JOB_EVENTS", hub)
     monkeypatch.setattr(tf, "_NOTE_REMOTE_SLOTS", threading.BoundedSemaphore(tf.NOTE_CONCURRENCY))
     monkeypatch.setattr(tf, "_NOTE_SLOT_POLL_SECONDS", 0.02)
     tq._QUEUE_RECENT.clear()

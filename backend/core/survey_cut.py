@@ -978,7 +978,7 @@ def _finish_uncut(
             delivered.unlink()
         except OSError as exc:
             logger.warning("could not take the old cut %s out of the folder: %s", delivered, exc)
-    for key in ("delivered", "delivered_path", "delivered_name", "delivered_as", "media_filename", "render", "render_verified"):
+    for key in ("delivered", "delivered_path", "delivered_name", "delivered_as", "media_filename", "render", "render_verified", DECIDED_KEY):
         state.pop(key, None)
     result["transcript_media"] = TRANSCRIPT_MEDIA_SOURCE
     result.pop("playback_media_kind", None)

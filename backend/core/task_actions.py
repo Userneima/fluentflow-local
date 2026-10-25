@@ -264,6 +264,13 @@ async def stop_step(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
     cancelled = await JOB_EVENTS.cancel(task_id)
     # Whatever no runner closes (a task still waiting for its turn).
     task_steps.close_open(task_id, stopped=True)
+    if job.get("status") in {"queued", "running"}:
+        # Stopped before its transcript was stored: it reads stopped now, as a
+        # cancel does, not once the task ahead of it in line is done (its
+        # runner keeps its place until then, so the line stays serial).
+        upsert_job(task_id=task_id, status="cancelled", client_id=job.get("client_id"),
+                   stage=job.get("stage") or "cancelled", error_reason="user_stopped",
+                   metadata={"queue_wait": None})
     if task_steps.NOTE in open_steps and job.get("status") == "completed":
         # The note's thread finishes on its own a few seconds later; until
         # then the task would still read 正在写笔记.
@@ -297,8 +304,12 @@ async def resume_task(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
     are not done again; a cut whose decision was kept is only rendered again."""
     job = _job(task_id, client_id, "任务不存在")
     current = task_activity.activity(job)
-    if current.busy or JOB_EVENTS.is_running(task_id):
+    if current.busy:
         raise Refused(f"这个任务{current.label or '还在处理'}，等它停下或做完再接着做。", "busy")
+    if JOB_EVENTS.is_running(task_id):
+        # A task stopped while it waited in line keeps its place until the
+        # task ahead is done (``task_queue.wait_for_queue_turn``).
+        raise Refused("这个任务刚停下，还占着排队的位置，等前面那条做完再接着做。", "still_stopping")
     if task_id in debreath_job.running_task_ids() or visual_note_job.is_claimed(task_id):
         raise Refused("上次停下的那一步还在收尾，过几秒再接着做。", "still_stopping")
     steps = task_steps.steps_of([task_id]).get(task_id, [])
@@ -353,7 +364,7 @@ def stepped_tasks_cut_off() -> list[str]:
     those waiting for the user's agent (``task_flow.resume_agent_cuts``)."""
     return [
         task_id for task_id in task_steps.interrupted()
-        if not task_flow.agent_cut_unfinished(get_job(task_id))
+        if not task_flow.agent_cut_goes_on(get_job(task_id))
     ]
 
 

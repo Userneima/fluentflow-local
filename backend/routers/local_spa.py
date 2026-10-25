@@ -5,44 +5,12 @@ from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse
 
 from backend.core.frontend_paths import local_frontend_index_path
+from backend.core.local_http_boundary import LOCAL_API_PREFIXES, RESERVED_PREFIXES  # noqa: F401
 
 
 # NOTE: "agent" is NOT an API prefix — /agent is the processing-records SPA
 # page. The Agent API lives under /agent/v1 only, blocked separately below so
 # a direct visit or refresh of /agent still serves the app.
-LOCAL_API_PREFIXES = frozenset(
-    {
-        "agent-access",
-        "credentials",
-        "events",
-        "export-lark",
-        "health",
-        "hotword-libraries",
-        "jobs",
-        "process",
-        "queue",
-        "regenerate-summary",
-        "runtime-config",
-        "speaker-diarization",
-        "summarize-transcript-file",
-        "version",
-        "video-sources",
-        "workflow-status",
-    }
-)
-
-RESERVED_PREFIXES = frozenset(
-    {
-        "account",
-        "admin",
-        "auth",
-        "desktop-sync",
-        "guest-trial",
-        "oss-upload-sessions",
-    }
-)
-
-
 def create_local_spa_router(index_path: Optional[Path] = None) -> APIRouter:
     router = APIRouter()
     resolved_index = index_path or local_frontend_index_path()

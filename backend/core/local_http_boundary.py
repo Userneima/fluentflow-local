@@ -42,7 +42,41 @@ from fastapi.responses import JSONResponse
 
 from backend.core.local_request_scope import require_local_agent_access
 from backend.core.runtime_env import env_truthy
-from backend.routers.local_spa import LOCAL_API_PREFIXES, RESERVED_PREFIXES
+
+
+# The first path segments that are the service's own routes, and ones kept
+# back from the page, so the single-page app does not answer them.
+LOCAL_API_PREFIXES = frozenset(
+    {
+        "agent-access",
+        "credentials",
+        "events",
+        "export-lark",
+        "health",
+        "hotword-libraries",
+        "jobs",
+        "process",
+        "queue",
+        "regenerate-summary",
+        "runtime-config",
+        "speaker-diarization",
+        "summarize-transcript-file",
+        "version",
+        "video-sources",
+        "workflow-status",
+    }
+)
+
+RESERVED_PREFIXES = frozenset(
+    {
+        "account",
+        "admin",
+        "auth",
+        "desktop-sync",
+        "guest-trial",
+        "oss-upload-sessions",
+    }
+)
 
 LOOPBACK_PEERS = {"127.0.0.1", "::1", "localhost", "testclient", ""}
 LOOPBACK_ORIGIN_HOSTS = {"127.0.0.1", "::1", "localhost"}

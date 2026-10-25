@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 import backend.core.local_entry_guards as guards
 import backend.routers.local_note_regen as local_note_regen
+from backend.core import transcript_note
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.routers.local_note_regen import router
 
@@ -73,17 +74,15 @@ def _install_store(monkeypatch):
                          "progress": values["progress"], "summary_status": values["summary_status"]}
         return jobs[task_id]
 
-    monkeypatch.setattr(local_note_regen, "upsert_job", fake_upsert)
-    monkeypatch.setattr(
-        local_note_regen, "get_job", lambda task_id, client_id=None: jobs.get(task_id)
-    )
+    # The rewrite route's own module, and the transcript-file note it calls.
+    for module in (local_note_regen, transcript_note):
+        monkeypatch.setattr(module, "upsert_job", fake_upsert, raising=False)
+        monkeypatch.setattr(module, "get_job", lambda task_id, client_id=None: jobs.get(task_id), raising=False)
+        monkeypatch.setattr(module, "finalize_note_if_unchanged", fake_finalize_note, raising=False)
+        monkeypatch.setattr(module, "log_event", lambda **values: events.append(values), raising=False)
+        monkeypatch.setattr(module, "_attach_result_artifacts", lambda task_id, result: result, raising=False)
     monkeypatch.setattr(guards, "get_job", scoped_get)
     monkeypatch.setattr(guards, "create_job_if_absent", fake_create)
-    monkeypatch.setattr(local_note_regen, "finalize_note_if_unchanged", fake_finalize_note)
-    monkeypatch.setattr(local_note_regen, "log_event", lambda **values: events.append(values))
-    monkeypatch.setattr(
-        local_note_regen, "_attach_result_artifacts", lambda task_id, result: result
-    )
     return jobs, events
 
 
@@ -308,7 +307,7 @@ def test_transcript_file_size_limit(monkeypatch):
 
 def test_transcript_file_duration_limit(monkeypatch):
     jobs, _ = _install_store(monkeypatch)
-    monkeypatch.setattr(local_note_regen, "max_media_duration_seconds", lambda: 3.0)
+    monkeypatch.setattr(transcript_note, "max_media_duration_seconds", lambda: 3.0)
     r = _client().post(
         "/summarize-transcript-file",
         headers=_HEADERS,
@@ -325,7 +324,7 @@ def test_transcript_only_mode_skips_summary(monkeypatch):
     def unexpected(*args, **kwargs):
         raise AssertionError("summarizer must not run in transcript-only mode")
 
-    monkeypatch.setattr(local_note_regen, "summarize_transcript_with_metadata", unexpected)
+    monkeypatch.setattr(transcript_note, "summarize_transcript_with_metadata", unexpected)
 
     r = _client().post(
         "/summarize-transcript-file",
@@ -346,7 +345,7 @@ def test_transcript_only_mode_skips_summary(monkeypatch):
 def test_transcript_file_summary_success(monkeypatch):
     jobs, events = _install_store(monkeypatch)
     monkeypatch.setattr(
-        local_note_regen, "summarize_transcript_with_metadata",
+        transcript_note, "summarize_transcript_with_metadata",
         lambda transcript, **kwargs: _summary_result("# 本地笔记"),
     )
 
@@ -377,7 +376,7 @@ def test_transcript_file_summary_failure_returns_partial_result(monkeypatch):
     def boom(transcript, **kwargs):
         raise RuntimeError("AI provider down")
 
-    monkeypatch.setattr(local_note_regen, "summarize_transcript_with_metadata", boom)
+    monkeypatch.setattr(transcript_note, "summarize_transcript_with_metadata", boom)
 
     r = _client().post(
         "/summarize-transcript-file",

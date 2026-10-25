@@ -16,7 +16,8 @@ or the skill names a tool that was renamed.
   (``backend/routers/``): an operation both can do lives in ``backend/core``
   (``task_actions``, ``task_queue`` and the rest), and an agent route borrowing
   from a page route was how operations the page had never lent stayed out of
-  an agent's reach.
+  an agent's reach. Nothing in ``backend/core`` imports a route either: what
+  core needs from a route belongs in core.
 """
 
 from __future__ import annotations
@@ -99,6 +100,15 @@ def test_the_agent_routes_borrow_nothing_from_the_page_routes():
         "backend/routers/local_agent.py imports from the page's routes; move what both need "
         f"into backend/core (task_actions, task_queue, task_submission ...): {borrowed}"
     )
+
+
+def test_nothing_in_core_imports_a_route():
+    borrowed = {
+        path.relative_to(ROOT).as_posix(): found
+        for path in (ROOT / "backend" / "core").rglob("*.py")
+        if "__pycache__" not in path.parts and (found := _router_imports(path))
+    }
+    assert not borrowed, f"backend/core imports from backend/routers; move what it needs into core: {borrowed}"
 
 
 def test_the_import_check_sees_an_import(tmp_path):

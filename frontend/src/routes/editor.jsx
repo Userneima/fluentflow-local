@@ -1283,6 +1283,11 @@ const Editor = () => {
             setToast(null);
         }, 3000);
     }, []);
+    // A task carried on from the header (接着做 / 重做这一步): {taskId} until
+    // its steps have all ended, when its note is taken like any other.
+    const [resumeWatch, setResumeWatch] = useState(null);
+    const resumeWatchRef = useRef(resumeWatch);
+    resumeWatchRef.current = resumeWatch;
     // Carrying a stopped task on, or redoing a step that failed (header button).
     const taskResume = useTaskResume({
         taskId: result?.task_id || '',
@@ -1290,7 +1295,11 @@ const Editor = () => {
         resumeJob,
         jobOptions: resultJobOptions,
         lang,
-        onResumed: () => showToast(lang === 'zh' ? '已排进队列，从这一步接着做' : 'Queued: carrying on from this step'),
+        onResumed: () => {
+            // The page follows the task until it is done and shows its note.
+            if (result?.task_id) setResumeWatch({taskId: result.task_id});
+            showToast(lang === 'zh' ? '已排进队列，从这一步接着做' : 'Queued: carrying on from this step');
+        },
         onError: (err) => showToast(err?.message || String(err), false),
     });
     // The server refused a save made on an older copy (the note or subtitles
@@ -1348,6 +1357,7 @@ const Editor = () => {
     const pollTaskId = result?.task_id || '';
     const notePolling = !!pollTaskId && (
         noteIsBeingWritten(result) || noteWatch?.taskId === pollTaskId || exportWatch?.taskId === pollTaskId
+        || resumeWatch?.taskId === pollTaskId
     );
     useEffect(() => {
         // A rewrite started for a task that is no longer open is no longer this
@@ -1358,6 +1368,9 @@ const Editor = () => {
         }
         if (exportWatchRef.current && exportWatchRef.current.taskId !== pollTaskId) {
             setExportWatch(null);
+        }
+        if (resumeWatchRef.current && resumeWatchRef.current.taskId !== pollTaskId) {
+            setResumeWatch(null);
         }
     }, [pollTaskId]);
     useEffect(() => {
@@ -1382,6 +1395,17 @@ const Editor = () => {
                 stopped = true;
                 clearInterval(timer);
             };
+            // Carried on: wait until no step of the task is working any more,
+            // then take its note (written again, or left as it was).
+            const resumeWait = resumeWatchRef.current?.taskId === taskId ? resumeWatchRef.current : null;
+            if (resumeWait) {
+                if (job?.activity?.busy !== false) return;
+                if (summaryUnsavedRef.current || noteCellOpenRef.current) return;
+                stop();
+                setResumeWatch(null);
+                setLastResult((prev) => (prev?.task_id === taskId ? mergeNoteFields(prev, fresh) : prev));
+                return;
+            }
             // The note is already in; only the export's outcome is awaited, and
             // only that is taken, so a note edited meanwhile is left alone.
             const exportWait = exportWatchRef.current?.taskId === taskId ? exportWatchRef.current : null;
@@ -2211,7 +2235,10 @@ const Editor = () => {
                                                 </button>
                                             )}
                                             {summaryFailureHint && (
-                                                <p data-testid="note-failure-reason" className="rounded-[12px] border border-[#fda29b] bg-[#fef3f2] px-3 py-2 text-[13px] font-semibold leading-relaxed text-[#b42318] dark:border-[#f04438]/40 dark:bg-[#f04438]/[0.12] dark:text-[#f97066]">
+                                                // A note the user stopped did not fail: said in grey, not red.
+                                                <p data-testid="note-failure-reason" data-tone={taskResume.offer?.kind === 'resume' ? 'stopped' : 'failed'} className={taskResume.offer?.kind === 'resume'
+                                                    ? 'rounded-[12px] border border-[#e4e1e1] bg-[#f7f7f7] px-3 py-2 text-[13px] font-semibold leading-relaxed text-[#57585d] dark:border-white/[0.10] dark:bg-white/[0.04] dark:text-white/60'
+                                                    : 'rounded-[12px] border border-[#fda29b] bg-[#fef3f2] px-3 py-2 text-[13px] font-semibold leading-relaxed text-[#b42318] dark:border-[#f04438]/40 dark:bg-[#f04438]/[0.12] dark:text-[#f97066]'}>
                                                     {summaryFailureHint}
                                                     {result?.task_id && (
                                                         <>

@@ -181,6 +181,24 @@ def test_the_recording_is_cut_once_and_the_transcript_moves_onto_the_cut(task, m
     # Removed talk is always put to the user.
     assert report["sections"][0]["title"] == "需要你判断"
     assert [item["ref"] for item in report["sections"][0]["items"]] == ["r1"]
+    # The decision kept for carrying on goes once the cut is rendered.
+    assert survey_cut.DECIDED_KEY not in state
+
+
+@needs_ffmpeg
+def test_a_decision_to_cut_nothing_is_not_kept_after_the_cut(task, monkeypatch):
+    """Review of task steps batch 2: the decision kept for carrying a cut on
+    goes when the cut ends with nothing to cut, as when it renders."""
+    from dataclasses import replace
+
+    def nothing(media, plan, segments):
+        return replace(plan, cuts=[], keeps=[silence_cuts.TimeRange(0.0, plan.source_duration_seconds)]), {}
+
+    survey_cut.survey_and_cut(task["id"], decide=nothing, judged_by="agent-test")
+
+    state = job_store.get_job(task["id"])["result"]["debreath"]
+    assert state["rendered"] is False
+    assert survey_cut.DECIDED_KEY not in state
 
 
 @needs_ffmpeg

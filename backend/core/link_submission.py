@@ -56,6 +56,7 @@ from backend.core.video_source import (
     normalize_source_link,
 )
 from backend.core.task_flow import run_pipeline_then_note
+from backend.core.transcript_note import summarize_transcript_source
 from backend.core.task_queue import _start_behind_queue, wait_for_queue_turn
 from backend.core.task_submission import _effective_duration_limit, _local_media_job_context
 
@@ -387,8 +388,6 @@ async def _download_then_process(
     if media_type == "transcript":
         try:
             # A caption track is summarised like an uploaded transcript.
-            from backend.routers.local_note_regen import summarize_transcript_source
-
             raw = await asyncio.to_thread(target_path.read_bytes)
             result = await summarize_transcript_source(
                 raw=raw,

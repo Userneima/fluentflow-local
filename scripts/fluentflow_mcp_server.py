@@ -647,8 +647,8 @@ def stop_task_step(task_id: str, api_base: str | None = None, client_id: str | N
         "is only rendered again, without asking a model, and a transcription is not repeated when only "
         "its corrections were left. The answer's resume_from names the step; get_task's activity says "
         "the same before you call (resume_from, stopped_steps, failed_steps). Follow with wait_task. "
-        "Refused with code busy while the task is still working, still_stopping for a few seconds after "
-        "a stop, nothing_to_resume when every step is done, no_steps for a task processed before steps "
+        "Refused with code busy while the task is still working, still_stopping shortly after a stop (a "
+        "task stopped while waiting its turn keeps its place until the task ahead is done), nothing_to_resume when every step is done, no_steps for a task processed before steps "
         "were recorded (use retry_task), source_missing when the recording it needs is gone."),
     input_schema=_TASK_ONLY,
 )
