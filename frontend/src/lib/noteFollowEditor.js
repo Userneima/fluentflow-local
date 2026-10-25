@@ -11,7 +11,7 @@ import {matchRows, noteSections} from './noteFollow.js';
 export const setNoteFollow = StateEffect.define();
 
 const followField = StateField.define({
-    create: () => ({rows: null, activeKey: null}),
+    create: () => ({rows: null, activeKey: null, alsoKeys: []}),
     update(value, tr) {
         let next = value;
         for (const effect of tr.effects) if (effect.is(setNoteFollow)) next = {...next, ...effect.value};
@@ -60,19 +60,25 @@ const sectionEnd = (sections, index, lastLine) => {
 };
 
 const buildDecorations = (state, {lang, onSeek}) => {
-    const {rows, activeKey} = state.field(followField);
+    const {rows, activeKey, alsoKeys} = state.field(followField);
     if (!rows?.length) return Decoration.none;
     const doc = state.doc;
     const sections = noteSections(doc.toString());
     const matched = matchRows(rows, sections);
+    const also = new Set(alsoKeys || []);
+    // The section followed, to leave its parent heading unmarked: the parent
+    // holds the moment too, as a whole, and marking it lightly says nothing.
+    const activeIndex = sections.findIndex((section) => matched.get(section.index)?.id === activeKey);
     const out = [];
     sections.forEach((section, index) => {
         const entry = matched.get(section.index);
         const line = doc.line(section.line);
-        if (entry && entry.id === activeKey) {
-            const last = Math.min(sectionEnd(sections, index, doc.lines), doc.lines);
-            out.push(Decoration.line({class: 'cm-follow-active cm-follow-active-heading'}).range(line.from));
-            for (let n = section.line + 1; n <= last; n += 1) out.push(Decoration.line({class: 'cm-follow-active'}).range(doc.line(n).from));
+        const last = Math.min(sectionEnd(sections, index, doc.lines), doc.lines);
+        const holdsActive = activeIndex > index && sections[activeIndex].line <= last;
+        const mark = entry && entry.id === activeKey ? 'active' : entry && also.has(entry.id) && !holdsActive ? 'also' : '';
+        if (mark) {
+            out.push(Decoration.line({class: `cm-follow-${mark} cm-follow-${mark}-heading`}).range(line.from));
+            for (let n = section.line + 1; n <= last; n += 1) out.push(Decoration.line({class: `cm-follow-${mark}`}).range(doc.line(n).from));
         }
         if (entry) {
             const label = lang === 'zh'
@@ -90,6 +96,12 @@ export const followTheme = EditorView.theme({
         backgroundColor: 'rgba(59, 130, 246, 0.06)',
     },
     '.cm-follow-active-heading': {backgroundColor: 'rgba(59, 130, 246, 0.12)'},
+    // Another place the moment playing is drawn on (a recap at the end):
+    // lighter, a thin bar, never scrolled to.
+    '.cm-follow-also': {
+        boxShadow: 'inset 2px 0 0 rgba(59, 130, 246, 0.35)',
+        backgroundColor: 'rgba(59, 130, 246, 0.03)',
+    },
     '.cm-follow-time': {
         marginLeft: '10px', padding: '1px 7px', borderRadius: '8px', border: '1px solid var(--c-outline-variant)',
         backgroundColor: 'transparent', color: 'var(--c-on-surface-variant)', cursor: 'pointer',

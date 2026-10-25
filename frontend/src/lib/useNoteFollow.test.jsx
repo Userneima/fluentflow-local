@@ -4,7 +4,9 @@
 // Written from the requirements:
 //   - Times are shown only while the file they are on is the one playing.
 //   - The section highlighted is the one playing; it stays until another
-//     section's span starts.
+//     section's main span starts. A section drawing on the moment only through
+//     another span (the recap at the end) is listed to mark lightly and is
+//     never the one followed (owner, 2026-10-25).
 //   - Scrolling in the note pauses following; resuming follows again and
 //     brings the section playing back into view.
 //   - Clicking a section's time highlights that section, even where another
@@ -75,10 +77,16 @@ describe('useNoteFollow', () => {
         await settle();
         act(() => clock.set(200));
         expect(result.current.activeKey).toBe('r8');
+        expect(result.current.alsoKeys).toEqual([]);
         act(() => clock.set(630));
-        expect(result.current.activeKey).toBe('r9'); // one of 九's other places
+        expect(result.current.activeKey).toBe('r8'); // 九 draws on it only through another span
+        expect(result.current.alsoKeys).toEqual(['r9']);
         act(() => clock.set(5000));
-        expect(result.current.activeKey).toBe('r9');
+        expect(result.current.activeKey).toBe('r8');
+        expect(result.current.alsoKeys).toEqual([]);
+        act(() => clock.set(1950));
+        expect(result.current.activeKey).toBe('r9'); // 九 and 十 share one main span: the first in the note
+        expect(result.current.editorProps.alsoKeys).toEqual(['r10']);
     });
 
     it('pauses when the reader scrolls the note and comes back to the section playing on resume', async () => {

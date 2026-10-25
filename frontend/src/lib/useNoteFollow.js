@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {matchRows, normalizeRows, noteSections, rowHolds, sectionAt} from './noteFollow.js';
+import {alsoAt, matchRows, normalizeRows, noteSections, rowHolds, sectionAt} from './noteFollow.js';
 
 // The editor page's side of the note following playback (decision 6.37,
 // mock-up behind `?follow=on`). Reads the section times every POLL_MS while
@@ -10,7 +10,9 @@ import {matchRows, normalizeRows, noteSections, rowHolds, sectionAt} from './not
 // playing on each tick of the player, stored only when it changes, like the
 // transcript's sentence. A section whose time was clicked stays the one
 // highlighted while the time is inside its spans, even where another
-// section's span starts at the same second.
+// section's span starts at the same second. Sections that draw on the moment
+// only through another span (the recap at the end of a meeting) are listed in
+// `alsoKeys`: marked lightly, never scrolled to.
 
 export const POLL_MS = 20000;
 const ASK = new Set(['missing', 'partial', 'failed']);
@@ -19,12 +21,18 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
     const [table, setTable] = useState(null);
     const [following, setFollowing] = useState(true);
     const [activeKey, setActiveKey] = useState(null);
+    // Joined with spaces so an unchanged list is the same string and the
+    // editor is not redrawn on every tick of the player.
+    const [alsoJoined, setAlsoJoined] = useState('');
     const [revealToken, setRevealToken] = useState(0);
     const pinnedRef = useRef(null);
+    const activeRef = useRef(null);
 
     useEffect(() => {
         setTable(null);
         setActiveKey(null);
+        activeRef.current = null;
+        setAlsoJoined('');
         setFollowing(true);
         pinnedRef.current = null;
     }, [taskId]);
@@ -71,7 +79,7 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
     }, [rows, foundIds]);
 
     useEffect(() => {
-        if (!foundRows.length) { setActiveKey(null); return undefined; }
+        if (!foundRows.length) { setActiveKey(null); activeRef.current = null; setAlsoJoined(''); return undefined; }
         const update = (time) => {
             const pinned = foundRows.find((row) => row.id === pinnedRef.current);
             let key = null;
@@ -80,7 +88,12 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
                 pinnedRef.current = null;
                 key = sectionAt(time, foundRows);
             }
-            if (key) setActiveKey((previous) => (previous === key ? previous : key));
+            if (key) {
+                activeRef.current = key;
+                setActiveKey((previous) => (previous === key ? previous : key));
+            }
+            const also = alsoAt(time, foundRows, activeRef.current).join(' ');
+            setAlsoJoined((previous) => (previous === also ? previous : also));
         };
         update(clock.get());
         return clock.subscribe(update);
@@ -94,12 +107,14 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
     const seekSection = useCallback((seconds, rowId) => {
         if (rowId) {
             pinnedRef.current = rowId;
+            activeRef.current = rowId;
             setActiveKey(rowId);
         }
         seek(seconds);
         resume();
     }, [seek, resume]);
 
+    const alsoKeys = useMemo(() => (alsoJoined ? alsoJoined.split(' ') : []), [alsoJoined]);
     const available = foundRows.length > 0;
     return {
         available,
@@ -108,8 +123,9 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
         failedReason: enabled && !available && table?.state === 'failed' ? (table.error || '') : '',
         following,
         activeKey,
+        alsoKeys,
         toggle: () => (following ? setFollowing(false) : resume()),
         resume,
-        editorProps: enabled ? {rows, activeKey, following, revealToken, onSeek: seekSection, onUserScroll: pause} : null,
+        editorProps: enabled ? {rows, activeKey, alsoKeys, following, revealToken, onSeek: seekSection, onUserScroll: pause} : null,
     };
 };

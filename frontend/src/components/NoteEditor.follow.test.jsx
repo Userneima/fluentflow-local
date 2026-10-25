@@ -5,6 +5,10 @@
 //     play from where the section is talked about most, naming the section.
 //   - The section playing is marked, heading and body, up to the next heading
 //     of its level or higher; while following, its heading is brought into view.
+//   - Only the main span (where a section is talked about most) is followed.
+//     A section that draws on the moment through another span, like the recap
+//     at the end of a meeting, is marked lightly and never scrolled to; its
+//     parent heading is not marked (owner, 2026-10-25).
 //   - Neither the times nor the marking changes the markdown or reports an
 //     edit, so they can never be saved (decisions 6.27, 6.30); a newer note
 //     handed down by the page keeps them.
@@ -19,7 +23,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {act, cleanup, fireEvent, render} from '@testing-library/react';
 import {EditorView} from '@codemirror/view';
 import NoteEditor from './NoteEditor.jsx';
-import {bodyHash, matchRows, normalizeRows, noteSections, sectionAt} from '../lib/noteFollow.js';
+import {alsoAt, bodyHash, matchRows, normalizeRows, noteSections, sectionAt} from '../lib/noteFollow.js';
 
 const noRects = () => ({length: 0, item: () => null, [Symbol.iterator]: function* () {}});
 const emptyRect = () => ({x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({})});
@@ -57,7 +61,7 @@ const ROWS = normalizeRows([
     {id: 'r1', heading: '一、做得好的', level: 2, body_hash: bodyOf('一、做得好的'), primary: [161, 571], others: [[15, 31]]},
     {id: 'r11', heading: '（一）发版节奏', level: 3, body_hash: bodyOf('（一）发版节奏'), primary: [161, 196], others: []},
     {id: 'r2', heading: '二、计划方式', level: 2, body_hash: bodyOf('二、计划方式'), primary: [826, 950], others: [[571, 652]]},
-    {id: 'r9', heading: '小结', level: 2, body_hash: bodyOf('小结'), primary: [1939, 1972], others: []},
+    {id: 'r9', heading: '小结', level: 2, body_hash: bodyOf('小结'), primary: [1939, 1972], others: [[619, 652]]},
 ]);
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -113,12 +117,20 @@ describe('finding each row its section', () => {
         expect(headingIds(NOTE.replace('两周一个 Sprint。', '两周一个 Sprint，改过。'))[2]).toEqual(['二、计划方式', 'r2']);
     });
 
-    it('picks the deepest heading, counting the other places a section draws on', () => {
+    it('follows the deepest heading whose main span holds the moment', () => {
         expect(sectionAt(170, ROWS)).toBe('r11');
         expect(sectionAt(300, ROWS)).toBe('r1');
-        expect(sectionAt(20, ROWS)).toBe('r1');
-        expect(sectionAt(600, ROWS)).toBe('r2');
+        expect(sectionAt(900, ROWS)).toBe('r2');
         expect(sectionAt(700, ROWS)).toBe(null);
+    });
+
+    it('never follows a section through one of its other spans, and lists those to mark lightly', () => {
+        // 10:30 of the meeting: chapter two and the recap both draw on it
+        // through another span; the note used to jump to the recap.
+        expect(sectionAt(630, ROWS)).toBe(null);
+        expect(sectionAt(20, ROWS)).toBe(null);
+        expect(alsoAt(630, ROWS, 'r1').sort()).toEqual(['r2', 'r9']);
+        expect(alsoAt(170, ROWS, 'r11')).toEqual(['r1']);
     });
 });
 
@@ -155,6 +167,25 @@ describe('the note editor following playback', () => {
         expect(scroll).toHaveBeenCalledTimes(1);
         rerender({following: true, activeKey: 'r9'});
         expect(scroll).toHaveBeenCalledTimes(2);
+    });
+
+    it('marks the recap lightly without scrolling to it, and leaves the parent of the section playing unmarked', () => {
+        const scroll = vi.spyOn(EditorView, 'scrollIntoView');
+        const {container, rerender, onChange} = renderNote({following: false});
+        rerender({following: true, activeKey: 'r1', alsoKeys: ['r2', 'r9']});
+        expect(scroll).toHaveBeenCalledTimes(1);
+        expect(lineOf(container, '第一处小结').className).toContain('cm-follow-also');
+        expect(lineOf(container, '第一处小结').className).not.toContain('cm-follow-active');
+        expect(lineOf(container, '两周一个').className).toContain('cm-follow-also');
+        expect(lineOf(container, '稳定。').className).toContain('cm-follow-active');
+
+        rerender({following: true, activeKey: 'r1', alsoKeys: ['r9']});
+        expect(scroll).toHaveBeenCalledTimes(1);
+
+        rerender({following: true, activeKey: 'r11', alsoKeys: ['r1']});
+        expect(lineOf(container, '一、做得好的').className).not.toContain('cm-follow-also');
+        expect(lineOf(container, '稳定。').className).toContain('cm-follow-active');
+        expect(onChange).not.toHaveBeenCalled();
     });
 
     it('keeps the times and the marking when the page hands down a newer note', () => {

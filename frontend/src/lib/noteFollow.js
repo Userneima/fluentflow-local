@@ -88,24 +88,32 @@ const inside = (span, time) => time >= span[0] && time < span[1];
 
 export const rowHolds = (row, time) => !!row && (inside(row.primary, time) || row.others.some((span) => inside(span, time)));
 
-// The row to highlight at `time` among `rows` (those found in the note): the
-// deepest heading whose main span or one of its other spans holds it; among
-// several of one level, a main span wins over another's other span, then the
-// latest start. `null` when none holds it (the caller keeps the last one:
-// people quietly writing in a shared document still belong to the section
-// before).
+// The row to follow at `time` among `rows` (those found in the note): the
+// deepest heading whose main span (where the section is talked about most)
+// holds it; among several of one level, the latest start, then the first in
+// the note. A section that only
+// draws on this moment through one of its other spans is marked lightly
+// (`alsoAt`) and never scrolled to: the recap at the end of a meeting note
+// ("决定", "待办") draws on many moments of the body, and following it made the
+// note jump to the end and back (owner, 2026-10-25). `null` when no main span
+// holds it (the caller keeps the last one: people quietly writing in a shared
+// document still belong to the section before).
 export const sectionAt = (time, rows) => {
     if (!Number.isFinite(time) || !rows?.length) return null;
     let best = null;
     let bestRank = null;
     rows.forEach((row) => {
-        const main = inside(row.primary, time);
-        const other = main ? null : row.others.find((span) => inside(span, time));
-        if (!main && !other) return;
-        const rank = [row.level, main ? 1 : 0, main ? row.primary[0] : other[0]];
-        const better = !bestRank || rank[0] > bestRank[0]
-            || (rank[0] === bestRank[0] && (rank[1] > bestRank[1] || (rank[1] === bestRank[1] && rank[2] > bestRank[2])));
+        if (!inside(row.primary, time)) return;
+        const rank = [row.level, row.primary[0]];
+        const better = !bestRank || rank[0] > bestRank[0] || (rank[0] === bestRank[0] && rank[1] > bestRank[1]);
         if (better) { best = row.id; bestRank = rank; }
     });
     return best;
+};
+
+// The other rows that draw on `time` through one of their spans, besides
+// `activeId`: marked lightly, never scrolled to.
+export const alsoAt = (time, rows, activeId) => {
+    if (!Number.isFinite(time) || !rows?.length) return [];
+    return rows.filter((row) => row.id !== activeId && rowHolds(row, time)).map((row) => row.id);
 };

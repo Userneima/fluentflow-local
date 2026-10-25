@@ -150,7 +150,7 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
     const followOnRef = useRef(!!follow);
     const pushFollow = (view) => {
         if (!followOnRef.current || !view) return;
-        view.dispatch({effects: setNoteFollow.of({rows: followRef.current?.rows || null, activeKey: followRef.current?.activeKey || null})});
+        view.dispatch({effects: setNoteFollow.of({rows: followRef.current?.rows || null, activeKey: followRef.current?.activeKey || null, alsoKeys: followRef.current?.alsoKeys || []})});
     };
     // The texts this editor reported recently. The page hands them back as
     // `markdown`, possibly a keystroke behind; an echo must not be applied
@@ -261,7 +261,7 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
     useEffect(() => {
         pushFollow(viewRef.current);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [follow?.rows, follow?.activeKey]);
+    }, [follow?.rows, follow?.activeKey, follow?.alsoKeys]);
 
     useEffect(() => {
         if (follow?.following && follow?.activeKey) revealSection(viewRef.current, follow.activeKey);
