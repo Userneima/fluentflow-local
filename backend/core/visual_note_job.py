@@ -1066,10 +1066,10 @@ def coverage_checker(api_key: str | None = None) -> tuple[note_coverage.Chat, st
 
     # A subscription the user opted into is already paid for: it goes before
     # a key billed per token (owner, 2026-10-25).
-    subscribed = claude_text.subscription_chat()
+    settings = local_ai_kwargs()
+    subscribed = claude_text.subscription_first(ai_summarizer.text_model_chat(**settings))
     if subscribed is not None:
         return subscribed
-    settings = local_ai_kwargs()
     chat = ai_summarizer.text_model_chat(**settings)
     if chat is not None:
         # Which model, not only "a text model": an agent told its note was

@@ -40,7 +40,7 @@ from backend.core.media_probe import media_duration_seconds
 from backend.core.runtime_env import truthy
 from backend.core.ai_client import _chat, _get_client, _normalize_model, _normalize_provider, _provider_api_key
 from backend.core import subtitle_correction
-from backend.core.claude_text import claude_chat, subscription_chat
+from backend.core.claude_text import claude_chat, subscription_first
 from backend.core.media_job_stages import (
     clean_transcript,
     export_note_to_lark,
@@ -297,7 +297,7 @@ def _translation_writer(
     every English recording they processed came back without Chinese subtitles.
     With neither, the text model is kept so the error names the key to add.
     """
-    subscribed = subscription_chat()
+    subscribed = subscription_first(_key_chat(translation_kwargs))
     if subscribed is not None:
         return subscribed
     provider = str(translation_kwargs.get("provider") or "")
@@ -376,20 +376,30 @@ async def _run_transcript_correction_stage(
     return fields, note_transcript_text, note_segments
 
 
+def _key_chat(kwargs: dict[str, Any]) -> Any:
+    """A ``(system, user) -> text`` call on the configured text model, or
+    ``None`` without a key for it."""
+    try:
+        provider = _normalize_provider(kwargs.get("provider") or None)
+        client = _get_client(provider=provider, api_key=kwargs.get("api_key"))
+    except Exception:  # noqa: BLE001 - no key is an answer, not an error
+        return None
+    model = _normalize_model(provider, kwargs.get("model"))
+    return lambda system, user: _chat(client, model, system, user, temperature=0.1)
+
+
 def _subtitle_chat(ai_kwargs: dict[str, Any], secret_resolver: Any) -> tuple[Any, str | None]:
     """The writer that reads the transcript for misheard words, picked as the
     subtitle translation picks it; ``(None, None)`` when there is none."""
     kwargs = _translation_ai_kwargs(ai_kwargs)
     try:
         writer, channel = _translation_writer(kwargs, secret_resolver)
-        if writer is not None:
-            return writer, channel
-        provider = _normalize_provider(kwargs.get("provider") or None)
-        client = _get_client(provider=provider, api_key=kwargs.get("api_key"))
     except Exception:  # noqa: BLE001 - no model means the step is skipped
         return None, None
-    model = _normalize_model(provider, kwargs.get("model"))
-    return (lambda system, user: _chat(client, model, system, user, temperature=0.1)), channel
+    if writer is not None:
+        return writer, channel
+    keyed = _key_chat(kwargs)
+    return (keyed, channel) if keyed is not None else (None, None)
 
 
 async def _run_subtitle_correction_stage(
@@ -403,9 +413,17 @@ async def _run_subtitle_correction_stage(
     if not subtitle_correction.enabled():
         return segments, {}
     chat, channel = _subtitle_chat(ai_kwargs or {}, ctx.secret_resolver) if ai_kwargs is not None else (None, None)
-    outcome = await ctx.loop.run_in_executor(
-        None, lambda: subtitle_correction.correct_from_subtitles(video, segments, chat),
-    )
+    # The step runs in a worker thread, which a cancelled task does not stop
+    # by itself: without this it went on decoding the whole video and calling
+    # the model after the task was cancelled (review, 2026-10-25).
+    stop = threading.Event()
+    try:
+        outcome = await ctx.loop.run_in_executor(
+            None, lambda: subtitle_correction.correct_from_subtitles(video, segments, chat, stop=stop),
+        )
+    except asyncio.CancelledError:
+        stop.set()
+        raise
     log_event(
         task_id=ctx.task_id_value,
         event_name="subtitle_correction_completed" if outcome.status != "failed" else "subtitle_correction_failed",

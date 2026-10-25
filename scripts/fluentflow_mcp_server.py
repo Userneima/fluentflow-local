@@ -1631,7 +1631,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "name": "revert_subtitle_corrections",
         "description": (
             "Undo subtitle corrections: each named one (ids from list_subtitle_corrections, or all when ids "
-            "is empty) goes back to what the transcript said. Ask the user first. The task's transcript, "
+            "is empty) goes back to what the transcript said. Ask the user first. Refused with code "
+            "task_busy while the task is still transcribing, cutting or writing its note: wait for it to "
+            "finish. The task's transcript (every copy of it), "
             "its subtitle files and the output folder follow; a note already written is not rewritten "
             "(regenerate_note does that if the user wants it). not_found lists ids whose sentence was "
             "edited since and could not be found."

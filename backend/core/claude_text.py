@@ -10,10 +10,14 @@ opt-in rules apply.
 
 from __future__ import annotations
 
+import logging
+import threading
 from typing import Callable
 
 from backend.core import claude_code_note, claude_vision
 from backend.core.visual_note_channel import CHANNEL_SUBSCRIPTION, preferred_channel, resolve_channel
+
+logger = logging.getLogger(__name__)
 
 TEXT_MAX_TOKENS = 16_000
 
@@ -97,4 +101,29 @@ def subscription_chat(*, runner: Callable | None = None) -> tuple[Chat, str] | N
     return claude_chat(None, runner=runner)
 
 
-__all__ = ["Chat", "claude_chat", "subscription_chat"]
+def subscription_first(fallback: Chat | None, *, runner: Callable | None = None) -> tuple[Chat, str] | None:
+    """``subscription_chat`` that hands over to ``fallback`` (the user's own
+    key) the first time a subscription call fails at run time: the usage limit
+    reached, the login expired mid-task. Choosing the channel only knows the
+    CLI is installed and logged in, which says nothing about the limit
+    (review, 2026-10-25). Once failed, the rest of the job stays on the key.
+    Without a fallback the failure is raised as before."""
+    found = subscription_chat(runner=runner)
+    if found is None or fallback is None:
+        return found
+    subscribed, name = found
+    failed = threading.Event()
+
+    def chat(system: str, user: str) -> str:
+        if not failed.is_set():
+            try:
+                return subscribed(system, user)
+            except Exception as exc:  # noqa: BLE001 - the key takes over; its own failure is raised
+                logger.warning("Claude subscription call failed, using the configured key: %s", exc)
+                failed.set()
+        return fallback(system, user)
+
+    return chat, name
+
+
+__all__ = ["Chat", "claude_chat", "subscription_chat", "subscription_first"]

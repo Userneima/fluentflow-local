@@ -44,7 +44,7 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import subtitle_correction
+from backend.core import subtitle_correction, task_activity
 from backend.core import agent_cut, agent_note, debreath_job, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
@@ -968,7 +968,15 @@ def revert_subtitle_corrections(
     """Put the named corrections (all, without ids) back to what the
     transcript said; the subtitle files and the output folder follow."""
     client_id = _local_client_scope(request)
-    before = dict(_job_for_request(request, task_id).get("result") or {})
+    job = _job_for_request(request, task_id)
+    # The pipeline and the note step write the whole result back when they
+    # finish; an undo made meanwhile would be overwritten without a word.
+    if str(job.get("status") or "") != "completed" or task_activity.busy_reason(job):
+        raise HTTPException(status_code=409, detail={
+            "code": "task_busy",
+            "message": "这个任务还在处理（转录、剪辑或写笔记），等它结束再撤回，否则撤回会被处理结果盖掉。",
+        })
+    before = dict(job.get("result") or {})
     ids = (payload or {}).get("ids")
     try:
         result, reverted, missing = subtitle_correction.revert(

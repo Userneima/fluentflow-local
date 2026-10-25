@@ -50,6 +50,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from collections import Counter
@@ -104,7 +105,30 @@ WORKERS = 6
 MODEL_WORKERS = 4
 FRAME_TIMEOUT_SECONDS = 20
 
+# How much text one replacement may take out, and how much longer or shorter
+# its replacement may be, in words: a Han character counts one, a run of
+# Latin letters or digits counts one. The longest mishearings measured on the
+# Luo Fuli interview were six (「最好吃机笔件」 for 「最好是几比几」,
+# 「Code Office 4.6」 for 「Claude Opus 4.6」 is three). Anything longer is the
+# model rewriting a sentence, not fixing a word.
+MAX_REPLACED_WORDS = 6
+_BRACKETS = set("（）()【】[]")
+
 _OFF = {"0", "false", "no", "off", "disabled"}
+
+
+class Cancelled(Exception):
+    """The task was cancelled while this step ran."""
+
+
+class ModelFailed(Exception):
+    """The model raised (quota, login, network), as opposed to answering
+    something that cannot be read. The step gives up instead of asking again."""
+
+
+def _stopped(stop: threading.Event | None) -> None:
+    if stop is not None and stop.is_set():
+        raise Cancelled("任务已取消")
 _STRIP = re.compile(r"[\s\W_]+", re.UNICODE)
 
 
@@ -126,6 +150,7 @@ class SubtitleCorrectionResult:
     seconds: float = 0.0
     reason: str | None = None
     phase_seconds: dict[str, float] = field(default_factory=dict)
+    unreadable_batches: int = 0
 
     def meta(self, channel: str | None = None) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -135,6 +160,7 @@ class SubtitleCorrectionResult:
             "subtitle_cues": self.cues,
             "mismatched_sentences": self.mismatched,
             "applied": len(self.corrections),
+            "unreadable_batches": self.unreadable_batches or None,
             "seconds": round(self.seconds, 1),
             "phase_seconds": {key: round(value, 1) for key, value in self.phase_seconds.items()} or None,
             "channel": channel,
@@ -309,23 +335,44 @@ def _duration(video: Path) -> float | None:
         return None
 
 
-def read_track(video: Path, band: Band, workdir: Path) -> list[tuple[float, str]]:
-    """What the subtitle strip says each second: (second, text), one decode."""
+def read_track(
+    video: Path, band: Band, workdir: Path, stop: threading.Event | None = None,
+) -> list[tuple[float, str]]:
+    """What the subtitle strip says each second: (second, text), one decode.
+    A cancelled task stops the decode and the reading (``Cancelled``)."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return []
     height = max(24, math.ceil(LINE_PIXELS * band.height / max(band.line, 1e-3)))
     pattern = workdir / "strip_%05d.png"
     duration = _duration(video) or 0.0
-    subprocess.run(
+    process = subprocess.Popen(
         [ffmpeg, "-v", "error", "-y", "-i", str(video), "-vf",
          f"fps=1,crop=iw:ih*{band.height:.4f}:0:ih*{band.top:.4f},scale=-2:{height},tile=1x{STACK}",
          str(pattern)],
-        check=True, capture_output=True, timeout=max(600.0, duration),
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
     )
+    deadline = time.monotonic() + max(600.0, duration)
+    try:
+        while True:
+            try:
+                _out, err = process.communicate(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if (stop is not None and stop.is_set()) or time.monotonic() > deadline:
+                    process.kill()
+                    process.communicate()
+                    _stopped(stop)
+                    raise RuntimeError("ffmpeg took too long reading the subtitle strip")
+    finally:
+        if process.poll() is None:
+            process.kill()
+    if process.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed reading the subtitle strip: {(err or b'').decode(errors='replace')[-300:]}")
     stacks = sorted(workdir.glob("strip_*.png"))
 
     def read(path: Path) -> list[frame_text.TextBox]:
+        _stopped(stop)
         return frame_text.read_boxes(path, language_correction=False)
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
@@ -446,6 +493,7 @@ _DECIDE_SYSTEM = """你会收到一批语音识别转录的句子。每条给出
 - 字幕作者删掉的语气词、重复、口头禅，不要补回、也不要删转录里的。
 - 字幕和转录只是说法不同（断句、同义词、改写），不改。只换听错的词，不按字幕改写整句。
 - 字幕看不出、字幕像识别乱码，不改。
+- 字幕里的括号注释（比如「10B的（激活）模型」里的「（激活）」）是视频作者加的说明，不是原话，不要抄进 to。
 - 字幕是繁体时，只改专有名词和英文，不把简体字改成繁体。
 - 字幕识别会把大写 I 读成小写 l、把 0 读成 O；这种情况按常识写对（OpenAl 写成 OpenAI）。
 - 一句里有几处听错，分几条写。
@@ -469,8 +517,54 @@ def _answer(text: str) -> dict[str, Any] | None:
     return None
 
 
-def decide(segments: list[dict[str, Any]], found: list[dict[str, Any]], chat: Chat) -> list[dict[str, Any]]:
-    """The replacements the model makes, held to the subtitle lines."""
+def _words(text: str) -> int:
+    """Han characters, plus runs of Latin letters or digits, each one word."""
+    return len(re.findall(r"[一-鿿]|[A-Za-z0-9]+", text or ""))
+
+
+def _position(sentence: str, old: str, subtitle: str) -> int | None:
+    """Where in the sentence ``old`` is the misheard text. When it occurs more
+    than once, the occurrence the subtitle reads differently; ``None`` when
+    that cannot be told."""
+    places = [m.start() for m in re.finditer(re.escape(old), sentence)]
+    if len(places) <= 1:
+        return places[0] if places else None
+    differing = set()
+    for tag, i1, i2, _j1, _j2 in SequenceMatcher(None, sentence, subtitle, autojunk=False).get_opcodes():
+        if tag != "equal":
+            differing.update(range(i1, max(i2, i1 + 1)))
+    scores = [sum(1 for i in range(p, p + len(old)) if i in differing) for p in places]
+    best = max(scores)
+    return places[scores.index(best)] if best and scores.count(best) == 1 else None
+
+
+def _acceptable(old: str, new: str, sentence: str) -> bool:
+    """A replacement of a word or short phrase, not a rewrite: the text taken
+    out is short, the new text is about as long, and nothing the subtitle
+    author added in brackets (「10B的（激活）模型」) is copied into what was
+    said."""
+    if not old.strip() or not new or _key(old) == _key(new):
+        # Case or spacing alone (KIMI against Kimi) is not a mishearing.
+        return False
+    if (_BRACKETS & set(new)) - set(old):
+        return False
+    taken, given = _words(old), _words(new)
+    if taken > MAX_REPLACED_WORDS or abs(given - taken) > max(2, taken):
+        return False
+    return old in sentence
+
+
+def decide(
+    segments: list[dict[str, Any]], found: list[dict[str, Any]], chat: Chat, stop: threading.Event | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """The replacements the model makes, held to the subtitle lines, and how
+    many batches came back unreadable.
+
+    A reply that cannot be read is asked once more, then in two halves, each
+    once. A model that raises (quota, login, network) ends the step with
+    ``ModelFailed``: asking again would only multiply the failed calls (the
+    review measured 4444 calls for 1117 sentences when every call failed and
+    every failure was retried and split)."""
     items = [
         {
             "id": n,
@@ -481,34 +575,38 @@ def decide(segments: list[dict[str, Any]], found: list[dict[str, Any]], chat: Ch
         }
         for n, f in enumerate(found)
     ]
+    failed = threading.Event()
 
     def once(batch: list[dict[str, Any]]) -> dict[str, Any] | None:
+        _stopped(stop)
+        if failed.is_set():
+            raise ModelFailed("an earlier request failed")
         try:
-            return _answer(chat(_DECIDE_SYSTEM, json.dumps(batch, ensure_ascii=False)))
-        except Exception as exc:  # noqa: BLE001 - a failed batch changes nothing
-            logger.warning("Subtitle decision failed on a batch: %s", exc)
-            return None
+            reply = chat(_DECIDE_SYSTEM, json.dumps(batch, ensure_ascii=False))
+        except Exception as exc:
+            failed.set()
+            raise ModelFailed(str(exc)[:300]) from exc
+        return _answer(reply)
 
-    def ask(batch: list[dict[str, Any]]) -> dict[str, Any]:
-        """A batch whose reply cannot be read is asked again, then in halves.
-        On the Luo Fuli interview one batch of a hundred came back with no
-        readable answer and 39 corrections the first version had made were
-        lost with it."""
-        answer = once(batch) or once(batch)
+    def ask(batch: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+        answer = once(batch)
+        if answer is None:
+            answer = once(batch)
         if answer is not None:
-            return answer
+            return answer["fixes"], False
         if len(batch) == 1:
-            return {"fixes": []}
+            return [], True
         half = len(batch) // 2
-        return {"fixes": [*ask(batch[:half])["fixes"], *ask(batch[half:])["fixes"]]}
+        halves = [once(batch[:half]), once(batch[half:])]
+        return [fix for part in halves if part for fix in part["fixes"]], any(part is None for part in halves)
 
     batches = [items[start:start + DECIDE_BATCH] for start in range(0, len(items), DECIDE_BATCH)]
     with ThreadPoolExecutor(max_workers=MODEL_WORKERS) as pool:
         answers = list(pool.map(ask, batches))
     fixes: list[dict[str, Any]] = []
-    for batch, answer in zip(batches, answers):
+    for batch, (answer, _lost) in zip(batches, answers):
         by_id = {item["id"]: item for item in batch}
-        for fix in answer.get("fixes") or []:
+        for fix in answer:
             if not isinstance(fix, dict):
                 continue
             try:
@@ -516,42 +614,54 @@ def decide(segments: list[dict[str, Any]], found: list[dict[str, Any]], chat: Ch
             except (TypeError, ValueError):
                 continue
             old, new = str(fix.get("from") or ""), str(fix.get("to") or "").strip()
-            if item is None or not old.strip() or not new or _key(old) == _key(new):
-                # Case or spacing alone (KIMI against Kimi) is not a mishearing.
-                continue
-            if len(new) > 3 * len(old) + 10:
+            if item is None or not _acceptable(old, new, item["sentence"]):
                 continue
             line = next((sub for sub in item["subtitles"] if _loose(new) in _loose(sub)), None)
-            if old not in item["sentence"] or line is None:
+            if line is None:
                 continue
-            fixes.append({"index": found[item["id"]]["index"], "from": old, "to": new, "subtitle": line})
-    return fixes
+            at = _position(item["sentence"], old, "".join(item["subtitles"]))
+            if at is None:
+                continue
+            fixes.append({"index": found[item["id"]]["index"], "from": old, "to": new, "at": at, "subtitle": line})
+    return fixes, sum(1 for _answer_, lost in answers if lost)
 
 
 def apply(segments: list[dict[str, Any]], fixes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The segments with the fixes made, and one record per change."""
+    """The segments with the fixes made, and one record per change.
+
+    Each fix is made where it was found in the sentence (``at``), the later
+    places in a sentence first, so the earlier positions still hold; a fix that
+    overlaps one already made is dropped."""
     fixed = [dict(seg) for seg in segments]
     records: list[dict[str, Any]] = []
+    by_sentence: dict[int, list[dict[str, Any]]] = {}
     for fix in fixes:
-        index = fix["index"]
-        before = _text(fixed[index])
-        if fix["from"] not in before:
-            continue
-        at = before.index(fix["from"])
-        after = before[:at] + fix["to"] + before[at + len(fix["from"]):]
-        fixed[index]["text"] = after
-        records.append({
-            "id": uuid.uuid4().hex[:12],
-            "start": fixed[index].get("start"),
-            "end": fixed[index].get("end"),
-            "from": fix["from"],
-            "to": fix["to"],
-            "at": at,
-            "subtitle": fix["subtitle"],
-            "sentence_before": before,
-            "sentence_after": after,
-            "reverted": False,
-        })
+        by_sentence.setdefault(fix["index"], []).append(fix)
+    for index in sorted(by_sentence):
+        taken: list[tuple[int, int]] = []
+        for fix in sorted(by_sentence[index], key=lambda f: -int(f.get("at", 0))):
+            before = _text(fixed[index])
+            at = fix.get("at")
+            if not isinstance(at, int) or before[at:at + len(fix["from"])] != fix["from"]:
+                continue
+            span = (at, at + len(fix["from"]))
+            if any(span[0] < end and start < span[1] for start, end in taken):
+                continue
+            taken.append(span)
+            after = before[:at] + fix["to"] + before[at + len(fix["from"]):]
+            fixed[index]["text"] = after
+            records.append({
+                "id": uuid.uuid4().hex[:12],
+                "start": fixed[index].get("start"),
+                "end": fixed[index].get("end"),
+                "from": fix["from"],
+                "to": fix["to"],
+                "at": at,
+                "subtitle": fix["subtitle"],
+                "sentence_before": before,
+                "sentence_after": after,
+                "reverted": False,
+            })
     return fixed, records
 
 
@@ -564,9 +674,11 @@ def correct_from_subtitles(
     track_reader: Callable = read_track,
     video_check: Callable[[Path], bool] = _has_video,
     ocr_available: Callable[[], bool] = frame_text.available,
+    stop: threading.Event | None = None,
 ) -> SubtitleCorrectionResult:
     """The whole step. Never raises: anything missing or failing leaves the
-    transcript as it was, with the reason recorded."""
+    transcript as it was, with the reason recorded. ``stop`` set (the task
+    was cancelled) ends it between frames and before each model call."""
     started = time.perf_counter()
 
     def done(status: str, **kwargs: Any) -> SubtitleCorrectionResult:
@@ -589,18 +701,24 @@ def correct_from_subtitles(
                 return done("skipped", reason="no_model", checked=checked, matched=matched)
             phases: dict[str, float] = {"locate": time.perf_counter() - started}
             mark = time.perf_counter()
-            track = cues(track_reader(Path(video), band, workdir))
+            _stopped(stop)
+            track = cues(track_reader(Path(video), band, workdir, stop))
             phases["read"], mark = time.perf_counter() - mark, time.perf_counter()
             found = mismatches(segments, track)
             phases["align"], mark = time.perf_counter() - mark, time.perf_counter()
-            fixes = decide(segments, found, chat) if found else []
+            fixes, unreadable = decide(segments, found, chat, stop) if found else ([], 0)
             phases["decide"] = time.perf_counter() - mark
             fixed, records = apply(segments, fixes)
             return done(
                 "completed" if records else "no_changes",
                 segments=fixed, corrections=records, checked=checked, matched=matched,
-                cues=len(track), mismatched=len(found), phase_seconds=phases,
+                cues=len(track), mismatched=len(found), phase_seconds=phases, unreadable_batches=unreadable,
             )
+    except Cancelled:
+        return done("cancelled", reason="task_cancelled")
+    except ModelFailed as exc:
+        logger.warning("Subtitle correction gave up, the model failed: %s", exc)
+        return done("failed", reason=f"model_error: {exc}")
     except Exception as exc:  # noqa: BLE001 - this step may never fail a task
         logger.warning("Subtitle correction failed: %s", exc)
         return done("failed", reason=str(exc)[:300])
@@ -614,11 +732,12 @@ class RevertError(ValueError):
     pass
 
 
-def _find(segments: list[dict[str, Any]], record: dict[str, Any]) -> int | None:
+def _find(segments: list[dict[str, Any]], record: dict[str, Any], clock: str = "start") -> int | None:
     """The sentence a correction was made in: the one that still reads as it
-    was left, else the nearest in time that still has the new text."""
+    was left, else the nearest in time that still has the new text.
+    ``clock`` names the record's time on the clock these segments use."""
     exact = [i for i, seg in enumerate(segments) if _text(seg) == record.get("sentence_after")]
-    start = _seconds(record.get("start"))
+    start = _seconds(record.get(clock, record.get("start")))
     if len(exact) == 1 or (exact and start is None):
         return exact[0]
     if start is None:
@@ -644,6 +763,12 @@ def _undone(text: str, record: dict[str, Any]) -> str:
     return text.replace(new, record["from"], 1)
 
 
+_COPIES = (
+    "raw_segments", "display_segments", "corrected_segments",
+    "source_raw_segments", "source_display_segments", "source_corrected_segments",
+)
+
+
 def revert(result: dict[str, Any], ids: list[str] | None) -> tuple[dict[str, Any], list[str], list[str]]:
     """``result`` with the named corrections (all, when ``ids`` is empty) put
     back to what the transcript said. Returns (result, reverted, not found)."""
@@ -652,8 +777,12 @@ def revert(result: dict[str, Any], ids: list[str] | None) -> tuple[dict[str, Any
     unknown = sorted(wanted - {r.get("id") for r in records})
     if unknown and not records:
         raise RevertError("这个任务没有按画面字幕改过的地方。")
+    # Every copy of the transcript that carries the change: what the page and
+    # the subtitle files read, what the note and the agent read first when the
+    # text-model correction is on, and the copies on the original's clock that
+    # a re-export of the cut starts from.
     lists = {key: [dict(seg) for seg in result.get(key) or [] if isinstance(seg, dict)]
-             for key in ("raw_segments", "display_segments")}
+             for key in _COPIES if isinstance(result.get(key), list)}
     reverted: list[str] = []
     missing: list[str] = list(unknown)
     # Newest first, so a sentence changed twice is unwound in order and each
@@ -662,8 +791,8 @@ def revert(result: dict[str, Any], ids: list[str] | None) -> tuple[dict[str, Any
         if record.get("id") not in wanted or record.get("reverted"):
             continue
         hit = False
-        for segments in lists.values():
-            index = _find(segments, record)
+        for key, segments in lists.items():
+            index = _find(segments, record, "source_start" if key.startswith("source_") else "start")
             if index is not None:
                 segments[index]["text"] = _undone(_text(segments[index]), record)
                 hit = True
@@ -677,14 +806,18 @@ def revert(result: dict[str, Any], ids: list[str] | None) -> tuple[dict[str, Any
         if result.get(key) is not None:
             updated[key] = segments
     updated["subtitle_corrections"] = records
-    if reverted:
+    if reverted and "raw_segments" in lists:
         updated["transcript_text"] = joined(lists["raw_segments"])
         updated["transcript_text_preview"] = updated["transcript_text"][:200]
+    if reverted and lists.get("corrected_segments"):
+        updated["corrected_transcript_text"] = joined(lists["corrected_segments"])
     return updated, reverted[::-1], missing
 
 
 __all__ = [
     "Band",
+    "Cancelled",
+    "ModelFailed",
     "Cue",
     "RevertError",
     "SubtitleCorrectionResult",

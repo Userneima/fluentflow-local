@@ -73,7 +73,7 @@ def _probe(subtitles=SUBTITLES):
 
 
 def _track(subtitles=SUBTITLES, garble: dict[int, str] | None = None):
-    def read(video, band, workdir):
+    def read(video, band, workdir, stop=None):
         out = []
         for second in range(0, 16):
             text = next((t for start, end, t in subtitles if start <= second < end), "")
@@ -355,6 +355,7 @@ def test_the_records_move_onto_the_cut_clock_with_the_transcript():
     moved = survey_cut._onto_cut_clock(result, ranges)
 
     assert moved["subtitle_corrections"][0]["start"] == pytest.approx(6.0)
+    assert moved["subtitle_corrections"][0]["source_start"] == 8.0
 
 
 def test_the_pipeline_stage_skips_without_a_model_and_never_raises(video, monkeypatch):
@@ -363,7 +364,7 @@ def test_the_pipeline_stage_skips_without_a_model_and_never_raises(video, monkey
 
     from backend.core import media_job
 
-    monkeypatch.setattr(sc, "correct_from_subtitles", lambda v, s, chat: sc.SubtitleCorrectionResult(
+    monkeypatch.setattr(sc, "correct_from_subtitles", lambda v, s, chat, **_kw: sc.SubtitleCorrectionResult(
         status="skipped", segments=s, reason="no_model" if chat is None else "x"))
     ctx = SimpleNamespace(task_id_value="t", source_type="local", source_filename="a.mp4", event_route="/x",
                           secret_resolver=None, loop=None)
@@ -383,8 +384,9 @@ def test_undoing_takes_out_the_change_where_it_was_made():
     # 「现在才做」 corrected to 「现在在做」 has two 在; the first is not the
     # one that changed (found on the Luo Fuli interview).
     segments = [{"start": 0.0, "end": 2.0, "text": "现在才做的保密"}]
-    fixes = [{"index": 0, "from": "才", "to": "在", "subtitle": "现在在做的保密"}]
+    fixes = [{"index": 0, "from": "才", "to": "在", "at": 2, "subtitle": "现在在做的保密"}]
     fixed, records = sc.apply(segments, fixes)
+    assert fixed[0]["text"] == "现在在做的保密"
     result = {"raw_segments": fixed, "display_segments": fixed, "subtitle_corrections": records}
 
     undone, _, _ = sc.revert(result, None)
@@ -395,8 +397,8 @@ def test_undoing_takes_out_the_change_where_it_was_made():
 def test_two_changes_in_one_sentence_are_both_undone():
     segments = [{"start": 0.0, "end": 2.0, "text": "也是cloud code加cloud ops"}]
     fixes = [
-        {"index": 0, "from": "cloud code", "to": "Claude Code", "subtitle": "也是Claude Code加Claude Opus"},
-        {"index": 0, "from": "cloud ops", "to": "Claude Opus", "subtitle": "也是Claude Code加Claude Opus"},
+        {"index": 0, "from": "cloud code", "to": "Claude Code", "at": 2, "subtitle": "也是Claude Code加Claude Opus"},
+        {"index": 0, "from": "cloud ops", "to": "Claude Opus", "at": 13, "subtitle": "也是Claude Code加Claude Opus"},
     ]
     fixed, records = sc.apply(segments, fixes)
     assert fixed[0]["text"] == "也是Claude Code加Claude Opus"
@@ -428,3 +430,183 @@ def test_prose_around_the_answer_does_not_hide_it(video):
         return "看过了 {几处} 如下：\n```json\n" + answer + "\n```"
 
     assert "GLM-5" in [r["to"] for r in _run(video, chatty).corrections]
+
+
+# ── review, 2026-10-25 ────────────────────────────────────────────────────
+
+class Counting:
+    """A model that answers with ``replies`` in turn (a string, or an
+    exception to raise), then like ``Model``; counts its calls."""
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.calls = 0
+        self.model = Model()
+
+    def __call__(self, system, user):
+        self.calls += 1
+        if self.replies:
+            reply = self.replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        return self.model(system, user)
+
+
+def test_a_model_that_fails_ends_the_step_without_asking_again(video):
+    # Every call failing used to be asked twice and split, 4444 calls for
+    # 1117 sentences, and the step still read as no changes.
+    model = Counting(*[RuntimeError("usage limit reached")] * 50)
+
+    outcome = _run(video, model)
+
+    assert outcome.status == "failed" and "usage limit reached" in outcome.reason
+    assert model.calls == 1
+    assert outcome.segments == SEGMENTS
+
+
+def test_an_unreadable_reply_is_asked_once_more_before_anything_else(video):
+    model = Counting("这里没有 JSON")
+
+    outcome = _run(video, model)
+
+    assert model.calls == 2
+    assert "GLM-5" in [r["to"] for r in outcome.corrections]
+
+
+def test_a_reply_that_stays_unreadable_costs_a_bounded_number_of_calls(video):
+    model = Counting(*["读不出"] * 50)
+
+    outcome = _run(video, model)
+
+    # once, once more, then each half once
+    assert model.calls == 4
+    assert outcome.corrections == [] and outcome.meta()["unreadable_batches"] == 1
+
+
+def test_a_note_the_subtitle_author_added_in_brackets_is_not_copied_into_what_was_said(video):
+    segments = [*SEGMENTS[:4], {"start": 8.0, "end": 10.0, "text": "这是一个10B的模型"}, *SEGMENTS[5:]]
+    subtitles = [*SUBTITLES[:4], (8.0, 10.0, "这是一个10B的（激活）模型"), *SUBTITLES[5:]]
+    model = Model(fixes=lambda items: [
+        {"id": item["id"], "from": "的模型", "to": "的（激活）模型"} for item in items if "10B" in item["sentence"]
+    ])
+
+    outcome = _run(video, model, probe=_probe(subtitles)[0], track=_track(subtitles), segments=segments)
+
+    assert outcome.segments[4]["text"] == "这是一个10B的模型"
+
+
+def test_a_whole_sentence_cannot_be_rewritten_only_a_word_replaced(video):
+    segments = [*SEGMENTS[:4], {"start": 8.0, "end": 10.0, "text": "因为他们用一个识别的模型做到了这一点"}, *SEGMENTS[5:]]
+    subtitles = [*SUBTITLES[:4], (8.0, 10.0, "因为它们用一个10B的模型做到了这一点"), *SUBTITLES[5:]]
+    whole = Model(fixes=lambda items: [
+        {"id": item["id"], "from": item["sentence"], "to": "10B"} for item in items if "识别" in item["sentence"]
+    ])
+    word = Model(fixes=lambda items: [
+        {"id": item["id"], "from": "识别", "to": "10B"} for item in items if "识别" in item["sentence"]
+    ])
+    kwargs = {"probe": _probe(subtitles)[0], "track": _track(subtitles), "segments": segments}
+
+    assert _run(video, whole, **kwargs).segments[4]["text"] == segments[4]["text"]
+    assert _run(video, word, **kwargs).segments[4]["text"] == "因为他们用一个10B的模型做到了这一点"
+
+
+def test_a_word_said_twice_is_replaced_where_the_subtitle_reads_it_differently(video):
+    segments = [*SEGMENTS[:4], {"start": 8.0, "end": 10.0, "text": "我们用MA他们也用MA"}, *SEGMENTS[5:]]
+    subtitles = [*SUBTITLES[:4], (8.0, 10.0, "我们用MA他们也用MLA"), *SUBTITLES[5:]]
+    model = Model(fixes=lambda items: [
+        {"id": item["id"], "from": "MA", "to": "MLA"} for item in items if "他们也用" in item["sentence"]
+    ])
+
+    outcome = _run(video, model, probe=_probe(subtitles)[0], track=_track(subtitles), segments=segments)
+
+    assert outcome.segments[4]["text"] == "我们用MA他们也用MLA"
+
+
+def test_a_cancelled_task_stops_before_the_model_is_asked(video):
+    import threading
+
+    stop = threading.Event()
+    seen = {}
+
+    def track(video, band, workdir, stop_=None):
+        seen["stop"] = stop_
+        stop.set()  # the task is cancelled while the subtitle track is read
+        return _track()(video, band, workdir)
+
+    model = Model()
+    outcome = _run(video, model, track=track, stop=stop)
+
+    assert seen["stop"] is stop
+    assert outcome.status == "cancelled" and model.asked == []
+    assert outcome.segments == SEGMENTS
+
+
+def test_undoing_reaches_every_copy_of_the_transcript(video):
+    result = _corrected(video)
+    gom = next(r for r in result["subtitle_corrections"] if r["from"] == "GOM")
+    # The text-model correction's copy, and the copies on the original's
+    # clock (here the cut moved everything 100 seconds earlier).
+    result["corrected_segments"] = [dict(seg) for seg in result["raw_segments"]]
+    result["corrected_transcript_text"] = sc.joined(result["corrected_segments"])
+    result["source_raw_segments"] = [dict(seg, start=seg["start"] + 100, end=seg["end"] + 100) for seg in result["raw_segments"]]
+    for record in result["subtitle_corrections"]:
+        record["source_start"] = record["start"] + 100
+
+    undone, reverted, missing = sc.revert(result, [gom["id"]])
+
+    assert reverted == [gom["id"]] and missing == []
+    for key in ("raw_segments", "display_segments", "corrected_segments", "source_raw_segments"):
+        assert "应该是GOM跟KIMI" in [seg["text"] for seg in undone[key]], key
+    assert "应该是GOM跟KIMI" in undone["corrected_transcript_text"]
+
+
+def test_undoing_is_refused_while_the_task_is_still_being_worked_on(video, monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", TOKEN)
+    task_id = f"sc-{uuid.uuid4().hex[:8]}"
+    corrected = _corrected(video)
+    result = {"filename": "访谈.mp4", "display_title": "访谈", "summary_status": "pending", **corrected}
+    job_store.upsert_job(task_id=task_id, status="completed", client_id=LOCAL_OWNER_ID, result=result)
+    app = FastAPI()
+    app.include_router(local_agent.router)
+    try:
+        answer = TestClient(app).post(f"/agent/v1/tasks/{task_id}/subtitle-corrections/revert", headers=AGENT, json={})
+
+        assert answer.status_code == 409 and answer.json()["detail"]["code"] == "task_busy"
+        assert job_store.get_job(task_id)["result"]["raw_segments"][4]["text"] == "应该是GLM-5跟KIMI"
+    finally:
+        job_store.delete_jobs([task_id])
+
+
+def test_cancelling_the_task_stops_the_step_running_in_its_thread(video, monkeypatch):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+
+    from backend.core import media_job
+
+    started, stopped = threading.Event(), threading.Event()
+
+    def runs_until_stopped(v, s, chat, stop=None, **_kw):
+        started.set()
+        if stop.wait(timeout=5):
+            stopped.set()
+        return sc.SubtitleCorrectionResult(status="cancelled", segments=s)
+
+    monkeypatch.setattr(sc, "correct_from_subtitles", runs_until_stopped)
+    ctx = SimpleNamespace(task_id_value="t", source_type="local", source_filename="a.mp4", event_route="/x",
+                          secret_resolver=None, loop=None)
+
+    async def run():
+        ctx.loop = asyncio.get_running_loop()
+        task = asyncio.ensure_future(
+            media_job._run_subtitle_correction_stage(ctx, video=video, segments=SEGMENTS, ai_kwargs=None))
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert stopped.wait(timeout=5)

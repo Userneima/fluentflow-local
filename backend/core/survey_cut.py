@@ -699,6 +699,9 @@ def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]
                 **record,
                 "start": cut_timeline.new_time(ranges, _seconds(record.get("start"))),
                 "end": cut_timeline.new_time(ranges, _seconds(record.get("end"))),
+                # For the copies kept on the original's clock (``source_*``).
+                "source_start": record.get("start"),
+                "source_end": record.get("end"),
             }
             for record in result["subtitle_corrections"] if isinstance(record, dict)
         ]
