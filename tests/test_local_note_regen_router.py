@@ -440,3 +440,24 @@ def test_regenerate_without_a_previous_note_reports_nothing_was_written(monkeypa
     failed = [job for job in jobs.values() if job.get("summary_status") == "failed"]
     assert failed and failed[0]["status"] == "failed"
     assert not any(job.get("result", {}).get("summary_markdown") == "" for job in jobs.values())
+
+
+def test_a_submitted_transcript_is_recorded_as_fluentflows_own_text(monkeypatch):
+    """The glossary step, run later on this task, leaves alone the sentences
+    the user edits; it can only tell them apart when the submitted text was
+    recorded when the task was made."""
+    from backend.core import glossary_correction as gc
+
+    jobs, _ = _install_store(monkeypatch)
+    r = _client().post(
+        "/summarize-transcript-file",
+        headers=_HEADERS,
+        files={"file": ("talk.srt", _SRT.encode("utf-8"), "text/plain")},
+        data={"skip_summary": "1", "task_id": "marks-1"},
+    )
+
+    assert r.status_code == 200
+    result = jobs["marks-1"]["result"]
+    assert gc.edited_by_user(result) == set()
+    result["raw_segments"][1]["text"] = "今天讲本地版，我改过"
+    assert gc.edited_by_user(result) == {1}

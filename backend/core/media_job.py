@@ -378,10 +378,12 @@ async def _run_glossary_correction_stage(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Correct misheard words from the series' word list and the context.
 
-    Returns the segments to carry on with and the fields for the result. Never
+    Returns the segments to carry on with and the fields for the result,
+    which always record the sentences of the transcript as FluentFlow wrote
+    them, so a later run of this step can tell the ones the user edits. Never
     fails the task: without a model the transcript goes on as it was."""
     if not glossary_correction.enabled():
-        return segments, {}
+        return segments, {glossary_correction.FINGERPRINTS: glossary_correction.fingerprints(segments)}
     chat, channel = _subtitle_chat(ai_kwargs or {}, ctx.secret_resolver) if ai_kwargs is not None else (None, None)
     try:
         glossary = correction_notes.for_task(ctx.task_id_value, ctx.client_id)
@@ -406,7 +408,10 @@ async def _run_glossary_correction_stage(
         error_reason=outcome.reason if outcome.status == "failed" else None,
         metadata=event_metadata(route=ctx.event_route, **outcome.meta(channel)),
     )
-    fields: dict[str, Any] = {glossary_correction.META: outcome.meta(channel)}
+    fields: dict[str, Any] = {
+        glossary_correction.META: outcome.meta(channel),
+        glossary_correction.FINGERPRINTS: glossary_correction.fingerprints(outcome.segments),
+    }
     if outcome.corrections:
         fields[glossary_correction.FIELD] = outcome.corrections
     return outcome.segments, fields
@@ -956,10 +961,11 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             if subtitle_fields.get("subtitle_corrections"):
                 transcript_text = subtitle_correction.joined(segments_payload)
         glossary_fields: dict[str, Any] = {}
-        if glossary_correction.enabled() and segments_payload:
-            current_stage = "glossary_correction"
-            upsert_job(task_id=task_id_value, status="running", stage="glossary_correction", progress=60)
-            yield _sse({"stage": "glossary_correction", "progress": 60})
+        if segments_payload:
+            if glossary_correction.enabled():
+                current_stage = "glossary_correction"
+                upsert_job(task_id=task_id_value, status="running", stage="glossary_correction", progress=60)
+                yield _sse({"stage": "glossary_correction", "progress": 60})
             segments_payload, glossary_fields = await _run_glossary_correction_stage(
                 ctx,
                 segments=segments_payload,
@@ -1082,9 +1088,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         })
         base_result.update(subtitle_fields)
         base_result.update(glossary_fields)
-        # What FluentFlow wrote, so a later run of the glossary step can tell
-        # the sentences the user edited from its own.
-        base_result[glossary_correction.FINGERPRINTS] = glossary_correction.fingerprints(segments_payload)
         note_transcript_text = transcript_text
         note_segments_payload = segments_payload
         if not summary_disabled:

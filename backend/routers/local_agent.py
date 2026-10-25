@@ -987,7 +987,7 @@ def revert_subtitle_corrections(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if reverted:
         # The words put back are FluentFlow's own, not an edit of the user's.
-        result = _attach_result_artifacts(task_id, glossary_correction.remember(result), parts=("transcript",))
+        result = _attach_result_artifacts(task_id, glossary_correction.remember(before, result), parts=("transcript",))
     save_result_changes(task_id, before, result, client_id=client_id)
     return {"ok": True, "task_id": task_id, "reverted": reverted, "not_found": missing}
 

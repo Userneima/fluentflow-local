@@ -46,6 +46,7 @@ import json
 import logging
 import math
 import os
+import hashlib
 import re
 import shutil
 import subprocess
@@ -734,9 +735,39 @@ class RevertError(ValueError):
     pass
 
 
-def _find(segments: list[dict[str, Any]], record: dict[str, Any], clock: str = "start") -> int | None:
+# What FluentFlow itself wrote into a task's transcript, one fingerprint per
+# sentence: the pipeline records every sentence it produced, each correction
+# and undo the sentences it changed. A sentence whose text is not among them
+# was written by someone else (the user, in the editor).
+FINGERPRINTS = "transcript_fingerprints"
+_RECORD_FIELDS = ("subtitle_corrections", "glossary_corrections")
+
+
+def fingerprint(text: str) -> str:
+    return hashlib.sha1((text or "").strip().encode("utf-8")).hexdigest()[:12]
+
+
+def written_by_fluentflow(result: dict[str, Any]) -> Callable[[str], bool]:
+    """Whether a sentence reads as FluentFlow left it: a text it fingerprinted,
+    or one a correction left behind (``sentence_after``), which also covers
+    tasks from before the fingerprints."""
+    marks = set(result.get(FINGERPRINTS) or [])
+    afters = {
+        str(record.get("sentence_after") or "")
+        for key in _RECORD_FIELDS for record in result.get(key) or [] if isinstance(record, dict)
+    }
+    return lambda text: text in afters or fingerprint(text) in marks
+
+
+def _find(
+    segments: list[dict[str, Any]], record: dict[str, Any], clock: str = "start",
+    trusted: Callable[[str], bool] | None = None,
+) -> int | None:
     """The sentence a correction was made in: the one that still reads as it
-    was left, else the nearest in time that still has the new text.
+    was left, else the nearest in time that still has the new text and that
+    ``trusted`` says FluentFlow wrote (another correction changed it since).
+    A sentence the user edited that still holds the new text is not it: the
+    undo would change their words (review, 2026-10-25).
     ``clock`` names the record's time on the clock these segments use."""
     exact = [i for i, seg in enumerate(segments) if _text(seg) == record.get("sentence_after")]
     start = _seconds(record.get(clock, record.get("start")))
@@ -746,7 +777,7 @@ def _find(segments: list[dict[str, Any]], record: dict[str, Any], clock: str = "
         return None
     best: tuple[float, int] | None = None
     for i, seg in enumerate(segments):
-        if record["to"] not in _text(seg):
+        if record["to"] not in _text(seg) or (trusted is not None and not trusted(_text(seg))):
             continue
         distance = abs((_seconds(seg.get("start")) or 0.0) - start)
         if distance <= 2.0 and (best is None or distance < best[0]):
@@ -791,6 +822,7 @@ def revert(
              for key in _COPIES if isinstance(result.get(key), list)}
     reverted: list[str] = []
     missing: list[str] = list(unknown)
+    trusted = written_by_fluentflow(result)
     # Newest first, so a sentence changed twice is unwound in order and each
     # record's position still points at its own change.
     for record in reversed(records):
@@ -798,12 +830,14 @@ def revert(
             continue
         # The transcript the user sees decides: a sentence edited there since
         # is the user's, and no copy of it is touched.
-        if "raw_segments" in lists and _find(lists["raw_segments"], record) is None:
+        if "raw_segments" in lists and _find(lists["raw_segments"], record, trusted=trusted) is None:
             missing.append(record["id"])
             continue
         hit = False
         for key, segments in lists.items():
-            index = _find(segments, record, "source_start" if key.startswith("source_") else "start")
+            # The page's copies are the ones the user edits; the others follow.
+            index = _find(segments, record, "source_start" if key.startswith("source_") else "start",
+                          trusted if key in ("raw_segments", "display_segments") else None)
             if index is not None:
                 segments[index]["text"] = _undone(_text(segments[index]), record)
                 hit = True

@@ -158,7 +158,11 @@ def test_a_listed_name_inside_a_longer_word_is_not_that_entry():
     glossary += "- subagent：主 agent 派出去做子任务的 agent。转录常听成：subway 群\n"
     assert gc.entry_for("Codex", glossary) is None
     assert gc.entry_for("Agent", glossary) is None
-    assert gc.entry_for("竞品调研", "- 黑客级竞品调研：训练营的名字。转录常听成：黑客级镜头调研\n").startswith("- 黑客级")
+    camp = "- 黑客级竞品调研：训练营的名字。转录常听成：黑客级镜头调研\n"
+    assert gc.entry_for("竞品", camp, "镜头").startswith("- 黑客级")
+    # A piece of a Chinese name, replacing a hearing the line does not list,
+    # is the context's doing (调研 is in the name, 掉眼 is not a listed hearing).
+    assert gc.entry_for("调研", camp, "掉眼") is None
     assert gc.entry_for("Claude", glossary).startswith("- Claude Code：")
 
 
@@ -373,7 +377,7 @@ def test_the_records_move_onto_the_cut_clock_with_the_transcript():
 # ── the user's own edits ──────────────────────────────────────────────────
 
 def test_sentences_the_user_edited_are_left_alone():
-    result = gc.remember({"raw_segments": [dict(seg) for seg in SEGMENTS]})
+    result = {"raw_segments": [dict(seg) for seg in SEGMENTS], gc.FINGERPRINTS: gc.fingerprints(SEGMENTS)}
     result["raw_segments"][3]["text"] = "我要研究OpenCloud这个东西"  # the user's own sentence now
     result["transcript_edited"] = True
 
@@ -589,3 +593,169 @@ def test_it_runs_after_the_subtitle_check_and_before_the_note():
     stored = source.index('"raw_segments": segments_payload')
     note = source.index("note_input_text =")
     assert subtitle < glossary < stored < note
+
+
+# ── several steps in a row (review, 2026-10-25) ───────────────────────────
+
+def _run_again(result):
+    outcome = gc.correct([dict(s) for s in result["raw_segments"]], GLOSSARY, Model(),
+                         protected=gc.edited_by_user(result))
+    return gc.onto_result(result, outcome.segments, outcome.corrections)
+
+
+def _users_edit(result, index, text):
+    for key in ("raw_segments", "display_segments"):
+        result[key][index]["text"] = text
+    result["transcript_edited"] = True
+
+
+def test_a_users_sentence_stays_theirs_however_often_the_step_runs():
+    result = {"raw_segments": [dict(s) for s in SEGMENTS], "display_segments": [dict(s) for s in SEGMENTS],
+              gc.FINGERPRINTS: gc.fingerprints(SEGMENTS)}
+    _users_edit(result, 3, "OpenCloud 真的很好用")
+
+    result = _run_again(result)
+    result = _run_again(result)
+
+    assert result["raw_segments"][3]["text"] == "OpenCloud 真的很好用"
+    assert result["raw_segments"][1]["text"] == "至少要把Claude Code和Codex"
+
+
+def test_an_older_tasks_edits_stay_protected_after_its_first_run():
+    result = {"raw_segments": [dict(s) for s in SEGMENTS], "display_segments": [dict(s) for s in SEGMENTS]}
+    _users_edit(result, 3, "OpenCloud 真的很好用")
+    result["transcript_edit_records"] = [{"index": 3, "before": "我要研究OpenCloud", "after": "OpenCloud 真的很好用"}]
+
+    result = _run_again(result)
+    # The editor's records name only its latest save; after this the
+    # fingerprints carry the protection.
+    result["transcript_edit_records"] = []
+    result = _run_again(result)
+
+    assert result["raw_segments"][3]["text"] == "OpenCloud 真的很好用"
+
+
+def test_an_undo_does_not_hand_the_users_sentences_to_the_next_run():
+    result = {"raw_segments": [dict(s) for s in SEGMENTS], "display_segments": [dict(s) for s in SEGMENTS],
+              gc.FINGERPRINTS: gc.fingerprints(SEGMENTS)}
+    result = _run_again(result)
+    _users_edit(result, 3, "OpenCloud 真的很好用")
+
+    result, _reverted, _missing = gc.revert(result, None)
+    result = _run_again(result)
+
+    assert result["raw_segments"][3]["text"] == "OpenCloud 真的很好用"
+
+
+def test_a_sentence_the_user_added_to_is_not_undone_though_it_keeps_the_new_word():
+    result, _original = _corrected_result()
+    _users_edit(result, 1, "至少要把Claude Code和Codex都用一遍")
+
+    undone, reverted, missing = gc.revert(result, None)
+
+    assert undone["raw_segments"][1]["text"] == "至少要把Claude Code和Codex都用一遍"
+    assert undone["display_segments"][1]["text"] == "至少要把Claude Code和Codex都用一遍"
+    claude = next(r["id"] for r in result[gc.FIELD] if r["from"] == "Cloud Cool")
+    assert claude in missing and claude not in reverted
+
+
+def test_the_same_holds_for_undoing_a_subtitle_correction():
+    result = {
+        "raw_segments": [{"start": 8.0, "end": 10.0, "text": "应该是GLM-5跟KIMI，我补了一句"}],
+        "display_segments": [{"start": 8.0, "end": 10.0, "text": "应该是GLM-5跟KIMI，我补了一句"}],
+        "subtitle_corrections": [{"id": "s1", "start": 8.0, "end": 10.0, "from": "GOM", "to": "GLM-5", "at": 3,
+                                  "sentence_before": "应该是GOM跟KIMI", "sentence_after": "应该是GLM-5跟KIMI"}],
+    }
+
+    undone, reverted, missing = sc.revert(result, None)
+
+    assert reverted == [] and missing == ["s1"]
+    assert undone["raw_segments"][0]["text"] == "应该是GLM-5跟KIMI，我补了一句"
+
+
+def test_the_older_of_two_changes_in_one_sentence_can_be_undone_alone():
+    segments = [{"start": 0.0, "end": 2.0, "text": "Cloud Cool和OpenCloud"}]
+    outcome = gc.correct(segments, GLOSSARY, Model())
+    result = gc.onto_result({"raw_segments": [dict(s) for s in segments], "display_segments": [dict(s) for s in segments],
+                             gc.FINGERPRINTS: gc.fingerprints(segments)}, outcome.segments, outcome.corrections)
+    assert result["raw_segments"][0]["text"] == "Claude Code和OpenClaw"
+    older = result[gc.FIELD][-1]
+
+    undone, reverted, _missing = gc.revert(result, [older["id"]])
+
+    assert reverted == [older["id"]]
+    assert undone["raw_segments"][0]["text"] in {"Cloud Cool和OpenClaw", "Claude Code和OpenCloud"}
+    assert undone["raw_segments"][0]["text"] != "Claude Code和OpenClaw"
+
+
+def test_records_keep_the_right_time_when_the_cut_is_made_again():
+    from backend.core import cut_timeline, survey_cut
+
+    raw = [{"start": 0.0, "end": 5.0, "text": "开场"}, {"start": 20.0, "end": 25.0, "text": "Claude Code 讲解"}]
+    records = {
+        gc.FIELD: [{"id": "g", "start": 20.0, "end": 25.0, "from": "Cloud Code", "to": "Claude Code"}],
+        "subtitle_corrections": [{"id": "s", "start": 20.0, "end": 25.0, "from": "Cloud", "to": "Claude"}],
+    }
+    result = survey_cut._onto_cut_clock({"raw_segments": [dict(s) for s in raw], **records},
+                                        [cut_timeline.KeptRange(0, 5, 0), cut_timeline.KeptRange(15, 50, 5)])
+    assert result[gc.FIELD][0]["start"] == pytest.approx(10.0)
+
+    # Made again, cutting 5 to 10 instead: the transcript goes back to the
+    # original's clock first, as a re-render does.
+    for key in survey_cut.SEGMENT_KEYS:
+        if isinstance(result.get(f"source_{key}"), list):
+            result[key] = result[f"source_{key}"]
+    result = survey_cut._onto_cut_clock(result, [cut_timeline.KeptRange(0, 5, 0), cut_timeline.KeptRange(10, 50, 5)])
+
+    for key in (gc.FIELD, "subtitle_corrections"):
+        record = result[key][0]
+        assert record["start"] == pytest.approx(result["raw_segments"][1]["start"]) == pytest.approx(15.0), key
+        assert record["source_start"] == 20.0, key
+
+
+def test_a_rerender_puts_the_records_back_on_the_originals_clock_with_the_transcript():
+    from backend.core import survey_cut
+
+    result = {gc.FIELD: [{"id": "g", "start": 10.0, "end": 15.0, "source_start": 20.0, "source_end": 25.0}]}
+
+    survey_cut._records_onto_source_clock(result)
+
+    assert result[gc.FIELD][0]["start"] == 20.0 and "source_start" not in result[gc.FIELD][0]
+
+
+def test_the_pipeline_records_what_it_wrote_whether_or_not_the_step_runs(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from backend.core import correction_notes, media_job
+
+    monkeypatch.setattr(correction_notes, "for_task", lambda task_id, client_id=None: GLOSSARY)
+    monkeypatch.setattr(local_agent, "_glossary_chat", lambda: (None, None))
+    ctx = SimpleNamespace(task_id_value="t", client_id=None, source_type="local", source_filename="a.mp4",
+                          event_route="/x", secret_resolver=None, loop=None)
+
+    async def run():
+        ctx.loop = asyncio.get_running_loop()
+        return await media_job._run_glossary_correction_stage(ctx, segments=SEGMENTS, ai_kwargs=None)
+
+    for setting in ("on", "off"):
+        monkeypatch.setenv("FLUENTFLOW_GLOSSARY_CORRECTION", setting)
+        _segments, fields = asyncio.run(run())
+        result = {"raw_segments": [dict(s) for s in SEGMENTS], **fields}
+        assert gc.edited_by_user(result) == set(), setting
+        result["raw_segments"][2]["text"] = "我改过的这句"
+        assert gc.edited_by_user(result) == {2}, setting
+
+
+def test_a_word_reaches_the_copy_an_old_correction_rewrote():
+    segments = [{"start": 0.0, "end": 2.0, "text": "我要研究OpenCloud"}]
+    outcome = gc.correct(segments, GLOSSARY, Model())
+    result = {"raw_segments": [dict(s) for s in segments],
+              "corrected_segments": [{"start": 0.0, "end": 2.0, "text": "我想要研究一下OpenCloud"}]}
+
+    updated = gc.onto_result(result, outcome.segments, outcome.corrections)
+    assert updated["corrected_segments"][0]["text"] == "我想要研究一下OpenClaw"
+    assert "OpenClaw" in updated["corrected_transcript_text"]
+
+    undone, _reverted, _missing = gc.revert(updated, None)
+    assert undone["corrected_segments"][0]["text"] == "我想要研究一下OpenCloud"

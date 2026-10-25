@@ -676,6 +676,31 @@ def _lines_text(segments: Any) -> str:
     )
 
 
+# The correction records (subtitle check, glossary step), which carry the
+# time of the sentence they changed.
+CORRECTION_RECORDS = ("subtitle_corrections", "glossary_corrections")
+
+
+def _original_time(record: dict[str, Any], edge: str) -> Any:
+    kept = record.get(f"source_{edge}")
+    return kept if kept is not None else record.get(edge)
+
+
+def _records_onto_source_clock(result: dict[str, Any]) -> None:
+    """The correction records back on the original's clock, with the
+    transcript they belong to."""
+    for records_key in CORRECTION_RECORDS:
+        if isinstance(result.get(records_key), list):
+            result[records_key] = [
+                {
+                    **{k: v for k, v in record.items() if k not in ("source_start", "source_end")},
+                    "start": _original_time(record, "start"),
+                    "end": _original_time(record, "end"),
+                }
+                for record in result[records_key] if isinstance(record, dict)
+            ]
+
+
 def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]) -> dict[str, Any]:
     """Every timed transcript list moved onto the cut file's clock; the
     original lists kept under ``source_*``."""
@@ -692,18 +717,22 @@ def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]
     result["transcript_text"] = _lines_text(result.get("raw_segments"))
     if result.get("corrected_segments"):
         result["corrected_transcript_text"] = _lines_text(result["corrected_segments"])
-    for records_key in ("subtitle_corrections", "glossary_corrections"):
+    for records_key in CORRECTION_RECORDS:
         if not isinstance(result.get(records_key), list):
             continue
-        # Undoing one finds its sentence by time, on the clock the task now has.
+        # Undoing one finds its sentence by time, on the clock the task now
+        # has. The original's time is ``source_start`` once a record has been
+        # through a cut: a re-render moves the transcript back to the
+        # original's clock and cuts again, and converting the time the last
+        # cut gave would cut it twice (review, 2026-10-25).
         result[records_key] = [
             {
                 **record,
-                "start": cut_timeline.new_time(ranges, _seconds(record.get("start"))),
-                "end": cut_timeline.new_time(ranges, _seconds(record.get("end"))),
+                "start": cut_timeline.new_time(ranges, _seconds(_original_time(record, "start"))),
+                "end": cut_timeline.new_time(ranges, _seconds(_original_time(record, "end"))),
                 # For the copies kept on the original's clock (``source_*``).
-                "source_start": record.get("start"),
-                "source_end": record.get("end"),
+                "source_start": _original_time(record, "start"),
+                "source_end": _original_time(record, "end"),
             }
             for record in result[records_key] if isinstance(record, dict)
         ]
@@ -1016,6 +1045,7 @@ def _rerender(
         for key in SEGMENT_KEYS:
             if isinstance(result.get(f"source_{key}"), list):
                 result[key] = result[f"source_{key}"]
+        _records_onto_source_clock(result)
     result["transcript_text"] = _lines_text(result.get("raw_segments"))
     if result.get("corrected_segments"):
         result["corrected_transcript_text"] = _lines_text(result["corrected_segments"])

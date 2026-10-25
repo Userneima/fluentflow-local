@@ -31,7 +31,6 @@ side copy only the note read).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -50,7 +49,7 @@ Chat = Callable[[str, str], str]
 
 FIELD = "glossary_corrections"
 META = "glossary_correction"
-FINGERPRINTS = "transcript_fingerprints"
+FINGERPRINTS = sc.FINGERPRINTS
 
 # Sentence text sent per request, and the read-only sentences on either side
 # of a batch so its first and last sentences have their context too.
@@ -75,8 +74,7 @@ def _text(segment: dict[str, Any]) -> str:
 
 # ── whose sentence is it ──────────────────────────────────────────────────
 
-def _fingerprint(text: str) -> str:
-    return hashlib.sha1(text.strip().encode("utf-8")).hexdigest()[:12]
+_fingerprint = sc.fingerprint
 
 
 def fingerprints(segments: list[dict[str, Any]], known: list[str] | None = None) -> list[str]:
@@ -92,12 +90,23 @@ def fingerprints(segments: list[dict[str, Any]], known: list[str] | None = None)
     return found
 
 
-def remember(result: dict[str, Any]) -> dict[str, Any]:
-    """``result`` with its current sentences recorded as FluentFlow's own:
-    called wherever FluentFlow itself writes the transcript (the pipeline, a
-    correction, an undo)."""
-    updated = dict(result)
-    updated[FINGERPRINTS] = fingerprints(result.get("raw_segments") or [], result.get(FINGERPRINTS))
+def remember(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """``after`` with the sentences FluentFlow changed between ``before`` and
+    ``after`` (a correction, an undo) recorded as its own, and only those.
+
+    Recording the whole transcript instead took the user's edited sentences
+    for FluentFlow's too, and a second run then corrected them (review,
+    2026-10-25). A task from before the fingerprints first gets the sentences
+    it holds that the user did not edit."""
+    known = before.get(FINGERPRINTS)
+    old = [seg for seg in before.get("raw_segments") or [] if isinstance(seg, dict)]
+    if not isinstance(known, list) or not known:
+        edited = edited_by_user(before)
+        known = fingerprints([seg for i, seg in enumerate(old) if i not in edited])
+    new = [seg for seg in after.get("raw_segments") or [] if isinstance(seg, dict)]
+    changed = [seg for i, seg in enumerate(new) if i >= len(old) or _text(seg) != _text(old[i])]
+    updated = dict(after)
+    updated[FINGERPRINTS] = fingerprints(changed, known)
     return updated
 
 
@@ -174,8 +183,10 @@ def _payload(segments: list[dict[str, Any]], batch: list[int]) -> str:
     }, ensure_ascii=False)
 
 
-def entry_for(new: str, glossary: str) -> str | None:
-    """The word-list line whose right spelling ``new`` is, or ``None``."""
+def entry_for(new: str, glossary: str, old: str | None = None) -> str | None:
+    """The word-list line whose right spelling ``new`` is, or ``None``.
+    ``old`` is the text it replaces: a piece of a Chinese name counts only
+    when the line also lists that hearing."""
     target = sc._loose(new)
     if not target:
         return None
@@ -195,10 +206,17 @@ def entry_for(new: str, glossary: str) -> str | None:
     if re.search(r"[A-Za-z0-9]", wanted):
         pattern = re.compile(r"(?<![A-Za-z0-9])" + re.escape(wanted) + r"(?![A-Za-z0-9])", re.IGNORECASE)
         found = lambda name: bool(pattern.search(name))  # noqa: E731
+        listed = lambda line: True  # noqa: E731
     else:
+        # 竞品 out of 黑客级竞品调研 is that entry when the line lists the
+        # hearing it replaces (黑客级镜头调研 for 镜头); otherwise any two
+        # characters of a long name would count as the word list's (review,
+        # 2026-10-25).
+        heard = (old or "").strip()
         found = lambda name: wanted in name  # noqa: E731
+        listed = lambda line: bool(heard) and heard in line  # noqa: E731
     for line, names in heads:
-        if any(found(name) for name in names):
+        if any(found(name) for name in names) and listed(line):
             return line
     return None
 
@@ -270,7 +288,7 @@ def decide(
             at = _position(sentence, old, fix.get("nth"))
             if at is None:
                 continue
-            entry = entry_for(new, glossary) if glossary.strip() else None
+            entry = entry_for(new, glossary, old) if glossary.strip() else None
             why = str(fix.get("why") or "").strip()[:200]
             if entry is None and not why:
                 # A change the word list does not back and the model gives no
@@ -371,6 +389,16 @@ def _same_sentence(segments: list[dict[str, Any]], text: str, occurrence: int) -
     return hits[occurrence] if occurrence < len(hits) else None
 
 
+def _same_time(segments: list[dict[str, Any]], when: Any, word: str) -> int | None:
+    try:
+        moment = float(when)
+    except (TypeError, ValueError):
+        return None
+    hits = [i for i, seg in enumerate(segments)
+            if abs((sc._seconds(seg.get("start")) or 0.0) - moment) <= 0.05 and _text(seg).count(word) == 1]
+    return hits[0] if len(hits) == 1 else None
+
+
 def onto_result(result: dict[str, Any], fixed: list[dict[str, Any]], records: list[dict[str, Any]]) -> dict[str, Any]:
     """``result`` with the corrected ``raw_segments`` and the same changes made
     in every other copy of the transcript (what the page shows, the copies on
@@ -390,9 +418,20 @@ def onto_result(result: dict[str, Any], fixed: list[dict[str, Any]], records: li
             before = record["sentence_before"]
             occurrence = sum(1 for s in raw_before[:index] if _text(s) == before)
             at = _same_sentence(segments, before, occurrence)
-            if at is None:
+            if at is not None:
+                segments[at]["text"] = record["sentence_after"]
+            elif "corrected" in key:
+                # The retired text-model correction rewrote whole sentences
+                # into this copy, which the note and an agent read first on
+                # the tasks that had it on. The word goes in there too, in the
+                # sentence at the same time, when it is there exactly once.
+                at = _same_time(segments, record.get("source_start" if key.startswith("source_") else "start"),
+                                record["from"])
+                if at is None:
+                    continue
+                segments[at]["text"] = _text(segments[at]).replace(record["from"], record["to"], 1)
+            else:
                 continue
-            segments[at]["text"] = record["sentence_after"]
             if key.startswith("source_"):
                 record.setdefault("source_start", segments[at].get("start"))
                 record.setdefault("source_end", segments[at].get("end"))
@@ -402,23 +441,24 @@ def onto_result(result: dict[str, Any], fixed: list[dict[str, Any]], records: li
     if updated.get("corrected_segments"):
         updated["corrected_transcript_text"] = sc.joined(updated["corrected_segments"])
     updated[FIELD] = [*[r for r in result.get(FIELD) or [] if isinstance(r, dict)], *records]
-    return remember(updated)
+    return remember(result, updated)
 
 
 def revert(result: dict[str, Any], ids: list[str] | None) -> tuple[dict[str, Any], list[str], list[str]]:
     undone, reverted, missing = sc.revert(result, ids, FIELD, "这个任务没有按词表或上下文改过的地方。")
-    return (remember(undone) if reverted else undone), reverted, missing
+    return (remember(result, undone) if reverted else undone), reverted, missing
 
 
 def listing(result: dict[str, Any]) -> list[dict[str, Any]]:
     """The records with the sentence each sits in now (1-based), ``None``
     when that sentence has been changed since."""
     segments = [s for s in result.get("raw_segments") or [] if isinstance(s, dict)]
+    trusted = sc.written_by_fluentflow(result)
     out = []
     for record in result.get(FIELD) or []:
         if not isinstance(record, dict):
             continue
-        found = None if record.get("reverted") else sc._find(segments, record)
+        found = None if record.get("reverted") else sc._find(segments, record, trusted=trusted)
         out.append({**record, "sentence": (found + 1) if found is not None else None})
     return out
 

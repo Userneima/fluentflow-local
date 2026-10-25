@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
-from backend.core import note_versions, visual_note_job
+from backend.core import glossary_correction, note_versions, visual_note_job
 from backend.core.ai_summarizer import summarize_transcript_with_metadata
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 from backend.core.event_context import event_metadata
@@ -511,6 +511,9 @@ async def summarize_transcript_source(
         "display_segments": segments_payload,
         "raw_segments": segments_payload,
         "stt_raw_segments": raw_segments_payload,
+        # The submitted transcript is FluentFlow's starting text: a later run
+        # of the glossary step leaves alone what the user edits from here.
+        glossary_correction.FINGERPRINTS: glossary_correction.fingerprints(segments_payload),
         "transcript_cleanup": _cleanup_payload(cleanup_result),
         "status": "transcript_ready",
         "source": "transcript_file",

@@ -566,3 +566,31 @@ def test_putting_back_every_cut_leaves_a_video_the_user_put_in_its_place(task, m
     survey_cut.flip(task["id"], removed[0]["ref"])
 
     assert delivered.read_bytes() == b"the user's own edit"
+
+
+@needs_ffmpeg
+def test_correction_records_follow_the_transcript_when_every_cut_is_put_back(task, monkeypatch):
+    """Review 2026-10-25: a re-render moves the transcript back onto the
+    original's clock; the records of corrected words (glossary step, subtitle
+    check) have to come with it, or undoing one looks for its sentence at the
+    old cut's time."""
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    monkeypatch.setattr(survey_cut, "voiced_parts", lambda source, regions: [])
+    answer = '{"keep_gaps": [{"id": 1, "reason": "看表"}, {"id": 2, "reason": "看表"}], "remove": []}'
+    survey_cut.survey_and_cut(task["id"], chat=(_says(answer), "fake"))
+    result = job_store.get_job(task["id"])["result"]
+    cut_line, original_line = result["raw_segments"][-1], result["source_raw_segments"][-1]
+    assert cut_line["start"] != original_line["start"]
+    result["glossary_corrections"] = [{
+        "id": "g", "start": cut_line["start"], "end": cut_line["end"],
+        "source_start": original_line["start"], "source_end": original_line["end"], "from": "x", "to": "y",
+    }]
+    job_store.update_job_result(task["id"], result)
+    removed = [item for item in _report_items(task["id"]) if item["action"] == "removed"]
+
+    survey_cut.flip(task["id"], removed[0]["ref"])
+
+    after = job_store.get_job(task["id"])["result"]
+    assert after["transcript_media"] == "source"
+    assert after["glossary_corrections"][0]["start"] == pytest.approx(original_line["start"])
+    assert after["glossary_corrections"][0]["start"] == pytest.approx(after["raw_segments"][-1]["start"])
