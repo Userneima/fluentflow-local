@@ -63,6 +63,10 @@ misheard names and terms in the transcript from the subtitles in the picture and
 series' word list (`FluentFlow 校正文档.md`); `list_subtitle_corrections` and
 `list_glossary_corrections` show each change, the matching revert tools undo it after the
 user agrees, and `run_glossary_correction` runs the word-list step again on a finished task.
+`get_cut_report` shows what the cut removed and kept; `flip_cut_decision` (after the user
+agrees) turns one decision around and renders the cut again. `stop_task_step` stops the
+step a task is on, `cancel_task` cancels one still transcribing, and `resume_task` carries
+a stopped task, or a step that failed, on from that step on the same task.
 
 ## Only these need the user
 

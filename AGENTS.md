@@ -29,6 +29,7 @@ exists and that no other file judges whether a task is still busy.
 - Whether a task is still working, on what, and whether it is finished: `backend/core/task_activity.py`
 - The steps a task records after it is queued: `backend/core/task_steps.py`
 - The processing queue (which task runs now, which wait): `backend/core/task_queue.py`
+- What can be done to a task (the cut report's answers, cancel, stop a step, carry on), for the page and agents alike: `backend/core/task_actions.py`; stopping what a step started: `backend/core/task_stop.py`
 - What runs once a task's turn comes (pipeline, cut, note, compressed copy, Feishu): `backend/core/task_flow.py`
 - Turning a submission into a queued task (options, context, by path, retry): `backend/core/task_submission.py`; a video link: `backend/core/link_submission.py`
 - Cutting again or rewriting the note of a finished task on request: `backend/core/task_reruns.py`
@@ -44,7 +45,7 @@ exists and that no other file judges whether a task is still busy.
 - What each processing step currently uses, for the settings page and agents: `backend/core/workflow_status.py`
 - Where runtime data lives: `backend/core/runtime_paths.py`; which edition answers: `backend/core/edition_identity.py`
 - Button and card styles: `frontend/src/lib/ui.js`; a task's status as the pages show it: `frontend/src/lib/taskState.js`
-- What an agent is told: `scripts/fluentflow_mcp_server.py` (tools) and `agent/skills/fluentflow/SKILL.md` (workflow)
+- What an agent is told: `scripts/fluentflow_mcp_server.py` (each tool described once, in the `tool()` decorator on its function) and `agent/skills/fluentflow/SKILL.md` (workflow)
 
 `frontend/src/routes/editor.jsx` is the file most often edited by several
 sessions at once. When a change touches it, first move the part you change into
@@ -94,10 +95,13 @@ outside the repository in `~/Documents/对话存档/fluentflow-local/`.
 
 ## Restarting the backend
 
-Queued and running tasks live in the backend process. Restarting it marks every
-one of them failed, and in practice every "服务重启中断了这个任务" failure on
-record came from an agent restarting the service to load new code while its own
-batch was still queued. Before stopping or restarting the backend on port 8000,
+Queued and running tasks live in the backend process. A restart carries each
+task it cut off on in place, from the step it was on (decision 6.42), but the
+step that was running is done again (a transcription from the start, a note in
+full), a task cut off more than twice in a row is left failed, and in practice
+every "服务重启中断了这个任务" failure on record came from an agent restarting
+the service to load new code while its own batch was still queued. Before
+stopping or restarting the backend on port 8000,
 run `python3 launchers/macos/count_active_jobs.py http://127.0.0.1:8000`; restart
 only when it prints `0`. It counts every task with a step still to come (cut,
 note, compressed copy, Feishu export), though the task itself already reads
