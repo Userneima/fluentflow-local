@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
 
-from backend.core import hf_endpoint
+from backend.core import hf_endpoint, onnx_quiet
 from backend.core.local_config import load_project_env
 from backend.core.runtime_paths import put_bundled_tools_on_path
 
@@ -36,6 +36,8 @@ put_bundled_tools_on_path()
 # did, and a first task on a machine whose install-time download failed waited
 # forever on a host it could not reach.
 hf_endpoint.apply_at_startup()
+# onnxruntime's usage reporting can abort the process on exit (onnx_quiet).
+onnx_quiet.quiet()
 
 from backend.core.app_factory import create_app
 from backend.core import claude_code_note, visual_note_channel  # noqa: E402

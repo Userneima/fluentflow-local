@@ -73,6 +73,13 @@ TEST_RUNTIME_ROOT = _isolate_runtime_storage()
 # for the choice itself clear the environment and are unaffected.
 os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
 
+# onnxruntime's usage reporting can abort a test process as it exits, and every
+# abort pops a "Python quit unexpectedly" window on the owner's Mac (onnx_quiet).
+# Imports nothing from the backend, so the storage redirect above still holds.
+from backend.core import onnx_quiet  # noqa: E402
+
+onnx_quiet.quiet()
+
 
 @pytest.fixture(scope="session")
 def test_runtime_root() -> Path:
