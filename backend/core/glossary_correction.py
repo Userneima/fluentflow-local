@@ -184,15 +184,21 @@ def entry_for(new: str, glossary: str) -> str | None:
     for line in lines:
         head = re.split(r"[：:]", line.lstrip("- ").strip(), maxsplit=1)[0]
         # 「Post-train / Pre-train」 names two spellings in one line.
-        heads.append((line, [sc._loose(part) for part in head.split("/") if part.strip()]))
+        heads.append((line, [part.strip() for part in head.split("/") if part.strip()]))
     for line, names in heads:
-        if target in names:
+        if target in [sc._loose(name) for name in names]:
             return line
-    # A part of a listed name (Claude out of Claude Code, 竞品调研 out of
-    # 黑客级竞品调研) is that entry; a listed name inside a longer word is
-    # not (code inside Codex).
+    # A whole word of a listed name (Claude out of Claude Code, 竞品调研 out
+    # of 黑客级竞品调研) is that entry; a piece of a word is not (code inside
+    # Codex, Agent inside subagent: Zhang He kickoff, 2026-10-25).
+    wanted = new.strip()
+    if re.search(r"[A-Za-z0-9]", wanted):
+        pattern = re.compile(r"(?<![A-Za-z0-9])" + re.escape(wanted) + r"(?![A-Za-z0-9])", re.IGNORECASE)
+        found = lambda name: bool(pattern.search(name))  # noqa: E731
+    else:
+        found = lambda name: wanted in name  # noqa: E731
     for line, names in heads:
-        if any(name and target in name for name in names):
+        if any(found(name) for name in names):
             return line
     return None
 

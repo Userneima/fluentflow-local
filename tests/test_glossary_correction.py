@@ -155,7 +155,10 @@ def test_without_a_word_list_it_still_runs_and_changes_only_what_the_model_is_su
 
 def test_a_listed_name_inside_a_longer_word_is_not_that_entry():
     glossary = GLOSSARY + "- code：编程（「code 这种场景」）。转录常听成：科鲁\n"
+    glossary += "- subagent：主 agent 派出去做子任务的 agent。转录常听成：subway 群\n"
     assert gc.entry_for("Codex", glossary) is None
+    assert gc.entry_for("Agent", glossary) is None
+    assert gc.entry_for("竞品调研", "- 黑客级竞品调研：训练营的名字。转录常听成：黑客级镜头调研\n").startswith("- 黑客级")
     assert gc.entry_for("Claude", glossary).startswith("- Claude Code：")
 
 
