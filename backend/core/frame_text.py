@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -108,16 +109,36 @@ class FrameText:
         return len(self.text)
 
 
+_RESOLVE_LOCK = threading.Lock()
+_resolved = False
+
+
 def _vision():
-    """The Vision framework, or ``None`` on a machine that has no such thing."""
+    """The Vision framework, or ``None`` on a machine that has no such thing.
+
+    pyobjc looks a framework's functions up on first use, and two threads
+    doing the first lookup at once can lose one: frames read in parallel came
+    back as ``KeyError: 'CGImageSourceCreateImageAtIndex'`` and were counted as
+    having no text (2026-10-25, subtitle check). Every name used here is
+    looked up once, under a lock, before any frame is read.
+    """
+    global _resolved
     try:  # pragma: no cover - import availability is the branch, not the logic
         import Quartz  # noqa: PLC0415
         import Vision  # noqa: PLC0415
         from Foundation import NSURL  # noqa: PLC0415
-
-        return Vision, Quartz, NSURL
     except ImportError:
         return None
+    if not _resolved:  # pragma: no cover - only meaningful with pyobjc present
+        with _RESOLVE_LOCK:
+            if not _resolved:
+                for name in ("CGImageSourceCreateWithURL", "CGImageSourceCreateImageAtIndex"):
+                    getattr(Quartz, name)
+                for name in ("VNRecognizeTextRequest", "VNImageRequestHandler"):
+                    getattr(Vision, name)
+                NSURL.fileURLWithPath_
+                _resolved = True
+    return Vision, Quartz, NSURL
 
 
 def available() -> bool:
@@ -138,6 +159,60 @@ def unavailable_reason() -> str | None:
     )
 
 
+@dataclass(frozen=True)
+class TextBox:
+    """One line of text and where it sits, as fractions of the picture
+    measured from its top-left corner."""
+
+    text: str
+    top: float
+    bottom: float
+    left: float
+    right: float
+
+    @property
+    def middle(self) -> float:
+        return (self.top + self.bottom) / 2
+
+
+def _observations(path: Path, modules, *, language_correction: bool = True) -> list[TextBox]:
+    vision, quartz, nsurl = modules
+    # pyobjc binds these at runtime from the framework, so no static checker can
+    # see them; on Linux the modules are not installed at all and this branch is
+    # unreachable.
+    # pylint: disable=no-member
+    source = quartz.CGImageSourceCreateWithURL(nsurl.fileURLWithPath_(str(path)), None)
+    if source is None:
+        return []
+    image = quartz.CGImageSourceCreateImageAtIndex(source, 0, None)
+    if image is None:
+        return []
+    request = vision.VNRecognizeTextRequest.alloc().init()
+    request.setRecognitionLanguages_(list(RECOGNITION_LANGUAGES))
+    request.setRecognitionLevel_(0)  # accurate; the fast level loses small code text
+    request.setUsesLanguageCorrection_(language_correction)
+    handler = vision.VNImageRequestHandler.alloc().initWithCGImage_options_(image, None)
+    handler.performRequests_error_([request], None)
+    boxes: list[TextBox] = []
+    for observation in request.results() or []:
+        candidates = observation.topCandidates_(1)
+        if not candidates:
+            continue
+        text = _WHITESPACE.sub(" ", str(candidates[0].string())).strip()
+        if not text:
+            continue
+        # Vision measures from the bottom-left corner.
+        box = observation.boundingBox()
+        boxes.append(TextBox(
+            text=text,
+            top=1.0 - (box.origin.y + box.size.height),
+            bottom=1.0 - box.origin.y,
+            left=box.origin.x,
+            right=box.origin.x + box.size.width,
+        ))
+    return boxes
+
+
 def read_frame(path: Path) -> FrameText:
     """Every line of text Vision finds on one frame.
 
@@ -148,36 +223,28 @@ def read_frame(path: Path) -> FrameText:
     modules = _vision()
     if modules is None:
         return FrameText(lines=[], available=False)
-    vision, quartz, nsurl = modules
-    # pyobjc binds these at runtime from the framework, so no static checker can
-    # see them; on Linux the modules are not installed at all and this branch is
-    # unreachable.
-    # pylint: disable=no-member
     try:
-        source = quartz.CGImageSourceCreateWithURL(nsurl.fileURLWithPath_(str(path)), None)
-        if source is None:
-            return FrameText(lines=[])
-        image = quartz.CGImageSourceCreateImageAtIndex(source, 0, None)
-        if image is None:
-            return FrameText(lines=[])
-        request = vision.VNRecognizeTextRequest.alloc().init()
-        request.setRecognitionLanguages_(list(RECOGNITION_LANGUAGES))
-        request.setRecognitionLevel_(0)  # accurate; the fast level loses small code text
-        request.setUsesLanguageCorrection_(True)
-        handler = vision.VNImageRequestHandler.alloc().initWithCGImage_options_(image, None)
-        handler.performRequests_error_([request], None)
-        lines: list[str] = []
-        for observation in request.results() or []:
-            candidates = observation.topCandidates_(1)
-            if not candidates:
-                continue
-            text = _WHITESPACE.sub(" ", str(candidates[0].string())).strip()
-            if text:
-                lines.append(text)
-        return FrameText(lines=lines)
+        return FrameText(lines=[box.text for box in _observations(path, modules)])
     except Exception as exc:  # noqa: BLE001 - a frame that cannot be read is not a failed note
         logger.warning("Text recognition failed for %s: %s", path, exc)
         return FrameText(lines=[])
+
+
+def read_boxes(path: Path, *, language_correction: bool = True) -> list[TextBox]:
+    """Every line of text on one picture with where it sits; empty without
+    OCR or when the picture cannot be read.
+
+    ``language_correction=False`` reads letters as they are drawn instead of
+    nudging them towards dictionary words: what reading subtitles is for is
+    exactly the names a dictionary does not have."""
+    modules = _vision()
+    if modules is None:
+        return []
+    try:
+        return _observations(path, modules, language_correction=language_correction)
+    except Exception as exc:  # noqa: BLE001 - a picture that cannot be read has no text
+        logger.warning("Text recognition failed for %s: %s", path, exc)
+        return []
 
 
 @dataclass
@@ -280,9 +347,11 @@ __all__ = [
     "SeenLines",
     "INDEX_TOTAL_CHARS",
     "RECOGNITION_LANGUAGES",
+    "TextBox",
     "available",
     "fit_index",
     "new_lines",
+    "read_boxes",
     "read_frame",
     "summarise",
     "unavailable_reason",

@@ -1,14 +1,16 @@
 """Fixing misheard words from the subtitles burned into the picture.
 
-Written from the requirement (owner, 2026-10-24), not from the code:
+Written from the requirement (owner, 2026-10-24 and 2026-10-25), not from the code:
 
 - A video whose picture carries no subtitles is left alone, quickly, without
   asking a model anything. So is audio, and a machine without text recognition.
 - With subtitles, a word the transcript misheard is replaced by the spelling the
   subtitle shows, in the transcript itself, with a record of what changed.
+- Every sentence is compared with the subtitle, not only those a model thought
+  doubtful; the model sees only sentences the subtitle reads differently, and
+  not those where the subtitle only leaves fillers out.
 - A word is replaced only when a subtitle line read off the picture spells it
-  out; recogniser garble and the chapter bar under the subtitle are not a
-  source, and the model cannot write in a spelling the picture did not show.
+  out; the model cannot write in a spelling the picture did not show.
 - Nothing here fails a task.
 - Any change can be undone, and the subtitle files follow.
 """
@@ -25,7 +27,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.routers.local_agent as local_agent
-from backend.core import job_store, subtitle_correction as sc
+from backend.core import frame_text, job_store, subtitle_correction as sc
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.storage_paths import _artifact_storage_dir
@@ -34,15 +36,15 @@ SEGMENTS = [
     {"start": 0.0, "end": 2.0, "text": "今天我们的嘉宾是罗福利"},
     {"start": 2.0, "end": 4.0, "text": "他目前是小米大模型的负责人"},
     {"start": 4.0, "end": 6.0, "text": "访谈是在OpenCloud发布之后"},
-    {"start": 6.0, "end": 8.0, "text": "我们更深入地聊了聊"},
+    {"start": 6.0, "end": 8.0, "text": "嗯我们更深入地聊了聊"},
     {"start": 8.0, "end": 10.0, "text": "应该是GOM跟KIMI"},
     {"start": 10.0, "end": 12.0, "text": "这些能力都是可以被学会的"},
     {"start": 12.0, "end": 14.0, "text": "环境反而比经验更重要"},
-    {"start": 14.0, "end": 16.0, "text": "这是一个很难的问题"},
+    {"start": 14.0, "end": 16.0, "text": "大家太相信MA了"},
 ]
 
-# What the picture shows at each moment, as the subtitle author wrote it, plus
-# the chapter bar some videos run under it.
+# What the picture shows each second, as the subtitle author wrote it. The
+# 6-8s line drops the filler 嗯; that is editing, not a mishearing.
 SUBTITLES = [
     (0.0, 2.0, "今天我们的嘉宾是罗福莉"),
     (2.0, 4.0, "她目前是小米大模型的负责人"),
@@ -51,46 +53,54 @@ SUBTITLES = [
     (8.0, 10.0, "训练的应该是GLM-5跟Kimi"),
     (10.0, 12.0, "这些能力都是可以被学会的"),
     (12.0, 14.0, "环境反而比经验更重要"),
-    (14.0, 16.0, "这是一个很难的问题"),
+    (14.0, 16.0, "大家太相信MLA了"),
 ]
-CHAPTER_BAR = "1V2觉醒和伏击"
+
+RIGHT = {"罗福利": "罗福莉", "OpenCloud": "OpenClaw", "GOM": "GLM-5", "MA": "MLA", "他": "她"}
 
 
-def _picture(subtitles=SUBTITLES, garble: dict[float, str] | None = None):
+def _probe(subtitles=SUBTITLES):
+    """The bottom of one frame: the subtitle line where it sits, and a chapter
+    bar under it."""
     reads: list[float] = []
 
     def read(video, at, workdir):
         reads.append(at)
-        lines = [text for start, end, text in subtitles if start <= at < end]
-        for start, text in (garble or {}).items():
-            if start <= at < start + 2:
-                lines = [text]
-        return [*lines, CHAPTER_BAR]
+        lines = [frame_text.TextBox(text, 0.88, 0.92, 0.3, 0.7) for start, end, text in subtitles if start <= at < end]
+        return [*lines, frame_text.TextBox("1V2觉醒和伏击", 0.97, 0.99, 0.0, 0.2)]
 
     return read, reads
 
 
-class Model:
-    """Answers both questions the way a model would, and records what it was asked."""
+def _track(subtitles=SUBTITLES, garble: dict[int, str] | None = None):
+    def read(video, band, workdir):
+        out = []
+        for second in range(0, 16):
+            text = next((t for start, end, t in subtitles if start <= second < end), "")
+            out.append((float(second), (garble or {}).get(second, text)))
+        return out
 
-    def __init__(self, suspects=None, fixes=None):
-        self.suspects = suspects if suspects is not None else [
-            {"i": 0, "text": "罗福利"}, {"i": 2, "text": "OpenCloud"}, {"i": 4, "text": "GOM"},
-        ]
+    return read
+
+
+class Model:
+    """Answers the way a model would, and records what it was shown."""
+
+    def __init__(self, fixes=None):
         self.fixes = fixes
         self.asked: list[dict] = []
 
     def __call__(self, system: str, user: str) -> str:
-        if "可能听错的地方" in system and "suspects" in system:
-            return json.dumps({"suspects": self.suspects}, ensure_ascii=False)
         items = json.loads(user)
         self.asked.extend(items)
         if self.fixes is not None:
             return json.dumps({"fixes": self.fixes(items)}, ensure_ascii=False)
-        spelled = {"罗福利": "罗福莉", "OpenCloud": "OpenClaw", "GOM": "GLM-5"}
-        return json.dumps({"fixes": [
-            {"id": item["id"], "from": item["suspect"], "to": spelled[item["suspect"]]} for item in items
-        ]}, ensure_ascii=False)
+        found = []
+        for item in items:
+            for wrong, right in RIGHT.items():
+                if wrong in item["sentence"] and any(right in sub for sub in item["subtitles"]):
+                    found.append({"id": item["id"], "from": wrong, "to": right})
+        return json.dumps({"fixes": found}, ensure_ascii=False)
 
 
 @pytest.fixture
@@ -100,19 +110,24 @@ def video(tmp_path):
     return path
 
 
-def _run(video, model, read, **kwargs):
+def _run(video, model, probe=None, track=None, segments=SEGMENTS, **kwargs):
     kwargs.setdefault("video_check", lambda path: True)
     kwargs.setdefault("ocr_available", lambda: True)
-    return sc.correct_from_subtitles(video, SEGMENTS, model, read=read, **kwargs)
+    return sc.correct_from_subtitles(
+        video, segments, model, probe=probe or _probe()[0], track_reader=track or _track(), **kwargs,
+    )
 
 
 # ── when the step does nothing ────────────────────────────────────────────
 
 def test_a_picture_without_subtitles_is_skipped_without_asking_a_model(video):
     model = Model()
-    read, reads = _picture(subtitles=[])
+    probe, reads = _probe(subtitles=[])
 
-    outcome = _run(video, model, read)
+    def no_track(*_a):
+        raise AssertionError("the whole video must not be read")
+
+    outcome = _run(video, model, probe=probe, track=no_track)
 
     assert outcome.status == "skipped" and outcome.reason == "no_burned_subtitles"
     assert outcome.segments == SEGMENTS and outcome.corrections == []
@@ -120,18 +135,16 @@ def test_a_picture_without_subtitles_is_skipped_without_asking_a_model(video):
 
 
 def test_audio_and_machines_without_text_recognition_are_skipped(video):
-    read, reads = _picture()
+    probe, reads = _probe()
 
-    assert _run(video, Model(), read, video_check=lambda path: False).reason == "no_picture"
-    assert _run(video, Model(), read, ocr_available=lambda: False).reason == "no_text_recognition"
-    assert sc.correct_from_subtitles(None, SEGMENTS, Model(), read=read, ocr_available=lambda: True).reason == "no_picture"
+    assert _run(video, Model(), probe=probe, video_check=lambda path: False).reason == "no_picture"
+    assert _run(video, Model(), probe=probe, ocr_available=lambda: False).reason == "no_text_recognition"
+    assert sc.correct_from_subtitles(None, SEGMENTS, Model(), probe=probe, ocr_available=lambda: True).reason == "no_picture"
     assert reads == []
 
 
 def test_subtitles_but_no_model_leaves_the_transcript(video):
-    read, _ = _picture()
-
-    outcome = _run(video, None, read)
+    outcome = _run(video, None)
 
     assert outcome.status == "skipped" and outcome.reason == "no_model"
     assert outcome.segments == SEGMENTS
@@ -141,13 +154,12 @@ def test_nothing_here_fails_a_task(video):
     def broken(system, user):
         raise RuntimeError("model down")
 
-    read, _ = _picture()
-    assert _run(video, broken, read).segments == SEGMENTS
+    assert _run(video, broken).segments == SEGMENTS
 
-    def unreadable(video, at, workdir):
+    def unreadable(*_a):
         raise OSError("disk gone")
 
-    outcome = _run(video, Model(), unreadable)
+    outcome = _run(video, Model(), track=unreadable)
     assert outcome.status == "failed" and outcome.segments == SEGMENTS
 
 
@@ -157,87 +169,98 @@ def test_it_can_be_turned_off(monkeypatch):
     assert not sc.enabled()
 
 
-# ── what it changes ───────────────────────────────────────────────────────
+# ── finding where the subtitle is ─────────────────────────────────────────
+
+def test_the_strip_read_is_the_subtitle_line_not_the_chapter_bar_under_it(video, tmp_path):
+    band, checked, matched = sc.locate(video, SEGMENTS, tmp_path, _probe()[0])
+
+    assert matched >= sc.PROBE_NEEDED
+    assert band.top < 0.88 and 0.92 <= band.bottom < 0.97
+
+
+def test_one_line_read_on_several_seconds_is_one_cue_with_the_reading_most_agree_on():
+    track = [(10.0, "感官之间的协同"), (11.0, "感官之间旳协同"), (12.0, "感官之间的协同"), (13.0, "下一句完全不同")]
+
+    found = sc.cues(track)
+
+    assert [(c.start, c.end, c.text) for c in found] == [(10.0, 13.0, "感官之间的协同"), (13.0, 14.0, "下一句完全不同")]
+
+
+# ── what goes to the model ────────────────────────────────────────────────
+
+def test_only_sentences_the_subtitle_reads_differently_reach_the_model(video):
+    model = Model()
+
+    _run(video, model)
+
+    shown = sorted(item["sentence"] for item in model.asked)
+    assert shown == sorted([
+        "今天我们的嘉宾是罗福利", "他目前是小米大模型的负责人", "访谈是在OpenCloud发布之后",
+        "应该是GOM跟KIMI", "大家太相信MA了",
+    ])
+
 
 def test_a_misheard_word_takes_the_subtitles_spelling_and_is_recorded(video):
-    read, _ = _picture()
-
-    outcome = _run(video, Model(), read)
+    outcome = _run(video, Model())
 
     texts = [seg["text"] for seg in outcome.segments]
     assert texts[0] == "今天我们的嘉宾是罗福莉"
     assert texts[2] == "访谈是在OpenClaw发布之后"
     assert texts[4] == "应该是GLM-5跟KIMI"
-    assert outcome.status == "completed" and len(outcome.corrections) == 3
+    assert texts[7] == "大家太相信MLA了"
+    assert texts[3] == "嗯我们更深入地聊了聊"
     record = next(r for r in outcome.corrections if r["from"] == "GOM")
     assert record["to"] == "GLM-5" and record["start"] == 8.0
     assert record["subtitle"] == "训练的应该是GLM-5跟Kimi"
     assert record["sentence_before"] == "应该是GOM跟KIMI"
 
 
-def test_only_the_doubtful_sentences_are_read(video):
-    read, reads = _picture()
-    outcome = _run(video, Model(suspects=[{"i": 4, "text": "GOM"}]), read)
-
-    looked_up = reads[outcome.checked:]
-    assert looked_up and all(6.0 <= at <= 12.0 for at in looked_up)
-
-
 def test_the_model_cannot_write_in_a_spelling_the_picture_did_not_show(video):
-    read, _ = _picture()
-    model = Model(fixes=lambda items: [{"id": item["id"], "from": item["suspect"], "to": "GPT-5"} for item in items])
+    model = Model(fixes=lambda items: [{"id": item["id"], "from": "GOM", "to": "GPT-5"} for item in items])
 
-    outcome = _run(video, model, read)
-
-    assert outcome.corrections == [] and outcome.segments == SEGMENTS
+    assert _run(video, model).corrections == []
 
 
 def test_the_model_cannot_replace_text_that_is_not_in_the_sentence(video):
-    read, _ = _picture()
-    model = Model(
-        suspects=[{"i": 4, "text": "GOM"}],
-        fixes=lambda items: [{"id": item["id"], "from": "训练的", "to": "GLM-5"} for item in items],
-    )
+    model = Model(fixes=lambda items: [{"id": item["id"], "from": "训练的", "to": "GLM-5"} for item in items])
 
-    assert _run(video, model, read).corrections == []
+    assert _run(video, model).corrections == []
 
 
-def test_a_suspect_the_model_invented_is_not_looked_up(video):
-    read, _ = _picture()
-    model = Model(suspects=[{"i": 4, "text": "GPT"}, {"i": 99, "text": "GOM"}])
+def test_garbled_seconds_do_not_outvote_the_clean_reading(video):
+    # The recogniser misreads one of the two seconds of a line.
+    model = Model()
 
-    outcome = _run(video, model, read)
+    outcome = _run(video, model, track=_track(garble={9: "训练旳应该是GLM-5跟Kimi"}))
 
-    assert outcome.suspects == 0 and model.asked == []
-
-
-def test_garble_and_the_chapter_bar_are_not_evidence(video):
-    # Around 8-10s the recogniser reads the subtitle as noise (frame_text
-    # recorded 如何监督 read as 如們血苔); the chapter bar is always there.
-    read, _ = _picture(garble={6.5: "如們血苔蕾", 8.0: "如們血苔蕾", 10.0: "如們血苔蕾"})
-    model = Model(suspects=[{"i": 4, "text": "GOM"}, {"i": 2, "text": "OpenCloud"}])
-
-    outcome = _run(video, model, read)
-
-    assert [r["to"] for r in outcome.corrections] == ["OpenClaw"]
-    for item in model.asked:
-        assert CHAPTER_BAR not in item["subtitles"] and "如們血苔蕾" not in item["subtitles"]
+    assert "应该是GLM-5跟KIMI" in [seg["text"] for seg in outcome.segments]
 
 
 def test_subtitles_that_run_a_moment_behind_the_transcript_are_still_found(video):
-    late = [(start + 1.5, end + 1.5, text) for start, end, text in SUBTITLES]
-    read, _ = _picture(subtitles=late)
+    late = [(start + 1.0, end + 1.0, text) for start, end, text in SUBTITLES]
 
-    outcome = _run(video, Model(suspects=[{"i": 4, "text": "GOM"}]), read)
+    outcome = _run(video, Model(), probe=_probe(late)[0], track=_track(late))
 
-    assert [r["to"] for r in outcome.corrections] == ["GLM-5"]
+    assert "GLM-5" in [r["to"] for r in outcome.corrections]
+
+
+def test_a_letter_the_recogniser_swaps_does_not_block_the_right_spelling(video):
+    # OpenAI was read off the Luo Fuli interview as OpenAl.
+    subtitles = [*SUBTITLES[:4], (8.0, 10.0, "然后有OpenAl"), *SUBTITLES[5:]]
+    segments = [*SEGMENTS[:4], {"start": 8.0, "end": 10.0, "text": "然后有Open Eye"}, *SEGMENTS[5:]]
+    model = Model(fixes=lambda items: [
+        {"id": item["id"], "from": "Open Eye", "to": "OpenAI"} for item in items if "Open Eye" in item["sentence"]
+    ])
+
+    outcome = _run(video, model, probe=_probe(subtitles)[0], track=_track(subtitles), segments=segments)
+
+    assert outcome.segments[4]["text"] == "然后有OpenAI"
 
 
 # ── undoing ───────────────────────────────────────────────────────────────
 
 def _corrected(video) -> dict:
-    read, _ = _picture()
-    outcome = _run(video, Model(), read)
+    outcome = _run(video, Model())
     return {
         "raw_segments": outcome.segments,
         "display_segments": outcome.segments,
@@ -267,7 +290,7 @@ def test_all_are_undone_without_ids_and_a_sentence_edited_since_is_reported(vide
 
     undone, reverted, missing = sc.revert(result, None)
 
-    assert len(reverted) == 2 and len(missing) == 1
+    assert len(reverted) == len(result["subtitle_corrections"]) - 1 and len(missing) == 1
     assert sc.joined(undone["raw_segments"]).startswith("今天我们的嘉宾是罗福利")
 
 
@@ -356,26 +379,11 @@ def test_the_pipeline_stage_skips_without_a_model_and_never_raises(video, monkey
     assert "subtitle_corrections" not in fields
 
 
-def test_a_letter_the_recogniser_swaps_does_not_block_the_right_spelling(video):
-    # OpenAI was read off the Luo Fuli interview as OpenAl.
-    subtitles = [*SUBTITLES[:4], (8.0, 10.0, "然后有OpenAl"), *SUBTITLES[5:]]
-    segments = [*SEGMENTS[:4], {"start": 8.0, "end": 10.0, "text": "然后有Open Eye"}, *SEGMENTS[5:]]
-    read, _ = _picture(subtitles=subtitles)
-    model = Model(
-        suspects=[{"i": 4, "text": "Open Eye"}],
-        fixes=lambda items: [{"id": item["id"], "from": "Open Eye", "to": "OpenAI"} for item in items],
-    )
-
-    outcome = sc.correct_from_subtitles(video, segments, model, read=read, video_check=lambda p: True, ocr_available=lambda: True)
-
-    assert outcome.segments[4]["text"] == "然后有OpenAI"
-
-
 def test_undoing_takes_out_the_change_where_it_was_made():
     # 「现在才做」 corrected to 「现在在做」 has two 在; the first is not the
     # one that changed (found on the Luo Fuli interview).
     segments = [{"start": 0.0, "end": 2.0, "text": "现在才做的保密"}]
-    fixes = [{"suspect": {"index": 0, "word": "才"}, "from": "才", "to": "在", "subtitle": "现在在做的保密"}]
+    fixes = [{"index": 0, "from": "才", "to": "在", "subtitle": "现在在做的保密"}]
     fixed, records = sc.apply(segments, fixes)
     result = {"raw_segments": fixed, "display_segments": fixed, "subtitle_corrections": records}
 
@@ -387,8 +395,8 @@ def test_undoing_takes_out_the_change_where_it_was_made():
 def test_two_changes_in_one_sentence_are_both_undone():
     segments = [{"start": 0.0, "end": 2.0, "text": "也是cloud code加cloud ops"}]
     fixes = [
-        {"suspect": {"index": 0, "word": "cloud code"}, "from": "cloud code", "to": "Claude Code", "subtitle": "也是Claude Code加Claude Opus"},
-        {"suspect": {"index": 0, "word": "cloud ops"}, "from": "cloud ops", "to": "Claude Opus", "subtitle": "也是Claude Code加Claude Opus"},
+        {"index": 0, "from": "cloud code", "to": "Claude Code", "subtitle": "也是Claude Code加Claude Opus"},
+        {"index": 0, "from": "cloud ops", "to": "Claude Opus", "subtitle": "也是Claude Code加Claude Opus"},
     ]
     fixed, records = sc.apply(segments, fixes)
     assert fixed[0]["text"] == "也是Claude Code加Claude Opus"
@@ -397,3 +405,26 @@ def test_two_changes_in_one_sentence_are_both_undone():
 
     assert undone["raw_segments"][0]["text"] == "也是cloud code加cloud ops"
     assert reverted == [r["id"] for r in records] and missing == []
+
+
+def test_a_batch_whose_answer_cannot_be_read_is_asked_again_not_lost(video):
+    # On the Luo Fuli interview one batch of a hundred came back unreadable
+    # and every correction in it was lost.
+    replies = iter(["抱歉，我先说明一下 {这里不是 JSON", "还是不行"])
+    good = Model()
+
+    def flaky(system, user):
+        reply = next(replies, None)
+        return reply if reply is not None else good(system, user)
+
+    outcome = _run(video, flaky)
+
+    assert "GLM-5" in [r["to"] for r in outcome.corrections]
+
+
+def test_prose_around_the_answer_does_not_hide_it(video):
+    def chatty(system, user):
+        answer = Model()(system, user)
+        return "看过了 {几处} 如下：\n```json\n" + answer + "\n```"
+
+    assert "GLM-5" in [r["to"] for r in _run(video, chatty).corrections]
