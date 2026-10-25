@@ -26,6 +26,8 @@ there is no hosted router to look at.
 
 from __future__ import annotations
 
+from backend.core import task_reruns  # noqa: E402
+
 import json
 from typing import Any
 
@@ -114,7 +116,7 @@ def agent_job(monkeypatch):
         state["result"] = result
         return {**state, "result": dict(result)}
 
-    monkeypatch.setattr(jvn, "get_job", reader)
+    monkeypatch.setattr(task_reruns, "get_job", reader)
     monkeypatch.setattr(vn, "get_job", reader)
     monkeypatch.setattr(vn, "update_job_result", writer)
     monkeypatch.setattr(vn, "save_result_changes", lambda task_id, _before, after, **kw: writer(task_id, after, **kw))

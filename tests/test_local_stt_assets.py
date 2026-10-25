@@ -38,7 +38,7 @@ class TestDefaultModelAgreement(unittest.TestCase):
 
     def test_submit_route_has_no_model_literal_of_its_own(self) -> None:
         """The submit route's fallback must not re-declare a default next to it."""
-        source = (PROJECT_ROOT / "backend" / "routers" / "local_processing.py").read_text(encoding="utf-8")
+        source = (PROJECT_ROOT / "backend" / "core" / "task_submission.py").read_text(encoding="utf-8")
         self.assertIn('or DEFAULT_LOCAL_STT_MODEL', source)
         self.assertNotIn('stt_model") or "").strip() or "medium"', source)
 

@@ -44,130 +44,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Request
 
-from backend.core import visual_note_job
-from backend.core.job_store import get_job
-from backend.core.local_config import resolve_secret
-from backend.core.local_keyframe_provider import extract_keyframes
-from backend.core.request_scope import local_client_scope
-from backend.routers.local_processing import queue_is_busy
+from backend.core.task_reruns import start_local_visual_note
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def start_local_visual_note(
-    request: Request,
-    task_id: str,
-    background_tasks: BackgroundTasks,
-    payload: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
-    """Preview, switch, or accept a note run for one task — or refuse, here.
-
-    The local Agent API calls this too, so an agent goes through the same guards
-    the page does rather than a parallel implementation that can drift.
-    """
-    client_id = local_client_scope(request)
-    job = get_job(task_id, client_id=client_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    api_key = resolve_secret(None, "anthropic_api_key")
-    body = payload or {}
-
-    if bool(body.get("preview")):
-        return {
-            "ok": True,
-            "preview": True,
-            **visual_note_job.describe(task_id, job, api_key=api_key),
-        }
-
-    # Choosing between two notes that already exist costs nothing and reaches no
-    # outside service, so neither switch goes near the eligibility checks or the
-    # run slot.
-    for flag, action in (
-        ("restore_previous_note", visual_note_job.restore_previous_note),
-        ("use_generated_note", visual_note_job.use_generated_note),
-    ):
-        if not bool(body.get(flag)):
-            continue
-        try:
-            updated = action(task_id, client_id=client_id, base_version=body.get("base_version"))
-        except visual_note_job.NoteMovedError as exc:
-            raise HTTPException(status_code=409, detail={"code": "stale", "message": str(exc)}) from exc
-        except visual_note_job.VisualNoteError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {
-            "ok": True,
-            "task_id": task_id,
-            "accepted": False,
-            "preview": False,
-            flag: True,
-            "result": updated.get("result"),
-        }
-
-    described = visual_note_job.describe(task_id, job, api_key=api_key)
-    if not described["eligible"]:
-        raise HTTPException(status_code=409, detail=str(described["reason"]))
-    if queue_is_busy():
-        # Frame extraction is ffmpeg on this machine, and the serial queue
-        # exists so that nothing runs beside a transcription. This entry cannot
-        # join that queue, so it is refused while the queue is working.
-        raise HTTPException(
-            status_code=409,
-            detail="有任务正在处理中，等队列空下来再生成笔记，避免两件重活同时跑。",
-        )
-    replace_note = bool(body.get("replace_note", True))
-    base_version = str(body.get("base_version") or "").strip() or None
-    try:
-        visual_note_job.check_base(job.get("result"), base_version)
-    except visual_note_job.NoteMovedError as exc:
-        raise HTTPException(status_code=409, detail={"code": "stale", "message": str(exc)}) from exc
-    try:
-        visual_note_job.claim(task_id)
-    except visual_note_job.VisualNoteError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    def _run() -> None:
-        try:
-            visual_note_job.run_visual_note(
-                task_id,
-                client_id=client_id,
-                api_key=api_key,
-                claimed=True,
-                replace_note=replace_note,
-                keyframe_extractor=extract_keyframes,
-                base_version=base_version,
-            )
-        except visual_note_job.VisualNoteError as exc:
-            logger.warning("visual note refused for %s: %s", task_id, exc)
-        except Exception:  # noqa: BLE001 - already recorded on the job result
-            logger.exception("visual note failed for %s", task_id)
-        finally:
-            # run_visual_note releases its own slot; this covers the case where
-            # it never got to start, so the slot cannot leak.
-            visual_note_job.release(task_id)
-
-    background_tasks.add_task(_run)
-    return {
-        "ok": True,
-        "task_id": task_id,
-        "accepted": True,
-        "preview": False,
-        "model": described["model"],
-        "channel": described["channel"],
-        "channel_label": described["channel_label"],
-        "frame_budget": described["frame_budget"],
-        "transcript_chars": described["transcript_chars"],
-        "source_filename": described["source_filename"],
-        # What the run will read and what it will do to the existing note, echoed
-        # back so a programmatic caller has it on the accept rather than having to
-        # have asked for a preview first.
-        "media": described["media"],
-        "subtitle_timeline": described["subtitle_timeline"],
-        "replace_note": replace_note,
-    }
 
 
 @router.post("/jobs/{task_id}/visual-note")

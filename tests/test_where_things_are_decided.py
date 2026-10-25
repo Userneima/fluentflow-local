@@ -27,6 +27,7 @@ ALLOWED_RUNNING_STATE = {
     "backend/core/debreath_job.py": "its own state, and clearing renders a restart stranded",
     "backend/core/visual_note_job.py": "its own state, and clearing notes a restart stranded",
     "backend/routers/local_job_debreath.py": "one cut at a time for the same task, not whether the task is busy",
+    "backend/core/task_reruns.py": "one cut at a time for the same task, not whether the task is busy",
     "backend/core/agent_note.py": "an agent's note refused while the same note is being rewritten",
 }
 

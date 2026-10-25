@@ -12,10 +12,16 @@ or the skill names a tool that was renamed.
   save_, wait_ ...): field names such as ``agent_cut`` or ``to_judge`` are
   left alone. A heuristic, labelled as one: a tool whose first word no other
   tool uses is not checked.
+- The agent routes import nothing from the page's routes
+  (``backend/routers/``): an operation both can do lives in ``backend/core``
+  (``task_actions``, ``task_queue`` and the rest), and an agent route borrowing
+  from a page route was how operations the page had never lent stayed out of
+  an agent's reach.
 """
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -72,3 +78,30 @@ def test_the_skill_names_only_tools_that_exist():
 def test_the_checks_see_what_they_check():
     assert len(_routes()) >= 30
     assert "/agent/v1/tasks/{}/wait" in _paths_the_tools_call()
+
+
+def _router_imports(path: Path) -> list[str]:
+    found = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            names = [node.module] + [f"{node.module}.{alias.name}" for alias in node.names]
+        elif isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        else:
+            continue
+        found += [name for name in names if name.startswith("backend.routers")]
+    return found
+
+
+def test_the_agent_routes_borrow_nothing_from_the_page_routes():
+    borrowed = _router_imports(ROOT / "backend" / "routers" / "local_agent.py")
+    assert not borrowed, (
+        "backend/routers/local_agent.py imports from the page's routes; move what both need "
+        f"into backend/core (task_actions, task_queue, task_submission ...): {borrowed}"
+    )
+
+
+def test_the_import_check_sees_an_import(tmp_path):
+    sample = tmp_path / "sample.py"
+    sample.write_text("from backend.routers.local_processing import retry_task\n", encoding="utf-8")
+    assert _router_imports(sample) == ["backend.routers.local_processing", "backend.routers.local_processing.retry_task"]

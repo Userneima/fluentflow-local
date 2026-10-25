@@ -58,16 +58,11 @@ from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.core.edition_identity import INTAKE_REJECTION
 from backend.core.workflow_status import workflow_status
-from backend.routers.local_feishu_export import _local_lark_export_target, _record_export_on_task
-from backend.routers.local_job_debreath import start_local_debreath
-from backend.routers.local_job_visual_note import start_local_visual_note
-from backend.routers.local_processing import (
-    local_path_options,
-    queue_is_busy,
-    queue_local_media_file,
-    retry_for_request,
-)
-from backend.routers.local_video_sources import allow_duplicate_requested, submit_video_source_job
+from backend.core.lark_export_target import _local_lark_export_target, _record_export_on_task
+from backend.core.task_reruns import start_local_debreath, start_local_visual_note
+from backend.core.task_queue import queue_is_busy
+from backend.core.task_submission import local_path_options, queue_local_media_file, retry_for_request
+from backend.core.link_submission import allow_duplicate_requested, submit_video_source_job
 
 logger = logging.getLogger(__name__)
 

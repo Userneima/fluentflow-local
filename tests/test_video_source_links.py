@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 import backend.core.video_source as vs
-import backend.routers.local_video_sources as lvs
+import backend.core.link_submission as lvs
 from backend.core.local_error_diagnostics import diagnose_error
 
 BILIBILI = "https://www.bilibili.com/video/BV1N2pc6gErK"
@@ -526,11 +526,13 @@ def _retry_with_preferences(monkeypatch, preferences: dict) -> dict:
     """Retry the old link task through the real submit path and answer how the
     download would have been made."""
     import backend.routers.local_processing as lp
+    from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
     from backend.core import job_store
 
     job = _link_job_submitted_with_old_settings()
     monkeypatch.setattr(lp, "get_job", lambda task_id, client_id=None: job if task_id == "old" else job_store.get_job(task_id, client_id=client_id))
-    monkeypatch.setattr(lp, "find_source_file", lambda _t: None)
+    monkeypatch.setattr(ts, "get_job", lp.get_job)
+    monkeypatch.setattr(ts, "find_source_file", lambda _t: None)
     monkeypatch.setattr(lvs, "get_preference", lambda name: preferences.get(name))
     fetched: dict = {}
 
@@ -544,7 +546,7 @@ def _retry_with_preferences(monkeypatch, preferences: dict) -> dict:
     monkeypatch.setattr(lvs, "_run_local_video_source_job", run_job)
     monkeypatch.setattr(lvs, "_start_behind_queue", start)
 
-    result = asyncio.run(lp.retry_task("old", client_id="c", local_caller=True))
+    result = asyncio.run(ts.retry_task("old", client_id="c", local_caller=True))
     assert result["source_task_id"] == "old" and result["task_id"] != "old"
     # Nothing ran it, so it would stay queued and answer the next retry as an
     # active duplicate of the same link.

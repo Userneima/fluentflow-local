@@ -22,12 +22,16 @@ import pytest
 from backend.core import job_store, local_intake_flow
 from backend.core.job_event_hub import JobEventHub
 from backend.routers import local_processing as lp
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 
 @pytest.fixture()
 def events(monkeypatch):
     recorded: list[dict] = []
     monkeypatch.setattr(lp, "log_event", lambda **kw: recorded.append(kw))
+    monkeypatch.setattr(tq, "log_event", lp.log_event)
+    monkeypatch.setattr(tf, "log_event", lp.log_event)
+    monkeypatch.setattr(ts, "log_event", lp.log_event)
     return recorded
 
 
@@ -48,7 +52,7 @@ def ids():
 def _ctx(task_id, monkeypatch, *, skip_summary=False):
     # Built inside the service's async handlers, so built on a loop here too.
     async def build():
-        return lp._local_media_job_context(
+        return ts._local_media_job_context(
             task_id=task_id, client_id=None, source_type="video", source_filename="talk.mp4",
             raw_title="talk", display_title="talk", suffix=".mp4", td="/tmp", in_path=Path("/tmp/talk.mp4"),
             content=b"", source_file_size_mb=1.0, duration_preflight_sec=60.0,
@@ -60,21 +64,24 @@ def _ctx(task_id, monkeypatch, *, skip_summary=False):
 
 def test_a_task_that_waited_records_how_long_and_behind_whom(monkeypatch, events, ids):
     monkeypatch.setattr(lp, "JOB_EVENTS", JobEventHub())
-    lp._QUEUE_RECENT.clear()
+    monkeypatch.setattr(tq, "JOB_EVENTS", lp.JOB_EVENTS)
+    monkeypatch.setattr(tf, "JOB_EVENTS", lp.JOB_EVENTS)
+    monkeypatch.setattr(ts, "JOB_EVENTS", lp.JOB_EVENTS)
+    tq._QUEUE_RECENT.clear()
     first, second = ids("first", "second")
 
     async def scenario():
         ahead = asyncio.Event()
-        lp._queue_tail_record(first, ahead)
-        previous = lp._queue_tail_barrier()
-        waiter = asyncio.create_task(lp.wait_for_queue_turn(previous, second, None))
+        tq._queue_tail_record(first, ahead)
+        previous = tq._queue_tail_barrier()
+        waiter = asyncio.create_task(tq.wait_for_queue_turn(previous, second, None))
         await asyncio.sleep(0.2)
         ahead.set()
         await waiter
-        await lp.wait_for_queue_turn(None, first, None)
+        await tq.wait_for_queue_turn(None, first, None)
 
     asyncio.run(scenario())
-    lp._QUEUE_RECENT.clear()
+    tq._QUEUE_RECENT.clear()
     waits = [e for e in events if e["event_name"] == "queue_wait_completed"]
     assert len(waits) == 1, "the task that was first in line did not wait"
     assert waits[0]["task_id"] == second
@@ -151,28 +158,31 @@ def test_events_name_the_entry_a_task_came_in_through(monkeypatch, ids):
     from backend.core import media_job
 
     monkeypatch.setattr(lp, "JOB_EVENTS", JobEventHub())
-    lp._QUEUE_RECENT.clear()
+    monkeypatch.setattr(tq, "JOB_EVENTS", lp.JOB_EVENTS)
+    monkeypatch.setattr(tf, "JOB_EVENTS", lp.JOB_EVENTS)
+    monkeypatch.setattr(ts, "JOB_EVENTS", lp.JOB_EVENTS)
+    tq._QUEUE_RECENT.clear()
     [task] = ids("route")
     seen: list[str] = []
 
     async def fake_pipeline(ctx):
         seen.append(ctx.event_route)
 
-    monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
-    monkeypatch.setattr(lp.local_intake_flow, "note_is_wanted", lambda *_a: False)
+    monkeypatch.setattr(tf, "_run_pipeline", fake_pipeline)
+    monkeypatch.setattr(tf.local_intake_flow, "note_is_wanted", lambda *_a: False)
 
     async def scenario():
-        ctx = lp._local_media_job_context(
+        ctx = ts._local_media_job_context(
             task_id=task, client_id=None, source_type="audio", source_filename="talk.m4a",
             raw_title="talk", display_title="talk", suffix=".m4a", td="/tmp", in_path=Path("/tmp/talk.m4a"),
             content=b"", source_file_size_mb=1.0, duration_preflight_sec=60.0, options={},
         )
-        await lp.start_media_job_behind_queue(ctx, route="/queue/process-folder")
+        await ts.start_media_job_behind_queue(ctx, route="/queue/process-folder")
         for _ in range(20):
             await asyncio.sleep(0.01)
 
     asyncio.run(scenario())
-    lp._QUEUE_RECENT.clear()
+    tq._QUEUE_RECENT.clear()
     assert seen == ["/queue/process-folder"]
     # Guard: the pipeline writes the context's route, never a fixed one.
     assert 'route="/process"' not in inspect.getsource(media_job)

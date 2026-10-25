@@ -363,6 +363,7 @@ def test_a_previously_cut_file_is_refused_with_advice(local_client, folder, monk
 def test_processing_by_path_queues_the_file_where_it_is(local_client, folder, monkeypatch):
     """The task is created against the file's own path — nothing is copied first."""
     import backend.routers.local_processing as lp
+    from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
     ran: list = []
 
@@ -380,7 +381,8 @@ def test_processing_by_path_queues_the_file_where_it_is(local_client, folder, mo
     # tested where it belongs. Here the question is what happens to a file that
     # passes.
     monkeypatch.setattr(lp, "preflight_media_file", lambda _path: _Passed())
-    monkeypatch.setattr(lp, "_run_serially", no_pipeline)
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
+    monkeypatch.setattr(tf, "_run_serially", no_pipeline)
 
     body = local_client.post(
         "/queue/process-local-files",
@@ -465,6 +467,7 @@ def test_a_dropped_file_nobody_has_seen_is_answered_no_not_guessed(local_client,
 def in_place_task(local_client, folder, monkeypatch):
     """A finished-and-failed task that was read from the user's own folder."""
     import backend.routers.local_processing as lp
+    from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
     from backend.core import job_store
 
     ran: list = []
@@ -478,7 +481,8 @@ def in_place_task(local_client, folder, monkeypatch):
             return {"duration_seconds": 12.0}
 
     monkeypatch.setattr(lp, "preflight_media_file", lambda _path: _Passed())
-    monkeypatch.setattr(lp, "_run_serially", no_pipeline)
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
+    monkeypatch.setattr(tf, "_run_serially", no_pipeline)
 
     recording = folder / "0811-morning.mov"
     body = local_client.post(
@@ -532,6 +536,7 @@ def test_retrying_from_the_stored_copy_queues_and_writes_the_note(local_client, 
     and end at the transcript with no note.
     """
     import backend.routers.local_processing as lp
+    from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
     from backend.core import job_store
     from backend.core.media_intake import copy_source_file
 
@@ -548,7 +553,8 @@ def test_retrying_from_the_stored_copy_queues_and_writes_the_note(local_client, 
             return {"duration_seconds": 12.0}
 
     monkeypatch.setattr(lp, "preflight_media_file", lambda _path: _Passed())
-    monkeypatch.setattr(lp, "_run_serially", no_pipeline)
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
+    monkeypatch.setattr(tf, "_run_serially", no_pipeline)
     upload = tmp_path / "upload.mp4"
     upload.write_bytes(b"uploaded bytes")
     copy_source_file("stored-task", ".mp4", upload)

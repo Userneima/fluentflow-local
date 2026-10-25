@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from backend.core import job_store
 from backend.routers import local_processing as lp
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 # Every setting the page sends with a submission, as the page spells it.
 SETTINGS = {
@@ -55,7 +56,8 @@ def client(monkeypatch, tmp_path):
         done.set()
 
     monkeypatch.setattr(lp, "preflight_media_file", lambda _path: _Passed())
-    monkeypatch.setattr(lp, "_run_serially", no_pipeline)
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
+    monkeypatch.setattr(tf, "_run_serially", no_pipeline)
     before = {job["task_id"] for job in job_store.list_jobs(limit=None, include_result=False)}
     yield TestClient(create_local_app())
     # The faked pipeline never finishes a task; queued rows left behind would be

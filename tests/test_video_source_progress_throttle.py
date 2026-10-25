@@ -4,7 +4,7 @@ hear every one of them."""
 from __future__ import annotations
 
 from backend.core.video_source import VideoSourceProgress
-from backend.routers import local_video_sources as lvs
+from backend.core import link_submission as lvs
 
 
 def _report(percent, stage="downloading", loaded=None, total=None):

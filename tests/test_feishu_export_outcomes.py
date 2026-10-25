@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 
 import backend.core.lark_exporter as lx
 import backend.routers.local_feishu_export as local_feishu_export
+from backend.core import lark_export_target
 from backend.core.local_error_diagnostics import diagnose_error
 
 TASK = "task-7"
@@ -218,11 +219,12 @@ def owned_task(monkeypatch, tmp_path):
     monkeypatch.setattr(local_feishu_export, "_artifact_storage_dir", lambda: tmp_path)
     monkeypatch.setattr(local_feishu_export, "resolve_secret", lambda form_value, name: "x")
     monkeypatch.setattr(local_feishu_export, "get_job", lambda task_id, client_id=None: store.get(task_id))
+    monkeypatch.setattr(lark_export_target, "get_job", local_feishu_export.get_job)
 
     def update(task_id, result, client_id=None):
         store[task_id] = {**store[task_id], "result": result}
 
-    monkeypatch.setattr(local_feishu_export, "update_job_result", update)
+    monkeypatch.setattr(lark_export_target, "update_job_result", update)
     return store
 
 
@@ -264,17 +266,17 @@ def test_a_failed_manual_export_keeps_the_previous_link_and_records_the_reason(m
 
 
 def test_auto_route_uses_the_users_own_identity_when_lark_cli_is_signed_in(monkeypatch):
-    monkeypatch.setattr(local_feishu_export, "lark_cli_ready", lambda: True)
-    assert local_feishu_export._local_lark_export_target("auto", None) == "lark_cli"
-    monkeypatch.setattr(local_feishu_export, "lark_cli_ready", lambda: False)
-    assert local_feishu_export._local_lark_export_target("auto", None) == "lark_openapi"
+    monkeypatch.setattr(lark_export_target, "lark_cli_ready", lambda: True)
+    assert lark_export_target._local_lark_export_target("auto", None) == "lark_cli"
+    monkeypatch.setattr(lark_export_target, "lark_cli_ready", lambda: False)
+    assert lark_export_target._local_lark_export_target("auto", None) == "lark_openapi"
 
 
 def test_a_task_record_that_cannot_be_saved_does_not_turn_a_made_document_into_a_failure(monkeypatch, owned_task):
     def broken_update(*args, **kwargs):
         raise RuntimeError("database is locked")
 
-    monkeypatch.setattr(local_feishu_export, "update_job_result", broken_update)
+    monkeypatch.setattr(lark_export_target, "update_job_result", broken_update)
     monkeypatch.setattr(
         local_feishu_export, "export_markdown_via_lark_cli",
         lambda title, markdown, **kwargs: {"ok": True, "url": "https://x.feishu.cn/wiki/w"},

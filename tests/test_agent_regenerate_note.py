@@ -24,6 +24,7 @@ from backend.core import job_store, visual_note_job
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.routers.local_agent as local_agent
 import backend.routers.local_job_visual_note as local_job_visual_note
+from backend.core import task_reruns
 
 _TOKEN = "regen-token"
 _HEADERS = {"x-fluentflow-access-token": _TOKEN}
@@ -36,7 +37,7 @@ TEXT_NOTE = "# 文本模型写的笔记"
 def client(monkeypatch):
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", _TOKEN)
     monkeypatch.setattr(local_agent, "_attach_result_artifacts", lambda _task_id, result: result)
-    monkeypatch.setattr(local_job_visual_note, "queue_is_busy", lambda: False)
+    monkeypatch.setattr(task_reruns, "queue_is_busy", lambda: False)
     app = FastAPI()
     app.include_router(local_agent.router)
     return TestClient(app)

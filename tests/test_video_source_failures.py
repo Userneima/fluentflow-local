@@ -19,7 +19,7 @@ import subprocess
 import pytest
 
 import backend.core.video_source as vs
-import backend.routers.local_video_sources as lvs
+import backend.core.link_submission as lvs
 from backend.core.local_error_diagnostics import diagnose_error
 
 YOUTUBE = "https://www.youtube.com/watch?v=abc123"

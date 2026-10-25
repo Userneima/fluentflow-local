@@ -18,7 +18,7 @@ import inspect
 import pytest
 
 import backend.core.video_source as vs
-import backend.routers.local_video_sources as lvs
+import backend.core.link_submission as lvs
 from backend.core.local_config import get_preference, load_preferences, save_preferences
 
 DOUYIN = "https://www.douyin.com/video/7693194858911108367"

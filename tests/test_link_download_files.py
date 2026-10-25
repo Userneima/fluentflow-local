@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 import backend.core.video_source as vs
-import backend.routers.local_video_sources as lvs
+import backend.core.link_submission as lvs
 from backend.core import job_store
 from backend.core.local_entry_guards import CancellationGate
 from backend.core.media_intake import adopt_source_file
@@ -208,10 +208,11 @@ def _clean_client():
 
 def test_an_older_link_task_stops_keeping_its_video_twice(_clean_client):
     from backend.routers import local_processing as lp
+    from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
     task = _old_link_task("kept-twice", download_bytes=b"same video", own_bytes=b"same video")
 
-    lp._enforce_local_history_retention(CLIENT)
+    ts._enforce_local_history_retention(CLIENT)
 
     assert not task["download"].exists() and not task["details"].exists()
     assert task["own"].read_bytes() == b"same video", "the task's copy stays"
@@ -219,10 +220,11 @@ def test_an_older_link_task_stops_keeping_its_video_twice(_clean_client):
 
 def test_an_older_download_that_differs_from_the_tasks_copy_is_kept(_clean_client):
     from backend.routers import local_processing as lp
+    from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
     task = _old_link_task("kept-twice-differs", download_bytes=b"the whole video", own_bytes=b"cut off")
 
-    lp._enforce_local_history_retention(CLIENT)
+    ts._enforce_local_history_retention(CLIENT)
 
     assert task["download"].is_file(), "it may be the only whole copy"
 

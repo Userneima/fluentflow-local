@@ -28,6 +28,7 @@ import pytest
 from backend.core import job_store
 from backend.core.job_event_hub import JobEventHub
 from backend.routers import local_processing as lp
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 _CREATED: list[str] = []
 
@@ -36,11 +37,11 @@ _CREATED: list[str] = []
 def _fresh_chain(monkeypatch):
     hub = JobEventHub()
     monkeypatch.setattr(lp, "JOB_EVENTS", hub)
-    monkeypatch.setattr(lp, "_NOTE_REMOTE_SLOTS", threading.BoundedSemaphore(lp.NOTE_CONCURRENCY))
-    monkeypatch.setattr(lp, "_NOTE_SLOT_POLL_SECONDS", 0.02)
-    lp._QUEUE_RECENT.clear()
+    monkeypatch.setattr(tf, "_NOTE_REMOTE_SLOTS", threading.BoundedSemaphore(tf.NOTE_CONCURRENCY))
+    monkeypatch.setattr(tf, "_NOTE_SLOT_POLL_SECONDS", 0.02)
+    tq._QUEUE_RECENT.clear()
     yield hub
-    lp._QUEUE_RECENT.clear()
+    tq._QUEUE_RECENT.clear()
     # Waiting in the chain records a row; leave none behind looking like a task a
     # restart cut off.
     job_store.delete_jobs(_CREATED)
@@ -80,7 +81,7 @@ class Flow:
             return
         try:
             on_local_work_done()
-        except lp.NoteAbandoned:
+        except tf.NoteAbandoned:
             self.log.append(f"note-abandoned:{task_id}")
             raise
         with self._lock:
@@ -94,18 +95,18 @@ class Flow:
 
 
 def _start(flow: Flow, ids, monkeypatch):
-    monkeypatch.setattr(lp, "_run_pipeline", flow.pipeline)
-    monkeypatch.setattr(lp.local_intake_flow, "note_is_wanted", lambda *_a: True)
-    monkeypatch.setattr(lp.local_intake_flow, "mark_note_running", lambda *_a: None)
-    monkeypatch.setattr(lp.local_intake_flow, "_patch_result", lambda *_a, **_k: None)
-    monkeypatch.setattr(lp.local_intake_flow, "write_note", flow.write_note)
+    monkeypatch.setattr(tf, "_run_pipeline", flow.pipeline)
+    monkeypatch.setattr(tf.local_intake_flow, "note_is_wanted", lambda *_a: True)
+    monkeypatch.setattr(tf.local_intake_flow, "mark_note_running", lambda *_a: None)
+    monkeypatch.setattr(tf.local_intake_flow, "_patch_result", lambda *_a, **_k: None)
+    monkeypatch.setattr(tf.local_intake_flow, "write_note", flow.write_note)
     runners = []
     for task_id in ids:
-        previous = lp._queue_tail_barrier()
+        previous = tq._queue_tail_barrier()
         done = asyncio.Event()
-        lp._queue_tail_record(task_id, done)
+        tq._queue_tail_record(task_id, done)
         runners.append(asyncio.create_task(
-            lp._run_serially(previous, done, SimpleNamespace(task_id_value=task_id, client_id=None))
+            tf._run_serially(previous, done, SimpleNamespace(task_id_value=task_id, client_id=None))
         ))
     return runners
 
@@ -165,8 +166,8 @@ def test_a_long_batch_has_at_most_a_few_notes_waiting_on_claude(monkeypatch):
         await asyncio.gather(*runners)
         return waiting
 
-    assert asyncio.run(scenario()) == lp.NOTE_CONCURRENCY
-    assert flow.remote_peak == lp.NOTE_CONCURRENCY
+    assert asyncio.run(scenario()) == tf.NOTE_CONCURRENCY
+    assert flow.remote_peak == tf.NOTE_CONCURRENCY
     assert all(f"note-done:{i}" in flow.log for i in ids)
 
 
@@ -198,7 +199,7 @@ def test_pipelines_still_run_one_at_a_time(monkeypatch):
 
     async def scenario():
         runners = _start(flow, ids, monkeypatch)
-        monkeypatch.setattr(lp, "_run_pipeline", counting)
+        monkeypatch.setattr(tf, "_run_pipeline", counting)
         for gate in [*flow.local_gate.values(), *flow.remote_gate.values()]:
             gate.set()
         await asyncio.gather(*runners)
@@ -209,7 +210,7 @@ def test_pipelines_still_run_one_at_a_time(monkeypatch):
 
 def _slots_free():
     # BoundedSemaphore keeps its count here; a leak shows as a count below the limit.
-    return lp._NOTE_REMOTE_SLOTS._value
+    return tf._NOTE_REMOTE_SLOTS._value
 
 
 def test_waiting_notes_do_not_starve_the_threads_uploads_use(monkeypatch):
@@ -228,7 +229,7 @@ def test_waiting_notes_do_not_starve_the_threads_uploads_use(monkeypatch):
         for gate in flow.local_gate.values():
             gate.set()
         assert await _until(lambda: all(f"frames:{i}" in flow.log for i in ids))
-        assert await _until(lambda: flow.remote_now == lp.NOTE_CONCURRENCY)
+        assert await _until(lambda: flow.remote_now == tf.NOTE_CONCURRENCY)
         answer = await asyncio.wait_for(asyncio.to_thread(lambda: "saved"), 1)
         for gate in flow.remote_gate.values():
             gate.set()
@@ -259,7 +260,7 @@ def test_cancelling_a_note_waiting_for_its_turn_gives_the_turn_back(monkeypatch)
     asyncio.run(scenario())
     assert f"remote:{c}" not in flow.log
     assert f"note-done:{d}" in flow.log
-    assert _slots_free() == lp.NOTE_CONCURRENCY
+    assert _slots_free() == tf.NOTE_CONCURRENCY
 
 
 def test_cancelling_a_note_already_with_claude_keeps_its_turn_until_it_stops(monkeypatch):
@@ -282,7 +283,7 @@ def test_cancelling_a_note_already_with_claude_keeps_its_turn_until_it_stops(mon
         for gate in flow.remote_gate.values():
             gate.set()
         await asyncio.gather(*runners, return_exceptions=True)
-        assert await _until(lambda: _slots_free() == lp.NOTE_CONCURRENCY)
+        assert await _until(lambda: _slots_free() == tf.NOTE_CONCURRENCY)
 
     asyncio.run(scenario())
-    assert flow.remote_peak == lp.NOTE_CONCURRENCY
+    assert flow.remote_peak == tf.NOTE_CONCURRENCY

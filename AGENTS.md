@@ -28,6 +28,10 @@ exists and that no other file judges whether a task is still busy.
 
 - Whether a task is still working, on what, and whether it is finished: `backend/core/task_activity.py`
 - The steps a task records after it is queued: `backend/core/task_steps.py`
+- The processing queue (which task runs now, which wait): `backend/core/task_queue.py`
+- What runs once a task's turn comes (pipeline, cut, note, compressed copy, Feishu): `backend/core/task_flow.py`
+- Turning a submission into a queued task (options, context, by path, retry): `backend/core/task_submission.py`; a video link: `backend/core/link_submission.py`
+- Cutting again or rewriting the note of a finished task on request: `backend/core/task_reruns.py`
 - Storing and reading task records: `backend/core/job_store.py`
 - What to cut, read from the whole timeline: `backend/core/survey_cut.py`
 - Which model judges the cut: `backend/core/cut_judge.py`; the user's agent judging it: `backend/core/agent_cut.py`
@@ -42,13 +46,13 @@ exists and that no other file judges whether a task is still busy.
 - Button and card styles: `frontend/src/lib/ui.js`; a task's status as the pages show it: `frontend/src/lib/taskState.js`
 - What an agent is told: `scripts/fluentflow_mcp_server.py` (tools) and `agent/skills/fluentflow/SKILL.md` (workflow)
 
-`frontend/src/routes/editor.jsx` and `backend/routers/local_processing.py` are the
-two files most often edited by several sessions at once. When a change touches
-one of them, first move the part you change into its own file, then change it
-there. The editor splits into its header bar, transcript pane, note pane, and
-playback with note following; the processing routes into the queue, the
-submission entries, and the flow after the transcript (cut, note, compressed
-copy, Feishu). Do not split them for its own sake.
+`frontend/src/routes/editor.jsx` is the file most often edited by several
+sessions at once. When a change touches it, first move the part you change into
+its own file, then change it there: its header bar, transcript pane, note pane,
+and playback with note following. Do not split it for its own sake. The routes
+in `backend/routers/` only turn requests into calls; what they call lives in
+`backend/core`, and the agent routes (`backend/routers/local_agent.py`) import
+nothing from the page's routes (`tests/test_agent_surface.py`).
 
 ## Open problems
 

@@ -11,20 +11,21 @@ import asyncio
 import pytest
 
 from backend.routers import local_processing as lp
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
 def _clean_queue():
-    lp._QUEUE_RECENT.clear()
+    tq._QUEUE_RECENT.clear()
     yield
-    lp._QUEUE_RECENT.clear()
+    tq._QUEUE_RECENT.clear()
 
 
 def _hand_out(task_id: str):
     """What a submission does: read the barrier, then record itself."""
-    barrier = lp._queue_tail_barrier()
+    barrier = tq._queue_tail_barrier()
     done = asyncio.Event()
-    lp._queue_tail_record(task_id, done)
+    tq._queue_tail_record(task_id, done)
     return barrier, done
 
 
@@ -32,13 +33,13 @@ def test_the_first_jobs_up_to_the_limit_start_without_waiting():
     """A render is four ffmpeg processes and the transcription after it is one
     model on one core, so holding the second job back leaves most of the machine
     idle for half of every job."""
-    barriers = [_hand_out(f"t{i}")[0] for i in range(lp.QUEUE_CONCURRENCY)]
+    barriers = [_hand_out(f"t{i}")[0] for i in range(tq.QUEUE_CONCURRENCY)]
 
-    assert barriers == [None] * lp.QUEUE_CONCURRENCY
+    assert barriers == [None] * tq.QUEUE_CONCURRENCY
 
 
 def test_the_next_job_waits_on_the_one_that_will_free_a_slot():
-    for i in range(lp.QUEUE_CONCURRENCY):
+    for i in range(tq.QUEUE_CONCURRENCY):
         _hand_out(f"t{i}")
 
     barrier, _ = _hand_out("overflow")
@@ -54,7 +55,7 @@ def test_a_finished_job_stops_holding_anyone_back():
     """An event already set means that slot is free — waiting on it would be a
     queue that never drains after the first completion."""
     events = []
-    for i in range(lp.QUEUE_CONCURRENCY):
+    for i in range(tq.QUEUE_CONCURRENCY):
         _, done = _hand_out(f"t{i}")
         events.append(done)
     events[0].set()
@@ -70,13 +71,13 @@ def test_the_chain_does_not_grow_with_the_archive():
     for i in range(200):
         _hand_out(f"t{i}")
 
-    assert len(lp._QUEUE_RECENT) <= lp.QUEUE_CONCURRENCY + 1
+    assert len(tq._QUEUE_RECENT) <= tq.QUEUE_CONCURRENCY + 1
 
 
 def test_concurrency_of_one_is_still_a_serial_queue(monkeypatch):
     """The setting has to be able to go back: one job at a time is what this was
     before, and what a smaller machine may still need."""
-    monkeypatch.setattr(lp, "QUEUE_CONCURRENCY", 1)
+    monkeypatch.setattr(tq, "QUEUE_CONCURRENCY", 1)
 
     first, _ = _hand_out("a")
     second, _ = _hand_out("b")
@@ -91,4 +92,4 @@ def test_the_concurrency_setting_is_what_this_machine_was_measured_at():
     because raising it is a memory decision and not a free one: measured at 2 on
     a 16GB machine, load went from ~50 to ~102 in fifteen minutes with swap
     nearly exhausted, which is the shape that precedes a tenfold slowdown."""
-    assert lp.QUEUE_CONCURRENCY == 1
+    assert tq.QUEUE_CONCURRENCY == 1

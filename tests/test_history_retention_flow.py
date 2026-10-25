@@ -20,6 +20,7 @@ import pytest
 from backend.core import job_store
 from backend.core.storage_paths import _artifact_storage_dir, _source_storage_dir, find_source_file
 from backend.routers import local_processing as lp
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 CLIENT = "retention-flow-test"
 
@@ -72,7 +73,7 @@ def test_an_expired_recording_is_removed_and_the_note_and_transcript_stay():
     expired = _finished_task("ret-expired", expires_in_days=-1)
     assert find_source_file("ret-expired") is not None
 
-    outcome = lp._enforce_local_history_retention(CLIENT)
+    outcome = ts._enforce_local_history_retention(CLIENT)
 
     assert outcome["expired_source_count"] == 1
     assert outcome["pruned_count"] == 0
@@ -96,7 +97,7 @@ def test_a_recording_still_inside_its_window_is_left_exactly_as_it_was():
     fresh = _finished_task("ret-fresh", expires_in_days=5)
     before = job_store.get_job("ret-fresh", client_id=CLIENT)
 
-    outcome = lp._enforce_local_history_retention(CLIENT)
+    outcome = ts._enforce_local_history_retention(CLIENT)
 
     assert outcome["expired_source_count"] == 0
     assert (fresh["source_dir"] / "source.mp4").read_bytes() == b"the recording"
@@ -107,8 +108,8 @@ def test_one_pass_handles_both_and_the_second_pass_finds_nothing_more():
     expired = _finished_task("ret-old", expires_in_days=-0.01)
     fresh = _finished_task("ret-new", expires_in_days=30)
 
-    first = lp._enforce_local_history_retention(CLIENT)
-    second = lp._enforce_local_history_retention(CLIENT)
+    first = ts._enforce_local_history_retention(CLIENT)
+    second = ts._enforce_local_history_retention(CLIENT)
 
     assert first["expired_source_count"] == 1 and second["expired_source_count"] == 0
     assert not expired["source_dir"].exists()
@@ -120,7 +121,7 @@ def test_a_running_task_is_never_touched_even_with_a_stale_expiry():
     """A task mid-run may carry a date from a previous attempt; the recording is in use."""
     running = _finished_task("ret-running", expires_in_days=-1, status="running")
 
-    outcome = lp._enforce_local_history_retention(CLIENT)
+    outcome = ts._enforce_local_history_retention(CLIENT)
 
     assert outcome["expired_source_count"] == 0
     assert (running["source_dir"] / "source.mp4").is_file()
@@ -130,10 +131,10 @@ def test_the_pass_only_looks_at_its_own_client():
     """Local has one owner, but the pass is scoped so nothing else's rows are read."""
     other = _finished_task("ret-other", expires_in_days=-1)
 
-    outcome = lp._enforce_local_history_retention("someone-else")
+    outcome = ts._enforce_local_history_retention("someone-else")
     assert outcome["expired_source_count"] == 0
     assert (other["source_dir"] / "source.mp4").is_file()
-    assert lp._enforce_local_history_retention(None)["pruned_count"] == 0
+    assert ts._enforce_local_history_retention(None)["pruned_count"] == 0
 
 
 # ── nothing a task produced expires, however old it is ──────────────────────
@@ -164,7 +165,7 @@ def test_a_year_old_task_keeps_everything_but_fluentflows_copy_of_the_upload():
     (frames / "note_0002.jpg").write_bytes(b"only a candidate")
     _age("ret-year-old", 365)
 
-    lp._enforce_local_history_retention(CLIENT)
+    ts._enforce_local_history_retention(CLIENT)
 
     job = job_store.get_job("ret-year-old")
     assert job is not None, "the task is not deleted"
@@ -203,7 +204,7 @@ def _link_task(task_id: str, *, with_cut: bool) -> dict:
 def test_a_link_download_with_no_de_breathed_version_is_kept_past_its_window():
     task = _link_task("ret-link-uncut", with_cut=False)
 
-    lp._enforce_local_history_retention(CLIENT)
+    ts._enforce_local_history_retention(CLIENT)
 
     assert task["download"].is_file(), "nothing else holds this recording"
     assert (task["source_dir"] / "source.mp4").is_file()
@@ -213,7 +214,7 @@ def test_a_link_download_with_no_de_breathed_version_is_kept_past_its_window():
 def test_a_link_download_whose_de_breathed_version_exists_expires_as_usual():
     task = _link_task("ret-link-cut", with_cut=True)
 
-    lp._enforce_local_history_retention(CLIENT)
+    ts._enforce_local_history_retention(CLIENT)
 
     assert not task["download"].exists()
     assert (task["artifact_dir"] / "debreath" / "lecture_debreath.mp4").is_file(), "the cut version stays"
@@ -231,7 +232,7 @@ def test_zero_days_keeps_the_recording_when_the_task_finishes(monkeypatch, days)
     monkeypatch.setenv("FLUENTFLOW_SOURCE_RETENTION_DAYS", days)
     task = _finished_task("retention-forever", expires_in_days=7)
 
-    finished = lp._finalize_local_result_storage("retention-forever", task["result"], {"route": "/process"})
+    finished = ts._finalize_local_result_storage("retention-forever", task["result"], {"route": "/process"})
 
     assert (task["source_dir"] / "source.mp4").exists(), "the recording is not deleted"
     assert finished["source_file_available"] is True
@@ -241,11 +242,11 @@ def test_zero_days_keeps_the_recording_when_the_task_finishes(monkeypatch, days)
 def test_zero_days_keeps_the_recording_through_later_passes(monkeypatch):
     monkeypatch.setenv("FLUENTFLOW_SOURCE_RETENTION_DAYS", "0")
     task = _finished_task("retention-forever-pass", expires_in_days=7)
-    finished = lp._finalize_local_result_storage("retention-forever-pass", task["result"], {"route": "/process"})
+    finished = ts._finalize_local_result_storage("retention-forever-pass", task["result"], {"route": "/process"})
     job_store.update_job_result("retention-forever-pass", finished, client_id=CLIENT)
 
-    lp._enforce_local_history_retention(CLIENT)
-    lp._enforce_local_history_retention(CLIENT)
+    ts._enforce_local_history_retention(CLIENT)
+    ts._enforce_local_history_retention(CLIENT)
 
     assert find_source_file("retention-forever-pass") is not None
     assert job_store.get_job("retention-forever-pass", client_id=CLIENT)["result"]["source_file_available"] is True
@@ -262,7 +263,7 @@ def test_with_no_setting_a_finished_task_keeps_its_recording_and_gets_no_expiry(
     monkeypatch.delenv("FLUENTFLOW_SOURCE_RETENTION_DAYS", raising=False)
     task = _finished_task("retention-default", expires_in_days=7)
 
-    finished = lp._finalize_local_result_storage("retention-default", task["result"], {"route": "/process"})
+    finished = ts._finalize_local_result_storage("retention-default", task["result"], {"route": "/process"})
 
     assert finished["source_file_available"] is True
     assert not finished.get("source_retention_expires_at")
@@ -273,7 +274,7 @@ def test_with_no_setting_an_old_expiry_no_longer_deletes_anything(monkeypatch):
     upload = _finished_task("retention-old-upload", expires_in_days=-30)
     link = _link_task("retention-old-link", with_cut=True)
 
-    lp._enforce_local_history_retention(CLIENT)
+    ts._enforce_local_history_retention(CLIENT)
 
     assert (upload["source_dir"] / "source.mp4").is_file()
     assert link["download"].is_file(), "a de-breathed version existing is no reason to drop the original"

@@ -22,6 +22,7 @@ import pytest
 
 from backend.core import local_intake_flow as flow
 from backend.routers import local_processing as lp
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 
 # ── which tasks get a copy ─────────────────────────────────────────────────
@@ -91,18 +92,18 @@ class Steps:
 
 
 def _wire(monkeypatch, steps, *, note=True):
-    monkeypatch.setattr(lp, "_run_pipeline", steps.pipeline)
-    monkeypatch.setattr(lp.local_intake_flow, "survey_first_enabled", lambda: False)
-    monkeypatch.setattr(lp.local_intake_flow, "note_is_wanted", lambda *_a: note)
-    monkeypatch.setattr(lp.local_intake_flow, "mark_note_running", lambda *_a: None)
-    monkeypatch.setattr(lp.local_intake_flow, "write_note", steps.write_note)
-    monkeypatch.setattr(lp.local_intake_flow, "compress_original", steps.compress)
-    monkeypatch.setattr(lp.tail_trim, "trim_tail", lambda *_a: None)
+    monkeypatch.setattr(tf, "_run_pipeline", steps.pipeline)
+    monkeypatch.setattr(tf.local_intake_flow, "survey_first_enabled", lambda: False)
+    monkeypatch.setattr(tf.local_intake_flow, "note_is_wanted", lambda *_a: note)
+    monkeypatch.setattr(tf.local_intake_flow, "mark_note_running", lambda *_a: None)
+    monkeypatch.setattr(tf.local_intake_flow, "write_note", steps.write_note)
+    monkeypatch.setattr(tf.local_intake_flow, "compress_original", steps.compress)
+    monkeypatch.setattr(tf.tail_trim, "trim_tail", lambda *_a: None)
 
     async def deliver(_ctx):
         steps.log.append("delivered")
-    monkeypatch.setattr(lp, "_export_note_written_after_pipeline", lambda _ctx: asyncio.sleep(0))
-    monkeypatch.setattr(lp, "_deliver_to_output_folder", deliver)
+    monkeypatch.setattr(tf, "_export_note_written_after_pipeline", lambda _ctx: asyncio.sleep(0))
+    monkeypatch.setattr(tf, "_deliver_to_output_folder", deliver)
 
 
 async def _until(predicate, tries=150):
@@ -119,7 +120,7 @@ def test_the_queue_waits_for_the_copy_but_not_for_claude(monkeypatch):
 
     async def scenario():
         done = asyncio.Event()
-        runner = asyncio.create_task(lp.run_pipeline_then_note(done, SimpleNamespace(task_id_value="t", client_id=None)))
+        runner = asyncio.create_task(tf.run_pipeline_then_note(done, SimpleNamespace(task_id_value="t", client_id=None)))
         assert await _until(lambda: "copy-start" in steps.log)
         await asyncio.sleep(0.1)
         assert not done.is_set(), "the next recording started beside the copy"
@@ -138,6 +139,6 @@ def test_a_task_without_a_note_still_gets_its_copy(monkeypatch):
     _wire(monkeypatch, steps, note=False)
     steps.copy_gate.set()
 
-    asyncio.run(asyncio.wait_for(lp.run_pipeline_then_note(asyncio.Event(), SimpleNamespace(task_id_value="t", client_id=None)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), SimpleNamespace(task_id_value="t", client_id=None)), 5))
 
     assert "copy-done" in steps.log and steps.log.index("copy-done") < steps.log.index("delivered")

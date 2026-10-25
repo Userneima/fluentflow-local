@@ -29,6 +29,7 @@ import pytest
 import backend.core.visual_note_job as vn
 from backend.core import cut_timeline
 from backend.routers import local_processing as lp
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 from test_visual_note_job import TASK, job_store, no_ambient_key, vn_result  # noqa: F401
 
 # Kept: 0-10 s and 20-100 s of the original; 10-20 s is cut.
@@ -65,19 +66,19 @@ class Flow:
 
 
 def _wire(monkeypatch, flow, *, claude=True):
-    monkeypatch.setattr(lp, "_run_pipeline", flow.pipeline)
-    monkeypatch.setattr(lp.local_intake_flow, "survey_first_enabled", lambda: True)
-    monkeypatch.setattr(lp.local_intake_flow, "note_is_wanted", lambda *_a: True)
-    monkeypatch.setattr(lp.local_intake_flow, "mark_note_running", lambda *_a: None)
-    monkeypatch.setattr(lp.local_intake_flow, "write_note", flow.write_note)
-    monkeypatch.setattr(lp.survey_cut, "survey_and_cut", flow.survey_and_cut)
+    monkeypatch.setattr(tf, "_run_pipeline", flow.pipeline)
+    monkeypatch.setattr(tf.local_intake_flow, "survey_first_enabled", lambda: True)
+    monkeypatch.setattr(tf.local_intake_flow, "note_is_wanted", lambda *_a: True)
+    monkeypatch.setattr(tf.local_intake_flow, "mark_note_running", lambda *_a: None)
+    monkeypatch.setattr(tf.local_intake_flow, "write_note", flow.write_note)
+    monkeypatch.setattr(tf.survey_cut, "survey_and_cut", flow.survey_and_cut)
     monkeypatch.setattr(
-        lp.visual_note_channel, "resolve_channel", lambda *_a, **_k: SimpleNamespace(available=claude),
+        tf.visual_note_channel, "resolve_channel", lambda *_a, **_k: SimpleNamespace(available=claude),
     )
-    monkeypatch.setattr(lp.visual_note_job, "put_back_onto_original",
+    monkeypatch.setattr(tf.visual_note_job, "put_back_onto_original",
                         lambda *_a, **_k: flow.log.append("put-back-checked"))
-    monkeypatch.setattr(lp, "_export_note_written_after_pipeline", _nothing)
-    monkeypatch.setattr(lp, "_deliver_to_output_folder", _nothing)
+    monkeypatch.setattr(tf, "_export_note_written_after_pipeline", _nothing)
+    monkeypatch.setattr(tf, "_deliver_to_output_folder", _nothing)
 
 
 async def _nothing(_ctx):
@@ -102,7 +103,7 @@ def test_the_note_starts_once_the_cut_is_decided_and_does_not_wait_for_the_rende
 
     async def scenario():
         done = asyncio.Event()
-        runner = asyncio.create_task(lp.run_pipeline_then_note(done, _ctx()))
+        runner = asyncio.create_task(tf.run_pipeline_then_note(done, _ctx()))
         assert await _until(lambda: "note-start" in flow.log), "the note waited for the render"
         assert "cut-done" not in flow.log
         await asyncio.sleep(0.1)
@@ -125,7 +126,7 @@ def test_with_nothing_to_cut_the_note_waits_for_the_cut_step(monkeypatch):
     flow.render_gate.set()
     flow.remote_gate.set()
 
-    asyncio.run(asyncio.wait_for(lp.run_pipeline_then_note(asyncio.Event(), _ctx()), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx()), 5))
     assert flow.log.index("cut-done") < flow.log.index("note-start")
     assert flow.planned is None
 
@@ -136,7 +137,7 @@ def test_without_claude_the_note_waits_for_the_cut(monkeypatch):
     flow.render_gate.set()
     flow.remote_gate.set()
 
-    asyncio.run(asyncio.wait_for(lp.run_pipeline_then_note(asyncio.Event(), _ctx()), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx()), 5))
     assert flow.log.index("cut-done") < flow.log.index("note-start")
     assert flow.planned is None
 

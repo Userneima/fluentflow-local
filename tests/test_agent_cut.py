@@ -37,7 +37,7 @@ from backend.core import agent_cut, job_store, silence_cuts, survey_cut
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.routers.local_agent as local_agent
 import backend.routers.local_job_debreath as local_job_debreath
-import backend.routers.local_processing as local_processing
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 from tests.test_survey_cut import TAIL, _recording, _segments
 
@@ -320,17 +320,17 @@ def test_after_waiting_the_task_is_cut_with_the_decision_or_by_fluentflow(monkey
         hand_off()
 
     states = iter([None, {"status": "decided", "judged_by": "agent:x", "decision": {"kept_gaps": [], "removed": []}}])
-    monkeypatch.setattr(local_processing.agent_cut, "check", lambda *a: next(states))
-    monkeypatch.setattr(local_processing.agent_cut, "finished", lambda *a: None)
-    monkeypatch.setattr(local_processing, "AGENT_CUT_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(local_processing, "_cut_then_note", cut_then_note)
-    monkeypatch.setattr(local_processing.output_folder, "schedule_sync", lambda task_id: None)
-    asyncio.run(local_processing.continue_after_agent("t-1", None))
+    monkeypatch.setattr(tf.agent_cut, "check", lambda *a: next(states))
+    monkeypatch.setattr(tf.agent_cut, "finished", lambda *a: None)
+    monkeypatch.setattr(tf, "AGENT_CUT_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(tf, "_cut_then_note", cut_then_note)
+    monkeypatch.setattr(tf.output_folder, "schedule_sync", lambda task_id: None)
+    asyncio.run(tf.continue_after_agent("t-1", None))
     assert calls[0]["judged_by"] == "agent:x" and callable(calls[0]["decide"])
 
-    monkeypatch.setattr(local_processing.agent_cut, "check",
+    monkeypatch.setattr(tf.agent_cut, "check",
                         lambda *a: {"status": "fallback", "fallback_reason": "agent 的对话已经关掉了"})
-    asyncio.run(local_processing.continue_after_agent("t-2", None))
+    asyncio.run(tf.continue_after_agent("t-2", None))
     assert calls[1] == {"extra": {"agent_fallback": "agent 的对话已经关掉了"}}
 
 

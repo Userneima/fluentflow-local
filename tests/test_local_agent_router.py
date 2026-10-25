@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from backend.core import lark_export_target  # noqa: E402
+
 import functools
 from types import SimpleNamespace
 
@@ -13,7 +15,7 @@ import backend.core.local_entry_guards as guards
 from backend.core import job_store
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.routers.local_agent as local_agent
-import backend.routers.local_video_sources as local_video_sources
+import backend.core.link_submission as local_video_sources
 from backend.routers.local_agent import router as agent_router
 from backend.routers.local_video_sources import router as video_router
 
@@ -498,7 +500,7 @@ def _export_stack(monkeypatch, agent_stack, task_id, preferences):
     )
     for name in ("get_job", "update_job_result"):
         monkeypatch.setattr(
-            feishu_export, name,
+            lark_export_target, name,
             functools.partial(getattr(job_store, name), db_path=agent_stack["jobs_db"]),
         )
     monkeypatch.setattr(local_agent, "get_preference", lambda name: preferences.get(name))
@@ -550,7 +552,7 @@ def test_agent_export_without_any_choice_is_auto(monkeypatch, agent_stack, cli_s
     import backend.routers.local_feishu_export as feishu_export
 
     seen = _export_stack(monkeypatch, agent_stack, f"t-auto-{expected}", {})
-    monkeypatch.setattr(feishu_export, "lark_cli_ready", lambda: cli_signed_in)
+    monkeypatch.setattr(lark_export_target, "lark_cli_ready", lambda: cli_signed_in)
 
     r = TestClient(_app()).post(f"/agent/v1/tasks/t-auto-{expected}/exports", headers=_HEADERS, json={})
 

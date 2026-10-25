@@ -1,9 +1,9 @@
 """The media job pipeline.
 
 Holds MediaJobContext, the _stream_media_job pipeline generator, execute_media_job,
-and the transcript-correction / source-language helpers. Both entry points,
-routers/local_processing.py and routers/local_video_sources.py, build their
-context through local_processing's _local_media_job_context.
+and the transcript-correction / source-language helpers. Every entry (an
+upload, a recording by path, a retry, a link) builds its context through
+``task_submission._local_media_job_context``.
 
 Blocks lifted out of the generator live in media_job_outcome (the cancelled and
 failed endings) and media_job_stages (Lark export, speaker labelling, transcript

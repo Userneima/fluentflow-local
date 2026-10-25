@@ -10,7 +10,7 @@ import asyncio
 from backend.core import job_store
 from backend.core.local_entry_guards import CancellationGate
 from backend.core.video_source import VideoSourceProgress
-from backend.routers import local_video_sources as lvs
+from backend.core import link_submission as lvs
 
 
 def _download_reports_then_stops(seen: dict):

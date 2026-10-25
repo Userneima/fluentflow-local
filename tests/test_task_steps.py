@@ -34,6 +34,7 @@ import pytest
 from backend.core import job_store, task_activity, task_steps
 from backend.routers import local_agent
 from backend.routers import local_processing as lp
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 _GUARD_PATH = Path(__file__).resolve().parents[1] / "launchers" / "macos" / "count_active_jobs.py"
 _spec = importlib.util.spec_from_file_location("count_active_jobs", _GUARD_PATH)
@@ -117,17 +118,17 @@ class Flow:
 
 
 def _wire(monkeypatch, flow):
-    monkeypatch.setattr(lp, "_run_pipeline", flow.pipeline)
-    monkeypatch.setattr(lp, "_agent_judges_cut", _never)
-    monkeypatch.setattr(lp.local_intake_flow, "survey_first_enabled", lambda: True)
-    monkeypatch.setattr(lp.local_intake_flow, "note_is_wanted", lambda *_a: flow.note)
-    monkeypatch.setattr(lp.local_intake_flow, "mark_note_running", lambda *_a: None)
-    monkeypatch.setattr(lp.local_intake_flow, "write_note", flow.write_note)
-    monkeypatch.setattr(lp.local_intake_flow, "compress_original", lambda *_a: None)
-    monkeypatch.setattr(lp.survey_cut, "survey_and_cut", flow.survey_and_cut)
-    monkeypatch.setattr(lp.visual_note_channel, "resolve_channel",
+    monkeypatch.setattr(tf, "_run_pipeline", flow.pipeline)
+    monkeypatch.setattr(tf, "_agent_judges_cut", _never)
+    monkeypatch.setattr(tf.local_intake_flow, "survey_first_enabled", lambda: True)
+    monkeypatch.setattr(tf.local_intake_flow, "note_is_wanted", lambda *_a: flow.note)
+    monkeypatch.setattr(tf.local_intake_flow, "mark_note_running", lambda *_a: None)
+    monkeypatch.setattr(tf.local_intake_flow, "write_note", flow.write_note)
+    monkeypatch.setattr(tf.local_intake_flow, "compress_original", lambda *_a: None)
+    monkeypatch.setattr(tf.survey_cut, "survey_and_cut", flow.survey_and_cut)
+    monkeypatch.setattr(tf.visual_note_channel, "resolve_channel",
                         lambda *_a, **_k: SimpleNamespace(available=False))
-    monkeypatch.setattr(lp, "_deliver_to_output_folder", _nothing)
+    monkeypatch.setattr(tf, "_deliver_to_output_folder", _nothing)
 
 
 async def _never(_ctx):
@@ -161,7 +162,7 @@ def test_while_the_cut_and_note_are_still_coming_the_task_is_busy_everywhere(mon
     _wire(monkeypatch, flow)
 
     async def scenario():
-        runner = asyncio.create_task(lp.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)))
+        runner = asyncio.create_task(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)))
         assert await _until(lambda: (_steps(task_id).get("cut") or {}).get("status") == "running")
         # The transcript is the user's already; the task is not finished.
         assert _job(task_id)["result"]["transcript_text"] == "大家好"
@@ -192,7 +193,7 @@ def test_a_task_that_only_wanted_a_transcript_is_finished_once_it_is_stored(monk
     flow = Flow(task_id, note=False, cut=False)
     _wire(monkeypatch, flow)
 
-    asyncio.run(asyncio.wait_for(lp.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
 
     assert not any(_busy_everywhere(task_id).values())
     assert {name: step["status"] for name, step in _steps(task_id).items()} == {
@@ -207,7 +208,7 @@ def test_a_failed_note_ends_the_task_and_names_the_failure(monkeypatch, task_id)
     flow.note_gate.set()
     _wire(monkeypatch, flow)
 
-    asyncio.run(asyncio.wait_for(lp.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
 
     activity = task_activity.activity(_job(task_id))
     assert not activity.busy
@@ -223,7 +224,7 @@ def test_a_cut_that_raises_is_failed_and_the_task_still_ends(monkeypatch, task_i
     flow.note_gate.set()
     _wire(monkeypatch, flow)
 
-    asyncio.run(asyncio.wait_for(lp.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
 
     steps = _steps(task_id)
     assert steps["cut"]["status"] == "failed"
@@ -239,7 +240,7 @@ def test_a_note_that_raises_leaves_no_step_in_progress(monkeypatch, task_id):
     _wire(monkeypatch, flow)
 
     with pytest.raises(RuntimeError):
-        asyncio.run(asyncio.wait_for(lp.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+        asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
 
     steps = _steps(task_id)
     assert steps["note"]["status"] == "failed"
@@ -253,7 +254,7 @@ def test_a_stopped_task_has_its_open_steps_stopped(monkeypatch, task_id):
     _wire(monkeypatch, flow)
 
     async def scenario():
-        runner = asyncio.create_task(lp.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)))
+        runner = asyncio.create_task(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)))
         assert await _until(lambda: (_steps(task_id).get("cut") or {}).get("status") == "running")
         runner.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -277,8 +278,8 @@ def test_the_feishu_step_says_what_came_of_the_export(monkeypatch, task_id):
     async def export(ctx):
         _patch(ctx.task_id_value, lark_error="飞书没登录")
 
-    monkeypatch.setattr(lp, "_export_note_written_after_pipeline", export)
-    asyncio.run(asyncio.wait_for(lp.run_pipeline_then_note(asyncio.Event(), _ctx(task_id, lark=True)), 5))
+    monkeypatch.setattr(tf, "_export_note_written_after_pipeline", export)
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id, lark=True)), 5))
 
     feishu = _steps(task_id)["feishu"]
     assert (feishu["status"], feishu["error_reason"]) == ("failed", "飞书没登录")

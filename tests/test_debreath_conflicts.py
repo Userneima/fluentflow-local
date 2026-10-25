@@ -21,12 +21,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.core import task_reruns
 from backend.routers import local_job_debreath
 
 
 def _client(monkeypatch, job: dict) -> TestClient:
-    monkeypatch.setattr(local_job_debreath, "get_job", lambda task_id, client_id=None: dict(job))
-    monkeypatch.setattr(local_job_debreath, "queue_is_busy", lambda: False)
+    monkeypatch.setattr(task_reruns, "get_job", lambda task_id, client_id=None: dict(job))
+    monkeypatch.setattr(task_reruns, "queue_is_busy", lambda: False)
     monkeypatch.setattr(local_job_debreath.debreath_job, "resolve_source", lambda task_id: Path("/tmp/x.mp4"))
     monkeypatch.setattr(local_job_debreath.debreath_job, "claim", lambda task_id: None)
     monkeypatch.setattr(local_job_debreath.debreath_job, "run_debreath", lambda *a, **k: None)

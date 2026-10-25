@@ -18,6 +18,7 @@ import pytest
 
 from backend.core import job_store
 from backend.routers import local_processing as lp
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 
 def _ctx(task_id: str, *, do_lark=True, deferred=True):
@@ -42,6 +43,9 @@ def task():
 def events(monkeypatch):
     recorded: list[dict] = []
     monkeypatch.setattr(lp, "log_event", lambda **kw: recorded.append(kw))
+    monkeypatch.setattr(tq, "log_event", lp.log_event)
+    monkeypatch.setattr(tf, "log_event", lp.log_event)
+    monkeypatch.setattr(ts, "log_event", lp.log_event)
     return recorded
 
 
@@ -52,8 +56,8 @@ def test_the_written_note_is_exported_and_the_link_kept(task, events, monkeypatc
         sent.append(values["summary_markdown"])
         return {"doc_title": "讲座", "export_target": "lark_openapi", "response": {"url": "https://feishu.example/doc"}}
 
-    monkeypatch.setattr(lp, "_auto_export_local_lark", fake_export)
-    asyncio.run(lp._export_note_written_after_pipeline(_ctx(task)))
+    monkeypatch.setattr(tf, "_auto_export_local_lark", fake_export)
+    asyncio.run(tf._export_note_written_after_pipeline(_ctx(task)))
 
     assert sent == ["# 讲座\n\n正文"]
     result = job_store.get_job(task)["result"]
@@ -65,8 +69,8 @@ def test_a_failed_export_leaves_the_reason_and_keeps_the_note(task, events, monk
     def broken(**_values):
         raise RuntimeError("Feishu app secret is invalid")
 
-    monkeypatch.setattr(lp, "_auto_export_local_lark", broken)
-    asyncio.run(lp._export_note_written_after_pipeline(_ctx(task)))
+    monkeypatch.setattr(tf, "_auto_export_local_lark", broken)
+    asyncio.run(tf._export_note_written_after_pipeline(_ctx(task)))
 
     result = job_store.get_job(task)["result"]
     assert result["lark_error"]
@@ -75,8 +79,8 @@ def test_a_failed_export_leaves_the_reason_and_keeps_the_note(task, events, monk
 
 @pytest.mark.parametrize(("do_lark", "deferred"), [(False, True), (True, False)])
 def test_nothing_is_exported_when_not_asked_or_when_the_pipeline_already_did(task, events, monkeypatch, do_lark, deferred):
-    monkeypatch.setattr(lp, "_auto_export_local_lark", lambda **_v: pytest.fail("must not export"))
-    asyncio.run(lp._export_note_written_after_pipeline(_ctx(task, do_lark=do_lark, deferred=deferred)))
+    monkeypatch.setattr(tf, "_auto_export_local_lark", lambda **_v: pytest.fail("must not export"))
+    asyncio.run(tf._export_note_written_after_pipeline(_ctx(task, do_lark=do_lark, deferred=deferred)))
     assert not events
 
 
@@ -84,9 +88,9 @@ def test_a_task_whose_note_failed_is_not_exported(events, monkeypatch):
     task_id = f"lark-no-note-{uuid.uuid4().hex[:8]}"
     job_store.upsert_job(task_id=task_id, status="completed", client_id=None,
                          result={"summary_markdown": "", "summary_status": "failed"})
-    monkeypatch.setattr(lp, "_auto_export_local_lark", lambda **_v: pytest.fail("must not export"))
+    monkeypatch.setattr(tf, "_auto_export_local_lark", lambda **_v: pytest.fail("must not export"))
     try:
-        asyncio.run(lp._export_note_written_after_pipeline(_ctx(task_id)))
+        asyncio.run(tf._export_note_written_after_pipeline(_ctx(task_id)))
     finally:
         job_store.delete_jobs([task_id])
     assert not events

@@ -12,6 +12,8 @@ refused while the chain is busy instead of running beside it.
 
 from __future__ import annotations
 
+from backend.core import task_reruns  # noqa: E402
+
 import asyncio
 import io
 from pathlib import Path
@@ -27,7 +29,8 @@ from backend.core.job_store import upsert_job
 from backend.core.video_source import SavedVideoSource
 from backend.routers import local_job_debreath, local_job_visual_note
 from backend.routers import local_processing as lp
-from backend.routers import local_video_sources as lvs
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
+from backend.core import link_submission as lvs
 
 
 class _Passed:
@@ -42,12 +45,15 @@ def _fresh_chain(monkeypatch):
     """A hub without the keep-awake guard, and an empty chain, per test."""
     hub = JobEventHub()
     monkeypatch.setattr(lp, "JOB_EVENTS", hub)
+    monkeypatch.setattr(tq, "JOB_EVENTS", lp.JOB_EVENTS)
+    monkeypatch.setattr(tf, "JOB_EVENTS", lp.JOB_EVENTS)
+    monkeypatch.setattr(ts, "JOB_EVENTS", lp.JOB_EVENTS)
     monkeypatch.setattr(lvs, "JOB_EVENTS", hub)
-    lp._QUEUE_RECENT.clear()
-    lp._QUEUE_LINE.clear()
+    tq._QUEUE_RECENT.clear()
+    tq._QUEUE_LINE.clear()
     yield hub
-    lp._QUEUE_RECENT.clear()
-    lp._QUEUE_LINE.clear()
+    tq._QUEUE_RECENT.clear()
+    tq._QUEUE_LINE.clear()
 
 
 def _saved_video(path: Path) -> SavedVideoSource:
@@ -96,8 +102,9 @@ def test_a_single_upload_a_video_link_and_an_in_place_file_run_one_after_another
     downloaded.write_bytes(b"not really video either")
 
     monkeypatch.setattr(lp, "preflight_media_file", lambda _p: _Passed())
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
     monkeypatch.setattr(lvs, "preflight_media_file", lambda _p: _Passed())
-    monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
+    monkeypatch.setattr(tf, "_run_pipeline", fake_pipeline)
     monkeypatch.setattr(lvs, "download_video_source", lambda *a, **k: _saved_video(downloaded))
     monkeypatch.setattr(lvs, "get_preference", lambda name: None)
 
@@ -114,7 +121,7 @@ def test_a_single_upload_a_video_link_and_an_in_place_file_run_one_after_another
             prompt_preset_label=None, duration_limit_seconds=None, task_id=None,
         )
         assert upload.media_type == "text/event-stream"
-        first = lp._QUEUE_RECENT[-1]["task_id"]
+        first = tq._QUEUE_RECENT[-1]["task_id"]
         gates[first] = asyncio.Event()
 
         link = await lvs.submit_video_source_job(
@@ -123,7 +130,7 @@ def test_a_single_upload_a_video_link_and_an_in_place_file_run_one_after_another
         second = link["task_id"]
         gates[second] = asyncio.Event()
 
-        in_place = await lp.queue_local_media_file(
+        in_place = await ts.queue_local_media_file(
             recording, client_id="local-single-user", options={}, duration_limit_seconds=None,
             route="/queue/process-local-files", origin={"chosen_with": "test"},
         )
@@ -167,15 +174,16 @@ def test_a_video_link_downloads_while_the_queue_works_and_waits_only_to_transcri
         return _saved_video(downloaded)
 
     monkeypatch.setattr(lp, "preflight_media_file", lambda _p: _Passed())
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
     monkeypatch.setattr(lvs, "preflight_media_file", lambda _p: _Passed())
-    monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
+    monkeypatch.setattr(tf, "_run_pipeline", fake_pipeline)
     monkeypatch.setattr(lvs, "download_video_source", fake_download)
     monkeypatch.setattr(lvs, "get_preference", lambda name: None)
     recording = tmp_path / "r.mp4"
     recording.write_bytes(b"x")
 
     async def scenario():
-        first = (await lp.queue_local_media_file(
+        first = (await ts.queue_local_media_file(
             recording, client_id="local-single-user", options={}, duration_limit_seconds=None,
             route="/queue/process-local-files", origin={},
         ))["task_id"]
@@ -203,13 +211,13 @@ def test_the_queue_is_busy_while_a_runner_holds_its_link_and_idle_once_it_let_go
             finally:
                 done.set()
 
-        assert lp.queue_is_busy() is False
-        await lp._start_behind_queue(task_id="a", client_id=None, route="/t", stage="x", chained_worker=worker)
+        assert tq.queue_is_busy() is False
+        await tq._start_behind_queue(task_id="a", client_id=None, route="/t", stage="x", chained_worker=worker)
         await asyncio.sleep(0.01)
-        busy_while_running = lp.queue_is_busy()
+        busy_while_running = tq.queue_is_busy()
         gate.set()
         await asyncio.sleep(0.05)
-        return busy_while_running, lp.queue_is_busy(), hub.is_running("a")
+        return busy_while_running, tq.queue_is_busy(), hub.is_running("a")
 
     assert asyncio.run(scenario()) == (True, False, False)
 
@@ -217,9 +225,9 @@ def test_the_queue_is_busy_while_a_runner_holds_its_link_and_idle_once_it_let_go
 def test_a_link_whose_runner_is_gone_does_not_count_as_busy():
     """The stale-chain case the waiters heal: an unset event with no runner
     behind it must not block a de-breath forever either."""
-    lp._queue_tail_record("vanished", asyncio.Event())
+    tq._queue_tail_record("vanished", asyncio.Event())
 
-    assert lp.queue_is_busy() is False
+    assert tq.queue_is_busy() is False
 
 
 # ---- the entries that cannot join the chain refuse while it is busy -------------
@@ -229,7 +237,9 @@ _COMPLETED = {"task_id": "t-done", "status": "completed", "result": {"task_id": 
 
 def _debreath_client(monkeypatch, busy: bool) -> TestClient:
     monkeypatch.setattr(local_job_debreath, "get_job", lambda task_id, client_id=None: dict(_COMPLETED))
+    monkeypatch.setattr(task_reruns, "get_job", local_job_debreath.get_job)
     monkeypatch.setattr(local_job_debreath, "queue_is_busy", lambda: busy)
+    monkeypatch.setattr(task_reruns, "queue_is_busy", local_job_debreath.queue_is_busy)
     monkeypatch.setattr(local_job_debreath.debreath_job, "resolve_source", lambda task_id: Path("/tmp/x.mp4"))
     monkeypatch.setattr(local_job_debreath.debreath_job, "claim", lambda task_id: None)
     monkeypatch.setattr(local_job_debreath.debreath_job, "run_debreath", lambda *a, **k: None)
@@ -258,13 +268,13 @@ def _visual_note_client(monkeypatch, busy: bool) -> TestClient:
         "frame_budget": 0, "transcript_chars": 1, "source_filename": "x.mp4",
         "media": {}, "subtitle_timeline": {},
     }
-    monkeypatch.setattr(local_job_visual_note, "get_job", lambda task_id, client_id=None: dict(_COMPLETED))
-    monkeypatch.setattr(local_job_visual_note, "resolve_secret", lambda *a, **k: "key")
-    monkeypatch.setattr(local_job_visual_note, "queue_is_busy", lambda: busy)
-    monkeypatch.setattr(local_job_visual_note.visual_note_job, "describe", lambda *a, **k: dict(described))
-    monkeypatch.setattr(local_job_visual_note.visual_note_job, "claim", lambda task_id: None)
-    monkeypatch.setattr(local_job_visual_note.visual_note_job, "run_visual_note", lambda *a, **k: None)
-    monkeypatch.setattr(local_job_visual_note.visual_note_job, "release", lambda task_id: None)
+    monkeypatch.setattr(task_reruns, "get_job", lambda task_id, client_id=None: dict(_COMPLETED))
+    monkeypatch.setattr(task_reruns, "resolve_secret", lambda *a, **k: "key")
+    monkeypatch.setattr(task_reruns, "queue_is_busy", lambda: busy)
+    monkeypatch.setattr(task_reruns.visual_note_job, "describe", lambda *a, **k: dict(described))
+    monkeypatch.setattr(task_reruns.visual_note_job, "claim", lambda task_id: None)
+    monkeypatch.setattr(task_reruns.visual_note_job, "run_visual_note", lambda *a, **k: None)
+    monkeypatch.setattr(task_reruns.visual_note_job, "release", lambda task_id: None)
     app = FastAPI()
     app.include_router(local_job_visual_note.router)
     return TestClient(app)
@@ -311,13 +321,14 @@ def test_inspecting_a_file_before_queueing_it_happens_off_the_event_loop(monkeyp
     recording = tmp_path / "r.mp4"
     recording.write_bytes(b"x")
     monkeypatch.setattr(lp, "preflight_media_file", _off_the_loop(seen))
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
 
     async def no_pipeline(previous, done, ctx):
         done.set()
 
-    monkeypatch.setattr(lp, "_run_serially", no_pipeline)
+    monkeypatch.setattr(tf, "_run_serially", no_pipeline)
 
-    asyncio.run(lp.queue_local_media_file(
+    asyncio.run(ts.queue_local_media_file(
         recording, client_id="local-single-user", options={}, duration_limit_seconds=None,
         route="/queue/process-local-files", origin={},
     ))
@@ -336,9 +347,11 @@ def test_the_cookie_check_reads_the_browser_store_off_the_event_loop(monkeypatch
             seen["on_loop"] = False
         return {"ok": True, "browser": browser}
 
-    monkeypatch.setattr(lvs, "check_browser_cookies", probe)
+    from backend.routers import local_video_sources as link_routes
+
+    monkeypatch.setattr(link_routes, "check_browser_cookies", probe)
     app = FastAPI()
-    app.include_router(lvs.router)
+    app.include_router(link_routes.router)
 
     r = TestClient(app).post("/video-sources/cookie-check", json={"browser": "chrome"})
 
@@ -361,8 +374,8 @@ def test_a_task_submitted_as_a_link_gets_its_note_written_too(tmp_path, monkeypa
         noted.append(task_id)
 
     monkeypatch.setattr(lvs, "preflight_media_file", lambda _p: _Passed())
-    monkeypatch.setattr(lp, "_run_pipeline", fake_pipeline)
-    monkeypatch.setattr(lp, "_write_note_after_transcript", record_note)
+    monkeypatch.setattr(tf, "_run_pipeline", fake_pipeline)
+    monkeypatch.setattr(tf, "_write_note_after_transcript", record_note)
     monkeypatch.setattr(lvs, "download_video_source", lambda *a, **k: _saved_video(downloaded))
     monkeypatch.setattr(lvs, "get_preference", lambda name: None)
 
@@ -395,7 +408,8 @@ def test_the_submit_answer_says_where_each_recording_really_is_in_line(monkeypat
     log: list[str] = []
     gates: dict[str, asyncio.Event] = {}
     monkeypatch.setattr(lp, "preflight_media_file", lambda _p: _Passed())
-    monkeypatch.setattr(lp, "_run_pipeline", _gated_pipeline(log, gates))
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
+    monkeypatch.setattr(tf, "_run_pipeline", _gated_pipeline(log, gates))
     files = []
     for name in ("a", "b", "c"):
         path = tmp_path / f"{name}.mp4"
@@ -406,7 +420,7 @@ def test_the_submit_answer_says_where_each_recording_really_is_in_line(monkeypat
         answers = []
         for path in files:
             # Submitted one at a time, each as its own "batch of one".
-            answers.append(await lp.queue_local_media_file(
+            answers.append(await ts.queue_local_media_file(
                 path, client_id="local-single-user", options={}, duration_limit_seconds=None,
                 route="/queue/process-local-files", origin={"chosen_with": "test"},
             ))
@@ -425,15 +439,15 @@ def test_resubmitting_a_running_task_id_does_not_let_the_next_job_jump_the_queue
     nothing, and the next recording still waits for the job that is working."""
     log: list[str] = []
     gates: dict[str, asyncio.Event] = {}
-    monkeypatch.setattr(lp, "_run_pipeline", _gated_pipeline(log, gates))
+    monkeypatch.setattr(tf, "_run_pipeline", _gated_pipeline(log, gates))
 
     def ctx(task_id):
         return SimpleNamespace(task_id_value=task_id, client_id=None, event_route=None)
 
     async def start(task_id):
-        return await lp._start_behind_queue(
+        return await tq._start_behind_queue(
             task_id=task_id, client_id=None, route="/test", stage="processing",
-            chained_worker=lambda previous, done: lp._run_serially(previous, done, ctx(task_id)),
+            chained_worker=lambda previous, done: tf._run_serially(previous, done, ctx(task_id)),
         )
 
     async def scenario():

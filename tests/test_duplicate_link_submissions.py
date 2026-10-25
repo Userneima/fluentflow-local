@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from backend.core import job_store
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.video_source import normalize_source_link
-import backend.routers.local_video_sources as lvs
+import backend.core.link_submission as lvs
 from scripts import fluentflow_mcp_server as mcp
 
 _TOKEN = "dup-token"

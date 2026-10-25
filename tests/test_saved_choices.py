@@ -13,7 +13,7 @@ import pytest
 
 from backend.core.local_config import as_recorded, save_preferences, saved_choices
 from backend.core.local_entry_guards import local_ai_kwargs
-from backend.routers.local_processing import _collect_options, _local_media_job_context, _stored_queue_options, local_path_options
+from backend.core.task_submission import _collect_options, _local_media_job_context, _stored_queue_options, local_path_options
 
 
 @pytest.fixture

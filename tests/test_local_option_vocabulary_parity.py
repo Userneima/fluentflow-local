@@ -3,7 +3,7 @@
 Why this test exists
 --------------------
 Run options in the local edition are assembled in three places, all calling
-``_collect_options`` in ``backend/routers/local_processing.py``:
+``_collect_options`` in ``backend/core/task_submission.py``:
 
 * ``process_media``   -- the browser upload / link route
 * ``queue_process``   -- the multi-file / queue route
@@ -41,7 +41,9 @@ from __future__ import annotations
 import ast
 import pathlib
 
-_MODULE = pathlib.Path(__file__).resolve().parents[1] / "backend" / "routers" / "local_processing.py"
+_ROOT = pathlib.Path(__file__).resolve().parents[1] / "backend"
+# The upload routes, and the by-path options the routes and the Agent API share.
+_MODULES = (_ROOT / "routers" / "local_processing.py", _ROOT / "core" / "task_submission.py")
 
 
 def _collect_options_keysets() -> dict[str, set[str]]:
@@ -50,7 +52,6 @@ def _collect_options_keysets() -> dict[str, set[str]]:
     Read straight from the source (not at runtime) so the test needs no ffmpeg,
     no request, and no import side effects -- it is a structural tripwire.
     """
-    tree = ast.parse(_MODULE.read_text(encoding="utf-8"))
     found: dict[str, set[str]] = {}
 
     def visit(node: ast.AST, enclosing: str | None) -> None:
@@ -66,7 +67,8 @@ def _collect_options_keysets() -> dict[str, set[str]]:
                 )
             visit(child, fn)
 
-    visit(tree, None)
+    for module in _MODULES:
+        visit(ast.parse(module.read_text(encoding="utf-8")), None)
     return found
 
 

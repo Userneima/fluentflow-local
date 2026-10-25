@@ -5,7 +5,7 @@ an error: the run then reports success with the feature never having run. A
 
 from __future__ import annotations
 
-from backend.routers.local_processing import local_path_options
+from backend.core.task_submission import local_path_options
 
 
 def test_speaker_and_voice_switches_reach_the_pipeline() -> None:

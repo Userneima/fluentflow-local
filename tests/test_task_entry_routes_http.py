@@ -33,7 +33,8 @@ from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.storage_paths import _source_storage_dir
 from backend.routers import local_processing as lp
-from backend.routers import local_video_sources as lvs
+from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
+from backend.core import link_submission as lvs
 
 CANNED_NOTE = "# 笔记\n\n正文"
 
@@ -79,7 +80,7 @@ def pipeline(monkeypatch):
         await lp.JOB_EVENTS.publish(ctx.task_id_value, {"stage": "done", "progress": 100, "result": result})
         log.append(f"finish:{ctx.task_id_value}")
 
-    monkeypatch.setattr(lp, "_run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(tf, "_run_pipeline", fake_run_pipeline)
     return {"log": log, "contexts": contexts}
 
 
@@ -93,9 +94,13 @@ def client(monkeypatch, pipeline):
     """
     hub = JobEventHub()
     monkeypatch.setattr(lp, "JOB_EVENTS", hub)
+    monkeypatch.setattr(tq, "JOB_EVENTS", lp.JOB_EVENTS)
+    monkeypatch.setattr(tf, "JOB_EVENTS", lp.JOB_EVENTS)
+    monkeypatch.setattr(ts, "JOB_EVENTS", lp.JOB_EVENTS)
     monkeypatch.setattr(lvs, "JOB_EVENTS", hub)
-    lp._QUEUE_RECENT.clear()
+    tq._QUEUE_RECENT.clear()
     monkeypatch.setattr(lp, "preflight_media_file", lambda _path: _Passed())
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
 
     async def no_resume(_task_ids):
         return 0
@@ -103,7 +108,7 @@ def client(monkeypatch, pipeline):
     monkeypatch.setattr(local_main, "resume_interrupted_jobs", no_resume)
     with TestClient(local_main.create_local_app()) as test_client:
         yield test_client
-    lp._QUEUE_RECENT.clear()
+    tq._QUEUE_RECENT.clear()
 
 
 def _wait_until_done(client: TestClient, task_id: str, seconds: float = 5.0) -> dict:
@@ -210,6 +215,7 @@ def test_an_empty_file_is_refused_with_a_readable_reason_and_a_failed_task_that_
     refuses it before anything runs. The real check runs here — its empty-file
     rule needs no ffprobe."""
     monkeypatch.setattr(lp, "preflight_media_file", media_preflight.preflight_media_file)
+    monkeypatch.setattr(ts, "preflight_media_file", lp.preflight_media_file)
 
     response = client.post("/process", files={"file": _upload("empty.mp4", b"")}, data={"task_id": "http-empty"})
 
@@ -456,7 +462,7 @@ def test_a_retry_of_a_task_still_running_is_refused(client, pipeline, monkeypatc
     async def never_finishes(ctx):
         await asyncio.sleep(3600)
 
-    monkeypatch.setattr(lp, "_run_pipeline", never_finishes)
+    monkeypatch.setattr(tf, "_run_pipeline", never_finishes)
     client.post("/queue/process", files=[("files", _upload("slow.mp4"))])
     task_id = job_store.list_jobs(client_id=LOCAL_OWNER_ID, limit=1)[0]["task_id"]
 

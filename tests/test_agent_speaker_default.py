@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 import backend.routers.local_agent as local_agent
 from backend.core import speaker_diarization
-from backend.routers.local_processing import local_path_options
+from backend.core.task_submission import local_path_options
 
 _TOKEN = "speaker-default-token"
 

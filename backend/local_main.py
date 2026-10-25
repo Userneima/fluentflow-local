@@ -76,7 +76,7 @@ from backend.routers.local_job_visual_note import router as job_visual_note_rout
 from backend.routers.local_jobs import router as jobs_router
 from backend.routers.local_note_regen import router as note_regen_router
 from backend.routers.local_note_style import router as note_style_router
-from backend.routers.local_processing import retry_task
+from backend.core.task_submission import retry_task
 from backend.routers.local_processing import router as processing_router
 from backend.routers.local_spa import create_local_spa_router
 from backend.routers.local_system import router as system_router
@@ -292,7 +292,7 @@ async def lifespan(app: FastAPI):
     # Before anything is re-queued (a re-run plans its steps afresh): the steps
     # the stopped service was running did not finish. A task waiting for the
     # user's agent goes on by itself (``resume_agent_cuts`` below).
-    from backend.routers.local_processing import agent_cut_unfinished
+    from backend.core.task_flow import agent_cut_unfinished
 
     closed = task_steps.recover_after_restart(keep=lambda task_id: agent_cut_unfinished(get_job(task_id)))
     if closed:
@@ -316,7 +316,7 @@ async def lifespan(app: FastAPI):
     recover_interrupted()
     # Tasks a restart left waiting for the user's agent to judge their cut
     # go on waiting (or are cut, when the decision had come).
-    from backend.routers.local_processing import resume_agent_cuts
+    from backend.core.task_flow import resume_agent_cuts
 
     waiting = await resume_agent_cuts()
     if waiting:

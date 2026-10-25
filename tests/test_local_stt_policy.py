@@ -30,7 +30,7 @@ def test_an_old_cloud_engine_request_is_still_run_locally(tmp_path):
     import asyncio
 
     from backend.core.queue_options import _queue_options_from_mapping
-    from backend.routers.local_processing import _local_media_job_context
+    from backend.core.task_submission import _local_media_job_context
 
     for legacy in ("elevenlabs", "dashscope"):
         assert normalize_stt_provider(legacy) == "local"

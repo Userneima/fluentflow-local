@@ -46,7 +46,7 @@ def test_long_recording_is_not_rejected_by_default(monkeypatch):
     """Requirement (2026-10-14): Local has no duration limit unless the user sets
     one; a five-hour recording of their own is processed, not refused."""
     from backend.core.media_job import _duration_limit_error
-    from backend.routers.local_processing import _effective_duration_limit
+    from backend.core.task_submission import _effective_duration_limit
 
     monkeypatch.delenv("FLUENTFLOW_MAX_MEDIA_DURATION_SECONDS", raising=False)
     limit = _effective_duration_limit()

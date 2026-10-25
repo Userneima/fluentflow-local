@@ -215,7 +215,7 @@ def test_processing_visual_selector_reads_qwen_secret_from_backend_config() -> N
     # stays independent of hosted configuration while retaining the same
     # backend-config lookup behavior.
     pipeline_source = Path("backend/core/media_job.py").read_text(encoding="utf-8")
-    local_source = Path("backend/routers/local_processing.py").read_text(encoding="utf-8")
+    local_source = Path("backend/core/task_submission.py").read_text(encoding="utf-8")
 
     assert 'visual_api_key = secret_resolver(qwen_api_key, "qwen_api_key")' in pipeline_source
     assert "secret_resolver=resolve_secret" in local_source
