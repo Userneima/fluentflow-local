@@ -18,6 +18,38 @@ current workflow. If the task is for Hosted, switch to the independent
 - Shared capabilities are deliberately ported, reviewed, tested, and committed
   in each repository; never assume a change here reaches Hosted automatically.
 
+## Where things are decided
+
+Each concept below is decided in one place. Change it there; do not add a second
+judgement of it beside the code you happen to be editing. A new concept that
+others will need gets a line here in the same change.
+`tests/test_where_things_are_decided.py` checks that every file named here
+exists and that no other file judges whether a task is still busy.
+
+- Whether a task is still working, on what, and whether it is finished: `backend/core/task_activity.py`
+- The steps a task records after it is queued: `backend/core/task_steps.py`
+- Storing and reading task records: `backend/core/job_store.py`
+- What to cut, read from the whole timeline: `backend/core/survey_cut.py`
+- Which model judges the cut: `backend/core/cut_judge.py`; the user's agent judging it: `backend/core/agent_cut.py`
+- Rendering the cut video: `backend/core/debreath_job.py`
+- Whether Claude writes the note, through the subscription or a key: `backend/core/visual_note_channel.py`
+- How a note is written: `backend/note_skills/fluentflow-note-default/SKILL.md` (a user's own skill replaces it, `FLUENTFLOW_NOTE_SKILL_DIR`)
+- The text-model note and the calls to text models: `backend/core/ai_summarizer.py`, `backend/core/ai_client.py`
+- Correcting the transcript from on-screen subtitles and from the word list: `backend/core/subtitle_correction.py`, `backend/core/glossary_correction.py`
+- The output folder beside a recording: `backend/core/output_folder.py`; keeping a note in step with Feishu: `backend/core/feishu_sync.py`
+- What each processing step currently uses, for the settings page and agents: `backend/core/workflow_status.py`
+- Where runtime data lives: `backend/core/runtime_paths.py`; which edition answers: `backend/core/edition_identity.py`
+- Button and card styles: `frontend/src/lib/ui.js`; a task's status as the pages show it: `frontend/src/lib/taskState.js`
+- What an agent is told: `scripts/fluentflow_mcp_server.py` (tools) and `agent/skills/fluentflow/SKILL.md` (workflow)
+
+`frontend/src/routes/editor.jsx` and `backend/routers/local_processing.py` are the
+two files most often edited by several sessions at once. When a change touches
+one of them, first move the part you change into its own file, then change it
+there. The editor splits into its header bar, transcript pane, note pane, and
+playback with note following; the processing routes into the queue, the
+submission entries, and the flow after the transcript (cut, note, compressed
+copy, Feishu). Do not split them for its own sake.
+
 ## Open problems
 
 Open work, including known problems not yet fixed, is in `docs/01-待办.md`. Its order is the owner's priority rule: items that change what a recording turns into (the cut, the transcript, the note) come first, install next, speed and convenience last; within each, batches that can be done together. When you add an entry, place it by that rule, and for a result-changing item say whether redoing it needs the original recording or only the cut video and output folder, since the owner decides from that whether to keep his originals (decision 8.3). Read it before working in an area it covers; remove an entry when you fix, drop or park it.
