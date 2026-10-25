@@ -45,7 +45,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import process_tree
+from backend.core import process_tree, task_stop
 from backend.core.claude_vision import (
     FRAME_ATTACH_MAX,
     image_block,
@@ -440,6 +440,8 @@ def _run_tracked(command: list[str], *, track: bool = True, **kwargs: Any) -> su
     if track:
         with _RUNNING_LOCK:
             _RUNNING.add(process)
+    # Stopped with the task whose step started it (``task_stop``).
+    task_stop.track(process)
     try:
         try:
             stdout, stderr = process.communicate(stdin_text, timeout=timeout)
@@ -452,6 +454,7 @@ def _run_tracked(command: list[str], *, track: bool = True, **kwargs: Any) -> su
             completed.check_returncode()
         return completed
     finally:
+        task_stop.untrack(process)
         with _RUNNING_LOCK:
             _RUNNING.discard(process)
 

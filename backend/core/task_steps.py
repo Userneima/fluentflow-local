@@ -10,8 +10,11 @@ steps: every step has reached an end (done, failed, skipped or stopped).
 A step is opened by the code that runs it and closed with what it produced
 (``*_outcome`` read the result each step writes). The flow that runs a task
 closes whatever is still open when it ends, however it ends, so no step can
-stay "in progress" after its runner is gone; a restart closes what the previous
-process left open (``recover_after_restart``).
+stay "in progress" after its runner is gone. A restart carries a task on from
+the first step that did not reach its end (``resume_point``, ``reopen_from``;
+``task_flow.resume_after_restart``), and closes the steps of one it does not
+carry on (``recover_after_restart``). A step the user stops ends ``stopped``,
+and carrying the task on starts there.
 
 Writes are best-effort: a step record that cannot be written is logged and the
 task goes on. The task's results are the user's; the steps only describe them.
@@ -26,14 +29,20 @@ from backend.core import job_store
 
 logger = logging.getLogger(__name__)
 
+FETCH = "fetch"
 TRANSCRIBE = "transcribe"
+CORRECT = "correct"
 CUT = "cut"
 NOTE = "note"
 COMPRESS = "compress"
 FEISHU = "feishu"
-ORDER = (TRANSCRIBE, CUT, NOTE, COMPRESS, FEISHU)
+ORDER = (FETCH, TRANSCRIBE, CORRECT, CUT, NOTE, COMPRESS, FEISHU)
+# The steps the pipeline runs before the transcript is stored.
+BEFORE_TRANSCRIPT = (FETCH, TRANSCRIBE, CORRECT)
 LABELS = {
+    FETCH: "取素材",
     TRANSCRIBE: "转录",
+    CORRECT: "修正转录稿",
     CUT: "剪辑",
     NOTE: "写笔记",
     COMPRESS: "压缩副本",
@@ -51,6 +60,8 @@ ENDS = frozenset({DONE, FAILED, SKIPPED, STOPPED})
 
 RESTART_ERROR = "服务重启中断了这一步。"
 UNFINISHED_ERROR = "这一步没有正常结束。"
+# What a step the user stopped says until it is carried on.
+STOPPED_NOTE = "已停下，点「接着做」从这一步开始。"
 
 
 def _write(task_id: str, name: str, status: str, **kwargs: Any) -> None:
@@ -101,21 +112,61 @@ def close_open(task_id: str, *, stopped: bool = False, error: str = UNFINISHED_E
             finish(task_id, name, SKIPPED)
 
 
-def recover_after_restart(keep: Callable[[str], bool] = lambda _task_id: False) -> int:
-    """Close the steps a stopped service left open; ``keep`` names the tasks
-    that go on by themselves (a task waiting for the user's agent)."""
-    closed = 0
+def interrupted() -> list[str]:
+    """Tasks a stopped service left with a step not yet at an end."""
     try:
-        task_ids = job_store.task_ids_with_open_steps()
-    except Exception:  # noqa: BLE001 - nothing to close
+        return job_store.task_ids_with_open_steps()
+    except Exception:  # noqa: BLE001 - nothing to carry on
         logger.warning("could not list open task steps", exc_info=True)
-        return 0
-    for task_id in task_ids:
+        return []
+
+
+def recover_after_restart(keep: Callable[[str], bool] = lambda _task_id: False) -> int:
+    """Close the steps a stopped service left open, for the tasks not carried
+    on (``keep`` names the ones that are)."""
+    closed = 0
+    for task_id in interrupted():
         if keep(task_id):
             continue
         close_open(task_id, error=RESTART_ERROR)
         closed += 1
     return closed
+
+
+def statuses(steps: list[dict[str, Any]] | None) -> dict[str, str]:
+    """Each recorded step's status by name."""
+    found: dict[str, str] = {}
+    for step in steps or []:
+        name = str(step.get("step_type") or "")[len(job_store.TASK_STEP_PREFIX):]
+        if name in ORDER:
+            found[name] = str(step.get("status") or "")
+    return found
+
+
+def resume_point(steps: list[dict[str, Any]] | None) -> str | None:
+    """The step a task carries on from: the first that did not end done or
+    skipped (stopped, failed, or never reached its end). None when there is
+    nothing to carry on: every step done or skipped, or no steps recorded."""
+    named = statuses(steps)
+    if not named:
+        return None
+    for name in ORDER:
+        if named.get(name, PENDING) not in (DONE, SKIPPED):
+            return name
+    return None
+
+
+def reopen_from(task_id: str, name: str, steps: list[dict[str, Any]] | None = None) -> None:
+    """Make ``name`` and every later step not already done open again (not
+    started), for a run that carries the task on from ``name``."""
+    named = statuses(steps if steps is not None else steps_of([task_id]).get(task_id, []))
+    for later in ORDER[ORDER.index(name):]:
+        if named.get(later) != DONE:
+            _write(task_id, later, PENDING, reset=True)
+
+
+def status_of(task_id: str, name: str) -> str | None:
+    return statuses(steps_of([task_id]).get(task_id, [])).get(name)
 
 
 # ── what each step produced, read from the task's result ───────────────────
@@ -185,8 +236,9 @@ def settle(task_id: str, name: str, outcome: tuple[str, str | None]) -> None:
 
 
 __all__ = [
-    "CUT", "COMPRESS", "DONE", "ENDS", "FAILED", "FEISHU", "LABELS", "NOTE", "OPEN", "ORDER",
-    "PENDING", "RUNNING", "SKIPPED", "STOPPED", "TRANSCRIBE",
-    "close_open", "compress_outcome", "cut_outcome", "feishu_outcome", "finish", "note_outcome",
-    "plan", "recover_after_restart", "settle", "start", "steps_of", "transcribe_outcome",
+    "BEFORE_TRANSCRIPT", "CORRECT", "CUT", "COMPRESS", "DONE", "ENDS", "FAILED", "FEISHU", "FETCH", "LABELS",
+    "NOTE", "OPEN", "ORDER", "PENDING", "RUNNING", "SKIPPED", "STOPPED", "TRANSCRIBE",
+    "close_open", "compress_outcome", "cut_outcome", "feishu_outcome", "finish", "interrupted", "note_outcome",
+    "plan", "recover_after_restart", "reopen_from", "resume_point", "settle", "start", "status_of",
+    "statuses", "steps_of", "transcribe_outcome",
 ]

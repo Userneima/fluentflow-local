@@ -1,4 +1,4 @@
-"""Local job-mutation routes: cancellation and deletion."""
+"""Local job-mutation routes: cancelling, stopping a step, carrying on, deleting."""
 
 from __future__ import annotations
 
@@ -6,11 +6,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from backend.core import task_activity
-from backend.core.event_context import event_metadata
-from backend.core.event_logger import log_event
-from backend.core.job_store import cancel_job_steps, delete_jobs, get_job, upsert_job
-from backend.core.local_job_runtime import JOB_EVENTS
+from backend.core import task_actions, task_activity
+from backend.core.job_store import delete_jobs, get_job
 from backend.core.local_request_scope import request_client_id
 from backend.core.storage_cleanup import cleanup_task_all_files
 
@@ -26,50 +23,29 @@ def _local_client_scope(request: Request) -> Optional[str]:
 
 @router.post("/jobs/{task_id}/cancel")
 async def cancel_job(request: Request, task_id: str) -> dict[str, Any]:
-    client_id = _local_client_scope(request)
-    job = get_job(task_id, client_id=client_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("status") in _TERMINAL_STATUSES:
-        raise HTTPException(status_code=409, detail=f"Job is already {job.get('status')}")
+    try:
+        return await task_actions.cancel_task(task_id, _local_client_scope(request))
+    except task_actions.Refused as exc:
+        raise exc.as_http() from exc
 
-    cancelled_running_task = await JOB_EVENTS.cancel(task_id)
-    cancelled_steps = cancel_job_steps(task_id)
-    upsert_job(
-        task_id=task_id,
-        status="cancelled",
-        client_id=job.get("client_id") or client_id,
-        stage=job.get("stage") or "cancelled",
-        progress=job.get("progress") or 0,
-        source_type=job.get("source_type"),
-        source_filename=job.get("source_filename"),
-        source_file_size_mb=job.get("source_file_size_mb"),
-        summary_status=job.get("summary_status"),
-        error_reason="user_cancelled",
-        metadata=job.get("metadata"),
-    )
-    await JOB_EVENTS.publish(
-        task_id,
-        {"stage": "error", "progress": job.get("progress") or 0, "error": "Task cancelled"},
-    )
-    log_event(
-        task_id=task_id,
-        event_name="task_cancelled",
-        source_type=job.get("source_type"),
-        source_filename=job.get("source_filename"),
-        source_file_size_mb=job.get("source_file_size_mb"),
-        stage=job.get("stage"),
-        success=False,
-        metadata=event_metadata(trigger="background_tasks"),
-    )
-    return {
-        "ok": True,
-        "task_id": task_id,
-        "status": "cancelled",
-        "cancelled_running_task": cancelled_running_task,
-        "cancelled_steps": cancelled_steps,
-        "queued_before_cancel": False,
-    }
+
+@router.post("/jobs/{task_id}/stop")
+async def stop_job_step(request: Request, task_id: str) -> dict[str, Any]:
+    """Stop the step the task is on (``task_actions.stop_step``)."""
+    try:
+        return await task_actions.stop_step(task_id, _local_client_scope(request))
+    except task_actions.Refused as exc:
+        raise exc.as_http() from exc
+
+
+@router.post("/jobs/{task_id}/resume")
+async def resume_job(request: Request, task_id: str) -> dict[str, Any]:
+    """Carry the task on from the step that did not finish
+    (``task_actions.resume_task``): 接着做, or 重做这一步 for a failed one."""
+    try:
+        return await task_actions.resume_task(task_id, _local_client_scope(request))
+    except task_actions.Refused as exc:
+        raise exc.as_http() from exc
 
 
 def _delete_job_for_request(request: Request, task_id: str) -> dict[str, Any]:

@@ -33,6 +33,10 @@ class Activity:
     open_steps: tuple[str, ...] = ()
     waiting_for_agent: bool = False
     failed_steps: tuple[str, ...] = field(default_factory=tuple)
+    # Steps the user stopped; and, for a task not working, the step carrying
+    # it on would start from (``task_actions.resume_task``), or None.
+    stopped_steps: tuple[str, ...] = field(default_factory=tuple)
+    resume_from: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +48,13 @@ class Activity:
             "failed_steps": [
                 {"step": name, "label": task_steps.LABELS.get(name, name)} for name in self.failed_steps
             ],
+            "stopped": bool(self.stopped_steps),
+            "stopped_steps": [
+                {"step": name, "label": task_steps.LABELS.get(name, name)} for name in self.stopped_steps
+            ],
+            "resume_from": None if self.resume_from is None else {
+                "step": self.resume_from, "label": task_steps.LABELS.get(self.resume_from, self.resume_from),
+            },
         }
 
 
@@ -67,15 +78,23 @@ def activity(job: dict[str, Any] | None, steps: list[dict[str, Any]] | None = No
     failed = tuple(
         name for name in task_steps.ORDER if str((named.get(name) or {}).get("status")) == task_steps.FAILED
     )
+    stopped = tuple(
+        name for name in task_steps.ORDER if str((named.get(name) or {}).get("status")) == task_steps.STOPPED
+    )
+    resting = {"failed_steps": failed, "stopped_steps": stopped,
+               "resume_from": task_steps.resume_point(steps) if not open_steps else None}
     if status in {"failed", "cancelled"}:
-        return Activity(busy=False, failed_steps=failed)
-    if agent_cut.is_waiting(result):
+        return Activity(busy=False, label="已停下" if stopped else None, **resting)
+    if agent_cut.is_waiting(result) and str((named.get(task_steps.CUT) or {}).get("status")) != task_steps.STOPPED:
         return Activity(busy=False, label="等 agent 判断剪辑", open_steps=open_steps,
                         waiting_for_agent=True, failed_steps=failed)
     if status in _LIVE_STATUSES:
         label = "在排队" if status == "queued" else "正在处理"
-        return Activity(busy=True, label=label, current_step=task_steps.TRANSCRIBE,
-                        open_steps=open_steps or (task_steps.TRANSCRIBE,), failed_steps=failed)
+        running = [name for name in task_steps.BEFORE_TRANSCRIPT
+                   if str((named.get(name) or {}).get("status")) == task_steps.RUNNING]
+        current = running[0] if running else task_steps.TRANSCRIBE
+        return Activity(busy=True, label=label, current_step=current,
+                        open_steps=open_steps or (current,), failed_steps=failed)
     # Re-runs started on a finished task (a new cut, a rewritten note) keep
     # their state in the result, outside the steps.
     rerun: list[str] = []
@@ -86,7 +105,7 @@ def activity(job: dict[str, Any] | None, steps: list[dict[str, Any]] | None = No
         rerun.append(task_steps.NOTE)
     working = tuple(name for name in task_steps.ORDER if name in open_steps or name in rerun)
     if not working:
-        return Activity(busy=False, failed_steps=failed)
+        return Activity(busy=False, label="已停下" if stopped else None, **resting)
     running = [name for name in working if str((named.get(name) or {}).get("status")) == task_steps.RUNNING
                or name in rerun]
     label_step = (running or list(working))[0]
@@ -96,7 +115,9 @@ def activity(job: dict[str, Any] | None, steps: list[dict[str, Any]] | None = No
 
 
 _DELETE_WORDS = {
+    task_steps.FETCH: "这个任务还在处理，等它结束再删。",
     task_steps.TRANSCRIBE: "这个任务还在处理，等它结束再删。",
+    task_steps.CORRECT: "这个任务还在处理，等它结束再删。",
     task_steps.CUT: "这个任务还在剪辑或导出视频，等它结束再删。",
     task_steps.NOTE: "这个任务的笔记还在写，等写完再删。",
     task_steps.COMPRESS: "这个任务还在压缩副本，等它结束再删。",

@@ -106,6 +106,10 @@ def client(monkeypatch, pipeline):
         return 0
 
     monkeypatch.setattr(local_main, "resume_interrupted_jobs", no_resume)
+    # Tasks other tests left with a step open are not carried on into this one.
+    from backend.core import task_actions
+
+    monkeypatch.setattr(task_actions, "stepped_tasks_cut_off", lambda: [])
     with TestClient(local_main.create_local_app()) as test_client:
         yield test_client
     tq._QUEUE_RECENT.clear()

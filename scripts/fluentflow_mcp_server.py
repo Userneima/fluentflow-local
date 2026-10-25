@@ -243,566 +243,24 @@ _CUT_JUDGE_SCHEMA = {
 }
 
 
-def submit_local_media(
-    path: str,
-    title: str | None = None,
-    skip_summary: bool = False,
-    note_mode: str | None = None,
-    prompt_preset: str | None = None,
-    stt_model: str | None = None,
-    speaker_diarization: bool | None = None,
-    system_prompt: str | None = None,
-    cut_judge: str = "auto",
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Submit one recording that stays where it is, by absolute path on this machine.
+# ── tools ────────────────────────────────────────────────────────────────────
+#
+# What an agent is told about a tool is written once, on the tool: the
+# ``tool`` decorator right above each function holds its description and its
+# input schema, and the lists the server answers with are made from them.
 
-    Local edition only, and the backend refuses it from anywhere but localhost. One
-    file per call on purpose: a task has one id, and a call that queued five of them
-    would have nothing to return and nothing to point at when one failed. For a whole
-    folder, loop over this call.
-    """
-    refusal = _require_local_edition(normalize_api_base(api_base))
-    if refusal is not None:
-        return refusal
-    return _watching(_agent_request(
-        "POST",
-        "/agent/v1/tasks",
-        api_base=api_base,
-        client_id=client_id,
-        payload={
-            "path": path,
-            "input_type": "local_path",
-            "title": title,
-            "options": _options(
-                cut_judge=cut_judge,
-                skip_summary="true" if skip_summary else "false",
-                note_mode=note_mode,
-                prompt_preset=prompt_preset,
-                system_prompt=system_prompt,
-                stt_model=stt_model,
-                # Left out unless the caller asks: the backend default is off.
-                speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
-            ),
-        },
-    ), None, api_base, client_id)
+_TOOLS: dict[str, tuple[Any, dict[str, Any]]] = {}
 
 
-def submit_video_link(
-    input_text: str,
-    title: str | None = None,
-    stt_provider: str = "auto",
-    skip_summary: bool = False,
-    note_mode: str | None = None,
-    prompt_preset: str | None = None,
-    allow_duplicate: bool = False,
-    speaker_diarization: bool | None = None,
-    system_prompt: str | None = None,
-    cut_judge: str = "auto",
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Submit a video/share link to FluentFlow and return the created task.
-
-    The same link already queued or running comes back as that task with
-    ``duplicate_of_active: true``; one already completed is refused (409,
-    ``duplicate_link``) unless ``allow_duplicate`` is true.
-    """
-    return _watching(_agent_request(
-        "POST",
-        "/agent/v1/tasks",
-        api_base=api_base,
-        client_id=client_id,
-        payload={
-            "input": input_text,
-            "input_type": "video_link",
-            "title": title,
-            "allow_duplicate": bool(allow_duplicate),
-            "options": _options(
-                cut_judge=cut_judge,
-                stt_provider=stt_provider,
-                skip_summary="true" if skip_summary else "false",
-                note_mode=note_mode,
-                prompt_preset=prompt_preset,
-                system_prompt=system_prompt,
-                speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
-            ),
-        },
-        timeout=30,
-    ), None, api_base, client_id)
-
-
-def submit_transcript(
-    transcript_text: str,
-    title: str = "Transcript",
-    skip_summary: bool = False,
-    note_mode: str | None = None,
-    prompt_preset: str | None = None,
-    system_prompt: str | None = None,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Submit transcript text; the note is written in the background.
-
-    Returns the task id at once (``wait: false``), like the other submit tools:
-    a long note takes minutes, and holding the call open that long timed out in
-    MCP clients, which then submitted the same transcript again.
-    """
-    return _agent_request(
-        "POST",
-        "/agent/v1/tasks",
-        api_base=api_base,
-        client_id=client_id,
-        payload={
-            "input_type": "transcript",
-            "transcript_text": transcript_text,
-            "title": title,
-            "wait": False,
-            "options": _options(
-                skip_summary="true" if skip_summary else "false",
-                note_mode=note_mode,
-                prompt_preset=prompt_preset,
-                system_prompt=system_prompt,
-            ),
-        },
-        timeout=30,
-    )
-
-
-def get_task(
-    task_id: str,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Read lightweight task status from FluentFlow."""
-    return _watching(_agent_request("GET", f"/agent/v1/tasks/{task_id}", api_base=api_base, client_id=client_id),
-                     task_id, api_base, client_id)
-
-
-def wait_task(
-    task_id: str,
-    timeout_seconds: float = 30,
-    poll_interval_seconds: float = 2,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Wait for a task, note included, or return the current state.
-
-    ``done`` stays false while any step of a completed task is still to come
-    (cut, note, compressed copy, Feishu export; ``note_pending`` for the note);
-    the server decides from the task's steps, this only relays.
-    """
-    return _watching(_agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/wait",
-        api_base=api_base,
-        client_id=client_id,
-        payload={"timeout_seconds": timeout_seconds, "poll_interval_seconds": poll_interval_seconds},
-        timeout=max(5, min(float(timeout_seconds or 30) + 10, 75)),
-    ), task_id, api_base, client_id)
-
-
-def get_task_package(
-    task_id: str,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Read the stable Agent Task Package for a FluentFlow task."""
-    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/package", api_base=api_base, client_id=client_id)
-
-
-def diagnose_task(
-    task_id: str,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Explain note generation or task failure state in a machine-readable form."""
-    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/diagnosis", api_base=api_base, client_id=client_id)
-
-
-def retry_task(
-    task_id: str,
-    speaker_diarization: bool | None = None,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Run a finished (failed, cancelled or completed) task again as a new task.
-
-    Returns the new task's ``task_id``; the old task stays as it was. Re-reads the
-    recording FluentFlow kept, or the user's file for a task submitted by path; a
-    link task whose video is gone downloads the link again. ``speaker_diarization``
-    switches speaker separation on or off for the new task; left out, the old
-    task's choice is kept.
-    """
-    payload = None if speaker_diarization is None else {"speaker_diarization": bool(speaker_diarization)}
-    return _agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/retry",
-        api_base=api_base,
-        client_id=client_id,
-        payload=payload,
-        timeout=30,
-    )
-
-
-def regenerate_note(
-    task_id: str,
-    note_mode: str | None = None,
-    prompt_preset: str | None = None,
-    system_prompt: str | None = None,
-    base_version: str | None = None,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Rewrite a task's note by the writer that wrote it; the old note stays restorable."""
-    return _agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/note/regenerate",
-        api_base=api_base,
-        client_id=client_id,
-        payload=_options(note_mode=note_mode, prompt_preset=prompt_preset, system_prompt=system_prompt,
-                         base_version=base_version),
-        timeout=180,
-    )
-
-
-def debreath_task(
-    task_id: str,
-    min_silence_seconds: float | None = None,
-    noise_db: float | None = None,
-    padding_seconds: float | None = None,
-    render: bool = True,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Redo the breath-gap cut on an existing task's source media, mechanically.
-
-    Submitting already cuts, so this is for a redo. The server refuses (HTTP 409)
-    to cut a task whose transcript was made from a cut file, because the media and
-    the transcript would land on different timelines; resubmit the original instead.
-    A distinct action rather than a package field: it starts work, and it takes
-    parameters the caller has to choose. Returns as soon as the work is accepted —
-    rendering takes minutes, so poll ``get_task_package`` and read its
-    ``debreath`` block.
-
-    ``render=False`` produces only the cut list, which is the cheap way to see how
-    much would be removed and to check the ``warnings`` before spending an encode.
-    """
-    return _agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/debreath",
-        api_base=api_base,
-        client_id=client_id,
-        payload={
-            **_options(
-                min_silence_seconds=min_silence_seconds,
-                noise_db=noise_db,
-                padding_seconds=padding_seconds,
-            ),
-            "render": bool(render),
-        },
-        timeout=60,
-    )
-
-
-def write_note_from_cut_media(
-    task_id: str,
-    preview: bool = True,
-    replace_note: bool = True,
-    restore_previous_note: bool = False,
-    use_generated_note: bool = False,
-    base_version: str | None = None,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Rewrite an existing task's note with Claude, from the frames and transcript.
-
-    Submitting already writes this note; this is for a redo. It reads the file
-    the transcript describes: the cut file (frames taken from it, subtitles moved
-    onto its clock), or the original recording when the cut was declined or found
-    nothing to remove. It refuses only when there is no usable media — the cut
-    still running or failed, a plan-only cut with no rendered file, the file no
-    longer on this machine — and the refusal names the step to take.
-
-    ``preview`` defaults to **true** and costs nothing: it answers which file
-    would be read, how much transcript after remapping, how many frames, and
-    whose Claude allowance pays. Pass ``preview=False`` to actually run it — that
-    spends the machine owner's Claude allowance, so do not do it unasked.
-
-    By default the finished note becomes the task's note and the previous one is
-    kept and restorable. ``replace_note=False`` leaves the task's note alone;
-    ``restore_previous_note`` and ``use_generated_note`` switch between the two
-    without a model call. Poll ``get_task_package`` and read its
-    ``cut_media_note`` block: ``basis`` there is measured from the note's own
-    citations, so ``transcript_only`` means nothing was written from a picture.
-    """
-    refusal = _require_local_edition(normalize_api_base(api_base))
-    if refusal is not None:
-        return refusal
-    payload: dict[str, Any] = {}
-    if restore_previous_note:
-        payload["restore_previous_note"] = True
-    elif use_generated_note:
-        payload["use_generated_note"] = True
-    elif preview:
-        payload["preview"] = True
-    else:
-        payload["replace_note"] = bool(replace_note)
-    if base_version and not payload.get("preview"):
-        payload["base_version"] = base_version
-    return _agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/visual-note",
-        api_base=api_base,
-        client_id=client_id,
-        payload=payload,
-        timeout=60,
-    )
-
-
-def export_result(
-    task_id: str,
-    target: str = "lark",
-    title: str | None = None,
-    lark_export_route: str | None = None,
-    folder_token: str | None = None,
-    output_dir: str | None = None,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Export a completed task note to Lark, or to a PDF file on this machine.
-
-    Route and folder are sent only when given; otherwise the backend uses the
-    user's settings (``lark_export_route``, ``lark_folder_token``), then auto.
-    """
-    return _agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/exports",
-        api_base=api_base,
-        client_id=client_id,
-        payload=_options(
-            target=target, title=title, lark_export_route=lark_export_route, folder_token=folder_token,
-            output_dir=output_dir,
-        ),
-        timeout=120,
-    )
-
-
-def get_agent_note_material(
-    task_id: str,
-    part: int = 1,
-    small_parts: bool = False,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """What you write this task's note from, when you write it yourself.
-
-    Returns the whole transcript (with timestamps), the frames as paths on this
-    machine with their moments in the recording, and ``instructions``: the note
-    skill in effect plus the fixed contract. Open the frames you need, write the
-    whole note, then call ``save_agent_note`` once. When this host cannot take
-    that much in one tool result, ask again with ``small_parts=True``: the
-    recording then comes in ``total_parts`` parts to fetch, write and save one at
-    a time (``part``). Costs nothing on the user's side; the first call for a
-    video extracts its frames, which takes up to a minute.
-    """
-    refusal = _require_local_edition(normalize_api_base(api_base))
-    if refusal is not None:
-        return refusal
-    return _agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/agent-note/material",
-        api_base=api_base,
-        client_id=client_id,
-        payload={"part": int(part or 1), "small_parts": bool(small_parts)},
-        timeout=300,
-    )
-
-
-def save_agent_note(
-    task_id: str,
-    note_markdown: str | None = None,
-    part: int | None = None,
-    part_notes: list[str] | None = None,
-    basis_note: str = "",
-    model: str = "",
-    base_version: str | None = None,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Make the note you wrote this task's note; the previous one stays restorable.
-
-    Pass ``note_markdown`` for a one-part recording. For one in several parts,
-    save each part as it is written with ``part`` and ``note_markdown``; the
-    task's note is replaced once every part is in, and saving a part again later
-    updates it. ``note_markdown`` without ``part`` on such a recording is a whole
-    edited note. Cite frames by file name only. A note far too short for its
-    transcript is refused and nothing is replaced.
-
-    The first save of a note is checked against its transcript for knowledge
-    points it never mentions; ``coverage.missing`` lists them by part. When it
-    is not empty, write in the ones worth keeping and save again; that save is
-    not checked again.
-    """
-    refusal = _require_local_edition(normalize_api_base(api_base))
-    if refusal is not None:
-        return refusal
-    return _agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/agent-note",
-        api_base=api_base,
-        client_id=client_id,
-        payload=_options(note_markdown=note_markdown, part=part, part_notes=part_notes, basis_note=basis_note,
-                         model=model, base_version=base_version),
-        # Saving runs FluentFlow's coverage check on each part, a model request
-        # over that part's whole transcript.
-        timeout=600,
-    )
-
-
-def get_agent_note_part(
-    task_id: str,
-    part: int,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """One part of the note as you saved it, without its transcript, for the read-through."""
-    refusal = _require_local_edition(normalize_api_base(api_base))
-    if refusal is not None:
-        return refusal
-    return _agent_request(
-        "GET",
-        f"/agent/v1/tasks/{task_id}/agent-note/parts/{int(part)}",
-        api_base=api_base,
-        client_id=client_id,
-    )
-
-
-def get_agent_cut_material(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    """What you judge this task's cut from, when it waits for you."""
-    refusal = _require_local_edition(normalize_api_base(api_base))
-    if refusal is not None:
-        return refusal
-    return _watching(_agent_request(
-        "GET", f"/agent/v1/tasks/{task_id}/agent-cut/material", api_base=api_base, client_id=client_id,
-    ), task_id, api_base, client_id)
-
-
-def save_agent_cut(
-    task_id: str,
-    keep_gaps: list[dict[str, Any]] | None = None,
-    remove: list[dict[str, Any]] | None = None,
-    model: str = "",
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Your decision on what to cut; FluentFlow cuts with it."""
-    refusal = _require_local_edition(normalize_api_base(api_base))
-    if refusal is not None:
-        return refusal
-    return _watching(_agent_request(
-        "POST", f"/agent/v1/tasks/{task_id}/agent-cut", api_base=api_base, client_id=client_id,
-        payload={"keep_gaps": keep_gaps or [], "remove": remove or [], "model": model},
-    ), task_id, api_base, client_id)
-
-
-def save_agent_cut_report(
-    task_id: str,
-    summary: str = "",
-    sections: list[dict[str, Any]] | None = None,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Your processing report for the cut you judged."""
-    refusal = _require_local_edition(normalize_api_base(api_base))
-    if refusal is not None:
-        return refusal
-    return _agent_request(
-        "POST", f"/agent/v1/tasks/{task_id}/agent-cut/report", api_base=api_base, client_id=client_id,
-        payload={"report": {"summary": summary, "sections": sections or []}},
-    )
-
-
-def get_status(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    """Who does each step of a task this agent submits, and what needs the user."""
-    return _agent_request("GET", "/agent/v1/status", api_base=api_base, client_id=client_id)
-
-
-def get_note_skill(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    """The note-writing rules in effect, and every rule added from the user's feedback."""
-    return _agent_request("GET", "/agent/v1/note-skill", api_base=api_base, client_id=client_id)
-
-
-def record_note_feedback(
-    problem: str,
-    kind: str,
-    task_id: str | None = None,
-    criterion: str = "",
-    note_excerpt: str = "",
-    part: int | None = None,
-    transcript_excerpt: str = "",
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Keep a problem the user reported about a note as a test case."""
-    return _agent_request(
-        "POST", "/agent/v1/note-feedback", api_base=api_base, client_id=client_id,
-        payload=_options(task_id=task_id, problem=problem, kind=kind, criterion=criterion,
-                         note_excerpt=note_excerpt, part=part, transcript_excerpt=transcript_excerpt),
-    )
-
-
-def list_note_feedback(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    """Every problem the user has reported, newest first, with the rule it led to."""
-    return _agent_request("GET", "/agent/v1/note-feedback", api_base=api_base, client_id=client_id)
-
-
-def draft_note_part(
-    task_id: str,
-    rules: str,
-    part: int = 1,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """One part of a task's note written by FluentFlow's own model with candidate rules; not saved."""
-    return _agent_request(
-        "POST", f"/agent/v1/tasks/{task_id}/note-draft", api_base=api_base, client_id=client_id,
-        payload={"rules": rules, "part": int(part or 1)}, timeout=600,
-    )
-
-
-def apply_note_rule(
-    skill_text: str,
-    rule: str,
-    feedback_ids: list[str],
-    rounds: int,
-    evidence: str,
-    base_version: str | None = None,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Write a rule you verified into the user's note skill; the previous skill is kept."""
-    return _agent_request(
-        "POST", "/agent/v1/note-skill/rules", api_base=api_base, client_id=client_id,
-        payload={"skill_text": skill_text, "rule": rule, "feedback_ids": list(feedback_ids),
-                 "rounds": int(rounds), "evidence": evidence, "base_version": base_version},
-    )
-
-
-def list_tasks(
-    query: str = "",
-    limit: int = 20,
-    api_base: str | None = None,
-    client_id: str | None = None,
-) -> dict[str, Any]:
-    """Recent tasks, or those whose title, note title or file name contains ``query``."""
-    from urllib.parse import urlencode
-
-    return _agent_request(
-        "GET", "/agent/v1/tasks?" + urlencode({"query": query, "limit": int(limit or 20)}),
-        api_base=api_base, client_id=client_id,
-    )
+def tool(*, description: str, input_schema: dict[str, Any], meta: dict[str, Any] | None = None):
+    """Register the function below as a tool, described here and nowhere else."""
+    def register(func):
+        definition = {"name": func.__name__, "description": description, "inputSchema": input_schema}
+        if meta:
+            definition["_meta"] = meta
+        _TOOLS[func.__name__] = (func, definition)
+        return func
+    return register
 
 
 # Who writes the note on a media submission, said once for both submit tools.
@@ -830,6 +288,7 @@ _MEDIA_NOTE_FLOW = (
     "speaker_diarization=true or false overrides it for this task. Returns at once; follow "
     "with wait_task."
 )
+
 _SPEAKER_DIARIZATION_SCHEMA = {
     "type": "boolean",
     "description": (
@@ -838,19 +297,1188 @@ _SPEAKER_DIARIZATION_SCHEMA = {
         "panel; it adds little for a lecture or one speaker."
     ),
 }
+
 _TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's frame note)."
 
+
+@tool(
+    description=("Submit one audio or video file that stays where it is, by absolute path "
+        "on this machine. Local edition only; the backend accepts it from localhost "
+        "only, and this tool says so plainly when the other edition is the one "
+        "answering. One file per call — loop for a folder. "
+        + _MEDIA_NOTE_FLOW),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Absolute path to the recording."},
+            "title": {"type": "string"},
+            "skip_summary": {"type": "boolean", "default": False},
+            "note_mode": {"type": "string", "description": _TEXT_MODEL_ONLY},
+            "prompt_preset": {"type": "string", "description": "A label recorded with the note. " + _TEXT_MODEL_ONLY},
+            "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
+            "stt_model": {"type": "string"},
+            "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
+            "cut_judge": _CUT_JUDGE_SCHEMA,
+            "api_base": {"type": "string"},
+        },
+        "required": ["path"],
+    },
+)
+def submit_local_media(
+    path: str,
+    title: str | None = None,
+    skip_summary: bool = False,
+    note_mode: str | None = None,
+    prompt_preset: str | None = None,
+    stt_model: str | None = None,
+    speaker_diarization: bool | None = None,
+    system_prompt: str | None = None,
+    cut_judge: str = "auto",
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _watching(_agent_request(
+        "POST",
+        "/agent/v1/tasks",
+        api_base=api_base,
+        client_id=client_id,
+        payload={
+            "path": path,
+            "input_type": "local_path",
+            "title": title,
+            "options": _options(
+                cut_judge=cut_judge,
+                skip_summary="true" if skip_summary else "false",
+                note_mode=note_mode,
+                prompt_preset=prompt_preset,
+                system_prompt=system_prompt,
+                stt_model=stt_model,
+                # Left out unless the caller asks: the backend default is off.
+                speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
+            ),
+        },
+    ), None, api_base, client_id)
+
+
+@tool(
+    description=("Submit a video URL or copied share text to FluentFlow. "
+        + _MEDIA_NOTE_FLOW
+        + " The same link is never processed twice by accident (tracking parameters "
+        "such as utm_*, share_source, spm_id_from, vd_source are ignored when "
+        "comparing; Bilibili ?p= still counts): if that link is already queued or "
+        "running, no new task is made and the existing one comes back with "
+        "duplicate_of_active=true; if it was already completed, the call fails with "
+        "HTTP 409, code duplicate_link and existing_task_id — read that task, or ask "
+        "the user and resubmit with allow_duplicate=true to process it again. A "
+        "failed or cancelled earlier task never blocks a submission."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "input_text": {"type": "string", "description": "Video URL or copied share text."},
+            "title": {"type": "string"},
+            "stt_provider": {"type": "string", "default": "auto"},
+            "skip_summary": {"type": "boolean", "default": False},
+            "note_mode": {"type": "string", "description": _TEXT_MODEL_ONLY},
+            "prompt_preset": {"type": "string", "description": "A label recorded with the note. " + _TEXT_MODEL_ONLY},
+            "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
+            "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
+            "cut_judge": _CUT_JUDGE_SCHEMA,
+            "allow_duplicate": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Process this link again although a completed task already has it. "
+                    "Only after the user confirmed they want a second copy."
+                ),
+            },
+            "api_base": {"type": "string"},
+        },
+        "required": ["input_text"],
+    },
+)
+def submit_video_link(
+    input_text: str,
+    title: str | None = None,
+    stt_provider: str = "auto",
+    skip_summary: bool = False,
+    note_mode: str | None = None,
+    prompt_preset: str | None = None,
+    allow_duplicate: bool = False,
+    speaker_diarization: bool | None = None,
+    system_prompt: str | None = None,
+    cut_judge: str = "auto",
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _watching(_agent_request(
+        "POST",
+        "/agent/v1/tasks",
+        api_base=api_base,
+        client_id=client_id,
+        payload={
+            "input": input_text,
+            "input_type": "video_link",
+            "title": title,
+            "allow_duplicate": bool(allow_duplicate),
+            "options": _options(
+                cut_judge=cut_judge,
+                stt_provider=stt_provider,
+                skip_summary="true" if skip_summary else "false",
+                note_mode=note_mode,
+                prompt_preset=prompt_preset,
+                system_prompt=system_prompt,
+                speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
+            ),
+        },
+        timeout=30,
+    ), None, api_base, client_id)
+
+
+@tool(
+    description=("Submit transcript text and have the configured text model write a note from it "
+        "(Claude's frame note needs media, so it does not apply here). Returns the task_id "
+        "at once; the note is written in the background, typically within a minute or two "
+        "and capped at FLUENTFLOW_NOTE_DEADLINE_SECONDS (default an hour) — follow with "
+        "wait_task. note_mode, system_prompt and prompt_preset reach the model. "
+        "skip_summary=true stores the transcript without a note."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "transcript_text": {"type": "string"},
+            "title": {"type": "string", "default": "Transcript"},
+            "skip_summary": {"type": "boolean", "default": False},
+            "note_mode": {"type": "string"},
+            "prompt_preset": {"type": "string", "description": "A label recorded with the note; the instructions are system_prompt."},
+            "system_prompt": {"type": "string", "description": "Instructions for the note."},
+            "api_base": {"type": "string"},
+        },
+        "required": ["transcript_text"],
+    },
+)
+def submit_transcript(
+    transcript_text: str,
+    title: str = "Transcript",
+    skip_summary: bool = False,
+    note_mode: str | None = None,
+    prompt_preset: str | None = None,
+    system_prompt: str | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST",
+        "/agent/v1/tasks",
+        api_base=api_base,
+        client_id=client_id,
+        payload={
+            "input_type": "transcript",
+            "transcript_text": transcript_text,
+            "title": title,
+            "wait": False,
+            "options": _options(
+                skip_summary="true" if skip_summary else "false",
+                note_mode=note_mode,
+                prompt_preset=prompt_preset,
+                system_prompt=system_prompt,
+            ),
+        },
+        timeout=30,
+    )
+
+
+@tool(
+    description=("Read lightweight task status from FluentFlow. done is true only once every step "
+        "after the transcript has ended too (cut, note, compressed copy, Feishu export); "
+        "note_pending says the note is still to come. activity names the step it is on, the steps "
+        "that failed or were stopped (stopped=true reads 已停下), and resume_from, the step "
+        "resume_task would carry it on from. note_version "
+        "is the version of the note now: read it before you change the note, and pass it as "
+        "base_version when you save (save_agent_note, regenerate_note, write_note_from_cut_media)."),
+    input_schema={
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+        "required": ["task_id"],
+    },
+)
+def get_task(
+    task_id: str,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _watching(_agent_request("GET", f"/agent/v1/tasks/{task_id}", api_base=api_base, client_id=client_id),
+                     task_id, api_base, client_id)
+
+
+@tool(
+    description=("Wait for a task, cut and note included: a task reads completed once its transcript "
+        "is stored, but done stays false while the recording is being cut (cut_running=true) "
+        "and until the note is written, failed or skipped (note_pending=true), and while the "
+        "compressed copy or the Feishu export is still running. When done, task says where things stand (note status "
+        "and length, who wrote it, the output folder, next actions); read the note itself "
+        "with get_task_package. Otherwise the current state; call again until done. When the "
+        "task is waiting for you to judge its cut it returns at once with agent_cut (status "
+        "waiting, next): judge it with get_agent_cut_material and save_agent_cut, then wait again."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "timeout_seconds": {"type": "number", "default": 30},
+            "poll_interval_seconds": {"type": "number", "default": 2},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
+def wait_task(
+    task_id: str,
+    timeout_seconds: float = 30,
+    poll_interval_seconds: float = 2,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _watching(_agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/wait",
+        api_base=api_base,
+        client_id=client_id,
+        payload={"timeout_seconds": timeout_seconds, "poll_interval_seconds": poll_interval_seconds},
+        timeout=max(5, min(float(timeout_seconds or 30) + 10, 75)),
+    ), task_id, api_base, client_id)
+
+
+@tool(
+    description=("Read the Agent Task Package for a FluentFlow task: status, the note, where every output "
+        "is, and what happened. The transcript is described (chars, preview, file path), not "
+        "included; to write a note use get_agent_note_material, which hands it over in parts."),
+    input_schema={
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+        "required": ["task_id"],
+    },
+)
+def get_task_package(
+    task_id: str,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/package", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("Explain task or note generation failure state in a machine-readable form."),
+    input_schema={
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+        "required": ["task_id"],
+    },
+)
+def diagnose_task(
+    task_id: str,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/diagnosis", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("Run a task again as a NEW task: the answer's task_id is the new one (source_task_id "
+        "is the old), and the old task stays as it was. Works for failed, cancelled and "
+        "completed tasks; a queued or running task must be cancelled first. Re-reads the "
+        "recording FluentFlow kept, or the user's file for a task submitted by path; a link "
+        "task whose video is gone downloads the link again, with the current browser-login "
+        "setting. speaker_diarization=true re-runs it with speaker separation (who said "
+        "what) switched on; left out, the old task's choice is kept. Follow with wait_task "
+        "on the new task_id."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
+def retry_task(
+    task_id: str,
+    speaker_diarization: bool | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    payload = None if speaker_diarization is None else {"speaker_diarization": bool(speaker_diarization)}
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/retry",
+        api_base=api_base,
+        client_id=client_id,
+        payload=payload,
+        timeout=30,
+    )
+
+
+_TASK_ONLY = {
+    "type": "object",
+    "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+    "required": ["task_id"],
+}
+
+
+@tool(
+    description=("Stop the step a task is on now: the transcription, the cut's render, the note being "
+        "written (its Claude is stopped; a request already sent to a text model is not waited for), "
+        "the compressed copy or the Feishu export. The step is recorded as stopped and the task reads "
+        "已停下; nothing it already did is lost. Use it when the user asks to stop or pause a task, not "
+        "to cancel it for good. Carry it on later with resume_task, which starts from the stopped step. "
+        "Refused with code not_working when no step is running, and rerun_not_stoppable while only a "
+        "separately started re-cut or note rewrite runs."),
+    input_schema=_TASK_ONLY,
+)
+def stop_task_step(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    return _agent_request("POST", f"/agent/v1/tasks/{task_id}/stop", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("Carry a task on from the first step that did not finish, on the same task (not a new "
+        "one): a step the user stopped, a step that failed (the page calls this 重做这一步), or one a "
+        "restart cut off. Steps already done are not done again: a cut whose decision was already made "
+        "is only rendered again, without asking a model, and a transcription is not repeated when only "
+        "its corrections were left. The answer's resume_from names the step; get_task's activity says "
+        "the same before you call (resume_from, stopped_steps, failed_steps). Follow with wait_task. "
+        "Refused with code busy while the task is still working, still_stopping for a few seconds after "
+        "a stop, nothing_to_resume when every step is done, no_steps for a task processed before steps "
+        "were recorded (use retry_task), source_missing when the recording it needs is gone."),
+    input_schema=_TASK_ONLY,
+)
+def resume_task(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    return _agent_request("POST", f"/agent/v1/tasks/{task_id}/resume", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("Cancel a task that is still queued or transcribing (status queued or running); the "
+        "same as the page's cancel. Once the transcript is stored the task reads completed and cancel "
+        "is refused (code already_finished): stop_task_step stops a later step instead."),
+    input_schema=_TASK_ONLY,
+)
+def cancel_task(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    return _agent_request("POST", f"/agent/v1/tasks/{task_id}/cancel", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("Read a cut task's processing report, the list the page shows under 处理说明: each "
+        "decision with what was cut or kept (action removed or kept), why (text), its time span, its "
+        "ref (to turn it around with flip_cut_decision) and its key (to agree with it with "
+        "answer_cut_decisions); the section with to_judge=true is what the user should look at; "
+        "user_changes are the user's earlier turnarounds (undo one with undo_cut_change by its index); "
+        "agreed lists the keys already agreed. Refused with code no_report for a task with no report."),
+    input_schema=_TASK_ONLY,
+)
+def get_cut_report(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/cut-report", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("Turn one decision of the processing report around, as the page's 改判 does: a stretch "
+        "that was cut is put back, one that was kept is cut. The cut video is rendered again from the "
+        "original without asking a model, the transcript moved onto it, the report written again and "
+        "the note rewritten from the new cut; it takes minutes, follow with wait_task. Only on the "
+        "user's word: say which stretch (its time and text) and what will change, and do it when they "
+        "agree. Refused (409) while the task is still working (busy, note_running), while a re-render "
+        "of it runs (rerendering), while the queue works (queue_busy), or when the original is gone "
+        "(cannot_render)."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "ref": {"type": "string", "description": "The decision's ref from get_cut_report."},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id", "ref"],
+    },
+)
+def flip_cut_decision(task_id: str, ref: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/cut-report/flip",
+        api_base=api_base, client_id=client_id, payload={"ref": ref},
+    )
+
+
+@tool(
+    description=("Record that the user agrees with decisions of the processing report as they are "
+        "(剪得对 / 确实该保留), verdict agree, or take that back, verdict pending. Nothing is rendered. "
+        "Use it when the user has looked at the decisions and says they are right; an item nobody "
+        "answered counts as not looked at."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "keys": {"type": "array", "items": {"type": "string"}, "description": "Decision keys from get_cut_report."},
+            "verdict": {"type": "string", "enum": ["agree", "pending"]},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id", "keys", "verdict"],
+    },
+)
+def answer_cut_decisions(
+    task_id: str, keys: list[str], verdict: str, api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/cut-report/verdict",
+        api_base=api_base, client_id=client_id, payload={"keys": keys, "verdict": verdict},
+    )
+
+
+@tool(
+    description=("Undo one of the user's earlier turnarounds (get_cut_report's user_changes, by index): "
+        "the model's decision for that stretch applies again and the cut is rendered again, as "
+        "flip_cut_decision does. Refused for the same reasons."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "index": {"type": "integer", "description": "The change's index in user_changes."},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id", "index"],
+    },
+)
+def undo_cut_change(task_id: str, index: int, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/cut-report/undo",
+        api_base=api_base, client_id=client_id, payload={"index": index},
+    )
+
+
+@tool(
+    description=("Rewrite a finished task's note. Which model writes it: if the current note "
+        "was written by Claude from the video frames and that can still run for this "
+        "task (Claude configured, the cut file still there, the queue idle), Claude "
+        "rewrites it from the frames in the background, exactly as the editor does — "
+        "the answer says writer=claude_frames and returns at once; follow with "
+        "wait_task or get_task_package. Prompt and note_mode do not apply to that "
+        "path. Otherwise the configured text model rewrites it from the transcript "
+        "before answering (writer=text_model), using the system_prompt and note_mode "
+        "given here, or the ones the task was submitted with. The old note is never "
+        "lost: it is kept and can be put back for free with write_note_from_cut_media "
+        "restore_previous_note=true. If the rewrite fails the task stays completed "
+        "with its old note, and summary_status=failed plus summary_error say why. With "
+        "base_version, an edit the user makes while it is rewritten wins: the rewrite is "
+        "refused (stale) instead of replacing it."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "note_mode": {"type": "string", "description": "Text-model path only. Default: the task's own."},
+            "prompt_preset": {
+                "type": "string",
+                "description": "A label recorded with the note; the instructions themselves are system_prompt.",
+            },
+            "system_prompt": {
+                "type": "string",
+                "description": "Text-model path only: instructions for the note. Default: the task's own.",
+            },
+            "base_version": {
+                "type": "string",
+                "description": (
+                    "The note_version you read the note at (get_task, get_agent_note_material). "
+                    "When the note changed since, nothing is saved and the answer has code stale: "
+                    "read the note again, merge your change into it, save with the new version. "
+                    "Leaving it out saves as before, over any change made meanwhile."
+                ),
+            },
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
+def regenerate_note(
+    task_id: str,
+    note_mode: str | None = None,
+    prompt_preset: str | None = None,
+    system_prompt: str | None = None,
+    base_version: str | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/note/regenerate",
+        api_base=api_base,
+        client_id=client_id,
+        payload=_options(note_mode=note_mode, prompt_preset=prompt_preset, system_prompt=system_prompt,
+                         base_version=base_version),
+        timeout=180,
+    )
+
+
+@tool(
+    description=("Redo the breath-gap cut on an existing task; submitting already cuts, so this "
+        "is not the normal path. The server refuses (HTTP 409) a task whose transcript "
+        "was made from a cut file, since cutting again would put the media and the "
+        "transcript on different timelines; to cut differently, resubmit the original "
+        "with different settings. Acoustic detection only. "
+        "Writes a cut list always and a rendered file when render is true; poll "
+        "get_task_package and read its debreath block for progress, counts, and warnings."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "min_silence_seconds": {
+                "type": "number",
+                "description": (
+                    "Shortest silence to remove, 0.02-60. Default 0.25. Raise it "
+                    "(e.g. 1.0) for faintly recorded material, where the default cuts "
+                    "close to speech."
+                ),
+            },
+            "noise_db": {
+                "type": "number",
+                "description": (
+                    "Silence threshold in dBFS, -90 to 0. Leave it out to have it measured "
+                    "from the material (recommended; passing -30 also means measure). Any "
+                    "other value is used as given."
+                ),
+            },
+            "padding_seconds": {
+                "type": "number",
+                "description": "Sliver of each removed stretch kept at both ends, 0-2. Default 0.1.",
+            },
+            "render": {
+                "type": "boolean",
+                "default": True,
+                "description": "False produces only the cut list — no encode, no CPU spent.",
+            },
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
+def debreath_task(
+    task_id: str,
+    min_silence_seconds: float | None = None,
+    noise_db: float | None = None,
+    padding_seconds: float | None = None,
+    render: bool = True,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/debreath",
+        api_base=api_base,
+        client_id=client_id,
+        payload={
+            **_options(
+                min_silence_seconds=min_silence_seconds,
+                noise_db=noise_db,
+                padding_seconds=padding_seconds,
+            ),
+            "render": bool(render),
+        },
+        timeout=60,
+    )
+
+
+@tool(
+    description=("Rewrite an existing task's note with Claude from the frames and transcript; "
+        "submitting already writes this note, so use it only to redo one (e.g. after a "
+        "failed note). It reads the file the transcript describes: the cut file from "
+        "submitting or debreath_task(render=True) (frames from it, subtitles moved onto "
+        "its clock), or the original recording when the cut "
+        "was declined or found nothing to remove. It refuses only when there is no usable "
+        "media (cut still running or failed, a cut list with no rendered file, the file "
+        "gone from this machine), and says which step to take. "
+        "preview defaults to true and is "
+        "free (which file, how much transcript, how many frames, whose Claude "
+        "allowance pays); preview=false spends that allowance, so ask first. The note "
+        "becomes the task's note by default, keeping the previous one restorable."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "preview": {
+                "type": "boolean",
+                "default": True,
+                "description": "True answers what would be sent and who pays, for free. False runs it.",
+            },
+            "replace_note": {
+                "type": "boolean",
+                "default": True,
+                "description": (
+                    "True makes the finished note the task's note, keeping the previous "
+                    "one on record. False writes it without touching the task's note."
+                ),
+            },
+            "restore_previous_note": {
+                "type": "boolean",
+                "default": False,
+                "description": "Put back the note a run replaced. Free, no model call.",
+            },
+            "use_generated_note": {
+                "type": "boolean",
+                "default": False,
+                "description": "Make the already-written note the task's note again. Free.",
+            },
+            "base_version": {
+                "type": "string",
+                "description": (
+                    "The note_version you read the note at (get_task, get_agent_note_material). "
+                    "When the note changed since, nothing is saved and the answer has code stale: "
+                    "read the note again, merge your change into it, save with the new version. "
+                    "Leaving it out saves as before, over any change made meanwhile."
+                ),
+            },
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
+def write_note_from_cut_media(
+    task_id: str,
+    preview: bool = True,
+    replace_note: bool = True,
+    restore_previous_note: bool = False,
+    use_generated_note: bool = False,
+    base_version: str | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    payload: dict[str, Any] = {}
+    if restore_previous_note:
+        payload["restore_previous_note"] = True
+    elif use_generated_note:
+        payload["use_generated_note"] = True
+    elif preview:
+        payload["preview"] = True
+    else:
+        payload["replace_note"] = bool(replace_note)
+    if base_version and not payload.get("preview"):
+        payload["base_version"] = base_version
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/visual-note",
+        api_base=api_base,
+        client_id=client_id,
+        payload=payload,
+        timeout=60,
+    )
+
+
+@tool(
+    description=("Export a completed task note. target=pdf writes a PDF with its screenshots to output_dir "
+        "(default ~/Documents/FluentFlow 笔记) and returns pdf_path; it needs Chrome or Edge on the "
+        "machine, and without one returns html_path to print instead. target=lark exports to Feishu/Lark. "
+        "For Feishu: without lark_export_route or "
+        "folder_token the user's export settings apply (route, then folder), else auto: "
+        "lark-cli when it is signed in, otherwise the user's Feishu app. The document "
+        "link is recorded on the task, so the editor shows it too."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "target": {"type": "string", "enum": ["lark", "pdf"], "default": "lark"},
+            "output_dir": {"type": "string", "description": "pdf only: folder to write the PDF in."},
+            "title": {"type": "string"},
+            "lark_export_route": {
+                "type": "string",
+                "enum": ["auto", "local_cli", "openapi"],
+                "description": "Override the user's export route for this call only.",
+            },
+            "folder_token": {
+                "type": "string",
+                "description": "Feishu folder for the app route; default: the user's setting.",
+            },
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
+def export_result(
+    task_id: str,
+    target: str = "lark",
+    title: str | None = None,
+    lark_export_route: str | None = None,
+    folder_token: str | None = None,
+    output_dir: str | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/exports",
+        api_base=api_base,
+        client_id=client_id,
+        payload=_options(
+            target=target, title=title, lark_export_route=lark_export_route, folder_token=folder_token,
+            output_dir=output_dir,
+        ),
+        timeout=120,
+    )
+
+
+@tool(
+    description=("Write a task's note yourself instead of a model FluentFlow is configured to pay for "
+        "(the way to get a note on the user's own subscription). Returns the whole timestamped "
+        "transcript, the frames as local file paths with their moments, and instructions (the "
+        "note skill in effect plus the fixed contract). Open the frames you need, write the whole "
+        "note, then call save_agent_note once. Do this in a subagent with a fresh context when "
+        "your host has them, so the transcript does not fill the user's conversation: give it the "
+        "task_id and have it fetch, write and save. If the result came back truncated or saved to "
+        "a file because it was too large for one tool result, call again with small_parts=true: "
+        "the recording then comes in total_parts parts to fetch, write and save one at a time. "
+        "The first call for a video extracts frames (up to a minute). note_version is the task's "
+        "note as you read it: pass it to save_agent_note as base_version."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "part": {"type": "integer", "default": 1, "description": "Which part, from 1 to total_parts (small_parts only)."},
+            "small_parts": {
+                "type": "boolean", "default": False,
+                "description": "Hand the recording over in parts of about 15,000 characters, for a host whose tool results are too small for the whole transcript.",
+            },
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+    meta={"anthropic/maxResultSizeChars": 500_000},
+)
+def get_agent_note_material(
+    task_id: str,
+    part: int = 1,
+    small_parts: bool = False,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/agent-note/material",
+        api_base=api_base,
+        client_id=client_id,
+        payload={"part": int(part or 1), "small_parts": bool(small_parts)},
+        timeout=300,
+    )
+
+
+@tool(
+    description=("Save the note you wrote from get_agent_note_material as the task's note. The previous "
+        "note is kept and restorable (write_note_from_cut_media restore_previous_note=true). "
+        "note_markdown for a one-part recording. For several parts, save each as soon as it is "
+        "written with part and note_markdown: saved parts stay in FluentFlow across conversations, "
+        "the task's note is replaced once every part is in, and the answer's next says what to do "
+        "(the remaining parts, then a read-through). note_markdown without part on such a recording "
+        "is a whole edited note. Cite "
+        "frames by file name only. A note far too short for its transcript is refused and "
+        "nothing is replaced. The first save of each part is checked against its transcript for "
+        "knowledge points the note never mentions (when FluentFlow has a model to check with) and "
+        "they come back in coverage.missing, by part: when it is not empty, write in the ones worth "
+        "keeping and save that part again once. A part saved again is not checked again. "
+        "Pass base_version (note_version from the material or get_task): if the user changed the "
+        "note in the page, Obsidian or Feishu while you wrote, the save is refused with code stale "
+        "and nothing is replaced; get_task_package for the current note, merge your note into it "
+        "and save again with the new note_version. Each answer carries note_version as the note "
+        "is after it; use that one for the next save of a part."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "note_markdown": {"type": "string"},
+            "part": {"type": "integer", "description": "Which part this note is, from 1 to total_parts."},
+            "part_notes": {"type": "array", "items": {"type": "string"}},
+            "basis_note": {
+                "type": "string",
+                "description": "One or two sentences: which parts rest on the frames, which on the transcript only.",
+            },
+            "model": {"type": "string", "description": "Which model wrote it, recorded on the note."},
+            "base_version": {
+                "type": "string",
+                "description": (
+                    "The note_version you read the note at (get_task, get_agent_note_material). "
+                    "When the note changed since, nothing is saved and the answer has code stale: "
+                    "read the note again, merge your change into it, save with the new version. "
+                    "Leaving it out saves as before, over any change made meanwhile."
+                ),
+            },
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
+def save_agent_note(
+    task_id: str,
+    note_markdown: str | None = None,
+    part: int | None = None,
+    part_notes: list[str] | None = None,
+    basis_note: str = "",
+    model: str = "",
+    base_version: str | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _agent_request(
+        "POST",
+        f"/agent/v1/tasks/{task_id}/agent-note",
+        api_base=api_base,
+        client_id=client_id,
+        payload=_options(note_markdown=note_markdown, part=part, part_notes=part_notes, basis_note=basis_note,
+                         model=model, base_version=base_version),
+        # Saving runs FluentFlow's coverage check on each part, a model request
+        # over that part's whole transcript.
+        timeout=600,
+    )
+
+
+@tool(
+    description=("Read back one part of the note you saved with save_agent_note(part=...), without its "
+        "transcript. Used for the read-through once every part is saved: read the parts one at a "
+        "time, then save again only the parts you change."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "part": {"type": "integer"},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id", "part"],
+    },
+)
+def get_agent_note_part(
+    task_id: str,
+    part: int,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _agent_request(
+        "GET",
+        f"/agent/v1/tasks/{task_id}/agent-note/parts/{int(part)}",
+        api_base=api_base,
+        client_id=client_id,
+    )
+
+
+@tool(
+    description=("When a task waits for you to judge its cut (wait_task or get_task shows agent_cut.status "
+        "waiting): the same material FluentFlow's own model gets. instructions (what to keep, what "
+        "to remove, the JSON to answer with), cases (the user's earlier cut decisions), timeline "
+        "(timestamped transcript with numbered long gaps and whether the picture moved), shots "
+        "(screenshots of the long gaps whose picture moved, as local paths; open them before deciding "
+        "those gaps). Then call save_agent_cut. If you do not answer within decide_within_seconds, or "
+        "this conversation closes, FluentFlow judges the cut itself."),
+    input_schema={
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+        "required": ["task_id"],
+    },
+    meta={"anthropic/maxResultSizeChars": 500_000},
+)
+def get_agent_cut_material(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _watching(_agent_request(
+        "GET", f"/agent/v1/tasks/{task_id}/agent-cut/material", api_base=api_base, client_id=client_id,
+    ), task_id, api_base, client_id)
+
+
+@tool(
+    description=("Send your decision on a task's cut, as the instructions of get_agent_cut_material ask: "
+        "keep_gaps (gap ids from the timeline, each with a reason) and remove (stretches with talk, "
+        "from/to in seconds as the timeline gives them, to null for the end, each with a reason). "
+        "FluentFlow applies the same rules as to its own model: spoken words are never cut, and "
+        "removals that together take more than a quarter of what was said are not applied but put "
+        "to the user one by one. A wrong gap id is refused, so you can fix it and send again. The "
+        "answer lists what was done as numbered facts with report_instructions: organise them and "
+        "call save_agent_cut_report. Then tell the user the cut is done and how many places need "
+        "their look (save_agent_cut_report's to_judge) on the task page in FluentFlow; do not ask them "
+        "in chat (they need the video)."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "keep_gaps": {"type": "array", "items": {"type": "object"}},
+            "remove": {"type": "array", "items": {"type": "object"}},
+            "model": {"type": "string", "description": "Which model judged, recorded with the cut."},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
+def save_agent_cut(
+    task_id: str,
+    keep_gaps: list[dict[str, Any]] | None = None,
+    remove: list[dict[str, Any]] | None = None,
+    model: str = "",
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _watching(_agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/agent-cut", api_base=api_base, client_id=client_id,
+        payload={"keep_gaps": keep_gaps or [], "remove": remove or [], "model": model},
+    ), task_id, api_base, client_id)
+
+
+@tool(
+    description=("Send the processing report for the cut you judged: the facts save_agent_cut listed, organised "
+        "as its report_instructions say (summary, and sections of items that cite facts by ref; mark "
+        "unsure with a doubt only where you are not sure). It is shown on the task page and kept when "
+        "the user changes a cut later. The answer's to_judge is how many places the page asks the user "
+        "to judge (yours plus the ones FluentFlow always asks about, such as removed talk): tell the user "
+        "that number, not your own count."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "summary": {"type": "string"},
+            "sections": {"type": "array", "items": {"type": "object"}},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id", "sections"],
+    },
+)
+def save_agent_cut_report(
+    task_id: str,
+    summary: str = "",
+    sections: list[dict[str, Any]] | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    refusal = _require_local_edition(normalize_api_base(api_base))
+    if refusal is not None:
+        return refusal
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/agent-cut/report", api_base=api_base, client_id=client_id,
+        payload={"report": {"summary": summary, "sections": sections or []}},
+    )
+
+
+@tool(
+    description=("How FluentFlow on this machine handles a task you submit, step by step (getting the material, "
+        "cutting, transcription, notes, outputs, agent connection), and anything the user has to fix first. "
+        "The same list the Settings page shows. Use it when the user asks what FluentFlow is set up to do."),
+    input_schema={"type": "object", "properties": {"api_base": {"type": "string"}}},
+)
+def get_status(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    return _agent_request("GET", "/agent/v1/status", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("The note-writing rules in effect (text, version, default or the user's own) and every rule added from feedback, with the feedback each came from."),
+    input_schema={"type": "object", "properties": {"api_base": {"type": "string"}}},
+)
+def get_note_skill(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    return _agent_request("GET", "/agent/v1/note-skill", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("Keep a problem the user reported about a note as a test case. kind=one_off for a single "
+        "error (a misspelt name) or pattern for a way of writing that would recur. A pattern needs "
+        "criterion: how a checker tells the problem is fixed. With task_id the transcript of that "
+        "part is frozen into the case. When the user points out a problem in a note (often with a screenshot): fix that note first (save_agent_note). If the problem would come back in other notes, record it with record_note_feedback kind=pattern, check list_note_feedback for the same problem reported before (if so, show the user the existing rule and the old and new versions before changing it), then draft a rule, rewrite the affected part several times with it, have a separate checker that did not write it judge only whether the problem is still there, and when it passes call apply_note_rule and tell the user the rule in one sentence."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "problem": {"type": "string", "description": "What the user said is wrong, in their words."},
+            "kind": {"type": "string", "enum": ["one_off", "pattern"]},
+            "task_id": {"type": "string"},
+            "criterion": {"type": "string", "description": "Pass / fail: what a fixed note does."},
+            "note_excerpt": {"type": "string", "description": "The note text the problem is in."},
+            "part": {"type": "integer"},
+            "transcript_excerpt": {"type": "string", "description": "Only the relevant stretch; default the whole part."},
+            "api_base": {"type": "string"},
+        },
+        "required": ["problem", "kind"],
+    },
+)
+def record_note_feedback(
+    problem: str,
+    kind: str,
+    task_id: str | None = None,
+    criterion: str = "",
+    note_excerpt: str = "",
+    part: int | None = None,
+    transcript_excerpt: str = "",
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST", "/agent/v1/note-feedback", api_base=api_base, client_id=client_id,
+        payload=_options(task_id=task_id, problem=problem, kind=kind, criterion=criterion,
+                         note_excerpt=note_excerpt, part=part, transcript_excerpt=transcript_excerpt),
+    )
+
+
+@tool(
+    description=("Every problem the user has reported, newest first, with rule_id when a rule came of it. Read it to tell whether a new report is a problem that came back."),
+    input_schema={"type": "object", "properties": {"api_base": {"type": "string"}}},
+)
+def list_note_feedback(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    return _agent_request("GET", "/agent/v1/note-feedback", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("Have FluentFlow's own model write one part of a task's note with candidate rules, without "
+        "saving it, for verifying a rule when FluentFlow writes the user's notes. When no model is "
+        "configured, write the part yourself from get_agent_note_material with the candidate rules."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "rules": {"type": "string", "description": "The whole candidate skill text."},
+            "part": {"type": "integer", "default": 1},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id", "rules"],
+    },
+)
+def draft_note_part(
+    task_id: str,
+    rules: str,
+    part: int = 1,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/note-draft", api_base=api_base, client_id=client_id,
+        payload={"rules": rules, "part": int(part or 1)}, timeout=600,
+    )
+
+
+@tool(
+    description=("Write a rule you verified into the user's note skill. skill_text is the whole new skill "
+        "with the rule merged where it belongs; the previous skill is kept and can be restored from "
+        "the settings page. rounds: how many rewrites passed the checker; evidence: one or two "
+        "sentences on what was checked."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "skill_text": {"type": "string"},
+            "rule": {"type": "string", "description": "The rule, as the user will be told it."},
+            "feedback_ids": {"type": "array", "items": {"type": "string"}},
+            "rounds": {"type": "integer"},
+            "evidence": {"type": "string"},
+            "base_version": {
+                "type": "string",
+                "description": "The skill version get_note_skill returned, the one you merged the rule into. "
+                               "The write is refused if the skill changed since; read it again and merge.",
+            },
+            "api_base": {"type": "string"},
+        },
+        "required": ["skill_text", "rule", "feedback_ids", "rounds", "evidence"],
+    },
+)
+def apply_note_rule(
+    skill_text: str,
+    rule: str,
+    feedback_ids: list[str],
+    rounds: int,
+    evidence: str,
+    base_version: str | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST", "/agent/v1/note-skill/rules", api_base=api_base, client_id=client_id,
+        payload={"skill_text": skill_text, "rule": rule, "feedback_ids": list(feedback_ids),
+                 "rounds": int(rounds), "evidence": evidence, "base_version": base_version},
+    )
+
+
+@tool(
+    description=("Find tasks: newest first, or only those whose title, note title (the note's first heading) "
+        "or file name contains query. Use it to find which task a screenshot of a note came from: "
+        "search a few characters of the title in the screenshot. Returns task_id, title, note_title, "
+        "created_at, status, has_note."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "limit": {"type": "integer", "default": 20},
+            "api_base": {"type": "string"},
+        },
+    },
+)
+def list_tasks(
+    query: str = "",
+    limit: int = 20,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    from urllib.parse import urlencode
+
+    return _agent_request(
+        "GET", "/agent/v1/tasks?" + urlencode({"query": query, "limit": int(limit or 20)}),
+        api_base=api_base, client_id=client_id,
+    )
+
+
+
+@tool(
+    description=("List the earlier versions FluentFlow kept of a task's note. Use it when the user says the "
+        "note lost content, got much shorter, was overwritten, or asks for an earlier version. Before "
+        "anything writes over the note (an edit on the page, the md edited in Obsidian, an agent's "
+        "note, a rewrite, Feishu, a restore), the version being replaced is kept; the Feishu document "
+        "only when it was edited in Feishu since the last push. What each change changed (time, who, "
+        "chapter, words before and after) is in 过程文件/修改记录.md beside the note's versions, "
+        "newest first (its path is change_log in the answer): read it to find which change lost "
+        "something. Returns current "
+        "(the note now: note_version, chars, chars_change, changed_by) and versions, newest first: "
+        "version_id, saved_at, side (where that version lived: 本地 = the md in the output folder, "
+        "FluentFlow = the task's note, 飞书 = the Feishu document), replaced_by (what wrote over it: "
+        "web_edit, obsidian, agent_note, rewrite, generated, feishu_pull, export, restore, switch_back, adjust; "
+        "null for versions kept before this was recorded, shown as 未记录), chars, chars_change "
+        "(against the previous version on the same side; the 飞书 side is Feishu's export format and "
+        "runs a few hundred characters longer than the others) and sharp_drop (at least 1,000 characters and half the "
+        "length lost at once, the sign of a note saved over by a fragment). Tell the user what "
+        "you found before restoring anything."),
+    input_schema={
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+        "required": ["task_id"],
+    },
+)
 def list_note_versions(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    """The task's note now and every kept earlier version, newest first, with what replaced each."""
     return _agent_request(
         "GET", f"/agent/v1/tasks/{task_id}/note/versions", api_base=api_base, client_id=client_id,
     )
 
 
+@tool(
+    description=("Read one kept version of a task's note in full (markdown), by the version_id "
+        "list_note_versions gave. Use it to check a version is the one the user wants before "
+        "restoring it, or to copy a lost passage back by hand. Versions with side 本地, and FluentFlow "
+        "versions kept when an Obsidian edit came in, point their screenshots at 过程文件/截图 beside "
+        "the md (a restore turns them back into the task's own pictures); side 飞书 is Feishu's own "
+        "export format."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "version_id": {"type": "string"},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id", "version_id"],
+    },
+)
 def read_note_version(
     task_id: str, version_id: str, api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    """One kept version of the task's note, whole."""
     from urllib.parse import quote
 
     return _agent_request(
@@ -859,10 +1487,36 @@ def read_note_version(
     )
 
 
+@tool(
+    description=("Make a kept version the task's note again. Ask the user first: it replaces the note "
+        "everywhere it is kept. The current note is kept as a version first (replaced_by=restore), "
+        "so a restore can itself be undone. It then goes through the note's ordinary save: the "
+        "task's note changes at once; the md and PDF in the output folder, and the Feishu document "
+        "of a note kept in step with Feishu (changed chapters only), are queued to follow, usually "
+        "within seconds to a minute. The answer's follows lists where it applies; if one did not "
+        "follow, get_task says why (output_folder.error, lark_sync_error). base_version is current.note_version from "
+        "list_note_versions: when the note changed since (the user editing in Obsidian or on the "
+        "page, Feishu, another agent), the restore is refused with code stale and nothing changes; "
+        "list again and confirm with the user. Versions with side 飞书 cannot be restored (Feishu's "
+        "format loses screenshots and chapter links); restore the 本地 or FluentFlow version from "
+        "the same moment instead."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "version_id": {"type": "string"},
+            "base_version": {
+                "type": "string",
+                "description": "current.note_version from list_note_versions.",
+            },
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id", "version_id", "base_version"],
+    },
+)
 def restore_note_version(
     task_id: str, version_id: str, base_version: str, api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Put a kept version back as the task's note; the note it replaces is kept first."""
     from urllib.parse import quote
 
     return _agent_request(
@@ -871,871 +1525,124 @@ def restore_note_version(
     )
 
 
+@tool(
+    description=("Words in the task's transcript that FluentFlow replaced from the subtitles burned into the "
+        "video picture, right after transcription and before the note was written. Each has an id, the "
+        "time, from (what the transcript said), to (the subtitle's spelling), and the subtitle line it "
+        "rests on. subtitle_correction says how the step went: skipped with its reason (no subtitles in "
+        "the picture, no text recognition on this machine, no picture, no model), no_changes or completed. "
+        "Show the user these when they say a name or term in the transcript or note was changed wrongly."),
+    input_schema={
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+        "required": ["task_id"],
+    },
+)
 def list_subtitle_corrections(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    """The words fixed from the subtitles burned into the picture."""
     return _agent_request("GET", f"/agent/v1/tasks/{task_id}/subtitle-corrections", api_base=api_base, client_id=client_id)
 
 
+@tool(
+    description=("Undo subtitle corrections: each named one (ids from list_subtitle_corrections, or all when ids "
+        "is empty) goes back to what the transcript said. Ask the user first. Refused with code "
+        "task_busy while the task is still transcribing, cutting or writing its note: wait for it to "
+        "finish. The task's transcript (every copy of it), "
+        "its subtitle files and the output folder follow; a note already written is not rewritten "
+        "(regenerate_note does that if the user wants it). not_found lists ids whose sentence was "
+        "edited since and could not be found."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "ids": {"type": "array", "items": {"type": "string"}},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
 def revert_subtitle_corrections(
     task_id: str, ids: list[str] | None = None, api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Put subtitle corrections back to what the transcript said."""
     return _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/subtitle-corrections/revert",
         api_base=api_base, client_id=client_id, payload={"ids": ids or []},
     )
 
 
+@tool(
+    description=("Words in the task's transcript that FluentFlow corrected from the series' word list "
+        "(FluentFlow 校正文档.md in the recording's folder or above) and the surrounding sentences, "
+        "after transcription (and after the subtitle check) and before the note was written. Each has an "
+        "id, the time, sentence (its number in the transcript now; null when that sentence was edited "
+        "since), from, to, basis (glossary: the word list's spelling, entry is that line; context: the "
+        "sentences around it decided, why says how) and the sentence before and after. "
+        "glossary_correction says how the step went: skipped with its reason (no transcript, no model), "
+        "failed with the model's error, no_changes or completed, with counts by basis, the channel "
+        "(subscription or a key) and the seconds it took."),
+    input_schema={
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+        "required": ["task_id"],
+    },
+)
 def list_glossary_corrections(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    """The words fixed from the series' word list and the context."""
     return _agent_request("GET", f"/agent/v1/tasks/{task_id}/glossary-corrections", api_base=api_base, client_id=client_id)
 
 
+@tool(
+    description=("Run the word-list correction on a finished task again, for a task processed before the step "
+        "existed or after the user added to the word list. Reads the whole transcript with the word list "
+        "found for the recording's folder (with no word list, only what the context makes certain is "
+        "changed). Sentences the user edited in the editor are left alone. Each change replaces a misheard "
+        "word, never a sentence; the new changes join the task's records and undo the same way "
+        "(list_glossary_corrections, revert_glossary_corrections). The transcript, its subtitle files and "
+        "the output folder follow; a note already written is not rewritten (regenerate_note does that if "
+        "the user wants it). Uses the Claude subscription first when this machine opted into it, else the "
+        "configured text model; takes a minute or two for an hour of recording. Refused with code "
+        "task_busy while the task is still being processed, already_running when a run is under way, and "
+        "transcript_moved when the transcript was edited while it ran (nothing written; run it again)."),
+    input_schema={
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+        "required": ["task_id"],
+    },
+)
 def run_glossary_correction(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    """Run the word-list correction again on a finished task."""
     return _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/glossary-corrections/run",
         api_base=api_base, client_id=client_id, payload={}, timeout=900,
     )
 
 
+@tool(
+    description=("Undo glossary corrections: each named one (ids from list_glossary_corrections, or all when ids "
+        "is empty) goes back to what the transcript said, in every copy of the transcript, the subtitle "
+        "files and the output folder. Ask the user first. Refused with code task_busy while the task is "
+        "still being processed. not_found lists ids whose sentence was edited since and could not be found."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "ids": {"type": "array", "items": {"type": "string"}},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id"],
+    },
+)
 def revert_glossary_corrections(
     task_id: str, ids: list[str] | None = None, api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Put glossary corrections back to what the transcript said."""
     return _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/glossary-corrections/revert",
         api_base=api_base, client_id=client_id, payload={"ids": ids or []},
     )
 
 
-TOOL_FUNCTIONS = {
-    "submit_video_link": submit_video_link,
-    "submit_transcript": submit_transcript,
-    "get_task": get_task,
-    "list_tasks": list_tasks,
-    "wait_task": wait_task,
-    "get_task_package": get_task_package,
-    "diagnose_task": diagnose_task,
-    "retry_task": retry_task,
-    "submit_local_media": submit_local_media,
-    "regenerate_note": regenerate_note,
-    "debreath_task": debreath_task,
-    "write_note_from_cut_media": write_note_from_cut_media,
-    "get_agent_cut_material": get_agent_cut_material,
-    "save_agent_cut": save_agent_cut,
-    "save_agent_cut_report": save_agent_cut_report,
-    "get_agent_note_material": get_agent_note_material,
-    "save_agent_note": save_agent_note,
-    "get_agent_note_part": get_agent_note_part,
-    "get_status": get_status,
-    "get_note_skill": get_note_skill,
-    "record_note_feedback": record_note_feedback,
-    "list_note_feedback": list_note_feedback,
-    "draft_note_part": draft_note_part,
-    "apply_note_rule": apply_note_rule,
-    "export_result": export_result,
-    "list_note_versions": list_note_versions,
-    "read_note_version": read_note_version,
-    "restore_note_version": restore_note_version,
-    "list_subtitle_corrections": list_subtitle_corrections,
-    "revert_subtitle_corrections": revert_subtitle_corrections,
-    "list_glossary_corrections": list_glossary_corrections,
-    "run_glossary_correction": run_glossary_correction,
-    "revert_glossary_corrections": revert_glossary_corrections,
-}
+# Every tool, in the order written: each is described where it is defined (``tool``).
+TOOL_FUNCTIONS: dict[str, Any] = {name: func for name, (func, _definition) in _TOOLS.items()}
 
 
-TOOL_DEFINITIONS: list[dict[str, Any]] = [
-    {
-        "name": "submit_video_link",
-        "description": (
-            "Submit a video URL or copied share text to FluentFlow. "
-            + _MEDIA_NOTE_FLOW
-            + " The same link is never processed twice by accident (tracking parameters "
-            "such as utm_*, share_source, spm_id_from, vd_source are ignored when "
-            "comparing; Bilibili ?p= still counts): if that link is already queued or "
-            "running, no new task is made and the existing one comes back with "
-            "duplicate_of_active=true; if it was already completed, the call fails with "
-            "HTTP 409, code duplicate_link and existing_task_id — read that task, or ask "
-            "the user and resubmit with allow_duplicate=true to process it again. A "
-            "failed or cancelled earlier task never blocks a submission."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "input_text": {"type": "string", "description": "Video URL or copied share text."},
-                "title": {"type": "string"},
-                "stt_provider": {"type": "string", "default": "auto"},
-                "skip_summary": {"type": "boolean", "default": False},
-                "note_mode": {"type": "string", "description": _TEXT_MODEL_ONLY},
-                "prompt_preset": {"type": "string", "description": "A label recorded with the note. " + _TEXT_MODEL_ONLY},
-                "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
-                "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
-                "cut_judge": _CUT_JUDGE_SCHEMA,
-                "allow_duplicate": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": (
-                        "Process this link again although a completed task already has it. "
-                        "Only after the user confirmed they want a second copy."
-                    ),
-                },
-                "api_base": {"type": "string"},
-            },
-            "required": ["input_text"],
-        },
-    },
-    {
-        "name": "submit_transcript",
-        "description": (
-            "Submit transcript text and have the configured text model write a note from it "
-            "(Claude's frame note needs media, so it does not apply here). Returns the task_id "
-            "at once; the note is written in the background, typically within a minute or two "
-            "and capped at FLUENTFLOW_NOTE_DEADLINE_SECONDS (default an hour) — follow with "
-            "wait_task. note_mode, system_prompt and prompt_preset reach the model. "
-            "skip_summary=true stores the transcript without a note."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "transcript_text": {"type": "string"},
-                "title": {"type": "string", "default": "Transcript"},
-                "skip_summary": {"type": "boolean", "default": False},
-                "note_mode": {"type": "string"},
-                "prompt_preset": {"type": "string", "description": "A label recorded with the note; the instructions are system_prompt."},
-                "system_prompt": {"type": "string", "description": "Instructions for the note."},
-                "api_base": {"type": "string"},
-            },
-            "required": ["transcript_text"],
-        },
-    },
-    {
-        "name": "submit_local_media",
-        "description": (
-            "Submit one audio or video file that stays where it is, by absolute path "
-            "on this machine. Local edition only; the backend accepts it from localhost "
-            "only, and this tool says so plainly when the other edition is the one "
-            "answering. One file per call — loop for a folder. "
-            + _MEDIA_NOTE_FLOW
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Absolute path to the recording."},
-                "title": {"type": "string"},
-                "skip_summary": {"type": "boolean", "default": False},
-                "note_mode": {"type": "string", "description": _TEXT_MODEL_ONLY},
-                "prompt_preset": {"type": "string", "description": "A label recorded with the note. " + _TEXT_MODEL_ONLY},
-                "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
-                "stt_model": {"type": "string"},
-                "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
-                "cut_judge": _CUT_JUDGE_SCHEMA,
-                "api_base": {"type": "string"},
-            },
-            "required": ["path"],
-        },
-    },
-    {
-        "name": "get_task",
-        "description": (
-            "Read lightweight task status from FluentFlow. done is true only once every step "
-            "after the transcript has ended too (cut, note, compressed copy, Feishu export); "
-            "note_pending says the note is still to come. note_version "
-            "is the version of the note now: read it before you change the note, and pass it as "
-            "base_version when you save (save_agent_note, regenerate_note, write_note_from_cut_media)."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "wait_task",
-        "description": (
-            "Wait for a task, cut and note included: a task reads completed once its transcript "
-            "is stored, but done stays false while the recording is being cut (cut_running=true) "
-            "and until the note is written, failed or skipped (note_pending=true), and while the "
-            "compressed copy or the Feishu export is still running. When done, task says where things stand (note status "
-            "and length, who wrote it, the output folder, next actions); read the note itself "
-            "with get_task_package. Otherwise the current state; call again until done. When the "
-            "task is waiting for you to judge its cut it returns at once with agent_cut (status "
-            "waiting, next): judge it with get_agent_cut_material and save_agent_cut, then wait again."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "timeout_seconds": {"type": "number", "default": 30},
-                "poll_interval_seconds": {"type": "number", "default": 2},
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "get_task_package",
-        "description": (
-            "Read the Agent Task Package for a FluentFlow task: status, the note, where every output "
-            "is, and what happened. The transcript is described (chars, preview, file path), not "
-            "included; to write a note use get_agent_note_material, which hands it over in parts."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "diagnose_task",
-        "description": "Explain task or note generation failure state in a machine-readable form.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "retry_task",
-        "description": (
-            "Run a task again as a NEW task: the answer's task_id is the new one (source_task_id "
-            "is the old), and the old task stays as it was. Works for failed, cancelled and "
-            "completed tasks; a queued or running task must be cancelled first. Re-reads the "
-            "recording FluentFlow kept, or the user's file for a task submitted by path; a link "
-            "task whose video is gone downloads the link again, with the current browser-login "
-            "setting. speaker_diarization=true re-runs it with speaker separation (who said "
-            "what) switched on; left out, the old task's choice is kept. Follow with wait_task "
-            "on the new task_id."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "regenerate_note",
-        "description": (
-            "Rewrite a finished task's note. Which model writes it: if the current note "
-            "was written by Claude from the video frames and that can still run for this "
-            "task (Claude configured, the cut file still there, the queue idle), Claude "
-            "rewrites it from the frames in the background, exactly as the editor does — "
-            "the answer says writer=claude_frames and returns at once; follow with "
-            "wait_task or get_task_package. Prompt and note_mode do not apply to that "
-            "path. Otherwise the configured text model rewrites it from the transcript "
-            "before answering (writer=text_model), using the system_prompt and note_mode "
-            "given here, or the ones the task was submitted with. The old note is never "
-            "lost: it is kept and can be put back for free with write_note_from_cut_media "
-            "restore_previous_note=true. If the rewrite fails the task stays completed "
-            "with its old note, and summary_status=failed plus summary_error say why. With "
-            "base_version, an edit the user makes while it is rewritten wins: the rewrite is "
-            "refused (stale) instead of replacing it."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "note_mode": {"type": "string", "description": "Text-model path only. Default: the task's own."},
-                "prompt_preset": {
-                    "type": "string",
-                    "description": "A label recorded with the note; the instructions themselves are system_prompt.",
-                },
-                "system_prompt": {
-                    "type": "string",
-                    "description": "Text-model path only: instructions for the note. Default: the task's own.",
-                },
-                "base_version": {
-                    "type": "string",
-                    "description": (
-                        "The note_version you read the note at (get_task, get_agent_note_material). "
-                        "When the note changed since, nothing is saved and the answer has code stale: "
-                        "read the note again, merge your change into it, save with the new version. "
-                        "Leaving it out saves as before, over any change made meanwhile."
-                    ),
-                },
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "debreath_task",
-        "description": (
-            "Redo the breath-gap cut on an existing task; submitting already cuts, so this "
-            "is not the normal path. The server refuses (HTTP 409) a task whose transcript "
-            "was made from a cut file, since cutting again would put the media and the "
-            "transcript on different timelines; to cut differently, resubmit the original "
-            "with different settings. Acoustic detection only. "
-            "Writes a cut list always and a rendered file when render is true; poll "
-            "get_task_package and read its debreath block for progress, counts, and warnings."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "min_silence_seconds": {
-                    "type": "number",
-                    "description": (
-                        "Shortest silence to remove, 0.02-60. Default 0.25. Raise it "
-                        "(e.g. 1.0) for faintly recorded material, where the default cuts "
-                        "close to speech."
-                    ),
-                },
-                "noise_db": {
-                    "type": "number",
-                    "description": (
-                        "Silence threshold in dBFS, -90 to 0. Leave it out to have it measured "
-                        "from the material (recommended; passing -30 also means measure). Any "
-                        "other value is used as given."
-                    ),
-                },
-                "padding_seconds": {
-                    "type": "number",
-                    "description": "Sliver of each removed stretch kept at both ends, 0-2. Default 0.1.",
-                },
-                "render": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": "False produces only the cut list — no encode, no CPU spent.",
-                },
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "write_note_from_cut_media",
-        "description": (
-            "Rewrite an existing task's note with Claude from the frames and transcript; "
-            "submitting already writes this note, so use it only to redo one (e.g. after a "
-            "failed note). It reads the file the transcript describes: the cut file from "
-            "submitting or debreath_task(render=True) (frames from it, subtitles moved onto "
-            "its clock), or the original recording when the cut "
-            "was declined or found nothing to remove. It refuses only when there is no usable "
-            "media (cut still running or failed, a cut list with no rendered file, the file "
-            "gone from this machine), and says which step to take. "
-            "preview defaults to true and is "
-            "free (which file, how much transcript, how many frames, whose Claude "
-            "allowance pays); preview=false spends that allowance, so ask first. The note "
-            "becomes the task's note by default, keeping the previous one restorable."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "preview": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": "True answers what would be sent and who pays, for free. False runs it.",
-                },
-                "replace_note": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": (
-                        "True makes the finished note the task's note, keeping the previous "
-                        "one on record. False writes it without touching the task's note."
-                    ),
-                },
-                "restore_previous_note": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Put back the note a run replaced. Free, no model call.",
-                },
-                "use_generated_note": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Make the already-written note the task's note again. Free.",
-                },
-                "base_version": {
-                    "type": "string",
-                    "description": (
-                        "The note_version you read the note at (get_task, get_agent_note_material). "
-                        "When the note changed since, nothing is saved and the answer has code stale: "
-                        "read the note again, merge your change into it, save with the new version. "
-                        "Leaving it out saves as before, over any change made meanwhile."
-                    ),
-                },
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "get_agent_cut_material",
-        "_meta": {"anthropic/maxResultSizeChars": 500_000},
-        "description": (
-            "When a task waits for you to judge its cut (wait_task or get_task shows agent_cut.status "
-            "waiting): the same material FluentFlow's own model gets. instructions (what to keep, what "
-            "to remove, the JSON to answer with), cases (the user's earlier cut decisions), timeline "
-            "(timestamped transcript with numbered long gaps and whether the picture moved), shots "
-            "(screenshots of the long gaps whose picture moved, as local paths; open them before deciding "
-            "those gaps). Then call save_agent_cut. If you do not answer within decide_within_seconds, or "
-            "this conversation closes, FluentFlow judges the cut itself."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "save_agent_cut",
-        "description": (
-            "Send your decision on a task's cut, as the instructions of get_agent_cut_material ask: "
-            "keep_gaps (gap ids from the timeline, each with a reason) and remove (stretches with talk, "
-            "from/to in seconds as the timeline gives them, to null for the end, each with a reason). "
-            "FluentFlow applies the same rules as to its own model: spoken words are never cut, and "
-            "removals that together take more than a quarter of what was said are not applied but put "
-            "to the user one by one. A wrong gap id is refused, so you can fix it and send again. The "
-            "answer lists what was done as numbered facts with report_instructions: organise them and "
-            "call save_agent_cut_report. Then tell the user the cut is done and how many places need "
-            "their look (save_agent_cut_report's to_judge) on the task page in FluentFlow; do not ask them "
-            "in chat (they need the video)."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "keep_gaps": {"type": "array", "items": {"type": "object"}},
-                "remove": {"type": "array", "items": {"type": "object"}},
-                "model": {"type": "string", "description": "Which model judged, recorded with the cut."},
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "save_agent_cut_report",
-        "description": (
-            "Send the processing report for the cut you judged: the facts save_agent_cut listed, organised "
-            "as its report_instructions say (summary, and sections of items that cite facts by ref; mark "
-            "unsure with a doubt only where you are not sure). It is shown on the task page and kept when "
-            "the user changes a cut later. The answer's to_judge is how many places the page asks the user "
-            "to judge (yours plus the ones FluentFlow always asks about, such as removed talk): tell the user "
-            "that number, not your own count."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "summary": {"type": "string"},
-                "sections": {"type": "array", "items": {"type": "object"}},
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id", "sections"],
-        },
-    },
-    {
-        "name": "get_agent_note_material",
-        # Claude Code keeps a tool result up to this size inline instead of
-        # saving it to a file (its ceiling is 500,000 characters; without it,
-        # 50,000). The whole transcript of a 2.6-hour recording came to about
-        # 130,000 characters (2026-10-16).
-        "_meta": {"anthropic/maxResultSizeChars": 500_000},
-        "description": (
-            "Write a task's note yourself instead of a model FluentFlow is configured to pay for "
-            "(the way to get a note on the user's own subscription). Returns the whole timestamped "
-            "transcript, the frames as local file paths with their moments, and instructions (the "
-            "note skill in effect plus the fixed contract). Open the frames you need, write the whole "
-            "note, then call save_agent_note once. Do this in a subagent with a fresh context when "
-            "your host has them, so the transcript does not fill the user's conversation: give it the "
-            "task_id and have it fetch, write and save. If the result came back truncated or saved to "
-            "a file because it was too large for one tool result, call again with small_parts=true: "
-            "the recording then comes in total_parts parts to fetch, write and save one at a time. "
-            "The first call for a video extracts frames (up to a minute). note_version is the task's "
-            "note as you read it: pass it to save_agent_note as base_version."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "part": {"type": "integer", "default": 1, "description": "Which part, from 1 to total_parts (small_parts only)."},
-                "small_parts": {
-                    "type": "boolean", "default": False,
-                    "description": "Hand the recording over in parts of about 15,000 characters, for a host whose tool results are too small for the whole transcript.",
-                },
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "save_agent_note",
-        "description": (
-            "Save the note you wrote from get_agent_note_material as the task's note. The previous "
-            "note is kept and restorable (write_note_from_cut_media restore_previous_note=true). "
-            "note_markdown for a one-part recording. For several parts, save each as soon as it is "
-            "written with part and note_markdown: saved parts stay in FluentFlow across conversations, "
-            "the task's note is replaced once every part is in, and the answer's next says what to do "
-            "(the remaining parts, then a read-through). note_markdown without part on such a recording "
-            "is a whole edited note. Cite "
-            "frames by file name only. A note far too short for its transcript is refused and "
-            "nothing is replaced. The first save of each part is checked against its transcript for "
-            "knowledge points the note never mentions (when FluentFlow has a model to check with) and "
-            "they come back in coverage.missing, by part: when it is not empty, write in the ones worth "
-            "keeping and save that part again once. A part saved again is not checked again. "
-            "Pass base_version (note_version from the material or get_task): if the user changed the "
-            "note in the page, Obsidian or Feishu while you wrote, the save is refused with code stale "
-            "and nothing is replaced; get_task_package for the current note, merge your note into it "
-            "and save again with the new note_version. Each answer carries note_version as the note "
-            "is after it; use that one for the next save of a part."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "note_markdown": {"type": "string"},
-                "part": {"type": "integer", "description": "Which part this note is, from 1 to total_parts."},
-                "part_notes": {"type": "array", "items": {"type": "string"}},
-                "basis_note": {
-                    "type": "string",
-                    "description": "One or two sentences: which parts rest on the frames, which on the transcript only.",
-                },
-                "model": {"type": "string", "description": "Which model wrote it, recorded on the note."},
-                "base_version": {
-                    "type": "string",
-                    "description": (
-                        "The note_version you read the note at (get_task, get_agent_note_material). "
-                        "When the note changed since, nothing is saved and the answer has code stale: "
-                        "read the note again, merge your change into it, save with the new version. "
-                        "Leaving it out saves as before, over any change made meanwhile."
-                    ),
-                },
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "get_agent_note_part",
-        "description": (
-            "Read back one part of the note you saved with save_agent_note(part=...), without its "
-            "transcript. Used for the read-through once every part is saved: read the parts one at a "
-            "time, then save again only the parts you change."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "part": {"type": "integer"},
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id", "part"],
-        },
-    },
-    {
-        "name": "list_tasks",
-        "description": (
-            "Find tasks: newest first, or only those whose title, note title (the note's first heading) "
-            "or file name contains query. Use it to find which task a screenshot of a note came from: "
-            "search a few characters of the title in the screenshot. Returns task_id, title, note_title, "
-            "created_at, status, has_note."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "limit": {"type": "integer", "default": 20},
-                "api_base": {"type": "string"},
-            },
-        },
-    },
-    {
-        "name": "get_status",
-        "description": (
-            "How FluentFlow on this machine handles a task you submit, step by step (getting the material, "
-            "cutting, transcription, notes, outputs, agent connection), and anything the user has to fix first. "
-            "The same list the Settings page shows. Use it when the user asks what FluentFlow is set up to do."
-        ),
-        "inputSchema": {"type": "object", "properties": {"api_base": {"type": "string"}}},
-    },
-    {
-        "name": "get_note_skill",
-        "description": "The note-writing rules in effect (text, version, default or the user's own) and every rule added from feedback, with the feedback each came from.",
-        "inputSchema": {"type": "object", "properties": {"api_base": {"type": "string"}}},
-    },
-    {
-        "name": "record_note_feedback",
-        "description": (
-            "Keep a problem the user reported about a note as a test case. kind=one_off for a single "
-            "error (a misspelt name) or pattern for a way of writing that would recur. A pattern needs "
-            "criterion: how a checker tells the problem is fixed. With task_id the transcript of that "
-            "part is frozen into the case. When the user points out a problem in a note (often with a screenshot): fix that note first (save_agent_note). If the problem would come back in other notes, record it with record_note_feedback kind=pattern, check list_note_feedback for the same problem reported before (if so, show the user the existing rule and the old and new versions before changing it), then draft a rule, rewrite the affected part several times with it, have a separate checker that did not write it judge only whether the problem is still there, and when it passes call apply_note_rule and tell the user the rule in one sentence."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "problem": {"type": "string", "description": "What the user said is wrong, in their words."},
-                "kind": {"type": "string", "enum": ["one_off", "pattern"]},
-                "task_id": {"type": "string"},
-                "criterion": {"type": "string", "description": "Pass / fail: what a fixed note does."},
-                "note_excerpt": {"type": "string", "description": "The note text the problem is in."},
-                "part": {"type": "integer"},
-                "transcript_excerpt": {"type": "string", "description": "Only the relevant stretch; default the whole part."},
-                "api_base": {"type": "string"},
-            },
-            "required": ["problem", "kind"],
-        },
-    },
-    {
-        "name": "list_note_feedback",
-        "description": "Every problem the user has reported, newest first, with rule_id when a rule came of it. Read it to tell whether a new report is a problem that came back.",
-        "inputSchema": {"type": "object", "properties": {"api_base": {"type": "string"}}},
-    },
-    {
-        "name": "draft_note_part",
-        "description": (
-            "Have FluentFlow's own model write one part of a task's note with candidate rules, without "
-            "saving it, for verifying a rule when FluentFlow writes the user's notes. When no model is "
-            "configured, write the part yourself from get_agent_note_material with the candidate rules."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "rules": {"type": "string", "description": "The whole candidate skill text."},
-                "part": {"type": "integer", "default": 1},
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id", "rules"],
-        },
-    },
-    {
-        "name": "apply_note_rule",
-        "description": (
-            "Write a rule you verified into the user's note skill. skill_text is the whole new skill "
-            "with the rule merged where it belongs; the previous skill is kept and can be restored from "
-            "the settings page. rounds: how many rewrites passed the checker; evidence: one or two "
-            "sentences on what was checked."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "skill_text": {"type": "string"},
-                "rule": {"type": "string", "description": "The rule, as the user will be told it."},
-                "feedback_ids": {"type": "array", "items": {"type": "string"}},
-                "rounds": {"type": "integer"},
-                "evidence": {"type": "string"},
-                "base_version": {
-                    "type": "string",
-                    "description": "The skill version get_note_skill returned, the one you merged the rule into. "
-                                   "The write is refused if the skill changed since; read it again and merge.",
-                },
-                "api_base": {"type": "string"},
-            },
-            "required": ["skill_text", "rule", "feedback_ids", "rounds", "evidence"],
-        },
-    },
-    {
-        "name": "list_note_versions",
-        "description": (
-            "List the earlier versions FluentFlow kept of a task's note. Use it when the user says the "
-            "note lost content, got much shorter, was overwritten, or asks for an earlier version. Before "
-            "anything writes over the note (an edit on the page, the md edited in Obsidian, an agent's "
-            "note, a rewrite, Feishu, a restore), the version being replaced is kept; the Feishu document "
-            "only when it was edited in Feishu since the last push. What each change changed (time, who, "
-            "chapter, words before and after) is in 过程文件/修改记录.md beside the note's versions, "
-            "newest first (its path is change_log in the answer): read it to find which change lost "
-            "something. Returns current "
-            "(the note now: note_version, chars, chars_change, changed_by) and versions, newest first: "
-            "version_id, saved_at, side (where that version lived: 本地 = the md in the output folder, "
-            "FluentFlow = the task's note, 飞书 = the Feishu document), replaced_by (what wrote over it: "
-            "web_edit, obsidian, agent_note, rewrite, generated, feishu_pull, export, restore, switch_back, adjust; "
-            "null for versions kept before this was recorded, shown as 未记录), chars, chars_change "
-            "(against the previous version on the same side; the 飞书 side is Feishu's export format and "
-            "runs a few hundred characters longer than the others) and sharp_drop (at least 1,000 characters and half the "
-            "length lost at once, the sign of a note saved over by a fragment). Tell the user what "
-            "you found before restoring anything."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "read_note_version",
-        "description": (
-            "Read one kept version of a task's note in full (markdown), by the version_id "
-            "list_note_versions gave. Use it to check a version is the one the user wants before "
-            "restoring it, or to copy a lost passage back by hand. Versions with side 本地, and FluentFlow "
-            "versions kept when an Obsidian edit came in, point their screenshots at 过程文件/截图 beside "
-            "the md (a restore turns them back into the task's own pictures); side 飞书 is Feishu's own "
-            "export format."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "version_id": {"type": "string"},
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id", "version_id"],
-        },
-    },
-    {
-        "name": "restore_note_version",
-        "description": (
-            "Make a kept version the task's note again. Ask the user first: it replaces the note "
-            "everywhere it is kept. The current note is kept as a version first (replaced_by=restore), "
-            "so a restore can itself be undone. It then goes through the note's ordinary save: the "
-            "task's note changes at once; the md and PDF in the output folder, and the Feishu document "
-            "of a note kept in step with Feishu (changed chapters only), are queued to follow, usually "
-            "within seconds to a minute. The answer's follows lists where it applies; if one did not "
-            "follow, get_task says why (output_folder.error, lark_sync_error). base_version is current.note_version from "
-            "list_note_versions: when the note changed since (the user editing in Obsidian or on the "
-            "page, Feishu, another agent), the restore is refused with code stale and nothing changes; "
-            "list again and confirm with the user. Versions with side 飞书 cannot be restored (Feishu's "
-            "format loses screenshots and chapter links); restore the 本地 or FluentFlow version from "
-            "the same moment instead."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "version_id": {"type": "string"},
-                "base_version": {
-                    "type": "string",
-                    "description": "current.note_version from list_note_versions.",
-                },
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id", "version_id", "base_version"],
-        },
-    },
-    {
-        "name": "export_result",
-        "description": (
-            "Export a completed task note. target=pdf writes a PDF with its screenshots to output_dir "
-            "(default ~/Documents/FluentFlow 笔记) and returns pdf_path; it needs Chrome or Edge on the "
-            "machine, and without one returns html_path to print instead. target=lark exports to Feishu/Lark. "
-            "For Feishu: without lark_export_route or "
-            "folder_token the user's export settings apply (route, then folder), else auto: "
-            "lark-cli when it is signed in, otherwise the user's Feishu app. The document "
-            "link is recorded on the task, so the editor shows it too."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "target": {"type": "string", "enum": ["lark", "pdf"], "default": "lark"},
-                "output_dir": {"type": "string", "description": "pdf only: folder to write the PDF in."},
-                "title": {"type": "string"},
-                "lark_export_route": {
-                    "type": "string",
-                    "enum": ["auto", "local_cli", "openapi"],
-                    "description": "Override the user's export route for this call only.",
-                },
-                "folder_token": {
-                    "type": "string",
-                    "description": "Feishu folder for the app route; default: the user's setting.",
-                },
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "list_subtitle_corrections",
-        "description": (
-            "Words in the task's transcript that FluentFlow replaced from the subtitles burned into the "
-            "video picture, right after transcription and before the note was written. Each has an id, the "
-            "time, from (what the transcript said), to (the subtitle's spelling), and the subtitle line it "
-            "rests on. subtitle_correction says how the step went: skipped with its reason (no subtitles in "
-            "the picture, no text recognition on this machine, no picture, no model), no_changes or completed. "
-            "Show the user these when they say a name or term in the transcript or note was changed wrongly."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "revert_subtitle_corrections",
-        "description": (
-            "Undo subtitle corrections: each named one (ids from list_subtitle_corrections, or all when ids "
-            "is empty) goes back to what the transcript said. Ask the user first. Refused with code "
-            "task_busy while the task is still transcribing, cutting or writing its note: wait for it to "
-            "finish. The task's transcript (every copy of it), "
-            "its subtitle files and the output folder follow; a note already written is not rewritten "
-            "(regenerate_note does that if the user wants it). not_found lists ids whose sentence was "
-            "edited since and could not be found."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "ids": {"type": "array", "items": {"type": "string"}},
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "list_glossary_corrections",
-        "description": (
-            "Words in the task's transcript that FluentFlow corrected from the series' word list "
-            "(FluentFlow 校正文档.md in the recording's folder or above) and the surrounding sentences, "
-            "after transcription (and after the subtitle check) and before the note was written. Each has an "
-            "id, the time, sentence (its number in the transcript now; null when that sentence was edited "
-            "since), from, to, basis (glossary: the word list's spelling, entry is that line; context: the "
-            "sentences around it decided, why says how) and the sentence before and after. "
-            "glossary_correction says how the step went: skipped with its reason (no transcript, no model), "
-            "failed with the model's error, no_changes or completed, with counts by basis, the channel "
-            "(subscription or a key) and the seconds it took."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "run_glossary_correction",
-        "description": (
-            "Run the word-list correction on a finished task again, for a task processed before the step "
-            "existed or after the user added to the word list. Reads the whole transcript with the word list "
-            "found for the recording's folder (with no word list, only what the context makes certain is "
-            "changed). Sentences the user edited in the editor are left alone. Each change replaces a misheard "
-            "word, never a sentence; the new changes join the task's records and undo the same way "
-            "(list_glossary_corrections, revert_glossary_corrections). The transcript, its subtitle files and "
-            "the output folder follow; a note already written is not rewritten (regenerate_note does that if "
-            "the user wants it). Uses the Claude subscription first when this machine opted into it, else the "
-            "configured text model; takes a minute or two for an hour of recording. Refused with code "
-            "task_busy while the task is still being processed, already_running when a run is under way, and "
-            "transcript_moved when the transcript was edited while it ran (nothing written; run it again)."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "revert_glossary_corrections",
-        "description": (
-            "Undo glossary corrections: each named one (ids from list_glossary_corrections, or all when ids "
-            "is empty) goes back to what the transcript said, in every copy of the transcript, the subtitle "
-            "files and the output folder. Ask the user first. Refused with code task_busy while the task is "
-            "still being processed. not_found lists ids whose sentence was edited since and could not be found."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "ids": {"type": "array", "items": {"type": "string"}},
-                "api_base": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-]
+TOOL_DEFINITIONS: list[dict[str, Any]] = [definition for _func, definition in _TOOLS.values()]
 
 
 def _result(payload: Any) -> dict[str, Any]:

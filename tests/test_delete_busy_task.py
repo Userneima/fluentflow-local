@@ -53,7 +53,8 @@ def test_a_task_whose_cut_and_note_are_still_to_come_is_not_deleted(client):
     # refusal names the first of them.
     task = _task({"summary_status": "skipped", "note_deferred_to_visual_note": True, "transcript_text": "x"})
     task_steps.plan(task)
-    task_steps.finish(task, task_steps.TRANSCRIBE, task_steps.DONE)
+    for done in task_steps.BEFORE_TRANSCRIPT:
+        task_steps.finish(task, done, task_steps.DONE)
 
     response = client.delete(f"/jobs/{task}")
 

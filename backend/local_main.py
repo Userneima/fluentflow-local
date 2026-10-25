@@ -40,7 +40,7 @@ hf_endpoint.apply_at_startup()
 onnx_quiet.quiet()
 
 from backend.core.app_factory import create_app
-from backend.core import claude_code_note, task_steps, visual_note_channel  # noqa: E402
+from backend.core import claude_code_note, visual_note_channel  # noqa: E402
 from backend.core.event_context import event_metadata  # noqa: E402
 from backend.core.event_logger import log_event  # noqa: E402
 from backend.core.claude_code_note import stop_running_notes
@@ -111,7 +111,7 @@ RESTART_RESUME_COUNT_KEY = "restart_resume_count"
 RESUMED_ERROR_REASON = "服务重启中断了这个任务，已自动重新排队处理，结果在新的那条记录里。"
 
 
-def recover_stale_jobs() -> int:
+def recover_stale_jobs(skip: set[str] | frozenset[str] = frozenset()) -> int:
     """Mark jobs stranded by a previous shutdown as failed.
 
     Local workers are process-local (hub + serial queue chain), so a
@@ -129,7 +129,7 @@ def recover_stale_jobs() -> int:
     interrupted_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     for job in list_jobs_by_statuses(("queued", "running")):
         task_id = str(job.get("task_id") or "")
-        if not task_id:
+        if not task_id or task_id in skip:
             continue
         upsert_job(
             task_id=task_id,
@@ -285,28 +285,21 @@ async def lifespan(app: FastAPI):
             "Startup removed %s interrupted link downloads (stopped %s still-running yt-dlp)",
             leftovers["removed"], leftovers["stopped"],
         )
-    interrupted = [str(job.get("task_id")) for job in list_jobs_by_statuses(("queued", "running"))]
-    recovered = recover_stale_jobs()
+    # A task that records its steps is carried on in place from the step it
+    # was on (``task_actions.resume_after_restart``, below, once the cut and
+    # note states the restart stranded are cleared). One from before steps
+    # were recorded is re-run as a new task, as it always was.
+    from backend.core import task_actions
+
+    stepped = task_actions.stepped_tasks_cut_off()
+    interrupted = [
+        str(job.get("task_id")) for job in list_jobs_by_statuses(("queued", "running"))
+        if str(job.get("task_id")) not in stepped
+    ]
+    recovered = recover_stale_jobs(skip=set(stepped))
     if recovered:
         logger.info("Startup recovery marked %s stranded local jobs as failed", recovered)
-    # Before anything is re-queued (a re-run plans its steps afresh): the steps
-    # the stopped service was running did not finish. A task waiting for the
-    # user's agent goes on by itself (``resume_agent_cuts`` below).
-    from backend.core.task_flow import agent_cut_unfinished
-
-    closed = task_steps.recover_after_restart(keep=lambda task_id: agent_cut_unfinished(get_job(task_id)))
-    if closed:
-        logger.info("Startup closed the open steps of %s tasks the restart cut off", closed)
     resume = None
-    if interrupted:
-        # Off the startup path: each re-queue probes its file, and the page
-        # should not wait on that to load.
-        async def _resume() -> None:
-            resumed = await resume_interrupted_jobs(interrupted)
-            if resumed:
-                logger.info("Startup re-queued %s tasks the restart cut off", resumed)
-
-        resume = asyncio.create_task(_resume())
     # The de-breath render slot lives in process memory, so a service killed
     # mid-encode leaves a completed task saying its de-breath is still running —
     # and the route refuses that state, which would make the entry dead for good.
@@ -328,6 +321,18 @@ async def lifespan(app: FastAPI):
     stranded_notes = recover_stranded_notes()
     if stranded_notes:
         logger.info("Startup recovery cleared %s stranded visual notes", stranded_notes)
+    if interrupted or stepped:
+        # Off the startup path: each re-queue probes its file, and the page
+        # should not wait on that to load. Oldest first, as they were queued.
+        async def _resume() -> None:
+            carried = await task_actions.resume_after_restart(stepped)
+            if carried:
+                logger.info("Startup carried on %s tasks from the step the restart cut off", carried)
+            resumed = await resume_interrupted_jobs(interrupted)
+            if resumed:
+                logger.info("Startup re-queued %s tasks the restart cut off", resumed)
+
+        resume = asyncio.create_task(_resume())
     # An md note edited in Obsidian comes back into its task; a note kept in
     # Feishu follows it there; each change of a note is written in its change
     # log (each import registers its listener).

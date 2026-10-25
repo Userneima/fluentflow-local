@@ -334,16 +334,18 @@ def scoped_stack(monkeypatch, tmp_path):
     """Real tmp SQLite behind the assembled app's job routers."""
     jobs_db = tmp_path / "jobs.sqlite"
     monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path / "data"))
-    for module in (local_jobs, local_job_mutation, local_job_edit):
+    from backend.core import task_actions
+
+    for module in (local_jobs, local_job_mutation, local_job_edit, task_actions):
         monkeypatch.setattr(
             module, "get_job", functools.partial(job_store.get_job, db_path=jobs_db),
             raising=False,
         )
     monkeypatch.setattr(
-        local_job_mutation, "upsert_job", functools.partial(job_store.upsert_job, db_path=jobs_db)
+        task_actions, "upsert_job", functools.partial(job_store.upsert_job, db_path=jobs_db)
     )
     monkeypatch.setattr(
-        local_job_mutation, "cancel_job_steps",
+        task_actions, "cancel_job_steps",
         functools.partial(job_store.cancel_job_steps, db_path=jobs_db),
     )
     monkeypatch.setattr(
@@ -351,7 +353,7 @@ def scoped_stack(monkeypatch, tmp_path):
         functools.partial(job_store.save_result_changes, db_path=jobs_db),
         raising=False,
     )
-    monkeypatch.setattr(local_job_mutation, "log_event", lambda **values: None)
+    monkeypatch.setattr(task_actions, "log_event", lambda **values: None)
     job_store.upsert_job(
         task_id="b-task",
         status="running",

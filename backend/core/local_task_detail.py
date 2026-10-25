@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from backend.core import job_store, task_steps
 from backend.core.event_logger import list_task_events
 from backend.core.local_decision_log import build_decision_log as build_local_decision_log
 from backend.core.local_error_diagnostics import diagnose_error
@@ -17,10 +18,10 @@ from backend.core.task_detail_core import (
     build_task_snapshot as build_task_snapshot_core,
 )
 
-# Which timeline step each pipeline event closes. The local edition runs its
-# pipeline in process and never writes job_steps rows; the event log is its
-# record of what actually happened, so the detail page reads it instead of
-# inferring every step from the job's final state.
+# Which timeline step each pipeline event closes, for a task from before steps
+# were recorded (``task_steps``): its event log is its record of what actually
+# happened, so the detail page reads it instead of inferring every step from
+# the job's final state.
 EVENT_TO_STEP = {
     "video_source_downloaded": "source_fetch",
     "source_imported": "source_fetch",
@@ -226,11 +227,53 @@ def build_task_snapshot(
     return build_task_snapshot_core(job, policy=POLICY, job_steps=job_steps)
 
 
+# How a recorded step's status reads on the timeline.
+_TIMELINE_STATUS = {
+    task_steps.PENDING: "pending",
+    task_steps.RUNNING: "running",
+    task_steps.DONE: "completed",
+    task_steps.FAILED: "failed",
+    task_steps.SKIPPED: "skipped",
+    task_steps.STOPPED: "stopped",
+}
+
+
+def timeline_from_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The task's timeline, one entry per recorded step (``task_steps``), in
+    their order: what ran, when, and how it ended."""
+    timeline = []
+    for name in task_steps.ORDER:
+        step = next((each for each in steps if _text(each.get("step_type")) == job_store.TASK_STEP_PREFIX + name), None)
+        if step is None:
+            continue
+        entry = {
+            "id": name,
+            "title": task_steps.LABELS[name],
+            "status": _TIMELINE_STATUS.get(_text(step.get("status")), "pending"),
+            "source": "recorded",
+            "started_at": step.get("started_at"),
+            "finished_at": step.get("finished_at"),
+            "error_reason": _text(step.get("error_reason")) or None,
+        }
+        timeline.append({key: value for key, value in entry.items() if value is not None and value != ""})
+    return timeline
+
+
 def build_task_detail(
     job: dict[str, Any],
     *,
     job_steps: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """The detail page's data. A task that records its steps gets its timeline
+    from them; one from before steps were recorded, from its event log."""
+    task_id = _text(job.get("task_id"))
+    recorded = task_steps.steps_of([task_id]).get(task_id, []) if task_id else []
     if not job_steps:
-        job_steps = recorded_steps_from_events(_text(job.get("task_id")))
-    return build_task_detail_core(job, policy=POLICY, job_steps=job_steps)
+        job_steps = recorded_steps_from_events(task_id)
+    detail = build_task_detail_core(job, policy=POLICY, job_steps=job_steps)
+    if recorded:
+        detail["timeline"] = timeline_from_steps(recorded)
+        detail["recorded_steps"] = recorded
+        detail["data_quality"] = {**detail.get("data_quality", {}), "has_recorded_steps": True,
+                                  "timeline_sources": ["recorded"]}
+    return detail

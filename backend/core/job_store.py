@@ -627,6 +627,26 @@ def update_job_metadata(
     return True
 
 
+def reopen_job(task_id: str, db_path: Path | str = DEFAULT_DB_PATH) -> bool:
+    """Put a task that stopped before its transcript was stored back in the
+    queue, to be carried on (``task_actions.resume_task``).
+
+    The one write that turns a cancelled task back: ``upsert_job`` refuses to,
+    so a late write from a stopped worker cannot revive it by accident.
+    """
+    if not task_id:
+        return False
+    ensure_job_db(db_path)
+    now = _now_iso()
+    with sqlite_connection(Path(db_path), timeout=10) as conn:
+        cursor = conn.execute(
+            "UPDATE jobs SET status = 'queued', stage = 'queued', progress = 0, error_reason = NULL,"
+            " updated_at = ? WHERE task_id = ?",
+            (now, task_id),
+        )
+        return bool(cursor.rowcount)
+
+
 def update_job_result(
     task_id: str,
     result: dict[str, Any],

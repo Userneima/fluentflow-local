@@ -42,7 +42,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import cut_cases, cut_judge, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts
+from backend.core import cut_cases, cut_judge, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts, task_stop
 from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT, TRANSCRIPT_MEDIA_SOURCE, resolve_artifact_file
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.core.silence_cuts import CutPlan, TimeRange
@@ -748,6 +748,7 @@ def survey_and_cut(
     task_id: str, client_id: str | None = None, *, chat: tuple[Chat, str] | None = None,
     on_plan: Callable[[list[cut_timeline.KeptRange]], None] | None = None,
     decide: Decide | None = None, judged_by: str | None = None, extra: dict[str, Any] | None = None,
+    runner: Callable[..., Any] | None = None,
 ) -> dict[str, Any] | None:
     """Judge the recording from its transcript, cut it once, and move the
     transcript onto the cut. Returns what was recorded, or None when there was
@@ -760,7 +761,12 @@ def survey_and_cut(
     ``decide`` stands in for the model when the judgement was made elsewhere
     (the user's own agent, ``agent_cut``): it gets the loudness plan with the
     spoken words already protected and returns the plan to render and what was
-    decided. ``judged_by`` names that judge; ``extra`` goes into the record."""
+    decided. ``judged_by`` names that judge; ``extra`` goes into the record.
+
+    A decision is kept on the task before the render (``DECIDED_KEY``): a cut
+    stopped or cut off by a restart while rendering renders that decision
+    again instead of asking a model again (decision 6.42). ``runner`` runs the
+    cut's commands (a ``TaskWatch`` runner, so stopping the task stops them)."""
     job = job_store.get_job(task_id, client_id=client_id)
     result = dict((job or {}).get("result") or {})
     if not job or str(result.get("transcript_media") or "") == TRANSCRIPT_MEDIA_CUT:
@@ -774,6 +780,10 @@ def survey_and_cut(
     except debreath_job.DebreathError:
         return None
 
+    stored = (debreath_job.debreath_state(result).get(DECIDED_KEY) or None) if decide is None else None
+    if isinstance(stored, dict) and stored.get("cuts") is not None:
+        decide, judged_by = _replay(stored), stored.get("judged_by")
+        extra = {**(extra or {}), "replayed_decision": True}
     judge = None if decide is not None else _judge(chat)
     asker = (judge.text, judge.name) if judge else None
     record: dict[str, Any] = {"judged_by": judged_by if decide is not None else (judge.name if judge else None), **(extra or {})}
@@ -822,6 +832,7 @@ def survey_and_cut(
         return revised
 
     def _tell_plan(plan: CutPlan) -> None:
+        _remember_decision(task_id, client_id, plan, record)
         if on_plan is None or not plan.cuts:
             return
         try:
@@ -829,8 +840,10 @@ def survey_and_cut(
         except Exception as exc:  # noqa: BLE001 - the cut goes on regardless
             logger.warning("could not hand the plan of %s on: %s", task_id, exc)
 
+    runner = runner or task_stop.bound_runner()
     try:
-        debreath_job.run_debreath(task_id, client_id=client_id, revise=revise)
+        debreath_job.run_debreath(task_id, client_id=client_id, revise=revise,
+                                  **({"runner": runner} if runner is not None else {}))
     except Exception as exc:  # noqa: BLE001 - the original's transcript stands
         logger.warning("survey cut for %s failed: %s", task_id, exc)
         record["render_error"] = str(exc)[:300]
@@ -840,6 +853,36 @@ def survey_and_cut(
     if not _finish(task_id, client_id, source, final.get("plan"), record, asker):
         _record(task_id, client_id, record)
     return record
+
+
+# The decision a cut renders, kept on the task until the render is done.
+DECIDED_KEY = "survey_decided"
+
+
+def _remember_decision(task_id: str, client_id: str | None, plan: CutPlan, record: dict[str, Any]) -> None:
+    """Keep what was decided before rendering it: the stretches to cut and
+    what the judge said. Best effort; a cut that cannot keep it renders all
+    the same, and is judged again if it has to start over."""
+    try:
+        kept = json.loads(json.dumps({
+            "cuts": [[round(c.start, 3), round(c.end, 3)] for c in plan.cuts],
+            "judged_by": record.get("judged_by"),
+            "record": {k: v for k, v in record.items() if k not in ("word_protection", "spoken")},
+        }, ensure_ascii=False, default=str))
+        debreath_job._store(task_id, client_id=client_id, state={DECIDED_KEY: kept})
+    except Exception:  # noqa: BLE001 - the render goes ahead regardless
+        logger.warning("could not keep the cut decision of %s", task_id, exc_info=True)
+
+
+def _replay(stored: dict[str, Any]) -> Decide:
+    """Stands in for the judge with a decision already made."""
+    def decide(media: Path, plan: CutPlan, segments: Any) -> tuple[CutPlan, dict[str, Any]]:
+        cuts = [TimeRange(float(a), float(b)) for a, b in stored.get("cuts") or []]
+        duration = plan.source_duration_seconds
+        replayed = replace(plan, cuts=cuts, keeps=silence_cuts._keeps_between(duration, cuts, silence_cuts.MIN_KEEP_SECONDS),
+                           warnings=list(plan.warnings))
+        return replayed, dict(stored.get("record") or {})
+    return decide
 
 
 def _finish(
@@ -868,6 +911,7 @@ def _finish(
         delivered = output_folder.deliver_media(task_id, source, media, output_folder.CUT_LABEL)
     # The transcript is on the cut's clock now, exactly as when the cut came
     # first; the result page and the re-cut guard read this flag for that.
+    state.pop(DECIDED_KEY, None)
     result["debreath"] = {**state, **delivered, "ran_before_transcription": True, "survey": record}
     from backend.core.result_artifacts import _attach_result_artifacts
 

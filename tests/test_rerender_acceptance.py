@@ -11,10 +11,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks
 
 from backend.core import debreath_job, job_store
-from backend.routers import local_job_debreath as route
+from backend.core import task_actions as route
 
 
 @pytest.fixture
@@ -36,16 +36,16 @@ def _run(tasks: BackgroundTasks) -> None:
 def test_a_second_click_before_the_first_ends_is_refused(task):
     seen = []
     first = BackgroundTasks()
-    route._accept_rerender(task, None, first, lambda claimed: seen.append(claimed))
+    route._accept_rerender(task, None, first.add_task, lambda claimed: seen.append(claimed))
 
-    with pytest.raises(HTTPException) as refused:
-        route._accept_rerender(task, None, BackgroundTasks(), lambda claimed: seen.append(claimed))
-    assert refused.value.status_code == 409
+    with pytest.raises(route.Refused) as refused:
+        route._accept_rerender(task, None, BackgroundTasks().add_task, lambda claimed: seen.append(claimed))
+    assert refused.value.status == 409
 
     _run(first)
     assert seen == [True], "the work runs once, holding the render slot"
     again = BackgroundTasks()
-    route._accept_rerender(task, None, again, lambda claimed: None)
+    route._accept_rerender(task, None, again.add_task, lambda claimed: None)
     _run(again)
 
 
@@ -54,10 +54,10 @@ def test_a_failed_rerender_frees_the_task(task):
         raise RuntimeError("disk full")
 
     tasks = BackgroundTasks()
-    route._accept_rerender(task, None, tasks, broken)
+    route._accept_rerender(task, None, tasks.add_task, broken)
     _run(tasks)
 
     later = BackgroundTasks()
-    route._accept_rerender(task, None, later, lambda claimed: None)
+    route._accept_rerender(task, None, later.add_task, lambda claimed: None)
     _run(later)
     assert task not in debreath_job.running_task_ids()

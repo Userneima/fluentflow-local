@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import logging
+import shutil
 import threading
 import time
 import types
@@ -23,6 +25,7 @@ from backend.core import (
     survey_cut,
     tail_trim,
     task_steps,
+    task_stop,
     visual_note_channel,
     visual_note_job,
 )
@@ -34,7 +37,7 @@ from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import friendly_error
 from backend.core.local_job_runtime import JOB_EVENTS
-from backend.core.media_job import MediaJobContext, execute_media_job
+from backend.core.media_job import RESUME_DIRNAME, MediaJobContext, execute_media_job
 from backend.core.note_title import resolve_lark_doc_title
 from backend.core.runtime_env import truthy
 from backend.core.storage_paths import _artifact_storage_dir
@@ -125,10 +128,17 @@ def _write_note_holding_slot(
             raise NoteAbandoned("任务已取消，笔记没有写。")
 
     try:
-        local_intake_flow.write_note(
-            task_id, client_id, on_local_work_done=hand_off,
-            **({"planned_ranges": planned_ranges} if planned_ranges else {}),
-        )
+        with task_stop.bound(task_id):
+            local_intake_flow.write_note(
+                task_id, client_id, on_local_work_done=hand_off,
+                **({"planned_ranges": planned_ranges} if planned_ranges else {}),
+            )
+        if task_stop.requested(task_id):
+            # Its Claude was stopped with the step: the note says so, not
+            # what the stopped command line printed.
+            local_intake_flow._patch_result(task_id, client_id, {
+                "summary_status": "failed", "summary_error": task_steps.STOPPED_NOTE, "summary_skipped": False,
+            })
     except NoteAbandoned as exc:
         # The frame note records this itself; the text-note path lets it through.
         local_intake_flow._patch_result(task_id, client_id, {
@@ -198,17 +208,30 @@ async def _run_serially(
     previous: Optional[tuple[Optional[str], asyncio.Event]],
     done: asyncio.Event,
     ctx: MediaJobContext,
+    start_at: str = task_steps.FETCH,
 ) -> None:
-    """Wait for the task ahead, then the pipeline and its note."""
+    """Wait for the task ahead, then the pipeline and its note (from
+    ``start_at`` when the task is carried on)."""
     try:
         await wait_for_queue_turn(previous, ctx.task_id_value, ctx.client_id)
     except BaseException:
         done.set()
         raise
-    await run_pipeline_then_note(done, ctx)
+    await run_pipeline_then_note(done, ctx, start_at=start_at)
 
 
-async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> None:
+class StepStopped(asyncio.CancelledError):
+    """The user stopped this task's step (``task_stop``)."""
+
+
+def _raise_if_stopped(task_id: str) -> None:
+    if task_stop.requested(task_id):
+        raise StepStopped()
+
+
+async def run_pipeline_then_note(
+    done: asyncio.Event, ctx: MediaJobContext, *, start_at: str = task_steps.FETCH,
+) -> None:
     """Run the pipeline and the note's local part, then hand the queue on while
     the note waits on the remote model. Every entry that transcribes goes
     through here once its turn has come, so none of them can end without a note
@@ -222,35 +245,55 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
     two and a half cores for half a minute per twelve minutes of video, and that
     belongs in the queue with every other local job. Running local jobs side by
     side on this machine was measured slower than running them in turn.
+
+    ``start_at`` carries a task on from that step (after a restart, or when the
+    user carries on a stopped task): the steps it already did are not done again
+    (decision 6.42).
     """
     loop = asyncio.get_running_loop()
     compressing: list[asyncio.Future] = []
+    task_id = ctx.task_id_value
+    recorded = task_steps.steps_of([task_id]).get(task_id, [])
+    if recorded:
+        task_steps.reopen_from(task_id, start_at, recorded)
+    else:
+        task_steps.plan(task_id)
+    done_before = {name for name, status in task_steps.statuses(recorded).items() if status == task_steps.DONE}
+    task_stop.begin(task_id)
 
     def hand_off() -> None:
         # Called once the note's frames are on disk (from its worker thread) or
         # the cut is rendered. The compressed copy of a high-bitrate original
         # is local work too, so it runs first and the queue moves on after it.
         def start() -> None:
-            if not compressing:
+            if compressing:
+                return
+            if task_steps.COMPRESS in done_before:
+                compressing.append(asyncio.ensure_future(_release(done)))
+            else:
                 compressing.append(asyncio.ensure_future(_compress_then_release(ctx, done)))
         loop.call_soon_threadsafe(start)
 
-    task_id = ctx.task_id_value
     stopped = False
-    task_steps.plan(task_id)
-    task_steps.start(task_id, task_steps.TRANSCRIBE)
     try:
-        await _run_pipeline(ctx)
-        task_steps.settle(task_id, task_steps.TRANSCRIBE, task_steps.transcribe_outcome(
-            get_job(task_id, client_id=ctx.client_id),
-        ))
-        if await _agent_judges_cut(ctx):
-            # The queue moves on while the user's agent judges; this task
-            # takes a new place in line once it has a decision.
-            done.set()
-            await continue_after_agent(ctx.task_id_value, ctx.client_id, ctx)
-            return
-        await _cut_then_note(ctx, hand_off)
+        if start_at in task_steps.BEFORE_TRANSCRIPT:
+            if not await _steps_before_transcript(ctx, start_at):
+                return
+        named = task_steps.statuses(task_steps.steps_of([task_id]).get(task_id, []))
+        if named.get(task_steps.CUT) != task_steps.DONE:
+            if agent_cut_unfinished(get_job(task_id, client_id=ctx.client_id)) or await _agent_judges_cut(ctx):
+                # The queue moves on while the user's agent judges; this task
+                # takes a new place in line once it has a decision.
+                done.set()
+                await continue_after_agent(task_id, ctx.client_id, ctx)
+                return
+            if named.get(task_steps.NOTE) == task_steps.DONE:
+                await _trim_recorded_tail(ctx)
+            else:
+                await _cut_then_note(ctx, hand_off)
+        elif named.get(task_steps.NOTE) != task_steps.DONE:
+            await _write_note_after_transcript(task_id, ctx.client_id, on_local_work_done=hand_off)
+        _raise_if_stopped(task_id)
         if not compressing:
             # No note took the hand-off (none wanted, or it stopped early).
             hand_off()
@@ -258,7 +301,9 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
         if compressing:
             # Delivered after the copy exists, so the folder lists it.
             await compressing[0]
-        await _feishu_step(ctx)
+        _raise_if_stopped(task_id)
+        if named.get(task_steps.FEISHU) != task_steps.DONE:
+            await _feishu_step(ctx)
         await _deliver_to_output_folder(ctx)
     except asyncio.CancelledError:
         stopped = True
@@ -271,7 +316,99 @@ async def run_pipeline_then_note(done: asyncio.Event, ctx: MediaJobContext) -> N
         # not released here: the note thread owns it (`_write_note_holding_slot`).
         done.set()
         # Nothing runs this task's steps once this returns.
-        task_steps.close_open(task_id, stopped=stopped)
+        task_steps.close_open(task_id, stopped=stopped or task_stop.requested(task_id))
+
+
+def _bound_to(task_id: str, work: Any) -> Any:
+    """``work`` run on a worker thread as work of this task (``task_stop``)."""
+    def run() -> Any:
+        with task_stop.bound(task_id):
+            return work()
+    return run
+
+
+async def _release(done: asyncio.Event) -> None:
+    done.set()
+
+
+# ── the steps before the transcript is stored ───────────────────────────────
+#
+# The pipeline (``media_job``) fetches nothing itself: a recording is uploaded
+# or read in place before the task is queued, and a link is downloaded by
+# ``link_submission`` (which records the fetch step). It transcribes, then
+# corrects; the moment the transcription is done it hands over what it
+# produced, which is kept so that a task cut off during the corrections
+# carries on from them (``transcribe_checkpoint``).
+
+CHECKPOINT_FILE = "transcribed.json"
+
+
+def _checkpoint_path(task_id: str) -> Path:
+    return _artifact_storage_dir() / task_id / RESUME_DIRNAME / CHECKPOINT_FILE
+
+
+def _save_checkpoint(task_id: str, checkpoint: dict[str, Any]) -> None:
+    try:
+        path = _checkpoint_path(task_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, default=str), encoding="utf-8")
+        temporary.replace(path)
+    except Exception:  # noqa: BLE001 - the task goes on; carrying on would transcribe again
+        logger.warning("could not keep the transcription of %s for carrying on", task_id, exc_info=True)
+
+
+def load_checkpoint(task_id: str) -> dict[str, Any] | None:
+    try:
+        return json.loads(_checkpoint_path(task_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _drop_checkpoint(task_id: str) -> None:
+    shutil.rmtree(_checkpoint_path(task_id).parent, ignore_errors=True)
+
+
+async def _steps_before_transcript(ctx: Any, start_at: str) -> bool:
+    """Fetch (a file already on this machine), transcribe and correct, as
+    steps. Raises ``StepStopped`` when the user stopped one."""
+    task_id = ctx.task_id_value
+    if start_at == task_steps.FETCH:
+        task_steps.start(task_id, task_steps.FETCH)
+        task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+    checkpoint = load_checkpoint(task_id) if start_at == task_steps.CORRECT else None
+    if checkpoint is None:
+        if start_at == task_steps.CORRECT:
+            # Nothing kept from the transcription: it is done again.
+            task_steps.reopen_from(task_id, task_steps.TRANSCRIBE)
+        task_steps.start(task_id, task_steps.TRANSCRIBE)
+    else:
+        task_steps.start(task_id, task_steps.CORRECT)
+
+    def transcribed(record: dict[str, Any]) -> None:
+        _save_checkpoint(task_id, record)
+        task_steps.finish(task_id, task_steps.TRANSCRIBE, task_steps.DONE)
+        task_steps.start(task_id, task_steps.CORRECT)
+
+    ctx.transcribe_checkpoint = checkpoint
+    ctx.on_transcribed = transcribed
+    ctx.save_checkpoint = functools.partial(_save_checkpoint, task_id)
+    await _run_pipeline(ctx)
+    outcome = task_steps.transcribe_outcome(get_job(task_id, client_id=ctx.client_id))
+    if task_stop.requested(task_id) and outcome[0] != task_steps.DONE:
+        outcome = (task_steps.STOPPED, None)
+    current = task_steps.statuses(task_steps.steps_of([task_id]).get(task_id, []))
+    for name in (task_steps.TRANSCRIBE, task_steps.CORRECT):
+        if current.get(name) in task_steps.OPEN:
+            task_steps.settle(task_id, name, outcome)
+    if outcome[0] == task_steps.STOPPED:
+        raise StepStopped()
+    if outcome[0] == task_steps.DONE:
+        _drop_checkpoint(task_id)
+    _raise_if_stopped(task_id)
+    # A failed transcription goes on as before: each later step finds
+    # nothing to work on and says so.
+    return True
 
 
 async def _cut_then_note(ctx: Any, hand_off: Any, **cut: Any) -> None:
@@ -483,7 +620,7 @@ async def _trim_recorded_tail(ctx: MediaJobContext, *, on_plan: Any = None, **cu
         work = functools.partial(tail_trim.trim_tail, ctx.task_id_value, ctx.client_id)
     task_steps.start(ctx.task_id_value, task_steps.CUT)
     try:
-        await asyncio.get_running_loop().run_in_executor(None, work)
+        await asyncio.get_running_loop().run_in_executor(None, _bound_to(ctx.task_id_value, work))
     except Exception as exc:  # noqa: BLE001 - the task's own results stand
         logger.warning("tail trim skipped for %s: %s", ctx.task_id_value, exc)
         task_steps.finish(ctx.task_id_value, task_steps.CUT, task_steps.FAILED, friendly_error(exc))

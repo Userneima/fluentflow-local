@@ -44,7 +44,7 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import correction_notes, glossary_correction, subtitle_correction, task_activity, task_steps
+from backend.core import correction_notes, glossary_correction, subtitle_correction, task_actions, task_activity, task_steps
 from backend.core import agent_cut, agent_note, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
@@ -137,6 +137,9 @@ def _task_brief(job: dict[str, Any]) -> dict[str, Any]:
         },
         "output_folder": package.get("output_folder"),
         "next_actions": package.get("next_actions") or [],
+        # Busy or not, on which step, which steps failed or were stopped, and
+        # where ``resume_task`` would carry it on from.
+        "activity": task_activity.activity(job).as_dict(),
         "package_url": f"/agent/v1/tasks/{task_id}/package",
     }
 
@@ -499,6 +502,9 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             "cut_running": _cut_running(job),
             "done": _task_done(job),
             "agent_cut": _agent_cut_brief(job),
+            # Which step it is on, which failed or were stopped, and where
+            # resume_task carries it on from.
+            "activity": task_activity.activity(job).as_dict(),
             # What an edit starts from: name it as ``base_version`` when saving
             # the note, so a change made elsewhere meanwhile is not replaced.
             "note_version": (job.get("result") or {}).get("note_version"),
@@ -669,6 +675,68 @@ async def retry_agent_task(request: Request, task_id: str) -> dict[str, Any]:
         "package_url": f"/agent/v1/tasks/{next_task_id}/package",
         "task": _task_brief(job),
     }
+
+
+def _action(call):
+    """Run a task operation (``task_actions``); a refusal becomes 409 (404
+    for a task that is not there) with a code and a sentence."""
+    try:
+        return call()
+    except task_actions.Refused as exc:
+        raise exc.as_http(agent=True) from exc
+
+
+async def _async_action(call):
+    try:
+        return await call()
+    except task_actions.Refused as exc:
+        raise exc.as_http(agent=True) from exc
+
+
+@router.get("/tasks/{task_id}/cut-report")
+def get_agent_cut_report(request: Request, task_id: str) -> dict[str, Any]:
+    return _action(lambda: task_actions.cut_report(task_id, _local_client_scope(request)))
+
+
+@router.post("/tasks/{task_id}/cut-report/flip")
+def flip_agent_cut_decision(
+    request: Request, task_id: str, background_tasks: BackgroundTasks, payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    ref = str((payload or {}).get("ref") or "")
+    return _action(lambda: task_actions.flip_cut_decision(task_id, ref, _local_client_scope(request), background_tasks.add_task))
+
+
+@router.post("/tasks/{task_id}/cut-report/verdict")
+def answer_agent_cut_decisions(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    body = payload or {}
+    keys = [str(key) for key in body.get("keys") or [] if key]
+    return _action(lambda: task_actions.answer_cut_decisions(task_id, keys, str(body.get("verdict") or ""), _local_client_scope(request)))
+
+
+@router.post("/tasks/{task_id}/cut-report/undo")
+def undo_agent_cut_change(
+    request: Request, task_id: str, background_tasks: BackgroundTasks, payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    try:
+        index = int((payload or {}).get("index"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail={"code": "bad_index", "message": "index 是改动在 user_changes 里的编号"})
+    return _action(lambda: task_actions.undo_cut_change(task_id, index, _local_client_scope(request), background_tasks.add_task))
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_agent_task(request: Request, task_id: str) -> dict[str, Any]:
+    return await _async_action(lambda: task_actions.cancel_task(task_id, _local_client_scope(request)))
+
+
+@router.post("/tasks/{task_id}/stop")
+async def stop_agent_task_step(request: Request, task_id: str) -> dict[str, Any]:
+    return await _async_action(lambda: task_actions.stop_step(task_id, _local_client_scope(request)))
+
+
+@router.post("/tasks/{task_id}/resume")
+async def resume_agent_task(request: Request, task_id: str) -> dict[str, Any]:
+    return await _async_action(lambda: task_actions.resume_task(task_id, _local_client_scope(request)))
 
 
 @router.post("/tasks/{task_id}/debreath")

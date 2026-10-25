@@ -269,7 +269,9 @@ async def run_worker_with_terminal_state(
             await fail_worker(detail, detail)
     except asyncio.CancelledError:
         current = get_job(task_id, client_id=client_id)
-        if not current or current.get("status") != "cancelled":
+        # A task stopped after its transcript was stored keeps it: the step
+        # that was stopped says so (``task_steps``), the task stays completed.
+        if not current or current.get("status") not in {"cancelled", "completed"}:
             upsert_job(
                 task_id=task_id,
                 status="cancelled",

@@ -123,8 +123,8 @@ def get_job_processing_detail(request: Request, task_id: str) -> dict[str, Any]:
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     steps = task_steps.steps_of([task_id]).get(task_id, [])
-    # The timeline is still read from the event log; the steps are given
-    # beside it, with what they mean for the task as a whole.
+    # The timeline is read from the steps (``build_task_detail``); the steps
+    # are given too, with what they mean for the task as a whole.
     return {
         **build_task_detail(job),
         "steps": steps,

@@ -177,6 +177,12 @@ def claim(task_id: str) -> None:
     _running.add(task_id)
 
 
+def is_claimed(task_id: str) -> bool:
+    """Whether a note for this task holds the slot in this process (it may
+    still be finishing after its task was stopped)."""
+    return task_id in _running
+
+
 def release(task_id: str) -> None:
     """Give the slot back. Idempotent."""
     _running.discard(task_id)

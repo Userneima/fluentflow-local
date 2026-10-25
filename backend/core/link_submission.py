@@ -30,7 +30,8 @@ from fastapi import HTTPException
 
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
-from backend.core.job_store import list_jobs, progress_message_metadata, upsert_job
+from backend.core import task_steps, task_stop
+from backend.core.job_store import get_job, list_jobs, progress_message_metadata, upsert_job
 from backend.core.local_entry_guards import CancellationGate, claim_task_id
 from backend.core.local_config import ALLOWED_COOKIE_BROWSERS, get_preference, normalize_cookie_browser
 from backend.core.local_error_diagnostics import diagnose_error
@@ -166,6 +167,7 @@ async def _run_local_video_source_job(
     never left waiting.
     """
     link_done = done if done is not None else asyncio.Event()
+    stopped = False
     try:
         await _download_then_process(
             task_id=task_id,
@@ -178,8 +180,13 @@ async def _run_local_video_source_job(
             previous=previous,
             done=link_done,
         )
+    except asyncio.CancelledError:
+        stopped = True
+        raise
     finally:
         link_done.set()
+        # However the download ended, no step of it is left open.
+        task_steps.close_open(task_id, stopped=stopped or task_stop.requested(task_id))
 
 
 def _progress_throttle() -> Any:
@@ -223,6 +230,9 @@ async def _download_then_process(
 ) -> None:
     loop = asyncio.get_running_loop()
     should_publish = _progress_throttle()
+    if not task_steps.steps_of([task_id]).get(task_id):
+        task_steps.plan(task_id)
+    task_steps.start(task_id, task_steps.FETCH)
 
     def on_progress(progress: VideoSourceProgress) -> None:
         # Runs in the executor thread: persist, then publish thread-safely.
@@ -271,6 +281,7 @@ async def _download_then_process(
 
     async def fail(stage: str, error: Exception | str, **extra_metadata: Any) -> None:
         friendly_error = _friendly_error(error)
+        task_steps.finish(task_id, task_steps.FETCH, task_steps.FAILED, friendly_error)
         log_event(
             task_id=task_id,
             event_name="task_failed",
@@ -399,6 +410,8 @@ async def _download_then_process(
         except Exception as exc:
             await fail("summary", exc)
             return
+        task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+        task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
         await JOB_EVENTS.publish(task_id, {"stage": "done", "progress": 100, "result": result})
         return
 
@@ -433,9 +446,10 @@ async def _download_then_process(
         duration_limit_seconds=effective_duration_limit,
     )
     ctx.event_route = route
+    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
     # The expensive part waits its turn; the download above did not have to.
     await wait_for_queue_turn(previous, task_id, client_id)
-    await run_pipeline_then_note(done, ctx)
+    await run_pipeline_then_note(done, ctx, start_at=task_steps.TRANSCRIBE)
 
 
 _ACTIVE_STATUSES = frozenset({"queued", "running"})
@@ -607,3 +621,40 @@ async def submit_video_source_job(
         "extra_urls_ignored": ignored_extra,
         **({"warning": EXTRA_URLS_WARNING} if ignored_extra else {}),
     }
+
+
+def link_of(job: dict[str, Any]) -> str:
+    """The link a link task was submitted with ('' when it has none)."""
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    return str(metadata.get("video_source_url") or "").strip() or (
+        extract_first_url(str(metadata.get("video_source_input_preview") or "")) or ""
+    )
+
+
+async def resume_link_download(job: dict[str, Any]) -> bool:
+    """Fetch a link task's video again under the same task, and carry on from
+    there (``task_actions.resume_task``): its download never finished."""
+    task_id = str(job.get("task_id") or "")
+    client_id = job.get("client_id")
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    link = link_of(job)
+    if not link:
+        raise FileNotFoundError("这个链接任务找不到原来的链接，没法接着做；请重新提交链接。")
+    stored = metadata.get("queue_options")
+    options = dict(stored) if isinstance(stored, dict) else {}
+    # The browser whose login is read follows the settings now.
+    options.pop("cookies_from_browser", None)
+    title = str(metadata.get("video_source_title") or "").strip() or None
+    gate = CancellationGate()
+    return await _start_behind_queue(
+        task_id=task_id,
+        client_id=client_id,
+        route=_ROUTE,
+        stage="video_source",
+        gate=gate,
+        plan_steps=False,
+        chained_worker=lambda previous, done: _run_local_video_source_job(
+            task_id=task_id, input_text=link, title=title, options=options, client_id=client_id,
+            gate=gate, route=_ROUTE, previous=previous, done=done,
+        ),
+    )

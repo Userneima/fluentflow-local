@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from backend.core import device_profile
+from backend.core import device_profile, task_steps
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import upsert_job
@@ -291,6 +291,7 @@ async def _start_behind_queue(
     stage: str,
     chained_worker: Any,
     gate: Any = None,
+    plan_steps: bool = True,
 ) -> bool:
     """Put a job on the chain and start its runner; say whether one started.
 
@@ -301,6 +302,10 @@ async def _start_behind_queue(
     # Barrier and record happen together, before the first await, so two
     # submissions arriving at once cannot both take the same job as the one
     # they wait for.
+    if plan_steps and not task_steps.steps_of([task_id]).get(task_id):
+        # Recorded from the moment the task is queued, so a restart before its
+        # turn carries it on in place (``task_actions.resume_after_restart``).
+        task_steps.plan(task_id)
     previous = _queue_tail_barrier()
     done = asyncio.Event()
     _queue_tail_record(task_id, done)

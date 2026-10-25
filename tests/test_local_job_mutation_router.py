@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 import backend.routers.local_job_mutation as local_job_mutation
 from backend.core.local_request_scope import LOCAL_OWNER_ID
+from backend.core import task_actions
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.routers.local_job_mutation import router
 
@@ -24,7 +25,7 @@ def test_cancel_missing_job_returns_404(monkeypatch):
         scoped.append((task_id, client_id))
         return None
 
-    monkeypatch.setattr(local_job_mutation, "get_job", missing)
+    monkeypatch.setattr(task_actions, "get_job", missing)
 
     response = _client().post("/jobs/nope/cancel", headers=_HEADERS)
 
@@ -34,7 +35,7 @@ def test_cancel_missing_job_returns_404(monkeypatch):
 
 def test_cancel_terminal_job_returns_409(monkeypatch):
     monkeypatch.setattr(
-        local_job_mutation, "get_job",
+        task_actions, "get_job",
         lambda task_id, client_id=None: {"task_id": task_id, "status": "completed"},
     )
 
@@ -60,15 +61,15 @@ def test_cancel_running_job_marks_cancelled_and_reconciles_hub(monkeypatch):
     logged: list[dict] = []
 
     monkeypatch.setattr(
-        local_job_mutation, "get_job",
+        task_actions, "get_job",
         lambda task_id, client_id=None: {
             "task_id": task_id, "status": "running", "stage": "stt",
             "progress": 40, "client_id": "desktop-a",
         },
     )
-    monkeypatch.setattr(local_job_mutation, "cancel_job_steps", lambda task_id: 2)
-    monkeypatch.setattr(local_job_mutation, "upsert_job", lambda **kwargs: upserts.append(kwargs))
-    monkeypatch.setattr(local_job_mutation, "log_event", lambda **kwargs: logged.append(kwargs))
+    monkeypatch.setattr(task_actions, "cancel_job_steps", lambda task_id: 2)
+    monkeypatch.setattr(task_actions, "upsert_job", lambda **kwargs: upserts.append(kwargs))
+    monkeypatch.setattr(task_actions, "log_event", lambda **kwargs: logged.append(kwargs))
     monkeypatch.setattr(JOB_EVENTS, "cancel", fake_cancel)
     monkeypatch.setattr(JOB_EVENTS, "publish", fake_publish)
 

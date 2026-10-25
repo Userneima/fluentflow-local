@@ -375,6 +375,10 @@ def test_startup_removes_what_a_killed_service_left(monkeypatch):
         return 0
 
     monkeypatch.setattr(local_main, "resume_interrupted_jobs", no_resume)
+    # Tasks other tests left with a step open are not carried on into this one.
+    from backend.core import task_actions
+
+    monkeypatch.setattr(task_actions, "stepped_tasks_cut_off", lambda: [])
     video_dir = _video_source_storage_dir()
     scratch = _scratch(video_dir, "startup.mp4")
     _age(scratch, 3600)

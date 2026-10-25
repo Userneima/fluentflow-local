@@ -500,6 +500,13 @@ class MediaJobContext:
     # The entry that started this job, written on every event it logs. Without
     # it every upload, batch, folder, retry and link read as "/process".
     event_route: str = "/process"
+    # Resuming a task cut off after its transcription (``task_flow``): what the
+    # transcription produced, so only the corrections run again. ``on_transcribed``
+    # gets that record the moment it exists, ``save_checkpoint`` each time a
+    # correction adds to it.
+    transcribe_checkpoint: Any = None
+    on_transcribed: Any = None
+    save_checkpoint: Any = None
 
 
 def _declared_generated(result: dict[str, Any]) -> dict[str, Any]:
@@ -521,6 +528,79 @@ def _finalize_result_storage(ctx: MediaJobContext, result: dict[str, Any]) -> di
 
 def _enforce_history_retention(ctx: MediaJobContext) -> None:
     if ctx.enforce_history_retention: ctx.enforce_history_retention(ctx.client_id)
+
+
+
+# ── resuming after the transcription ─────────────────────────────────────────
+#
+# The transcription is the long, local part of a task; the corrections after it
+# call models. A task cut off between the two (a restart, the user stopping it)
+# carries on from what the transcription produced, kept here as plain data.
+
+def _transcribed_checkpoint(ctx: "MediaJobContext", *, base_result: dict[str, Any], tr: Any,
+                            cleanup_payload: dict[str, Any], **values: Any) -> dict[str, Any]:
+    playback = values.pop("playback_audio_path")
+    enhanced = values.pop("enhanced_playback_audio_path")
+    in_path = values.pop("in_path")
+    return {
+        "base_result": dict(base_result),
+        "tr": {
+            "text": getattr(tr, "text", ""),
+            "language": getattr(tr, "language", None),
+            "language_probability": getattr(tr, "language_probability", None),
+            "engine": getattr(tr, "engine", None),
+            "model_name": getattr(tr, "model_name", None),
+        },
+        "cleanup_payload": cleanup_payload,
+        "cleaned_text": values.get("transcript_text") or "",
+        "in_path": str(in_path),
+        "playback_audio_path": _keep_for_resume(ctx.task_id_value, playback),
+        "enhanced_playback_audio_path": _keep_for_resume(ctx.task_id_value, enhanced),
+        **values,
+    }
+
+
+def _keep_for_resume(task_id: str, path: Any) -> str | None:
+    """The playback takes are written in the job's scratch folder, which is
+    gone after a restart; the checkpoint keeps its own copy."""
+    if not path or not Path(path).is_file():
+        return None
+    folder = _artifact_storage_dir() / task_id / RESUME_DIRNAME
+    folder.mkdir(parents=True, exist_ok=True)
+    kept = folder / Path(path).name
+    shutil.copyfile(path, kept)
+    return str(kept)
+
+
+RESUME_DIRNAME = "resume"
+
+
+def _checkpoint_advanced(ctx: "MediaJobContext", checkpoint: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    advanced = {**checkpoint, **changes}
+    if ctx.save_checkpoint is not None:
+        ctx.save_checkpoint(advanced)
+    return advanced
+
+
+def _from_checkpoint(checkpoint: dict[str, Any]) -> tuple[Any, ...]:
+    import types
+
+    tr = types.SimpleNamespace(**checkpoint["tr"])
+    cleanup = types.SimpleNamespace(cleaned_text=checkpoint.get("cleaned_text") or "")
+    playback = checkpoint.get("playback_audio_path")
+    enhanced = checkpoint.get("enhanced_playback_audio_path")
+    return (
+        dict(checkpoint["base_result"]), tr, cleanup, checkpoint.get("cleanup_payload") or {},
+        list(checkpoint.get("raw_segments_payload") or []), list(checkpoint.get("segments_payload") or []),
+        dict(checkpoint.get("speaker_payload") or {}), checkpoint.get("transcript_text") or "",
+        checkpoint.get("duration_sec") or 0.0, checkpoint.get("duration_estimate_sec"),
+        checkpoint.get("stt_elapsed_sec") or 0.0, checkpoint.get("stt_realtime_factor"),
+        checkpoint.get("stt_model_for_result"), Path(checkpoint["in_path"]),
+        Path(playback) if playback and Path(playback).is_file() else None,
+        Path(enhanced) if enhanced and Path(enhanced).is_file() else None,
+        checkpoint.get("voice_presence"), checkpoint.get("stt_audio_take") or "plain",
+        dict(checkpoint.get("preprocess_artifacts") or {}),
+    )
 
 
 async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
@@ -593,355 +673,385 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         if stt_provider_label is None:
             raise RuntimeError("Media job context is missing an STT provider label policy")
 
-        # ── Stage 0: Prepare the media the rest of the job reads ───
-        # Optional and injected. The local edition removes the breath gaps here,
-        # so everything after this line — the audio, the transcript and its
-        # timestamps, the note, the page's player — belongs to one file. It runs
-        # before the duration limit is measured on purpose: the shortened file is
-        # what the user is going to work with, so it is what should be measured.
-        audio_start_progress = 5
-        if media_preprocessor is not None:
-            current_stage = "prepare_media"
-            upsert_job(task_id=task_id_value, status="running", stage="prepare_media", progress=2)
-            yield _sse({"stage": "prepare_media", "progress": 2})
-            # The step runs in a worker thread; ``watch`` is its line back. Its
-            # progress lands on the job, and a cancelled task stops the ffmpeg it
-            # is running instead of leaving it to re-encode the whole recording.
-            progress_writer = _prepare_progress_writer(task_id_value)
-            prepare_watch = watch = TaskWatch(on_progress=progress_writer)
-            prepared = await loop.run_in_executor(
-                None, lambda: media_preprocessor(task_id_value, in_path, watch=watch)
+        # A task cut off after its transcription carries on from here: what
+        # the transcription produced was kept (``transcribe_checkpoint``), so
+        # only the corrections that had not finished run again (decision 6.42).
+        checkpoint = ctx.transcribe_checkpoint
+        if checkpoint is None:
+            # ── Stage 0: Prepare the media the rest of the job reads ───
+            # Optional and injected. The local edition removes the breath gaps here,
+            # so everything after this line — the audio, the transcript and its
+            # timestamps, the note, the page's player — belongs to one file. It runs
+            # before the duration limit is measured on purpose: the shortened file is
+            # what the user is going to work with, so it is what should be measured.
+            audio_start_progress = 5
+            if media_preprocessor is not None:
+                current_stage = "prepare_media"
+                upsert_job(task_id=task_id_value, status="running", stage="prepare_media", progress=2)
+                yield _sse({"stage": "prepare_media", "progress": 2})
+                # The step runs in a worker thread; ``watch`` is its line back. Its
+                # progress lands on the job, and a cancelled task stops the ffmpeg it
+                # is running instead of leaving it to re-encode the whole recording.
+                progress_writer = _prepare_progress_writer(task_id_value)
+                prepare_watch = watch = TaskWatch(on_progress=progress_writer)
+                prepared = await loop.run_in_executor(
+                    None, lambda: media_preprocessor(task_id_value, in_path, watch=watch)
+                )
+                audio_start_progress = PREPARE_PROGRESS_END
+                if prepared is not None:
+                    preprocess_state = dict(getattr(prepared, "state", None) or {})
+                    preprocess_artifacts = dict(getattr(prepared, "artifacts", None) or {})
+                    prepared_path = getattr(prepared, "path", None)
+                    if prepared_path:
+                        in_path = Path(prepared_path)
+                    pending_video = getattr(prepared, "video", None)
+                    if pending_video is not None:
+                        progress_writer.background = True
+
+            # ── Stage 1: Audio extraction ──────────────────────
+            current_stage = "audio"
+            upsert_job(task_id=task_id_value, status="running", stage="audio", progress=audio_start_progress)
+            yield _sse({"stage": "audio", "progress": audio_start_progress})
+            audio_started_at = time.perf_counter()
+
+            # Only when asked. Most material does not need correcting, the
+            # correction damages an already-mixed soundtrack, and no threshold
+            # separates those cases (see `voice_enhance`) — so an upload nobody said
+            # anything about is left alone entirely, including what the recognizer
+            # reads. Correcting it also changes what silence looks like: `loudnorm`
+            # lifts the gaps between words, which is why de-breathing measures its
+            # own threshold per file instead of trusting a constant.
+            #
+            # When asked: measure the consonant band, write a clearer take, and
+            # transcribe from that. Measured on four speakers with two whisper sizes,
+            # it transcribes at least as well and better on consonant-dense words —
+            # "IG ID / EVN ID" came back as "Agent ID / Event ID".
+            if voice_enhance_requested:
+                try:
+                    reading = await loop.run_in_executor(None, lambda: measure_presence(in_path))
+                    voice_presence = reading.as_dict()
+                    enhanced_playback_audio_path = await loop.run_in_executor(
+                        None,
+                        lambda: enhance_voice(in_path, output_path=Path(td) / "playback_enhanced.m4a"),
+                    )
+                except Exception as exc:  # noqa: BLE001 - clarity is optional, the transcript is not
+                    logger.warning("Voice enhancement skipped for %s: %s", task_id_value, exc)
+                    enhanced_playback_audio_path = None
+
+            # Derived from the corrected take that was just written, not by filtering
+            # the original a second time. The two are not interchangeable, and the
+            # measurement that justified feeding the recognizer corrected audio was
+            # made on this one. Filtering the original straight to a recognizer input
+            # skips a lossy generation and should be the better of the two, but when
+            # compared it dropped a company name the m4a-derived take recovered
+            # ("MyFitnessPal" survived as "MetfitnessPal", against nothing at all),
+            # so the measured path wins over the one that ought to be better.
+            stt_source, stt_audio_take = stt_audio_source(enhanced_playback_audio_path, in_path)
+            audio_output_format = "wav"
+            out_audio = await loop.run_in_executor(
+                None, lambda: extract_stt_wav(stt_source, output_path=Path(td) / "stt.wav")
             )
-            audio_start_progress = PREPARE_PROGRESS_END
-            if prepared is not None:
-                preprocess_state = dict(getattr(prepared, "state", None) or {})
-                preprocess_artifacts = dict(getattr(prepared, "artifacts", None) or {})
-                prepared_path = getattr(prepared, "path", None)
-                if prepared_path:
-                    in_path = Path(prepared_path)
-                pending_video = getattr(prepared, "video", None)
-                if pending_video is not None:
-                    progress_writer.background = True
+            # The plain take is always kept: it is what the editor plays by default
+            # and what a re-transcription reads, so a re-run reproduces this run.
+            playback_audio_path = await loop.run_in_executor(
+                None, lambda: extract_compressed_mp3(in_path, output_path=Path(td) / "playback.mp3")
+            )
+            if media_guard_enabled(SILENCE_GUARD_ENV):
+                # Checked on the plain take on purpose. `loudnorm` lifts a near-silent
+                # recording's noise floor into audible range, so the corrected take
+                # would report sound where the recording has none.
+                await loop.run_in_executor(None, lambda: require_audible_audio(playback_audio_path))
 
-        # ── Stage 1: Audio extraction ──────────────────────
-        current_stage = "audio"
-        upsert_job(task_id=task_id_value, status="running", stage="audio", progress=audio_start_progress)
-        yield _sse({"stage": "audio", "progress": audio_start_progress})
-        audio_started_at = time.perf_counter()
+            audio_elapsed_sec = time.perf_counter() - audio_started_at
+            log_event(
+                task_id=task_id_value,
+                event_name="audio_extracted",
+                source_type=source_type,
+                source_filename=source_filename,
+                source_file_size_mb=source_file_size_mb,
+                stage="audio",
+                duration_seconds=round(audio_elapsed_sec, 3),
+                success=True,
+                metadata=event_metadata(
+                    route=event_route,
+                    stt_provider=stt_provider_value,
+                    stt_provider_label=stt_provider_label(stt_provider_value),
+                    audio_output_format=audio_output_format,
+                    audio_output_size_mb=path_size_mb(out_audio),
+                    stt_audio_take=stt_audio_take,
+                    presence_deficit_db=(voice_presence or {}).get("presence_deficit_db"),
+                ),
+            )
+            upsert_job(task_id=task_id_value, status="running", stage="audio", progress=20)
+            yield _sse({"stage": "audio", "progress": 20})
 
-        # Only when asked. Most material does not need correcting, the
-        # correction damages an already-mixed soundtrack, and no threshold
-        # separates those cases (see `voice_enhance`) — so an upload nobody said
-        # anything about is left alone entirely, including what the recognizer
-        # reads. Correcting it also changes what silence looks like: `loudnorm`
-        # lifts the gaps between words, which is why de-breathing measures its
-        # own threshold per file instead of trusting a constant.
-        #
-        # When asked: measure the consonant band, write a clearer take, and
-        # transcribe from that. Measured on four speakers with two whisper sizes,
-        # it transcribes at least as well and better on consonant-dense words —
-        # "IG ID / EVN ID" came back as "Agent ID / Event ID".
-        if voice_enhance_requested:
-            try:
-                reading = await loop.run_in_executor(None, lambda: measure_presence(in_path))
-                voice_presence = reading.as_dict()
-                enhanced_playback_audio_path = await loop.run_in_executor(
-                    None,
-                    lambda: enhance_voice(in_path, output_path=Path(td) / "playback_enhanced.m4a"),
-                )
-            except Exception as exc:  # noqa: BLE001 - clarity is optional, the transcript is not
-                logger.warning("Voice enhancement skipped for %s: %s", task_id_value, exc)
-                enhanced_playback_audio_path = None
+            # ── Stage 1.5: Visual evidence placeholders ──
+            # Actual frame extraction happens after the text note exists, so the
+            # text model can request only the time windows where screenshots help.
+            frame_paths: list[str] = []
+            frame_metadata: list[dict[str, Any]] = []
+            visual_requests: list[dict[str, Any]] = []
+            visual_selections: list[dict[str, Any]] = []
+            visual_evidence_error: str | None = None
+            visual_plan_covered_until: float | None = None
 
-        # Derived from the corrected take that was just written, not by filtering
-        # the original a second time. The two are not interchangeable, and the
-        # measurement that justified feeding the recognizer corrected audio was
-        # made on this one. Filtering the original straight to a recognizer input
-        # skips a lossy generation and should be the better of the two, but when
-        # compared it dropped a company name the m4a-derived take recovered
-        # ("MyFitnessPal" survived as "MetfitnessPal", against nothing at all),
-        # so the measured path wins over the one that ought to be better.
-        stt_source, stt_audio_take = stt_audio_source(enhanced_playback_audio_path, in_path)
-        audio_output_format = "wav"
-        out_audio = await loop.run_in_executor(
-            None, lambda: extract_stt_wav(stt_source, output_path=Path(td) / "stt.wav")
-        )
-        # The plain take is always kept: it is what the editor plays by default
-        # and what a re-transcription reads, so a re-run reproduces this run.
-        playback_audio_path = await loop.run_in_executor(
-            None, lambda: extract_compressed_mp3(in_path, output_path=Path(td) / "playback.mp3")
-        )
-        if media_guard_enabled(SILENCE_GUARD_ENV):
-            # Checked on the plain take on purpose. `loudnorm` lifts a near-silent
-            # recording's noise floor into audible range, so the corrected take
-            # would report sound where the recording has none.
-            await loop.run_in_executor(None, lambda: require_audible_audio(playback_audio_path))
+            # ── Stage 2: STT transcription ─────────────────────
+            current_stage = "stt"
+            upsert_job(task_id=task_id_value, status="running", stage="stt", progress=22)
+            yield _sse({"stage": "stt", "progress": 22, "stt_progress": 0, "stt_status": "starting"})
 
-        audio_elapsed_sec = time.perf_counter() - audio_started_at
-        log_event(
-            task_id=task_id_value,
-            event_name="audio_extracted",
-            source_type=source_type,
-            source_filename=source_filename,
-            source_file_size_mb=source_file_size_mb,
-            stage="audio",
-            duration_seconds=round(audio_elapsed_sec, 3),
-            success=True,
-            metadata=event_metadata(
-                route=event_route,
-                stt_provider=stt_provider_value,
-                stt_provider_label=stt_provider_label(stt_provider_value),
-                audio_output_format=audio_output_format,
-                audio_output_size_mb=path_size_mb(out_audio),
-                stt_audio_take=stt_audio_take,
-                presence_deficit_db=(voice_presence or {}).get("presence_deficit_db"),
-            ),
-        )
-        upsert_job(task_id=task_id_value, status="running", stage="audio", progress=20)
-        yield _sse({"stage": "audio", "progress": 20})
+            duration_estimate_sec = _media_duration_seconds(out_audio)
+            if duration_estimate_sec:
+                duration_error = _duration_limit_error(duration_estimate_sec, source_filename, duration_limit_seconds)
+                if duration_error:
+                    raise RuntimeError(duration_error)
+            status_progress_floor = {
+                "starting": 22.0,
+                "loading_model": 23.0,
+                "chunking_audio": 24.0,
+                "preparing_audio": 24.0,
+                "waiting_first_segment": 25.0,
+                "transcribing_chunks": 25.0,
+                "transcribing_segments": 25.0,
+            }
+            progress_state: dict[str, Any] = {
+                "latest": 22.0,
+                "stt_progress": 0.0,
+                "transcribed_seconds": 0.0,
+                "duration_seconds": duration_estimate_sec,
+                "stt_status": "starting",
+            }
 
-        # ── Stage 1.5: Visual evidence placeholders ──
-        # Actual frame extraction happens after the text note exists, so the
-        # text model can request only the time windows where screenshots help.
-        frame_paths: list[str] = []
-        frame_metadata: list[dict[str, Any]] = []
-        visual_requests: list[dict[str, Any]] = []
-        visual_selections: list[dict[str, Any]] = []
-        visual_evidence_error: str | None = None
-        visual_plan_covered_until: float | None = None
-
-        # ── Stage 2: STT transcription ─────────────────────
-        current_stage = "stt"
-        upsert_job(task_id=task_id_value, status="running", stage="stt", progress=22)
-        yield _sse({"stage": "stt", "progress": 22, "stt_progress": 0, "stt_status": "starting"})
-
-        duration_estimate_sec = _media_duration_seconds(out_audio)
-        if duration_estimate_sec:
-            duration_error = _duration_limit_error(duration_estimate_sec, source_filename, duration_limit_seconds)
-            if duration_error:
-                raise RuntimeError(duration_error)
-        status_progress_floor = {
-            "starting": 22.0,
-            "loading_model": 23.0,
-            "chunking_audio": 24.0,
-            "preparing_audio": 24.0,
-            "waiting_first_segment": 25.0,
-            "transcribing_chunks": 25.0,
-            "transcribing_segments": 25.0,
-        }
-        progress_state: dict[str, Any] = {
-            "latest": 22.0,
-            "stt_progress": 0.0,
-            "transcribed_seconds": 0.0,
-            "duration_seconds": duration_estimate_sec,
-            "stt_status": "starting",
-        }
-
-        stt_started_at = time.perf_counter()
-        stt_watch = _SttWatch(_stale_job_seconds(), stt_started_at)
-        stt_process, stt_queue = start_transcription_process(
-            out_audio,
-            model_size=model_size,
-            speed_profile=speed_profile,
-            language=language,
-        )
-        stt_result = None
-        stt_error: str | None = None
-        last_sent_progress = 22.0
-        last_emit_at = time.perf_counter()
-        while True:
-            if stt_watch.stalled(time.perf_counter()):
-                if stt_process is not None and stt_process.is_alive():
-                    stt_process.terminate()
-                    stt_process.join(timeout=5)
-                raise RuntimeError(
-                    f"STT processing timed out: no progress for {stt_watch.limit_seconds / 60:.0f} minutes"
-                )
-            for message in drain_queue(stt_queue):
-                stt_watch.heard(time.perf_counter())
-                message_type = message.get("type")
-                if message_type == "progress":
-                    safe_frac = max(0.0, min(float(message.get("value") or 0), 1.0))
-                    progress_state["stt_progress"] = safe_frac
-                    progress_state["latest"] = max(
-                        float(progress_state.get("latest") or 22.0),
-                        22 + safe_frac * 38,  # 22–60 range
+            stt_started_at = time.perf_counter()
+            stt_watch = _SttWatch(_stale_job_seconds(), stt_started_at)
+            stt_process, stt_queue = start_transcription_process(
+                out_audio,
+                model_size=model_size,
+                speed_profile=speed_profile,
+                language=language,
+            )
+            stt_result = None
+            stt_error: str | None = None
+            last_sent_progress = 22.0
+            last_emit_at = time.perf_counter()
+            while True:
+                if stt_watch.stalled(time.perf_counter()):
+                    if stt_process is not None and stt_process.is_alive():
+                        stt_process.terminate()
+                        stt_process.join(timeout=5)
+                    raise RuntimeError(
+                        f"STT processing timed out: no progress for {stt_watch.limit_seconds / 60:.0f} minutes"
                     )
-                    if duration_estimate_sec:
-                        progress_state["transcribed_seconds"] = safe_frac * duration_estimate_sec
-                elif message_type == "status":
-                    status = message.get("status") or progress_state["stt_status"]
-                    progress_state["stt_status"] = status
-                    progress_state["latest"] = max(
-                        float(progress_state.get("latest") or 22.0),
-                        status_progress_floor.get(str(status), 22.0),
-                    )
-                elif message_type == "result":
-                    stt_result = message.get("result")
-                elif message_type == "error":
-                    stt_error = message.get("error") or "STT worker failed"
-
-            if stt_result is not None:
-                break
-            if stt_error:
-                raise RuntimeError(stt_error)
-            if stt_process is not None and not stt_process.is_alive():
                 for message in drain_queue(stt_queue):
-                    if message.get("type") == "result":
+                    stt_watch.heard(time.perf_counter())
+                    message_type = message.get("type")
+                    if message_type == "progress":
+                        safe_frac = max(0.0, min(float(message.get("value") or 0), 1.0))
+                        progress_state["stt_progress"] = safe_frac
+                        progress_state["latest"] = max(
+                            float(progress_state.get("latest") or 22.0),
+                            22 + safe_frac * 38,  # 22–60 range
+                        )
+                        if duration_estimate_sec:
+                            progress_state["transcribed_seconds"] = safe_frac * duration_estimate_sec
+                    elif message_type == "status":
+                        status = message.get("status") or progress_state["stt_status"]
+                        progress_state["stt_status"] = status
+                        progress_state["latest"] = max(
+                            float(progress_state.get("latest") or 22.0),
+                            status_progress_floor.get(str(status), 22.0),
+                        )
+                    elif message_type == "result":
                         stt_result = message.get("result")
-                    elif message.get("type") == "error":
+                    elif message_type == "error":
                         stt_error = message.get("error") or "STT worker failed"
+
                 if stt_result is not None:
                     break
                 if stt_error:
                     raise RuntimeError(stt_error)
-                raise RuntimeError(f"STT worker exited unexpectedly with code {stt_process.exitcode}")
+                if stt_process is not None and not stt_process.is_alive():
+                    for message in drain_queue(stt_queue):
+                        if message.get("type") == "result":
+                            stt_result = message.get("result")
+                        elif message.get("type") == "error":
+                            stt_error = message.get("error") or "STT worker failed"
+                    if stt_result is not None:
+                        break
+                    if stt_error:
+                        raise RuntimeError(stt_error)
+                    raise RuntimeError(f"STT worker exited unexpectedly with code {stt_process.exitcode}")
 
-            await asyncio.sleep(0.5)
-            latest_progress = float(progress_state.get("latest") or 22.0)
-            now = time.perf_counter()
-            if latest_progress >= last_sent_progress + 1 or now - last_emit_at >= 2:
-                last_sent_progress = max(last_sent_progress, latest_progress)
-                last_emit_at = now
-                upsert_job(
-                    task_id=task_id_value,
-                    status="running",
-                    stage="stt",
-                    progress=round(latest_progress, 1),
-                    metadata={
-                        "stt_provider": stt_provider_value,
-                        "stt_provider_label": stt_provider_label(stt_provider_value),
+                await asyncio.sleep(0.5)
+                latest_progress = float(progress_state.get("latest") or 22.0)
+                now = time.perf_counter()
+                if latest_progress >= last_sent_progress + 1 or now - last_emit_at >= 2:
+                    last_sent_progress = max(last_sent_progress, latest_progress)
+                    last_emit_at = now
+                    upsert_job(
+                        task_id=task_id_value,
+                        status="running",
+                        stage="stt",
+                        progress=round(latest_progress, 1),
+                        metadata={
+                            "stt_provider": stt_provider_value,
+                            "stt_provider_label": stt_provider_label(stt_provider_value),
+                            "stt_progress": round(float(progress_state.get("stt_progress") or 0), 4),
+                            "transcribed_seconds": round(float(progress_state.get("transcribed_seconds") or 0), 1),
+                            "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
+                            "stt_elapsed_seconds": round(now - stt_started_at, 1),
+                            "stt_status": progress_state.get("stt_status"),
+                        },
+                    )
+                    yield _sse({
+                        "stage": "stt",
+                        "progress": round(latest_progress, 1),
                         "stt_progress": round(float(progress_state.get("stt_progress") or 0), 4),
                         "transcribed_seconds": round(float(progress_state.get("transcribed_seconds") or 0), 1),
                         "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
                         "stt_elapsed_seconds": round(now - stt_started_at, 1),
                         "stt_status": progress_state.get("stt_status"),
-                    },
-                )
-                yield _sse({
-                    "stage": "stt",
-                    "progress": round(latest_progress, 1),
-                    "stt_progress": round(float(progress_state.get("stt_progress") or 0), 4),
-                    "transcribed_seconds": round(float(progress_state.get("transcribed_seconds") or 0), 1),
-                    "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
-                    "stt_elapsed_seconds": round(now - stt_started_at, 1),
-                    "stt_status": progress_state.get("stt_status"),
+                        "stt_provider": stt_provider_value,
+                    })
+            if stt_process is not None:
+                stt_process.join(timeout=2)
+            tr = stt_result
+            stt_elapsed_sec = time.perf_counter() - stt_started_at
+            upsert_job(
+                task_id=task_id_value,
+                status="running",
+                stage="stt",
+                progress=60,
+                metadata={
                     "stt_provider": stt_provider_value,
-                })
-        if stt_process is not None:
-            stt_process.join(timeout=2)
-        tr = stt_result
-        stt_elapsed_sec = time.perf_counter() - stt_started_at
-        upsert_job(
-            task_id=task_id_value,
-            status="running",
-            stage="stt",
-            progress=60,
-            metadata={
-                "stt_provider": stt_provider_value,
-                "stt_provider_label": stt_provider_label(stt_provider_value),
+                    "stt_provider_label": stt_provider_label(stt_provider_value),
+                    "stt_progress": 1,
+                    # Written here as well as in the progress loop: the loop only
+                    # writes every few seconds, so a short file finished with the
+                    # row still saying "preparing_audio" and 0 seconds transcribed.
+                    "stt_status": "done",
+                    "transcribed_seconds": _transcribed_total(duration_estimate_sec, stt_result),
+                    "stt_elapsed_seconds": round(stt_elapsed_sec, 1),
+                    "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
+                },
+            )
+            yield _sse({
+                "stage": "stt",
+                "progress": 60,
                 "stt_progress": 1,
-                # Written here as well as in the progress loop: the loop only
-                # writes every few seconds, so a short file finished with the
-                # row still saying "preparing_audio" and 0 seconds transcribed.
-                "stt_status": "done",
-                "transcribed_seconds": _transcribed_total(duration_estimate_sec, stt_result),
-                "stt_elapsed_seconds": round(stt_elapsed_sec, 1),
+                "transcribed_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
                 "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
-            },
-        )
-        yield _sse({
-            "stage": "stt",
-            "progress": 60,
-            "stt_progress": 1,
-            "transcribed_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
-            "duration_seconds": round(duration_estimate_sec, 1) if duration_estimate_sec else None,
-            "stt_provider": stt_provider_value,
-        })
+                "stt_provider": stt_provider_value,
+            })
 
-        duration_sec = tr.duration or (tr.segments[-1].end if tr.segments else 0)
-        stt_realtime_factor = _stt_realtime_factor(stt_elapsed_sec, duration_sec)
-        transcript_text = tr.text
-        stt_model_for_result = model_size
-        log_event(
-            task_id=task_id_value,
-            event_name="stt_completed",
-            source_type=source_type,
-            source_filename=source_filename,
-            source_duration_seconds=round(duration_sec, 1),
-            source_file_size_mb=source_file_size_mb,
-            transcript_length=_text_len(transcript_text),
-            stage="stt",
-            duration_seconds=round(stt_elapsed_sec, 3),
-            success=True,
-            metadata=event_metadata(
-                **runtime_context_metadata(),
-                route=event_route,
-                source_fingerprint=source_fingerprint,
-                stt_provider=stt_provider_value,
-                stt_provider_label=stt_provider_label(stt_provider_value),
-                stt_model=stt_model_for_result,
-                stt_speed=speed_profile,
-                stt_language=language,
-                device_requested=getattr(tr, "device_requested", None) or "auto",
-                device_resolved=getattr(tr, "device_resolved", None),
-                vad_filter=getattr(tr, "vad_filter", None),
-                cpu_threads=getattr(tr, "cpu_threads", None),
-                num_workers=getattr(tr, "num_workers", None),
-                detected_language=tr.language,
-                language_probability=tr.language_probability,
-                segment_count=len(tr.segments),
-                stt_realtime_factor=stt_realtime_factor,
-                model_cache_hit=getattr(tr, "model_cache_hit", None),
-                model_load_seconds=getattr(tr, "model_load_seconds", None),
-                model_source=getattr(tr, "model_source", None),
-                compute_type=getattr(tr, "compute_type", None),
-            ),
-        )
-        base_result: dict[str, Any] = {
-            "task_id": task_id_value,
-            "filename": source_filename,
-            "raw_title": raw_title_value,
-            "display_title": display_title_value,
-            "source_file_available": True,
-        }
-        if pending_video is not None:
-            # Transcribed from the cut audio; the result records the cut video,
-            # so it waits for it here. Usually it is long done.
-            if not pending_video.done():
-                current_stage = RENDER_VIDEO_STAGE
-                progress_writer.waiting = True
-                upsert_job(task_id=task_id_value, status="running", stage=RENDER_VIDEO_STAGE)
-                yield _sse({"stage": RENDER_VIDEO_STAGE})
-            finished = await asyncio.wrap_future(pending_video)
-            pending_video = None
-            preprocess_state = dict(finished.state or {})
-            preprocess_artifacts = dict(finished.artifacts or {})
-            in_path = Path(finished.path)
-        if preprocess_state:
-            base_result["debreath"] = preprocess_state
-            # Which file this transcript describes, and therefore which file the
-            # page should play. Recorded rather than inferred: a transcript's
-            # timestamps only mean something against one file, and getting that
-            # wrong is invisible — the captions are simply progressively late.
-            if preprocess_state.get("used_for_transcription"):
-                base_result["transcript_media"] = TRANSCRIPT_MEDIA_CUT
-                base_result["playback_media_kind"] = DEBREATH_MEDIA_KIND
-            else:
-                base_result["transcript_media"] = TRANSCRIPT_MEDIA_SOURCE
-        cleanup_result, raw_segments_payload = clean_transcript(
-            ctx, transcription=tr, duration_sec=duration_sec
-        )
-        transcript_text = cleanup_result.cleaned_text
-        segments_payload = list(cleanup_result.cleaned_segments)
-        segments_payload, speaker_payload = await label_speakers(
-            ctx,
-            segments_payload=segments_payload,
-            duration_sec=duration_sec,
-            audio_path=out_audio,
-        )
-        subtitle_fields: dict[str, Any] = {}
-        if subtitle_correction.enabled() and segments_payload:
+            duration_sec = tr.duration or (tr.segments[-1].end if tr.segments else 0)
+            stt_realtime_factor = _stt_realtime_factor(stt_elapsed_sec, duration_sec)
+            transcript_text = tr.text
+            stt_model_for_result = model_size
+            log_event(
+                task_id=task_id_value,
+                event_name="stt_completed",
+                source_type=source_type,
+                source_filename=source_filename,
+                source_duration_seconds=round(duration_sec, 1),
+                source_file_size_mb=source_file_size_mb,
+                transcript_length=_text_len(transcript_text),
+                stage="stt",
+                duration_seconds=round(stt_elapsed_sec, 3),
+                success=True,
+                metadata=event_metadata(
+                    **runtime_context_metadata(),
+                    route=event_route,
+                    source_fingerprint=source_fingerprint,
+                    stt_provider=stt_provider_value,
+                    stt_provider_label=stt_provider_label(stt_provider_value),
+                    stt_model=stt_model_for_result,
+                    stt_speed=speed_profile,
+                    stt_language=language,
+                    device_requested=getattr(tr, "device_requested", None) or "auto",
+                    device_resolved=getattr(tr, "device_resolved", None),
+                    vad_filter=getattr(tr, "vad_filter", None),
+                    cpu_threads=getattr(tr, "cpu_threads", None),
+                    num_workers=getattr(tr, "num_workers", None),
+                    detected_language=tr.language,
+                    language_probability=tr.language_probability,
+                    segment_count=len(tr.segments),
+                    stt_realtime_factor=stt_realtime_factor,
+                    model_cache_hit=getattr(tr, "model_cache_hit", None),
+                    model_load_seconds=getattr(tr, "model_load_seconds", None),
+                    model_source=getattr(tr, "model_source", None),
+                    compute_type=getattr(tr, "compute_type", None),
+                ),
+            )
+            base_result: dict[str, Any] = {
+                "task_id": task_id_value,
+                "filename": source_filename,
+                "raw_title": raw_title_value,
+                "display_title": display_title_value,
+                "source_file_available": True,
+            }
+            if pending_video is not None:
+                # Transcribed from the cut audio; the result records the cut video,
+                # so it waits for it here. Usually it is long done.
+                if not pending_video.done():
+                    current_stage = RENDER_VIDEO_STAGE
+                    progress_writer.waiting = True
+                    upsert_job(task_id=task_id_value, status="running", stage=RENDER_VIDEO_STAGE)
+                    yield _sse({"stage": RENDER_VIDEO_STAGE})
+                finished = await asyncio.wrap_future(pending_video)
+                pending_video = None
+                preprocess_state = dict(finished.state or {})
+                preprocess_artifacts = dict(finished.artifacts or {})
+                in_path = Path(finished.path)
+            if preprocess_state:
+                base_result["debreath"] = preprocess_state
+                # Which file this transcript describes, and therefore which file the
+                # page should play. Recorded rather than inferred: a transcript's
+                # timestamps only mean something against one file, and getting that
+                # wrong is invisible — the captions are simply progressively late.
+                if preprocess_state.get("used_for_transcription"):
+                    base_result["transcript_media"] = TRANSCRIPT_MEDIA_CUT
+                    base_result["playback_media_kind"] = DEBREATH_MEDIA_KIND
+                else:
+                    base_result["transcript_media"] = TRANSCRIPT_MEDIA_SOURCE
+            cleanup_result, raw_segments_payload = clean_transcript(
+                ctx, transcription=tr, duration_sec=duration_sec
+            )
+            transcript_text = cleanup_result.cleaned_text
+            segments_payload = list(cleanup_result.cleaned_segments)
+            segments_payload, speaker_payload = await label_speakers(
+                ctx,
+                segments_payload=segments_payload,
+                duration_sec=duration_sec,
+                audio_path=out_audio,
+            )
+            cleanup_payload = _cleanup_payload(cleanup_result)
+            checkpoint = _transcribed_checkpoint(
+                ctx, base_result=base_result, tr=tr, cleanup_payload=cleanup_payload,
+                raw_segments_payload=raw_segments_payload, segments_payload=segments_payload,
+                speaker_payload=speaker_payload, transcript_text=transcript_text, duration_sec=duration_sec,
+                duration_estimate_sec=duration_estimate_sec, stt_elapsed_sec=stt_elapsed_sec,
+                stt_realtime_factor=stt_realtime_factor, stt_model_for_result=stt_model_for_result,
+                in_path=in_path, playback_audio_path=playback_audio_path,
+                enhanced_playback_audio_path=enhanced_playback_audio_path, voice_presence=voice_presence,
+                stt_audio_take=stt_audio_take, preprocess_artifacts=preprocess_artifacts,
+            )
+            if ctx.on_transcribed is not None:
+                ctx.on_transcribed(checkpoint)
+        else:
+            (base_result, tr, cleanup_result, cleanup_payload, raw_segments_payload, segments_payload,
+             speaker_payload, transcript_text, duration_sec, duration_estimate_sec, stt_elapsed_sec,
+             stt_realtime_factor, stt_model_for_result, in_path, playback_audio_path,
+             enhanced_playback_audio_path, voice_presence, stt_audio_take,
+             preprocess_artifacts) = _from_checkpoint(checkpoint)
+            frame_paths, frame_metadata, visual_requests, visual_selections = [], [], [], []
+            visual_evidence_error, visual_plan_covered_until = None, None
+        # A correction that finished before an interruption is not run again:
+        # its result is in the checkpoint, segments included.
+        subtitle_fields: dict[str, Any] = dict(checkpoint.get("subtitle_fields") or {})
+        if "subtitle_fields" in checkpoint:
+            pass
+        elif subtitle_correction.enabled() and segments_payload:
             current_stage = "subtitle_correction"
             upsert_job(task_id=task_id_value, status="running", stage="subtitle_correction", progress=60)
             yield _sse({"stage": "subtitle_correction", "progress": 60})
@@ -960,8 +1070,14 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             )
             if subtitle_fields.get("subtitle_corrections"):
                 transcript_text = subtitle_correction.joined(segments_payload)
-        glossary_fields: dict[str, Any] = {}
-        if segments_payload:
+            checkpoint = _checkpoint_advanced(
+                ctx, checkpoint, subtitle_fields=subtitle_fields,
+                segments_payload=segments_payload, transcript_text=transcript_text,
+            )
+        glossary_fields: dict[str, Any] = dict(checkpoint.get("glossary_fields") or {})
+        if "glossary_fields" in checkpoint:
+            pass
+        elif segments_payload:
             if glossary_correction.enabled():
                 current_stage = "glossary_correction"
                 upsert_job(task_id=task_id_value, status="running", stage="glossary_correction", progress=60)
@@ -980,6 +1096,10 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             )
             if glossary_fields.get(glossary_correction.FIELD):
                 transcript_text = subtitle_correction.joined(segments_payload)
+            checkpoint = _checkpoint_advanced(
+                ctx, checkpoint, glossary_fields=glossary_fields,
+                segments_payload=segments_payload, transcript_text=transcript_text,
+            )
         source_language = _normalized_source_language(getattr(tr, "language", None)) or _normalized_source_language(language)
         bilingual_segments: list[dict[str, Any]] = []
         translation_status = "not_applicable"
@@ -1081,7 +1201,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             "raw_segments": segments_payload,
             "speaker_diarization": speaker_payload,
             "stt_raw_segments": raw_segments_payload,
-            "transcript_cleanup": _cleanup_payload(cleanup_result),
+            "transcript_cleanup": cleanup_payload,
             "status": "transcript_ready",
             "source": source_type,
             "summary_skipped": summary_disabled,

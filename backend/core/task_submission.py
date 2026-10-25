@@ -157,6 +157,7 @@ def _local_media_job_context(
     openai_api_key: Optional[str] = None,
     qwen_api_key: Optional[str] = None,
     duration_limit_seconds: float | None = None,
+    announce_fallback: bool = True,
 ) -> MediaJobContext:
     """Build the pipeline context with the local edition's invariants: local
     STT and the local event hub. ``options`` uses the persisted queue-options vocabulary so the
@@ -167,7 +168,7 @@ def _local_media_job_context(
     visual_note_will_run = local_intake_flow.auto_note_will_run()
     note_after_cut = visual_note_will_run or local_intake_flow.survey_first_enabled()
     note_fallback_reason = None
-    if not skip_summary and local_intake_flow.auto_note_enabled() and not visual_note_will_run:
+    if announce_fallback and not skip_summary and local_intake_flow.auto_note_enabled() and not visual_note_will_run:
         note_fallback_reason = _log_visual_note_unavailable(task_id, source_type=source_type, source_filename=source_filename)
     return MediaJobContext(
         task_id_value=task_id,
@@ -777,3 +778,52 @@ async def retry_task(
         "task_id": retry_task_id,
         "job": {**started_job, "task_snapshot": build_task_snapshot(started_job)},
     }
+
+
+def context_for_task(job: dict, *, need_source: bool = True) -> MediaJobContext:
+    """The pipeline context of a task already on record, to carry it on in
+    place (``task_actions.resume_task``): its own options, title and
+    recording. ``need_source`` is false when only steps after the transcript
+    run, which read the task's own files rather than the recording.
+
+    Raises ``FileNotFoundError`` with the user's words when the recording it
+    needs is gone.
+    """
+    task_id = str(job.get("task_id") or "")
+    client_id = job.get("client_id")
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    options = _stored_queue_options(job)
+    in_place = _in_place_origin(job)
+    source: Path | None = Path(str(in_place["original_path"])) if in_place else find_source_file(task_id)
+    if need_source and (source is None or not source.is_file()):
+        where = f"：{source}" if source is not None else ""
+        raise FileNotFoundError(f"这个任务的录像已不在原来的位置{where}，没法接着做；请重新添加文件。")
+    filename = Path(str(job.get("source_filename") or (source.name if source else "media.mp4"))).name
+    suffix = (source.suffix if source else "") or Path(filename).suffix.lower() or ".mp4"
+    raw_title = str(metadata.get("raw_title") or options.get("title") or Path(filename).stem).strip()
+    display_title = str(metadata.get("display_title") or display_title_for_user(raw_title, filename)).strip()
+    preflight = metadata.get("media_preflight") if isinstance(metadata.get("media_preflight"), dict) else {}
+    ctx = _local_media_job_context(
+        task_id=task_id,
+        client_id=client_id,
+        source_type=str(job.get("source_type") or source_type_for_suffix(suffix)),
+        source_filename=filename,
+        raw_title=raw_title,
+        display_title=display_title,
+        suffix=suffix,
+        td=tempfile.mkdtemp(),
+        in_path=source,
+        content=b"",
+        source_file_size_mb=job.get("source_file_size_mb"),
+        duration_preflight_sec=preflight.get("duration_seconds"),
+        options=options,
+        duration_limit_seconds=_effective_duration_limit(options.get("duration_limit_seconds")),
+        # Said when the task was submitted; carrying it on is not a new submission.
+        announce_fallback=False,
+    )
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if "note_deferred_to_visual_note" in result:
+        # Decided when the task ran, not by what is reachable now.
+        ctx.note_deferred_to_visual_note = bool(result["note_deferred_to_visual_note"])
+    ctx.event_route = str(metadata.get("route") or "/jobs/{task_id}/resume")
+    return ctx

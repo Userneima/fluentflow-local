@@ -3,8 +3,8 @@
 Requirements (owner, 2026-10-18 and 2026-10-25, docs/方案/2026-10-25-任务步骤清单和模型用量记账.md),
 in the user's terms:
 
-- A task records its steps: transcription, cut, note, compressed copy, Feishu
-  export. Each one is not started, in progress, done, failed, skipped or
+- A task records its steps: fetching the recording, transcription, correcting
+  the transcript, cut, note, compressed copy, Feishu export. Each one is not started, in progress, done, failed, skipped or
   stopped.
 - While any step is still to come or in progress, the task is still working:
   it cannot be deleted, an agent waiting for it is not done, the restart guard
@@ -183,7 +183,8 @@ def test_while_the_cut_and_note_are_still_coming_the_task_is_busy_everywhere(mon
     assert not any(_busy_everywhere(task_id).values())
     steps = _steps(task_id)
     assert {name: step["status"] for name, step in steps.items()} == {
-        "transcribe": "done", "cut": "done", "note": "done", "compress": "skipped", "feishu": "skipped",
+        "fetch": "done", "transcribe": "done", "correct": "done",
+        "cut": "done", "note": "done", "compress": "skipped", "feishu": "skipped",
     }
     assert steps["cut"]["started_at"] and steps["cut"]["finished_at"]
 
@@ -197,7 +198,8 @@ def test_a_task_that_only_wanted_a_transcript_is_finished_once_it_is_stored(monk
 
     assert not any(_busy_everywhere(task_id).values())
     assert {name: step["status"] for name, step in _steps(task_id).items()} == {
-        "transcribe": "done", "cut": "skipped", "note": "skipped", "compress": "skipped", "feishu": "skipped",
+        "fetch": "done", "transcribe": "done", "correct": "done",
+        "cut": "skipped", "note": "skipped", "compress": "skipped", "feishu": "skipped",
     }
 
 
