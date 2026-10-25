@@ -657,7 +657,9 @@ def apply(segments: list[dict[str, Any]], fixes: list[dict[str, Any]]) -> tuple[
                 "from": fix["from"],
                 "to": fix["to"],
                 "at": at,
-                "subtitle": fix["subtitle"],
+                # What the change rests on: the subtitle line here, the word
+                # list entry or the model's reason in the glossary step.
+                **{key: value for key, value in fix.items() if key not in {"index", "from", "to", "at"}},
                 "sentence_before": before,
                 "sentence_after": after,
                 "reverted": False,
@@ -769,14 +771,18 @@ _COPIES = (
 )
 
 
-def revert(result: dict[str, Any], ids: list[str] | None) -> tuple[dict[str, Any], list[str], list[str]]:
+def revert(
+    result: dict[str, Any], ids: list[str] | None, field: str = "subtitle_corrections",
+    none_made: str = "这个任务没有按画面字幕改过的地方。",
+) -> tuple[dict[str, Any], list[str], list[str]]:
     """``result`` with the named corrections (all, when ``ids`` is empty) put
-    back to what the transcript said. Returns (result, reverted, not found)."""
-    records = [dict(r) for r in result.get("subtitle_corrections") or [] if isinstance(r, dict)]
+    back to what the transcript said. Returns (result, reverted, not found).
+    ``field`` names the step's records: the glossary step keeps its own."""
+    records = [dict(r) for r in result.get(field) or [] if isinstance(r, dict)]
     wanted = set(ids or [r.get("id") for r in records if not r.get("reverted")])
     unknown = sorted(wanted - {r.get("id") for r in records})
     if unknown and not records:
-        raise RevertError("这个任务没有按画面字幕改过的地方。")
+        raise RevertError(none_made)
     # Every copy of the transcript that carries the change: what the page and
     # the subtitle files read, what the note and the agent read first when the
     # text-model correction is on, and the copies on the original's clock that
@@ -789,6 +795,11 @@ def revert(result: dict[str, Any], ids: list[str] | None) -> tuple[dict[str, Any
     # record's position still points at its own change.
     for record in reversed(records):
         if record.get("id") not in wanted or record.get("reverted"):
+            continue
+        # The transcript the user sees decides: a sentence edited there since
+        # is the user's, and no copy of it is touched.
+        if "raw_segments" in lists and _find(lists["raw_segments"], record) is None:
+            missing.append(record["id"])
             continue
         hit = False
         for key, segments in lists.items():
@@ -805,7 +816,7 @@ def revert(result: dict[str, Any], ids: list[str] | None) -> tuple[dict[str, Any
     for key, segments in lists.items():
         if result.get(key) is not None:
             updated[key] = segments
-    updated["subtitle_corrections"] = records
+    updated[field] = records
     if reverted and "raw_segments" in lists:
         updated["transcript_text"] = joined(lists["raw_segments"])
         updated["transcript_text_preview"] = updated["transcript_text"][:200]

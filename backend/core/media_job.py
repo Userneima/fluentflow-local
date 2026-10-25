@@ -39,7 +39,7 @@ from backend.core.ai_summarizer import (
 from backend.core.media_probe import media_duration_seconds
 from backend.core.runtime_env import truthy
 from backend.core.ai_client import _chat, _get_client, _normalize_model, _normalize_provider, _provider_api_key
-from backend.core import subtitle_correction
+from backend.core import correction_notes, glossary_correction, subtitle_correction
 from backend.core.claude_text import claude_chat, subscription_first
 from backend.core.media_job_stages import (
     clean_transcript,
@@ -82,11 +82,6 @@ from backend.core.speaker_diarization import build_speaker_annotated_transcript
 from backend.core.voice_enhance import enhance_voice, measure_presence, stt_audio_source
 from backend.core.stt_process import drain_queue, start_transcription_process, terminate_process
 from backend.core.storage_paths import _artifact_storage_dir
-from backend.core.transcript_correction import (
-    correction_result_fields,
-    correct_transcript_segments,
-    transcript_correction_enabled,
-)
 from backend.core.visual_evidence import (
     build_visual_evidence_from_note_images,
     build_visual_key_moments,
@@ -313,69 +308,6 @@ def _translation_writer(
     return found
 
 
-async def _run_transcript_correction_stage(
-    *,
-    loop: asyncio.AbstractEventLoop,
-    task_id: str,
-    route: str,
-    source_type: str,
-    source_filename: str | None,
-    source_duration_seconds: float | None,
-    source_file_size_mb: float | None,
-    transcript_text: str,
-    segments: list[dict[str, Any]],
-    deepseek_api_key: str | None,
-    secret_resolver: Any = None,
-) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
-    """Run optional conservative transcript correction without failing the task."""
-    if not transcript_correction_enabled():
-        return {"note_generation_transcript_source": "transcript_text"}, transcript_text, segments
-    if secret_resolver is None:
-        raise RuntimeError("Transcript correction requires a secret resolver")
-
-    started_at = time.perf_counter()
-    correction_result = await loop.run_in_executor(
-        None,
-        lambda: correct_transcript_segments(
-            segments,
-            api_key=secret_resolver(deepseek_api_key, "deepseek_api_key"),
-            provider="deepseek",
-        ),
-    )
-    note_transcript_text = correction_result.corrected_text or transcript_text
-    note_segments = correction_result.corrected_segments or segments
-    fields = correction_result_fields(
-        correction_result,
-        note_input_applied=bool(correction_result.corrected_text),
-    )
-    fields["note_generation_transcript_source"] = (
-        "corrected_transcript" if correction_result.corrected_text else "transcript_text"
-    )
-    log_event(
-        task_id=task_id,
-        event_name="transcript_correction_completed" if correction_result.status in {"completed", "no_changes"} else "transcript_correction_unavailable",
-        source_type=source_type,
-        source_filename=source_filename,
-        source_duration_seconds=source_duration_seconds,
-        source_file_size_mb=source_file_size_mb,
-        transcript_length=_text_len(transcript_text),
-        stage="transcript_correction",
-        duration_seconds=round(time.perf_counter() - started_at, 3),
-        success=correction_result.status in {"completed", "no_changes"},
-        error_reason=correction_result.error,
-        metadata=event_metadata(
-            route=route,
-            correction_status=correction_result.status,
-            correction_applied_count=correction_result.applied_count,
-            correction_rejected_count=correction_result.rejected_count,
-            correction_provider=correction_result.provider,
-            correction_model=correction_result.model,
-            note_generation_transcript_source=fields["note_generation_transcript_source"],
-        ),
-    )
-    return fields, note_transcript_text, note_segments
-
-
 def _key_chat(kwargs: dict[str, Any]) -> Any:
     """A ``(system, user) -> text`` call on the configured text model, or
     ``None`` without a key for it."""
@@ -438,6 +370,45 @@ async def _run_subtitle_correction_stage(
     fields: dict[str, Any] = {"subtitle_correction": outcome.meta(channel)}
     if outcome.corrections:
         fields["subtitle_corrections"] = outcome.corrections
+    return outcome.segments, fields
+
+
+async def _run_glossary_correction_stage(
+    ctx: "MediaJobContext", *, segments: list[dict[str, Any]], ai_kwargs: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Correct misheard words from the series' word list and the context.
+
+    Returns the segments to carry on with and the fields for the result. Never
+    fails the task: without a model the transcript goes on as it was."""
+    if not glossary_correction.enabled():
+        return segments, {}
+    chat, channel = _subtitle_chat(ai_kwargs or {}, ctx.secret_resolver) if ai_kwargs is not None else (None, None)
+    try:
+        glossary = correction_notes.for_task(ctx.task_id_value, ctx.client_id)
+    except Exception:  # noqa: BLE001 - no word list is an answer, not an error
+        glossary = ""
+    stop = threading.Event()
+    try:
+        outcome = await ctx.loop.run_in_executor(
+            None, lambda: glossary_correction.correct(segments, glossary, chat, stop=stop),
+        )
+    except asyncio.CancelledError:
+        stop.set()
+        raise
+    log_event(
+        task_id=ctx.task_id_value,
+        event_name="glossary_correction_completed" if outcome.status != "failed" else "glossary_correction_failed",
+        source_type=ctx.source_type,
+        source_filename=ctx.source_filename,
+        stage="glossary_correction",
+        duration_seconds=round(outcome.seconds, 3),
+        success=outcome.status != "failed",
+        error_reason=outcome.reason if outcome.status == "failed" else None,
+        metadata=event_metadata(route=ctx.event_route, **outcome.meta(channel)),
+    )
+    fields: dict[str, Any] = {glossary_correction.META: outcome.meta(channel)}
+    if outcome.corrections:
+        fields[glossary_correction.FIELD] = outcome.corrections
     return outcome.segments, fields
 
 
@@ -984,6 +955,25 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             )
             if subtitle_fields.get("subtitle_corrections"):
                 transcript_text = subtitle_correction.joined(segments_payload)
+        glossary_fields: dict[str, Any] = {}
+        if glossary_correction.enabled() and segments_payload:
+            current_stage = "glossary_correction"
+            upsert_job(task_id=task_id_value, status="running", stage="glossary_correction", progress=60)
+            yield _sse({"stage": "glossary_correction", "progress": 60})
+            segments_payload, glossary_fields = await _run_glossary_correction_stage(
+                ctx,
+                segments=segments_payload,
+                ai_kwargs=ai_kwargs_builder(
+                    deepseek_api_key=deepseek_api_key,
+                    openai_api_key=openai_api_key,
+                    qwen_api_key=qwen_api_key,
+                    ai_provider=ai_provider,
+                    ai_model=ai_model,
+                    system_prompt=None,
+                ) if ai_kwargs_builder is not None else None,
+            )
+            if glossary_fields.get(glossary_correction.FIELD):
+                transcript_text = subtitle_correction.joined(segments_payload)
         source_language = _normalized_source_language(getattr(tr, "language", None)) or _normalized_source_language(language)
         bilingual_segments: list[dict[str, Any]] = []
         translation_status = "not_applicable"
@@ -1091,27 +1081,13 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             "summary_skipped": summary_disabled,
         })
         base_result.update(subtitle_fields)
+        base_result.update(glossary_fields)
+        # What FluentFlow wrote, so a later run of the glossary step can tell
+        # the sentences the user edited from its own.
+        base_result[glossary_correction.FINGERPRINTS] = glossary_correction.fingerprints(segments_payload)
         note_transcript_text = transcript_text
         note_segments_payload = segments_payload
-        if not summary_disabled and transcript_correction_enabled():
-            current_stage = "transcript_correction"
-            upsert_job(task_id=task_id_value, status="running", stage="transcript_correction", progress=61)
-            yield _sse({"stage": "transcript_correction", "progress": 61})
-            correction_fields, note_transcript_text, note_segments_payload = await _run_transcript_correction_stage(
-                loop=loop,
-                task_id=task_id_value,
-                route=event_route,
-                source_type=source_type,
-                source_filename=source_filename,
-                source_duration_seconds=round(duration_sec, 1),
-                source_file_size_mb=source_file_size_mb,
-                transcript_text=transcript_text,
-                segments=segments_payload,
-                deepseek_api_key=deepseek_api_key,
-                secret_resolver=secret_resolver,
-            )
-            base_result.update(correction_fields)
-        elif not summary_disabled:
+        if not summary_disabled:
             base_result["note_generation_transcript_source"] = "transcript_text"
         if playback_audio_path is not None:
             base_result = _attach_playback_audio_artifact(task_id_value, base_result, playback_audio_path)

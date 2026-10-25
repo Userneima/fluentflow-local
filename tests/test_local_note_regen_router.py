@@ -321,7 +321,6 @@ def test_transcript_file_duration_limit(monkeypatch):
 
 def test_transcript_only_mode_skips_summary(monkeypatch):
     jobs, _ = _install_store(monkeypatch)
-    monkeypatch.setattr(local_note_regen, "transcript_correction_enabled", lambda: False)
 
     def unexpected(*args, **kwargs):
         raise AssertionError("summarizer must not run in transcript-only mode")
@@ -346,7 +345,6 @@ def test_transcript_only_mode_skips_summary(monkeypatch):
 
 def test_transcript_file_summary_success(monkeypatch):
     jobs, events = _install_store(monkeypatch)
-    monkeypatch.setattr(local_note_regen, "transcript_correction_enabled", lambda: False)
     monkeypatch.setattr(
         local_note_regen, "summarize_transcript_with_metadata",
         lambda transcript, **kwargs: _summary_result("# 本地笔记"),
@@ -375,7 +373,6 @@ def test_transcript_file_summary_success(monkeypatch):
 
 def test_transcript_file_summary_failure_returns_partial_result(monkeypatch):
     jobs, _ = _install_store(monkeypatch)
-    monkeypatch.setattr(local_note_regen, "transcript_correction_enabled", lambda: False)
 
     def boom(transcript, **kwargs):
         raise RuntimeError("AI provider down")
@@ -396,52 +393,6 @@ def test_transcript_file_summary_failure_returns_partial_result(monkeypatch):
     assert "本地版" in body["transcript_text"]
     assert jobs["fail-1"]["summary_status"] == "failed"
     assert jobs["fail-1"]["status"] == "completed"
-
-
-def test_transcript_correction_uses_local_key(monkeypatch):
-    _install_store(monkeypatch)
-    monkeypatch.setattr(local_note_regen, "transcript_correction_enabled", lambda: True)
-    monkeypatch.setattr(
-        local_note_regen, "resolve_secret",
-        lambda form_value, name: (form_value or "").strip() or f"stored-{name}",
-    )
-    seen: dict = {}
-
-    def fake_correct(segments, *, api_key, provider="deepseek", **kwargs):
-        seen.update({"api_key": api_key, "provider": provider, "segments": segments})
-        return SimpleNamespace(
-            status="no_changes",
-            corrections=[],
-            corrected_segments=[],
-            corrected_text="",
-            provider="deepseek",
-            model="deepseek-chat",
-            applied_count=0,
-            rejected_count=0,
-            segment_count=len(segments),
-            error=None,
-        )
-
-    monkeypatch.setattr(local_note_regen, "correct_transcript_segments", fake_correct)
-    monkeypatch.setattr(
-        local_note_regen, "correction_result_fields",
-        lambda result, note_input_applied=False: {"transcript_correction_status": result.status},
-    )
-    monkeypatch.setattr(
-        local_note_regen, "summarize_transcript_with_metadata",
-        lambda transcript, **kwargs: _summary_result(),
-    )
-
-    r = _client().post(
-        "/summarize-transcript-file",
-        headers=_HEADERS,
-        files={"file": ("talk.srt", _SRT.encode("utf-8"), "text/plain")},
-    )
-
-    assert r.status_code == 200
-    assert seen["api_key"] == "stored-deepseek_api_key"
-    assert seen["provider"] == "deepseek"
-    assert r.json()["note_generation_transcript_source"] == "transcript_text"
 
 
 def test_regenerate_keeps_the_old_note_when_the_model_returns_nothing(monkeypatch):

@@ -692,9 +692,11 @@ def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]
     result["transcript_text"] = _lines_text(result.get("raw_segments"))
     if result.get("corrected_segments"):
         result["corrected_transcript_text"] = _lines_text(result["corrected_segments"])
-    if isinstance(result.get("subtitle_corrections"), list):
+    for records_key in ("subtitle_corrections", "glossary_corrections"):
+        if not isinstance(result.get(records_key), list):
+            continue
         # Undoing one finds its sentence by time, on the clock the task now has.
-        result["subtitle_corrections"] = [
+        result[records_key] = [
             {
                 **record,
                 "start": cut_timeline.new_time(ranges, _seconds(record.get("start"))),
@@ -703,7 +705,7 @@ def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]
                 "source_start": record.get("start"),
                 "source_end": record.get("end"),
             }
-            for record in result["subtitle_corrections"] if isinstance(record, dict)
+            for record in result[records_key] if isinstance(record, dict)
         ]
     result["transcript_media"] = TRANSCRIPT_MEDIA_CUT
     result["playback_media_kind"] = DEBREATH_MEDIA_KIND

@@ -30,7 +30,6 @@ from backend.core.job_lifecycle import (
     result_for_transcript_only,
 )
 from backend.core.job_store import NOTE_BASIS_FIELDS, finalize_note_if_unchanged, get_job, upsert_job
-from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import (
     claim_task_id,
     local_ai_kwargs,
@@ -47,11 +46,6 @@ from backend.core.request_scope import local_client_scope
 from backend.core.runtime_env import truthy
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.transcript_cleaner import clean_repeated_transcript
-from backend.core.transcript_correction import (
-    correct_transcript_segments,
-    correction_result_fields,
-    transcript_correction_enabled,
-)
 from backend.core.transcript_parser import parse_transcript_file
 
 router = APIRouter()
@@ -350,69 +344,6 @@ async def regenerate_summary(
         raise HTTPException(status_code=500, detail=friendly_error) from exc
 
 
-async def _run_local_transcript_correction(
-    *,
-    loop: asyncio.AbstractEventLoop,
-    task_id: str,
-    route: str,
-    source_filename: str | None,
-    source_duration_seconds: float | None,
-    source_file_size_mb: float | None,
-    transcript_text: str,
-    segments: list[dict[str, Any]],
-    deepseek_api_key: str | None,
-) -> tuple[dict[str, Any], str]:
-    """Optional conservative transcript correction with the LOCAL credential
-    store (mirrors the hosted stage in ``media_job`` without failing the task)."""
-    if not transcript_correction_enabled():
-        return {"note_generation_transcript_source": "transcript_text"}, transcript_text
-
-    started_at = time.perf_counter()
-    correction_result = await loop.run_in_executor(
-        None,
-        lambda: correct_transcript_segments(
-            segments,
-            api_key=resolve_secret(deepseek_api_key, "deepseek_api_key"),
-            provider="deepseek",
-        ),
-    )
-    note_transcript_text = correction_result.corrected_text or transcript_text
-    fields = correction_result_fields(
-        correction_result,
-        note_input_applied=bool(correction_result.corrected_text),
-    )
-    fields["note_generation_transcript_source"] = (
-        "corrected_transcript" if correction_result.corrected_text else "transcript_text"
-    )
-    log_event(
-        task_id=task_id,
-        event_name=(
-            "transcript_correction_completed"
-            if correction_result.status in {"completed", "no_changes"}
-            else "transcript_correction_unavailable"
-        ),
-        source_type="transcript_file",
-        source_filename=source_filename,
-        source_duration_seconds=source_duration_seconds,
-        source_file_size_mb=source_file_size_mb,
-        transcript_length=len(transcript_text or ""),
-        stage="transcript_correction",
-        duration_seconds=round(time.perf_counter() - started_at, 3),
-        success=correction_result.status in {"completed", "no_changes"},
-        error_reason=correction_result.error,
-        metadata=event_metadata(
-            route=route,
-            correction_status=correction_result.status,
-            correction_applied_count=correction_result.applied_count,
-            correction_rejected_count=correction_result.rejected_count,
-            correction_provider=correction_result.provider,
-            correction_model=correction_result.model,
-            note_generation_transcript_source=fields["note_generation_transcript_source"],
-        ),
-    )
-    return fields, note_transcript_text
-
-
 async def summarize_transcript_source(
     *,
     raw: bytes | bytearray,
@@ -587,18 +518,7 @@ async def summarize_transcript_source(
     }
     note_transcript_text = transcript_text
     if not summary_disabled:
-        correction_fields, note_transcript_text = await _run_local_transcript_correction(
-            loop=loop,
-            task_id=task_id_value,
-            route=route,
-            source_filename=source_filename,
-            source_duration_seconds=round(parsed.duration, 1),
-            source_file_size_mb=source_file_size_mb,
-            transcript_text=transcript_text,
-            segments=segments_payload,
-            deepseek_api_key=deepseek_api_key,
-        )
-        base_result.update(correction_fields)
+        base_result["note_generation_transcript_source"] = "transcript_text"
     base_result = _attach_result_artifacts(task_id_value, base_result)
     upsert_job(
         task_id=task_id_value,

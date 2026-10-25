@@ -885,6 +885,29 @@ def revert_subtitle_corrections(
     )
 
 
+def list_glossary_corrections(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    """The words fixed from the series' word list and the context."""
+    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/glossary-corrections", api_base=api_base, client_id=client_id)
+
+
+def run_glossary_correction(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    """Run the word-list correction again on a finished task."""
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/glossary-corrections/run",
+        api_base=api_base, client_id=client_id, payload={}, timeout=900,
+    )
+
+
+def revert_glossary_corrections(
+    task_id: str, ids: list[str] | None = None, api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    """Put glossary corrections back to what the transcript said."""
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/glossary-corrections/revert",
+        api_base=api_base, client_id=client_id, payload={"ids": ids or []},
+    )
+
+
 TOOL_FUNCTIONS = {
     "submit_video_link": submit_video_link,
     "submit_transcript": submit_transcript,
@@ -916,6 +939,9 @@ TOOL_FUNCTIONS = {
     "restore_note_version": restore_note_version,
     "list_subtitle_corrections": list_subtitle_corrections,
     "revert_subtitle_corrections": revert_subtitle_corrections,
+    "list_glossary_corrections": list_glossary_corrections,
+    "run_glossary_correction": run_glossary_correction,
+    "revert_glossary_corrections": revert_glossary_corrections,
 }
 
 
@@ -1637,6 +1663,64 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "its subtitle files and the output folder follow; a note already written is not rewritten "
             "(regenerate_note does that if the user wants it). not_found lists ids whose sentence was "
             "edited since and could not be found."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "ids": {"type": "array", "items": {"type": "string"}},
+                "api_base": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "list_glossary_corrections",
+        "description": (
+            "Words in the task's transcript that FluentFlow corrected from the series' word list "
+            "(FluentFlow 校正文档.md in the recording's folder or above) and the surrounding sentences, "
+            "after transcription (and after the subtitle check) and before the note was written. Each has an "
+            "id, the time, sentence (its number in the transcript now; null when that sentence was edited "
+            "since), from, to, basis (glossary: the word list's spelling, entry is that line; context: the "
+            "sentences around it decided, why says how) and the sentence before and after. "
+            "glossary_correction says how the step went: skipped with its reason (no transcript, no model), "
+            "failed with the model's error, no_changes or completed, with counts by basis, the channel "
+            "(subscription or a key) and the seconds it took."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "run_glossary_correction",
+        "description": (
+            "Run the word-list correction on a finished task again, for a task processed before the step "
+            "existed or after the user added to the word list. Reads the whole transcript with the word list "
+            "found for the recording's folder (with no word list, only what the context makes certain is "
+            "changed). Sentences the user edited in the editor are left alone. Each change replaces a misheard "
+            "word, never a sentence; the new changes join the task's records and undo the same way "
+            "(list_glossary_corrections, revert_glossary_corrections). The transcript, its subtitle files and "
+            "the output folder follow; a note already written is not rewritten (regenerate_note does that if "
+            "the user wants it). Uses the Claude subscription first when this machine opted into it, else the "
+            "configured text model; takes a minute or two for an hour of recording. Refused with code "
+            "task_busy while the task is still being processed, already_running when a run is under way, and "
+            "transcript_moved when the transcript was edited while it ran (nothing written; run it again)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "revert_glossary_corrections",
+        "description": (
+            "Undo glossary corrections: each named one (ids from list_glossary_corrections, or all when ids "
+            "is empty) goes back to what the transcript said, in every copy of the transcript, the subtitle "
+            "files and the output folder. Ask the user first. Refused with code task_busy while the task is "
+            "still being processed. not_found lists ids whose sentence was edited since and could not be found."
         ),
         "inputSchema": {
             "type": "object",

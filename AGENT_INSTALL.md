@@ -58,7 +58,11 @@ parts; fetch and write each, then save them together. When a note lost content o
 user wants an earlier version, `过程文件/修改记录.md` beside the note says what each change
 changed, `list_note_versions` shows every kept version with what
 replaced it, `read_note_version` reads one, and `restore_note_version` (after the user
-agrees) puts it back everywhere the note is kept.
+agrees) puts it back everywhere the note is kept. After transcription FluentFlow corrects
+misheard names and terms in the transcript from the subtitles in the picture and from the
+series' word list (`FluentFlow 校正文档.md`); `list_subtitle_corrections` and
+`list_glossary_corrections` show each change, the matching revert tools undo it after the
+user agrees, and `run_glossary_correction` runs the word-list step again on a finished task.
 
 ## Only these need the user
 
