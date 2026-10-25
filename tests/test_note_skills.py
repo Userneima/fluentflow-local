@@ -124,7 +124,13 @@ def test_the_default_skill_is_anonymous_and_has_the_agreed_rules():
         assert personal not in text
     for agreed in (
         "只写能从转录文字或截图里确认的内容",
-        "第一次出现的地方用括号解释",
+        "原词照讲者的说法写",
+        "紧跟一个括号写解释",
+        "括号里的解释只用这样的读者认识的词",
+        "不在叙述中间另起一句",
+        "在这段开头先用几句话交代清楚",
+        "不改成表格",
+        "正文写名字",
         "不另设词汇表",
         "保留讲者的限定词",
         "同一个意思只写一处",
