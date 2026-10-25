@@ -364,20 +364,25 @@ def test_filling_the_output_folder_does_not_hold_the_queue(client, pipeline, fol
     starts as soon as the previous one's processing is done."""
     from backend.core import output_folder
 
-    started = []
+    synced: dict[str, float] = {}
 
     def slow_sync(task_id):
-        started.append(task_id)
         time.sleep(3)
+        synced[task_id] = time.monotonic()
 
     monkeypatch.setattr(output_folder, "sync", slow_sync)
 
     queued = client.post("/queue/process-folder", json={"path": str(folder)}).json()["queued"]
-    begin = time.monotonic()
-    for q in queued:
-        _wait_until_done(client, q["task_id"], seconds=2.5)
+    first, second = (q["task_id"] for q in queued[:2])
+    _wait_until_done(client, first, seconds=10)
+    _wait_until_done(client, second, seconds=10)
+    second_done = time.monotonic()
 
-    assert time.monotonic() - begin < 2.5, "the second recording did not wait for the first one's folder"
+    # Measured against the first folder's own fill rather than a wall-clock
+    # budget: a task is finished only once its cut and compressed copy have
+    # ended too, which on a loaded machine takes a variable while.
+    assert first not in synced or synced[first] > second_done, \
+        "the second recording waited for the first one's folder"
 
 
 def test_a_folder_that_does_not_exist_is_refused_by_name(client, pipeline, tmp_path):
