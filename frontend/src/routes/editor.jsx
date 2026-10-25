@@ -70,6 +70,7 @@ import {
     visualNoteStartErrorMessage,
 } from './editor-helpers.js';
 import {timestampButton, button, iconButton, linkButton, segmentGroup, segmentItem, chip, statusButton, surfaceCard} from '../lib/ui.js';
+import {useTaskResume} from '../lib/useTaskResume.js';
 
 // The records worth showing: a changed sentence whose current text is still the
 // changed version. Shared by the records dialog and the save payload.
@@ -301,7 +302,7 @@ const Editor = () => {
         runtimeConfig,
         ingestJobs,
     } = useApp();
-    const {processVideoSSE, retryJob, fetchJobArtifactFile, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
+    const {processVideoSSE, retryJob, resumeJob, getJobActivity, fetchJobArtifactFile, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
     const {loadSettings} = useSettings();
     const [regenerating, setRegenerating] = useState(false);
     const [retranscribing, setRetranscribing] = useState(false);
@@ -1282,6 +1283,16 @@ const Editor = () => {
             setToast(null);
         }, 3000);
     }, []);
+    // Carrying a stopped task on, or redoing a step that failed (header button).
+    const taskResume = useTaskResume({
+        taskId: result?.task_id || '',
+        getJobActivity,
+        resumeJob,
+        jobOptions: resultJobOptions,
+        lang,
+        onResumed: () => showToast(lang === 'zh' ? '已排进队列，从这一步接着做' : 'Queued: carrying on from this step'),
+        onError: (err) => showToast(err?.message || String(err), false),
+    });
     // The server refused a save made on an older copy (the note or subtitles
     // changed in Obsidian, by an agent or in another tab): load what the task
     // holds now and say so, rather than sending the old copy again.
@@ -1719,8 +1730,15 @@ const Editor = () => {
     const autoExportError = !larkDocUrl && result?.lark_error ? String(result.lark_error) : '';
     const noteMissing = !!result && !hasEditableSummary && (result.summary_skipped || result.summary_status === 'failed' || !!result.summary_error);
     const noteBeingWritten = regenerating || noteIsBeingWritten(result);
+    const resumeLabel = taskResume.offer
+        ? `${taskResume.offer.sentence.replace(/[。.]$/, '')}${lang === 'zh' ? '，' : ': '}${taskResume.resuming ? (lang === 'zh' ? '正在入队…' : 'queuing…') : taskResume.offer.label}`
+        : '';
     const headerStatus = cutFileUnavailable
         ? {tone: 'error', label: lang === 'zh' ? '剪后文件读不到了，重新处理' : 'The cut file cannot be read: process again', onClick: handleRetranscribe}
+        // A stopped task, or a step that failed, comes first: the task is not
+        // finished until it is carried on.
+        : taskResume.offer
+            ? {tone: 'ask', label: resumeLabel, onClick: taskResume.resuming ? null : taskResume.resume}
         : cutJudgeCount > 0
             ? {tone: 'ask', label: lang === 'zh' ? `剪辑有 ${cutJudgeCount} 处需要你判断` : `${cutJudgeCount} cut decision${cutJudgeCount === 1 ? '' : 's'} need your call`, onClick: () => setCutReviewOpen(true)}
             : noteBeingWritten

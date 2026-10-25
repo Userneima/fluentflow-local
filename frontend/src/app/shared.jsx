@@ -423,6 +423,22 @@ const createApi = () => {
         if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
         return data;
     };
+    // Stop the step a task is on, or carry it on from the step that did not
+    // finish (backend/core/task_actions.py). Refusals come back in words.
+    const postTaskAction = async (taskId, action, options={}) => {
+        const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/${action}`, {
+            method: "POST",
+            headers: localExecutionHeaders(options),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
+    };
+    // The task row with its activity (whether a step works, failed or was
+    // stopped), for a page that only needs that and not to replace its result.
+    const getJobActivity = (taskId, options={}) => getJob(taskId, options);
+    const stopJobStep = (taskId, options={}) => postTaskAction(taskId, 'stop', options);
+    const resumeJob = (taskId, options={}) => postTaskAction(taskId, 'resume', options);
     // Cancel a record the page is holding, rather than a bare task id.
     const cancelJobRecord = (job={}) => cancelJob(job.taskId, {sttProvider: job.sttProvider});
     const deleteJob = async (taskId, options={}) => {
@@ -801,7 +817,7 @@ const createApi = () => {
         return r.ok && data?.providers ? data.providers : {};
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobMedia, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, openOutputFolder, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getWorkflowStatus, getTextModelInUse, getPreferences, savePreferences, noteStyle, getProviderModels, getModelDefaults, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, getJobActivity, stopJobStep, resumeJob, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobMedia, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, openOutputFolder, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getWorkflowStatus, getTextModelInUse, getPreferences, savePreferences, noteStyle, getProviderModels, getModelDefaults, checkHealth};
 };
 
 export const useSettings = () => {

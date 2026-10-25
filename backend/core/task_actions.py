@@ -264,6 +264,15 @@ async def stop_step(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
     cancelled = await JOB_EVENTS.cancel(task_id)
     # Whatever no runner closes (a task still waiting for its turn).
     task_steps.close_open(task_id, stopped=True)
+    if task_steps.NOTE in open_steps and job.get("status") == "completed":
+        # The note's thread finishes on its own a few seconds later; until
+        # then the task would still read 正在写笔记.
+        result = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
+        if str(result.get("summary_status") or "") == "pending" and not str(result.get("summary_markdown") or "").strip():
+            local_intake_flow._patch_result(task_id, client_id, {
+                "summary_status": "failed", "summary_error": task_steps.STOPPED_NOTE, "summary_skipped": False,
+            })
+            upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed", client_id=job.get("client_id"))
     log_event(
         task_id=task_id,
         event_name="task_step_stopped",

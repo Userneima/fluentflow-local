@@ -114,3 +114,34 @@ describe('a task the backend says is still working', () => {
         expect(taskOutcome(done, 'zh').kind).toBe('done');
     });
 });
+
+// Task steps batch 2 (2026-10-25): what the backend says about a stopped or
+// partly failed task becomes the offer the page makes.
+import {resumeOffer} from './taskState.js';
+
+describe('the offer to carry a task on', () => {
+    const activity = (extra) => ({busy: false, open_steps: [], failed_steps: [], stopped: false, resume_from: null, ...extra});
+
+    it('offers 接着做 for a stopped task, from the step the backend names', () => {
+        const job = {status: 'completed', result: {}, activity: activity({stopped: true, resume_from: {step: 'cut', label: '剪辑'}})};
+        expect(resumeOffer(job, 'zh')).toMatchObject({kind: 'resume', label: '接着做', sentence: '停在了「剪辑」这一步。'});
+    });
+
+    it('offers 重做这一步 for a finished task whose step failed', () => {
+        const job = {status: 'completed', result: {}, activity: activity({failed_steps: [{step: 'compress'}], resume_from: {step: 'compress', label: '压缩副本'}})};
+        expect(resumeOffer(job, 'zh')).toMatchObject({kind: 'redo', label: '重做这一步'});
+        expect(taskOutcome(job, 'zh').label).toBe('完成，但压缩副本失败');
+    });
+
+    it('offers nothing while the task works, or for a failed task (that is 重新提交)', () => {
+        expect(resumeOffer({status: 'completed', activity: activity({busy: true, resume_from: {step: 'note'}})})).toBeNull();
+        expect(resumeOffer({status: 'failed', activity: activity({failed_steps: [{step: 'transcribe'}], resume_from: {step: 'transcribe'}})})).toBeNull();
+        expect(resumeOffer({status: 'completed'})).toBeNull();
+    });
+
+    it('a cancelled task keeps 已取消 but can be carried on', () => {
+        const job = {status: 'cancelled', activity: activity({stopped: true, resume_from: {step: 'transcribe', label: '转录'}})};
+        expect(taskOutcome(job, 'zh').label).toBe('已取消');
+        expect(resumeOffer(job, 'zh')?.label).toBe('接着做');
+    });
+});

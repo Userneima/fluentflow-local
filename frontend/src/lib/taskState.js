@@ -89,11 +89,36 @@ export const taskStatusLabel = (job, lang = 'zh') => {
 // 'failed' | 'warn' | 'done', and `done` is the only quiet one.
 export const cutsToJudge = (job = {}) => Number(job?.result?.debreath?.survey?.to_judge) || 0;
 
+// A task the user stopped (a step reads stopped and nothing is working).
+export const isStopped = (job = {}) => hasActivity(job) && !job.activity.busy && Boolean(job.activity.stopped);
+
+const stepLabel = (step, lang) => (lang === 'zh' ? String(step?.label || '') : String(step?.step || ''));
+
+// What carrying the task on would do, when the page should offer it:
+// 接着做 for a stopped task, 重做这一步 for a finished one whose step failed.
+// The step it starts from comes from the backend (activity.resume_from).
+export const resumeOffer = (job = {}, lang = 'zh') => {
+    const zh = lang === 'zh';
+    if (!hasActivity(job) || job.activity.busy || !job.activity.resume_from) return null;
+    const step = stepLabel(job.activity.resume_from, lang);
+    if (isStopped(job)) {
+        return {kind: 'resume', label: zh ? '接着做' : 'Carry on', sentence: zh ? `停在了「${step}」这一步。` : `Stopped at ${step}.`};
+    }
+    const state = normalizeTaskState(job);
+    const failed = Array.isArray(job.activity.failed_steps) && job.activity.failed_steps.length > 0;
+    if ([TASK_STATE_COMPLETED, TASK_STATE_CACHED_ONLY].includes(state) && failed) {
+        return {kind: 'redo', label: zh ? '重做这一步' : 'Redo this step', sentence: zh ? `「${step}」这一步没做成。` : `${step} did not finish.`};
+    }
+    return null;
+};
+
 export const taskOutcome = (job = {}, lang = 'zh') => {
     const zh = lang === 'zh';
     const state = normalizeTaskState(job);
     if (state === TASK_STATE_FAILED) return {kind: 'failed', tone: 'failed', label: zh ? '失败' : 'Failed'};
     if (state === TASK_STATE_CANCELLED) return {kind: 'cancelled', tone: 'failed', label: zh ? '已取消' : 'Cancelled'};
+    // Stopped after the transcript was stored (a cancelled one stays 已取消).
+    if (isStopped(job)) return {kind: 'stopped', tone: 'warn', label: zh ? '已停下' : 'Stopped'};
     if (![TASK_STATE_COMPLETED, TASK_STATE_CACHED_ONLY].includes(state) || isNoteStillBeingWritten(job) || stillWorkingLabel(job)) {
         return {kind: 'live', tone: 'live', label: taskStatusLabel(job, lang)};
     }
@@ -113,6 +138,11 @@ export const taskOutcome = (job = {}, lang = 'zh') => {
     }
     if (String(result.debreath?.status || '').toLowerCase() === 'failed') {
         return {kind: 'cut_failed', tone: 'warn', label: zh ? '没去成气口' : 'Cut failed'};
+    }
+    const redo = resumeOffer(job, lang);
+    if (redo?.kind === 'redo') {
+        const step = stepLabel(job.activity.resume_from, lang);
+        return {kind: 'step_failed', tone: 'warn', label: zh ? `完成，但${step}失败` : `Done, ${step} failed`};
     }
     const toJudge = cutsToJudge(job);
     if (toJudge) return {kind: 'judge', tone: 'warn', label: zh ? `${toJudge} 处待你判断` : `${toJudge} to review`};

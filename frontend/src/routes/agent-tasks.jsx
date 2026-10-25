@@ -46,6 +46,7 @@ import {
     TASK_STATE_CACHED_ONLY,
     taskStatusLabel,
     taskOutcome,
+    resumeOffer,
     cutsToJudge,
 } from '../lib/taskState.js';
 import {useJobPolling} from '../lib/useJobPolling.js';
@@ -483,7 +484,7 @@ const sizeAndLengthLabel = (job, lang) => {
     return parts.join(' · ');
 };
 
-const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highlighted = false, cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onOpenSteps, onRetry}) => {
+const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highlighted = false, cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, resumingTaskId, stoppingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onOpenSteps, onRetry, onResume, onStop}) => {
     const zh = lang === 'zh';
     const taskId = taskIdForJob(job);
     const highlightRef = useRef(null);
@@ -520,13 +521,18 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
             ? (zh ? `已下载 ${fmtBytes(downloadedBytes)}` : `${fmtBytes(downloadedBytes)} downloaded`)
             : (zh ? '处理中' : 'Working'))
         : `${progress}%`;
+    const resume = resumeOffer(job, lang);
+    // A finished transcript whose later steps still run: the step it is on can
+    // be stopped and carried on later (a task still transcribing is cancelled).
+    const stoppable = completed && taskId && Boolean(job?.activity?.busy);
     const menuItems = [
         cancellableLive ? {label: zh ? '取消任务' : 'Cancel task', disabled: cancellingTaskId === taskId, onClick: () => onCancel(job)} : null,
+        stoppable ? {label: zh ? '停下这一步' : 'Stop this step', disabled: stoppingTaskId === taskId, onClick: () => onStop(job)} : null,
         // Step-by-step state and the failure diagnosis of this one task.
         taskId ? {label: zh ? '处理过程' : 'Processing steps', onClick: () => onOpenSteps(job)} : null,
         terminal && taskId ? {icon: 'delete', danger: true, label: zh ? '删除记录' : 'Delete record', onClick: () => onDelete(job)} : null,
     ].filter(Boolean);
-    const menuBusy = deletingTaskId === taskId || cancellingTaskId === taskId;
+    const menuBusy = deletingTaskId === taskId || cancellingTaskId === taskId || stoppingTaskId === taskId;
     const cutText = `${zh ? '去气口' : 'Cut'} ${cutTile.value}${cutTile.hint ? `（${cutTile.hint}）` : ''}`;
     // A failed or cancelled task shows only the steps it got to: its cut and
     // note blocks otherwise read "未剪（旧任务）" and "等处理", which say it is
@@ -637,6 +643,14 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                     ) : null}
                 </div>
             ) : null}
+            {resume ? (
+                <div data-testid="resume-offer" className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] font-semibold leading-5 text-[#57585d] dark:text-white/60">
+                    <span className="min-w-0 break-words">{resume.sentence}</span>
+                    <button type="button" disabled={resumingTaskId === taskId} onClick={() => onResume(job)} className={`shrink-0 ${button('secondary', 'sm')}`}>
+                        {resumingTaskId === taskId ? (zh ? '正在入队…' : 'Queuing…') : resume.label}
+                    </button>
+                </div>
+            ) : null}
             {retryError ? (
                 <p data-testid="retry-error" className="mt-2 inline-flex max-w-full items-start gap-2 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold leading-5 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                     <AlertCircle className="mt-0.5 size-4 shrink-0" strokeWidth={2.15}/>
@@ -699,11 +713,13 @@ const cardRenderKey = (job) => {
         meta.video_source_progress?.total_bytes, meta.video_source_progress?.percent,
         progressMessageOf(job),
         job?.task_snapshot?.current_step,
+        job?.activity?.busy, job?.activity?.label, job?.activity?.stopped, job?.activity?.resume_from?.step,
+        (job?.activity?.failed_steps || []).map((step) => step?.step).join(','),
         job?.sttStatus, job?.stt_status, meta.stt_status,
     ].join('\u0001');
 };
 // The busy ids are page-wide; a card only cares whether they name it.
-const BUSY_KEYS = ['cancellingTaskId', 'deletingTaskId', 'openingTaskId', 'retryingTaskId', 'downloadingTaskId'];
+const BUSY_KEYS = ['cancellingTaskId', 'deletingTaskId', 'openingTaskId', 'retryingTaskId', 'downloadingTaskId', 'resumingTaskId', 'stoppingTaskId'];
 const areCardPropsEqual = (prev, next) => {
     if (prev.lang !== next.lang || prev.aheadName !== next.aheadName || prev.retryError !== next.retryError || prev.highlighted !== next.highlighted) return false;
     const taskId = taskIdForJob(next.job);
@@ -731,7 +747,7 @@ const AgentTasks = () => {
     // longer keeps a private jobs state, warm cache, or writes the cache
     // (plan Stage 3b).
     const {currentJob, setCurrentJob, setLastResult, addToHistory, removeFromHistory, tasks: jobs, ingestJobs, markCancelled, revertCancelled, restoreTask, abortPendingUpload} = useApp();
-    const {getJob, cancelJob, deleteJob, retryJob, createVideoSourceJob, downloadJobMedia} = useApi();
+    const {getJob, cancelJob, deleteJob, retryJob, stopJobStep, resumeJob, createVideoSourceJob, downloadJobMedia} = useApi();
     const {loadSettings} = useSettings();
     const location = useLocation();
     const navigate = useNavigate();
@@ -740,6 +756,8 @@ const AgentTasks = () => {
     const [openingTaskId, setOpeningTaskId] = useState('');
     const [deletingTaskId, setDeletingTaskId] = useState('');
     const [retryingTaskId, setRetryingTaskId] = useState('');
+    const [resumingTaskId, setResumingTaskId] = useState('');
+    const [stoppingTaskId, setStoppingTaskId] = useState('');
     // A refusal to re-run belongs on the card that was refused, not in the page
     // banner: that banner is cleared by every successful poll, and this page polls
     // while any task is live, so the reason a retry did not happen was wiped
@@ -892,6 +910,38 @@ const AgentTasks = () => {
         }
     };
 
+    // Carry a stopped task on, or redo the step that failed, on the same task;
+    // a refusal is said on the card, like a refused retry.
+    const resumeTerminalJob = async (job) => {
+        const taskId = taskIdForJob(job);
+        if (!taskId) return;
+        setResumingTaskId(taskId);
+        setRetryError(null);
+        try {
+            await resumeJob(taskId, isLocalJob(job) ? {sttProvider: 'local'} : {});
+            await loadJobs();
+        } catch (err) {
+            setRetryError({taskId, message: friendlyTaskError(err.message || String(err), lang)});
+        } finally {
+            setResumingTaskId('');
+        }
+    };
+
+    const stopJobStepOf = async (job) => {
+        const taskId = taskIdForJob(job);
+        if (!taskId) return;
+        setStoppingTaskId(taskId);
+        try {
+            await stopJobStep(taskId, isLocalJob(job) ? {sttProvider: 'local'} : {});
+            setError(null);
+            await loadJobs();
+        } catch (err) {
+            setError(friendlyTaskError(err.message || String(err), lang));
+        } finally {
+            setStoppingTaskId('');
+        }
+    };
+
     const rememberRetriedJobs = (nextJobs=[]) => {
         const normalized = nextJobs.filter(Boolean).map(markBackendJob);
         if (!normalized.length) return;
@@ -1012,7 +1062,7 @@ const AgentTasks = () => {
     // which is what lets a card skip rendering when its row did not change.
     const handlersRef = useRef({});
     const openSteps = (job) => navigate(`/tasks/${encodeURIComponent(taskIdForJob(job))}/agent`);
-    handlersRef.current = {cancelLiveJob, deleteTerminalJob, downloadCutFile, openResult, openSteps, retryTerminalJob};
+    handlersRef.current = {cancelLiveJob, deleteTerminalJob, downloadCutFile, openResult, openSteps, retryTerminalJob, resumeTerminalJob, stopJobStepOf};
     const cardHandlers = useMemo(() => ({
         onCancel: (job) => handlersRef.current.cancelLiveJob(job),
         onDelete: (job) => handlersRef.current.deleteTerminalJob(job),
@@ -1020,6 +1070,8 @@ const AgentTasks = () => {
         onOpenResult: (job) => handlersRef.current.openResult(job),
         onOpenSteps: (job) => handlersRef.current.openSteps(job),
         onRetry: (job) => handlersRef.current.retryTerminalJob(job),
+        onResume: (job) => handlersRef.current.resumeTerminalJob(job),
+        onStop: (job) => handlersRef.current.stopJobStepOf(job),
     }), []);
 
     return (
@@ -1137,6 +1189,8 @@ const AgentTasks = () => {
                             openingTaskId={openingTaskId}
                             retryingTaskId={retryingTaskId}
                             downloadingTaskId={downloadingTaskId}
+                            resumingTaskId={resumingTaskId}
+                            stoppingTaskId={stoppingTaskId}
                             {...cardHandlers}
                         />
                     ))}
