@@ -1195,14 +1195,15 @@ MODEL_CALL_FIELDS = (
 
 
 def insert_model_call(*, db_path: Path | str = DEFAULT_DB_PATH, **values: Any) -> None:
-    """One call to a model (``model_usage``). Its time is stored in UTC, which
-    the price table's peak hours are written in."""
+    """One call to a model (``model_usage``). ``created_at`` is when it was
+    asked, in UTC (now when not given), which the price table's peak hours are
+    written in."""
     ensure_job_db(db_path)
     row = {name: values.get(name) for name in MODEL_CALL_FIELDS}
     row["ok"] = 1 if row["ok"] else 0
     row["cached_input_tokens"] = int(row["cached_input_tokens"] or 0)
     row["cache_write_tokens"] = int(row["cache_write_tokens"] or 0)
-    created = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    created = values.get("created_at") or datetime.now(timezone.utc).isoformat(timespec="seconds")
     with sqlite_connection(Path(db_path)) as conn:
         conn.execute(
             f"INSERT INTO model_calls (created_at, {', '.join(MODEL_CALL_FIELDS)})"

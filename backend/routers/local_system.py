@@ -185,6 +185,8 @@ def _check_anthropic_key(key: str) -> dict[str, Any]:
                 call.claude_usage((response.json() or {}).get("usage"))
             except (ValueError, AttributeError):
                 pass
+        else:
+            call.refused = f"HTTP {response.status_code}"
     status = response.status_code
     if status == 200:
         return _key_check_result(True, "ok", "Key 可以用。")

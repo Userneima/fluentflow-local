@@ -22,11 +22,13 @@ Requirements (owner, 2026-10-25 plan, docs/方案/2026-10-25-任务步骤清单�
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import subprocess
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -240,8 +242,9 @@ def test_an_exit_that_stops_recording_is_caught_by_the_whole_task_check(monkeypa
 def test_a_thread_started_without_carrying_the_step_records_its_call_outside_any_step(monkeypatch, task_id):
     seen: list = []
     _deepseek(monkeypatch, seen)
-    chat = ai_summarizer.text_model_chat(provider="deepseek")
-    loose_before = len([row for row in job_store.list_model_calls() if row["task_id"] is None])
+    # A model name no other test uses, so rows other tests write meanwhile
+    # (a coverage thread left running, say) are not counted.
+    chat = ai_summarizer.text_model_chat(provider="deepseek", model=f"bare-thread-{task_id}")
     with model_usage.scope(task_id, task_steps.NOTE):
         bare = threading.Thread(target=lambda: chat("系统", "你好"))
         bare.start()
@@ -250,10 +253,11 @@ def test_a_thread_started_without_carrying_the_step_records_its_call_outside_any
         carried.start()
         carried.join()
 
-    lost = [row for row in job_store.list_model_calls() if row["task_id"] is None and row["step"] is None]
-    assert len(lost) == loose_before + 1, "the call made on the bare thread is kept, as not in a step"
-    assert [row["step"] for row in _rows(task_id)] == ["note"]
-    unattributed = model_usage.summarize("", rows=lost)["steps"][0]
+    mine = [row for row in job_store.list_model_calls() if row["model"] == f"bare-thread-{task_id}"]
+    assert [(row["task_id"], row["step"]) for row in mine] == [(None, None), (task_id, "note")], (
+        "the call made on the bare thread is kept, in no task and no step"
+    )
+    unattributed = model_usage.summarize("", rows=mine[:1])["steps"][0]
     assert unattributed["label"] == "没归到步骤"
 
 
@@ -401,6 +405,28 @@ def test_deepseek_is_priced_in_yuan_at_peak_on_weekday_peak_hours_and_off_peak_o
     assert model_usage.cost(_row(created_at=_at(2026, 10, 31, 2))) == ("CNY", pytest.approx(1.0)), "Saturday"
 
 
+def test_the_first_day_of_a_price_starts_at_midnight_beijing_time():
+    # 07:00 on 2026-10-26 in Beijing is still 2026-10-25 in UTC.
+    early = datetime(2026, 10, 25, 23, 0, tzinfo=timezone.utc).isoformat()
+    assert model_usage.cost(_row(created_at=early)) is not None
+    the_day_before = datetime(2026, 10, 25, 15, 0, tzinfo=timezone.utc).isoformat()
+    assert model_usage.cost(_row(created_at=the_day_before)) is None
+
+
+def test_a_call_is_priced_by_when_it_was_asked_not_when_it_answered(monkeypatch, task_id):
+    """A call asked at 11:59 Beijing time on a weekday (peak) that answers
+    after 12:00 (off-peak) is billed at peak."""
+    asked = datetime(2026, 10, 26, 3, 59, tzinfo=timezone.utc)
+    answered = datetime(2026, 10, 26, 4, 1, tzinfo=timezone.utc)
+    clock = iter([asked, answered])
+    monkeypatch.setattr(model_usage, "utc_now", lambda: next(clock))
+    with model_usage.scope(task_id, task_steps.NOTE), model_usage.call("deepseek", "deepseek-flash") as call:
+        call.input_tokens, call.output_tokens = 1_000_000, 0
+    [row] = _rows(task_id)
+    assert datetime.fromisoformat(row["created_at"]) == asked
+    assert model_usage.cost(row) == ("CNY", pytest.approx(2.0)), "peak price"
+
+
 def test_cache_hits_and_answers_have_their_own_prices():
     row = _row(input_tokens=1_000_000, cached_input_tokens=1_000_000, output_tokens=1_000_000,
                created_at=_at(2026, 10, 26, 5))
@@ -452,7 +478,8 @@ def test_the_price_table_names_its_source_and_the_day_each_price_was_read():
         assert provider["source"].startswith("https://")
         assert provider["checked"]
         assert provider["currency"] in {"CNY", "USD"}
-        assert all(entry["from"] for entry in provider["prices"])
+        for entry in provider["prices"]:
+            assert datetime.fromisoformat(entry["from"]).tzinfo is not None, "a start without its time zone"
 
 
 # ── where it is shown ──────────────────────────────────────────────────────
@@ -476,23 +503,95 @@ def test_the_processing_record_and_the_agents_task_answers_carry_the_usage(monke
     assert package["model_usage"]["total"]["output_tokens"] == 5
 
 
-def test_no_model_is_called_outside_the_exits_that_record_it():
-    """A new place that calls a model directly would spend money nobody sees.
-    Every request to a provider in the backend sits inside ``model_usage.call``."""
-    from pathlib import Path
-    import re
+# ── no request to a model goes around the exits ────────────────────────────
 
+# Functions that launch the subscription command line from a command built
+# elsewhere; their caller wraps them in ``model_usage.call``.
+REGISTERED_EXITS = {("claude_code_note.py", "_cli_pass")}
+_SDK_CALLS = {"create", "stream"}
+_SDK_PARENTS = {"completions", "messages"}
+_ENDPOINTS = ("chat/completions", "/v1/messages")
+
+
+def _strings(node: ast.AST) -> list[str]:
+    return [part.value for part in ast.walk(node) if isinstance(part, ast.Constant) and isinstance(part.value, str)]
+
+
+def _requests_a_model(call: ast.Call) -> bool:
+    func = call.func
+    if isinstance(func, ast.Attribute) and func.attr in _SDK_CALLS:
+        chain = func.value
+        while isinstance(chain, ast.Attribute):
+            if chain.attr in _SDK_PARENTS:
+                return True
+            chain = chain.value
+    arguments = [*call.args, *(keyword.value for keyword in call.keywords)]
+    if any(endpoint in text for argument in arguments for text in _strings(argument) for endpoint in _ENDPOINTS):
+        return True
+    for argument in arguments:
+        if isinstance(argument, (ast.List, ast.Tuple)) and argument.elts:
+            first = argument.elts[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str) and first.value.rsplit("/", 1)[-1] == "claude":
+                return True
+    return False
+
+
+def _records(item: ast.withitem) -> bool:
+    expr = item.context_expr
+    return (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "call"
+            and isinstance(expr.func.value, ast.Name) and expr.func.value.id == "model_usage")
+
+
+def unrecorded_requests(source: str, filename: str) -> list[str]:
+    """Each call in ``source`` that asks a model for something (an SDK's
+    create or stream, an HTTP request to a chat or messages endpoint, the
+    ``claude`` command line) and is not inside ``with model_usage.call(...)``
+    or a registered exit."""
+    found: list[str] = []
+
+    def visit(node: ast.AST, covered: bool, function: str) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            function = node.name
+            covered = covered or (filename, function) in REGISTERED_EXITS
+        if isinstance(node, (ast.With, ast.AsyncWith)) and any(_records(item) for item in node.items):
+            for child in node.body:
+                visit(child, True, function)
+            for item in node.items:
+                visit(item, covered, function)
+            return
+        if isinstance(node, ast.Call) and not covered and _requests_a_model(node):
+            found.append(f"{filename}:{node.lineno}")
+        for child in ast.iter_child_nodes(node):
+            visit(child, covered, function)
+
+    visit(ast.parse(source), False, "")
+    return found
+
+
+def test_no_model_is_called_outside_the_exits_that_record_it():
+    """A new place that calls a model directly would spend money nobody sees."""
     root = Path(__file__).resolve().parents[1] / "backend"
-    request = re.compile(r"\.chat\.completions\.create\(|\.messages\.(?:create|stream)\(|/v1/messages")
-    unrecorded = []
-    for path in root.rglob("*.py"):
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for number, line in enumerate(lines):
-            if not request.search(line) or line.lstrip().startswith("#"):
-                continue
-            before = "\n".join(lines[max(0, number - 6):number + 1])
-            if "model_usage.call(" not in before:
-                unrecorded.append(f"{path.relative_to(root)}:{number + 1}")
-    assert unrecorded == []
-    # The subscription's one exit records every pass of the command line.
-    assert "model_usage.call(" in Path(root / "core/claude_code_note.py").read_text(encoding="utf-8")
+    found = []
+    for path in sorted(root.rglob("*.py")):
+        found += unrecorded_requests(path.read_text(encoding="utf-8"), path.name)
+    assert found == []
+
+
+@pytest.mark.parametrize("sample", [
+    # The SDK call split over lines, with the words that used to satisfy a
+    # text search sitting in a comment above it.
+    "def ask(client):\n    # model_usage.call( is not this\n    return client.chat.completions\\\n        .create(model='m', messages=[])\n",
+    "def ask(client):\n    with client.messages.stream(model='m') as s:\n        return s.get_final_message()\n",
+    "import httpx\ndef ask(base):\n    return httpx.post(f'{base}/chat/completions', json={})\n",
+    "def ask(send):\n    return send('POST', 'https://api.anthropic.com/v1/messages', json={})\n",
+    "import subprocess\ndef ask():\n    return subprocess.run(['claude', '-p', 'hi'], capture_output=True)\n",
+])
+def test_the_guard_catches_a_request_outside_the_exits(sample):
+    assert unrecorded_requests(sample, "x.py"), sample
+
+
+def test_the_guard_lets_a_recorded_request_through():
+    sample = ("def ask(client):\n    with model_usage.call('deepseek', 'm') as call:\n"
+              "        response = client.chat.completions.create(model='m', messages=[])\n"
+              "        call.openai(response)\n    return response\n")
+    assert unrecorded_requests(sample, "x.py") == []

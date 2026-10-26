@@ -185,3 +185,22 @@ def test_key_check_without_a_saved_key_sends_nothing(monkeypatch, tmp_path):
     assert result["reason"] == "missing"
     assert calls == []
     assert client.post("/credentials/check", json={"provider": "nope"}).status_code == 400
+
+
+@pytest.mark.parametrize("status, ok", [(200, True), (401, False), (403, False)])
+def test_the_anthropic_key_check_is_recorded_as_a_model_call_that_worked_or_not(monkeypatch, tmp_path, status, ok):
+    """The one-token check is a model call like any other (model_usage), in
+    no task: recorded as worked only when Anthropic answered it."""
+    from backend.core import job_store
+
+    client = _saved(monkeypatch, tmp_path, anthropic_api_key="sk-ant-x")
+    _fake_provider(monkeypatch, status=status,
+                   body={"content": [], "usage": {"input_tokens": 8, "output_tokens": 1}} if status == 200 else {})
+    before = len(job_store.list_model_calls())
+
+    client.post("/credentials/check", json={"provider": "anthropic"})
+
+    [row] = job_store.list_model_calls()[before:]
+    assert (row["task_id"], row["item"], row["ok"]) == (None, "检查 Key", ok)
+    if ok:
+        assert (row["input_tokens"], row["output_tokens"]) == (8, 1)

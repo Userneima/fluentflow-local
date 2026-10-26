@@ -189,6 +189,9 @@ class Call:
     cache_write_tokens: int = 0
     output_tokens: int | None = None
     reported_cost_usd: float | None = None
+    # A request the provider answered with a refusal rather than an error
+    # raised (an HTTP status read by hand).
+    refused: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     def openai(self, response: Any) -> None:
@@ -236,19 +239,27 @@ class Call:
 def call(provider: str, model: str, billing: str = KEY) -> Iterator[Call]:
     """Around one request at an exit: records it, answered or not."""
     record_of = Call(provider=provider or "unknown", model=model or "unknown", billing=billing)
+    # Priced by when it was asked: a long call that runs past the end of
+    # DeepSeek's peak hours is billed at the price it started under.
+    at = utc_now()
     started = time.perf_counter()
     try:
         yield record_of
     except BaseException as exc:
-        _record(record_of, time.perf_counter() - started, ok=False, error=str(exc) or type(exc).__name__)
+        _record(record_of, at, time.perf_counter() - started, ok=False, error=str(exc) or type(exc).__name__)
         raise
-    _record(record_of, time.perf_counter() - started, ok=True)
+    _record(record_of, at, time.perf_counter() - started, ok=not record_of.refused, error=record_of.refused)
 
 
-def _record(made: Call, seconds: float, *, ok: bool, error: str | None = None) -> None:
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _record(made: Call, at: datetime, seconds: float, *, ok: bool, error: str | None = None) -> None:
     where = current()
     try:
         job_store.insert_model_call(
+            created_at=at.isoformat(timespec="seconds"),
             task_id=where.task_id, step=where.step, item=where.item,
             provider=made.provider, model=made.model, billing=made.billing,
             input_tokens=made.input_tokens, cached_input_tokens=made.cached_input_tokens,
@@ -283,6 +294,8 @@ def prices() -> dict[str, Any]:
 
 
 def _when(stamp: Any) -> datetime | None:
+    """A stored time. The price table writes its zone; a call's time without
+    one is UTC, as ``insert_model_call`` stores it."""
     try:
         moment = datetime.fromisoformat(str(stamp))
     except (TypeError, ValueError):
