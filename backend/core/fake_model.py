@@ -4,8 +4,10 @@ For test runs that check the flow (restart, stop, export, carry on) rather
 than what a model writes (decision 8.11). Turned on for the whole service by
 ``FLUENTFLOW_FAKE_MODEL=1``. Each exit (``model_usage.call``'s callers) asks
 ``Call.fake`` before sending; when it is set the exit builds its provider's
-reply from ``reply`` instead of making the request, and no command line is
-started. The call is still recorded, under the provider ``fake``, at no cost.
+reply from ``reply`` instead of making the request. The subscription's exit
+starts a stand-in program in place of the ``claude`` command line, started and
+stopped the same way, so stopping a step or the service while it runs is
+tested as with the real one (``command_line_stand_in``). The call is still recorded, under the provider ``fake``, at no cost.
 
 ``reply`` answers in the shape each request asks for, picked by the part of
 the step it works for (``model_usage.item``), so the flow goes on as with a
@@ -20,10 +22,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from types import SimpleNamespace
 from typing import Any
 
 ENV = "FLUENTFLOW_FAKE_MODEL"
+# How long the stand-in for the subscription command line takes to answer:
+# long enough to press 停下这一步 or stop the service while it runs.
+SECONDS_ENV = "FLUENTFLOW_FAKE_MODEL_SECONDS"
+DEFAULT_SECONDS = 3.0
 PROVIDER = "fake"
 LABEL = "假模型"
 MODEL_NOTE = "假模型（测试用），没有看截图，内容是固定的。"
@@ -199,9 +206,30 @@ def anthropic_message(text: str) -> Any:
     return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason="end_turn", usage=None)
 
 
-def command_line_result(text: str) -> dict[str, Any]:
-    """The subscription command line's result event."""
-    return {"type": "result", "subtype": "success", "is_error": False, "result": text}
+def seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get(SECONDS_ENV) or DEFAULT_SECONDS))
+    except ValueError:
+        return DEFAULT_SECONDS
+
+
+# Reads the prompt as the command line would, waits, then prints its result
+# event: one JSON line, as ``claude -p --output-format stream-json`` ends.
+_STAND_IN = (
+    "import json, sys, time\n"
+    "sys.stdin.read()\n"
+    "time.sleep(float(sys.argv[1]))\n"
+    "print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': sys.argv[2]}))\n"
+)
+
+
+def command_line_stand_in(text: str) -> list[str]:
+    """A small program that stands in for the ``claude`` command line and
+    answers ``text``. It is started, tracked and stopped the way the command
+    line is (``claude_code_note._run_tracked``, ``task_stop``), so stopping a
+    step or the service while the note is written can be tested without a
+    model. Not the command line: nothing is sent anywhere."""
+    return [sys.executable, "-I", "-c", _STAND_IN, f"{seconds():g}", text]
 
 
 def command_line_system(command: list[str]) -> str:
@@ -220,6 +248,7 @@ def command_line_user(prompt: str) -> str:
 
 
 __all__ = [
-    "ENV", "LABEL", "PROVIDER", "anthropic_message", "command_line_result", "command_line_system",
+    "ENV", "LABEL", "PROVIDER", "SECONDS_ENV", "anthropic_message", "command_line_stand_in",
+    "command_line_system",
     "command_line_user", "enabled", "openai_response", "reply", "reply_to_messages",
 ]

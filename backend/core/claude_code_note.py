@@ -642,9 +642,11 @@ def _run_cli_once(
     named = command[command.index("--model") + 1] if "--model" in command[:-1] else SUBSCRIPTION_MODEL
     with model_usage.call(model_usage.ANTHROPIC, named, model_usage.SUBSCRIPTION) as call:
         if call.fake:
-            # Nothing is started: the fake model answers in the result event's shape.
-            text = fake_model.reply(fake_model.command_line_system(command), fake_model.command_line_user(prompt))
-            return fake_model.command_line_result(text), []
+            # A stand-in program answers instead of ``claude``, started and
+            # stopped the same way, so 停下这一步 and a service stop still
+            # have a command line to stop.
+            command = fake_model.command_line_stand_in(
+                fake_model.reply(fake_model.command_line_system(command), fake_model.command_line_user(prompt)))
         return _cli_pass(command, prompt, execute, call)
 
 

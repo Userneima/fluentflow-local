@@ -9,7 +9,10 @@ Requirements (owner, 2026-10-26, decision 8.11), in the user's terms:
   model. Without a budget nothing changes.
 - A service started with the fake model answers every model call with fixed
   content in the provider's shape: no request leaves the machine and no
-  ``claude`` command line is started. Each call is still recorded, under the
+  ``claude`` command line is started. Where the subscription would start
+  the command line, a stand-in program answers after a few seconds, started
+  and stopped the same way: stopping the step while the note is written
+  stops it within seconds and the step reads stopped. Each call is still recorded, under the
   provider "fake", at no cost. A whole task run this way reaches the end of
   every step it takes, and its note lands in the output folder with its PDF.
 - A new exit that calls a model and does not answer from the fake model is
@@ -23,6 +26,9 @@ import ast
 import asyncio
 import socket
 import subprocess
+import sys
+import threading
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,7 +40,7 @@ from fastapi.testclient import TestClient
 from backend.core import ai_client, ai_summarizer, claude_code_note as ccn, claude_text, claude_vision, cut_judge
 from backend.core import cut_report, fake_model, job_store, media_job, model_usage, note_coverage, note_pdf
 from backend.core import note_section_times, output_folder, survey_cut, tail_trim, task_steps, visual_note_job
-from backend.core import task_flow as tf, workflow_status
+from backend.core import task_actions, task_flow as tf, task_stop, workflow_status
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.routers import local_system
 
@@ -59,10 +65,12 @@ def _task_id() -> str:
 # ── the far side of every exit: any request reaching it fails the test ──────
 
 class Reached:
-    """Records every attempt to reach a model, a network or the command line."""
+    """Records every attempt to reach a model, a network or the command line,
+    and every stand-in program started in its place."""
 
     def __init__(self):
         self.attempts: list[str] = []
+        self.stand_ins = 0
 
     def stop(self, what: str):
         self.attempts.append(what)
@@ -99,7 +107,15 @@ def reached(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", no_connect)
     monkeypatch.setattr(ai_client, "OpenAI", NoOpenAI)
     monkeypatch.setattr(claude_vision.anthropic, "Anthropic", NoAnthropic)
-    monkeypatch.setattr(ccn, "_run_tracked", lambda command, **_k: found.stop(f"command line {command[:2]}"))
+    real_run = ccn._run_tracked
+
+    def run_tracked(command, **kwargs):
+        if command[0] != sys.executable:
+            found.stop(f"command line {command[:2]}")
+        found.stand_ins += 1
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(ccn, "_run_tracked", run_tracked)
     monkeypatch.setattr(subprocess, "Popen", popen)
     monkeypatch.setattr(ccn, "cli_path", lambda: "/usr/local/bin/claude")
     monkeypatch.setattr(local_system, "_http_request", lambda *a, **_k: found.stop(f"HTTP {a[:2]}"))
@@ -116,6 +132,7 @@ def _owner_setup(monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-flash")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setenv(fake_model.SECONDS_ENV, "0")
 
 
 # ── the fake model: a whole task through the real flow ─────────────────────
@@ -231,6 +248,7 @@ def test_with_the_fake_model_a_whole_task_ends_every_step_without_one_real_reque
     flow, pdfs = _run_fake_task(monkeypatch, tmp_path, task_id)
 
     assert reached.attempts == []
+    assert reached.stand_ins >= 3, "the subscription's calls did not go through the stand-in program"
     steps = task_steps.statuses(task_steps.steps_of([task_id])[task_id])
     assert {name: steps[name] for name in (task_steps.TRANSCRIBE, task_steps.CORRECT, task_steps.CUT, task_steps.NOTE)} \
         == dict.fromkeys((task_steps.TRANSCRIBE, task_steps.CORRECT, task_steps.CUT, task_steps.NOTE), task_steps.DONE)
@@ -302,6 +320,48 @@ def test_every_exit_answers_from_the_fake_model_and_records_it(monkeypatch, reac
     assert answer and reached.attempts == []
     rows = job_store.list_model_calls(task_id)
     assert [(row["provider"], row["billing"], bool(row["ok"])) for row in rows] == [(model_usage.FAKE, model_usage.FAKE, True)]
+
+
+def test_stopping_the_step_stops_the_stand_in_while_the_note_is_written(monkeypatch, reached):
+    """停下这一步 while the fake model writes the note through the
+    subscription: the stand-in program is stopped within seconds, the note
+    is not written, and the step reads stopped."""
+    _owner_setup(monkeypatch)
+    monkeypatch.setenv(fake_model.ENV, "1")
+    monkeypatch.setenv(fake_model.SECONDS_ENV, "60")
+    task_id = _task_id()
+    job_store.upsert_job(task_id=task_id, status="completed", stage="done", progress=100,
+                         result={"task_id": task_id, "transcript_text": TRANSCRIPT})
+    task_steps.plan(task_id)
+    for name in (task_steps.FETCH, task_steps.TRANSCRIBE, task_steps.CORRECT, task_steps.CUT):
+        task_steps.finish(task_id, name, task_steps.DONE)
+    task_stop.begin(task_id)
+    outcome: dict = {}
+
+    def write():
+        task_steps.start(task_id, task_steps.NOTE)
+        with task_stop.bound(task_id):
+            try:
+                outcome["draft"] = ccn.write_visual_note(TRANSCRIPT, [])
+            except Exception as exc:  # noqa: BLE001 - the stop is what is expected
+                outcome["error"] = exc
+
+    writer = threading.Thread(target=write)
+    writer.start()
+    deadline = time.monotonic() + 10
+    while not task_stop._processes.get(task_id) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    [process] = list(task_stop._processes[task_id])
+    assert process.args[0] == sys.executable and process.poll() is None
+
+    stopped_at = time.monotonic()
+    asyncio.run(task_actions.stop_step(task_id, None))
+    writer.join(10)
+
+    assert not writer.is_alive() and time.monotonic() - stopped_at < 3
+    assert process.poll() is not None and "draft" not in outcome
+    assert task_steps.status_of(task_id, task_steps.NOTE) == task_steps.STOPPED
+    assert reached.attempts == []
 
 
 def _with_fake_branch(source: str) -> list[str]:
