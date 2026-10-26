@@ -26,6 +26,7 @@ import {useSettingsPageState} from './settings-state.js';
 import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {NoteStylePanel} from '../components/NoteStylePanel.jsx';
 import LocalAgentAccessPanel from '../components/LocalAgentAccessPanel.jsx';
+import {OutsideTasksUsageLine} from '../components/ModelUsageCard.jsx';
 import {dismissNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
 import {linkButton, rowButton, surfaceCard} from '../lib/ui.js';
 
@@ -258,6 +259,7 @@ const Settings = () => {
                                         <div className="px-5 py-4"><SecretSaveBar state={state} {...appKeys} lang={lang}/></div>
                                     </>
                                 )}
+                                <OutsideTasksUsageLine lang={lang}/>
                             </>
                         )}
                     </div>

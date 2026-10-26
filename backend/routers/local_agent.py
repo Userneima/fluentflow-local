@@ -458,6 +458,9 @@ def agent_workflow_status() -> dict[str, Any]:
     return {
         "attention": [item["text"]["zh"] for item in overview["attention"]],
         "steps": [{"step": step["title"]["zh"], "now": step["summary"]["zh"]} for step in overview["steps"]],
+        # Model calls that belong to no task (the key check, the note style,
+        # a call whose thread lost its task): a task's own are in get_task.
+        "model_usage_outside_tasks": model_usage.outside_tasks_or_none(),
     }
 
 

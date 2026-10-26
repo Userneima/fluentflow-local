@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import note_preview, note_skills
+from backend.core import model_usage, note_preview, note_skills
 from backend.core.claude_text import claude_chat
 from backend.core.job_store import list_jobs
 
@@ -73,7 +73,14 @@ def _chat() -> Callable[[str, str], str]:
     found = claude_chat(resolve_secret(None, "anthropic_api_key"))
     if found is None:
         raise NoteStyleError("整理笔记风格要用 Claude：在设置页「账号和 Key」里填入 Anthropic API Key 后再试。")
-    return found[0]
+    ask = found[0]
+
+    def chat(system: str, user: str) -> str:
+        # In no task; the settings page lists it under its own name (model_usage).
+        with model_usage.item("整理笔记风格"):
+            return ask(system, user)
+
+    return chat
 
 
 def _json_from(text: str) -> Any:

@@ -1213,13 +1213,16 @@ def insert_model_call(*, db_path: Path | str = DEFAULT_DB_PATH, **values: Any) -
 
 
 def list_model_calls(
-    task_id: str | None = None, *, db_path: Path | str = DEFAULT_DB_PATH,
+    task_id: str | None = None, *, without_task: bool = False, db_path: Path | str = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
-    """A task's model calls in the order made; every call when ``task_id`` is None."""
+    """A task's model calls in the order made; every call when ``task_id`` is
+    None; with ``without_task``, the calls that belong to no task."""
     ensure_job_db(db_path)
     with sqlite_connection(Path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
-        if task_id is None:
+        if without_task:
+            rows = conn.execute("SELECT * FROM model_calls WHERE task_id IS NULL ORDER BY id").fetchall()
+        elif task_id is None:
             rows = conn.execute("SELECT * FROM model_calls ORDER BY id").fetchall()
         else:
             rows = conn.execute("SELECT * FROM model_calls WHERE task_id = ? ORDER BY id", (task_id,)).fetchall()

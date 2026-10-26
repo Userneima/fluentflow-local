@@ -445,6 +445,31 @@ def summarize(task_id: str, rows: Iterable[dict[str, Any]] | None = None) -> dic
     return {"total": total, "steps": listed, "prices_checked": prices().get("checked")}
 
 
+OUTSIDE_TASKS_LABEL = "不属于哪条录像"
+
+
+def outside_tasks(rows: Iterable[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """The calls that belong to no task: the settings page's key check, the
+    note style drawn from the user's edits, and any call whose thread lost
+    its task. Their total, and each kind (its part's name, or 没归到步骤)."""
+    found = list(rows) if rows is not None else job_store.list_model_calls(without_task=True)
+    total = _empty()
+    kinds: dict[str, dict[str, Any]] = {}
+    for row in found:
+        _add(total, row)
+        name = str(row.get("item") or "") or UNATTRIBUTED_LABEL
+        _add(kinds.setdefault(name, {**_empty(), "item": name}), row)
+    return {"total": total, "items": list(kinds.values()), "prices_checked": prices().get("checked")}
+
+
+def outside_tasks_or_none() -> dict[str, Any] | None:
+    try:
+        return outside_tasks()
+    except Exception:  # noqa: BLE001 - the rest of the answer stands
+        logger.warning("could not read the model calls outside tasks", exc_info=True)
+        return None
+
+
 def for_task(task_id: str) -> dict[str, Any] | None:
     """``summarize`` for the page and agents; None when the record cannot be
     read, which leaves the rest of the answer as it was."""
@@ -457,6 +482,7 @@ def for_task(task_id: str) -> dict[str, Any] | None:
 
 __all__ = [
     "ANTHROPIC", "CarryingExecutor", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
-    "call", "carry", "cost", "current", "enter_step", "for_task", "item", "leave_step", "part_of", "prices",
+    "OUTSIDE_TASKS_LABEL", "call", "carry", "cost", "current", "enter_step", "for_task", "outside_tasks",
+    "outside_tasks_or_none", "item", "leave_step", "part_of", "prices",
     "provider_of_base_url", "scope", "summarize", "unit_prices", "works_for",
 ]

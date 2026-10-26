@@ -1280,7 +1280,9 @@ def save_agent_cut_report(
 @tool(
     description=("How FluentFlow on this machine handles a task you submit, step by step (getting the material, "
         "cutting, transcription, notes, outputs, agent connection), and anything the user has to fix first. "
-        "The same list the Settings page shows. Use it when the user asks what FluentFlow is set up to do."),
+        "The same list the Settings page shows. Use it when the user asks what FluentFlow is set up to do. "
+        "model_usage_outside_tasks adds up the model calls that belong to no task (the settings page's key "
+        "check, the note style, a call that lost its task), shaped like a task's model_usage with items by kind."),
     input_schema={"type": "object", "properties": {"api_base": {"type": "string"}}},
 )
 def get_status(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:

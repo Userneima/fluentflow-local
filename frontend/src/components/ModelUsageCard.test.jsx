@@ -8,7 +8,7 @@
 import {afterEach, describe, expect, it} from 'vitest';
 import {cleanup, render, screen} from '@testing-library/react';
 
-import ModelUsageCard from './ModelUsageCard.jsx';
+import ModelUsageCard, {OutsideTasksUsageLine} from './ModelUsageCard.jsx';
 import {fmtCosts, fmtMoney, fmtTokens} from '../lib/format.js';
 
 afterEach(cleanup);
@@ -74,6 +74,22 @@ describe('ModelUsageCard', () => {
             steps: [{...usage({calls: 1, input_tokens: 10, output_tokens: 1}), step: 'unattributed', label: '没归到步骤', items: []}],
         }}/>);
         expect(screen.getByTestId('usage-step').textContent).toContain('没归到步骤');
+    });
+});
+
+describe('OutsideTasksUsageLine', () => {
+    it('says what the calls outside any recording were and what they cost', () => {
+        render(<OutsideTasksUsageLine lang="zh" usage={{
+            total: usage({calls: 3, input_tokens: 500, output_tokens: 20, cost: {USD: 0.004}}),
+            items: [{...usage({calls: 2}), item: '检查 Key'}, {...usage({calls: 1}), item: '整理笔记风格'}],
+        }}/>);
+        const line = screen.getByTestId('usage-outside-tasks').textContent;
+        expect(line).toContain('3 次调用（检查 Key 2 次、整理笔记风格 1 次）');
+        expect(line).toContain('约 $0.004');
+    });
+    it('shows nothing when there are none', () => {
+        const {container} = render(<OutsideTasksUsageLine lang="zh" usage={{total: empty, items: []}}/>);
+        expect(container.textContent).toBe('');
     });
 });
 

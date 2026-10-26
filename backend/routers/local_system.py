@@ -206,6 +206,12 @@ def _check_anthropic_key(key: str) -> dict[str, Any]:
     return _key_check_result(False, "provider_error", f"Anthropic 返回了错误（{status}），稍后再试。")
 
 
+@router.get("/model-usage/outside-tasks")
+def model_usage_outside_tasks() -> dict[str, Any]:
+    """The model calls that belong to no task, for the settings page."""
+    return model_usage.outside_tasks()
+
+
 @router.post("/credentials/check")
 def check_credential(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     provider = str(payload.get("provider") or "").strip().lower()

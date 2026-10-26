@@ -595,3 +595,39 @@ def test_the_guard_lets_a_recorded_request_through():
               "        response = client.chat.completions.create(model='m', messages=[])\n"
               "        call.openai(response)\n    return response\n")
     assert unrecorded_requests(sample, "x.py") == []
+
+
+# ── the calls that belong to no task ───────────────────────────────────────
+
+def test_calls_in_no_task_are_added_up_by_kind_for_the_settings_page_and_agents(monkeypatch):
+    rows = [
+        _row(task_id=None, item="检查 Key", provider="anthropic", model="claude-opus-5-5", input_tokens=8,
+             output_tokens=1, created_at=_at(2026, 10, 26, 5)),
+        _row(task_id=None, item="整理笔记风格", created_at=_at(2026, 10, 26, 5)),
+        _row(task_id=None, item=None, created_at=_at(2026, 10, 26, 5)),
+    ]
+    found = model_usage.outside_tasks(rows)
+    assert found["total"]["calls"] == 3
+    assert [kind["item"] for kind in found["items"]] == ["检查 Key", "整理笔记风格", "没归到步骤"]
+    assert found["total"]["cost"]["CNY"] == pytest.approx(2.0)
+
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "usage-token")
+    app = FastAPI()
+    app.include_router(local_agent.router)
+    status = TestClient(app).get("/agent/v1/status", headers={"x-fluentflow-access-token": "usage-token"}).json()
+    assert "total" in status["model_usage_outside_tasks"]
+
+
+def test_the_note_style_calls_are_named_for_the_settings_page(monkeypatch):
+    from backend.core import note_style
+
+    marker = f"style-{next(_counter)}"
+
+    def ask(system, user):
+        with model_usage.call("anthropic", marker):
+            return "[]"
+
+    monkeypatch.setattr(note_style, "claude_chat", lambda *_a, **_k: (ask, "api_key"))
+    note_style._chat()("系统", "你好")
+    [row] = [row for row in job_store.list_model_calls(without_task=True) if row["model"] == marker]
+    assert row["item"] == "整理笔记风格"

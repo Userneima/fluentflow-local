@@ -1,3 +1,5 @@
+import {useEffect, useState} from 'react';
+import {API_BASE, apiFetch} from '../app/shared.jsx';
 import {fmtCosts, fmtMoney, fmtTokens} from '../lib/format.js';
 import {surfaceCard} from '../lib/ui.js';
 
@@ -112,6 +114,34 @@ const ModelUsageCard = ({usage, lang}) => {
                 {(usage.steps || []).map((step) => <StepRow key={step.step} step={step} zh={zh}/>)}
             </ul>
         </section>
+    );
+};
+
+// The calls that belong to no recording (the key check, the note style drawn
+// from your edits, a call that lost its task), one line under 账号和 Key.
+// Nothing is shown when there are none or they cannot be read.
+export const OutsideTasksUsageLine = ({lang, usage: given}) => {
+    const [read, setRead] = useState(null);
+    useEffect(() => {
+        if (given !== undefined) return undefined;
+        let live = true;
+        apiFetch(`${API_BASE}/model-usage/outside-tasks`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((value) => { if (live) setRead(value); })
+            .catch(() => {});
+        return () => { live = false; };
+    }, [given]);
+    const usage = given !== undefined ? given : read;
+    const total = usage?.total;
+    if (!total || !total.calls) return null;
+    const zh = lang === 'zh';
+    const kinds = (usage.items || []).map((kind) => (zh ? `${kind.item} ${kind.calls} 次` : `${kind.item} ×${kind.calls}`));
+    const money = moneyText(total, zh);
+    return (
+        <p data-testid="usage-outside-tasks" className="px-5 py-3 text-[12px] font-semibold text-[#85868c] dark:text-white/[0.65]">
+            {zh ? '不属于哪条录像的模型调用' : 'Model calls outside any recording'}：{callsText(total.calls, zh)}（{kinds.join('、')}）
+            {total.failed_calls < total.calls ? ` · ${tokensText(total, zh)}` : ''}{money ? ` · ${money}` : ''}
+        </p>
     );
 };
 
