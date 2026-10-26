@@ -37,7 +37,7 @@ from backend.core.job_store import (
     list_jobs,
     upsert_job,
 )
-from backend.core import feishu_sync
+from backend.core import agent_alignment, feishu_sync, note_section_times
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
@@ -111,6 +111,7 @@ def _task_package_response(job: dict[str, Any]) -> dict[str, Any]:
     package["model_usage"] = model_usage.for_task(str(job.get("task_id") or ""))
     # The version of the note in this package: what a save of an edit to it names.
     package["note_version"] = (job.get("result") or {}).get("note_version")
+    package["note_alignment"] = note_section_times.status(job.get("result") or {})
     return package
 
 
@@ -517,6 +518,7 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             # the note, so a change made elsewhere meanwhile is not replaced.
             "note_version": (job.get("result") or {}).get("note_version"),
             "transcript_version": (job.get("result") or {}).get("transcript_version"),
+            "note_alignment": note_section_times.status(job.get("result") or {}),
             # Tokens and money spent on models, the task's total and each step's.
             "model_usage": model_usage.for_task(task_id),
         },
@@ -797,6 +799,31 @@ def visual_note_agent_task(
         "package_url": f"/agent/v1/tasks/{task_id}/package",
         "task": _task_brief(_job_for_request(request, task_id)),
     }
+
+
+def _alignment_call(action, *args, **kwargs):
+    try:
+        return {"ok": True, **action(*args, **kwargs)}
+    except agent_alignment.AlignmentError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+@router.post("/tasks/{task_id}/agent-alignment/material")
+def agent_alignment_material(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    body = payload or {}
+    return _alignment_call(
+        agent_alignment.material, task_id, client_id=_local_client_scope(request),
+        offset=body.get("offset", 0), material_version=body.get("material_version"),
+    )
+
+
+@router.post("/tasks/{task_id}/agent-alignment")
+def save_agent_alignment(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    body = payload or {}
+    return _alignment_call(
+        agent_alignment.save, task_id, client_id=_local_client_scope(request),
+        material_version=body.get("material_version"), sections=body.get("sections"), model=body.get("model"),
+    )
 
 
 @router.post("/tasks/{task_id}/agent-note/material")

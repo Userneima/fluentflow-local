@@ -83,6 +83,14 @@ honest verification evidence. A conflict requires rereading and merging.
 Settings shows the current writing rules, their change history and undo; it
 no longer extracts candidates or runs mandatory side-by-side comparisons.
 
+For section times or playback following, the current agent does the alignment too:
+`get_agent_alignment_material` returns the tagged note and timed transcript. Read every
+page with `next_offset` and the same `material_version`, judge the primary span and
+other sources for each tagged section, then `save_agent_alignment` with that version,
+the section rows and your actual model. No Claude installation, login or model key is
+needed. Stale material must be read again. Only the table changes, not the note or files.
+Agent-written notes and tasks handed to an agent do not trigger background Claude alignment.
+
 ## Only these need the user
 
 - **Not enough disk space** (a step fails with "No space left on device"; the install

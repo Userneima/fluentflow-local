@@ -40,7 +40,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from backend.core import job_store, model_usage, task_steps
-from backend.core.result_schema import canonical_display_segments
+from backend.core.result_schema import NOTE_FROM_AGENT, canonical_display_segments
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +163,12 @@ def _timeline(result: dict[str, Any]) -> dict[str, Any]:
 def stored_table(result: dict[str, Any] | None) -> dict[str, Any] | None:
     table = (result or {}).get(RESULT_KEY)
     return table if isinstance(table, dict) else None
+
+
+def uses_agent(result: dict[str, Any]) -> bool:
+    """An agent-written note, or a task explicitly handed to an agent, stays
+    with that agent even when the editor asks for missing times."""
+    return (stored_table(result) or {}).get("executor") == "agent" or result.get("summary_written_from") == NOTE_FROM_AGENT
 
 
 def _timeline_matches(table: dict[str, Any], result: dict[str, Any]) -> bool:
@@ -325,6 +331,8 @@ def align(task_id: str, *, chat: tuple[Chat, str, str] | None = None) -> dict[st
     "failed" | "skipped", ...}``."""
     job = job_store.get_job(task_id)
     result = dict((job or {}).get("result") or {})
+    if uses_agent(result):
+        return {"state": "skipped", "executor": "agent"}
     markdown = str(result.get("summary_markdown") or "")
     if not job or not markdown.strip() or str(result.get("summary_status") or "") not in {"", "completed"}:
         return {"state": "skipped"}
@@ -351,7 +359,18 @@ def align(task_id: str, *, chat: tuple[Chat, str, str] | None = None) -> dict[st
         failure = {**(table or {}), "error": f"章节时间没有对上：{str(exc)[:160]}", "failed_at": _now()}
         _save(task_id, result, failure)
         return {"state": "failed", "error": failure["error"]}
-    sections = note_sections(markdown)
+    saved = alignment_table(result, ask, spans, whole=whole)
+    saved.update(aligned_by=channel, model=model, seconds=round((datetime.now() - started).total_seconds(), 1))
+    # A running background answer cannot replace a table claimed by an agent.
+    if not _save(task_id, result, saved):
+        return {"state": "skipped"}
+    return {"state": "ready", "asked": len(ask), "answered": len(spans), "whole": whole}
+
+
+def alignment_table(result: dict[str, Any], ask: list[dict[str, Any]], spans: dict[int, dict[str, Any]], *, whole: bool) -> dict[str, Any]:
+    """The same merge for background and agent answers; untouched rows keep IDs."""
+    sections = note_sections(str(result.get("summary_markdown") or ""))
+    table = stored_table(result)
     kept = {} if whole else match_rows(list((table or {}).get("sections") or []), sections)
     rows = []
     for section in sections:
@@ -367,25 +386,21 @@ def align(task_id: str, *, chat: tuple[Chat, str, str] | None = None) -> dict[st
     saved = {
         **_timeline(result),
         **({"unanswered": unanswered, "unanswered_at": _now()} if unanswered else {}),
-        "aligned_by": channel,
-        "model": model,
         "aligned_at": _now(),
-        "seconds": round((datetime.now() - started).total_seconds(), 1),
         "sections": rows,
     }
-    # The table describes the note as it was read above. Only this one field
-    # is written onto the result as it is now, so a note saved meanwhile
-    # stays; the listener then matches whatever that save changed.
-    _save(task_id, result, saved)
-    return {"state": "ready", "asked": len(ask), "answered": len(spans), "whole": whole}
+    return saved
 
 
 def _identity(section: dict[str, Any]) -> list[Any]:
     return [section["level"], section["heading"], section["body_hash"]]
 
 
-def _save(task_id: str, before: dict[str, Any], table: dict[str, Any]) -> None:
-    job_store.save_result_changes(task_id, before, {**before, RESULT_KEY: table}, touch_updated_at=False)
+def _save(task_id: str, before: dict[str, Any], table: dict[str, Any]) -> bool:
+    return job_store.save_result_changes(
+        task_id, before, {**before, RESULT_KEY: table}, touch_updated_at=False,
+        unless_moved=(RESULT_KEY, "summary_written_from", "playback_media_kind", "debreath"),
+    ) is not None
 
 
 def status(result: dict[str, Any] | None) -> dict[str, Any]:
@@ -394,7 +409,7 @@ def status(result: dict[str, Any] | None) -> dict[str, Any]:
     table = stored_table(result)
     task_id = str(result.get("task_id") or "")
     ask, _whole = missing_sections(result) if result.get("summary_markdown") else ([], False)
-    if task_id and (task_id in _RUNNING or task_id in _QUEUED or task_id in _TIMERS):
+    if not uses_agent(result) and task_id and (task_id in _RUNNING or task_id in _QUEUED or task_id in _TIMERS):
         state = "aligning"
     elif table and table.get("error") and ask:
         state = "failed"
@@ -414,6 +429,7 @@ def status(result: dict[str, Any] | None) -> dict[str, Any]:
         # Which file the times are on, so the page shows them only while that
         # file is the one playing.
         "timeline": (usable or {}).get("timeline"),
+        "executor": "agent" if uses_agent(result) else "fluentflow",
     }
 
 
@@ -426,6 +442,8 @@ def request(result: dict[str, Any]) -> dict[str, Any]:
     nothing, so the page may ask on every look."""
     task_id = str(result.get("task_id") or "")
     current = status(result)
+    if uses_agent(result):
+        return current
     if not task_id or current["state"] not in {"missing", "partial", "failed"}:
         return current
     table = stored_table(result) or {}
@@ -538,7 +556,7 @@ def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[st
     """A note saved, a heading renamed, a cut list re-exported: once the
     changes stop, match whatever the table no longer covers. A table already
     covering every heading costs nothing (no model call)."""
-    if not _enabled or not isinstance(after, dict) or _watched(before) == _watched(after):
+    if not _enabled or not isinstance(after, dict) or uses_agent(after) or _watched(before) == _watched(after):
         return
     if not str(after.get("summary_markdown") or "").strip():
         return

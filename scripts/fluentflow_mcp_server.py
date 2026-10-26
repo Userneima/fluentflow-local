@@ -1032,6 +1032,70 @@ def export_result(
 
 
 @tool(
+    description=("Align a finished note's sections to the played recording yourself, in the current agent "
+        "(Codex, Claude Code or any other host). No FluentFlow model call, Claude login or API key is needed. "
+        "Claims alignment for this task so background/page retries do not call Claude. Returns tagged note "
+        "headings and the timed transcript in material, with primary/others instructions. Read every page "
+        "using next_offset as offset and the same material_version before judging. Then save_agent_alignment "
+        "with that version and one answer per section. A stale version means re-read and judge again. "
+        "Only the time table changes; the note, files and record ordering are untouched."),
+    input_schema={
+        "type": "object", "properties": {
+            "task_id": {"type": "string"},
+            "offset": {"type": "integer", "default": 0, "minimum": 0},
+            "material_version": {"type": "string", "description": "Required when reading a later page."},
+            "api_base": {"type": "string"},
+        }, "required": ["task_id"],
+    },
+)
+def get_agent_alignment_material(
+    task_id: str, offset: int = 0, material_version: str | None = None,
+    api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/agent-alignment/material",
+        api_base=api_base, client_id=client_id,
+        payload=_options(offset=offset, material_version=material_version),
+    )
+
+
+@tool(
+    description=("Save the section times you judged from ALL pages of get_agent_alignment_material. "
+        "Pass its material_version, the sections array (id, primary {start,end}, others [{start,end}]) "
+        "and your actual model. Times are seconds or H:MM:SS on the PLAYED recording. Every requested "
+        "id must appear exactly once, each span finite, within the recording and end > start. "
+        "If the note, transcript, cut timeline or table changed meanwhile, returns stale and writes "
+        "nothing: get fresh material and judge again. Never calls a model or edits the note or its files."),
+    input_schema={
+        "type": "object", "properties": {
+            "task_id": {"type": "string"}, "material_version": {"type": "string"},
+            "sections": {"type": "array", "items": {
+                "type": "object", "properties": {
+                    "id": {"type": "string"},
+                    "primary": {"type": "object", "properties": {
+                        "start": {"type": ["number", "string"]}, "end": {"type": ["number", "string"]},
+                    }, "required": ["start", "end"]},
+                    "others": {"type": "array", "items": {"type": "object", "properties": {
+                        "start": {"type": ["number", "string"]}, "end": {"type": ["number", "string"]},
+                    }, "required": ["start", "end"]}},
+                }, "required": ["id", "primary", "others"],
+            }},
+            "model": {"type": "string"}, "api_base": {"type": "string"},
+        }, "required": ["task_id", "material_version", "sections", "model"],
+    },
+)
+def save_agent_alignment(
+    task_id: str, material_version: str, sections: list[dict[str, Any]], model: str,
+    api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/agent-alignment",
+        api_base=api_base, client_id=client_id,
+        payload={"material_version": material_version, "sections": sections, "model": model},
+    )
+
+
+@tool(
     description=("Write a task's note yourself instead of a model FluentFlow is configured to pay for "
         "(the way to get a note on the user's own subscription). Returns the whole timestamped "
         "transcript, the frames as local file paths with their moments, and instructions (the "

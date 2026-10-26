@@ -26,6 +26,8 @@ from backend.core.local_decision_log import build_decision_log
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_processing_plan import build_processing_plan, ensure_processing_plan
 from backend.core.storage_paths import find_source_file
+from backend.core import note_section_times, task_activity
+from backend.core.result_schema import canonical_display_segments
 from backend.core.tool_trace_core import build_tool_trace
 
 
@@ -56,6 +58,15 @@ def _local_extra_next_actions(job: dict[str, Any], diagnosis: dict[str, Any]) ->
             "method": "POST",
             "path": f"/agent/v1/tasks/{task_id}/agent-note/material",
             "reason": "这个任务还没有笔记。可以由你来写：取材料（转录、截图、写法要求），写好后交回 save_agent_note。",
+        }]
+    if (
+        task_id and note_settled and not task_activity.activity(job).busy
+        and canonical_display_segments(result) and note_section_times.missing_sections(result)[0]
+    ):
+        return [{
+            "action": "get_agent_alignment_material", "method": "POST",
+            "path": f"/agent/v1/tasks/{task_id}/agent-alignment/material",
+            "reason": "笔记有章节尚未对上播放时间。由你取材料、按意思对齐并用 save_agent_alignment 交回，不需要 Claude。",
         }]
     return []
 
