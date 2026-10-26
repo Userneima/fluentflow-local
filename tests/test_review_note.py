@@ -19,6 +19,7 @@ Requirements (docs/方案/2026-10-25-复习笔记.md, owner, 2026-10-25 and 10-2
 from __future__ import annotations
 
 import hashlib
+import shutil
 from pathlib import Path
 
 import pytest
@@ -125,10 +126,17 @@ class FakeChat:
 
 
 @pytest.fixture(autouse=True)
+def home(monkeypatch, tmp_path):
+    # Notes are read only from the user's home; the test's folder is it.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
 def no_browser(monkeypatch):
     printed: list[tuple[str, Path, str]] = []
 
-    def fake_pdf(note, title, directory, stem, *, task_id=None):
+    def fake_pdf(note, title, directory, stem, *, task_id=None, keep_html_without_browser=True):
         printed.append((note, Path(directory), stem))
         return {"pdf_path": str(Path(directory) / f"{stem}.pdf"), "html_path": None}
 
@@ -328,3 +336,207 @@ def test_the_writing_rules_use_no_example_from_the_interview_they_were_tried_on(
     assert not any(word in skill for word in ("罗福莉", "MiMo", "OpenClaw", "MTP", "MLA"))
     for heading in ("## 主线", "## 术语表", "## 自测题", "## 还没弄清的", "## 出处信息"):
         assert f"`{heading}" in skill or heading in skill
+
+
+# ---- after the review of 5d0de23 (main session, 2026-10-26) -------------------------------
+
+
+def test_the_second_task_on_a_recording_in_its_own_folder_uses_its_own_material(tmp_path):
+    folder = tmp_path / "课"
+    (folder / "过程文件").mkdir(parents=True)
+    # The recording sits in its own folder: both tasks share it, the second's
+    # files carry 「 (2)」 (output_folder.place).
+    (folder / ".fluentflow-task").write_text("t-first\t\nt-second\t (2)\n", encoding="utf-8")
+    (folder / "课_笔记.md").write_text(BASE, encoding="utf-8")
+    second = folder / "课_笔记 (2).md"
+    second.write_text(BASE, encoding="utf-8")
+    job_store.upsert_job(task_id="t-first", status="completed", client_id=LOCAL_OWNER_ID, result={
+        "display_segments": [{"start": 1.0, "end": 2.0, "text": "第一条任务的转录"}],
+        "note_section_times": {"sections": SECTION_ROWS},
+    })
+    later_rows = [dict(row, primary=[row["primary"][0] + 100, row["primary"][1] + 100]) for row in SECTION_ROWS]
+    job_store.upsert_job(task_id="t-second", status="completed", client_id=LOCAL_OWNER_ID, result={
+        "display_segments": [{"start": 120.0, "end": 125.0, "text": "第二条任务的转录"}],
+        "note_section_times": {"sections": later_rows},
+    })
+    chat = FakeChat()
+
+    out = review_note.generate(note_path=str(second), chat=(chat, "x"))
+
+    assert out["task_id"] == "t-second"
+    assert "第二条任务的转录" in chat.calls[0][1] and "第一条任务的转录" not in chat.calls[0][1]
+    review = folder / "课_复习笔记 (2).md"
+    assert out["path"] == str(review)
+    assert "[[课_笔记 (2)#一、为什么要扩容#（一）读太多|第一章（一）]] 2:00" in review.read_text(encoding="utf-8")
+    assert "review_note" in job_store.get_job("t-second")["result"]
+    assert "review_note" not in job_store.get_job("t-first")["result"]
+
+    chat = FakeChat()
+    revised = review_note.revise(str(review), "改一下", chat=(chat, "x"))
+    assert revised["task_id"] == "t-second" and "〔S2 2:00〕" in chat.calls[0][1]
+
+
+def _expanded_sample(table):
+    text = "见，〔S1 0:40〕。在 [[#（一）读请求占九成]]〔S2〕，又见〔S3 1:00〕〔S1〕"
+    expanded, unknown = review_note.expand_sources(text, table)
+    assert not unknown
+    return expanded
+
+
+def test_a_link_goes_to_ids_and_back_letter_for_letter():
+    table = review_note.section_table(BASE, STEM, SECTION_ROWS)
+    expanded = _expanded_sample(table)
+    assert "见，[[课_笔记#" in expanded  # the user's own comma stays
+
+    collapsed, kept = review_note.collapse_sources(expanded, table)
+
+    assert not kept and STEM not in collapsed
+    assert review_note.expand_sources(collapsed, table)[0] == expanded
+
+
+def test_a_heading_obsidian_cannot_follow_gets_words_and_time_and_still_goes_both_ways():
+    base = BASE.replace("## 二、读写分离", "## 二、读|写 [分离] #1")
+    table = review_note.section_table(base, STEM, SECTION_ROWS)
+    expanded, _ = review_note.expand_sources("见〔S3 1:00〕，再看〔S1〕", table)
+
+    assert "第二章 1:00" in expanded and "读|写" not in expanded
+    assert expanded.count("[[") == 1  # only the chapter Obsidian can open
+    collapsed, kept = review_note.collapse_sources(expanded, table)
+    assert "〔S3 1:00〕" in collapsed and not kept
+    assert review_note.expand_sources(collapsed, table)[0] == expanded
+
+
+def test_a_link_to_a_renamed_heading_is_kept_as_it_was_and_not_shown_to_the_model(tmp_path):
+    folder = _folder(tmp_path)
+    review_note.generate(note_path=str(folder / f"{STEM}.md"), chat=(FakeChat(), "x"))
+    review = folder / "课_复习笔记.md"
+    old_link = f"[[{STEM}#零、早先的标题|第零章]] 0:05"
+    review.write_text(review.read_text(encoding="utf-8").replace("**结论**：读太多。", f"**结论**：读太多。见{old_link}。"), encoding="utf-8")
+
+    class Echo(FakeChat):
+        def __call__(self, system, user):
+            self.calls.append((system, user))
+            return user.split("# 现在的复习笔记\n\n", 1)[1]
+
+    chat = Echo()
+    out = review_note.revise(str(review), "不改", chat=(chat, "x"))
+
+    assert "零、早先的标题" not in chat.calls[0][1] and "〔L1〕" in chat.calls[0][1]
+    assert f"见{old_link}。" in review.read_text(encoding="utf-8")
+    assert out["lost_links"] == []
+
+
+def test_a_citation_written_loosely_is_read_and_an_invented_one_is_not_written_as_real(tmp_path):
+    table = review_note.section_table(BASE, STEM, SECTION_ROWS)
+    text, unknown = review_note.expand_sources("〔S1，0:40〕 〔S2 0:20–0:30〕 〔S999〕 〔S2,第二段〕", table)
+
+    assert f"[[{STEM}#一、为什么要扩容|第一章]] 0:40" in text
+    assert f"第一章（一）]] 0:20" in text
+    assert "S999" not in text and "第二段" not in text
+    assert text.count(review_note.UNKNOWN_SOURCE) == 2
+    assert unknown == ["〔S999〕", "〔S2,第二段〕"]
+
+    folder = _folder(tmp_path)
+    out = review_note.generate(note_path=str(folder / f"{STEM}.md"),
+                               chat=(FakeChat(ANSWER.replace("〔S2〕", "〔S2〕、〔S999〕")), "x"))
+    assert out["unknown_sources"] == ["〔S999〕"]
+
+
+def test_only_a_follow_along_note_in_the_users_home_is_read(tmp_path):
+    folder = _folder(tmp_path)
+    elsewhere = Path(tmp_path).parent / f"{tmp_path.name}-outside"
+    elsewhere.mkdir()
+    (elsewhere / f"{STEM}.md").write_text(BASE, encoding="utf-8")
+    (folder / "密码.md").write_text("不是笔记", encoding="utf-8")
+    (folder / "链接_笔记.md").symlink_to(elsewhere / f"{STEM}.md")
+    _task("t-review-8", folder / f"{STEM}.md")
+    other = tmp_path / "别的" / "课"
+    (other.parent).mkdir()
+    shutil.copytree(folder, other, ignore=shutil.ignore_patterns("链接_笔记.md"))
+
+    for raw, reason in [
+        (elsewhere / f"{STEM}.md", "用户目录"),
+        (folder / "链接_笔记.md", "用户目录"),  # a link out of the home
+        (folder / "密码.md", "随看笔记"),
+    ]:
+        with pytest.raises(review_note.ReviewNoteError, match=reason):
+            review_note.generate(note_path=str(raw), chat=(FakeChat(), "x"))
+    with pytest.raises(review_note.ReviewNoteError, match="对不上"):
+        review_note.generate("t-review-8", str(other / f"{STEM}.md"), chat=(FakeChat(), "x"))
+    assert not list(elsewhere.glob("*复习笔记*")) and not (folder / "密码_复习笔记.md").exists()
+
+
+def test_a_pdf_that_failed_is_reported_and_the_old_one_is_not_passed_off_as_new(tmp_path, monkeypatch):
+    monkeypatch.undo()  # the real printing, with a browser that fails
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(note_pdf, "_browser", lambda: "/usr/bin/false")
+    folder = _folder(tmp_path)
+    old_pdf = folder / "课_复习笔记.pdf"
+    old_pdf.write_bytes(b"%PDF old")
+
+    out = review_note.generate(note_path=str(folder / f"{STEM}.md"), chat=(FakeChat(), "x"))
+
+    assert out["pdf_path"] is None and "上一版" in out["pdf_error"] and "md 已写好" in out["pdf_error"]
+    assert old_pdf.read_bytes() == b"%PDF old"
+    assert not list(folder.glob("*.html")) and not list(folder.glob(".*printing*"))
+    assert (folder / "课_复习笔记.md").is_file()
+
+
+def test_the_earlier_review_note_is_kept_even_without_a_process_folder(tmp_path):
+    folder = tmp_path / "课"
+    folder.mkdir()
+    (folder / f"{STEM}.md").write_text(BASE, encoding="utf-8")
+    review_note.generate(note_path=str(folder / f"{STEM}.md"), chat=(FakeChat(), "x"))
+    first = (folder / "课_复习笔记.md").read_text(encoding="utf-8")
+
+    review_note.generate(note_path=str(folder / f"{STEM}.md"), chat=(FakeChat(ANSWER + "\n多一行"), "x"))
+
+    kept = list((folder / "过程文件" / "历史版本").glob("课_复习笔记_*.md"))
+    assert [path.read_text(encoding="utf-8") for path in kept] == [first]
+
+
+def test_a_failed_write_says_why_and_leaves_the_old_note_whole(tmp_path, monkeypatch):
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "review-token")
+    folder = _folder(tmp_path, task_id="t-review-9")
+    _task("t-review-9", folder / f"{STEM}.md")
+    review_note.generate("t-review-9", chat=(FakeChat(), "x"))
+    first = (folder / "课_复习笔记.md").read_text(encoding="utf-8")
+
+    def disk_full(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(review_note.os, "replace", disk_full)
+    monkeypatch.setattr(review_note, "default_chat", lambda: (FakeChat(ANSWER + "\n新的一行"), "x"))
+    failed = _client().post("/agent/v1/review-notes", headers=_HEADERS, json={"task_id": "t-review-9"})
+
+    assert failed.status_code == 422 and "No space left" in failed.json()["detail"]["message"]
+    assert (folder / "课_复习笔记.md").read_text(encoding="utf-8") == first
+    assert not list(folder.glob(".课_复习笔记.*"))
+
+
+def test_the_record_names_the_key_when_it_finished_what_the_subscription_began(tmp_path, monkeypatch):
+    def broken(system, user):
+        raise RuntimeError("usage limit")
+
+    monkeypatch.setattr(claude_text, "preferred_channel", lambda: claude_text.CHANNEL_SUBSCRIPTION)
+    monkeypatch.setattr(claude_text, "subscription_chat", lambda runner=None: (broken, "claude_code_subscription"))
+    monkeypatch.setattr(claude_text, "claude_chat", lambda *a, **k: ((lambda s, u: ANSWER), "anthropic_api_key"))
+    from backend.core import ai_summarizer
+
+    monkeypatch.setattr(ai_summarizer, "text_model_chat", lambda **_: None)
+    folder = _folder(tmp_path)
+
+    out = review_note.generate(note_path=str(folder / f"{STEM}.md"))
+
+    assert out["written_by"] == "anthropic_api_key"
+
+
+def test_the_same_note_named_another_way_is_not_written_twice_at_once(tmp_path):
+    folder = _folder(tmp_path)
+    review_note._running.add(str((folder / f"{STEM}.md").resolve()))
+    try:
+        with pytest.raises(review_note.ReviewNoteError) as raised:
+            review_note.generate(note_path=str(folder / "过程文件" / ".." / f"{STEM}.md"), chat=(FakeChat(), "x"))
+    finally:
+        review_note._running.clear()
+    assert raised.value.code == "already_running"

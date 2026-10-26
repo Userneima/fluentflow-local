@@ -171,32 +171,49 @@ def export_pdf(
 
 def markdown_to_pdf(
     note: str, title: str, directory: Path, stem: str, *, task_id: str | None = None,
+    keep_html_without_browser: bool = True,
 ) -> dict[str, Any]:
     """Print ``note`` to ``<directory>/<stem>.pdf``. Without a task its images
     are left as written. Returns ``pdf_path`` or, with no browser, the
-    printable ``html_path`` and a ``reason``."""
-    directory.mkdir(parents=True, exist_ok=True)
-    html_path = directory / f"{stem}.html"
-    html_path.write_text(printable_html(task_id, note, title), encoding="utf-8")
+    printable ``html_path`` (unless ``keep_html_without_browser`` is off) and
+    a ``reason``.
 
-    browser = _browser()
-    if not browser:
-        return {
-            "pdf_path": None, "html_path": str(html_path),
-            "reason": "这台电脑上没找到 Chrome 或 Edge，生成不了 PDF。已写好可打印的网页，用浏览器打开后打印成 PDF 即可。",
-        }
+    The PDF is printed to a new file and only then put in place of the old
+    one: checking the final name alone took an earlier PDF for a new one when
+    the browser failed. The page beside it is removed whatever happens,
+    except as the fallback when there is no browser."""
+    directory.mkdir(parents=True, exist_ok=True)
+    html_path = directory / f".{stem}.printing.html"
     pdf_path = directory / f"{stem}.pdf"
-    with tempfile.TemporaryDirectory(prefix="fluentflow-pdf-") as profile:
-        run = subprocess.run(
-            [browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
-             f"--user-data-dir={profile}", "--allow-file-access-from-files",
-             f"--print-to-pdf={pdf_path}", html_path.as_uri()],
-            capture_output=True, text=True, timeout=180,
-        )
-    if not pdf_path.is_file() or pdf_path.stat().st_size == 0:
-        raise NotePdfError(f"浏览器没能生成 PDF（退出码 {run.returncode}）。可打印的网页在 {html_path}")
-    html_path.unlink(missing_ok=True)
-    return {"pdf_path": str(pdf_path), "html_path": None}
+    printing = directory / f".{stem}.printing.pdf"
+    html_path.write_text(printable_html(task_id, note, title), encoding="utf-8")
+    try:
+        browser = _browser()
+        if not browser:
+            if not keep_html_without_browser:
+                return {"pdf_path": None, "html_path": None,
+                        "reason": "这台电脑上没找到 Chrome 或 Edge，生成不了 PDF。"}
+            kept = directory / f"{stem}.html"
+            html_path.replace(kept)
+            return {
+                "pdf_path": None, "html_path": str(kept),
+                "reason": "这台电脑上没找到 Chrome 或 Edge，生成不了 PDF。已写好可打印的网页，用浏览器打开后打印成 PDF 即可。",
+            }
+        printing.unlink(missing_ok=True)
+        with tempfile.TemporaryDirectory(prefix="fluentflow-pdf-") as profile:
+            run = subprocess.run(
+                [browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                 f"--user-data-dir={profile}", "--allow-file-access-from-files",
+                 f"--print-to-pdf={printing}", html_path.as_uri()],
+                capture_output=True, text=True, timeout=180,
+            )
+        if not printing.is_file() or printing.stat().st_size == 0:
+            raise NotePdfError(f"浏览器没能生成 PDF（退出码 {run.returncode}）。")
+        printing.replace(pdf_path)
+        return {"pdf_path": str(pdf_path), "html_path": None}
+    finally:
+        html_path.unlink(missing_ok=True)
+        printing.unlink(missing_ok=True)
 
 
 __all__ = ["NotePdfError", "default_output_dir", "export_pdf", "markdown_to_pdf", "printable_html"]

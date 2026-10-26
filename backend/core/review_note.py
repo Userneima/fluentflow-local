@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import shutil
+import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +45,13 @@ SKILL_PATH = Path(__file__).resolve().parent.parent / "note_skills" / "fluentflo
 REVIEW_SUFFIX = "_复习笔记"
 NOTE_SUFFIX = "_笔记"
 
+# ``<名>_笔记.md``, ``<名>_笔记 (2).md``: the follow-along note as the output
+# folder names it (a later task on a recording that sits in its own folder
+# carries `` (2)``, `` (3)``...), and the review note beside it.
+_NOTE_NAME = re.compile(r"^(?P<stem>.+)_笔记(?P<suffix>(?: \(\d+\))?)$")
+_REVIEW_NAME = re.compile(r"^(?P<stem>.+)_复习笔记(?P<suffix>(?: \(\d+\))?)$")
+# Characters Obsidian cannot follow in a link's file or heading part.
+_LINK_UNSAFE = re.compile(r"[\[\]|#^]")
 _H2_NUMBER = re.compile(r"^([一二三四五六七八九十百零]+)、")
 _H3_NUMBER = re.compile(r"^(（[一二三四五六七八九十]+）)")
 _SRT_TIME = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d+):(\d{2}):(\d{2})[,.](\d{3})")
@@ -53,10 +62,22 @@ def skill_text() -> str:
 
 
 def review_path_for(note_path: Path) -> Path:
-    """``<名>_笔记.md`` → ``<名>_复习笔记.md``, in the same folder."""
-    stem = note_path.stem
-    base = stem[: -len(NOTE_SUFFIX)] if stem.endswith(NOTE_SUFFIX) else stem
-    return note_path.with_name(f"{base}{REVIEW_SUFFIX}.md")
+    """``<名>_笔记 (2).md`` → ``<名>_复习笔记 (2).md``, in the same folder,
+    named the way the output folder names a task's files."""
+    found = _NOTE_NAME.match(note_path.stem)
+    if found:
+        return note_path.with_name(f"{found['stem']}{REVIEW_SUFFIX}{found['suffix']}.md")
+    return note_path.with_name(f"{note_path.stem}{REVIEW_SUFFIX}.md")
+
+
+def base_paths_for(review_path: Path) -> list[Path]:
+    """The follow-along notes a review note may have been written from, the
+    output folder's name first."""
+    found = _REVIEW_NAME.match(review_path.stem)
+    if not found:
+        return []
+    return [review_path.with_name(f"{found['stem']}{NOTE_SUFFIX}{found['suffix']}.md"),
+            review_path.with_name(f"{found['stem']}{found['suffix']}.md")]
 
 
 def base_version(note_path: Path, text: str) -> dict[str, Any]:
@@ -108,12 +129,16 @@ def section_table(note_markdown: str, note_stem: str, time_rows: list[dict[str, 
             label = _chapter_label(current_h2, heading) if current_h2 else heading
         row = matched.get(section["index"]) or {}
         primary = row.get("primary") if isinstance(row.get("primary"), list) else None
+        # A heading Obsidian cannot follow gets the words and the time, never
+        # a link that opens nothing.
+        parts = [note_stem, heading] + ([current_h2] if section["level"] == 3 and current_h2 else [])
+        linkable = not any(_LINK_UNSAFE.search(part) for part in parts)
         table.append({
             "id": f"S{number}",
             "level": section["level"],
             "heading": heading,
             "label": label,
-            "link": f"[[{note_stem}#{target}|{label}]]",
+            "link": f"[[{note_stem}#{target}|{label}]]" if linkable else None,
             "start": float(primary[0]) if primary else None,
             "end": float(primary[1]) if primary else None,
             "others": [list(span) for span in (row.get("others") or []) if isinstance(span, list)],
@@ -173,43 +198,77 @@ def build_prompt(
     return skill_text() + correction_notes.as_section(glossary), material
 
 
-_CITE = re.compile(r"〔(S\d+)(?:\s+(\d{1,2}:\d{2}(?::\d{2})?))?〕")
+# 〔S12〕, 〔S12 1:05:20〕, and the forms a model slips into: 〔S12，1:05:20〕,
+# 〔S12 1:05:20–1:06:00〕 (the start is kept).
+_TIME = r"\d{1,2}:\d{2}(?::\d{2})?"
+_CITE = re.compile(rf"〔\s*(S\d+)\s*(?:[，,、\s]\s*({_TIME})(?:\s*[–—\-~～至]\s*{_TIME})?)?\s*〕")
+_LEFTOVER_CITE = re.compile(r"〔\s*S\d+[^〕]*〕")
+UNKNOWN_SOURCE = "（出处待核）"
 
 
 def expand_sources(text: str, table: list[dict[str, Any]]) -> tuple[str, list[str]]:
     """``〔S12 1:05:20〕`` → the chapter's Obsidian link and the time; without a
-    time, the chapter's start. Returns the note and the ids that are not in
-    the table (left as written, for the check to report)."""
+    time, the chapter's start; a chapter Obsidian cannot link to gets its
+    label and the time. An id the table does not have, or a citation that
+    cannot be read, becomes 「（出处待核）」 and is returned, so no invented
+    source is written as if it were real."""
     by_id = {row["id"]: row for row in table}
     unknown: list[str] = []
 
     def swap(match: re.Match[str]) -> str:
         row = by_id.get(match.group(1))
         if row is None:
-            unknown.append(match.group(1))
-            return match.group(0)
+            unknown.append(match.group(0))
+            return UNKNOWN_SOURCE
         moment = match.group(2) or _clock(row["start"])
         # Right after another link (「在 [[#知识点]]〔S9〕」) the two would run together.
-        lead = "，" if match.start() > 0 and text[match.start() - 1] == "]" else ""
-        return f"{lead}{row['link']} {moment}".rstrip()
+        lead = "，" if match.start() > 0 and text[match.start() - 1] in "]〕" else ""
+        return f"{lead}{row['link'] or row['label']} {moment}".rstrip()
 
-    return _CITE.sub(swap, text), unknown
+    expanded = _CITE.sub(swap, text)
+
+    def leftover(match: re.Match[str]) -> str:
+        unknown.append(match.group(0))
+        return UNKNOWN_SOURCE
+
+    return _LEFTOVER_CITE.sub(leftover, expanded), unknown
 
 
-def collapse_sources(text: str, table: list[dict[str, Any]]) -> str:
-    """The reverse of ``expand_sources``: each link back to the base note,
-    with the time after it, becomes ``〔S12 1:05:20〕`` again, so a model
-    revising the note handles short ids instead of long file names."""
-    by_link = {row["link"]: row["id"] for row in table}
+_LINK = re.compile(rf"(?P<lead>(?<=\])，)?(?P<link>\[\[[^\]]+\]\])(?: (?P<time>{_TIME}))?")
+
+
+def collapse_sources(text: str, table: list[dict[str, Any]]) -> tuple[str, dict[str, str]]:
+    """The reverse of ``expand_sources``, so a model revising the note handles
+    short ids instead of long file names: each source becomes
+    ``〔S12 1:05:20〕`` again, and ``expand_sources`` gives back the same text.
+
+    A link that is not one of today's sources (the follow-along note's
+    heading was renamed since) is swapped for ``〔L1〕`` and returned, to be
+    put back untouched after the model has answered. Links inside the note
+    (``[[#…]]``) stay as they are."""
+    by_link = {row["link"]: row["id"] for row in table if row["link"]}
+    kept: dict[str, str] = {}
 
     def swap(match: re.Match[str]) -> str:
-        found = by_link.get(match.group(1))
-        if found is None:
+        link, moment = match.group("link"), match.group("time")
+        found = by_link.get(link)
+        if found is not None:
+            return f"〔{found}{' ' + moment if moment else ''}〕"
+        if link.startswith("[[#"):
             return match.group(0)
-        moment = f" {match.group(2)}" if match.group(2) else ""
-        return f"〔{found}{moment}〕"
+        key = f"〔L{len(kept) + 1}〕"
+        kept[key] = link + (f" {moment}" if moment else "")
+        return (match.group("lead") or "") + key
 
-    return re.sub(r"，?(\[\[[^\]]+\]\])(?: (\d{1,2}:\d{2}(?::\d{2})?))?", swap, text)
+    collapsed = _LINK.sub(swap, text)
+    labels = [row["label"] for row in table]
+    plain = {row["label"]: row["id"] for row in table if not row["link"] and labels.count(row["label"]) == 1}
+    if plain:
+        pattern = re.compile(
+            rf"(?P<lead>(?<=\])，)?(?P<label>{'|'.join(map(re.escape, sorted(plain, key=len, reverse=True)))}) (?P<time>{_TIME})"
+        )
+        collapsed = pattern.sub(lambda m: f"〔{plain[m.group('label')]} {m.group('time')}〕", collapsed)
+    return collapsed, kept
 
 
 class ReviewNoteError(RuntimeError):
@@ -232,12 +291,49 @@ def _job_note_path(job: dict[str, Any]) -> Path | None:
     return Path(path) if path and Path(path).is_file() else None
 
 
+def _real_md(raw: str | Path) -> Path:
+    """The file a path really points at, which must be an md in the user's
+    home: an agent names a path, and the note's whole text goes to the
+    model and a file is written beside it."""
+    try:
+        path = Path(raw).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ReviewNoteError(f"找不到这个文件：{raw}") from exc
+    if not path.is_file() or path.suffix.lower() != ".md":
+        raise ReviewNoteError(f"不是一份 md 文件：{path}")
+    if not path.is_relative_to(Path.home().resolve()):
+        raise ReviewNoteError(f"只能用你用户目录里的笔记：{path}")
+    return path
+
+
+def _checked_base(raw: str | Path) -> Path:
+    """A follow-along note: named the way the output folder names one, or in
+    a folder FluentFlow made (it holds ``.fluentflow-task``)."""
+    from backend.core.output_folder import MARKER_NAME
+
+    path = _real_md(raw)
+    if _REVIEW_NAME.match(path.stem):
+        raise ReviewNoteError("这是一份复习笔记，底稿要用旁边的随看笔记（文件名以「_笔记.md」结尾的那份）。")
+    if not _NOTE_NAME.match(path.stem) and not (path.parent / MARKER_NAME).is_file():
+        raise ReviewNoteError(f"这不像 FluentFlow 的随看笔记（文件名以「_笔记.md」结尾，或在 FluentFlow 建的文件夹里）：{path}")
+    return path
+
+
 def _task_beside(note_path: Path) -> dict[str, Any] | None:
-    """The task whose output folder this note sits in (the folder's
-    ``.fluentflow-task`` marker survives a move)."""
+    """The task this note belongs to, from the folder's ``.fluentflow-task``
+    marker (it survives a move). Each line names a task and the suffix its
+    file names carry, so the second task on a recording that sits in its own
+    folder (``课_笔记 (2).md``) is never taken for the first. A note whose
+    name says nothing is matched only in a folder with a single task."""
     from backend.core.output_folder import _owners
 
-    for task_id, _suffix in _owners(note_path.parent):
+    owners = _owners(note_path.parent)
+    named = _NOTE_NAME.match(note_path.stem)
+    if named:
+        candidates = [task for task, suffix in owners if suffix == named["suffix"]]
+    else:
+        candidates = [task for task, _suffix in owners] if len(owners) == 1 else []
+    for task_id in candidates:
         job = job_store.get_job(task_id)
         if job:
             return job
@@ -247,18 +343,21 @@ def _task_beside(note_path: Path) -> dict[str, Any] | None:
 def locate(task_id: str | None = None, note_path: str | None = None) -> tuple[Path, dict[str, Any] | None]:
     """The follow-along md to write from and its task, if one is known.
 
-    ``note_path`` wins: it is how an agent points at a folder the user moved,
-    which FluentFlow no longer finds (decision 6.34)."""
+    ``note_path`` is how an agent points at a folder the user moved, which
+    FluentFlow no longer finds (decision 6.34). Given with a task, the two
+    must be the same note."""
     job = job_store.get_job(task_id) if task_id else None
     if task_id and not job:
         raise ReviewNoteError("找不到这条任务。")
     if note_path:
-        path = Path(note_path).expanduser()
-        if not path.is_file() or path.suffix.lower() != ".md":
-            raise ReviewNoteError(f"底稿不是一份存在的 md 文件：{path}")
-        if path.stem.endswith(REVIEW_SUFFIX):
-            raise ReviewNoteError("这是一份复习笔记，底稿要用随看笔记（文件名以「_笔记.md」结尾的那份）。")
-        return path, job or _task_beside(path)
+        path = _checked_base(note_path)
+        beside = _task_beside(path)
+        if job is None:
+            return path, beside
+        known = _job_note_path(job)
+        if (beside or {}).get("task_id") == task_id or (known is not None and known.resolve() == path):
+            return path, job
+        raise ReviewNoteError("给的任务编号和底稿对不上：这份随看笔记不是这条任务的。只传其中一个，或核对一下。")
     if not job:
         raise ReviewNoteError("要给出任务编号，或底稿 md 的路径。")
     path = _job_note_path(job)
@@ -267,7 +366,7 @@ def locate(task_id: str | None = None, note_path: str | None = None) -> tuple[Pa
             "找不到这条任务产出文件夹里的随看笔记（文件夹可能被挪走了）。"
             "把随看笔记 md 现在的路径作为 note_path 传进来即可。"
         )
-    return path, job
+    return _checked_base(path), job
 
 
 def _segments(job: dict[str, Any] | None, note_path: Path) -> list[dict[str, Any]]:
@@ -288,6 +387,24 @@ def _playback_name(note_path: Path) -> str:
     return cut[0].name if cut else "剪后视频"
 
 
+class _Ask:
+    """The model call, and which channel really answered it: the
+    subscription's name was recorded even after the key wrote the note."""
+
+    def __init__(self, chat: Chat, name: str, fallback_name: str | None) -> None:
+        self.chat, self.name, self.fallback_name = chat, name, fallback_name
+
+    def __call__(self, system: str, user: str) -> str:
+        return self.chat(system, user)
+
+    @property
+    def channel(self) -> str:
+        fell_back = getattr(self.chat, "fell_back", None)
+        if self.fallback_name and fell_back is not None and fell_back.is_set():
+            return self.fallback_name
+        return self.name
+
+
 def default_chat() -> tuple[Chat, str] | None:
     """The Claude subscription when this machine opted into it, the user's
     key taking over when it fails at run time (decisions 4.12, 4.14); else
@@ -299,15 +416,23 @@ def default_chat() -> tuple[Chat, str] | None:
     settings = local_ai_kwargs()
     anthropic = claude_text.claude_chat(resolve_secret(None, "anthropic_api_key"), max_tokens=ANSWER_MAX_TOKENS)
     keyed = ai_summarizer.text_model_chat(**settings)
-    fallback = anthropic[0] if anthropic and anthropic[1] != claude_text.CHANNEL_SUBSCRIPTION else keyed
+    text_name = f"text_model:{ai_summarizer.text_model_name(**settings)}"
+    if anthropic and anthropic[1] != claude_text.CHANNEL_SUBSCRIPTION:
+        fallback, fallback_name = anthropic[0], anthropic[1]
+    else:
+        fallback, fallback_name = keyed, (text_name if keyed else None)
     subscribed = claude_text.subscription_first(fallback)
     if subscribed is not None:
-        return subscribed
+        return _Ask(subscribed[0], subscribed[1], fallback_name), subscribed[1]
     if anthropic is not None:
         return anthropic
     if keyed is not None:
-        return keyed, f"text_model:{ai_summarizer.text_model_name(**settings)}"
+        return keyed, text_name
     return None
+
+
+def _answered_by(ask: Chat, channel: str) -> str:
+    return ask.channel if isinstance(ask, _Ask) else channel
 
 
 def _strip_fence(text: str) -> str:
@@ -326,14 +451,35 @@ def _with_base_line(text: str, version: dict[str, Any]) -> str:
 
 
 def _keep_previous(target: Path) -> None:
+    """Copy the review note about to be replaced into 「过程文件/历史版本」,
+    made when the folder has none: an earlier version is never just lost."""
     if not target.is_file():
         return
     history = target.parent / "过程文件" / "历史版本"
-    if not history.parent.is_dir():
-        return
-    history.mkdir(exist_ok=True)
+    history.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     shutil.copy2(target, history / f"{target.stem}_{stamp}_重新生成前.md")
+
+
+def _write_in_place(target: Path, text: str) -> None:
+    """Keep the old one, then the whole new text in a file beside it, then
+    swapped in: a failure partway leaves the old note as it was."""
+    try:
+        _keep_previous(target)
+        handle, temporary = tempfile.mkstemp(prefix=f".{target.stem}.", suffix=".md", dir=target.parent)
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                stream.write(text)
+            os.replace(temporary, target)
+        except BaseException:
+            Path(temporary).unlink(missing_ok=True)
+            raise
+    except OSError as exc:
+        raise ReviewNoteError(f"复习笔记没能写进文件夹（{exc}），原来的那份没动。") from exc
+
+
+def _running_key(path: Path) -> str:
+    return str(path.resolve())
 
 
 def generate(task_id: str | None = None, note_path: str | None = None, *, chat: tuple[Chat, str] | None = None) -> dict[str, Any]:
@@ -342,7 +488,7 @@ def generate(task_id: str | None = None, note_path: str | None = None, *, chat: 
     Raises ``ReviewNoteError`` with the reason when nothing was written; the
     task itself is never touched beyond the record of this run."""
     path, job = locate(task_id, note_path)
-    key = str(path)
+    key = _running_key(path)
     with _running_lock:
         if key in _running:
             raise ReviewNoteError("这份笔记的复习笔记已经在生成了。", code="already_running")
@@ -382,8 +528,7 @@ def _generate(path: Path, job: dict[str, Any] | None, chat: tuple[Chat, str] | N
     note, unknown = expand_sources(answer, table)
     note = _with_base_line(note, version)
     target = review_path_for(path)
-    _keep_previous(target)
-    target.write_text(note, encoding="utf-8")
+    _write_in_place(target, note)
     pdf = _pdf(note, target)
     record = {
         "path": str(target),
@@ -391,14 +536,14 @@ def _generate(path: Path, job: dict[str, Any] | None, chat: tuple[Chat, str] | N
         "pdf_error": pdf.get("error"),
         "base": version,
         "written_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "written_by": channel,
+        "written_by": _answered_by(ask, channel),
         "seconds": round((datetime.now() - started).total_seconds(), 1),
-        "unknown_sources": sorted(set(unknown)),
+        "unknown_sources": unknown,
         "timed_sections": sum(1 for row in table if row["start"] is not None),
         "sections": len(table),
     }
     if job:
-        _record(str(job.get("task_id") or ""), record)
+        record["record_error"] = _record(str(job.get("task_id") or ""), record)
     return {"task_id": (job or {}).get("task_id"), **record}
 
 
@@ -409,47 +554,55 @@ REVISE_RULES = (
     "用户读过下面这份按上面写法写的复习笔记，提了意见。只按意见改；意见没提到的内容"
     "（知识点的正文、出处、「我的笔记」框、判断框、术语表、自测题、还没弄清的）原样保留，"
     "只在结构变了需要跟着改时才改（比如三级标题的编号和顺序变了，自测题、知识地图和"
-    "「还没弄清的」里链到它的地方逐字跟着改）。出处照原样写成〔编号 时间〕。"
+    "「还没弄清的」里链到它的地方逐字跟着改）。出处照原样写成〔编号 时间〕；"
+    "〔L1〕〔L2〕这样的记号是要原样保留的旧链接，照抄在原处。"
     "只输出改好的整篇笔记，不加说明。"
 )
 
 
-def revise(note_path: str, instruction: str, *, chat: tuple[Chat, str] | None = None) -> dict[str, Any]:
+def revise(
+    note_path: str | None, instruction: str, *, task_id: str | None = None, chat: tuple[Chat, str] | None = None,
+) -> dict[str, Any]:
     """Change an existing review note as the user asked, without writing it
     again from the base (decision 8.8: a structural or wording change rewrites
     only what it touches). ``note_path`` is the review note or the
-    follow-along note beside it."""
-    path = Path(note_path).expanduser()
-    if path.stem.endswith(REVIEW_SUFFIX):
-        review = path
-        base = path.with_name(path.stem[: -len(REVIEW_SUFFIX)] + NOTE_SUFFIX + ".md")
-    else:
-        base, review = path, review_path_for(path)
-    if not review.is_file():
-        raise ReviewNoteError(f"还没有复习笔记：{review}")
-    if not base.is_file():
-        raise ReviewNoteError(f"找不到它旁边的随看笔记：{base}")
+    follow-along note beside it; or give the task."""
     if not instruction.strip():
         raise ReviewNoteError("要说明这次按什么意见改。")
-    key = str(base)
+    review: Path | None = None
+    if note_path and _REVIEW_NAME.match(Path(note_path).stem):
+        review = _real_md(note_path)
+        bases = [candidate for candidate in base_paths_for(review) if candidate.is_file()]
+        if not bases:
+            raise ReviewNoteError(f"找不到它旁边的随看笔记：{base_paths_for(review)[0]}")
+        base, job = locate(task_id, str(bases[0]))
+        if review_path_for(base) != review:
+            raise ReviewNoteError(f"这份复习笔记和旁边的随看笔记对不上名字：{review.name}")
+    else:
+        base, job = locate(task_id, note_path)
+        review = review_path_for(base)
+    if not review.is_file():
+        raise ReviewNoteError(f"还没有复习笔记：{review}")
+    key = _running_key(base)
     with _running_lock:
         if key in _running:
             raise ReviewNoteError("这份笔记的复习笔记已经在生成了。", code="already_running")
         _running.add(key)
     try:
-        return _revise(base, review, instruction, chat)
+        return _revise(base, review, job, instruction, chat)
     finally:
         with _running_lock:
             _running.discard(key)
 
 
-def _revise(base: Path, review: Path, instruction: str, chat: tuple[Chat, str] | None) -> dict[str, Any]:
-    job = _task_beside(base)
+def _revise(
+    base: Path, review: Path, job: dict[str, Any] | None, instruction: str, chat: tuple[Chat, str] | None,
+) -> dict[str, Any]:
     rows = ((job or {}).get("result") or {}).get(note_section_times.RESULT_KEY) or {}
     table = section_table(base.read_text(encoding="utf-8"), base.stem, rows.get("sections") if isinstance(rows, dict) else None)
     current = review.read_text(encoding="utf-8")
     base_line = next(iter(_BASE_LINE.findall(current)), "")
-    draft = collapse_sources(_BASE_LINE.sub("", current), table)
+    draft, kept = collapse_sources(_BASE_LINE.sub("", current), table)
     found = chat if chat is not None else default_chat()
     if found is None:
         raise ReviewNoteError("这台电脑上没有能写复习笔记的模型：没登录 Claude 订阅，也没有配置 Key。")
@@ -464,23 +617,26 @@ def _revise(base: Path, review: Path, instruction: str, chat: tuple[Chat, str] |
     if missing:
         raise ReviewNoteError(f"模型的回答不完整（缺「{'」「'.join(h[3:] for h in missing)}」），没有写入，可以再试一次。")
     note, unknown = expand_sources(answer, table)
+    lost = [kept[key] for key in kept if key not in note]
+    for key, original in kept.items():
+        note = note.replace(key, original)
     note = note.rstrip() + "\n" + (base_line if base_line.endswith("\n") or not base_line else base_line + "\n")
-    _keep_previous(review)
-    review.write_text(note, encoding="utf-8")
+    _write_in_place(review, note)
     pdf = _pdf(note, review)
     record = {
         "path": str(review),
         "pdf_path": pdf.get("pdf_path"),
         "pdf_error": pdf.get("error"),
         "revised_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "revised_by": channel,
+        "revised_by": _answered_by(ask, channel),
         "instruction": instruction.strip(),
         "seconds": round((datetime.now() - started).total_seconds(), 1),
-        "unknown_sources": sorted(set(unknown)),
+        "unknown_sources": unknown,
+        "lost_links": lost,
     }
     if job:
         before = (job.get("result") or {}).get(RESULT_KEY) or {}
-        _record(str(job.get("task_id") or ""), {**before, "last_revision": record})
+        record["record_error"] = _record(str(job.get("task_id") or ""), {**before, "last_revision": record})
     return {"task_id": (job or {}).get("task_id"), **record}
 
 
@@ -488,20 +644,30 @@ def _pdf(note: str, target: Path) -> dict[str, Any]:
     from backend.core import note_pdf
 
     title = next((line.lstrip("#").strip() for line in note.splitlines() if line.startswith("# ")), target.stem)
+    stale = "旁边那份 PDF 还是上一版。" if target.with_suffix(".pdf").is_file() else ""
     try:
-        made = note_pdf.markdown_to_pdf(note, title, target.parent, target.stem)
+        made = note_pdf.markdown_to_pdf(note, title, target.parent, target.stem, keep_html_without_browser=False)
     except Exception as exc:  # noqa: BLE001 - the md is already written
-        return {"pdf_path": None, "error": f"PDF 没生成（{exc}），md 已写好。"}
-    return {"pdf_path": made.get("pdf_path"), "error": made.get("reason")}
+        return {"pdf_path": None, "error": f"PDF 没生成（{exc}），md 已写好。{stale}"}
+    if not made.get("pdf_path"):
+        return {"pdf_path": None, "error": f"{made.get('reason') or 'PDF 没生成。'}md 已写好。{stale}"}
+    return {"pdf_path": made["pdf_path"], "error": None}
 
 
-def _record(task_id: str, record: dict[str, Any]) -> None:
-    job = job_store.get_job(task_id)
-    if not job:
-        return
-    before = dict(job.get("result") or {})
-    # Only this key changes; the note and the task's state stay as they are.
-    job_store.save_result_changes(task_id, before, {**before, RESULT_KEY: record}, touch_updated_at=False)
+def _record(task_id: str, record: dict[str, Any]) -> str | None:
+    """Note on the task what was written; a failure here is reported, the
+    file is already in place."""
+    try:
+        job = job_store.get_job(task_id)
+        if not job:
+            return None
+        before = dict(job.get("result") or {})
+        # Only this key changes; the note and the task's state stay as they are.
+        job_store.save_result_changes(task_id, before, {**before, RESULT_KEY: record}, touch_updated_at=False)
+    except Exception as exc:  # noqa: BLE001 - the note is written; say what was not recorded
+        logger.warning("review note written but not recorded on task %s: %s", task_id, exc)
+        return f"复习笔记已写好，但没能记到任务上（{exc}）。"
+    return None
 
 
 __all__ = [
@@ -516,6 +682,8 @@ __all__ = [
     "collapse_sources",
     "REVIEW_SUFFIX",
     "SKILL_PATH",
+    "UNKNOWN_SOURCE",
+    "base_paths_for",
     "base_version",
     "build_prompt",
     "review_path_for",

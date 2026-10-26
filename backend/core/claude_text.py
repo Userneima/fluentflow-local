@@ -126,6 +126,9 @@ def subscription_first(fallback: Chat | None, *, runner: Callable | None = None)
                 failed.set()
         return fallback(system, user)
 
+    # Who actually answered, for a caller that records it: the name returned
+    # here is the subscription's even after the key took over.
+    chat.fell_back = failed  # type: ignore[attr-defined]
     return chat, name
 
 

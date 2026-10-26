@@ -20,7 +20,6 @@ import math
 import threading
 import time
 from copy import deepcopy
-from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
@@ -1587,10 +1586,7 @@ def revise_review_note(request: Request, payload: dict[str, Any] = Body(default_
     without writing it again from the follow-along note."""
     instruction = str(payload.get("instruction") or "")
 
-    def run(core: Any, task_id: str | None, note_path: str | None) -> dict[str, Any]:
-        if note_path and Path(note_path).expanduser().stem.endswith(core.REVIEW_SUFFIX):
-            return core.revise(note_path, instruction)
-        base, _job = core.locate(task_id, note_path)
-        return core.revise(str(base), instruction)
-
-    return _review_note_call(request, payload, run)
+    return _review_note_call(
+        request, payload,
+        lambda core, task_id, note_path: core.revise(note_path, instruction, task_id=task_id),
+    )

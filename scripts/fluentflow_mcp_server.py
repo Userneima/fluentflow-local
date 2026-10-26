@@ -1650,7 +1650,9 @@ def revert_glossary_corrections(
         "user's corrections; later edits to it do not change the review note until it is written again. "
         "Give task_id, or note_path (the follow-along md's path) when the user moved the output folder and "
         "FluentFlow can no longer find it; with note_path only, the task is found from the folder when it "
-        "can be. Only when the user asks for one. Uses the Claude subscription first when this machine "
+        "can be (given both, they must be the same note). note_path must be a follow-along note in the "
+        "user's home folder. A second task's note on the same recording (<名>_笔记 (2).md) gets "
+        "<名>_复习笔记 (2).md. Only when the user asks for one. Uses the Claude subscription first when this machine "
         "opted into it, the user's key taking over if it fails; takes about ten minutes for a three-hour "
         "recording. Refused with code review_note_failed and the reason (no model, the note not found, an "
         "incomplete answer: nothing is written and the task is not affected), already_running while one is "
@@ -1680,7 +1682,8 @@ def write_review_note(
         "the follow-along note are kept exactly. The previous version goes to 过程文件/历史版本 and the PDF "
         "is printed again. Give task_id, or note_path (the review note or the follow-along note beside it). "
         "Takes a few minutes. Refused with code review_note_failed and the reason when there is no review "
-        "note yet or the answer was incomplete (nothing is written)."),
+        "note yet or the answer was incomplete (nothing is written). unknown_sources lists citations the "
+        "model got wrong (written as （出处待核）); lost_links lists old links it dropped."),
     input_schema={
         "type": "object",
         "properties": {
