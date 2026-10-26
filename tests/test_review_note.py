@@ -540,3 +540,23 @@ def test_the_same_note_named_another_way_is_not_written_twice_at_once(tmp_path):
     finally:
         review_note._running.clear()
     assert raised.value.code == "already_running"
+
+
+def test_its_model_call_is_recorded_as_part_of_the_tasks_note(tmp_path):
+    """The review note costs a model call like any other step's work: it is
+    recorded against the task, in 写笔记 / 复习笔记 (model_usage)."""
+    from backend.core import job_store, model_usage
+
+    folder = _folder(tmp_path)
+    _task("t-review-usage", folder / f"{STEM}.md")
+    fake = FakeChat()
+
+    def recorded(system, user):
+        with model_usage.call("deepseek", "deepseek-flash") as call:
+            call.input_tokens, call.output_tokens = 900, 300
+            return fake(system, user)
+
+    review_note.generate("t-review-usage", chat=(recorded, "x"))
+
+    [row] = job_store.list_model_calls("t-review-usage")
+    assert (row["step"], row["item"]) == ("note", "复习笔记")

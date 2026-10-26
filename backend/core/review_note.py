@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import correction_notes, job_store, note_section_times
+from backend.core import correction_notes, job_store, model_usage, note_section_times, task_steps
 from backend.core.result_schema import canonical_display_segments
 
 logger = logging.getLogger(__name__)
@@ -431,6 +431,12 @@ def default_chat() -> tuple[Chat, str] | None:
     return None
 
 
+def _usage_scope(job: dict[str, Any] | None) -> Any:
+    """The review note's model call, recorded as part of the task's note
+    (``model_usage``); a note with no task beside it belongs to none."""
+    return model_usage.scope(str((job or {}).get("task_id") or "") or None, task_steps.NOTE, "复习笔记")
+
+
 def _answered_by(ask: Chat, channel: str) -> str:
     return ask.channel if isinstance(ask, _Ask) else channel
 
@@ -519,7 +525,8 @@ def _generate(path: Path, job: dict[str, Any] | None, chat: tuple[Chat, str] | N
     ask, channel = found
     started = datetime.now()
     try:
-        answer = _strip_fence(ask(system, user))
+        with _usage_scope(job):
+            answer = _strip_fence(ask(system, user))
     except Exception as exc:  # noqa: BLE001 - the reason goes back to the agent
         raise ReviewNoteError(f"模型调用失败：{exc}") from exc
     missing = [heading for heading in REQUIRED_HEADINGS if heading not in answer]
@@ -610,7 +617,8 @@ def _revise(
     started = datetime.now()
     user = f"# 用户的意见\n\n{instruction.strip()}\n\n# 现在的复习笔记\n\n{draft.strip()}\n"
     try:
-        answer = _strip_fence(ask(skill_text() + REVISE_RULES, user))
+        with _usage_scope(job):
+            answer = _strip_fence(ask(skill_text() + REVISE_RULES, user))
     except Exception as exc:  # noqa: BLE001 - the reason goes back to the agent
         raise ReviewNoteError(f"模型调用失败：{exc}") from exc
     missing = [heading for heading in REQUIRED_HEADINGS if heading not in answer]
