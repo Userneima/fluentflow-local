@@ -25,7 +25,8 @@ const tokensText = (usage, zh) => {
 const moneyText = (usage, zh) => {
     const parts = [];
     const money = fmtCosts(usage.cost);
-    if (money) parts.push(zh ? `约 ${money}` : `about ${money}`);
+    // A figure under the smallest shown already says it is not exact.
+    if (money) parts.push(money.startsWith('<') ? money : (zh ? `约 ${money}` : `about ${money}`));
     if (usage.subscription_calls > 0) {
         const all = usage.subscription_calls === usage.calls;
         parts.push(zh
