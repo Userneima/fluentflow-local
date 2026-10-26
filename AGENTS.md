@@ -105,7 +105,7 @@ every "服务重启中断了这个任务" failure on record came from an agent r
 the service to load new code while its own batch was still queued. Before
 stopping or restarting the backend on port 8000,
 run `python3 launchers/macos/count_active_jobs.py http://127.0.0.1:8000`; restart
-only when it prints `0`. It counts every task with a step still to come (cut,
+only when it prints `0`, and when `git status` in this checkout shows no other session's uncommitted changes under `backend/` or `scripts/`: the service on 8000 runs this working tree, so a restart would load their unfinished code. It counts every task with a step still to come (cut,
 note, compressed copy, Feishu export), though the task itself already reads
 completed; the service answers that per task from its steps (`activity.busy`).
 Stopping the service stops the encodes its tasks started and leaves their step
