@@ -18,7 +18,7 @@ calls as not belonging to any step, which the processing report shows rather
 than hides.
 
 Only tokens are stored. Money is worked out when it is shown, from the price
-table in ``model_prices.json`` (decision 6.43), in the currency each
+table in ``model_prices.json`` (decision 6.44), in the currency each
 provider bills (DeepSeek's Chinese platform in yuan, Anthropic in dollars): a price that changes changes
 the figure for every call made at that price, and a model without a price shows
 its tokens and no figure. Calls through the Claude subscription cost nothing
