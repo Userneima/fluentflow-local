@@ -1,7 +1,7 @@
 """The MCP side of the agent judging the cut (``backend/core/agent_cut.py``).
 
 Requirements:
-- submitting says who judges the cut (cut_judge), default auto;
+- submitting says who judges the cut (cut_judge), default current agent;
 - the agent can fetch the material, send its decision and its report;
 - the material is a long tool result Claude Code keeps whole;
 - while this MCP process lives it reports the tasks it submitted or touched,
@@ -34,7 +34,7 @@ def test_submission_says_who_judges_the_cut(monkeypatch):
     mcp.submit_local_media("/Users/me/meeting.mov")
     mcp.submit_video_link("https://example.com/v", cut_judge="agent")
     options = [payload["options"] for _, path, payload in calls if path == "/agent/v1/tasks"]
-    assert options[0]["cut_judge"] == "auto" and options[1]["cut_judge"] == "agent"
+    assert options[0]["cut_judge"] == "agent" and options[1]["cut_judge"] == "agent"
     schema = {tool["name"]: tool for tool in mcp.TOOL_DEFINITIONS}
     for name in ("submit_local_media", "submit_video_link"):
         assert schema[name]["inputSchema"]["properties"]["cut_judge"]["enum"] == ["auto", "agent", "fluentflow"]

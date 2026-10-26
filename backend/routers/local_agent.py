@@ -37,7 +37,7 @@ from backend.core.job_store import (
     list_jobs,
     upsert_job,
 )
-from backend.core import agent_alignment, feishu_sync, note_section_times
+from backend.core import agent_alignment, feishu_sync, note_section_times, task_intelligence
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
@@ -203,6 +203,7 @@ async def _write_transcript_task(
         "transcript_text": transcript,
         "transcript_text_preview": transcript[:200],
         "source": "agent_transcript",
+        "intelligence": options.get("intelligence"),
     }
     for key in ("prompt_preset", "prompt_preset_label"):
         value = str(options.get(key) or "").strip()
@@ -324,7 +325,16 @@ async def create_agent_task(
     input_text = str(payload.get("input") or payload.get("url") or "").strip()
     transcript = str(payload.get("transcript_text") or "").strip()
     input_type = str(payload.get("input_type") or "").strip().lower()
-    options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+    raw_options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+    if raw_options.get("cut_judge") is not None:
+        try:
+            agent_cut.normalized_choice(raw_options["cut_judge"])
+        except agent_cut.AgentCutError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        options = task_intelligence.agent_options(raw_options)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     client_id = _local_client_scope(request)
     local_path = str(payload.get("path") or payload.get("local_path") or "").strip()
 
@@ -519,6 +529,11 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             "note_version": (job.get("result") or {}).get("note_version"),
             "transcript_version": (job.get("result") or {}).get("transcript_version"),
             "note_alignment": note_section_times.status(job.get("result") or {}),
+            "intelligence": (job.get("result") or {}).get("intelligence"),
+            "deferred_ai_steps": {
+                key: value for key, value in (job.get("result") or {}).items()
+                if isinstance(value, dict) and value.get("reason") == "agent_required"
+            },
             # Tokens and money spent on models, the task's total and each step's.
             "model_usage": model_usage.for_task(task_id),
         },
@@ -870,6 +885,7 @@ def save_agent_note(
     """
     body = payload or {}
     part_notes = body.get("part_notes")
+    checker = True if _truthy_json(body.get("model_check")) else None
     try:
         if body.get("part") is not None:
             saved = agent_note.save_part(
@@ -880,6 +896,7 @@ def save_agent_note(
                 model=str(body.get("model") or ""),
                 client_id=_local_client_scope(request),
                 base_version=body.get("base_version"),
+                checker=checker,
             )
             answer = {
                 "ok": True,
@@ -913,6 +930,7 @@ def save_agent_note(
             model=str(body.get("model") or ""),
             client_id=_local_client_scope(request),
             base_version=body.get("base_version"),
+            checker=checker,
         )
     except visual_note_job.NoteMovedError as exc:
         raise _note_moved(exc) from exc

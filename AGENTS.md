@@ -38,6 +38,7 @@ exists and that no other file judges whether a task is still busy.
 - What to cut, read from the whole timeline: `backend/core/survey_cut.py`
 - Which model judges the cut: `backend/core/cut_judge.py`; the user's agent judging it: `backend/core/agent_cut.py`
 - Rendering the cut video: `backend/core/debreath_job.py`
+- Who handles understanding on an agent submission (current agent by default, explicit background delegation): `backend/core/task_intelligence.py`
 - Whether Claude writes the note, through the subscription or a key: `backend/core/visual_note_channel.py`
 - How a note is written: `backend/note_skills/fluentflow-note-default/SKILL.md` (a user's own skill replaces it, `FLUENTFLOW_NOTE_SKILL_DIR`)
 - How a review note is written: `backend/note_skills/fluentflow-review-note/SKILL.md`; writing and revising it beside the follow-along note: `backend/core/review_note.py`

@@ -91,8 +91,8 @@ SAVE_INSTRUCTION = (
     "存过的部分留在 FluentFlow 里，换了对话也能接着写下一部分，全部存齐后才替换任务的笔记。"
     "截图在本机的路径就是 frames 里的 path，打开看过再决定引不引用；引用时只写文件名。"
     "\n\n交回之前，按上面写法里「不漏」一节对照这部分转录逐条查一遍，没写到的写进讲它的那一段。"
-    "第一次交回后 FluentFlow 会查一遍：返回的 coverage.missing 里列着它认为没写到的知识点，"
-    "非空时把值得写的补进去，再保存一次；补完再存不会再查。"
+    "默认由你自己查漏，保存不会另调模型。只有你无法检查或用户明确要求，才带 model_check=true 委托后台检查；"
+    "这会使用配置的模型额度。返回 coverage.missing 非空时，补上值得写的内容再保存一次。"
 )
 
 # Said once the last part is in. Each part only saw its own stretch, so what the
@@ -157,10 +157,11 @@ def _eligible(task_id: str, job: dict[str, Any]) -> tuple[Any, list[claude_visio
         if vn.is_running(result):
             raise AgentNoteError("这个任务的笔记正在重写中")
         segments = cut_timeline.timeline_segments(result)
-        transcript = cut_timeline.timestamped_transcript(segments) if segments else ""
+        transcript = (cut_timeline.timestamped_transcript(segments) if segments else
+                      str(result.get("corrected_transcript_text") or result.get("transcript_text") or ""))
         if not transcript.strip():
             raise AgentNoteError(vn._cut_media_reason(task_id, result))
-        return _TranscriptOnly(), _parts(transcript), segments
+        return _TranscriptOnly(), _parts(transcript, small=_small_parts(task_id)), segments
     described = vn.describe(task_id, job, channel=_AGENT_CHANNEL)
     if not described["eligible"]:
         raise AgentNoteError(str(described["reason"]))
@@ -283,7 +284,7 @@ def save(
     basis_note: str = "",
     model: str = "",
     client_id: str | None = None,
-    checker: tuple[note_coverage.Chat, str] | None | bool = True,
+    checker: tuple[note_coverage.Chat, str] | None | bool = None,
     base_version: str | None = None,
 ) -> dict[str, Any]:
     """Make the agent's note the task's note, keeping the one it replaces.
@@ -373,7 +374,7 @@ def save_part(
     basis_note: str = "",
     model: str = "",
     client_id: str | None = None,
-    checker: tuple[note_coverage.Chat, str] | None | bool = True,
+    checker: tuple[note_coverage.Chat, str] | None | bool = None,
     base_version: str | None = None,
 ) -> dict[str, Any]:
     """Keep one part of the note; once every part is in, they become the task's note.
@@ -615,7 +616,7 @@ def _coverage(drafts, parts, checker) -> dict[str, Any]:
         checker = vn.coverage_checker()
     if not checker:
         return {"checker": "", "parts": [
-            {"part": part.index, **note_coverage.unchecked("本机没有可用来查漏的模型，请按材料里的要求自己查漏")}
+            {"part": part.index, **note_coverage.unchecked("默认由当前 agent 按完整材料自行查漏，未委托后台模型")}
             for part in parts
         ], "missing": []}
     chat, name = checker

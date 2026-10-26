@@ -62,7 +62,7 @@ def test_names_the_picture_model_when_that_decides(no_models, monkeypatch):
 
 def test_without_a_model_the_page_says_loudness_and_an_agent_hears_it_decides(no_models):
     assert "只按音量剪" in _step(ws.workflow_status(), "cutting")["summary"]["zh"]
-    assert "由提交任务的 agent 判断" in _step(ws.workflow_status(for_agent=True), "cutting")["summary"]["zh"]
+    assert "由你正在使用的 agent" in _step(ws.workflow_status(for_agent=True), "cutting")["summary"]["zh"]
 
 
 def test_reports_the_preset_an_environment_override_sets(no_models, monkeypatch):
@@ -171,3 +171,14 @@ def test_the_automatic_feishu_route_is_fine_with_lark_cli_signed_in(no_models, m
     assert ws.workflow_status({"skip_ai_summary": "1"})["attention"] == []
     monkeypatch.setattr(ws, "_lark_cli_ready", lambda: False)
     assert [item["id"] for item in ws.workflow_status({"skip_ai_summary": "1"})["attention"]] == ["lark-app"]
+
+
+def test_agent_status_never_requires_a_configured_claude_or_text_model(no_models, monkeypatch):
+    def forbidden(*_a, **_k):
+        pytest.fail("agent workflow should not resolve a background model")
+    monkeypatch.setattr(cut_judge, "choose", forbidden)
+    monkeypatch.setattr(visual_note_channel, "resolve_channel", forbidden)
+    monkeypatch.setattr(ws, "local_ai_kwargs", forbidden)
+    overview = ws.workflow_status(for_agent=True)
+    assert _step(overview, "cutting")["judge"] == "agent"
+    assert _step(overview, "notes")["writer"] == "agent"

@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
-from backend.core import claude_code_note, local_intake_flow, task_flow, test_copy, visual_note_channel
+from backend.core import claude_code_note, local_intake_flow, task_flow, task_intelligence, test_copy, visual_note_channel
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
@@ -213,6 +213,7 @@ def _local_media_job_context(
         # step after the cut writes it instead, with the text model when
         # Claude cannot (``local_intake_flow.write_note``).
         summary_disabled=skip_summary or note_after_cut,
+        agent_intelligence=task_intelligence.uses_agent(options),
         note_deferred_to_visual_note=note_after_cut and not skip_summary,
         note_fallback_reason=note_fallback_reason,
         generate_visuals=truthy(options.get("generate_visuals")),
@@ -454,6 +455,7 @@ def local_path_options(
         ai_model=_payload_text(payload, "ai_model"),
         note_mode=_payload_text(payload, "note_mode"),
         skip_summary=_payload_text(payload, "skip_summary"),
+        intelligence=_payload_text(payload, "intelligence"),
         generate_visuals=_payload_text(payload, "generate_visuals"),
         stt_model=_payload_text(payload, "stt_model"),
         stt_speed=_payload_text(payload, "stt_speed"),

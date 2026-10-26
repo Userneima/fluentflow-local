@@ -120,7 +120,7 @@ def test_transcript_task_completes_with_local_package(monkeypatch, agent_stack):
     r = client.post(
         "/agent/v1/tasks",
         headers=_HEADERS,
-        json={"transcript_text": "大家好，本地版。", "title": "演讲"},
+        json={"transcript_text": "大家好，本地版。", "title": "演讲", "options": {"intelligence": "fluentflow"}},
     )
 
     assert r.status_code == 200
@@ -164,7 +164,7 @@ def test_transcript_task_uses_strict_local_keys(monkeypatch, agent_stack):
     r = TestClient(_app()).post(
         "/agent/v1/tasks",
         headers=_HEADERS,
-        json={"transcript_text": "文本", "ai_provider": "qwen"},
+        json={"transcript_text": "文本", "ai_provider": "qwen", "options": {"intelligence": "fluentflow"}},
     )
     assert r.status_code == 200
     assert seen["provider"] == "qwen"
@@ -235,7 +235,7 @@ def test_video_link_task_starts_and_stays_out_of_video_sources_list(monkeypatch,
     assert r.status_code == 200
     assert r.json()["task_id"] == "agent-vid-1"
     assert submitted["route"] == "/agent/v1/tasks"
-    assert submitted["extra_metadata"] == {"agent_input_type": "video_link", "cut_judge": "auto"}
+    assert submitted["extra_metadata"] == {"agent_input_type": "video_link", "cut_judge": "agent"}
 
     # Agent-submitted jobs are not mixed into the manual video-sources list.
     listed = client.get("/video-sources/jobs", headers=_HEADERS)
@@ -722,7 +722,7 @@ def test_transcript_task_can_be_submitted_without_holding_the_request(monkeypatc
         json={
             "transcript_text": "大家好。", "title": "演讲", "wait": False,
             "options": {
-                "note_mode": "high_fidelity", "system_prompt": "只列行动项",
+                "intelligence": "fluentflow", "note_mode": "high_fidelity", "system_prompt": "只列行动项",
                 "prompt_preset": "meeting", "prompt_preset_label": "会议",
             },
         },
@@ -749,7 +749,7 @@ def test_a_failed_background_transcript_note_is_reported_by_wait(monkeypatch, ag
     client = TestClient(_app())
 
     r = client.post(
-        "/agent/v1/tasks", headers=_HEADERS, json={"transcript_text": "文本", "wait": False},
+        "/agent/v1/tasks", headers=_HEADERS, json={"transcript_text": "文本", "wait": False, "options": {"intelligence": "fluentflow"}},
     )
 
     task_id = r.json()["task_id"]

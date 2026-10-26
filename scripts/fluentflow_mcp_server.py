@@ -14,6 +14,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.core.task_intelligence import agent_options
+
 from scripts.local_agent_client import (
     DEFAULT_CLIENT_ID,
     FluentFlowApiError,
@@ -234,9 +236,10 @@ def _watching(answer: dict[str, Any], task_id: Any, api_base: str | None, client
 _CUT_JUDGE_SCHEMA = {
     "type": "string",
     "enum": ["auto", "agent", "fluentflow"],
-    "default": "auto",
+    "default": "agent",
     "description": (
-        "Who decides what to cut. auto: FluentFlow's own model when it has one, otherwise the task "
+        "Who decides what to cut. With intelligence=agent this is always agent. "
+        "For explicit background delegation, auto: FluentFlow's own model when it has one, otherwise the task "
         "waits after transcription for you to judge (get_agent_cut_material, save_agent_cut). "
         "agent: always you. fluentflow: always FluentFlow (only the loudness when it has no model)."
     ),
@@ -265,29 +268,28 @@ def tool(*, description: str, input_schema: dict[str, Any], meta: dict[str, Any]
 
 # Who writes the note on a media submission, said once for both submit tools.
 _MEDIA_NOTE_FLOW = (
-    "By default the task transcribes the original, then a model reads the whole transcript "
-    "(and screenshots of long silent stretches where the picture moves) and decides what to "
-    "cut: breath gaps, waiting before the start, leftover after the end, sound checks, a "
-    "sentence said twice. The cut is rendered once and the transcript moved onto it; "
-    "FluentFlow picks that model itself (Claude, then a picture model set in "
-    "FLUENTFLOW_VISION_*, then the text model). Its processing report, with the cuts the "
-    "user should judge, is on the task page. After the cut, Claude writes the note from "
-    "the frames and the transcript, paid by the user's own Anthropic API key (the local "
-    "Claude subscription only when FLUENTFLOW_VISUAL_NOTE_CHANNEL=subscription is set); "
-    "without a usable Claude the configured text model writes it from the cut's transcript. "
-    "Who decides the cut is cut_judge: by default FluentFlow's own model, and when it has none "
-    "the task stops after transcription and waits for you (wait_task then returns agent_cut "
-    "with status waiting): call get_agent_cut_material, judge, save_agent_cut, then "
-    "save_agent_cut_report. "
-    "To write the note yourself, on your own subscription, pass skip_summary=true, wait for "
-    "done, then use get_agent_note_material and save_agent_note; with no model at all the "
-    "task also stops at the transcript for you to do that. note_mode, prompt_preset and "
-    "system_prompt only apply when a text model writes the note; Claude's frame note "
-    "ignores them. The text model, speaker separation and auto export to Feishu follow what "
-    "the user saved in FluentFlow's Settings, the same as a recording submitted on the page; "
-    "speaker_diarization=true or false overrides it for this task. Returns at once; follow "
-    "with wait_task."
+    "The current agent handles understanding and judgement by default, even when model keys "
+    "are configured. FluentFlow transcribes the original, then YOU decide what to cut "
+    "(breath gaps, waiting, sound checks, repeated talk) with get_agent_cut_material, "
+    "save_agent_cut and save_agent_cut_report. It renders the cut and moves the transcript "
+    "onto its timeline. Defaults are cut_judge=agent and skip_summary=true: wait_task "
+    "returns agent_cut while you must judge; after done, write from get_agent_note_material "
+    "and save_agent_note, checking coverage yourself. Never wait for Claude to fail first. "
+    "intelligence=fluentflow delegates to configured background models only when you cannot "
+    "do the work, failed, or the user requested it; tell the user why and which allowance "
+    "or API key is used. Background processing may use an Anthropic API key, a locally "
+    "opted-in Claude subscription, or the configured text model. Only apply when a text "
+    "model writes the note: note_mode, prompt_preset, system_prompt. Speaker separation "
+    "and Feishu settings follow the saved choices. Subtitle/glossary correction and "
+    "subtitle translation have no agent write-back interface yet: agent mode marks them "
+    "deferred, never silently runs background AI or claims they completed. Returns at once; "
+    "follow with wait_task."
 )
+
+_INTELLIGENCE_SCHEMA = {
+    "type": "string", "enum": ["agent", "fluentflow"], "default": "agent",
+    "description": "Current agent first. fluentflow explicitly delegates to configured background models as fallback.",
+}
 
 _SPEAKER_DIARIZATION_SCHEMA = {
     "type": "boolean",
@@ -312,7 +314,8 @@ _TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's fr
         "properties": {
             "path": {"type": "string", "description": "Absolute path to the recording."},
             "title": {"type": "string"},
-            "skip_summary": {"type": "boolean", "default": False},
+            "skip_summary": {"type": "boolean", "default": True},
+            "intelligence": _INTELLIGENCE_SCHEMA,
             "note_mode": {"type": "string", "description": _TEXT_MODEL_ONLY},
             "prompt_preset": {"type": "string", "description": "A label recorded with the note. " + _TEXT_MODEL_ONLY},
             "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
@@ -327,13 +330,14 @@ _TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's fr
 def submit_local_media(
     path: str,
     title: str | None = None,
-    skip_summary: bool = False,
+    skip_summary: bool | None = None,
     note_mode: str | None = None,
     prompt_preset: str | None = None,
     stt_model: str | None = None,
     speaker_diarization: bool | None = None,
     system_prompt: str | None = None,
-    cut_judge: str = "auto",
+    cut_judge: str | None = None,
+    intelligence: str = "agent",
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -349,16 +353,17 @@ def submit_local_media(
             "path": path,
             "input_type": "local_path",
             "title": title,
-            "options": _options(
+            "options": agent_options(_options(
+                intelligence=intelligence,
                 cut_judge=cut_judge,
-                skip_summary="true" if skip_summary else "false",
+                skip_summary=None if skip_summary is None else ("true" if skip_summary else "false"),
                 note_mode=note_mode,
                 prompt_preset=prompt_preset,
                 system_prompt=system_prompt,
                 stt_model=stt_model,
                 # Left out unless the caller asks: the backend default is off.
                 speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
-            ),
+            )),
         },
     ), None, api_base, client_id)
 
@@ -380,7 +385,8 @@ def submit_local_media(
             "input_text": {"type": "string", "description": "Video URL or copied share text."},
             "title": {"type": "string"},
             "stt_provider": {"type": "string", "default": "auto"},
-            "skip_summary": {"type": "boolean", "default": False},
+            "skip_summary": {"type": "boolean", "default": True},
+            "intelligence": _INTELLIGENCE_SCHEMA,
             "note_mode": {"type": "string", "description": _TEXT_MODEL_ONLY},
             "prompt_preset": {"type": "string", "description": "A label recorded with the note. " + _TEXT_MODEL_ONLY},
             "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
@@ -403,13 +409,14 @@ def submit_video_link(
     input_text: str,
     title: str | None = None,
     stt_provider: str = "auto",
-    skip_summary: bool = False,
+    skip_summary: bool | None = None,
     note_mode: str | None = None,
     prompt_preset: str | None = None,
     allow_duplicate: bool = False,
     speaker_diarization: bool | None = None,
     system_prompt: str | None = None,
-    cut_judge: str = "auto",
+    cut_judge: str | None = None,
+    intelligence: str = "agent",
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -423,33 +430,34 @@ def submit_video_link(
             "input_type": "video_link",
             "title": title,
             "allow_duplicate": bool(allow_duplicate),
-            "options": _options(
+            "options": agent_options(_options(
+                intelligence=intelligence,
                 cut_judge=cut_judge,
                 stt_provider=stt_provider,
-                skip_summary="true" if skip_summary else "false",
+                skip_summary=None if skip_summary is None else ("true" if skip_summary else "false"),
                 note_mode=note_mode,
                 prompt_preset=prompt_preset,
                 system_prompt=system_prompt,
                 speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
-            ),
+            )),
         },
         timeout=30,
     ), None, api_base, client_id)
 
 
 @tool(
-    description=("Submit transcript text and have the configured text model write a note from it "
-        "(Claude's frame note needs media, so it does not apply here). Returns the task_id "
-        "at once; the note is written in the background, typically within a minute or two "
-        "and capped at FLUENTFLOW_NOTE_DEADLINE_SECONDS (default an hour) — follow with "
-        "wait_task. note_mode, system_prompt and prompt_preset reach the model. "
-        "skip_summary=true stores the transcript without a note."),
+    description=("Store transcript text for the current agent to write its note. "
+        "Defaults to intelligence=agent and skip_summary=true; follow with wait_task, "
+        "get_agent_note_material and save_agent_note. Only delegate with intelligence=fluentflow "
+        "when the agent cannot do it, failed, or the user asked; that uses configured models. "
+        "note_mode, system_prompt and prompt_preset reach the text model on that fallback."),
     input_schema={
         "type": "object",
         "properties": {
             "transcript_text": {"type": "string"},
             "title": {"type": "string", "default": "Transcript"},
-            "skip_summary": {"type": "boolean", "default": False},
+            "skip_summary": {"type": "boolean", "default": True},
+            "intelligence": _INTELLIGENCE_SCHEMA,
             "note_mode": {"type": "string"},
             "prompt_preset": {"type": "string", "description": "A label recorded with the note; the instructions are system_prompt."},
             "system_prompt": {"type": "string", "description": "Instructions for the note."},
@@ -461,10 +469,11 @@ def submit_video_link(
 def submit_transcript(
     transcript_text: str,
     title: str = "Transcript",
-    skip_summary: bool = False,
+    skip_summary: bool | None = None,
     note_mode: str | None = None,
     prompt_preset: str | None = None,
     system_prompt: str | None = None,
+    intelligence: str = "agent",
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -478,12 +487,13 @@ def submit_transcript(
             "transcript_text": transcript_text,
             "title": title,
             "wait": False,
-            "options": _options(
-                skip_summary="true" if skip_summary else "false",
+            "options": agent_options(_options(
+                intelligence=intelligence,
+                skip_summary=None if skip_summary is None else ("true" if skip_summary else "false"),
                 note_mode=note_mode,
                 prompt_preset=prompt_preset,
                 system_prompt=system_prompt,
-            ),
+            )),
         },
         timeout=30,
     )
@@ -1143,23 +1153,14 @@ def get_agent_note_material(
 
 
 @tool(
-    description=("Save the note you wrote from get_agent_note_material as the task's note. The previous "
-        "note is kept and restorable (write_note_from_cut_media restore_previous_note=true). "
-        "note_markdown for a one-part recording. For several parts, save each as soon as it is "
-        "written with part and note_markdown: saved parts stay in FluentFlow across conversations, "
-        "the task's note is replaced once every part is in, and the answer's next says what to do "
-        "(the remaining parts, then a read-through). note_markdown without part on such a recording "
-        "is a whole edited note. Cite "
-        "frames by file name only. A note far too short for its transcript is refused and "
-        "nothing is replaced. The first save of each part is checked against its transcript for "
-        "knowledge points the note never mentions (when FluentFlow has a model to check with) and "
-        "they come back in coverage.missing, by part: when it is not empty, write in the ones worth "
-        "keeping and save that part again once. A part saved again is not checked again. "
-        "Pass base_version (note_version from the material or get_task): if the user changed the "
-        "note in the page, Obsidian or Feishu while you wrote, the save is refused with code stale "
-        "and nothing is replaced; get_task_package for the current note, merge your note into it "
-        "and save again with the new note_version. Each answer carries note_version as the note "
-        "is after it; use that one for the next save of a part."),
+    description=("Save the note you wrote from get_agent_note_material. Check it against the "
+        "whole transcript yourself before saving. No model is called by default. "
+        "model_check=true explicitly delegates coverage checking to configured models as fallback; "
+        "coverage.missing then lists points to consider adding once. "
+        "Use note_markdown for a whole note, or part to save parts before joining. "
+        "Cite frames by file name only. Too-short notes are refused. Pass base_version: "
+        "a concurrent edit returns stale without replacing it; read, merge and save again "
+        "with the new note_version. Previous notes stay restorable."),
     input_schema={
         "type": "object",
         "properties": {
@@ -1181,6 +1182,7 @@ def get_agent_note_material(
                     "Leaving it out saves as before, over any change made meanwhile."
                 ),
             },
+            "model_check": {"type": "boolean", "default": False, "description": "Explicitly delegate coverage checking to background models; otherwise check yourself."},
             "api_base": {"type": "string"},
         },
         "required": ["task_id"],
@@ -1194,6 +1196,7 @@ def save_agent_note(
     basis_note: str = "",
     model: str = "",
     base_version: str | None = None,
+    model_check: bool = False,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1206,9 +1209,8 @@ def save_agent_note(
         api_base=api_base,
         client_id=client_id,
         payload=_options(note_markdown=note_markdown, part=part, part_notes=part_notes, basis_note=basis_note,
-                         model=model, base_version=base_version),
-        # Saving runs FluentFlow's coverage check on each part, a model request
-        # over that part's whole transcript.
+                         model=model, base_version=base_version, model_check=model_check),
+        # A delegated model check may read each full transcript part.
         timeout=600,
     )
 

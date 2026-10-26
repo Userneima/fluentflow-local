@@ -39,7 +39,7 @@ from backend.core.ai_summarizer import (
 from backend.core.media_probe import media_duration_seconds
 from backend.core.runtime_env import truthy
 from backend.core.ai_client import _chat, _get_client, _normalize_model, _normalize_provider, _provider_api_key
-from backend.core import correction_notes, glossary_correction, model_usage, subtitle_correction
+from backend.core import correction_notes, glossary_correction, model_usage, subtitle_correction, task_intelligence
 from backend.core.claude_text import claude_chat, subscription_first
 from backend.core.media_job_stages import (
     clean_transcript,
@@ -470,6 +470,8 @@ class MediaJobContext:
     # already-mixed soundtrack. Off also means the recognizer reads the plain
     # audio, so an upload nobody asked about behaves exactly as it did before.
     voice_enhance_requested: bool = False
+    # Agent submissions do not spend background model calls for understanding.
+    agent_intelligence: bool = False
     # AI credential policy: the caller's strict provider-to-key matcher.
     ai_kwargs_builder: Any = None
     # Event hub the worker publishes to, shared with live progress and
@@ -1051,6 +1053,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         subtitle_fields: dict[str, Any] = dict(checkpoint.get("subtitle_fields") or {})
         if "subtitle_fields" in checkpoint:
             pass
+        elif ctx.agent_intelligence:
+            subtitle_fields = {"subtitle_correction": task_intelligence.deferred_step()}
         elif subtitle_correction.enabled() and segments_payload:
             current_stage = "subtitle_correction"
             upsert_job(task_id=task_id_value, status="running", stage="subtitle_correction", progress=60)
@@ -1077,6 +1081,11 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         glossary_fields: dict[str, Any] = dict(checkpoint.get("glossary_fields") or {})
         if "glossary_fields" in checkpoint:
             pass
+        elif ctx.agent_intelligence:
+            glossary_fields = {
+                glossary_correction.META: task_intelligence.deferred_step(),
+                glossary_correction.FINGERPRINTS: glossary_correction.fingerprints(segments_payload),
+            }
         elif segments_payload:
             if glossary_correction.enabled():
                 current_stage = "glossary_correction"
@@ -1104,7 +1113,9 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         bilingual_segments: list[dict[str, Any]] = []
         translation_status = "not_applicable"
         translation_error: str | None = None
-        if _is_english_source(source_language) and segments_payload:
+        if _is_english_source(source_language) and segments_payload and ctx.agent_intelligence:
+            translation_status = "agent_required"
+        elif _is_english_source(source_language) and segments_payload:
             current_stage = "translation"
             translation_status = "running"
             upsert_job(task_id=task_id_value, status="running", stage="translation", progress=61)
@@ -1205,6 +1216,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             "status": "transcript_ready",
             "source": source_type,
             "summary_skipped": summary_disabled,
+            "intelligence": "agent" if ctx.agent_intelligence else "fluentflow",
         })
         base_result.update(subtitle_fields)
         base_result.update(glossary_fields)

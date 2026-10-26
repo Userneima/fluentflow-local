@@ -48,21 +48,29 @@ Say this, in the user's language:
 - To get a note, give you (the agent) a video file or a Douyin, Bilibili or YouTube link
   in a new conversation, or drop it into the app's page.
 - You write the notes yourself, so no API key is needed. Entering a model key in the
-  app's settings is optional; with one, the app writes notes on its own.
+  app's settings is optional; it is a fallback when you cannot complete the work or the user delegates it, and supports submissions made on the page.
 
 The MCP tools appear in the user's next conversation with you. When asked for a note
-then: submit with `submit_local_media` or `submit_video_link`, wait with `wait_task`,
-fetch the material with `get_agent_note_material`, write the note following its
-`instructions`, and save it with `save_agent_note`. A long recording comes in several
+then: submit with `submit_local_media` or `submit_video_link` using the default
+`intelligence="agent"`; handle `agent_cut` with `get_agent_cut_material`, `save_agent_cut`
+and `save_agent_cut_report`, then wait for the rendered cut. Fetch `get_agent_note_material`,
+write and check the note yourself, and `save_agent_note` with its `base_version`.
+`skip_summary=true` leaves writing to you; it does not complete the user's request.
+Configured keys do not change these defaults. Only delegate with `intelligence="fluentflow"`
+when you cannot do it, failed, or the user asks; explain which configured model pays.
+`save_agent_note` never calls a checker unless you explicitly set `model_check=true`.
+A long recording comes in several
 parts; fetch and write each, then save them together. When a note lost content or the
 user wants an earlier version, `过程文件/修改记录.md` beside the note says what each change
 changed, `list_note_versions` shows every kept version with what
 replaced it, `read_note_version` reads one, and `restore_note_version` (after the user
-agrees) puts it back everywhere the note is kept. After transcription FluentFlow corrects
+agrees) puts it back everywhere the note is kept. In the delegated background flow FluentFlow corrects
 misheard names and terms in the transcript from the subtitles in the picture and from the
 series' word list (`FluentFlow 校正文档.md`); `list_subtitle_corrections` and
 `list_glossary_corrections` show each change, the matching revert tools undo it after the
 user agrees, and `run_glossary_correction` runs the word-list step again on a finished task.
+Agent submissions currently defer source corrections and subtitle translation (`agent_required`):
+these lack agent write-back tools. Check names in the note without claiming the source was corrected.
 When the user wants a review note (复习笔记, a second note reorganised by topic for learning
 it again), `write_review_note` writes it beside the follow-along note from the md the user
 corrected, and `revise_review_note` changes it at their word without starting over.

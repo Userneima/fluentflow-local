@@ -18,6 +18,7 @@ def _queue_options_from_mapping(payload: dict[str, Any] | None) -> dict[str, str
         "ai_model",
         "note_mode",
         "skip_summary",
+        "intelligence",
         "generate_visuals",
         "stt_model",
         "stt_speed",

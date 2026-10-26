@@ -120,6 +120,10 @@ def _cutting(for_agent: bool) -> dict[str, Any]:
                 "judge": "loudness",
                 "summary": _t("转录前先按音量剪掉空白，不用模型判断" + tail[0],
                               "Gaps are cut by loudness before transcription, without a model" + tail[1])}
+    if for_agent:
+        return {"id": "cutting", "title": _t("剪辑", "Cutting"), "level": "ok", "judge": "agent",
+                "summary": _t("由你正在使用的 agent 看转录和截图，判断剪哪里" + tail[0],
+                              "Your current agent decides cuts from the transcript and frames" + tail[1])}
     judge = cut_judge.choose()
     name = judge.name if judge else ""
     kind = ("claude" if name in (visual_note_channel.CHANNEL_SUBSCRIPTION, visual_note_channel.CHANNEL_ANTHROPIC_KEY)
@@ -169,6 +173,11 @@ def _transcription(choices: Mapping[str, Any], attention: list[dict[str, Any]]) 
 
 
 def _notes(choices: Mapping[str, Any], for_agent: bool, attention: list[dict[str, Any]]) -> dict[str, Any]:
+    if for_agent:
+        return {"id": "notes", "title": _t("写笔记", "Notes"), "level": "ok", "writer": "agent",
+                "claude_channel": "", "summary": _t(
+                    "由你正在使用的 agent 结合画面写并自行查漏；无法完成时再明确委托配置的模型。",
+                    "Your current agent writes from frames and checks coverage; delegate to configured models only if needed.")}
     level = "ok"
     channel = visual_note_channel.resolve_channel(resolve_secret(None, "anthropic_api_key"))
     if channel.name == visual_note_channel.CHANNEL_SUBSCRIPTION and claude_code_note.cli_available() \

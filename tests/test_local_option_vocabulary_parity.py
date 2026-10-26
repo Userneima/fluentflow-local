@@ -79,7 +79,7 @@ def _collect_options_keysets() -> dict[str, set[str]]:
 # needs a reason here before it may appear.
 EXPECTED_UPLOAD_ONLY: set[str] = set()
 
-EXPECTED_BYPATH_ONLY: set[str] = set()
+EXPECTED_BYPATH_ONLY: set[str] = {"intelligence"}  # Agent execution choice; uploads keep the page's model flow.
 
 
 def test_the_two_upload_routes_share_one_option_vocabulary() -> None:

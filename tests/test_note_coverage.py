@@ -344,7 +344,7 @@ def test_the_save_route_hands_the_missing_points_back(job_store, tmp_path, monke
     ))
 
     response = TestClient(create_local_app()).post(
-        f"/agent/v1/tasks/{TASK}/agent-note", json={"note_markdown": AGENT_NOTE},
+        f"/agent/v1/tasks/{TASK}/agent-note", json={"note_markdown": AGENT_NOTE, "model_check": True},
         headers={"x-fluentflow-access-token": "local-secret-token"},
     )
 

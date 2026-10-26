@@ -216,3 +216,21 @@ def test_a_task_with_only_a_transcript_gets_a_note_from_the_transcript(job_store
     assert updated["result"]["summary_written_from"] == NOTE_FROM_AGENT
     assert state["basis"] == vn.BASIS_TRANSCRIPT_ONLY
     assert state["media_source"]["kind"] == "transcript_only"
+
+
+def test_default_save_never_resolves_a_background_checker(job_store, tmp_path, monkeypatch):
+    _material(tmp_path)
+    monkeypatch.setattr(vn, "coverage_checker", lambda *_a, **_k: pytest.fail("unexpected model check"))
+    saved = an.save(TASK, note_markdown="# 笔记\n\n正文。", client_id="anonymous")
+    assert vn.visual_note_state(saved["result"])["coverage"]["parts"][0]["checked"] is False
+
+
+def test_plain_transcript_without_media_can_be_read_and_saved(job_store, monkeypatch):
+    monkeypatch.setattr(vn, "cut_media", lambda *_: None)
+    job_store["result"] = {"transcript_text": "研究问题应当明确。", "summary_markdown": ""}
+    material = an.material(TASK, client_id="anonymous", keyframe_extractor=lambda *_a, **_k: pytest.fail("no media to extract"))
+    assert material["transcript"] == "研究问题应当明确。"
+    assert material["frames"] == [] and material["has_video"] is False
+    saved = an.save(TASK, note_markdown="# 研究问题\n\n研究问题应当明确。", client_id="anonymous",
+                    base_version=material["note_version"])
+    assert saved["result"]["summary_written_from"] == NOTE_FROM_AGENT

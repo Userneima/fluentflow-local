@@ -29,7 +29,7 @@ def test_waiting_covers_the_note():
 def test_submitting_describes_the_survey_first_flow_and_the_agents_own_note():
     for name in ("submit_local_media", "submit_video_link"):
         text = _description(name)
-        assert "transcribes the original" in text and "decides what to cut" in text, name
+        assert "transcribes the original" in text and "you decide what to cut" in text, name
         assert "skip_summary=true" in text and "get_agent_note_material" in text, name
 
 
