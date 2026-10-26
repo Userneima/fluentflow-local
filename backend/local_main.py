@@ -40,7 +40,7 @@ hf_endpoint.apply_at_startup()
 onnx_quiet.quiet()
 
 from backend.core.app_factory import create_app
-from backend.core import claude_code_note, visual_note_channel  # noqa: E402
+from backend.core import claude_code_note, task_stop, visual_note_channel  # noqa: E402
 from backend.core.event_context import event_metadata  # noqa: E402
 from backend.core.event_logger import log_event  # noqa: E402
 from backend.core.claude_code_note import stop_running_notes
@@ -252,6 +252,7 @@ def _log_restart_interruption(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    task_stop.service_started()
     # Readiness is advisory at startup: the server still boots (the SPA
     # router and diagnostics give readable errors), but failures are logged
     # up front so they are visible before the first task fails mid-way.
@@ -347,6 +348,11 @@ async def lifespan(app: FastAPI):
     yield
     if resume is not None and not resume.done():
         resume.cancel()
+    # First, so nothing that ends because of it records its step as stopped
+    # or failed: the restart carries those steps on (``task_stop.shutdown``).
+    killed = task_stop.shutdown()
+    if killed:
+        logger.info("Shutdown stopped %s command lines of running tasks", killed)
     stopped = stop_running_notes()
     if stopped:
         logger.info("Shutdown stopped %s note writers that were still running", stopped)

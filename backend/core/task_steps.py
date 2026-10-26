@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Iterable
 
-from backend.core import job_store
+from backend.core import job_store, task_stop
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,12 @@ STOPPED_NOTE = "已停下，点「接着做」从这一步开始。"
 
 
 def _write(task_id: str, name: str, status: str, **kwargs: Any) -> None:
+    if task_stop.shutting_down():
+        # The service is stopping and stopped this step's work under it: the
+        # step was cut off, not stopped or failed, and a restart carries it
+        # on from here (``task_stop.shutdown``).
+        logger.info("service stopping: step %s of %s left as it was (not %s)", name, task_id, status)
+        return
     try:
         job_store.write_task_step(task_id, name, status, order=ORDER.index(name), **kwargs)
     except Exception:  # noqa: BLE001 - the task goes on without its step record

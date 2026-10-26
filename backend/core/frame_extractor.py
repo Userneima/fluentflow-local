@@ -9,6 +9,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from backend.core import task_stop
+from backend.core.task_watch import TaskCancelled
+
 logger = logging.getLogger(__name__)
 
 
@@ -132,6 +135,17 @@ SCREEN_CONTENT_EDGE_CONTRAST = 20.0
 SCREENLESS_FRAME_BUDGET = 4
 
 
+def _run(cmd: list[str], **kwargs: Any) -> "subprocess.CompletedProcess[str]":
+    """``subprocess.run``, refused once the task these frames are for has been
+    stopped (``task_stop``): picking a note's pictures runs ffmpeg once per
+    frame, and a stopped note, or a service shutting down, waited for every
+    one of them (measured 2026-10-26, over a minute for a 4-minute clip)."""
+    task_id = task_stop.current()
+    if task_id and task_stop.requested(task_id):
+        raise TaskCancelled("任务已取消")
+    return subprocess.run(cmd, **kwargs)
+
+
 def _ffmpeg_path() -> str:
     path = shutil.which("ffmpeg")
     if not path:
@@ -147,7 +161,7 @@ def _ffprobe_path() -> str:
 
 
 def _video_duration_seconds(video_path: str) -> float:
-    result = subprocess.run(
+    result = _run(
         [
             _ffprobe_path(),
             "-v", "error",
@@ -237,7 +251,7 @@ def _detect_scene_timestamps(video_path: str, *, threshold: float) -> list[float
         "-f", "null",
         "-",
     ]
-    completed = subprocess.run(
+    completed = _run(
         cmd, check=False, capture_output=True, text=True,
         timeout=SCENE_ANALYSIS_TIMEOUT_SECONDS,
     )
@@ -361,7 +375,7 @@ def _grab_frame(video_path: str, output: Path, timestamp: float) -> bool:
         str(output),
     ]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True,
+        _run(cmd, check=True, capture_output=True, text=True,
                        timeout=FRAME_GRAB_TIMEOUT_SECONDS)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
@@ -616,7 +630,7 @@ def _extract_timepoint_frames(
                 str(output),
             ]
             try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+                _run(cmd, check=True, capture_output=True, text=True, timeout=30)
             except subprocess.CalledProcessError:
                 continue
             if output.is_file():

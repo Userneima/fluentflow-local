@@ -10,6 +10,14 @@ task is stopped (``request``).
 
 A request already sent to a model over HTTP cannot be called back: its answer
 is dropped, and the step waits for nothing.
+
+When the service itself stops (``shutdown``), every task's work is stopped the
+same way, but the steps are not recorded as stopped: from then on
+``task_steps`` leaves step records as they are, so the step a task was on is
+still open after the restart and is carried on from there (decision 6.42).
+Without this, the encodes of a cut kept running after the service had gone and
+the restarted service rendered the same cut again beside them (measured
+2026-10-25).
 """
 
 from __future__ import annotations
@@ -25,6 +33,7 @@ _lock = threading.Lock()
 _events: dict[str, threading.Event] = {}
 _processes: dict[str, set[subprocess.Popen]] = {}
 _bound = threading.local()
+_shutting_down = threading.Event()
 
 
 def begin(task_id: str) -> threading.Event:
@@ -111,4 +120,22 @@ def request(task_id: str) -> int:
     return killed
 
 
-__all__ = ["begin", "bound", "bound_runner", "current", "event", "request", "requested", "track", "untrack"]
+def shutdown() -> int:
+    """The service is stopping: stop every task's work and leave its steps
+    as they are. Returns how many command lines were killed."""
+    _shutting_down.set()
+    with _lock:
+        task_ids = list(_events)
+    return sum(request(task_id) for task_id in task_ids)
+
+
+def service_started() -> None:
+    """A new start of the service: step records are written again."""
+    _shutting_down.clear()
+
+
+def shutting_down() -> bool:
+    return _shutting_down.is_set()
+
+
+__all__ = ["begin", "bound", "bound_runner", "current", "event", "request", "requested", "service_started", "shutdown", "shutting_down", "track", "untrack"]

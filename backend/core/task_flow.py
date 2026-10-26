@@ -42,7 +42,7 @@ from backend.core.note_title import resolve_lark_doc_title
 from backend.core.runtime_env import truthy
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.core.task_queue import _take_queue_turn, wait_for_queue_turn
-from backend.core.task_watch import TaskWatch
+from backend.core.task_watch import TaskCancelled, TaskWatch
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +139,13 @@ def _write_note_holding_slot(
             local_intake_flow._patch_result(task_id, client_id, {
                 "summary_status": "failed", "summary_error": task_steps.STOPPED_NOTE, "summary_skipped": False,
             })
+    except TaskCancelled:
+        # Picking its pictures stopped with the step (``frame_extractor``).
+        if not task_stop.requested(task_id):
+            raise
+        local_intake_flow._patch_result(task_id, client_id, {
+            "summary_status": "failed", "summary_error": task_steps.STOPPED_NOTE, "summary_skipped": False,
+        })
     except NoteAbandoned as exc:
         # The frame note records this itself; the text-note path lets it through.
         local_intake_flow._patch_result(task_id, client_id, {

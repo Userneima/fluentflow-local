@@ -184,3 +184,15 @@ def _no_real_cut_judge(monkeypatch):
     from backend.core import cut_judge
 
     monkeypatch.setattr(cut_judge, "choose", lambda *args, **kwargs: None)
+
+
+@pytest.fixture(autouse=True)
+def _service_not_stopping():
+    """Every test runs against a service that is up. A test that starts and
+    stops the whole app leaves ``task_stop`` marked as shutting down, which
+    freezes step records (``task_stop.shutdown``) for the tests after it."""
+    from backend.core import task_stop
+
+    task_stop.service_started()
+    yield
+    task_stop.service_started()
