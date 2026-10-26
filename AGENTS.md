@@ -108,4 +108,8 @@ run `python3 launchers/macos/count_active_jobs.py http://127.0.0.1:8000`; restar
 only when it prints `0`. It counts every task with a step still to come (cut,
 note, compressed copy, Feishu export), though the task itself already reads
 completed; the service answers that per task from its steps (`activity.busy`).
+Stopping the service stops the encodes its tasks started and leaves their step
+records as they were (`task_stop.shutdown`), so the restart carries those steps
+on; work a step runs on its own thread pool (correcting the transcript from
+on-screen subtitles) still finishes its round first.
 Otherwise wait for the queue to drain, or test the new code on another port.
