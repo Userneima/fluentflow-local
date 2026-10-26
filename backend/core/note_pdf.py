@@ -75,9 +75,10 @@ _LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s")
 # Obsidian's callout, 「> [!question] 标题」: the reader's own questions and the
 # answers added later. Python-Markdown would print 「[!question]」 as text.
 _CALLOUT = re.compile(r"^(\s*>\s*)\[!(\w+)\][+-]?\s*(.*)$")
-# Obsidian's link to a heading in the same note, 「[[#五、标题|第五章]]」: the
-# reader clicks it in Obsidian; on paper only the words can stay.
-_HEADING_LINK = re.compile(r"\[\[#([^\]|]+)(?:\|([^\]]+))?\]\]")
+# Obsidian's link to a heading, in the same note 「[[#五、标题|第五章]]」 or in
+# another one beside it 「[[某某_笔记#五、标题|第五章]]」 (the review note's
+# sources): the reader clicks it in Obsidian; on paper only the words can stay.
+_HEADING_LINK = re.compile(r"\[\[[^\]|#]*#([^\]|]+)(?:\|([^\]]+))?\]\]")
 _CALLOUT_LABELS = {"question": "问题", "note": "补充", "info": "补充", "tip": "提示",
                    "quote": "引用", "warning": "注意", "summary": "小结", "todo": "待办"}
 
@@ -119,7 +120,7 @@ def _markdown_for_print(text: str) -> str:
     return "\n".join(out)
 
 
-def printable_html(task_id: str, note_markdown: str, title: str) -> str:
+def printable_html(task_id: str | None, note_markdown: str, title: str) -> str:
     """The note as a standalone page whose screenshots load from this machine.
 
     Every image reference that resolves to one of the task's screenshots is
@@ -129,6 +130,8 @@ def printable_html(task_id: str, note_markdown: str, title: str) -> str:
     from backend.core.output_folder import frame_file
 
     def local(match: re.Match[str]) -> str:
+        if task_id is None:
+            return match.group(0)
         src = match.group(2)
         path = frame_file(task_id, src)
         if path is None:
@@ -162,15 +165,24 @@ def export_pdf(
     heading = next((line.lstrip("#").strip() for line in note.splitlines() if line.startswith("# ")), "")
     title = heading or str(result.get("display_title") or result.get("filename") or task_id).strip()
     directory = Path(output_dir).expanduser() if output_dir else default_output_dir()
-    directory.mkdir(parents=True, exist_ok=True)
     stem = _UNSAFE_NAME.sub("_", filename or title)[:120 if filename else 80].strip() or task_id
+    return {"task_id": task_id, **markdown_to_pdf(note, title, directory, stem, task_id=task_id)}
+
+
+def markdown_to_pdf(
+    note: str, title: str, directory: Path, stem: str, *, task_id: str | None = None,
+) -> dict[str, Any]:
+    """Print ``note`` to ``<directory>/<stem>.pdf``. Without a task its images
+    are left as written. Returns ``pdf_path`` or, with no browser, the
+    printable ``html_path`` and a ``reason``."""
+    directory.mkdir(parents=True, exist_ok=True)
     html_path = directory / f"{stem}.html"
     html_path.write_text(printable_html(task_id, note, title), encoding="utf-8")
 
     browser = _browser()
     if not browser:
         return {
-            "task_id": task_id, "pdf_path": None, "html_path": str(html_path),
+            "pdf_path": None, "html_path": str(html_path),
             "reason": "这台电脑上没找到 Chrome 或 Edge，生成不了 PDF。已写好可打印的网页，用浏览器打开后打印成 PDF 即可。",
         }
     pdf_path = directory / f"{stem}.pdf"
@@ -184,7 +196,7 @@ def export_pdf(
     if not pdf_path.is_file() or pdf_path.stat().st_size == 0:
         raise NotePdfError(f"浏览器没能生成 PDF（退出码 {run.returncode}）。可打印的网页在 {html_path}")
     html_path.unlink(missing_ok=True)
-    return {"task_id": task_id, "pdf_path": str(pdf_path), "html_path": None}
+    return {"pdf_path": str(pdf_path), "html_path": None}
 
 
-__all__ = ["NotePdfError", "default_output_dir", "export_pdf", "printable_html"]
+__all__ = ["NotePdfError", "default_output_dir", "export_pdf", "markdown_to_pdf", "printable_html"]

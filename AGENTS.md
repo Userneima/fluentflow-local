@@ -40,6 +40,7 @@ exists and that no other file judges whether a task is still busy.
 - Rendering the cut video: `backend/core/debreath_job.py`
 - Whether Claude writes the note, through the subscription or a key: `backend/core/visual_note_channel.py`
 - How a note is written: `backend/note_skills/fluentflow-note-default/SKILL.md` (a user's own skill replaces it, `FLUENTFLOW_NOTE_SKILL_DIR`)
+- How a review note is written: `backend/note_skills/fluentflow-review-note/SKILL.md`; writing and revising it beside the follow-along note: `backend/core/review_note.py`
 - The text-model note and the calls to text models: `backend/core/ai_summarizer.py`, `backend/core/ai_client.py`
 - Correcting the transcript from on-screen subtitles and from the word list: `backend/core/subtitle_correction.py`, `backend/core/glossary_correction.py`
 - The output folder beside a recording: `backend/core/output_folder.py`; keeping a note in step with Feishu: `backend/core/feishu_sync.py`

@@ -20,6 +20,7 @@ import math
 import threading
 import time
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
@@ -1554,3 +1555,42 @@ async def export_agent_task(
         metadata=event_metadata(route=route, target=target, doc_title=resolved_title),
     )
     return {"ok": True, "task_id": task_id, "export": export_record, "task": _task_brief(updated)}
+
+
+def _review_note_call(request: Request, payload: dict[str, Any], run: Any) -> dict[str, Any]:
+    """Shared by the two review-note routes: the task (when named) must be
+    this caller's; a reason the note was not written comes back as 422, and
+    the task itself is never failed (decision 5.37)."""
+    from backend.core import review_note
+
+    task_id = str(payload.get("task_id") or "").strip() or None
+    note_path = str(payload.get("note_path") or "").strip() or None
+    if task_id:
+        _job_for_request(request, task_id)
+    try:
+        return {"ok": True, **run(review_note, task_id, note_path)}
+    except review_note.ReviewNoteError as exc:
+        raise HTTPException(status_code=409 if exc.code == "already_running" else 422,
+                            detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+@router.post("/review-notes")
+def write_review_note(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Write the review note beside a task's follow-along note, or beside the
+    md at ``note_path`` when the output folder was moved."""
+    return _review_note_call(request, payload, lambda core, task_id, note_path: core.generate(task_id, note_path))
+
+
+@router.post("/review-notes/revise")
+def revise_review_note(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Change an existing review note as the user asked (``instruction``),
+    without writing it again from the follow-along note."""
+    instruction = str(payload.get("instruction") or "")
+
+    def run(core: Any, task_id: str | None, note_path: str | None) -> dict[str, Any]:
+        if note_path and Path(note_path).expanduser().stem.endswith(core.REVIEW_SUFFIX):
+            return core.revise(note_path, instruction)
+        base, _job = core.locate(task_id, note_path)
+        return core.revise(str(base), instruction)
+
+    return _review_note_call(request, payload, run)

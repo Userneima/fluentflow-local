@@ -24,13 +24,13 @@ TEXT_MAX_TOKENS = 16_000
 Chat = Callable[[str, str], str]
 
 
-def _api_key_chat(api_key: str | None, model: str) -> Chat:
+def _api_key_chat(api_key: str | None, model: str, max_tokens: int = TEXT_MAX_TOKENS) -> Chat:
     def chat(system: str, user: str) -> str:
         client = claude_vision.anthropic.Anthropic(api_key=claude_vision.resolve_api_key(api_key))
         try:
             with client.messages.stream(
                 model=model,
-                max_tokens=TEXT_MAX_TOKENS,
+                max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
             ) as stream:
@@ -74,15 +74,18 @@ def _subscription_chat(model: str, runner: Callable | None) -> Chat:
     return chat
 
 
-def claude_chat(api_key: str | None = None, *, runner: Callable | None = None) -> tuple[Chat, str] | None:
+def claude_chat(
+    api_key: str | None = None, *, runner: Callable | None = None, max_tokens: int = TEXT_MAX_TOKENS,
+) -> tuple[Chat, str] | None:
     """A ``(system, user) -> text`` function and the channel's name, or ``None``
-    when this machine cannot reach Claude either way."""
+    when this machine cannot reach Claude either way. ``max_tokens`` bounds a
+    key's answer; the subscription's is the CLI's own."""
     channel = resolve_channel(api_key)
     if not channel.available:
         return None
     if channel.name == CHANNEL_SUBSCRIPTION:
         return _subscription_chat(channel.model, runner), channel.name
-    return _api_key_chat(api_key, claude_vision.latest_model(api_key)), channel.name
+    return _api_key_chat(api_key, claude_vision.latest_model(api_key), max_tokens), channel.name
 
 
 def subscription_chat(*, runner: Callable | None = None) -> tuple[Chat, str] | None:

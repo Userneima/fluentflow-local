@@ -1638,6 +1638,71 @@ def revert_glossary_corrections(
     )
 
 
+@tool(
+    description=("Write the review note (复习笔记) for a recording: a second note, beside the follow-along note "
+        "(<名>_笔记.md), reorganised by topic for learning it again later. It opens with the main line and a "
+        "map of the chapters; each point appears once with its sources as links back to the follow-along "
+        "note's chapters plus the time in the cut video; the user's own question boxes are folded into the "
+        "points they ask about; the speaker's predictions are marked as the judgement at recording time; "
+        "then a term list, 10 to 15 self-test questions, what is still unclear, and which version of the "
+        "follow-along note it was written from. Written as <名>_复习笔记.md with a PDF beside it; an earlier "
+        "one is kept in 过程文件/历史版本. The base is the follow-along md as it is on disk now, with the "
+        "user's corrections; later edits to it do not change the review note until it is written again. "
+        "Give task_id, or note_path (the follow-along md's path) when the user moved the output folder and "
+        "FluentFlow can no longer find it; with note_path only, the task is found from the folder when it "
+        "can be. Only when the user asks for one. Uses the Claude subscription first when this machine "
+        "opted into it, the user's key taking over if it fails; takes about ten minutes for a three-hour "
+        "recording. Refused with code review_note_failed and the reason (no model, the note not found, an "
+        "incomplete answer: nothing is written and the task is not affected), already_running while one is "
+        "being written."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "note_path": {"type": "string", "description": "The follow-along note md, when the output folder was moved."},
+            "api_base": {"type": "string"},
+        },
+    },
+)
+def write_review_note(
+    task_id: str | None = None, note_path: str | None = None, api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST", "/agent/v1/review-notes",
+        api_base=api_base, client_id=client_id, payload={"task_id": task_id, "note_path": note_path}, timeout=2700,
+    )
+
+
+@tool(
+    description=("Change an existing review note as the user asked, without writing it again from the "
+        "follow-along note: pass the user's feedback as instruction (what to change and what to leave). "
+        "The rest of the note, its sources, question boxes and term list stay as they are; the links back to "
+        "the follow-along note are kept exactly. The previous version goes to 过程文件/历史版本 and the PDF "
+        "is printed again. Give task_id, or note_path (the review note or the follow-along note beside it). "
+        "Takes a few minutes. Refused with code review_note_failed and the reason when there is no review "
+        "note yet or the answer was incomplete (nothing is written)."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "note_path": {"type": "string"},
+            "instruction": {"type": "string"},
+            "api_base": {"type": "string"},
+        },
+        "required": ["instruction"],
+    },
+)
+def revise_review_note(
+    instruction: str, task_id: str | None = None, note_path: str | None = None,
+    api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST", "/agent/v1/review-notes/revise",
+        api_base=api_base, client_id=client_id, timeout=1800,
+        payload={"task_id": task_id, "note_path": note_path, "instruction": instruction},
+    )
+
+
 # Every tool, in the order written: each is described where it is defined (``tool``).
 TOOL_FUNCTIONS: dict[str, Any] = {name: func for name, (func, _definition) in _TOOLS.items()}
 
