@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import compress_media, debreath_job, silence_cuts, visual_note_channel, visual_note_job
-from backend.core import device_profile, note_versions, output_folder
+from backend.core import device_profile, model_usage, note_versions, output_folder, task_steps
 from backend.core.task_watch import TaskWatch
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -301,6 +301,7 @@ def mark_note_running(task_id: str, client_id: str | None) -> None:
     upsert_job(task_id=task_id, status="completed", stage="note", summary_status="pending")
 
 
+@model_usage.works_for(task_steps.NOTE)
 def write_note(
     task_id: str,
     client_id: str | None,

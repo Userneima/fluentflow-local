@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from backend.core import job_store, task_steps
+from backend.core import job_store, model_usage, task_steps
 from backend.core.event_logger import list_task_events
 from backend.core.local_decision_log import build_decision_log as build_local_decision_log
 from backend.core.local_error_diagnostics import diagnose_error
@@ -276,4 +276,7 @@ def build_task_detail(
         detail["recorded_steps"] = recorded
         detail["data_quality"] = {**detail.get("data_quality", {}), "has_recorded_steps": True,
                                   "timeline_sources": ["recorded"]}
+    if task_id:
+        # Each step's model calls, tokens and money (``model_usage``).
+        detail["model_usage"] = model_usage.for_task(task_id)
     return detail

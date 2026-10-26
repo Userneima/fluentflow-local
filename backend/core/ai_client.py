@@ -14,7 +14,7 @@ import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from backend.core.ai_usage import record_token_usage
+from backend.core import model_usage
 from backend.core import text_providers
 from backend.core.ai_config import (
     DEFAULT_DEEPSEEK_MODEL,
@@ -150,7 +150,7 @@ def _create(client: OpenAI, model: str, *, may_replace: bool = True, **kwargs: A
     provider = _provider_of(client)
     model = _REPLACED.get((provider, model), model)
     try:
-        return client.chat.completions.create(model=model, **kwargs), model
+        return _send(client, provider, model, **kwargs), model
     except Exception as exc:
         if not _model_gone(exc):
             raise
@@ -164,7 +164,15 @@ def _create(client: OpenAI, model: str, *, may_replace: bool = True, **kwargs: A
             ) from exc
         logger.warning("model %s is gone at %s; using %s", model, provider, fallback)
         _REPLACED[(provider, model)] = fallback
-        return client.chat.completions.create(model=fallback, **kwargs), fallback
+        return _send(client, provider, fallback, **kwargs), fallback
+
+
+def _send(client: OpenAI, provider: str, model: str, **kwargs: Any) -> Any:
+    """One request, recorded (``model_usage``)."""
+    with model_usage.call(provider, model) as call:
+        response = client.chat.completions.create(model=model, **kwargs)
+        call.openai(response)
+    return response
 
 
 def _chat(
@@ -183,7 +191,6 @@ def _chat(
         ],
         temperature=temperature,
     )
-    record_token_usage(provider=_provider_of(client), model=model, response=resp)
     msg = resp.choices[0].message
     return (msg.content or "").strip()
 
@@ -222,7 +229,6 @@ def _vision_chat(
         ],
         temperature=temperature,
     )
-    record_token_usage(provider=_provider_of(client), model=model, response=resp)
     msg = resp.choices[0].message
     return (msg.content or "").strip()
 

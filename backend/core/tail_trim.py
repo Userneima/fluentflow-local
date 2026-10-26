@@ -37,7 +37,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import job_store, silence_cuts
+from backend.core import job_store, model_usage, silence_cuts, task_steps
 from backend.core.storage_paths import _artifact_storage_dir
 
 logger = logging.getLogger(__name__)
@@ -117,6 +117,7 @@ def _default_chat() -> tuple[Chat, str] | None:
     return visual_note_job.coverage_checker(resolve_secret(None, "anthropic_api_key"))
 
 
+@model_usage.part_of(task_steps.CUT, "判断结尾")
 def _ask(chat: Chat, user: str) -> str:
     from backend.core.note_coverage import _within_deadline
 
@@ -167,6 +168,7 @@ def _keep_until(segments: Any, seconds: float) -> Any:
     return [seg for seg in segments if isinstance(seg, dict) and float(seg.get("start") or 0) < seconds]
 
 
+@model_usage.works_for(task_steps.CUT)
 def trim_tail(task_id: str, client_id: str | None = None, *, chat: tuple[Chat, str] | None = None) -> dict[str, Any] | None:
     """Judge where the content ends and cut the rest off. Returns what it
     recorded on the task, or None when there was nothing to judge. Never raises:

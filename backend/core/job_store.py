@@ -61,6 +61,25 @@ CREATE TABLE IF NOT EXISTS job_steps (
 );
 CREATE INDEX IF NOT EXISTS idx_job_steps_status_priority ON job_steps(status, priority, id);
 CREATE INDEX IF NOT EXISTS idx_job_steps_task ON job_steps(task_id, id);
+CREATE TABLE IF NOT EXISTS model_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    task_id TEXT,
+    step TEXT,
+    item TEXT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    billing TEXT NOT NULL,
+    input_tokens INTEGER,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER,
+    duration_ms INTEGER,
+    ok INTEGER NOT NULL,
+    error TEXT,
+    reported_cost_usd REAL
+);
+CREATE INDEX IF NOT EXISTS idx_model_calls_task ON model_calls(task_id, id);
 """
 
 
@@ -1167,6 +1186,43 @@ def task_ids_with_open_steps(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[s
             (TASK_STEP_PREFIX + "%",),
         ).fetchall()
     return [str(row[0]) for row in rows]
+
+
+MODEL_CALL_FIELDS = (
+    "task_id", "step", "item", "provider", "model", "billing", "input_tokens", "cached_input_tokens",
+    "cache_write_tokens", "output_tokens", "duration_ms", "ok", "error", "reported_cost_usd",
+)
+
+
+def insert_model_call(*, db_path: Path | str = DEFAULT_DB_PATH, **values: Any) -> None:
+    """One call to a model (``model_usage``). Its time is stored in UTC, which
+    the price table's peak hours are written in."""
+    ensure_job_db(db_path)
+    row = {name: values.get(name) for name in MODEL_CALL_FIELDS}
+    row["ok"] = 1 if row["ok"] else 0
+    row["cached_input_tokens"] = int(row["cached_input_tokens"] or 0)
+    row["cache_write_tokens"] = int(row["cache_write_tokens"] or 0)
+    created = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with sqlite_connection(Path(db_path)) as conn:
+        conn.execute(
+            f"INSERT INTO model_calls (created_at, {', '.join(MODEL_CALL_FIELDS)})"
+            f" VALUES (?, {', '.join('?' for _ in MODEL_CALL_FIELDS)})",
+            (created, *row.values()),
+        )
+
+
+def list_model_calls(
+    task_id: str | None = None, *, db_path: Path | str = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
+    """A task's model calls in the order made; every call when ``task_id`` is None."""
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        if task_id is None:
+            rows = conn.execute("SELECT * FROM model_calls ORDER BY id").fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM model_calls WHERE task_id = ? ORDER BY id", (task_id,)).fetchall()
+    return [{**dict(row), "ok": bool(row["ok"])} for row in rows]
 
 
 def repair_truncated_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> int:

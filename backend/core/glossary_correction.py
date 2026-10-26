@@ -37,10 +37,10 @@ import os
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from backend.core import model_usage, task_steps
 from backend.core import subtitle_correction as sc
 
 logger = logging.getLogger(__name__)
@@ -267,7 +267,7 @@ def decide(
             answer = once(batch)
         return answer["fixes"] if answer is not None else None
 
-    with ThreadPoolExecutor(max_workers=MODEL_WORKERS) as pool:
+    with model_usage.CarryingExecutor(max_workers=MODEL_WORKERS) as pool:
         answers = list(pool.map(ask, batches))
     fixes: list[dict[str, Any]] = []
     for batch, answer in zip(batches, answers):
@@ -338,6 +338,7 @@ class GlossaryCorrectionResult:
         return {key: value for key, value in data.items() if value not in (None, "")}
 
 
+@model_usage.part_of(task_steps.CORRECT, "词表纠错")
 def correct(
     segments: list[dict[str, Any]], glossary: str, chat: Chat | None, *,
     protected: set[int] | frozenset[int] = frozenset(), stop: threading.Event | None = None,

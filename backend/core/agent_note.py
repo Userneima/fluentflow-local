@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, correction_notes, cut_timeline, note_coverage, note_skills, note_versions, visual_note_check
+from backend.core import model_usage, task_steps
 from backend.core import visual_note_job as vn
 from backend.core.claude_vision import FrameInput
 from backend.core.result_artifacts import (
@@ -273,6 +274,7 @@ def _cleaned(draft: str | None, part: claude_vision.TranscriptPart, *, where: st
     return claude_vision.VisualNoteDraft(markdown=markdown, basis_note=basis_note, model=model)
 
 
+@model_usage.works_for(task_steps.NOTE)
 def save(
     task_id: str,
     *,
@@ -362,6 +364,7 @@ def _kept_from_earlier_save(job: dict[str, Any]) -> dict[str, Any] | None:
     return store.get("kept_replaced") or None
 
 
+@model_usage.works_for(task_steps.NOTE)
 def save_part(
     task_id: str,
     *,

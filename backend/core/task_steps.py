@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Iterable
 
-from backend.core import job_store, task_stop
+from backend.core import job_store, model_usage, task_stop
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +84,16 @@ def plan(task_id: str) -> None:
 
 
 def start(task_id: str, name: str) -> None:
+    """The step is under way. The model calls made from here on, in this
+    context and the work it hands to other threads, are this step's
+    (``model_usage``)."""
     _write(task_id, name, RUNNING, started=True)
+    model_usage.enter_step(task_id, name)
 
 
 def finish(task_id: str, name: str, status: str, error: str | None = None) -> None:
     _write(task_id, name, status, error=error or None, finished=True)
+    model_usage.leave_step(task_id, name)
 
 
 def steps_of(task_ids: Iterable[str]) -> dict[str, list[dict[str, Any]]]:

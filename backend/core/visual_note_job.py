@@ -59,7 +59,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import claude_vision, cut_timeline, debreath_job, visual_note_channel
+from backend.core import claude_vision, cut_timeline, debreath_job, model_usage, task_steps, visual_note_channel
 from backend.core import note_coverage, note_join, note_skills, note_versions, visual_note_check
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
@@ -1600,6 +1600,7 @@ __all__ = [
 # pipeline logged "summary skipped" and the note that followed a minute later
 # was visible only on the task, which is deleted with it.
 
+@model_usage.works_for(task_steps.NOTE)
 def run_visual_note(
     task_id: str,
     *,

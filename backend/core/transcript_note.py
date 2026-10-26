@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 
-from backend.core import glossary_correction
+from backend.core import glossary_correction, model_usage, task_steps
 from backend.core.ai_summarizer import summarize_transcript_with_metadata
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
@@ -89,6 +89,7 @@ def _cleanup_payload(cleanup_result: Any) -> dict[str, Any]:
     }
 
 
+@model_usage.works_for(task_steps.NOTE)
 async def summarize_transcript_source(
     *,
     raw: bytes | bytearray,
@@ -318,7 +319,7 @@ async def summarize_transcript_source(
     started_at = time.perf_counter()
     try:
         summary_result = await loop.run_in_executor(
-            None, lambda: summarize_transcript_with_metadata(note_transcript_text, **kwargs)
+            None, model_usage.carry(lambda: summarize_transcript_with_metadata(note_transcript_text, **kwargs))
         )
         summary_md = summary_result.markdown
         if not summary_md.strip():

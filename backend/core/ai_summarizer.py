@@ -7,7 +7,6 @@ import re
 import json
 import time
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Final
@@ -51,7 +50,7 @@ from backend.core.ai_prompts import (
     _HIGH_FIDELITY_FINAL_WRAPPER,
     _BILINGUAL_SEGMENT_SYSTEM,
 )
-from backend.core import note_coverage
+from backend.core import model_usage, note_coverage, task_steps
 from backend.core.ai_client import (
     _normalize_provider,
     _normalize_model,
@@ -362,7 +361,7 @@ def _parallel_map(fn: Callable[[Any], Any], items: list[Any]) -> list[Any]:
     if len(items) <= 1:
         return [fn(item) for item in items]
     workers = min(_MAX_PARALLEL_CALLS, len(items))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with model_usage.CarryingExecutor(max_workers=workers) as executor:
         return list(executor.map(fn, items))
 
 
@@ -637,6 +636,7 @@ def visual_requests_to_frame_segments(requests: list[dict[str, Any]]) -> list[di
 VISUAL_PLAN_SUMMARY_CHARS = 35_000
 
 
+@model_usage.part_of(task_steps.NOTE, "挑截图")
 def plan_visual_evidence_requests(
     summary_markdown: str,
     transcript_segments: list[dict[str, Any]],
@@ -749,6 +749,7 @@ def _coerce_visual_frame_selection(
     return selections
 
 
+@model_usage.part_of(task_steps.NOTE, "挑截图")
 def select_visual_evidence_frames(
     visual_requests: list[dict[str, Any]],
     frame_metadata: list[dict[str, Any]],
@@ -1356,6 +1357,7 @@ def _condense_evidence(
     return _chat(client, model, _EVIDENCE_CONDENSE_SYSTEM, condensed)
 
 
+@model_usage.part_of(task_steps.NOTE)
 def summarize_transcript_with_metadata(transcript: str, **kwargs: Any) -> SummaryResult:
     """Generate a note and return mode/chunk metadata for product analysis.
     Third level headings come out numbered （一）（二） within each chapter,
@@ -1513,6 +1515,7 @@ def _int_from_any(value: Any) -> int | None:
         return None
 
 
+@model_usage.part_of(task_steps.CORRECT, "翻译")
 def generate_bilingual_segments_zh(
     segments: list[dict[str, Any]],
     *,

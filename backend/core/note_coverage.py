@@ -25,9 +25,10 @@ import json
 import logging
 import threading
 import re
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from backend.core import model_usage, task_steps
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ def _within_deadline(chat: Chat, system: str, user: str, seconds: float) -> str:
         except BaseException as exc:  # noqa: BLE001 - handed back to the caller
             outcome["error"] = exc
 
-    worker = threading.Thread(target=run, name="note-coverage-request", daemon=True)
+    worker = threading.Thread(target=model_usage.carry(run), name="note-coverage-request", daemon=True)
     worker.start()
     worker.join(seconds)
     if worker.is_alive():
@@ -218,10 +219,11 @@ def _split(text: str, max_chars: int) -> list[str]:
 def _map(fn: Callable[[Any], Any], items: list[Any]) -> list[Any]:
     if len(items) <= 1:
         return [fn(item) for item in items]
-    with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(items))) as pool:
+    with model_usage.CarryingExecutor(max_workers=min(_MAX_WORKERS, len(items))) as pool:
         return list(pool.map(fn, items))
 
 
+@model_usage.part_of(task_steps.NOTE, "查漏")
 def check_against_transcript(
     chat: Chat, transcript: str, note: str, *, rules: str | None = None,
     chunk_chars: int = TRANSCRIPT_CHUNK_CHARS,
@@ -262,6 +264,7 @@ def check_against_transcript(
     )
 
 
+@model_usage.part_of(task_steps.NOTE, "查漏")
 def check_against_points(
     chat: Chat, points: list[dict[str, str]], note: str, *, rules: str | None = None,
     batch_chars: int = POINTS_BATCH_CHARS,
@@ -332,6 +335,7 @@ def accept_revision(note: str, revised: str) -> str | None:
     return candidate
 
 
+@model_usage.part_of(task_steps.NOTE, "查漏后补写")
 def revise(write: Chat, system: str, note: str, check: CoverageCheck) -> str | None:
     """The note with what ``check`` found missing written back in, by ``write``
     under the writer's own rules; ``None`` when there was nothing to add or the

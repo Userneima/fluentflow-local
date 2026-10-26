@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.core import note_skills
+from backend.core import model_usage, note_skills, task_steps
 
 FEEDBACK_FILE = "feedback.json"
 RULES_LOG_FILE = "rules_log.json"
@@ -153,6 +153,7 @@ def part_transcript(task_id: str, part: int = 1, *, client_id: str | None = None
     return parts[part - 1].text
 
 
+@model_usage.works_for(task_steps.NOTE, "按候选规则试写")
 def draft_part(task_id: str, *, rules: str, part: int = 1, client_id: str | None = None) -> dict[str, Any]:
     """One part of the note written by the product's own writer with ``rules``.
 

@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from backend.core import note_skills
+from backend.core import model_usage, note_skills
 from backend.core.cut_timeline import SPEAKER_LABEL_PREAMBLE
 
 logger = logging.getLogger(__name__)
@@ -644,8 +644,10 @@ def write_visual_note(
         "output_config": {"format": {"type": "json_schema", "schema": NOTE_SCHEMA}},
     }
     try:
-        with active.messages.stream(**request) as stream:
-            message = stream.get_final_message()
+        with model_usage.call(model_usage.ANTHROPIC, chosen_model) as call:
+            with active.messages.stream(**request) as stream:
+                message = stream.get_final_message()
+            call.anthropic(message)
     except ClaudeVisionError:
         raise
     except Exception as exc:  # noqa: BLE001 - mapped to something a user can act on

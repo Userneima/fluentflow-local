@@ -44,7 +44,7 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import correction_notes, glossary_correction, subtitle_correction, task_actions, task_activity, task_steps
+from backend.core import correction_notes, glossary_correction, model_usage, subtitle_correction, task_actions, task_activity, task_steps
 from backend.core import agent_cut, agent_note, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
@@ -107,6 +107,8 @@ def _task_done(job: dict[str, Any]) -> bool:
 def _task_package_response(job: dict[str, Any]) -> dict[str, Any]:
     package = build_agent_task_package(job, artifact_root=_artifact_storage_dir())
     package["note_pending"] = _note_pending(job)
+    # What each step's model calls used and cost, and the whole task's total.
+    package["model_usage"] = model_usage.for_task(str(job.get("task_id") or ""))
     # The version of the note in this package: what a save of an edit to it names.
     package["note_version"] = (job.get("result") or {}).get("note_version")
     return package
@@ -224,7 +226,10 @@ async def _write_transcript_task(
         try:
             summary_result = await loop.run_in_executor(
                 None,
-                lambda: summarize_transcript_with_metadata(transcript, **kwargs),
+                model_usage.carry(
+                    lambda: summarize_transcript_with_metadata(transcript, **kwargs),
+                    task_id=task_id_value, step=task_steps.NOTE,
+                ),
             )
         except Exception as exc:
             detail = friendly_error(exc)
@@ -509,6 +514,8 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             # the note, so a change made elsewhere meanwhile is not replaced.
             "note_version": (job.get("result") or {}).get("note_version"),
             "transcript_version": (job.get("result") or {}).get("transcript_version"),
+            # Tokens and money spent on models, the task's total and each step's.
+            "model_usage": model_usage.for_task(task_id),
         },
         "package_url": f"/agent/v1/tasks/{task_id}/package",
     }
@@ -1052,9 +1059,10 @@ def run_glossary_correction(request: Request, task_id: str) -> dict[str, Any]:
         segments = [dict(s) for s in before.get("raw_segments") or [] if isinstance(s, dict)]
         chat, channel = _glossary_chat()
         glossary = correction_notes.for_task(task_id, client_id)
-        outcome = glossary_correction.correct(
-            segments, glossary, chat, protected=glossary_correction.edited_by_user(before),
-        )
+        with model_usage.scope(task_id, task_steps.CORRECT):
+            outcome = glossary_correction.correct(
+                segments, glossary, chat, protected=glossary_correction.edited_by_user(before),
+            )
         result = dict(before)
         result[glossary_correction.META] = outcome.meta(channel)
         if outcome.corrections:
@@ -1297,7 +1305,10 @@ async def regenerate_agent_task_note(
         loop = asyncio.get_running_loop()
         summary_result = await loop.run_in_executor(
             None,
-            lambda: summarize_transcript_with_metadata(transcript, **kwargs),
+            model_usage.carry(
+                lambda: summarize_transcript_with_metadata(transcript, **kwargs),
+                task_id=task_id, step=task_steps.NOTE,
+            ),
         )
         if not str(summary_result.markdown or "").strip():
             # Writing an empty note through would replace the user's note with

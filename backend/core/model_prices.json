@@ -1,0 +1,153 @@
+{
+  "note": "Prices for working out what a model call cost, per million tokens, in the currency the provider bills (each provider's 'currency'). Only prices read on the provider's own pricing page go here, each with the page and the day it was read; a model not listed shows its tokens and no money. 'from' is the first day a price applies to; a price that changes gets a new entry with a later 'from', and the old one stays for the calls made before it. 'input' is a prompt token not served from the cache, 'cached_input' one served from it, 'cache_write' one written to it (Anthropic, five-minute cache), 'output' an answer token. Ships with the release, on purpose not in recommended_models.json (owner, 2026-10-25).",
+  "checked": "2026-10-26",
+  "providers": {
+    "deepseek": {
+      "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
+      "checked": "2026-10-26",
+      "peak_hours_utc": [
+        [
+          "01:00",
+          "04:00"
+        ],
+        [
+          "06:00",
+          "10:00"
+        ]
+      ],
+      "peak_weekdays_only": true,
+      "peak_note": "Peak is Monday to Friday 09:00-12:00 and 14:00-18:00 Beijing time (written here in UTC), except Chinese public holidays, which are off-peak all day. No holiday calendar is kept here, so a call on a holiday weekday in peak hours is priced at peak: at most twice what was charged. The Chinese platform (platform.deepseek.com, the one the settings page links to) bills in yuan at these prices; the English page's dollar prices are a separate list.",
+      "prices": [
+        {
+          "models": [
+            "deepseek-flash",
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp"
+          ],
+          "from": "2026-10-26",
+          "per_million": {
+            "input": 2,
+            "cached_input": 0.04,
+            "output": 8
+          },
+          "off_peak": {
+            "input": 1,
+            "cached_input": 0.02,
+            "output": 4
+          }
+        },
+        {
+          "models": [
+            "deepseek-v4-pro"
+          ],
+          "from": "2026-10-26",
+          "per_million": {
+            "input": 9,
+            "cached_input": 0.3,
+            "output": 27
+          },
+          "off_peak": {
+            "input": 4.5,
+            "cached_input": 0.15,
+            "output": 13.5
+          }
+        }
+      ],
+      "currency": "CNY"
+    },
+    "anthropic": {
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "checked": "2026-10-26",
+      "prices": [
+        {
+          "models": [
+            "claude-fable-5-1"
+          ],
+          "from": "2026-10-26",
+          "per_million": {
+            "input": 10,
+            "cache_write": 12.5,
+            "cached_input": 0.25,
+            "output": 50
+          }
+        },
+        {
+          "models": [
+            "claude-fable-5"
+          ],
+          "from": "2026-10-26",
+          "per_million": {
+            "input": 10,
+            "cache_write": 12.5,
+            "cached_input": 1,
+            "output": 50
+          }
+        },
+        {
+          "models": [
+            "claude-opus-5-5"
+          ],
+          "from": "2026-10-26",
+          "per_million": {
+            "input": 4,
+            "cache_write": 5,
+            "cached_input": 0.2,
+            "output": 20
+          }
+        },
+        {
+          "models": [
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-opus-4-6"
+          ],
+          "from": "2026-10-26",
+          "per_million": {
+            "input": 5,
+            "cache_write": 6.25,
+            "cached_input": 0.5,
+            "output": 25
+          }
+        },
+        {
+          "models": [
+            "claude-sonnet-5-5"
+          ],
+          "from": "2026-10-26",
+          "per_million": {
+            "input": 2,
+            "cache_write": 2.5,
+            "cached_input": 0.1,
+            "output": 10
+          }
+        },
+        {
+          "models": [
+            "claude-sonnet-5"
+          ],
+          "from": "2026-10-26",
+          "per_million": {
+            "input": 2,
+            "cache_write": 2.5,
+            "cached_input": 0.2,
+            "output": 10
+          }
+        },
+        {
+          "models": [
+            "claude-sonnet-4-6"
+          ],
+          "from": "2026-10-26",
+          "per_million": {
+            "input": 3,
+            "cache_write": 3.75,
+            "cached_input": 0.3,
+            "output": 15
+          }
+        }
+      ],
+      "currency": "USD"
+    }
+  }
+}

@@ -42,6 +42,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
+from backend.core import model_usage, task_steps
 from backend.core import cut_cases, cut_judge, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts, task_stop
 from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT, TRANSCRIPT_MEDIA_SOURCE, resolve_artifact_file
 from backend.core.storage_paths import _artifact_storage_dir
@@ -367,6 +368,7 @@ def apply_answer(
     return revised, record
 
 
+@model_usage.part_of(task_steps.CUT, "判断剪哪里")
 def revise_plan(
     source: Path, plan: CutPlan, segments: list[dict[str, Any]], ask: Chat, *,
     pictures: Callable[[Path, list[TimeRange]], dict[int, float | None]] | None = None,
@@ -744,6 +746,7 @@ def _onto_cut_clock(result: dict[str, Any], ranges: list[cut_timeline.KeptRange]
 Decide = Callable[[Path, CutPlan, list[dict[str, Any]]], tuple[CutPlan, dict[str, Any]]]
 
 
+@model_usage.works_for(task_steps.CUT)
 def survey_and_cut(
     task_id: str, client_id: str | None = None, *, chat: tuple[Chat, str] | None = None,
     on_plan: Callable[[list[cut_timeline.KeptRange]], None] | None = None,
@@ -924,6 +927,7 @@ def judged_by_agent(record: dict[str, Any]) -> bool:
     return str(record.get("judged_by") or "").startswith("agent")
 
 
+@model_usage.part_of(task_steps.CUT, "整理处理报告")
 def build_report(
     record: dict[str, Any], segments: list[dict[str, Any]], chat: tuple[Chat, str] | None,
     result: dict[str, Any] | None = None,

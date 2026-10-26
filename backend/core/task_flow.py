@@ -14,11 +14,11 @@ import shutil
 import threading
 import time
 import types
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
 
 from backend.core import (
+    model_usage,
     agent_cut,
     local_intake_flow,
     output_folder,
@@ -87,7 +87,7 @@ _NOTE_REMOTE_SLOTS = threading.BoundedSemaphore(NOTE_CONCURRENCY)
 # next note waits for a thread, which holds the queue (its frame work is queue
 # work) rather than piling up more blocked threads.
 NOTE_WAITING_AHEAD = 4
-_NOTE_EXECUTOR = ThreadPoolExecutor(
+_NOTE_EXECUTOR = model_usage.CarryingExecutor(
     max_workers=NOTE_CONCURRENCY + NOTE_WAITING_AHEAD, thread_name_prefix="fluentflow-note",
 )
 # How often a thread waiting for a slot checks whether its task was cancelled.
@@ -327,11 +327,12 @@ async def run_pipeline_then_note(
 
 
 def _bound_to(task_id: str, work: Any) -> Any:
-    """``work`` run on a worker thread as work of this task (``task_stop``)."""
+    """``work`` run on a worker thread as work of this task (``task_stop``),
+    its model calls recorded as the step's (``model_usage``)."""
     def run() -> Any:
         with task_stop.bound(task_id):
             return work()
-    return run
+    return model_usage.carry(run)
 
 
 async def _release(done: asyncio.Event) -> None:

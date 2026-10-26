@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import cut_timeline, device_profile, silence_cuts
+from backend.core import cut_timeline, device_profile, model_usage, silence_cuts, task_steps
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import get_job, list_jobs_by_statuses, save_result_changes, update_job_result
@@ -1046,6 +1046,7 @@ def prepare_cut_media(task_id: str, source: Path, **kwargs: Any) -> PreparedCut:
     return prepared
 
 
+@model_usage.works_for(task_steps.CUT)
 def run_debreath(task_id: str, *, client_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
     """The manual de-breath (see ``_run_debreath``), recorded however it ends."""
     started = time.perf_counter()

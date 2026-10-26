@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
-from backend.core import note_versions, visual_note_job
+from backend.core import model_usage, note_versions, task_steps, visual_note_job
 from backend.core.ai_summarizer import summarize_transcript_with_metadata
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 from backend.core.event_context import event_metadata
@@ -108,7 +108,9 @@ async def regenerate_summary(
     started_at = time.perf_counter()
     try:
         summary_result = await loop.run_in_executor(
-            None, lambda: summarize_transcript_with_metadata(transcript, **kwargs)
+            None, model_usage.carry(
+                lambda: summarize_transcript_with_metadata(transcript, **kwargs), task_id=task_id_value, step=task_steps.NOTE,
+            ),
         )
         md = summary_result.markdown
         if not str(md or "").strip():

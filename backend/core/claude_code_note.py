@@ -45,7 +45,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import process_tree, task_stop
+from backend.core import model_usage, process_tree, task_stop
 from backend.core.claude_vision import (
     FRAME_ATTACH_MAX,
     image_block,
@@ -635,6 +635,15 @@ def _run_cli(
 def _run_cli_once(
     command: list[str], prompt: str, execute: Callable[..., subprocess.CompletedProcess[str]]
 ) -> tuple[dict[str, Any], list[str]]:
+    """One pass through the CLI, recorded (``model_usage``)."""
+    named = command[command.index("--model") + 1] if "--model" in command[:-1] else SUBSCRIPTION_MODEL
+    with model_usage.call(model_usage.ANTHROPIC, named, model_usage.SUBSCRIPTION) as call:
+        return _cli_pass(command, prompt, execute, call)
+
+
+def _cli_pass(
+    command: list[str], prompt: str, execute: Callable[..., subprocess.CompletedProcess[str]], call: Any,
+) -> tuple[dict[str, Any], list[str]]:
     """One pass through the CLI: the result event, and the frames it opened."""
     # An empty working directory, so the only files in reach are the frames that
     # were explicitly added. Running this in the project directory would put the
@@ -666,6 +675,8 @@ def _run_cli_once(
     if not stdout:
         raise _friendly_failure(completed.stderr or "本机 Claude 没有任何输出")
     payload, opened = _read_stream(stdout)
+    if payload is not None:
+        call.command_line(payload)
     if payload is None:
         if completed.returncode != 0:
             raise _friendly_failure(completed.stderr or stdout)

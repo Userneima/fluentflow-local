@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from backend.core import model_usage
+
 VISION_BASE_URL_ENV = "FLUENTFLOW_VISION_BASE_URL"
 VISION_API_KEY_ENV = "FLUENTFLOW_VISION_API_KEY"
 VISION_MODEL_ENV = "FLUENTFLOW_VISION_MODEL"
@@ -86,11 +88,13 @@ def _api_key(api_key: str | None) -> Ask:
 
     def ask(system: str, user: str, images: list[Image]) -> str:
         client = claude_vision.anthropic.Anthropic(api_key=claude_vision.resolve_api_key(api_key))
-        with client.messages.stream(
-            model=model, max_tokens=MAX_TOKENS, system=system,
-            messages=[{"role": "user", "content": _claude_blocks(user, images)}],
-        ) as stream:
-            message = stream.get_final_message()
+        with model_usage.call(model_usage.ANTHROPIC, model) as call:
+            with client.messages.stream(
+                model=model, max_tokens=MAX_TOKENS, system=system,
+                messages=[{"role": "user", "content": _claude_blocks(user, images)}],
+            ) as stream:
+                message = stream.get_final_message()
+            call.anthropic(message)
         return claude_vision._response_text(message)
 
     return ask
@@ -114,10 +118,12 @@ def _openai_compatible(base: str, key: str, model: str) -> Ask:
         for label, path in images:
             content.append({"type": "text", "text": label})
             content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_b64(path)}"}})
-        response = OpenAI(base_url=base, api_key=key).chat.completions.create(
-            model=model, max_tokens=MAX_TOKENS,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": content}],
-        )
+        with model_usage.call(model_usage.provider_of_base_url(base), model) as call:
+            response = OpenAI(base_url=base, api_key=key).chat.completions.create(
+                model=model, max_tokens=MAX_TOKENS,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": content}],
+            )
+            call.openai(response)
         return (response.choices[0].message.content or "").strip()
 
     return ask

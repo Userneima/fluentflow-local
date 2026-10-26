@@ -20,7 +20,7 @@ from backend.core.local_config import (
     save_sensitive_settings,
 )
 from backend.core import claude_code_note, claude_vision, local_intake_flow, visual_note_channel
-from backend.core import text_providers
+from backend.core import model_usage, text_providers
 from backend.core.ai_client import _provider_base_url
 from backend.core.local_limits_config import (
     max_media_duration_seconds,
@@ -167,17 +167,24 @@ def _check_listing_key(provider: str, label: str, key: str) -> dict[str, Any]:
 def _check_anthropic_key(key: str) -> dict[str, Any]:
     base = (os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com").rstrip("/")
     model = claude_vision.configured_model()
-    response = _http_request(
-        "POST",
-        f"{base}/v1/messages",
-        headers={
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
-        timeout=_KEY_CHECK_TIMEOUT,
-    )
+    # One token asked for; it is a call to a model like any other (``model_usage``).
+    with model_usage.item("检查 Key"), model_usage.call(model_usage.ANTHROPIC, model) as call:
+        response = _http_request(
+            "POST",
+            f"{base}/v1/messages",
+            headers={
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
+            timeout=_KEY_CHECK_TIMEOUT,
+        )
+        if response.status_code == 200:
+            try:
+                call.claude_usage((response.json() or {}).get("usage"))
+            except (ValueError, AttributeError):
+                pass
     status = response.status_code
     if status == 200:
         return _key_check_result(True, "ok", "Key 可以用。")

@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Callable
 
-from backend.core import job_store
+from backend.core import job_store, model_usage, task_steps
 from backend.core.result_schema import canonical_display_segments
 
 logger = logging.getLogger(__name__)
@@ -318,6 +318,7 @@ def _default_chat() -> tuple[Chat, str, str] | None:
     return chat, channel, claude_code_note.subscription_model()
 
 
+@model_usage.works_for(task_steps.NOTE, "对齐分段时间")
 def align(task_id: str, *, chat: tuple[Chat, str, str] | None = None) -> dict[str, Any]:
     """Give every section of the task's note that has no row one, and save
     the table. Returns what happened: ``{"state": "ready" | "unchanged" |

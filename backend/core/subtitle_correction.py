@@ -61,7 +61,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import frame_text
+from backend.core import frame_text, model_usage, task_steps
 
 logger = logging.getLogger(__name__)
 
@@ -602,7 +602,7 @@ def decide(
         return [fix for part in halves if part for fix in part["fixes"]], any(part is None for part in halves)
 
     batches = [items[start:start + DECIDE_BATCH] for start in range(0, len(items), DECIDE_BATCH)]
-    with ThreadPoolExecutor(max_workers=MODEL_WORKERS) as pool:
+    with model_usage.CarryingExecutor(max_workers=MODEL_WORKERS) as pool:
         answers = list(pool.map(ask, batches))
     fixes: list[dict[str, Any]] = []
     for batch, (answer, _lost) in zip(batches, answers):
@@ -668,6 +668,7 @@ def apply(segments: list[dict[str, Any]], fixes: list[dict[str, Any]]) -> tuple[
     return fixed, records
 
 
+@model_usage.part_of(task_steps.CORRECT, "画面字幕修正")
 def correct_from_subtitles(
     video: Path | None,
     segments: list[dict[str, Any]],

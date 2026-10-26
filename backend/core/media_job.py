@@ -39,7 +39,7 @@ from backend.core.ai_summarizer import (
 from backend.core.media_probe import media_duration_seconds
 from backend.core.runtime_env import truthy
 from backend.core.ai_client import _chat, _get_client, _normalize_model, _normalize_provider, _provider_api_key
-from backend.core import correction_notes, glossary_correction, subtitle_correction
+from backend.core import correction_notes, glossary_correction, model_usage, subtitle_correction
 from backend.core.claude_text import claude_chat, subscription_first
 from backend.core.media_job_stages import (
     clean_transcript,
@@ -351,7 +351,7 @@ async def _run_subtitle_correction_stage(
     stop = threading.Event()
     try:
         outcome = await ctx.loop.run_in_executor(
-            None, lambda: subtitle_correction.correct_from_subtitles(video, segments, chat, stop=stop),
+            None, model_usage.carry(lambda: subtitle_correction.correct_from_subtitles(video, segments, chat, stop=stop)),
         )
     except asyncio.CancelledError:
         stop.set()
@@ -392,7 +392,7 @@ async def _run_glossary_correction_stage(
     stop = threading.Event()
     try:
         outcome = await ctx.loop.run_in_executor(
-            None, lambda: glossary_correction.correct(segments, glossary, chat, stop=stop),
+            None, model_usage.carry(lambda: glossary_correction.correct(segments, glossary, chat, stop=stop)),
         )
     except asyncio.CancelledError:
         stop.set()
@@ -1122,9 +1122,9 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 translation_chat, translation_channel = _translation_writer(translation_kwargs, secret_resolver)
                 translation_result = await loop.run_in_executor(
                     None,
-                    lambda: generate_bilingual_segments_zh(
+                    model_usage.carry(lambda: generate_bilingual_segments_zh(
                         segments_payload, **translation_kwargs, chat=translation_chat,
-                    ),
+                    )),
                 )
                 bilingual_segments = translation_result.segments
                 translation_status = "completed" if bilingual_segments else "failed"
@@ -1352,11 +1352,11 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             speaker_payload["note_input_labeled"] = bool(note_speaker_text)
             summary_result = await loop.run_in_executor(
                 None,
-                lambda: summarize_transcript_with_metadata(
+                model_usage.carry(lambda: summarize_transcript_with_metadata(
                     note_input_text,
                     speaker_labeled=bool(note_speaker_text),
                     **kwargs,
-                ),
+                )),
             )
             summary_md = summary_result.markdown
             if not summary_md.strip():
@@ -1368,13 +1368,13 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                         raise RuntimeError("Media job context is missing a keyframe extraction policy")
                     visual_plan = await loop.run_in_executor(
                         None,
-                        lambda: plan_visual_evidence_requests(
+                        model_usage.carry(lambda: plan_visual_evidence_requests(
                             summary_md,
                             note_segments_payload,
                             api_key=kwargs.get("api_key"),
                             model=kwargs.get("model"),
                             provider=kwargs.get("provider"),
-                        ),
+                        )),
                     )
                     visual_requests = visual_plan.requests
                     if visual_plan.transcript_truncated:
@@ -1409,12 +1409,12 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                             visual_api_key = kwargs.get("api_key") or ""
                         visual_selection = await loop.run_in_executor(
                             None,
-                            lambda: select_visual_evidence_frames(
+                            model_usage.carry(lambda: select_visual_evidence_frames(
                                 visual_requests,
                                 frame_metadata,
                                 api_key=visual_api_key or None,
                                 provider="qwen",
-                            ),
+                            )),
                         )
                         visual_selections = visual_selection.selections
                 except Exception as exc:

@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from backend.core import (
+    model_usage,
     debreath_job,
     local_intake_flow,
     original_locator,
@@ -80,7 +81,7 @@ def _job(task_id: str, client_id: Optional[str], missing: str = "Job not found")
 
 
 def _in_background(work: Callable[[], None]) -> None:
-    threading.Thread(target=work, name="fluentflow-task-action", daemon=True).start()
+    threading.Thread(target=model_usage.carry(work), name="fluentflow-task-action", daemon=True).start()
 
 
 # ── the processing report: turn around, agree, undo ─────────────────────────
