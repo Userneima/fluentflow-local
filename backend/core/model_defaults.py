@@ -67,8 +67,11 @@ def _read(path: Path) -> dict[str, dict[str, str]] | None:
 
 
 def _fetch() -> dict[str, dict[str, str]] | None:
+    from backend.core import fake_model
+
     url = os.environ.get(URL_ENV, DEFAULT_URL).strip()
-    if not url:
+    if not url or fake_model.enabled():
+        # The fake model sends no request, this free one included.
         return None
     try:
         response = httpx.get(url, timeout=FETCH_TIMEOUT, follow_redirects=True)

@@ -26,6 +26,7 @@ from backend.core import (
     tail_trim,
     task_steps,
     task_stop,
+    test_copy,
     visual_note_channel,
     visual_note_job,
 )
@@ -671,7 +672,8 @@ async def _feishu_step(ctx: Any) -> None:
     otherwise what came of it, whether the pipeline exported the note it wrote
     or ``_export_note_written_after_pipeline`` exports the one written after."""
     task_id = ctx.task_id_value
-    if not getattr(ctx, "do_lark", False):
+    # A test copy never writes to Feishu (``test_copy``).
+    if not getattr(ctx, "do_lark", False) or test_copy.enabled():
         task_steps.finish(task_id, task_steps.FEISHU, task_steps.SKIPPED)
         return
     task_steps.start(task_id, task_steps.FEISHU)

@@ -388,11 +388,14 @@ def budget_refused(task_id: str | None, step: str | None) -> bool:
 
 def test_run() -> dict[str, Any]:
     """Whether this run is a test run: the fake model, the budget and what
-    it has used (``/health``, the settings page's 需要你处理)."""
+    it has used, and whether it runs on a copy of the task database (``/health``, the settings page's 需要你处理)."""
     from backend.core import fake_model
 
+    from backend.core import test_copy
+
     limits = budget()
-    return {"fake_model": fake_model.enabled(), "budget": limits, "spent": spent() if limits else None}
+    return {"fake_model": fake_model.enabled(), "budget": limits, "spent": spent() if limits else None,
+            "test_copy": test_copy.enabled()}
 
 
 def reset_budget() -> None:

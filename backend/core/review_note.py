@@ -488,12 +488,20 @@ def _running_key(path: Path) -> str:
     return str(path.resolve())
 
 
+def _refuse_on_test_copy(job: dict[str, Any] | None) -> None:
+    from backend.core import test_copy
+
+    if not test_copy.writable((job or {}).get("task_id")):
+        raise ReviewNoteError(test_copy.READ_ONLY, code="test_copy")
+
+
 def generate(task_id: str | None = None, note_path: str | None = None, *, chat: tuple[Chat, str] | None = None) -> dict[str, Any]:
     """Write ``<名>_复习笔记.md`` and its PDF beside the follow-along note.
 
     Raises ``ReviewNoteError`` with the reason when nothing was written; the
     task itself is never touched beyond the record of this run."""
     path, job = locate(task_id, note_path)
+    _refuse_on_test_copy(job)
     key = _running_key(path)
     with _running_lock:
         if key in _running:
@@ -588,6 +596,7 @@ def revise(
     else:
         base, job = locate(task_id, note_path)
         review = review_path_for(base)
+    _refuse_on_test_copy(job)
     if not review.is_file():
         raise ReviewNoteError(f"还没有复习笔记：{review}")
     key = _running_key(base)

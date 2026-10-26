@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
-from backend.core import claude_code_note, local_intake_flow, task_flow, visual_note_channel
+from backend.core import claude_code_note, local_intake_flow, task_flow, test_copy, visual_note_channel
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
@@ -195,7 +195,8 @@ def _local_media_job_context(
         stt_provider_value=LOCAL_STT_PROVIDER,
         diarization_requested=truthy(options.get("speaker_diarization")),
         voice_enhance_requested=truthy(options.get("voice_enhance")),
-        do_lark=truthy(options.get("export_to_lark")),
+        # A test copy never writes to Feishu (``test_copy``).
+        do_lark=truthy(options.get("export_to_lark")) and not test_copy.enabled(),
         # The pipeline's own note stage is switched off whenever this edition is
         # going to write the note itself from the cut media. That is the "remove
         # the old flow" half of the owner's decision: without this the user gets a

@@ -40,7 +40,7 @@ hf_endpoint.apply_at_startup()
 onnx_quiet.quiet()
 
 from backend.core.app_factory import create_app
-from backend.core import claude_code_note, task_stop, visual_note_channel  # noqa: E402
+from backend.core import claude_code_note, task_steps, task_stop, test_copy, visual_note_channel  # noqa: E402
 from backend.core.event_context import event_metadata  # noqa: E402
 from backend.core.event_logger import log_event  # noqa: E402
 from backend.core.claude_code_note import stop_running_notes
@@ -292,7 +292,14 @@ async def lifespan(app: FastAPI):
     # were recorded is re-run as a new task, as it always was.
     from backend.core import task_actions
 
-    stepped = task_actions.stepped_tasks_cut_off()
+    # A test copy carries nothing on: its tasks are the owner's real ones,
+    # maybe still running in the real service (decision 8.11). Their open
+    # steps and states are closed in the copy and nothing is queued.
+    copy = test_copy.enabled()
+    if copy:
+        task_steps.recover_after_restart()
+        logger.info("Test copy: no task is carried on or queued at startup")
+    stepped = [] if copy else task_actions.stepped_tasks_cut_off()
     interrupted = [
         str(job.get("task_id")) for job in list_jobs_by_statuses(("queued", "running"))
         if str(job.get("task_id")) not in stepped
@@ -312,7 +319,7 @@ async def lifespan(app: FastAPI):
     # go on waiting (or are cut, when the decision had come).
     from backend.core.task_flow import resume_agent_cuts
 
-    waiting = await resume_agent_cuts()
+    waiting = 0 if copy else await resume_agent_cuts()
     if waiting:
         logger.info("Startup resumed %s tasks waiting for the agent's cut", waiting)
     if stranded_renders:
@@ -322,7 +329,7 @@ async def lifespan(app: FastAPI):
     stranded_notes = recover_stranded_notes()
     if stranded_notes:
         logger.info("Startup recovery cleared %s stranded visual notes", stranded_notes)
-    if interrupted or stepped:
+    if (interrupted or stepped) and not copy:
         # Off the startup path: each re-queue probes its file, and the page
         # should not wait on that to load. Oldest first, as they were queued.
         async def _resume() -> None:
@@ -342,7 +349,7 @@ async def lifespan(app: FastAPI):
     # A service started on a copy of the task database for a test run
     # (scripts/prepare_test_copy.py) leaves the user's real notes and Feishu
     # documents alone: the copied tasks still point at them.
-    watch_notes = os.environ.get("FLUENTFLOW_TEST_COPY", "").strip().lower() not in {"1", "true", "yes", "on"}
+    watch_notes = not copy
     if watch_notes:
         feishu_sync.start_watch()
     else:
@@ -373,7 +380,7 @@ def create_local_app() -> FastAPI:
         spa_router=create_local_spa_router(),
         frontend_dist_dir=FRONTEND_LOCAL_DIST_DIR,
         lifespan=lifespan,
-        http_middleware=(local_boundary_middleware,),
+        http_middleware=(local_boundary_middleware, test_copy.middleware),
     )
 
 

@@ -174,10 +174,15 @@ def _stop(task_id: str, error: Exception) -> None:
 
 def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = subprocess.run) -> Any:
     """Bring the task's Feishu document up to date with its note. Returns the
-    export response, or None when there was nothing to do. Never raises: a
+    export response, or None when there was nothing to do (always on a test
+    copy, decision 8.11). Never raises: a
     failure is recorded on the task as ``lark_sync_error``. ``previous``
     replaces the recorded sync for this push (a pull that lost to the note
     asks for the chapters edited in Feishu to be rewritten)."""
+    from backend.core import test_copy
+
+    if test_copy.enabled():
+        return None
     from backend.core.lark_cli_exporter import export_markdown_via_lark_cli, note_digest
     from backend.core.note_title import resolve_lark_doc_title
     from backend.core.storage_paths import _artifact_storage_dir
@@ -304,6 +309,10 @@ def pull(task_id: str, *, modified_at: int | None = None, runner: Any = subproce
     """Bring edits made in the Feishu document back into the note. Returns
     what happened (``nothing``, ``pulled``, ``kept_note``), or None when the
     note is not kept in Feishu. Never raises."""
+    from backend.core import test_copy
+
+    if test_copy.enabled():
+        return None
     try:
         return _pull(task_id, modified_at=modified_at, runner=runner)
     except Exception as exc:  # noqa: BLE001 - the note itself is fine
@@ -582,7 +591,9 @@ def schedule_push_when_quiet(task_id: str, delay: float | None = None) -> None:
 
 
 def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[str, Any] | None) -> None:
-    if recorded_sync(after) is None:
+    from backend.core import test_copy
+
+    if recorded_sync(after) is None or test_copy.enabled():
         return
     note = str((after or {}).get("summary_markdown") or "")
     if note == str((before or {}).get("summary_markdown") or ""):

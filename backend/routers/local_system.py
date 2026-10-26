@@ -20,7 +20,7 @@ from backend.core.local_config import (
     save_sensitive_settings,
 )
 from backend.core import claude_code_note, claude_vision, local_intake_flow, visual_note_channel
-from backend.core import model_usage, text_providers
+from backend.core import fake_model, model_usage, text_providers
 from backend.core.ai_client import _provider_base_url
 from backend.core.local_limits_config import (
     max_media_duration_seconds,
@@ -226,6 +226,9 @@ def check_credential(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not key:
         return _key_check_result(False, "missing", f"还没有保存 {label} 的 Key。")
     try:
+        if provider != "anthropic" and fake_model.enabled():
+            # Free, but still a request to the provider; the fake model sends none.
+            return _key_check_result(True, "fake_model", "假模型开着，没有真的检查这个 Key。")
         if provider == "deepseek":
             return _check_deepseek_key(key)
         if provider == "anthropic":
@@ -265,6 +268,8 @@ def list_provider_models(provider: str) -> dict[str, Any]:
     key = key or (os.environ.get(env_name) or "").strip()
     if not key:
         return {"models": [], "reason": "missing"}
+    if fake_model.enabled():
+        return {"models": [], "reason": "fake_model"}
     try:
         response = _http_request(
             "GET", f"{_provider_base_url(name)}/models",

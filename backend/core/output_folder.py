@@ -434,6 +434,11 @@ def sync(task_id: str) -> dict[str, Any] | None:
 
 
 def _sync_locked(task_id: str) -> dict[str, Any] | None:
+    from backend.core import test_copy
+
+    if not test_copy.writable(task_id):
+        # A copied task's folder is the owner's real one (decision 8.11).
+        return None
     job = job_store.get_job(task_id)
     if job is None:
         return None

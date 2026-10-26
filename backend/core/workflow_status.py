@@ -293,6 +293,12 @@ def _test_run() -> list[dict[str, Any]]:
             "这次启动设了测试用的模型调用上限，用完后再调用模型会被拒绝。正式使用前，不带上限重新启动服务。",
             "This run has a test limit on model calls; once used up, model calls are refused. "
             "Start the service again without it before real use.")})
+    if run["test_copy"]:
+        found.append({"id": "test-copy", "action": "none", "text": _t(
+            "这次启动用的是任务记录的测试副本：原来的任务只能看，不会写进原片旁边的文件夹，也不会同步飞书。"
+            "正式使用前，用平时的方式重新启动服务。",
+            "This run works on a test copy of the task records: earlier tasks are read-only, nothing is written "
+            "beside the recordings or synced to Feishu. Start the service the usual way before real use.")})
     return found
 
 

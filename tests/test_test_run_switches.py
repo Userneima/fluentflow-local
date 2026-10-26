@@ -552,7 +552,8 @@ def test_health_and_the_settings_page_say_when_a_test_switch_is_on(monkeypatch):
     app = FastAPI()
     app.include_router(local_system.router)
     client = TestClient(app)
-    assert client.get("/health").json()["test_run"] == {"fake_model": False, "budget": None, "spent": None}
+    assert client.get("/health").json()["test_run"] == {"fake_model": False, "budget": None, "spent": None,
+                                                        "test_copy": False}
     assert not [item for item in workflow_status.workflow_status()["attention"] if item["id"].startswith(("fake", "test"))]
 
     monkeypatch.setenv(fake_model.ENV, "1")
@@ -576,17 +577,20 @@ def _real_data(tmp_path: Path) -> Path:
         db.execute("create table job_steps (task_id text, step_type text, status text)")
         db.executemany("insert into job_steps values (?, ?, ?)",
                        [("a", "task_step:cut", "running"), ("a", "task_step:note", "pending"), ("b", "task_step:note", "done")])
+        db.execute("create table jobs (task_id text, created_at text, status text, error_reason text)")
+        db.executemany("insert into jobs values (?, ?, ?, ?)",
+                       [("a", "1", "running", None), ("b", "2", "completed", None), ("c", "3", "queued", None)])
     (real / "fluentflow_config.json").write_text(json.dumps(
         {"preferences": {"export_to_lark": True}, "secrets": {"deepseek_api_key": "k"}}), encoding="utf-8")
     (real / "recommended_models.json").write_text("{}", encoding="utf-8")
     return real
 
 
-def _statuses(database: Path) -> list[str]:
+def _statuses(database: Path, table: str = "job_steps") -> list[str]:
     import sqlite3
 
     with sqlite3.connect(database) as db:
-        return [row[0] for row in db.execute("select status from job_steps order by rowid")]
+        return [row[0] for row in db.execute(f"select status from {table} order by rowid")]
 
 
 def test_the_test_copy_closes_open_steps_in_the_copy_only_and_prints_a_capped_start(tmp_path, capsys):
@@ -602,6 +606,12 @@ def test_the_test_copy_closes_open_steps_in_the_copy_only_and_prints_a_capped_st
     assert (real / "fluentflow_jobs.sqlite").read_bytes() == before
     assert _statuses(real / "fluentflow_jobs.sqlite") == ["running", "pending", "done"]
     assert _statuses(into / "fluentflow_jobs.sqlite") == ["skipped", "skipped", "done"]
+    assert _statuses(into / "fluentflow_jobs.sqlite", "jobs") == ["failed", "completed", "failed"]
+    assert _statuses(real / "fluentflow_jobs.sqlite", "jobs") == ["running", "completed", "queued"]
+    assert json.loads((into / prepare_test_copy.TASKS_FILE).read_text(encoding="utf-8")) == ["a", "b", "c"]
+    from backend.core import test_copy
+
+    assert prepare_test_copy.TASKS_FILE == test_copy.TASKS_FILE
     assert (into / "models").is_symlink() and (into / "models").resolve() == (real / "models").resolve()
     config = json.loads((into / "fluentflow_config.json").read_text(encoding="utf-8"))
     assert config["preferences"]["export_to_lark"] is False and config["secrets"] == {"deepseek_api_key": "k"}
@@ -618,3 +628,21 @@ def test_the_test_copy_refuses_to_go_inside_the_real_data(tmp_path):
     real = _real_data(tmp_path)
     with pytest.raises(SystemExit):
         prepare_test_copy.main(["--source", str(real), "--into", str(real / "copy")])
+
+
+def test_the_fake_model_also_sends_the_free_requests_nowhere(monkeypatch, reached):
+    """Checking a DeepSeek or Qwen key, listing a provider's models and
+    reading the daily model table cost nothing, but are requests all the
+    same: with the fake model on none is sent."""
+    from backend.core import model_defaults
+
+    _owner_setup(monkeypatch)
+    monkeypatch.setenv(fake_model.ENV, "1")
+    monkeypatch.setattr(model_defaults.httpx, "get", lambda *a, **_k: reached.stop(f"GET {a[:1]}"))
+    app = FastAPI()
+    app.include_router(local_system.router)
+    client = TestClient(app)
+    assert client.post("/credentials/check", json={"provider": "deepseek"}).json()["reason"] == "fake_model"
+    assert client.get("/credentials/models", params={"provider": "deepseek"}).json()["reason"] == "fake_model"
+    assert model_defaults._fetch() is None
+    assert reached.attempts == []

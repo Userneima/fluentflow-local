@@ -9,10 +9,13 @@ What it does, reading the real data directory and writing only the copy:
 - ``fluentflow_config.json`` and ``recommended_models.json`` copied, with
   automatic export to Feishu turned off in the copy;
 - ``models`` linked, not copied (the transcription and speaker models);
-- every step in the copy that has not reached its end closed as skipped:
-  otherwise the test service carries on the tasks the real one is running,
-  spends a model call each and writes into the folders beside their
-  recordings (2026-10-26, caught once).
+- every step in the copy that has not reached its end closed as skipped, and
+  every task in the copy still queued or running marked failed: otherwise
+  the test service carries on (or queues again from the original) the tasks
+  the real one is running, spends model calls on them and writes into the
+  folders beside their recordings (2026-10-26, caught once);
+- the list of the copied tasks (``test_copy_tasks.json``): the test service
+  only lets new tasks be worked on (``backend/core/test_copy.py``).
 
 The printed command starts the service with a budget on model calls by
 default (``--max-calls``, ``--max-usd``, ``--max-cny``) and, with ``--fake``,
@@ -35,6 +38,7 @@ from pathlib import Path
 DEFAULT_SOURCE = Path.home() / "Library" / "Application Support" / "FluentFlow"
 DATABASES = ("fluentflow_jobs.sqlite", "fluentflow_events.sqlite")
 FILES = ("fluentflow_config.json", "recommended_models.json")
+TASKS_FILE = "test_copy_tasks.json"
 DEFAULT_MAX_CALLS = 40
 DEFAULT_MAX_USD = 1.0
 DEFAULT_MAX_CNY = 1.0
@@ -69,6 +73,34 @@ def close_open_steps(database: Path) -> int:
         connection.close()
 
 
+UNFINISHED_REASON = "test_copy_unfinished"
+
+
+def close_open_tasks(database: Path) -> int:
+    """Every task in the copy still queued or running is marked failed; how
+    many. Not as cut off by a restart, so nothing offers to carry it on."""
+    connection = sqlite3.connect(database)
+    try:
+        changed = connection.execute(
+            "update jobs set status='failed', error_reason=? where status in ('queued','running')",
+            (UNFINISHED_REASON,),
+        ).rowcount
+        connection.commit()
+        return changed
+    finally:
+        connection.close()
+
+
+def write_task_list(database: Path, target: Path) -> int:
+    connection = sqlite3.connect(database)
+    try:
+        ids = [row[0] for row in connection.execute("select task_id from jobs order by created_at")]
+    finally:
+        connection.close()
+    target.write_text(json.dumps(ids), encoding="utf-8")
+    return len(ids)
+
+
 def copy_config(source: Path, target: Path) -> None:
     data = json.loads(source.read_text(encoding="utf-8"))
     preferences = data.get("preferences") if isinstance(data.get("preferences"), dict) else None
@@ -98,7 +130,13 @@ def prepare(source: Path, into: Path) -> dict[str, object]:
     link = into / "models"
     if (source / "models").is_dir() and not link.exists():
         link.symlink_to(source / "models", target_is_directory=True)
-    return {"into": into, "closed_steps": close_open_steps(into / DATABASES[0])}
+    database = into / DATABASES[0]
+    return {
+        "into": into,
+        "closed_steps": close_open_steps(database),
+        "closed_tasks": close_open_tasks(database),
+        "copied_tasks": write_task_list(database, into / TASKS_FILE),
+    }
 
 
 def start_command(into: Path, *, port: int, fake: bool, max_calls: int | None, max_usd: float | None,
@@ -135,7 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     done = prepare(args.source, args.into)
     limits = (None, None, None) if args.no_limit else (args.max_calls, args.max_usd, args.max_cny)
     repo = Path(__file__).resolve().parents[1]
-    print(f"copy: {done['into']}  (steps closed in the copy: {done['closed_steps']})")
+    print(f"copy: {done['into']}  ({done['copied_tasks']} tasks copied, read-only in the test service; "
+          f"closed in the copy: {done['closed_steps']} steps, {done['closed_tasks']} tasks)")
     print("start the test service with:")
     print(start_command(done["into"], port=args.port, fake=args.fake, max_calls=limits[0], max_usd=limits[1],
                         max_cny=limits[2], repo=repo))

@@ -12,7 +12,13 @@ def source_retention_days() -> int:
     The de-breathed cut is not a perfect stand-in for it, and getting a deleted
     original back (finding the file again, downloading the link again) is the
     expensive part. A positive value is an explicit opt-in to cleanup.
+    A test copy never cleans up: the copies it would delete are the owner's
+    real ones (``test_copy``).
     """
+    from backend.core import test_copy
+
+    if test_copy.enabled():
+        return 0
     try:
         return max(int(os.environ.get("FLUENTFLOW_SOURCE_RETENTION_DAYS", "0")), 0)
     except ValueError:
