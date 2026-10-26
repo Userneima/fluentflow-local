@@ -71,7 +71,9 @@ const StepRow = ({step, zh}) => {
                     {loose ? (zh ? '没归到步骤' : 'Not in a step') : step.label}
                 </p>
                 {items.length > 0 && (
-                    <p className="mt-0.5 text-[12px] font-semibold text-[#85868c] dark:text-white/[0.65]">{items.join(' · ')}</p>
+                    <p className="mt-0.5 flex flex-wrap gap-x-2 text-[12px] font-semibold text-[#85868c] dark:text-white/[0.65]">
+                        {items.map((text) => <span key={text} className="whitespace-nowrap">{text}</span>)}
+                    </p>
                 )}
             </div>
             <div className="min-w-0 text-[13px] leading-5 text-[#57585d] dark:text-white/[0.75]">
