@@ -286,6 +286,9 @@ def test_a_call_that_fails_is_recorded_as_failed_and_still_raises(monkeypatch, t
     [row] = _rows(task_id)
     assert row["ok"] is False and "Insufficient Balance" in row["error"]
     assert row["input_tokens"] is None, "nothing reported is not recorded as zero"
+    step = model_usage.summarize(task_id)["steps"][0]
+    assert (step["failed_calls"], step["failure"]) == (1, "账户余额不足")
+    assert step["unpriced_calls"] == 0, "a refused call cost nothing to price"
 
 
 class FakeStream:

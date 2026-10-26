@@ -57,6 +57,17 @@ describe('ModelUsageCard', () => {
         expect(row.textContent).not.toMatch(/[$¥]/);
     });
 
+    it('a step whose calls failed says why instead of showing no tokens', () => {
+        render(<ModelUsageCard lang="zh" usage={{
+            total: usage({calls: 2, failed_calls: 2, failure: '账户余额不足', models: ['deepseek-flash']}),
+            steps: [{...usage({calls: 2, failed_calls: 2, failure: '账户余额不足', models: ['deepseek-flash']}),
+                step: 'cut', label: '剪辑', items: []}],
+        }}/>);
+        const row = screen.getByTestId('usage-step');
+        expect(row.textContent).toContain('都没成功：账户余额不足');
+        expect(row.textContent).not.toContain('0 token');
+    });
+
     it('names the calls that were not put in a step', () => {
         render(<ModelUsageCard lang="zh" usage={{
             total: usage({calls: 1, input_tokens: 10, output_tokens: 1}),

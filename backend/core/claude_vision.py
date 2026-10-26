@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from backend.core import model_usage, note_skills
+from backend.core import model_usage, note_skills, task_steps
 from backend.core.cut_timeline import SPEAKER_LABEL_PREAMBLE
 
 logger = logging.getLogger(__name__)
@@ -600,6 +600,7 @@ def _response_text(message: Any) -> str:
     ).strip()
 
 
+@model_usage.part_of(task_steps.NOTE, "写正文")
 def write_visual_note(
     transcript: str,
     frames: list[FrameInput],

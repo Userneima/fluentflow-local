@@ -13,7 +13,7 @@ const tokensText = (usage, zh) => {
     const output = fmtTokens(usage.output_tokens, zh ? 'zh' : 'en');
     const cached = Number(usage.cached_input_tokens) || 0;
     const fromCache = cached > 0
-        ? (zh ? `（${fmtTokens(cached, 'zh')}来自缓存）` : ` (${fmtTokens(cached, 'en')} from cache)`)
+        ? (zh ? `（${fmtTokens(cached, 'zh')} 来自缓存）` : ` (${fmtTokens(cached, 'en')} from cache)`)
         : '';
     return zh ? `输入 ${input}${fromCache} · 输出 ${output}` : `in ${input}${fromCache} · out ${output}`;
 };
@@ -46,11 +46,19 @@ const notes = (total, zh) => {
             ? `另有 ${total.unpriced_calls} 次调用的模型没有价格，金额里没算。`
             : `${total.unpriced_calls} calls used a model without a price and are not in the amount.`);
     }
-    if (total.failed_calls > 0) {
-        lines.push(zh ? `${total.failed_calls} 次调用没成功。` : `${total.failed_calls} calls failed.`);
-    }
+
     return lines;
 };
+
+// A step whose calls failed says so and why, rather than "0 token".
+const failureText = (usage, zh) => {
+    if (!usage.failed_calls) return '';
+    const reason = usage.failure ? (zh ? `：${usage.failure}` : `: ${usage.failure}`) : '';
+    if (usage.failed_calls === usage.calls) return zh ? `都没成功${reason}` : `All failed${reason}`;
+    return zh ? `其中 ${usage.failed_calls} 次没成功${reason}` : `${usage.failed_calls} failed${reason}`;
+};
+
+const failureClass = 'font-extrabold text-[#b42318] dark:text-[#f97066]';
 
 const StepRow = ({step, zh}) => {
     const loose = step.step === 'unattributed';
@@ -70,7 +78,8 @@ const StepRow = ({step, zh}) => {
                 <p className="font-semibold">
                     {[(step.models || []).join('、'), callsText(step.calls, zh)].filter(Boolean).join(' · ')}
                 </p>
-                <p>{tokensText(step, zh)}</p>
+                {step.failed_calls < step.calls && <p>{tokensText(step, zh)}</p>}
+                {step.failed_calls > 0 && <p className={failureClass}>{failureText(step, zh)}</p>}
                 {money && <p className="font-extrabold text-[#111111] dark:text-white">{money}</p>}
             </div>
         </li>
@@ -91,8 +100,9 @@ const ModelUsageCard = ({usage, lang}) => {
                 {money && <p data-testid="usage-total-money" className="text-[15px] font-extrabold text-[#111111] dark:text-white">{money}</p>}
             </div>
             <p className="mt-1 text-[13px] font-semibold text-[#676970] dark:text-white/[0.70]">
-                {callsText(total.calls, zh)} · {tokensText(total, zh)}
+                {total.failed_calls < total.calls ? `${callsText(total.calls, zh)} · ${tokensText(total, zh)}` : callsText(total.calls, zh)}
             </p>
+            {total.failed_calls > 0 && <p className={`mt-1 text-[13px] ${failureClass}`}>{failureText(total, zh)}</p>}
             {notes(total, zh).map((line) => (
                 <p key={line} className="mt-1 text-[12px] font-semibold text-[#85868c] dark:text-white/[0.65]">{line}</p>
             ))}

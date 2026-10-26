@@ -354,13 +354,34 @@ def _empty() -> dict[str, Any]:
     return {
         "calls": 0, "failed_calls": 0, "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0,
         "cost": {}, "unpriced_calls": 0, "subscription_calls": 0, "reported_cost_usd": None,
-        "models": [],
+        "models": [], "failure": None,
     }
+
+
+_FAILURES = (
+    (("402", "insufficient balance", "insufficient_quota", "credit balance"), "账户余额不足"),
+    (("401", "invalid api key", "authentication", "invalid x-api-key"), "Key 不对"),
+    (("429", "rate limit", "usage limit", "too many requests"), "被限流或额度用完"),
+    (("timed out", "timeout", "超过"), "超时没有返回"),
+)
+
+
+def failure_text(error: Any) -> str:
+    """A failed call's reason as the page says it: the provider's answer
+    sorted into what the user can do about it, else its first words."""
+    raw = str(error or "").strip()
+    lowered = raw.lower()
+    for marks, text in _FAILURES:
+        if any(mark in lowered for mark in marks):
+            return text
+    return raw[:80] or "没有成功"
 
 
 def _add(total: dict[str, Any], row: dict[str, Any]) -> None:
     total["calls"] += 1
-    total["failed_calls"] += 0 if row.get("ok") else 1
+    if not row.get("ok"):
+        total["failed_calls"] += 1
+        total["failure"] = failure_text(row.get("error"))
     for name in ("input_tokens", "cached_input_tokens", "output_tokens"):
         total[name] += int(row.get(name) or 0)
     model = str(row.get("model") or "")

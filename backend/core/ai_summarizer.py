@@ -1357,7 +1357,7 @@ def _condense_evidence(
     return _chat(client, model, _EVIDENCE_CONDENSE_SYSTEM, condensed)
 
 
-@model_usage.part_of(task_steps.NOTE)
+@model_usage.part_of(task_steps.NOTE, "写正文")
 def summarize_transcript_with_metadata(transcript: str, **kwargs: Any) -> SummaryResult:
     """Generate a note and return mode/chunk metadata for product analysis.
     Third level headings come out numbered （一）（二） within each chapter,

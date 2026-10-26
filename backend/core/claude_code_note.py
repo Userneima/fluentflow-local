@@ -45,7 +45,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import model_usage, process_tree, task_stop
+from backend.core import model_usage, process_tree, task_steps, task_stop
 from backend.core.claude_vision import (
     FRAME_ATTACH_MAX,
     image_block,
@@ -704,6 +704,7 @@ def _model_that_wrote(payload: dict[str, Any]) -> str:
     return str(payload.get("model") or "")
 
 
+@model_usage.part_of(task_steps.NOTE, "写正文")
 def write_visual_note(
     transcript: str,
     frames: list[FrameInput],
