@@ -339,12 +339,20 @@ async def lifespan(app: FastAPI):
     # log (each import registers its listener).
     from backend.core import feishu_sync, note_changes, note_section_times, output_folder  # noqa: F401
 
-    feishu_sync.start_watch()
+    # A service started on a copy of the task database for a test run
+    # (scripts/prepare_test_copy.py) leaves the user's real notes and Feishu
+    # documents alone: the copied tasks still point at them.
+    watch_notes = os.environ.get("FLUENTFLOW_TEST_COPY", "").strip().lower() not in {"1", "true", "yes", "on"}
+    if watch_notes:
+        feishu_sync.start_watch()
+    else:
+        logger.info("Test copy: not watching the output folders and Feishu for note edits")
     # With FLUENTFLOW_NOTE_SECTION_TIMES on, a saved note gets the recording
     # time of each section (decision 6.37, mock-up).
     note_section_times.start()
 
-    output_folder.start_edit_watch()
+    if watch_notes:
+        output_folder.start_edit_watch()
     yield
     if resume is not None and not resume.done():
         resume.cancel()

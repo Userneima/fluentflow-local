@@ -14,7 +14,7 @@ import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from backend.core import model_usage
+from backend.core import fake_model, model_usage
 from backend.core import text_providers
 from backend.core.ai_config import (
     DEFAULT_DEEPSEEK_MODEL,
@@ -170,7 +170,10 @@ def _create(client: OpenAI, model: str, *, may_replace: bool = True, **kwargs: A
 def _send(client: OpenAI, provider: str, model: str, **kwargs: Any) -> Any:
     """One request, recorded (``model_usage``)."""
     with model_usage.call(provider, model) as call:
-        response = client.chat.completions.create(model=model, **kwargs)
+        if call.fake:
+            response = fake_model.openai_response(fake_model.reply_to_messages(kwargs.get("messages")))
+        else:
+            response = client.chat.completions.create(model=model, **kwargs)
         call.openai(response)
     return response
 

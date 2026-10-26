@@ -45,6 +45,15 @@ describe('ModelUsageCard', () => {
         expect(screen.getByText(/按 API 价折算约 \$0\.42，不是实际花费/)).toBeTruthy();
     });
 
+    it('calls answered by the fake model say so and cost nothing', () => {
+        render(<ModelUsageCard lang="zh" usage={{
+            total: usage({calls: 2, fake_calls: 2, models: ['opus']}),
+            steps: [{...usage({calls: 2, fake_calls: 2, models: ['opus']}), step: 'note', label: '写笔记', items: []}],
+        }}/>);
+        expect(screen.getByTestId('usage-total-money').textContent).toBe('假模型，不花钱');
+        expect(screen.getByTestId('usage-step').textContent).not.toMatch(/[$¥]/);
+    });
+
     it('a model without a price shows tokens and no amount', () => {
         render(<ModelUsageCard lang="zh" usage={{
             total: usage({calls: 1, input_tokens: 500, output_tokens: 100, unpriced_calls: 1, models: ['kimi-k2.6']}),

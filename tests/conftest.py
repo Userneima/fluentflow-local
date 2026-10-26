@@ -187,6 +187,18 @@ def _no_real_cut_judge(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_task_in_scope():
+    """Every test starts outside any task's step. A test that starts a step on
+    its own thread (``task_steps.start``) leaves that task set for the thread,
+    and a later test's call would be recorded against it."""
+    from backend.core import model_usage
+
+    token = model_usage._SCOPE.set(None)
+    yield
+    model_usage._SCOPE.reset(token)
+
+
+@pytest.fixture(autouse=True)
 def _service_not_stopping():
     """Every test runs against a service that is up. A test that starts and
     stops the whole app leaves ``task_stop`` marked as shutting down, which

@@ -27,7 +27,7 @@ import time
 from typing import Any, Mapping
 
 from backend.core import claude_code_note, cut_judge, device_profile, local_intake_flow, visual_note_channel
-from backend.core import text_providers
+from backend.core import model_usage, text_providers
 from backend.core.lark_cli_exporter import lark_cli_ready
 from backend.core.local_config import get_preference, load_project_env, normalize_cookie_browser, resolve_secret
 from backend.core.local_entry_guards import local_ai_kwargs
@@ -277,12 +277,31 @@ def _agent() -> dict[str, Any]:
             "last_agent_request_at": status["last_agent_request_at"]}
 
 
+def _test_run() -> list[dict[str, Any]]:
+    """A service started for testing says so first, so it is not used for real
+    work by mistake (decision 8.11). Nothing on the page turns it off: the
+    service is started again without it."""
+    run = model_usage.test_run()
+    found = []
+    if run["fake_model"]:
+        found.append({"id": "fake-model", "action": "none", "text": _t(
+            "这次启动开着假模型：剪辑判断和笔记都是固定内容，没有调用真模型。正式使用前，不带假模型重新启动服务。",
+            "This run uses the fake model: cut decisions and notes are fixed text, no real model is called. "
+            "Start the service again without it before real use.")})
+    if run["budget"]:
+        found.append({"id": "test-budget", "action": "none", "text": _t(
+            "这次启动设了测试用的模型调用上限，用完后再调用模型会被拒绝。正式使用前，不带上限重新启动服务。",
+            "This run has a test limit on model calls; once used up, model calls are refused. "
+            "Start the service again without it before real use.")})
+    return found
+
+
 def workflow_status(choices: Mapping[str, Any] | None = None, *, for_agent: bool = False) -> dict[str, Any]:
     # The service loads .env at startup; a caller that has not (a script, a
     # test) would otherwise see the cut and the note pick different channels.
     load_project_env()
     choices = choices or {}
-    attention: list[dict[str, Any]] = []
+    attention: list[dict[str, Any]] = _test_run()
     steps = [
         _intake(choices, for_agent),
         _cutting(for_agent),

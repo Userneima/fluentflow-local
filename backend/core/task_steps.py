@@ -92,6 +92,10 @@ def start(task_id: str, name: str) -> None:
 
 
 def finish(task_id: str, name: str, status: str, error: str | None = None) -> None:
+    # A call of this step refused for the test budget fails the step, whatever
+    # the step made of the refusal (many steps go on without their model).
+    if model_usage.budget_refused(task_id, name) and status != STOPPED:
+        status, error = FAILED, model_usage.BUDGET_EXCEEDED
     _write(task_id, name, status, error=error or None, finished=True)
     model_usage.leave_step(task_id, name)
 

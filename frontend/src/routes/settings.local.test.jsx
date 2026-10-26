@@ -177,6 +177,14 @@ describe('local settings page', () => {
         expect(await screen.findByText('第一次填 Key？看看 Key 是什么、去哪里申请、大概花多少钱')).toBeTruthy();
     });
 
+    it('says at the top when this run uses the fake model, with nothing to click', async () => {
+        workflow = workflowFrom({attention: [{id: 'fake-model', action: 'none', text: {zh: '这次启动开着假模型', en: ''}}]});
+        render(<Settings/>);
+        const box = await screen.findByTestId('settings-attention');
+        expect(box.textContent).toMatch(/这次启动开着假模型/);
+        expect(box.querySelector('button')).toBeNull();
+    });
+
     it('shows nothing at the top when nothing needs the person', async () => {
         render(<Settings/>);
         await screen.findByText('cutting 的现状');

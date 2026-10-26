@@ -503,7 +503,8 @@ def submit_transcript(
         "out from the providers' published prices; it is empty when no call had a price "
         "(unpriced_calls counts those). Calls through the Claude subscription are counted in "
         "subscription_calls and cost nothing per call (reported_cost_usd is the command line's "
-        "API-price figure for them, not money spent). A step named unattributed holds calls "
+        "API-price figure for them, not money spent). Calls answered by the fake model of a test "
+        "run are counted in fake_calls and cost nothing. A step named unattributed holds calls "
         "that were not put in a step."),
     input_schema={
         "type": "object",

@@ -61,6 +61,8 @@ def health() -> dict[str, Any]:
         **identity_payload(),
         "runtime": {"execution": "local"},
         "limits": _limits(),
+        # A run started for testing (decision 8.11): the fake model, the budget.
+        "test_run": model_usage.test_run(),
     }
 
 
@@ -169,6 +171,8 @@ def _check_anthropic_key(key: str) -> dict[str, Any]:
     model = claude_vision.configured_model()
     # One token asked for; it is a call to a model like any other (``model_usage``).
     with model_usage.item("检查 Key"), model_usage.call(model_usage.ANTHROPIC, model) as call:
+        if call.fake:
+            return _key_check_result(True, "fake_model", "假模型开着，没有真的检查这个 Key。")
         response = _http_request(
             "POST",
             f"{base}/v1/messages",

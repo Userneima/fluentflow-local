@@ -45,7 +45,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import model_usage, process_tree, task_steps, task_stop
+from backend.core import fake_model, model_usage, process_tree, task_steps, task_stop
 from backend.core.claude_vision import (
     FRAME_ATTACH_MAX,
     image_block,
@@ -177,7 +177,10 @@ def login_state(*, now: float | None = None, fresh: bool = False) -> bool | None
     note it falls back to, so those tasks ended with no note of any kind.
 
     ``fresh`` asks the program now, past the cache; only off the event loop.
+    With the fake model on the program is not started: logged in, if installed.
     """
+    if fake_model.enabled():
+        return True if cli_available() else None
     clock = time.monotonic() if now is None else now
     if fresh and not _on_event_loop():
         return _check_login(clock)
@@ -638,6 +641,10 @@ def _run_cli_once(
     """One pass through the CLI, recorded (``model_usage``)."""
     named = command[command.index("--model") + 1] if "--model" in command[:-1] else SUBSCRIPTION_MODEL
     with model_usage.call(model_usage.ANTHROPIC, named, model_usage.SUBSCRIPTION) as call:
+        if call.fake:
+            # Nothing is started: the fake model answers in the result event's shape.
+            text = fake_model.reply(fake_model.command_line_system(command), fake_model.command_line_user(prompt))
+            return fake_model.command_line_result(text), []
         return _cli_pass(command, prompt, execute, call)
 
 

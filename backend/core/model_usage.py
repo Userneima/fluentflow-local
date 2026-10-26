@@ -27,6 +27,16 @@ same tokens and is kept only to be shown as that.
 
 Recording never costs the task: a row that cannot be written is logged and the
 call's answer goes back as if nothing happened.
+
+Two switches for test runs on real data (decision 8.11), both checked here and
+nowhere else. A budget (``FLUENTFLOW_TEST_MAX_CALLS``, ``FLUENTFLOW_TEST_MAX_USD``,
+``FLUENTFLOW_TEST_MAX_CNY``) bounds what this run of the service may call: past
+it (the money limit in the currency the call's provider bills), ``call`` refuses before the request leaves, records the refusal and raises
+``BudgetExceeded``; the step it was for ends failed with that reason
+(``task_steps.finish`` asks ``budget_refused``). Money is counted at API prices,
+subscription calls included, and a call without a price counts only as a call.
+The fake model (``fake_model``) makes every exit answer with fixed content: the
+call is recorded under the provider ``fake`` and counts against no budget.
 """
 
 from __future__ import annotations
@@ -36,6 +46,8 @@ import functools
 import inspect
 import json
 import logging
+import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -192,6 +204,8 @@ class Call:
     # A request the provider answered with a refusal rather than an error
     # raised (an HTTP status read by hand).
     refused: str | None = None
+    # The fake model answers instead of the provider: the exit sends nothing.
+    fake: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
     def openai(self, response: Any) -> None:
@@ -237,11 +251,20 @@ class Call:
 
 @contextmanager
 def call(provider: str, model: str, billing: str = KEY) -> Iterator[Call]:
-    """Around one request at an exit: records it, answered or not."""
+    """Around one request at an exit: records it, answered or not. With the
+    fake model on, ``fake`` is set and the exit answers from ``fake_model``;
+    past this run's budget, the request is refused here."""
+    from backend.core import fake_model
+
     record_of = Call(provider=provider or "unknown", model=model or "unknown", billing=billing)
     # Priced by when it was asked: a long call that runs past the end of
     # DeepSeek's peak hours is billed at the price it started under.
     at = utc_now()
+    if fake_model.enabled():
+        record_of.provider = record_of.billing = FAKE
+        record_of.fake = True
+    else:
+        _admit(record_of, at)
     started = time.perf_counter()
     try:
         yield record_of
@@ -257,18 +280,126 @@ def utc_now() -> datetime:
 
 def _record(made: Call, at: datetime, seconds: float, *, ok: bool, error: str | None = None) -> None:
     where = current()
+    row = dict(
+        created_at=at.isoformat(timespec="seconds"),
+        task_id=where.task_id, step=where.step, item=where.item,
+        provider=made.provider, model=made.model, billing=made.billing,
+        input_tokens=made.input_tokens, cached_input_tokens=made.cached_input_tokens,
+        cache_write_tokens=made.cache_write_tokens, output_tokens=made.output_tokens,
+        duration_ms=int(seconds * 1000), ok=ok, error=(error or "")[:300] or None,
+        reported_cost_usd=made.reported_cost_usd,
+    )
+    if not made.fake:
+        _charge(row)
     try:
-        job_store.insert_model_call(
-            created_at=at.isoformat(timespec="seconds"),
-            task_id=where.task_id, step=where.step, item=where.item,
-            provider=made.provider, model=made.model, billing=made.billing,
-            input_tokens=made.input_tokens, cached_input_tokens=made.cached_input_tokens,
-            cache_write_tokens=made.cache_write_tokens, output_tokens=made.output_tokens,
-            duration_ms=int(seconds * 1000), ok=ok, error=(error or "")[:300] or None,
-            reported_cost_usd=made.reported_cost_usd,
-        )
+        job_store.insert_model_call(**row)
     except Exception:  # noqa: BLE001 - the call's answer matters more than its record
         logger.warning("could not record a model call (%s %s)", made.provider, made.model, exc_info=True)
+
+
+# ── this run's budget (decision 8.11) ──────────────────────────────────────
+
+FAKE = "fake"
+BUDGET_EXCEEDED = "超出这次测试的模型预算"
+BUDGET_ENV = {"calls": "FLUENTFLOW_TEST_MAX_CALLS", "USD": "FLUENTFLOW_TEST_MAX_USD", "CNY": "FLUENTFLOW_TEST_MAX_CNY"}
+
+
+class BudgetExceeded(RuntimeError):
+    """A call refused because this run's test budget is used up."""
+
+
+_budget_lock = threading.Lock()
+_spent: dict[str, float] = {"calls": 0, "USD": 0.0, "CNY": 0.0}
+# Steps a call was refused in, until the step ends: (task, step).
+_refused_in: set[tuple[str | None, str | None]] = set()
+
+
+def budget() -> dict[str, float] | None:
+    """This run's limits by kind (``calls``, ``USD``, ``CNY``), as set when
+    the service started; None when none is set."""
+    limits: dict[str, float] = {}
+    for kind, name in BUDGET_ENV.items():
+        raw = (os.environ.get(name) or "").strip()
+        if not raw:
+            continue
+        try:
+            limits[kind] = float(raw)
+        except ValueError:
+            logger.warning("%s=%r is not a number; no limit set from it", name, raw)
+    return limits or None
+
+
+def spent() -> dict[str, float]:
+    """What this run has called and spent so far, at API prices."""
+    with _budget_lock:
+        return dict(_spent)
+
+
+def api_price(row: dict[str, Any]) -> tuple[str, float] | None:
+    """What a call costs at API prices, subscription calls included: the
+    figure the subscription command line reported (it covers every model the
+    command line used), else the price table."""
+    if row.get("reported_cost_usd") is not None:
+        return "USD", float(row["reported_cost_usd"])
+    return cost({**row, "billing": KEY})
+
+
+def _admit(made: Call, at: datetime) -> None:
+    """Refuse the call when this run's budget is used up; else count it."""
+    limits = budget()
+    if limits is None:
+        return
+    # A money limit holds back only the calls billed in its currency: a yuan
+    # limit used up still lets a Claude call through, a dollar one does not.
+    found = (prices().get("providers") or {}).get(made.provider)
+    currency = str(found.get("currency") or "") if isinstance(found, dict) else ""
+    with _budget_lock:
+        over = [kind for kind, limit in limits.items()
+                if kind in ("calls", currency) and _spent.get(kind, 0.0) >= limit]
+        if not over:
+            _spent["calls"] += 1
+            return
+        where = current()
+        _refused_in.add((where.task_id, where.step))
+    used = "、".join(f"{kind} {_spent.get(kind, 0):g}/{limits[kind]:g}" for kind in over)
+    _record(made, at, 0.0, ok=False, error=f"{BUDGET_EXCEEDED}（{used}）")
+    raise BudgetExceeded(f"{BUDGET_EXCEEDED}（{used}），这次调用没有发出。")
+
+
+def _charge(row: dict[str, Any]) -> None:
+    if budget() is None or not row.get("ok") and row.get("input_tokens") is None:
+        return
+    priced = api_price(row)
+    if priced is None:
+        return
+    currency, amount = priced
+    with _budget_lock:
+        _spent[currency] = _spent.get(currency, 0.0) + amount
+
+
+def budget_refused(task_id: str | None, step: str | None) -> bool:
+    """Whether a call of this step was refused for the budget; asked once,
+    when the step ends (``task_steps.finish``)."""
+    with _budget_lock:
+        found = (task_id, step) in _refused_in
+        _refused_in.discard((task_id, step))
+    return found
+
+
+def test_run() -> dict[str, Any]:
+    """Whether this run is a test run: the fake model, the budget and what
+    it has used (``/health``, the settings page's 需要你处理)."""
+    from backend.core import fake_model
+
+    limits = budget()
+    return {"fake_model": fake_model.enabled(), "budget": limits, "spent": spent() if limits else None}
+
+
+def reset_budget() -> None:
+    """Back to nothing spent (tests)."""
+    with _budget_lock:
+        _spent.update({"calls": 0, "USD": 0.0, "CNY": 0.0})
+        _refused_in.clear()
 
 
 def provider_of_base_url(base_url: str) -> str:
@@ -367,7 +498,7 @@ def _empty() -> dict[str, Any]:
     return {
         "calls": 0, "failed_calls": 0, "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0,
         "cost": {}, "unpriced_calls": 0, "subscription_calls": 0, "reported_cost_usd": None,
-        "models": [], "failure": None,
+        "models": [], "failure": None, "fake_calls": 0,
     }
 
 
@@ -375,6 +506,7 @@ _FAILURES = (
     (("402", "insufficient balance", "insufficient_quota", "credit balance"), "账户余额不足"),
     (("401", "invalid api key", "authentication", "invalid x-api-key"), "Key 不对"),
     (("429", "rate limit", "usage limit", "too many requests"), "被限流或额度用完"),
+    ((BUDGET_EXCEEDED,), BUDGET_EXCEEDED),
     (("timed out", "timeout", "超过"), "超时没有返回"),
 )
 
@@ -400,6 +532,9 @@ def _add(total: dict[str, Any], row: dict[str, Any]) -> None:
     model = str(row.get("model") or "")
     if model and model not in total["models"]:
         total["models"].append(model)
+    if row.get("provider") == FAKE:
+        total["fake_calls"] += 1
+        return
     if row.get("billing") == SUBSCRIPTION:
         total["subscription_calls"] += 1
         if row.get("reported_cost_usd") is not None:
@@ -481,7 +616,8 @@ def for_task(task_id: str) -> dict[str, Any] | None:
 
 
 __all__ = [
-    "ANTHROPIC", "CarryingExecutor", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
+    "ANTHROPIC", "BUDGET_EXCEEDED", "BudgetExceeded", "CarryingExecutor", "FAKE", "api_price", "budget",
+    "budget_refused", "reset_budget", "spent", "test_run", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
     "OUTSIDE_TASKS_LABEL", "call", "carry", "cost", "current", "enter_step", "for_task", "outside_tasks",
     "outside_tasks_or_none", "item", "leave_step", "part_of", "prices",
     "provider_of_base_url", "scope", "summarize", "unit_prices", "works_for",

@@ -147,7 +147,7 @@ const Settings = () => {
                         {attention.map((item) => (
                             <li key={item.id} className="flex flex-wrap items-baseline justify-between gap-2 text-sm font-semibold text-amber-900 dark:text-amber-100">
                                 <span>{pick(item.text)}</span>
-                                {item.action === 'turn_off_speakers' ? (
+                                {item.action === 'none' ? null : item.action === 'turn_off_speakers' ? (
                                     <button type="button" className={linkButton('blue', 'sm')} onClick={() => state.updateSettingNow({speakerDiarization: false})}>
                                         {zh ? '关掉区分讲话人' : 'Turn speaker labels off'}
                                     </button>

@@ -14,7 +14,7 @@ import logging
 import threading
 from typing import Callable
 
-from backend.core import claude_code_note, claude_vision, model_usage
+from backend.core import claude_code_note, claude_vision, fake_model, model_usage
 from backend.core.visual_note_channel import CHANNEL_SUBSCRIPTION, preferred_channel, resolve_channel
 
 logger = logging.getLogger(__name__)
@@ -29,13 +29,16 @@ def _api_key_chat(api_key: str | None, model: str, max_tokens: int = TEXT_MAX_TO
         client = claude_vision.anthropic.Anthropic(api_key=claude_vision.resolve_api_key(api_key))
         try:
             with model_usage.call(model_usage.ANTHROPIC, model) as call:
-                with client.messages.stream(
-                    model=model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    messages=[{"role": "user", "content": user}],
-                ) as stream:
-                    message = stream.get_final_message()
+                if call.fake:
+                    message = fake_model.anthropic_message(fake_model.reply(system, user))
+                else:
+                    with client.messages.stream(
+                        model=model,
+                        max_tokens=max_tokens,
+                        system=system,
+                        messages=[{"role": "user", "content": user}],
+                    ) as stream:
+                        message = stream.get_final_message()
                 call.anthropic(message)
         except Exception as exc:  # noqa: BLE001 - mapped to something a user can act on
             raise claude_vision.ClaudeVisionError(

@@ -21,7 +21,7 @@ const tokensText = (usage, zh) => {
 };
 
 // The money line for a total or a step: what keys cost, then what the
-// subscription and unpriced calls add to the picture.
+// subscription, the fake model (test runs) and unpriced calls add to the picture.
 const moneyText = (usage, zh) => {
     const parts = [];
     const money = fmtCosts(usage.cost);
@@ -32,6 +32,12 @@ const moneyText = (usage, zh) => {
         parts.push(zh
             ? (all ? '订阅，不按次计费' : `${usage.subscription_calls} 次走订阅，不按次计费`)
             : (all ? 'Subscription, not billed per call' : `${usage.subscription_calls} by subscription, not billed per call`));
+    }
+    if (usage.fake_calls > 0) {
+        const all = usage.fake_calls === usage.calls;
+        parts.push(zh
+            ? (all ? '假模型，不花钱' : `${usage.fake_calls} 次是假模型，不花钱`)
+            : (all ? 'Fake model, no cost' : `${usage.fake_calls} by the fake model, no cost`));
     }
     if (usage.unpriced_calls > 0 && !parts.length) parts.push(zh ? '没有这个模型的价格' : 'No price for this model');
     return parts.join(zh ? '，' : '; ');

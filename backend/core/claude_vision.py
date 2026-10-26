@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from backend.core import model_usage, note_skills, task_steps
+from backend.core import fake_model, model_usage, note_skills, task_steps
 from backend.core.cut_timeline import SPEAKER_LABEL_PREAMBLE
 
 logger = logging.getLogger(__name__)
@@ -458,6 +458,9 @@ def latest_model(api_key: str | None = None, *, client: Any | None = None, now: 
     override = model_override()
     if override:
         return override
+    if fake_model.enabled():
+        # Looking it up is a request to Anthropic; the fake model sends none.
+        return configured_model()
     moment = time.time() if now is None else now
     if _LATEST_MODEL["id"] and moment - _LATEST_MODEL["at"] < LATEST_MODEL_TTL_SECONDS:
         return _LATEST_MODEL["id"]
@@ -646,8 +649,11 @@ def write_visual_note(
     }
     try:
         with model_usage.call(model_usage.ANTHROPIC, chosen_model) as call:
-            with active.messages.stream(**request) as stream:
-                message = stream.get_final_message()
+            if call.fake:
+                message = fake_model.anthropic_message(fake_model.reply(request["system"], text))
+            else:
+                with active.messages.stream(**request) as stream:
+                    message = stream.get_final_message()
             call.anthropic(message)
     except ClaudeVisionError:
         raise

@@ -43,6 +43,7 @@ exists and that no other file judges whether a task is still busy.
 - How a review note is written: `backend/note_skills/fluentflow-review-note/SKILL.md`; writing and revising it beside the follow-along note: `backend/core/review_note.py`
 - The text-model note and the calls to text models: `backend/core/ai_summarizer.py`, `backend/core/ai_client.py`
 - Recording each model call (which task, step, model, tokens) and what a task's calls cost: `backend/core/model_usage.py`; the prices: `backend/core/model_prices.json`. Every exit that calls a model wraps its request in `model_usage.call`, and work handed to another thread goes through `model_usage.carry` or `CarryingExecutor`
+- Whether a model call may go out in a test run (the budget) and whether the fake model answers it: `model_usage.call`; what the fake model answers: `backend/core/fake_model.py`. Every exit asks `call.fake` before sending (`tests/test_test_run_switches.py` fails on one that does not)
 - Correcting the transcript from on-screen subtitles and from the word list: `backend/core/subtitle_correction.py`, `backend/core/glossary_correction.py`
 - The output folder beside a recording: `backend/core/output_folder.py`; keeping a note in step with Feishu: `backend/core/feishu_sync.py`
 - What each processing step currently uses, for the settings page and agents: `backend/core/workflow_status.py`
@@ -83,6 +84,16 @@ used, what was checked, problems found), save it under
 folder beside a recording from the user's disk, with the transcript and
 subtitles in its `过程文件`. Link the record and that output folder in the
 reply.
+
+Real-run tests on the owner's data run on a copy prepared by
+`scripts/prepare_test_copy.py`, on a port of their own (decision 8.11, owner
+2026-10-26; how, in `docs/04-维护手册.md`「在真实数据的副本上实测」). A test of the
+flow (restart, stop, carry on, export) starts it with `--fake`: the fake model
+calls nothing and costs nothing. A test of what a model produces keeps the
+budget the script sets; before running it, say in the reply whether it goes
+through the Claude subscription or a key billed per call and what it should
+cost from earlier measurements, and wait for 王愉超's go-ahead when it is billed
+per call. Afterwards report what the usage record shows.
 
 ## Delivery records
 
