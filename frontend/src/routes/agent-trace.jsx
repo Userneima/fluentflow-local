@@ -12,6 +12,7 @@ import {
 import {API_BASE, apiFetch, localExecutionHeaders, noteModeLabel, useI18n, noteGenerationDiagnosis} from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import TaskProgressOverview from '../components/TaskProgressOverview.jsx';
+import ModelUsageCard from '../components/ModelUsageCard.jsx';
 import {normalizeTaskState} from '../lib/taskState.js';
 import {fmtCharCount, fmtDuration} from '../lib/format.js';
 import {button} from '../lib/ui.js';
@@ -819,6 +820,8 @@ const AgentTrace = () => {
                 </header>
 
                 <TaskProgressOverview pageData={pageData}/>
+
+                <ModelUsageCard usage={pageData?.model_usage} lang={lang}/>
 
                 <ChapterCoverageEvidence coverage={chapterCoverage} lang={lang}/>
 

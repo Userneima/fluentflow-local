@@ -171,6 +171,35 @@ export const fmtCharCount = (chars, lang = 'zh') => {
     const n = Math.max(0, Math.round(Number(chars) || 0));
     return lang === 'zh' ? `${n} 字` : `${n} chars`;
 };
+// Model tokens: whole numbers up to ten thousand, then 万 (zh) or K/M (en).
+export const fmtTokens = (tokens, lang = 'zh') => {
+    const n = Math.max(0, Math.round(Number(tokens) || 0));
+    if (lang === 'zh') {
+        if (n < 10000) return `${n} token`;
+        return `${(n / 10000).toFixed(n < 1000000 ? 1 : 0)} 万 token`;
+    }
+    if (n < 10000) return `${n} tokens`;
+    return n < 1000000 ? `${(n / 1000).toFixed(1)}K tokens` : `${(n / 1000000).toFixed(1)}M tokens`;
+};
+// Money spent on a model, in the currency the provider bills (DeepSeek's
+// Chinese platform in yuan, Anthropic in dollars). Calls are often fractions
+// of a cent, so small amounts keep two significant figures.
+const CURRENCY_SIGNS = {CNY: '¥', USD: '$'};
+export const fmtMoney = (amount, currency = 'USD') => {
+    const n = Number(amount);
+    const sign = CURRENCY_SIGNS[currency] || `${currency} `;
+    if (!Number.isFinite(n) || n < 0) return '-';
+    if (n === 0) return `${sign}0`;
+    if (n >= 0.1) return `${sign}${n.toFixed(2)}`;
+    if (n >= 0.01) return `${sign}${n.toFixed(3)}`;
+    if (n < 0.0001) return `< ${sign}0.0001`;
+    return `${sign}${Number(n.toPrecision(2))}`;
+};
+// Several currencies side by side, yuan first: "¥0.021 + $0.40".
+export const fmtCosts = (costs) => Object.entries(costs || {})
+    .sort(([a], [b]) => (a === 'CNY' ? -1 : b === 'CNY' ? 1 : a.localeCompare(b)))
+    .map(([currency, amount]) => fmtMoney(amount, currency))
+    .join(' + ');
 export const fmtFileSize = (mb) => {
     const n = Number(mb);
     if(!Number.isFinite(n) || n <= 0) return '-';

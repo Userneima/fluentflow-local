@@ -307,6 +307,31 @@ describe('note lengths have one wording', () => {
     });
 });
 
+// ---- Model tokens and money go through fmtTokens and fmtUsd -------------------
+
+export const usageWordingProblems = (files) => {
+    const problems = [];
+    for (const {path, text} of files) {
+        if (path === 'lib/format.js') continue;
+        text.split('\n').forEach((line, i) => {
+            if (/\$\{[^}]+\}\s*tokens?\b|\$\$\{|\\\$\$\{|¥\$\{/.test(line)) problems.push(`${path}:${i + 1} ${line.trim().slice(0, 90)}`);
+        });
+    }
+    return problems;
+};
+
+describe('model tokens and money have one wording', () => {
+    it('no page writes a token count or a dollar amount by hand', () => {
+        expect(usageWordingProblems(sourceFiles)).toEqual([]);
+    });
+    it('catches a hand-written one', () => {
+        expect(usageWordingProblems([{path: 'x.jsx', text: 'const a = `${n} token`;'}])).toHaveLength(1);
+        expect(usageWordingProblems([{path: 'x.jsx', text: 'const a = `$${cost.toFixed(2)}`;'}])).toHaveLength(1);
+        expect(usageWordingProblems([{path: 'x.jsx', text: 'const a = `¥${cost}`;'}])).toHaveLength(1);
+        expect(usageWordingProblems([{path: 'x.jsx', text: 'const a = `约 ${fmtCosts(cost)}`;'}])).toEqual([]);
+    });
+});
+
 // ---- Type is at least 11px ----------------------------------------------------
 
 export const tinyTextProblems = (files) => {

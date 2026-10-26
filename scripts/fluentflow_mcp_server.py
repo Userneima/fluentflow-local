@@ -496,7 +496,15 @@ def submit_transcript(
         "that failed or were stopped (stopped=true reads 已停下), and resume_from, the step "
         "resume_task would carry it on from. note_version "
         "is the version of the note now: read it before you change the note, and pass it as "
-        "base_version when you save (save_agent_note, regenerate_note, write_note_from_cut_media)."),
+        "base_version when you save (save_agent_note, regenerate_note, write_note_from_cut_media). "
+        "model_usage is what the task's model calls used: total, then steps (each with label, "
+        "models, calls, input_tokens, cached_input_tokens, output_tokens, cost and its parts in "
+        "items). cost maps a currency to an amount (CNY for DeepSeek, USD for Anthropic), worked "
+        "out from the providers' published prices; it is empty when no call had a price "
+        "(unpriced_calls counts those). Calls through the Claude subscription are counted in "
+        "subscription_calls and cost nothing per call (reported_cost_usd is the command line's "
+        "API-price figure for them, not money spent). A step named unattributed holds calls "
+        "that were not put in a step."),
     input_schema={
         "type": "object",
         "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
@@ -551,8 +559,9 @@ def wait_task(
 
 @tool(
     description=("Read the Agent Task Package for a FluentFlow task: status, the note, where every output "
-        "is, and what happened. The transcript is described (chars, preview, file path), not "
-        "included; to write a note use get_agent_note_material, which hands it over in parts."),
+        "is, and what happened, with model_usage as in get_task. The transcript is described "
+        "(chars, preview, file path), not included; to write a note use get_agent_note_material, "
+        "which hands it over in parts."),
     input_schema={
         "type": "object",
         "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
