@@ -4,8 +4,9 @@ The user points at a problem (usually a screenshot sent to their agent). The
 agent fixes that note, decides whether the problem would come back, and if so
 drafts a rule, rewrites the affected part several times with it, has a separate
 checker say whether the problem is still there, and only then writes the rule
-into the user's skill. The user is told afterwards; they step in only when the
-same problem is reported again.
+into the user's skill. The user confirms a lasting preference before it is saved. Verification is
+proportional to its effect: a short example for wording, representative
+material for changes to content selection or structure.
 
 Two records live beside the user's skill:
 
@@ -234,12 +235,14 @@ def apply_rule(
 
 def _apply_rule_locked(skill_text, rule, feedback_ids, rounds, evidence, base_version):
     before = note_skills.load_note_skill()
-    if base_version and base_version != before.version:
+    if not base_version:
+        raise NoteFeedbackError("请先用 get_note_skill 读取写法，并带上 base_version。")
+    if base_version != before.version:
         raise NoteFeedbackError(
             "笔记规则在你读取之后被改过（用户自己改了，或别的 agent 加了规则）。"
             "先用 get_note_skill 读最新的规则，把这条规则合进去，再带上新的版本号提交。"
         )
-    after = note_skills.save_user_skill(skill_text)
+    after = note_skills.save_user_skill(skill_text, base_version=base_version)
     entry = {
         "id": uuid.uuid4().hex[:12],
         "applied_at": _now(),

@@ -60,7 +60,8 @@ def test_applying_a_rule_keeps_the_old_skill_and_says_where_the_rule_came_from()
 
     applied = nf.apply_rule(
         skill_text="# 我的写法\n\n- 结尾不写总结段。", rule="结尾不写总结段",
-        feedback_ids=[fid], rounds=3, evidence="同一段重写三次，检查者三次都判没有总结段",
+        feedback_ids=[fid], rounds=1, evidence="受影响的片段已核对，没有总结段",
+        base_version=default_version,
     )
 
     skill = note_skills.load_note_skill()
@@ -155,3 +156,16 @@ def test_a_case_is_shown_with_its_transcript_in_a_file_not_inline(job_store):  #
     assert view["transcript_excerpt_chars"] == len(item["transcript_excerpt"])
     from pathlib import Path
     assert Path(view["transcript_excerpt_file"]).read_text(encoding="utf-8").strip() == item["transcript_excerpt"]
+
+
+def test_rule_updates_require_a_version_and_preserve_concurrent_changes():
+    fid = nf.record_feedback(task_id="", problem="以后段落为主", kind="pattern", criterion="对比数据以外用段落")["id"]
+    args = dict(skill_text="new preference", rule="段落为主", feedback_ids=[fid], rounds=1, evidence="一段样例符合要求")
+    with pytest.raises(nf.NoteFeedbackError, match="base_version"):
+        nf.apply_rule(**args)
+    old_version = note_skills.load_note_skill().version
+    note_skills.save_user_skill("changed elsewhere")
+    with pytest.raises(nf.NoteFeedbackError, match="改过"):
+        nf.apply_rule(**args, base_version=old_version)
+    assert note_skills.load_note_skill().text == "changed elsewhere"
+    assert not nf.rules_log()

@@ -146,7 +146,7 @@ def test_the_default_skill_is_anonymous_and_has_the_agreed_rules():
 
 
 def test_each_skill_is_named_after_its_folder():
-    for path in (note_skills.DEFAULT_SKILL_PATH, note_skills.META_SKILL_PATH):
+    for path in (note_skills.DEFAULT_SKILL_PATH,):
         name = re.search(r"^name: (.+)$", path.read_text(encoding="utf-8"), re.MULTILINE).group(1).strip()
         assert name == path.parent.name
         assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name)

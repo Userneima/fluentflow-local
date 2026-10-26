@@ -75,8 +75,7 @@ vi.mock('../app/shared.jsx', async () => {
 
 // One object, as the real useApi returns, so the note style panel's effects run once.
 const noteStyle = {
-    read: async () => ({skill: {text: '', version: 'v', is_default: true}, candidates: [], unread_edits: 0, proposal: null, history: []}),
-    previewTasks: async () => ({tasks: []}),
+    read: vi.fn(async () => ({skill: {text: '', version: 'v', is_default: true}, history: []})),
 };
 
 const getProviderModels = async (provider) => (provider === 'deepseek' ? ['deepseek-flash', 'deepseek-v4-pro'] : ['gpt-9-mini', 'gpt-9']);
@@ -628,6 +627,18 @@ describe('local settings page', () => {
         render(<Settings/>);
         expect(await screen.findByText('电脑占用')).toBeTruthy();
         window.history.replaceState(null, '', '#');
+    });
+
+    it('does not reload writing rules when the note section is closed and reopened', async () => {
+        noteStyle.read.mockClear();
+        workflow = workflowFrom(CLAUDE_AT_WORK);
+        render(<Settings/>);
+        await waitFor(() => expect(noteStyle.read).toHaveBeenCalledTimes(1));
+        open('notes');
+        await screen.findByText('FluentFlow 默认写法');
+        open('notes');
+        open('notes');
+        expect(noteStyle.read).toHaveBeenCalledTimes(1);
     });
 
     // Item 7: whether Claude writes the note comes from the service, not the

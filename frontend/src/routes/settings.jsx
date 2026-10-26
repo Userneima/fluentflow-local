@@ -37,7 +37,7 @@ import {linkButton, rowButton, surfaceCard} from '../lib/ui.js';
 // Something that needs the person is said once at the top.
 
 
-const StepCard = ({step, open, onToggle, lang, children}) => {
+const StepCard = ({step, open, onToggle, lang, children, keepMounted = false}) => {
     const zh = lang === 'zh';
     const attention = step.level === 'attention';
     return (
@@ -49,7 +49,7 @@ const StepCard = ({step, open, onToggle, lang, children}) => {
                 </p>
                 <span className="text-xs font-bold text-on-surface-variant">{open ? (zh ? '收起' : 'Close') : (zh ? '调整' : 'Adjust')}</span>
             </button>
-            {open && <div className="border-t border-[#ece8e8] dark:border-white/[0.1]">{children}</div>}
+            {(open || keepMounted) && <div hidden={!open} className="border-t border-[#ece8e8] dark:border-white/[0.1]">{children}</div>}
         </section>
     );
 };
@@ -122,6 +122,7 @@ const Settings = () => {
             <StepCard
                 step={{id, title: step ? pick(step.title) : STEP_TITLES[id], summary, level: step?.level || 'ok'}}
                 open={openStep === id}
+                keepMounted={id === 'notes'}
                 onToggle={() => toggle(id)}
                 lang={lang}
             >

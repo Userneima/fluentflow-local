@@ -71,6 +71,18 @@ agrees) turns one decision around and renders the cut again. `stop_task_step` st
 step a task is on, `cancel_task` cancels one still transcribing, and `resume_task` carries
 a stopped task, or a step that failed, on from that step on the same task.
 
+## Personal writing preferences
+
+Follow `agent/skills/fluentflow/SKILL.md` for note feedback and preferences.
+Propose only preferences supported by the user's feedback or edits and confirm
+what future notes should do; an explicit "always do this" already counts.
+Check one affected excerpt for wording or formatting, representative excerpts
+for content selection or structure. Read `get_note_skill` and merge into that
+version; `apply_note_rule` requires its `base_version`, recorded feedback and
+honest verification evidence. A conflict requires rereading and merging.
+Settings shows the current writing rules, their change history and undo; it
+no longer extracts candidates or runs mandatory side-by-side comparisons.
+
 ## Only these need the user
 
 - **Not enough disk space** (a step fails with "No space left on device"; the install

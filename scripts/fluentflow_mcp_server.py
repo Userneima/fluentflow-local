@@ -1302,7 +1302,12 @@ def get_note_skill(api_base: str | None = None, client_id: str | None = None) ->
     description=("Keep a problem the user reported about a note as a test case. kind=one_off for a single "
         "error (a misspelt name) or pattern for a way of writing that would recur. A pattern needs "
         "criterion: how a checker tells the problem is fixed. With task_id the transcript of that "
-        "part is frozen into the case. When the user points out a problem in a note (often with a screenshot): fix that note first (save_agent_note). If the problem would come back in other notes, record it with record_note_feedback kind=pattern, check list_note_feedback for the same problem reported before (if so, show the user the existing rule and the old and new versions before changing it), then draft a rule, rewrite the affected part several times with it, have a separate checker that did not write it judge only whether the problem is still there, and when it passes call apply_note_rule and tell the user the rule in one sentence."),
+        "part is frozen into the case. A one-off fact correction is not a lasting writing preference. "
+        "Propose a preference from the user's feedback or edits and confirm its effect and scope before "
+        "changing future notes; an explicit request to always write that way already counts. "
+        "Check a short affected excerpt for wording or formatting; use representative excerpts for "
+        "content selection or structure. Do not run three rewrites or full-note comparisons for every change. "
+        "After verification, merge the rule into get_note_skill's latest text and save with apply_note_rule."),
     input_schema={
         "type": "object",
         "properties": {
@@ -1373,9 +1378,10 @@ def draft_note_part(
 
 
 @tool(
-    description=("Write a rule you verified into the user's note skill. skill_text is the whole new skill "
+    description=("Write a user-confirmed preference you verified into the user's note skill. skill_text is the whole new skill "
         "with the rule merged where it belongs; the previous skill is kept and can be restored from "
-        "the settings page. rounds: how many rewrites passed the checker; evidence: one or two "
+        "the settings page without a model call. Requires base_version from get_note_skill. "
+        "rounds: the actual number of successful sample checks (one is enough for a small wording change); evidence: one or two "
         "sentences on what was checked."),
     input_schema={
         "type": "object",
@@ -1392,7 +1398,7 @@ def draft_note_part(
             },
             "api_base": {"type": "string"},
         },
-        "required": ["skill_text", "rule", "feedback_ids", "rounds", "evidence"],
+        "required": ["skill_text", "rule", "feedback_ids", "rounds", "evidence", "base_version"],
     },
 )
 def apply_note_rule(
@@ -1401,7 +1407,7 @@ def apply_note_rule(
     feedback_ids: list[str],
     rounds: int,
     evidence: str,
-    base_version: str | None = None,
+    base_version: str,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:

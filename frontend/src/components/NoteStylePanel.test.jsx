@@ -1,104 +1,76 @@
 // @vitest-environment jsdom
-
-// 「我的笔记风格」. What the user should get:
-// 1. It says which style Claude writes with now.
-// 2. Edits not read yet can be turned into candidate rules with one button.
-// 3. A change is compared before it applies: the compare button needs a rule
-//    picked and a recording, and sends both.
-// 4. While the comparison is written there is nothing to apply; once it is
-//    ready both versions are shown, and only "用新写法" applies the change.
-
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 
-const api = {
-    read: vi.fn(),
-    previewTasks: vi.fn(),
-    fromEdits: vi.fn(),
-    fromExamples: vi.fn(),
-    dismiss: vi.fn(),
-    propose: vi.fn(),
-    apply: vi.fn(),
-    discard: vi.fn(),
-};
+const api = {read: vi.fn(), restore: vi.fn()};
 vi.mock('../app/shared.jsx', () => ({useApi: () => ({noteStyle: api})}));
-
 const {NoteStylePanel} = await import('./NoteStylePanel.jsx');
+const SKILL = {text: '当前写法全文', version: 'v1', is_default: true};
+const state = (extra = {}) => ({skill: SKILL, history: [], rules_log: [], ...extra});
+afterEach(() => { cleanup(); Object.values(api).forEach((fn) => fn.mockReset()); });
+const setup = (first = state()) => { api.read.mockResolvedValue(first); return render(<NoteStylePanel/>); };
 
-const SKILL = {text: '---\nname: x\n---\n规则', version: 'v1', is_default: true};
-const state = (extra = {}) => ({skill: SKILL, candidates: [], unread_edits: 0, proposal: null, history: [], ...extra});
-
-afterEach(() => {
-    cleanup();
-    Object.values(api).forEach((fn) => fn.mockReset());
-});
-
-const setup = (first) => {
-    api.read.mockResolvedValue(first);
-    api.previewTasks.mockResolvedValue({tasks: [{task_id: 't1', title: '线性代数第一讲'}]});
-    render(<NoteStylePanel/>);
-};
-
-describe('NoteStylePanel', () => {
-    it('shows each rule the agent added, with the feedback it came from', async () => {
-        setup(state({
-            skill: {...SKILL, is_default: false},
-            rules_log: [{
-                id: 'r1', rule: '结尾不写总结段', applied_at: '2026-10-11T20:00:00+08:00', rounds: 3,
-                evidence: '同一段重写三次都没有总结段',
-                feedback: [{id: 'f1', problem: '每篇结尾都有一段总结', title: '什么是科学'}],
-            }],
-        }));
-        expect(await screen.findByText('结尾不写总结段')).toBeTruthy();
-        expect(screen.getByText('来自你的反馈：每篇结尾都有一段总结（什么是科学）')).toBeTruthy();
-        expect(screen.getByText(/验证 3 轮/)).toBeTruthy();
-    });
-
-    it('says which style is in use', async () => {
-        setup(state());
+describe('personal note preferences', () => {
+    it('only offers viewing and undo, even if an old response carries candidates', async () => {
+        setup(state({unread_edits: 3, candidates: [{rule: 'old'}], proposal: {status: 'ready'}}));
         expect(await screen.findByText('FluentFlow 默认写法')).toBeTruthy();
+        expect(screen.queryByText(/找规则|满意的笔记起步|用新写法|写一份对比/)).toBeNull();
+        fireEvent.click(screen.getByText('查看写法全文'));
+        expect(screen.getByText('当前写法全文')).toBeTruthy();
+        expect(api.read).toHaveBeenCalledTimes(1);
     });
-
-    it('turns unread edits into candidates with one button', async () => {
-        setup(state({unread_edits: 2}));
-        const button = await screen.findByText('从我改过的 2 份笔记里找规则');
-        api.fromEdits.mockResolvedValue({});
-        api.read.mockResolvedValue(state({
-            candidates: [{id: 'c1', rule: '术语在正文第一次出现时用括号解释', evidence: '删掉了词汇表'}],
-        }));
-        fireEvent.click(button);
-        expect(await screen.findByText('术语在正文第一次出现时用括号解释')).toBeTruthy();
-        expect(api.fromEdits).toHaveBeenCalledTimes(1);
+    it('refreshes the current rules when returning from the agent without hiding cached content', async () => {
+        setup();
+        await screen.findByText('FluentFlow 默认写法');
+        let finish;
+        api.read.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+        fireEvent.focus(window);
+        expect(screen.getByText('FluentFlow 默认写法')).toBeTruthy();
+        expect(screen.queryByText('正在读取笔记写法…')).toBeNull();
+        finish(state({skill: {...SKILL, is_default: false, version: 'v2'}}));
+        await screen.findByText('你自己的写法');
     });
-
-    it('compares a picked rule on the chosen recording before anything changes', async () => {
-        setup(state({candidates: [{id: 'c1', rule: '结尾回顾直接列条目'}]}));
-        const compare = await screen.findByText(/用选中的 0 条规则写一份对比/);
-        expect(compare.closest('button').disabled).toBe(true);
-        await waitFor(() => expect(screen.getByDisplayValue('线性代数第一讲')).toBeTruthy());
-        fireEvent.click(screen.getByRole('checkbox'));
-        api.propose.mockResolvedValue({});
-        fireEvent.click(screen.getByText(/用选中的 1 条规则写一份对比/));
-        await waitFor(() => expect(api.propose).toHaveBeenCalledWith({task_id: 't1', candidate_ids: ['c1']}));
-        expect(api.apply).not.toHaveBeenCalled();
+    it('keeps historical changes labelled as history after a restore', async () => {
+        setup(state({rules_log: [{id: 'r1', rule: '段落为主', evidence: '检查了一段样例', feedback: [{id: 'f1', problem: '不想要太多表格'}]}]}));
+        expect(await screen.findByText('修改记录和来源')).toBeTruthy();
+        fireEvent.click(screen.getByText('修改记录和来源'));
+        expect(screen.getByText(/也保留已撤回/)).toBeTruthy();
+        expect(screen.getByText('来自你的反馈：不想要太多表格')).toBeTruthy();
     });
-
-    it('offers nothing to apply while the comparison is written', async () => {
-        setup(state({proposal: {status: 'running', rules: ['r']}}));
-        expect(await screen.findByText(/写好之前写法不会变/)).toBeTruthy();
-        expect(screen.queryByText('用新写法')).toBeNull();
+    it('confirms an undo and sends the viewed version without choosing a recording', async () => {
+        setup(state({history: [{name: 'old.md', saved_at: '2026-10-26 14:00'}]}));
+        await screen.findByText('FluentFlow 默认写法');
+        fireEvent.change(screen.getByLabelText('撤回到'), {target: {value: 'old.md'}});
+        fireEvent.click(screen.getByText('撤回修改'));
+        expect(api.restore).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByText('取消'));
+        expect(api.restore).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByText('撤回修改'));
+        api.restore.mockResolvedValue(state({skill: {...SKILL, version: 'v2', is_default: false}}));
+        fireEvent.click(screen.getByText('确认撤回'));
+        await screen.findByText('你自己的写法');
+        expect(api.restore).toHaveBeenCalledWith({name: 'old.md', base_version: 'v1'});
     });
-
-    it('shows both versions and applies only on 用新写法', async () => {
-        setup(state({proposal: {
-            status: 'ready', rules: ['结尾回顾直接列条目'],
-            old: {markdown: '# 旧的笔记'}, new: {markdown: '# 新的笔记'},
-        }}));
-        expect(await screen.findByText('旧的笔记')).toBeTruthy();
-        expect(screen.getByText('新的笔记')).toBeTruthy();
-        api.apply.mockResolvedValue({});
-        fireEvent.click(screen.getByText('用新写法'));
-        await waitFor(() => expect(api.apply).toHaveBeenCalledTimes(1));
-        expect(api.discard).not.toHaveBeenCalled();
+    it('requires a new confirmation against the latest version after a conflict', async () => {
+        setup(state({skill: {...SKILL, is_default: false}}));
+        await screen.findByText('你自己的写法');
+        fireEvent.click(screen.getByText('恢复默认写法'));
+        api.restore.mockRejectedValueOnce(new Error('笔记写法已在别处改过，请重新读取后再修改。'));
+        api.read.mockResolvedValue(state({skill: {...SKILL, is_default: false, version: 'v2'}}));
+        fireEvent.click(screen.getByText('确认撤回'));
+        await screen.findByRole('alert');
+        expect(screen.queryByText('确认撤回')).toBeNull();
+        api.restore.mockResolvedValue(state());
+        fireEvent.click(screen.getByText('恢复默认写法'));
+        fireEvent.click(screen.getByText('确认撤回'));
+        await waitFor(() => expect(api.restore).toHaveBeenLastCalledWith({use_default: true, base_version: 'v2'}));
+    });
+    it('can retry a failed read without exposing an HTTP code', async () => {
+        api.read.mockRejectedValueOnce(new Error('HTTP 500')).mockResolvedValue(state());
+        render(<NoteStylePanel/>);
+        await screen.findByRole('alert');
+        expect(screen.queryByText('HTTP 500')).toBeNull();
+        fireEvent.click(screen.getByText('重新读取'));
+        await screen.findByText('FluentFlow 默认写法');
     });
 });

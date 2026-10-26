@@ -796,13 +796,7 @@ const createApi = () => {
     };
     const noteStyle = {
         read: () => noteStyleCall(''),
-        previewTasks: () => noteStyleCall('/preview-tasks'),
-        fromEdits: () => noteStyleCall('/candidates/from-edits', {}),
-        fromExamples: (notes) => noteStyleCall('/candidates/from-examples', {notes}),
-        dismiss: (id) => noteStyleCall(`/candidates/${encodeURIComponent(id)}/dismiss`, {}),
-        propose: (payload) => noteStyleCall('/proposal', payload),
-        apply: () => noteStyleCall('/proposal/apply', {}),
-        discard: () => noteStyleCall('/proposal/discard', {}),
+        restore: (payload) => noteStyleCall('/restore', payload),
     };
     // The models a text provider currently offers, newest first ([] when no
     // key is saved or the provider cannot be reached).

@@ -21,6 +21,11 @@ curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/ins
 
 ![设置](docs/images/settings.png)
 
+想调整笔记写法，把不满意的地方、你改过的笔记或希望以后怎么写告诉自己的 agent。
+agent 会先确认适用范围，再修改你的个人写法；只影响之后生成的随看笔记，已有笔记不自动重写。
+「设置 → 写笔记」可以查看当前写法、修改来源，或撤回到以前的写法；撤回不调用模型。
+备用文字模型暂不读取这份个人写法，复习笔记使用独立的写法。
+
 ## 能在什么机器上跑
 
 - **macOS**：Apple 芯片（M 系列）转录走 GPU 加速。Intel Mac 也能装，转录走 CPU，会慢不少。
