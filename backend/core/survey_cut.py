@@ -1238,6 +1238,7 @@ def _task_survey(task_id: str, client_id: str | None) -> tuple[dict[str, Any], d
     return before, result, survey
 
 
+@model_usage.works_for(task_steps.CUT)
 def flip(task_id: str, ref: str, client_id: str | None = None, *, claimed: bool = False) -> dict[str, Any]:
     """Turn one decision in the processing report around: what was cut is put
     back, what was kept is cut. The change is the user's feedback and is kept
@@ -1257,6 +1258,7 @@ def flip(task_id: str, ref: str, client_id: str | None = None, *, claimed: bool 
     return _turn_around(task_id, client_id, before, result, survey, item, change, claimed=claimed)
 
 
+@model_usage.works_for(task_steps.CUT)
 def undo_change(task_id: str, index: int, client_id: str | None = None, *, claimed: bool = False) -> dict[str, Any]:
     """Undo one of the user's earlier changes (from the report's bin): the
     model's decision for that stretch is applied again and the cut rendered
