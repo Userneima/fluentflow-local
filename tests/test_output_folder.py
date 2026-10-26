@@ -326,6 +326,26 @@ def test_a_link_download_keeps_working_after_fluentflows_copy_is_cleaned_up(tmp_
 
 
 
+def test_a_link_folder_moved_to_a_new_link_root_keeps_being_updated(tmp_path, pdfs, monkeypatch):
+    """Owner, 2026-10-26: link downloads were pointed at his short-video folder
+    and the finished folder moved there by hand. Its later updates land in the
+    moved folder, and nothing is recreated where it used to be."""
+    old_root, new_root = tmp_path / "Movies", tmp_path / "短视频"
+    monkeypatch.setenv(output_folder.LINK_ROOT_ENV, str(old_root))
+    task = _link_task("抖音视频", note="# 笔记\n\n第一版。\n")
+    output_folder.sync(task)
+
+    new_root.mkdir()
+    (old_root / "抖音视频").rename(new_root / "抖音视频")
+    monkeypatch.setenv(output_folder.LINK_ROOT_ENV, str(new_root))
+    record = output_folder.sync(task)
+
+    assert not record.get("error")
+    assert record["path"] == str(new_root / "抖音视频")
+    assert (new_root / "抖音视频" / "抖音视频_笔记.pdf").is_file()
+    assert list(old_root.iterdir()) == []
+
+
 def test_a_renamed_folder_is_found_and_a_moved_one_is_not_recreated(tmp_path, pdfs):
     source = _recording(tmp_path)
     task = _task(source, note="# 笔记\n")

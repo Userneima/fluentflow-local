@@ -276,7 +276,9 @@ def _folder_for(task_id: str, source: Path) -> tuple[Path, str]:
     if not previous:
         return place(task_id, source)
     known = Path(previous)
-    for folder in [known] + [
+    # A link download's original sits inside its own folder, so that folder is
+    # source.parent itself: found after the user moved it to a new link root.
+    for folder in [known, source.parent] + [
         child for parent in dict.fromkeys([known.parent, source.parent]) if parent.is_dir()
         for child in sorted(parent.iterdir()) if child.is_dir()
     ]:
