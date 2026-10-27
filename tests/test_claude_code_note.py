@@ -232,6 +232,19 @@ def test_the_agent_gets_no_tools_and_none_of_this_machines_configuration(frames)
     assert "--strict-mcp-config" in command, "no MCP servers from this machine"
 
 
+def test_no_claude_call_leaves_a_session_record_on_disk(frames, monkeypatch):
+    """Each run used to save its whole session (transcript, frames, output) in
+    ~/.claude/projects. Nobody reads them, and they reached 2.4GB."""
+    from backend.core import claude_text
+
+    run, calls = _recorder(_reply())
+    ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+    assert "--no-session-persistence" in calls[0]["command"], "writing a note"
+
+    monkeypatch.setattr(ccn, "cli_path", lambda: "/usr/local/bin/claude")
+    assert "--no-session-persistence" in claude_text._subscription_command("opus", "系统"), "a text errand"
+
+
 def test_the_writing_pass_reaches_no_directory_at_all(frames):
     """The errand stopped needing the filesystem, so it stopped being given it.
 

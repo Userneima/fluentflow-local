@@ -403,6 +403,10 @@ def _command(
         # machine. This errand is not the maintainer's coding session.
         "--safe-mode",
         "--strict-mcp-config",
+        # Otherwise every note leaves a full session record (prompt, frames,
+        # output) under ~/.claude/projects: 505 of them, 2.4GB, by 2026-10-27.
+        # Nothing reads them; usage comes from the stream's result event.
+        "--no-session-persistence",
         "--model", model,
     ]
     if inline:

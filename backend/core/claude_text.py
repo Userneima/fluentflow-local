@@ -65,6 +65,8 @@ def _subscription_command(model: str, system: str) -> list[str]:
         "--disallowed-tools", claude_code_note._DISALLOWED_TOOLS + ",Read",
         "--safe-mode",
         "--strict-mcp-config",
+        # No session record under ~/.claude/projects; see claude_code_note._command.
+        "--no-session-persistence",
         "--model", model,
     ]
 
