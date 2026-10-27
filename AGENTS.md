@@ -108,7 +108,7 @@ and the file name of the archived conversation (a readable Markdown record). Bef
 `docs/images/` and are linked from the record. The plan document links each
 lane to its record. Follow-up work after acceptance gets its own record,
 linked from the original. Records are kept, not deleted. Archived conversations live
-outside the repository in `~/Documents/对话存档/fluentflow-local/`.
+outside the repository in `~/9.归档/对话存档/fluentflow-local/`.
 
 ## Restarting the backend
 
