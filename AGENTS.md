@@ -82,9 +82,11 @@ Before a local checkpoint commit run `git diff --check`. For frontend changes ru
 
 When a real-run test needs a written record of the process (timings, models
 used, what was checked, problems found), save it under
-`~/Documents/FluentFlow测试记录/<YYYY-MM-DD-HHMMSS>-<topic>/` (owner,
-2026-10-16; moved out of Downloads 2026-10-27 because these records are
-kept as evidence the decision log cites). Keep the text, data and frames;
+`private/测试记录/<YYYY-MM-DD-HHMMSS>-<topic>/` in the main checkout
+(`/Users/yuchao/Developer/fluentflow-local`; `private/` is git-ignored, so a
+worktree does not have it). Owner, 2026-10-16; moved here 2026-10-27 under
+the file-placement rule in `~/Documents/整理规则.md`: these records are the
+evidence the decision log cites. Keep the text, data and frames;
 leave out copies of the source video or audio, which can be cut again. FluentFlow's own outputs stay where the product puts them: the
 folder beside a recording from the user's disk, with the transcript and
 subtitles in its `过程文件`. Link the record and that output folder in the
