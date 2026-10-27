@@ -531,20 +531,34 @@ def get_task(
                      task_id, api_base, client_id)
 
 
+# One wait_task call holds this long by default: under the 300 seconds Codex
+# gives one tool call unless its MCP server sets tool_timeout_sec (measured
+# 2026-10-27, Codex 0.164), with room for the answer to come back. The
+# service allows up to WAIT_MAX_SECONDS for a host that waits longer.
+WAIT_DEFAULT_SECONDS = 240
+WAIT_MAX_SECONDS = 600
+
+
 @tool(
-    description=("Wait for a task, cut and note included: a task reads completed once its transcript "
-        "is stored, but done stays false while the recording is being cut (cut_running=true) "
-        "and until the note is written, failed or skipped (note_pending=true), and while the "
-        "compressed copy or the Feishu export is still running. When done, task says where things stand (note status "
-        "and length, who wrote it, the output folder, next actions); read the note itself "
-        "with get_task_package. Otherwise the current state; call again until done. When the "
-        "task is waiting for you to judge its cut it returns at once with agent_cut (status "
-        "waiting, next): judge it with get_agent_cut_material and save_agent_cut, then wait again."),
+    description=("Wait for a task, cut and note included, without spending a turn on each check: one call "
+        "holds up to timeout_seconds (default 240, at most 600) and returns the moment you have something "
+        "to do. Between calls do nothing and tell the user nothing; call again straight away. A task reads "
+        "completed once its transcript is stored, but done stays false while the recording is being cut "
+        "(cut_running=true), until the note is written, failed or skipped (note_pending=true), and while "
+        "the compressed copy or the Feishu export is still running. It returns at once: done=true, with "
+        "task saying where things stand (note status and length, who wrote it, the output folder, next "
+        "actions; read the note itself with get_task_package); agent_cut (status waiting, next) when the "
+        "task waits for you to judge its cut: judge it with get_agent_cut_material and save_agent_cut, "
+        "then wait again; agent_note (status ready, next) once the cut is decided and rendering and the "
+        "note is yours to write: start it now (get_agent_note_material) instead of waiting for the "
+        "render; this comes once. Otherwise it returns the current state when its time is up. Keep the "
+        "default timeout on Codex: it stops waiting on one tool call after 300 seconds unless its "
+        "tool_timeout_sec is raised."),
     input_schema={
         "type": "object",
         "properties": {
             "task_id": {"type": "string"},
-            "timeout_seconds": {"type": "number", "default": 30},
+            "timeout_seconds": {"type": "number", "default": WAIT_DEFAULT_SECONDS, "maximum": WAIT_MAX_SECONDS},
             "poll_interval_seconds": {"type": "number", "default": 2},
             "api_base": {"type": "string"},
         },
@@ -553,18 +567,19 @@ def get_task(
 )
 def wait_task(
     task_id: str,
-    timeout_seconds: float = 30,
+    timeout_seconds: float = WAIT_DEFAULT_SECONDS,
     poll_interval_seconds: float = 2,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
+    held = min(max(float(timeout_seconds if timeout_seconds is not None else WAIT_DEFAULT_SECONDS), 0), WAIT_MAX_SECONDS)
     return _watching(_agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/wait",
         api_base=api_base,
         client_id=client_id,
-        payload={"timeout_seconds": timeout_seconds, "poll_interval_seconds": poll_interval_seconds},
-        timeout=max(5, min(float(timeout_seconds or 30) + 10, 75)),
+        payload={"timeout_seconds": held, "poll_interval_seconds": poll_interval_seconds},
+        timeout=held + 30,
     ), task_id, api_base, client_id)
 
 
@@ -1111,8 +1126,12 @@ def save_agent_alignment(
         "transcript, the frames as local file paths with their moments, and instructions (the "
         "note skill in effect plus the fixed contract). Open the frames you need, write the whole "
         "note, then call save_agent_note once. Do this in a subagent with a fresh context when "
-        "your host has them, so the transcript does not fill the user's conversation: give it the "
-        "task_id and have it fetch, write and save. If the result came back truncated or saved to "
+        "your host has them (one that does not inherit this conversation), so the transcript does "
+        "not fill the user's conversation and the subagent does not resend it: give it the task_id "
+        "and have it fetch, write and save. It works as soon as wait_task returns agent_note ready, "
+        "while the cut video still renders: the transcript is already on the cut video's clock, the "
+        "frames are taken at the moments the cut will show, and both stay the same once it is "
+        "rendered, so the note is saved as usual. If the result came back truncated or saved to "
         "a file because it was too large for one tool result, call again with small_parts=true: "
         "the recording then comes in total_parts parts to fetch, write and save one at a time. "
         "The first call for a video extracts frames (up to a minute). note_version is the task's "

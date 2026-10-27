@@ -45,7 +45,7 @@ from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
 from backend.core import correction_notes, glossary_correction, model_usage, subtitle_correction, task_actions, task_activity, task_steps
-from backend.core import agent_cut, agent_note, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
+from backend.core import agent_cut, agent_note, survey_cut, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_request_scope import (
@@ -546,6 +546,14 @@ def get_agent_task_package(request: Request, task_id: str) -> dict[str, Any]:
     return _task_package_response(_job_for_request(request, task_id))
 
 
+# How long one wait_task call may hold: long enough that an agent waiting
+# through a three-hour recording makes a few calls instead of a hundred, each
+# of which resends its whole conversation (2026-10-27: 157 turns, about 25
+# million input tokens, used up the Codex workspace's credits). It returns at
+# once whenever the agent has something to do.
+WAIT_MAX_SECONDS = 600
+
+
 @router.post("/tasks/{task_id}/wait")
 async def wait_agent_task(
     request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)
@@ -556,7 +564,7 @@ async def wait_agent_task(
         field="timeout_seconds",
         default=30,
         minimum=0,
-        maximum=60,
+        maximum=WAIT_MAX_SECONDS,
     )
     poll_interval = _bounded_finite_float(
         payload.get("poll_interval_seconds"),
@@ -575,6 +583,15 @@ async def wait_agent_task(
                 "ok": True,
                 "done": False,
                 "agent_cut": _agent_cut_brief(job),
+                "package_url": f"/agent/v1/tasks/{task_id}/package",
+            }
+        if agent_note.tell_ready_while_cut_renders(job):
+            # The cut is decided and rendering; the note need not wait for it.
+            return {
+                "ok": True,
+                "done": False,
+                "cut_running": True,
+                "agent_note": {"status": "ready", "next": AGENT_NOTE_NEXT},
                 "package_url": f"/agent/v1/tasks/{task_id}/package",
             }
         if _task_done(job):
@@ -600,6 +617,14 @@ async def wait_agent_task(
                 "package_url": f"/agent/v1/tasks/{task_id}/package",
             }
         await asyncio.sleep(poll_interval)
+
+
+AGENT_NOTE_NEXT = (
+    "The cut is decided and the cut video is rendering. Start the note now: call get_agent_note_material "
+    "(in a subagent with a fresh context when your host has them); it hands over the transcript on the cut "
+    "video's clock and frames from the matching moments, exactly as after the render. Save with "
+    "save_agent_note as usual. wait_task will not stop for this again; call it to wait for the render."
+)
 
 
 AGENT_CUT_NEXT = (
@@ -857,7 +882,12 @@ def agent_note_material(
     part = int((payload or {}).get("part") or 1)
     small_parts = bool((payload or {}).get("small_parts"))
     job = _job_for_request(request, task_id)
-    if not agent_note._stored_frames(task_id, job.get("result") or {}) and queue_is_busy():
+    result = job.get("result") or {}
+    # While this task's own cut renders it holds the queue, so nothing else
+    # transcribes: taking frames now overlaps the render, as FluentFlow's own
+    # note does (``survey_cut.ranges_while_rendering``).
+    if (not agent_note._stored_frames(task_id, result) and not survey_cut.ranges_while_rendering(result)
+            and queue_is_busy()):
         raise HTTPException(
             status_code=409,
             detail="有任务正在处理中，等队列空下来再取材料，避免抽帧和转录同时跑。",

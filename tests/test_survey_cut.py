@@ -612,3 +612,34 @@ def test_correction_records_follow_the_transcript_when_every_cut_is_put_back(tas
     assert after["transcript_media"] == "source"
     assert after["glossary_corrections"][0]["start"] == pytest.approx(original_line["start"])
     assert after["glossary_corrections"][0]["start"] == pytest.approx(after["raw_segments"][-1]["start"])
+
+
+@needs_ffmpeg
+def test_while_the_cut_renders_the_decided_stretches_are_the_ones_the_transcript_moves_onto(task, monkeypatch):
+    """Decision 5.41: an agent's note is written from the stretches the cut
+    keeps while it renders. Read during the render, they must be exactly the
+    ones the transcript moves onto once it is done, so the note's clock and
+    its parts' transcript are the same before and after."""
+    monkeypatch.setattr(survey_cut, "measure_pictures", lambda source, gaps: {})
+    during: dict = {}
+    render = silence_cuts.render_cut_plan
+
+    def watching_render(*args, **kwargs):
+        result = job_store.get_job(task["id"])["result"]
+        during["ranges"] = survey_cut.ranges_while_rendering(result)
+        during["lines"] = cut_timeline.remap_segments(
+            cut_timeline.timeline_segments(result), during["ranges"]).segments
+        return render(*args, **kwargs)
+
+    monkeypatch.setattr(survey_cut.debreath_job.silence_cuts, "render_cut_plan", watching_render)
+
+    survey_cut.survey_and_cut(task["id"], chat=(_says(TAIL), "fake"))
+
+    result = job_store.get_job(task["id"])["result"]
+    assert during["ranges"], "the stretches are known while the cut renders"
+    after = cut_timeline.timeline_segments(result)
+    assert [(s["start"], s["end"], s["text"]) for s in during["lines"]] == [
+        (s["start"], s["end"], s["text"]) for s in after]
+    # Once rendered, the cut file is what a note reads, not the plan.
+    assert survey_cut.ranges_while_rendering(result) == []
+    assert survey_cut.planned_ranges(result) == []

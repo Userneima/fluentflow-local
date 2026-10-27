@@ -867,14 +867,46 @@ def _remember_decision(task_id: str, client_id: str | None, plan: CutPlan, recor
     what the judge said. Best effort; a cut that cannot keep it renders all
     the same, and is judged again if it has to start over."""
     try:
+        current = job_store.get_job(task_id, client_id=client_id) or {}
         kept = json.loads(json.dumps({
+            # Which render this decision is for: a later render that does not
+            # decide again (a flip, a manual cut) must not be read as this one.
+            "render_started_at": debreath_job.debreath_state(current.get("result") or {}).get("started_at"),
             "cuts": [[round(c.start, 3), round(c.end, 3)] for c in plan.cuts],
+            # The stretches the render keeps, exactly as the transcript will be
+            # moved onto them afterwards (``_finish``): what an agent's note is
+            # written from while the cut renders (``planned_ranges``).
+            "keeps": plan.as_dict().get("keeps") if plan.cuts else [],
             "judged_by": record.get("judged_by"),
             "record": {k: v for k, v in record.items() if k not in ("word_protection", "spoken")},
         }, ensure_ascii=False, default=str))
         debreath_job._store(task_id, client_id=client_id, state={DECIDED_KEY: kept})
     except Exception:  # noqa: BLE001 - the render goes ahead regardless
         logger.warning("could not keep the cut decision of %s", task_id, exc_info=True)
+
+
+def planned_ranges(result: dict[str, Any] | None) -> list[cut_timeline.KeptRange]:
+    """The stretches the decided cut keeps, kept on the task until its render
+    is done; empty when nothing is decided, nothing is cut, or the decision
+    was kept before it carried them."""
+    decided = debreath_job.debreath_state(result or {}).get(DECIDED_KEY)
+    if not isinstance(decided, dict) or not decided.get("cuts"):
+        return []
+    return cut_timeline.kept_ranges({"keeps": decided.get("keeps")})
+
+
+def ranges_while_rendering(result: dict[str, Any] | None) -> list[cut_timeline.KeptRange]:
+    """``planned_ranges`` while the cut they describe is rendering, else empty:
+    the note can be written on the cut's clock from the original meanwhile
+    (decision 5.41, 2026-10-27). Once the render is done the cut file itself is
+    what a note reads."""
+    state = debreath_job.debreath_state(result or {})
+    if state.get("status") != debreath_job.STATUS_RUNNING or state.get("stage") != "rendering":
+        return []
+    decided = state.get(DECIDED_KEY) if isinstance(state.get(DECIDED_KEY), dict) else {}
+    if not decided.get("render_started_at") or decided.get("render_started_at") != state.get("started_at"):
+        return []
+    return planned_ranges(result)
 
 
 def _replay(stored: dict[str, Any]) -> Decide:

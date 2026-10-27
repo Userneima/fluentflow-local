@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, correction_notes, cut_timeline, note_coverage, note_skills, note_versions, visual_note_check
-from backend.core import model_usage, task_steps
+from backend.core import debreath_job, model_usage, survey_cut, task_steps
 from backend.core import visual_note_job as vn
 from backend.core.claude_vision import FrameInput
 from backend.core.result_artifacts import (
@@ -80,6 +80,15 @@ _PARTS_FILENAME = "agent_note_parts.json"
 # Present while this task's material is handed over in small parts: the save
 # calls that follow must split the transcript the way the material did.
 _SMALL_PARTS_FILENAME = "agent_note_small_parts"
+# Written when wait_task first tells the agent its note can start while the
+# cut renders, so it says so once and not again on every later wait (a
+# subagent not yet started, or material that failed, would otherwise make
+# every wait return at once for the whole render).
+_START_TOLD_FILENAME = "agent_note_start_told"
+# Present while the material last handed over was read from the planned cut:
+# a note drafted from it is on the cut's clock, which a cut that did not come
+# out never gets (``_refuse_draft_off_its_clock``).
+_PLANNED_MATERIAL_FILENAME = "agent_note_from_planned_cut"
 
 # How the agent hands the note back: field names match the save call, so the
 # fixed contract's wording ("note_markdown", "basis_note") stays true here.
@@ -136,6 +145,37 @@ class _TranscriptOnly:
         return {"kind": self.kind, "has_video": False}
 
 
+def tell_ready_while_cut_renders(job: dict[str, Any]) -> bool:
+    """Whether to tell the agent that submitted this task that it can start
+    its note now, before the cut has rendered: what ``wait_task`` stops for,
+    so the note and the render overlap. True once per task; the telling is
+    recorded here."""
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if result.get("intelligence") != "agent" or str(result.get("summary_markdown") or "").strip():
+        return False
+    if not survey_cut.ranges_while_rendering(result):
+        return False
+    told = artifact_target_path(str(job.get("task_id") or ""), _START_TOLD_FILENAME)
+    if told.is_file():
+        return False
+    told.write_text(vn._now() + "\n", encoding="utf-8")
+    return True
+
+
+def _refuse_draft_off_its_clock(task_id: str, media: Any) -> None:
+    """A note drafted from the planned cut is on the cut's clock; when the
+    cut then did not come out (failed, stopped), the task stays on the
+    original and the draft's times and pictures would be wrong there."""
+    if getattr(media, "planned_ranges", ()) or not artifact_target_path(task_id, _PLANNED_MATERIAL_FILENAME).is_file():
+        return
+    if getattr(media, "kind", "") == vn.MEDIA_CUT:
+        return
+    raise AgentNoteError(
+        "这份笔记是按剪后视频的时间写的，但剪后视频没有导出成功，任务留在原片上。"
+        "重新调用 get_agent_note_material 取按原片的材料，照新材料改时间和截图后再存。"
+    )
+
+
 def _small_parts(task_id: str) -> bool:
     return artifact_target_path(task_id, _SMALL_PARTS_FILENAME).is_file()
 
@@ -151,6 +191,22 @@ def _set_small_parts(task_id: str, small: bool) -> None:
 def _eligible(task_id: str, job: dict[str, Any]) -> tuple[Any, list[claude_vision.TranscriptPart], list]:
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     media = vn.cut_media(task_id, result)
+    planned = survey_cut.ranges_while_rendering(result) if media is None else []
+    if planned:
+        # The cut is decided and rendering: the note is written from the
+        # original read as the cut, the same as FluentFlow's own note does
+        # meanwhile (``task_flow._cut_and_note_side_by_side``). The transcript
+        # it gets is the one the task will have once the render is done.
+        described = vn.describe(task_id, job, channel=_AGENT_CHANNEL, planned_ranges=planned)
+        if not described["eligible"]:
+            raise AgentNoteError(str(described["reason"]))
+        media = vn.planned_cut_media(task_id, planned)
+        transcript, _timeline, segments = vn._transcript_for_media(task_id, result, media)
+        return media, _parts(transcript, small=_small_parts(task_id)), segments
+    if media is None and debreath_job.is_running(result):
+        # Not yet decided what to cut: the transcript's clock is still open,
+        # so the note is not written from the original's.
+        raise AgentNoteError(vn._cut_media_reason(task_id, result))
     if media is None:
         if str(job.get("status") or "") not in vn.ELIGIBLE_STATUSES:
             raise AgentNoteError(f"只有已完成的任务能写笔记，这个任务现在是 {job.get('status') or '未知状态'}")
@@ -205,7 +261,10 @@ def _frames(task_id: str, client_id: str | None, result: dict[str, Any], media: 
     stored = _stored_frames(task_id, result)
     if stored is not None:
         return stored
-    frames = frame_collector(task_id, media.path, keyframe_extractor=keyframe_extractor, segments=segments)
+    frames = frame_collector(
+        task_id, media.path, keyframe_extractor=keyframe_extractor, segments=segments,
+        **({"ranges": list(media.planned_ranges)} if getattr(media, "planned_ranges", ()) else {}),
+    )
     vn._store(task_id, client_id=client_id, state={
         "frames_sent": [vn._frame_record(task_id, frame) for frame in frames],
     })
@@ -239,6 +298,11 @@ def material(
     frames = _frames(task_id, client_id, result, media, segments, keyframe_extractor, frame_collector)
     chosen = parts[part - 1]
     skill = note_skills.load_note_skill()
+    planned_marker = artifact_target_path(task_id, _PLANNED_MATERIAL_FILENAME)
+    if getattr(media, "planned_ranges", ()):
+        planned_marker.write_text(vn._now() + "\n", encoding="utf-8")
+    else:
+        planned_marker.unlink(missing_ok=True)
     return {
         "task_id": task_id,
         "title": result.get("display_title") or result.get("filename") or "",
@@ -303,6 +367,7 @@ def save(
     # coverage check spends a model call, and again in the write itself.
     expect = vn.check_base(job.get("result"), base_version)
     media, parts, _segments = _eligible(task_id, job)
+    _refuse_draft_off_its_clock(task_id, media)
     kept = _kept_from_earlier_save(job)
     if part_notes:
         if len(part_notes) != len(parts):
@@ -399,6 +464,7 @@ def save_part(
     # the one the agent read.
     expect = vn.check_base(job.get("result"), base_version)
     media, parts, _segments = _eligible(task_id, job)
+    _refuse_draft_off_its_clock(task_id, media)
     if not note_markdown:
         raise AgentNoteError("没有收到这一部分的笔记内容（note_markdown）")
     if not 1 <= part <= len(parts):

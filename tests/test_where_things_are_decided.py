@@ -28,7 +28,7 @@ ALLOWED_RUNNING_STATE = {
     "backend/core/visual_note_job.py": "its own state, and clearing notes a restart stranded",
     "backend/core/task_actions.py": "one re-render at a time for the same task, not whether the task is busy",
     "backend/core/task_reruns.py": "one cut at a time for the same task, not whether the task is busy",
-    "backend/core/agent_note.py": "an agent's note refused while the same note is being rewritten",
+    "backend/core/agent_note.py": "an agent's note refused while the same note is being rewritten, or while the cut it is written for is not yet decided",
 }
 
 # Files that may compare a note status with "pending".

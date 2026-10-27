@@ -428,6 +428,7 @@ async def _cut_then_note(ctx: Any, hand_off: Any, **cut: Any) -> None:
         await _cut_and_note_side_by_side(ctx, hand_off, **cut)
     else:
         await _trim_recorded_tail(ctx, **cut)
+        await _agent_note_back_onto_original_if_uncut(ctx)
         await _write_note_after_transcript(
             ctx.task_id_value, ctx.client_id, on_local_work_done=hand_off,
         )
@@ -618,6 +619,24 @@ async def _cut_and_note_side_by_side(ctx: MediaJobContext, hand_off: Any, **deci
             if step is not None and not step.done():
                 step.cancel()
         raise
+
+
+async def _agent_note_back_onto_original_if_uncut(ctx: Any) -> None:
+    """The user's agent may have saved its note while the cut rendered
+    (``agent_note``, from the planned stretches); when the cut then did not
+    come out, that note goes back onto the original like FluentFlow's own.
+    Does nothing when the cut came out or no such note was saved."""
+    loop = asyncio.get_running_loop()
+    try:
+        job = await loop.run_in_executor(None, functools.partial(get_job, ctx.task_id_value, client_id=ctx.client_id))
+        ranges = survey_cut.planned_ranges((job or {}).get("result"))
+    except Exception as exc:  # noqa: BLE001 - the note itself is the user's
+        logger.warning("could not read the planned cut of %s: %s", ctx.task_id_value, exc)
+        return
+    if ranges:
+        await loop.run_in_executor(None, functools.partial(
+            _note_back_onto_original_if_uncut, ctx.task_id_value, ctx.client_id, ranges,
+        ))
 
 
 def _note_back_onto_original_if_uncut(task_id: str, client_id: Optional[str], ranges: Any) -> None:
