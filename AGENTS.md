@@ -104,10 +104,10 @@ A block of work handed to a separate session (one lane of a plan, one
 sub-session task) leaves a record in `docs/交付记录/YYYY-MM-DD-<topic>.md`,
 following the `subsession-acceptance` skill (owner, 2026-10-22): the session's delivery
 note, the acceptance section the main session adds after an independent review,
-and the file name of the exported conversation. Before/after screenshots go in
+and the file name of the archived conversation (a readable Markdown record). Before/after screenshots go in
 `docs/images/` and are linked from the record. The plan document links each
 lane to its record. Follow-up work after acceptance gets its own record,
-linked from the original. Records are kept, not deleted. Exported conversations live
+linked from the original. Records are kept, not deleted. Archived conversations live
 outside the repository in `~/Documents/对话存档/fluentflow-local/`.
 
 ## Restarting the backend
