@@ -71,7 +71,7 @@ _QUEUE_HEARTBEAT_SECONDS = 5.0
 
 
 def _record_queue_wait(
-    task_id: str, client_id: Optional[str], waiting_for: Optional[str]
+    task_id: str, client_id: Optional[str], waiting_for: Optional[str], status: str = "queued"
 ) -> None:
     """Put the wait on the job row, where the task list will read it.
 
@@ -85,10 +85,12 @@ def _record_queue_wait(
     # and it stops waiting, both before the pipeline begins. Writing the status
     # rather than leaving it out also keeps the store's own guard in play: a row
     # already cancelled is not updated by a write that is not a cancellation, so
-    # a job cancelled mid-wait is not resurrected by its own bookkeeping.
+    # a job cancelled mid-wait is not resurrected by its own bookkeeping. A task
+    # whose transcript is stored waits as ``completed``: it is not queued again,
+    # and its runner checks for a terminal status when it ends.
     upsert_job(
         task_id=task_id,
-        status="queued",
+        status=status,
         client_id=client_id,
         metadata={
             "queue_wait": None if waiting_for is None else {
@@ -100,7 +102,8 @@ def _record_queue_wait(
 
 
 async def _await_predecessor(
-    previous: tuple[Optional[str], asyncio.Event], task_id: str, client_id: Optional[str]
+    previous: tuple[Optional[str], asyncio.Event], task_id: str, client_id: Optional[str],
+    status: str = "queued",
 ) -> None:
     """Wait for the job ahead — but only while it is still there.
 
@@ -117,7 +120,7 @@ async def _await_predecessor(
     try:
         while not previous_event.is_set():
             if not announced:
-                _record_queue_wait(task_id, client_id, previous_id)
+                _record_queue_wait(task_id, client_id, previous_id, status)
                 await JOB_EVENTS.publish(
                     task_id,
                     {"stage": "queued", "progress": 0, "waiting_for": previous_id},
@@ -149,7 +152,7 @@ async def _await_predecessor(
         # The wait is over however it ended, so the row must stop saying it is
         # waiting — a stale "waiting for" on a running job is worse than none.
         if announced:
-            _record_queue_wait(task_id, client_id, None)
+            _record_queue_wait(task_id, client_id, None, status)
 
 
 def _queue_tail_barrier() -> Optional[tuple[Optional[str], asyncio.Event]]:
@@ -279,7 +282,7 @@ async def _take_queue_turn(task_id: str, client_id: Optional[str]) -> asyncio.Ev
     done = asyncio.Event()
     _queue_tail_record(task_id, done)
     if previous is not None:
-        await _await_predecessor(previous, task_id, client_id)
+        await _await_predecessor(previous, task_id, client_id, status="completed")
     return done
 
 
