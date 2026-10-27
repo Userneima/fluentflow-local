@@ -15,3 +15,6 @@ data/*
 logs/
 exports/
 reports/
+
+# Local-only material that must never be committed (meeting and course content)
+private/

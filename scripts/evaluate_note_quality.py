@@ -176,7 +176,7 @@ def main() -> int:
     )
     parser.add_argument("--task", action="append", default=[], help="Task id for --compare-skills (repeatable)")
     parser.add_argument("--score", type=Path, default=None,
-                        help="Test folder (e.g. ~/Documents/FluentFlow 笔记考题): score each recording's note against its 考题.md")
+                        help="Test folder (e.g. private/笔记考题): score each recording's note against its 考题.md")
     parser.add_argument("--label", default="现有笔记", help="Name of the version being scored, used in the report file name")
     parser.add_argument("--note-file", default=None, help="Score this file inside each recording folder instead of the task's note")
     parser.add_argument("--only", action="append", default=[], help="Only recordings whose folder name contains this (repeatable)")
