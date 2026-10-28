@@ -193,6 +193,16 @@ def missing_sections(result: dict[str, Any]) -> tuple[list[dict[str, Any]], bool
     return missing, False
 
 
+def sections_to_align(result: dict[str, Any], *, again: bool = False) -> tuple[list[dict[str, Any]], bool]:
+    """What an alignment asks about: the missing sections, or, when an agent
+    asks to align the note again (a table it judges wrong, 2026-10-28), every
+    section, replacing the whole table."""
+    if again:
+        sections = note_sections(str(result.get("summary_markdown") or ""))
+        return sections, bool(sections)
+    return missing_sections(result)
+
+
 def _clock(seconds: float) -> str:
     s = int(seconds)
     return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}"
@@ -590,6 +600,7 @@ __all__ = [
     "build_prompt",
     "match_rows",
     "missing_sections",
+    "sections_to_align",
     "note_sections",
     "parse_answer",
     "request",

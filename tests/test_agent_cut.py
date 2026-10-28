@@ -33,7 +33,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.core import agent_cut, job_store, silence_cuts, survey_cut
+from backend.core import agent_cut, job_store, silence_cuts, survey_cut, task_steps
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.routers.local_agent as local_agent
 import backend.routers.local_job_debreath as local_job_debreath
@@ -339,3 +339,42 @@ def test_the_heartbeat_keeps_only_tasks_still_on_their_way(tmp_path):
     done = _task(tmp_path, status="completed")["id"]
     assert agent_cut.beat([running, done, "missing"], LOCAL_OWNER_ID) == [running]
     assert running in agent_cut._beats and "missing" not in agent_cut._beats
+
+
+def _transcribed_cut_to_come(tmp_path) -> str:
+    """Completed with its transcript stored, the material for the agent still
+    being measured: the moment between transcription and waiting."""
+    task_id = _task(tmp_path, status="completed")["id"]
+    task_steps.plan(task_id)
+    for name in task_steps.BEFORE_TRANSCRIPT:
+        task_steps.finish(task_id, name, task_steps.DONE)
+    return task_id
+
+
+def test_the_heartbeat_keeps_a_task_between_transcription_and_waiting(tmp_path):
+    task_id = _transcribed_cut_to_come(tmp_path)
+    assert agent_cut.beat([task_id], LOCAL_OWNER_ID) == [task_id]
+
+
+@needs_ffmpeg
+def test_an_agent_still_reporting_is_never_declared_gone(tmp_path, no_pictures, monkeypatch):
+    """2026-10-28, task 0ed1…: the reports stopped in the minute between the
+    transcript and the waiting, and the agent waiting on the task was told its
+    conversation had closed. Here the agent's process reports every half
+    minute, as the MCP process does with whatever beat() tells it to keep."""
+    task_id = _transcribed_cut_to_come(tmp_path)
+    watched = [task_id]
+    clock = [1000.0]
+    monkeypatch.setattr(agent_cut.time, "time", lambda: clock[0])
+
+    def half_minute():
+        clock[0] += 30
+        watched[:] = agent_cut.beat(watched, LOCAL_OWNER_ID)
+
+    for _ in range(3):  # measuring the material for a minute and a half
+        half_minute()
+    agent_cut.prepare(task_id, LOCAL_OWNER_ID)
+    for _ in range(10):  # five minutes on, the agent still there
+        half_minute()
+        assert agent_cut.check(task_id, LOCAL_OWNER_ID) is None
+    assert watched == [task_id]

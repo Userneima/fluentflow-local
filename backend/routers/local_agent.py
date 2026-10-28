@@ -596,12 +596,16 @@ async def wait_agent_task(
             }
         if _task_done(job):
             brief = _task_brief(job)
-            return {
+            answer = {
                 "ok": True,
                 "done": True,
                 "note_status": brief["note"]["status"],
                 "task": brief,
             }
+            align = _alignment_next(job)
+            if align:
+                answer["next"] = align
+            return answer
         if time.monotonic() >= deadline:
             return {
                 "ok": True,
@@ -625,6 +629,24 @@ AGENT_NOTE_NEXT = (
     "video's clock and frames from the matching moments, exactly as after the render. Save with "
     "save_agent_note as usual. wait_task will not stop for this again; call it to wait for the render."
 )
+
+
+ALIGN_NEXT = (
+    "FluentFlow does not match the sections of a note an agent wrote to playback times; that is yours. "
+    "Align them with get_agent_alignment_material and save_agent_alignment (in a subagent with a fresh "
+    "context when your host has them), from the material, not from memory."
+)
+ALIGN_AFTER_DONE = " Do it once wait_task says done=true; while the task works the material is refused."
+
+
+def _alignment_next(job: dict[str, Any]) -> Optional[str]:
+    """What to say when a note the agent wrote has sections without a time."""
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if not note_section_times.uses_agent(result):
+        return None
+    if note_section_times.status(result)["state"] not in {"missing", "partial", "failed"}:
+        return None
+    return ALIGN_NEXT + (ALIGN_AFTER_DONE if task_activity.activity(job).busy else "")
 
 
 AGENT_CUT_NEXT = (
@@ -854,6 +876,7 @@ def agent_alignment_material(request: Request, task_id: str, payload: Optional[d
     return _alignment_call(
         agent_alignment.material, task_id, client_id=_local_client_scope(request),
         offset=body.get("offset", 0), material_version=body.get("material_version"),
+        again=_truthy_json(body.get("again", False)),
     )
 
 
@@ -863,6 +886,7 @@ def save_agent_alignment(request: Request, task_id: str, payload: Optional[dict[
     return _alignment_call(
         agent_alignment.save, task_id, client_id=_local_client_scope(request),
         material_version=body.get("material_version"), sections=body.get("sections"), model=body.get("model"),
+        again=_truthy_json(body.get("again", False)),
     )
 
 
@@ -948,6 +972,9 @@ def save_agent_note(
             if saved["job"] is not None:
                 answer["previous_note_restorable"] = True
                 answer["package_url"] = f"/agent/v1/tasks/{task_id}/package"
+                align = _alignment_next(saved["job"])
+                if align:
+                    answer["next"] = f"{answer['next']} Then: {align}".strip()
             # The task's note as it is after this save: what the next save of a
             # part names (the note changes once every part is in).
             answer.update(_current_versions(task_id, request))
@@ -969,7 +996,9 @@ def save_agent_note(
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="part 要是一个整数") from exc
     coverage = visual_note_job.visual_note_state(updated.get("result")).get("coverage") or {}
+    align = _alignment_next(updated)
     return {
+        **({"next": align} if align else {}),
         "ok": True,
         "task_id": task_id,
         "previous_note_restorable": True,

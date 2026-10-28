@@ -234,3 +234,46 @@ def test_background_that_was_already_running_cannot_overwrite_agent_table(task):
         return json.dumps({"sections": answers(packet)})
     assert times.align(task, chat=(talk, "claude_code_subscription", "opus"))["state"] == "skipped"
     assert job(task)["result"][times.RESULT_KEY]["aligned_by"] == "agent"
+
+
+def test_a_ready_table_can_be_aligned_again_in_full(task):
+    """2026-10-28, task 6713…: an agent filled the table from memory and
+    nobody could redo it, because only sections without a time were asked."""
+    save(task, material(task))
+    old = job(task)["result"][times.RESULT_KEY]
+    assert material(task)["sections"] == []
+    packet = material(task, again=True)
+    assert packet["state"] == "needs_alignment" and packet["whole"] and packet["again"]
+    assert [row["heading"] for row in packet["sections"]] == ["一、进展", "发布", "二、后续"]
+    # The ordinary material and save are another version: the redo cannot be
+    # answered by mistake as if only missing sections had been asked.
+    assert packet["material_version"] != material(task)["material_version"]
+    with pytest.raises(aa.AlignmentError):
+        save(task, packet)
+    assert job(task)["result"][times.RESULT_KEY] == old
+    redone = [{"id": row["id"], "primary": {"start": 50, "end": 70}, "others": []} for row in packet["sections"]]
+    answer = aa.save(task, client_id=OWNER, material_version=packet["material_version"],
+                     sections=redone, model="claude-opus-5-5", again=True)
+    assert answer["state"] == "ready" and answer["answered"] == 3
+    table = job(task)["result"][times.RESULT_KEY]
+    assert [row["primary"] for row in table["sections"]] == [[50.0, 70.0]] * 3
+    assert {row["id"] for row in table["sections"]}.isdisjoint({row["id"] for row in old["sections"]})
+    assert table["model"] == "claude-opus-5-5"
+
+
+def test_aligning_again_through_the_mcp_tools(task, monkeypatch):
+    sent = []
+
+    def bridge(method, path, **kw):
+        sent.append((path, kw.get("payload")))
+        return {"ok": True, "material_version": "v", "sections": []}
+
+    monkeypatch.setattr(mcp, "_agent_request", bridge)
+    mcp.get_agent_alignment_material(task, again=True)
+    mcp.save_agent_alignment(task, "v", [], "m", again=True)
+    mcp.get_agent_alignment_material(task)
+    assert sent[0][1]["again"] is True and sent[1][1]["again"] is True
+    assert "again" not in sent[2][1]
+    tools = {tool["name"]: tool for tool in mcp.TOOL_DEFINITIONS}
+    assert "again" in tools["get_agent_alignment_material"]["inputSchema"]["properties"]
+    assert "again=true" in tools["get_agent_alignment_material"]["description"]

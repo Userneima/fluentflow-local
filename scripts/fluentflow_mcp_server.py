@@ -551,7 +551,8 @@ WAIT_MAX_SECONDS = 600
         "task waits for you to judge its cut: judge it with get_agent_cut_material and save_agent_cut, "
         "then wait again; agent_note (status ready, next) once the cut is decided and rendering and the "
         "note is yours to write: start it now (get_agent_note_material) instead of waiting for the "
-        "render; this comes once. Otherwise it returns the current state when its time is up. Keep the "
+        "render; this comes once. With done=true, next asks you to align the sections of a note you wrote "
+        "to playback times when they have none. Otherwise it returns the current state when its time is up. Keep the "
         "default timeout on Codex: it stops waiting on one tool call after 300 seconds unless its "
         "tool_timeout_sec is raised."),
     input_schema={
@@ -573,6 +574,8 @@ def wait_task(
     client_id: str | None = None,
 ) -> dict[str, Any]:
     held = min(max(float(timeout_seconds if timeout_seconds is not None else WAIT_DEFAULT_SECONDS), 0), WAIT_MAX_SECONDS)
+    # Reported for the whole wait, not only once it returns.
+    _watch(task_id, api_base, client_id)
     return _watching(_agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/wait",
@@ -1063,24 +1066,29 @@ def export_result(
         "headings and the timed transcript in material, with primary/others instructions. Read every page "
         "using next_offset as offset and the same material_version before judging. Then save_agent_alignment "
         "with that version and one answer per section. A stale version means re-read and judge again. "
+        "It asks only about sections without a time; when the existing times are wrong or were not judged "
+        "from this material, pass again=true to align every section anew (pass it on every page and to "
+        "save_agent_alignment too); the whole table is replaced. "
         "Only the time table changes; the note, files and record ordering are untouched."),
     input_schema={
         "type": "object", "properties": {
             "task_id": {"type": "string"},
             "offset": {"type": "integer", "default": 0, "minimum": 0},
             "material_version": {"type": "string", "description": "Required when reading a later page."},
+            "again": {"type": "boolean", "default": False,
+                      "description": "Align every section anew, replacing the existing table."},
             "api_base": {"type": "string"},
         }, "required": ["task_id"],
     },
 )
 def get_agent_alignment_material(
-    task_id: str, offset: int = 0, material_version: str | None = None,
+    task_id: str, offset: int = 0, material_version: str | None = None, again: bool = False,
     api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
     return _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/agent-alignment/material",
         api_base=api_base, client_id=client_id,
-        payload=_options(offset=offset, material_version=material_version),
+        payload=_options(offset=offset, material_version=material_version, again=again or None),
     )
 
 
@@ -1090,7 +1098,8 @@ def get_agent_alignment_material(
         "and your actual model. Times are seconds or H:MM:SS on the PLAYED recording. Every requested "
         "id must appear exactly once, each span finite, within the recording and end > start. "
         "If the note, transcript, cut timeline or table changed meanwhile, returns stale and writes "
-        "nothing: get fresh material and judge again. Never calls a model or edits the note or its files."),
+        "nothing: get fresh material and judge again. Pass again=true when the material was read with "
+        "again=true. Never calls a model or edits the note or its files."),
     input_schema={
         "type": "object", "properties": {
             "task_id": {"type": "string"}, "material_version": {"type": "string"},
@@ -1105,18 +1114,21 @@ def get_agent_alignment_material(
                     }, "required": ["start", "end"]}},
                 }, "required": ["id", "primary", "others"],
             }},
-            "model": {"type": "string"}, "api_base": {"type": "string"},
+            "model": {"type": "string"}, "again": {"type": "boolean", "default": False},
+            "api_base": {"type": "string"},
         }, "required": ["task_id", "material_version", "sections", "model"],
     },
 )
 def save_agent_alignment(
-    task_id: str, material_version: str, sections: list[dict[str, Any]], model: str,
+    task_id: str, material_version: str, sections: list[dict[str, Any]], model: str, again: bool = False,
     api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
+    payload = {"material_version": material_version, "sections": sections, "model": model}
+    if again:
+        payload["again"] = True
     return _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/agent-alignment",
-        api_base=api_base, client_id=client_id,
-        payload={"material_version": material_version, "sections": sections, "model": model},
+        api_base=api_base, client_id=client_id, payload=payload,
     )
 
 
@@ -1179,7 +1191,9 @@ def get_agent_note_material(
         "Use note_markdown for a whole note, or part to save parts before joining. "
         "Cite frames by file name only. Too-short notes are refused. Pass base_version: "
         "a concurrent edit returns stale without replacing it; read, merge and save again "
-        "with the new note_version. Previous notes stay restorable."),
+        "with the new note_version. Previous notes stay restorable. FluentFlow does not match the "
+        "sections of a note you wrote to playback times: once the task is done, align them with "
+        "get_agent_alignment_material (the answer's next says so while times are missing)."),
     input_schema={
         "type": "object",
         "properties": {
@@ -1890,28 +1904,54 @@ def handle_jsonrpc_message(message: dict[str, Any]) -> dict[str, Any] | None:
     return _error(message_id, -32601, f"Method not found: {method}")
 
 
-def run_stdio() -> None:
-    for line in sys.stdin:
+_write_lock = threading.Lock()
+
+
+def _respond(response: dict[str, Any] | None, out=None) -> None:
+    if response is None:
+        return
+    out = out or sys.stdout
+    with _write_lock:
+        out.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
+        out.flush()
+
+
+def run_stdio(stdin=None, stdout=None) -> list[threading.Thread]:
+    """Answer each tool call on its own thread. One conversation, its
+    subagents included, shares this process: answered one at a time, a
+    subagent's call to fetch the cut material waited behind the main agent's
+    ten-minute wait_task, and the task was given away as never fetched
+    (2026-10-28). Returns the threads still answering, for tests."""
+    calls: list[threading.Thread] = []
+    for line in stdin or sys.stdin:
         text = line.strip()
         if not text:
             continue
         try:
             message = json.loads(text)
         except json.JSONDecodeError as exc:
-            response = _error(None, -32700, f"Parse error: {exc}")
-        else:
-            if not isinstance(message, dict):
-                response = _error(None, -32600, "Invalid request")
-            else:
-                response = handle_jsonrpc_message(message)
-        if response is not None:
-            sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
-            sys.stdout.flush()
+            _respond(_error(None, -32700, f"Parse error: {exc}"), stdout)
+            continue
+        if not isinstance(message, dict):
+            _respond(_error(None, -32600, "Invalid request"), stdout)
+            continue
+        if message.get("method") == "tools/call" and "id" in message:
+            call = threading.Thread(
+                target=lambda m=message: _respond(handle_jsonrpc_message(m), stdout),
+                name="fluentflow-tool-call", daemon=True,
+            )
+            call.start()
+            calls = [thread for thread in calls if thread.is_alive()] + [call]
+            continue
+        _respond(handle_jsonrpc_message(message), stdout)
+    return [thread for thread in calls if thread.is_alive()]
 
 
 def main() -> int:
     global _heartbeat_enabled
     _heartbeat_enabled = True
+    # The host closing stdin ends the conversation: exit without finishing
+    # the calls still out, or their heartbeat would outlive it.
     run_stdio()
     return 0
 

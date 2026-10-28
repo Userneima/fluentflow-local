@@ -372,8 +372,13 @@ def save_report(task_id: str, client_id: str | None, answer: Any) -> dict[str, A
 
 def beat(task_ids: list[str], client_id: str | None) -> list[str]:
     """An agent's MCP process says it is still here for these tasks. Returns
-    the ones it should keep reporting: tasks still on their way to the cut or
-    waiting for it."""
+    the ones it should keep reporting: tasks waiting for the agent, and tasks
+    with a step still to come. A task reads completed once its transcript is
+    stored, while the material is still being measured: dropping it then
+    stopped the reports before the waiting began, and the waiting task was
+    given away as closed two minutes later (2026-10-28)."""
+    from backend.core import task_activity  # it reads this module's state
+
     now = time.time()
     keep = []
     for task_id in task_ids[:50]:
@@ -381,8 +386,8 @@ def beat(task_ids: list[str], client_id: str | None) -> list[str]:
         if not job:
             continue
         _beats[str(task_id)] = now
-        status = str(job.get("status") or "")
-        if status in ("queued", "running") or is_waiting(job.get("result")):
+        current = task_activity.activity(job)
+        if current.busy or current.waiting_for_agent:
             keep.append(str(task_id))
     return keep
 

@@ -43,7 +43,7 @@ If the tools fail because nothing answers at `127.0.0.1:8000`, ask the user to o
 
 1. Submit: `submit_local_media` for a file path, `submit_video_link` for a link, `submit_transcript` for transcript text. Keep `intelligence="agent"`. One call per recording; a folder is several calls.
 2. `wait_task` until the task is done. Transcription takes a few minutes per hour of recording on Apple silicon, so a long recording means an hour or more of waiting. Every turn you take resends the whole conversation, so waiting must cost almost nothing: one `wait_task` call holds up to four minutes and comes back the moment you have something to do. After submitting, tell the user once that it is processing and roughly how long it takes; then call `wait_task` again and again without saying anything in between, no progress reports, no checks with `get_task`. Speak again only when it returns something for you to do or the task is done.
-   - When `wait_task` comes back with `agent_cut` waiting, the task wants you to decide what to cut (FluentFlow has no model of its own, or you submitted with `cut_judge="agent"`). Call `get_agent_cut_material`, open the screenshots it lists, judge as its `instructions` say, and send the decision with `save_agent_cut`; then organise the facts its answer lists into the processing report and send it with `save_agent_cut_report`. Tell the user the number of places to look at that this last answer gives (`to_judge`) and that they judge them on the task's page in FluentFlow; do not ask them in the conversation, they need the video. Then `wait_task` again. If you do not answer in time, FluentFlow judges the cut itself.
+   - When `wait_task` comes back with `agent_cut` waiting, the task wants you to decide what to cut (FluentFlow has no model of its own, or you submitted with `cut_judge="agent"`). Call `get_agent_cut_material`, open the screenshots it lists, judge as its `instructions` say, and send the decision with `save_agent_cut`; then organise the facts its answer lists into the processing report and send it with `save_agent_cut_report`. Tell the user the number of places to look at that this last answer gives (`to_judge`) and that they judge them on the task's page in FluentFlow; do not ask them in the conversation, they need the video. Then `wait_task` again. If you do not answer in time, FluentFlow judges the cut itself. A subagent you hand the judging to can start at once, even while you keep waiting on another task: the FluentFlow tools answer each call on its own, so its calls do not wait behind your `wait_task`.
    - When `wait_task` comes back with `agent_note` ready, the cut is decided and the cut video is rendering: start the note now (step 3) instead of waiting for the render; the material is already on the cut video's clock. Then `wait_task` again until done; it does not stop for this a second time.
 3. Reuse a completed task's existing note when it already satisfies the request. For a new submission, write it yourself, in a subagent with a fresh context when your host has them (give it the `task_id` and these steps; not a subagent that inherits this conversation, which would resend all of it on every turn), so the transcript does not fill the user's conversation: call `get_agent_note_material`, which returns the whole recording; open the frames you need, write the whole note following `instructions` exactly, and save it once with `save_agent_note`, passing the material's `note_version` as `base_version`. Before saving, check the whole transcript for missing points yourself and add those worth keeping. Only if you explicitly delegated a model check can the answer return `coverage.missing`; consider those points and save once more. An unchecked result does not mean an automatic check passed.
    - If the material came back truncated or saved to a file because it was too large for one tool result, call `get_agent_note_material` again with `small_parts=true`: the recording then comes in `total_parts` parts, each small enough to read in one go. Fetch, write and save one part at a time (`save_agent_note` with `part`). Saved parts stay in FluentFlow, so if the conversation is compacted or a new one starts, carry on from the parts the answer lists as remaining; the task's note is replaced only once every part is in. Every save names `base_version`: the material's `note_version` until the note is joined, then the `note_version` the last answer gave. When the last part is in, do what the answer's `next` asks: read the saved parts back one at a time with `get_agent_note_part`, merge conclusions and term explanations that repeat across parts, and save again only the parts you change.
@@ -63,7 +63,10 @@ do the semantic alignment yourself in the current agent. Codex, Claude Code and 
 hosts use the same tools; do not invoke Claude or ask for a model key. After you finish
 writing a note, check `get_task`'s `note_alignment`; align missing sections before delivery
 when the user is using playback following. `get_task_package` also carries `note_alignment`
-and offers `get_agent_alignment_material` in `next_actions` when times are missing.
+and offers `get_agent_alignment_material` in `next_actions` when times are missing. FluentFlow
+never aligns a note an agent wrote: when `wait_task` (done) or `save_agent_note` answers with a
+`next` about alignment, do it, in a subagent with a fresh context when your host has them, from the
+material and never from memory.
 
 1. Call `get_agent_alignment_material`. It hands this task's alignment to you, so the
    page and background retries cannot start their own model call for it. The `material`
@@ -80,7 +83,10 @@ and offers `get_agent_alignment_material` in `next_actions` when times are missi
    Seconds and H:MM:SS are accepted. Missing, duplicate or invented ids and invalid times
    are refused. If any read or save returns `stale`, fetch fresh material and judge again;
    never bypass its version. A save changes only the time table, never the note, files
-   or record order. If the table is already `ready`, no work is needed.
+   or record order. If the table is already `ready`, no work is needed, unless the user says the
+   times are wrong or they were not judged from the material: then pass `again=true` to
+   `get_agent_alignment_material` (every page) and to `save_agent_alignment`. Every section is
+   asked and the whole table is replaced.
 
 ## Changing the cut, stopping and carrying on
 

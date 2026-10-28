@@ -239,3 +239,25 @@ def test_a_transcript_only_task_still_waits_for_its_cut(jobs_db):
     waited = _wait(_client(), "t-skip-cutting", timeout_seconds=0)
 
     assert waited["done"] is False and waited["note_pending"] is False and waited["cut_running"] is True
+
+
+def _agent_note_with_sections(db, task_id: str, *, written_from: str) -> None:
+    _store(db, task_id, stage="done", summary_status="completed", result={
+        **_TRANSCRIPT, "summary_markdown": "# 笔记\n\n## 一、开场\n内容。\n\n## 二、正题\n内容。",
+        "summary_skipped": False, "summary_status": "completed", "summary_written_from": written_from,
+        "display_segments": [{"start": 0, "end": 10, "text": "大家好"}, {"start": 10, "end": 20, "text": "正题"}],
+    })
+
+
+def test_the_agent_is_told_to_align_the_note_it_wrote(jobs_db):
+    """FluentFlow never aligns a note an agent wrote (2026-10-28: the agent
+    had to know to call the alignment tools); the end of the wait says so."""
+    from backend.core.result_schema import NOTE_FROM_AGENT
+
+    _agent_note_with_sections(jobs_db, "t-agent", written_from=NOTE_FROM_AGENT)
+    _agent_note_with_sections(jobs_db, "t-fluentflow", written_from="cut_media")
+    client = _client()
+
+    waited = _wait(client, "t-agent", timeout_seconds=0)
+    assert waited["done"] is True and "get_agent_alignment_material" in waited["next"]
+    assert "next" not in _wait(client, "t-fluentflow", timeout_seconds=0)

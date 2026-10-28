@@ -79,3 +79,44 @@ def test_waiting_and_submitting_tell_the_agent_about_judging_the_cut():
     assert "get_agent_cut_material" in tools["wait_task"]
     assert "cut_judge" in tools["submit_local_media"]
     assert "do not ask them in chat" in tools["save_agent_cut"]
+
+
+def test_a_long_wait_does_not_hold_the_conversations_other_calls(monkeypatch):
+    """2026-10-28, tasks 3146… and 081a…: a subagent's call for the cut
+    material waited ten minutes behind the main agent's wait_task in the same
+    MCP process, and the task was given away as never fetched."""
+    import io
+    import json
+    import threading
+
+    release = threading.Event()
+    fetched = threading.Event()
+
+    def fake(method, api_base, path, **kwargs):
+        if path == "/health":
+            return LOCAL_HEALTH
+        if path.endswith("/wait"):
+            release.wait(5)
+            return {"ok": True, "done": True}
+        if path.endswith("/agent-cut/material"):
+            fetched.set()
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp, "api_request", fake)
+    monkeypatch.setattr(mcp, "_watched", {})
+    calls = [
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+         "params": {"name": "wait_task", "arguments": {"task_id": "t1"}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "get_agent_cut_material", "arguments": {"task_id": "t2"}}},
+    ]
+    out = io.StringIO()
+    pending = mcp.run_stdio(io.StringIO("".join(json.dumps(call) + "\n" for call in calls)), out)
+    assert fetched.wait(2), "the material call waited behind wait_task"
+    # The wait is reported while it holds, not only once it returns.
+    assert "t1" in mcp._watched
+    release.set()
+    for thread in pending:
+        thread.join(5)
+    answered = [json.loads(line)["id"] for line in out.getvalue().splitlines()]
+    assert answered == [2, 1]

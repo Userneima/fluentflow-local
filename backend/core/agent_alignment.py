@@ -36,8 +36,13 @@ def _stale() -> AlignmentError:
     return AlignmentError("对齐材料已变化，请重新取材料后再交回时间表。", "stale", 409)
 
 
-def _version(result: dict[str, Any]) -> str:
-    raw = json.dumps({key: result.get(key) for key in BASIS_FIELDS}, ensure_ascii=False, sort_keys=True, allow_nan=False)
+def _version(result: dict[str, Any], again: bool = False) -> str:
+    # Aligning again asks about other sections under the same S numbers, so
+    # its material is a version of its own: a save must say the same.
+    basis = {key: result.get(key) for key in BASIS_FIELDS}
+    if again:
+        basis["again"] = True
+    raw = json.dumps(basis, ensure_ascii=False, sort_keys=True, allow_nan=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -55,12 +60,14 @@ def _read(task_id: str, client_id: str | None) -> dict[str, Any]:
     return result
 
 
-def material(task_id: str, *, client_id: str | None, offset: int = 0, material_version: str | None = None) -> dict[str, Any]:
+def material(
+    task_id: str, *, client_id: str | None, offset: int = 0, material_version: str | None = None, again: bool = False,
+) -> dict[str, Any]:
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
         raise AlignmentError("offset 必须是非负整数")
     result = _read(task_id, client_id)
     if offset or material_version:
-        if not material_version or material_version != _version(result):
+        if not material_version or material_version != _version(result, again):
             raise _stale()
     # A first read explicitly assigns this task to the caller. Background
     # retries and late answers cannot take it back, even after a restart.
@@ -74,7 +81,7 @@ def material(task_id: str, *, client_id: str | None, offset: int = 0, material_v
         if saved is None:
             raise _stale()
         result = saved["result"]
-    ask, whole = times.missing_sections(result)
+    ask, whole = times.sections_to_align(result, again=again)
     segments = canonical_display_segments(result)
     duration = max(float(segment.get("end") or 0) for segment in segments)
     prompt = times.build_prompt(str(result["summary_markdown"]), ask, times.transcript_lines(segments), duration) if ask else ""
@@ -82,8 +89,8 @@ def material(task_id: str, *, client_id: str | None, offset: int = 0, material_v
         raise AlignmentError("offset 超过材料长度")
     end = min(offset + PAGE_CHARS, len(prompt))
     return {
-        "task_id": task_id, "material_version": _version(result),
-        "state": "needs_alignment" if ask else "ready", "whole": whole,
+        "task_id": task_id, "material_version": _version(result, again),
+        "state": "needs_alignment" if ask else "ready", "whole": whole, "again": again,
         "sections": [{"id": f"S{number + 1}", "heading": section["heading"]} for number, section in enumerate(ask)],
         "timeline": times._timeline(result), "duration": duration,
         "offset": offset, "total_chars": len(prompt),
@@ -96,6 +103,8 @@ def material(task_id: str, *, client_id: str | None, offset: int = 0, material_v
             "按材料要求给每个 S 编号一个 primary 和 others，时间用播放文件的秒数或时分秒。"
             "最后调用 save_agent_alignment，带 material_version、sections 和你实际使用的 model。"
             "只交时间表，不改笔记。若 stale，重新取全部材料并对齐，不能省略版本绕过。"
+            + ("这是整篇重新对齐：读后面几页和交回时间表时都带 again=true，交回后原来的时间表整张换掉。" if again else
+               "已有的时间表要整张重做（比如时间不准、或不是读材料对出来的），取材料时带 again=true。")
         ),
     }
 
@@ -123,15 +132,17 @@ def _span(value: Any, duration: float) -> dict[str, float]:
     return {"start": start, "end": end}
 
 
-def save(task_id: str, *, client_id: str | None, material_version: Any, sections: Any, model: Any) -> dict[str, Any]:
+def save(
+    task_id: str, *, client_id: str | None, material_version: Any, sections: Any, model: Any, again: bool = False,
+) -> dict[str, Any]:
     result = _read(task_id, client_id)
-    if not material_version or material_version != _version(result):
+    if not material_version or material_version != _version(result, again):
         raise _stale()
     if (times.stored_table(result) or {}).get("executor") != "agent":
         raise _stale()
     if not isinstance(model, str) or not model.strip():
         raise AlignmentError("请写明当前 agent 实际使用的 model")
-    ask, whole = times.missing_sections(result)
+    ask, whole = times.sections_to_align(result, again=again)
     if not ask:
         return {"task_id": task_id, "state": "ready", "answered": 0}
     expected = {f"S{number + 1}" for number in range(len(ask))}
