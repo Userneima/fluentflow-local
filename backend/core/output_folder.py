@@ -148,19 +148,34 @@ def _link_original(task_id: str, job: dict[str, Any]) -> Path | None:
     from backend.core.storage_paths import find_source_file, in_place_source_path
 
     downloaded = find_source_file(task_id)
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     if downloaded is None:
-        # FluentFlow's own copy was cleaned up; the one in the folder stays.
-        return in_place_source_path(job)
+        # FluentFlow's own copy was cleaned up; the one in the folder stays,
+        # also when the folder was sorted into a topic folder since.
+        kept = in_place_source_path(job)
+        if kept is not None:
+            return kept
+        recorded = str(metadata.get("kept_original_path") or "").strip()
+        if not recorded:
+            return None
+        name = Path(recorded).name
+        moved = next((child / name for child in _link_folders(link_root())
+                      if _owner(child) == task_id and (child / name).is_file()), None)
+        if moved is not None:
+            job_store.upsert_job(
+                task_id=task_id, status=str(job.get("status") or "completed"),
+                metadata={**metadata, "kept_original_path": str(moved)},
+            )
+        return moved
     if downloaded.suffix.lower() in {".srt", ".vtt", ".txt", ".json"}:
         return None
-    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     title = str(metadata.get("display_title") or metadata.get("raw_title") or job.get("source_filename") or "").strip()
     stem = _UNSAFE.sub("_", title).strip().strip(".") or f"video-{task_id[:8]}"
     root = link_root()
     root.mkdir(parents=True, exist_ok=True)
     names = [stem] + [f"{stem} ({n})" for n in range(2, MAX_FOLDERS_PER_RECORDING + 1)]
-    # Renamed by the user, it is still found by its marker.
-    folder = next((child for child in sorted(root.iterdir()) if child.is_dir() and _owner(child) == task_id), None)
+    # Renamed or sorted into a topic folder by the user, it is still found by its marker.
+    folder = next((child for child in _link_folders(root) if _owner(child) == task_id), None)
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     previous = (result.get(RESULT_KEY) or {}).get("path") if isinstance(result.get(RESULT_KEY), dict) else None
     if folder is None and previous:
@@ -183,6 +198,20 @@ def _link_original(task_id: str, job: dict[str, Any]) -> Path | None:
             metadata={**metadata, "kept_original_path": str(original)},
         )
     return original
+
+
+def _link_folders(root: Path) -> list[Path]:
+    """The folders under the link root, and one level further down: the owner
+    sorts the downloads by hand into topic folders there (2.AI, 3.求职 ...,
+    2026-10-29). Deeper is not searched; a folder moved there is reported as
+    gone, as one moved anywhere else is."""
+    if not root.is_dir():
+        return []
+    top = [child for child in sorted(root.iterdir()) if child.is_dir()]
+    return top + [
+        child for parent in top if not _owners(parent)
+        for child in sorted(parent.iterdir()) if child.is_dir()
+    ]
 
 
 def _stem(source: Path) -> str:
@@ -281,7 +310,7 @@ def _folder_for(task_id: str, source: Path) -> tuple[Path, str]:
     for folder in [known, source.parent] + [
         child for parent in dict.fromkeys([known.parent, source.parent]) if parent.is_dir()
         for child in sorted(parent.iterdir()) if child.is_dir()
-    ]:
+    ] + (_link_folders(link_root()) if _is_link_task(job) else []):
         if folder.is_dir():
             for task, suffix in _owners(folder):
                 if task == task_id:
@@ -777,6 +806,25 @@ def edited_notes(now: float | None = None) -> list[str]:
     return found
 
 
+_looked_for: set[tuple[str, str]] = set()
+
+
+def notes_to_find_again() -> list[str]:
+    """Tasks whose md is no longer where it was recorded (its folder was moved,
+    say into a topic folder), each returned once per place it went missing
+    from: the sync finds the folder again and records where it is now, so an
+    edit made there is seen by ``edited_notes``. A folder that cannot be found
+    is not looked for on every check."""
+    found = []
+    for task_id, md_path, _md_mtime, _updated_at in job_store.list_output_folder_notes():
+        key = (task_id, md_path)
+        if key in _looked_for or Path(md_path).exists():
+            continue
+        _looked_for.add(key)
+        found.append(task_id)
+    return found
+
+
 def start_edit_watch() -> None:
     """Every ``EDIT_CHECK_SECONDS``, sync each task whose md was edited, so an
     edit in Obsidian reaches the task (and its PDF) without waiting for the
@@ -792,7 +840,7 @@ def start_edit_watch() -> None:
         while True:
             time.sleep(EDIT_CHECK_SECONDS)
             try:
-                for task_id in edited_notes():
+                for task_id in dict.fromkeys(notes_to_find_again() + edited_notes()):
                     schedule_sync(task_id)
             except Exception as exc:  # noqa: BLE001 - the next look tries again
                 logger.warning("looking for edited notes failed: %s", exc)

@@ -346,6 +346,54 @@ def test_a_link_folder_moved_to_a_new_link_root_keeps_being_updated(tmp_path, pd
     assert list(old_root.iterdir()) == []
 
 
+@pytest.mark.parametrize("copy_cleaned_up", [False, True])
+def test_a_link_folder_sorted_into_a_subfolder_keeps_being_updated(tmp_path, pdfs, monkeypatch, copy_cleaned_up):
+    """Owner, 2026-10-29: the short-video folders are sorted by hand into topic
+    folders (2.AI, 3.求职 ...) under the link root. A sorted folder keeps being
+    updated where it now is, and nothing is recreated at the top."""
+    root = tmp_path / "短视频"
+    monkeypatch.setenv(output_folder.LINK_ROOT_ENV, str(root))
+    task = _link_task("抖音视频", note="# 笔记\n\n第一版。\n")
+    output_folder.sync(task)
+    if copy_cleaned_up:
+        (_source_storage_dir() / task / "source.mp4").unlink()
+
+    (root / "2.AI").mkdir()
+    (root / "抖音视频").rename(root / "2.AI" / "抖音视频")
+    record = output_folder.sync(task)
+
+    sorted_folder = root / "2.AI" / "抖音视频"
+    assert not record.get("error")
+    assert record["path"] == str(sorted_folder)
+    assert record["md_path"] == str(sorted_folder / "抖音视频_笔记.md")
+    assert sorted(p.name for p in root.iterdir()) == ["2.AI"]
+
+
+def test_an_edit_made_after_sorting_into_a_subfolder_reaches_the_task(tmp_path, pdfs, monkeypatch):
+    """The md moved with its folder is still the one Obsidian edits: the watch
+    looks for a note whose recorded place is gone once, the sync finds the
+    folder and takes the edit in, and the note is not looked for again."""
+    import os
+
+    root = tmp_path / "短视频"
+    monkeypatch.setenv(output_folder.LINK_ROOT_ENV, str(root))
+    task = _link_task("抖音视频", note="# 笔记\n\n第一版。\n")
+    output_folder.sync(task)
+    (root / "3.求职").mkdir()
+    (root / "抖音视频").rename(root / "3.求职" / "抖音视频")
+    md = root / "3.求职" / "抖音视频" / "抖音视频_笔记.md"
+    md.write_text("# 笔记\n\n在 Obsidian 里改过。\n", encoding="utf-8")
+    later = md.stat().st_mtime + 120
+    os.utime(md, (later, later))
+
+    assert task in output_folder.notes_to_find_again()
+    assert task not in output_folder.notes_to_find_again(), "looked for once, not every check"
+    output_folder.sync(task)
+
+    assert "在 Obsidian 里改过" in job_store.get_job(task)["result"]["summary_markdown"]
+    assert task not in output_folder.notes_to_find_again()
+
+
 def test_a_renamed_folder_is_found_and_a_moved_one_is_not_recreated(tmp_path, pdfs):
     source = _recording(tmp_path)
     task = _task(source, note="# 笔记\n")
