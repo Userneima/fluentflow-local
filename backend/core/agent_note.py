@@ -298,6 +298,8 @@ def material(
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     frames = _frames(task_id, client_id, result, media, segments, keyframe_extractor, frame_collector)
     chosen = parts[part - 1]
+    # The note's time on the task page runs from here to the save.
+    task_steps.agent_began(task_id, task_steps.NOTE)
     skill = note_skills.load_note_skill()
     planned_marker = artifact_target_path(task_id, _PLANNED_MATERIAL_FILENAME)
     if getattr(media, "planned_ranges", ()):
@@ -629,7 +631,7 @@ def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, m
         "finished_at": vn._now(),
         "error": None,
     }
-    return vn._store(
+    stored = vn._store(
         task_id,
         client_id=client_id,
         state=state,
@@ -638,6 +640,8 @@ def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, m
         rewrite_artifacts=True,
         expect_versions=expect_versions,
     )
+    task_steps.agent_finished(task_id, task_steps.NOTE)
+    return stored
 
 
 def _hash(text: str) -> str:

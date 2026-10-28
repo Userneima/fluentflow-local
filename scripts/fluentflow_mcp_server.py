@@ -588,7 +588,12 @@ def wait_task(
 
 @tool(
     description=("Read the Agent Task Package for a FluentFlow task: status, the note, where every output "
-        "is, and what happened, with model_usage as in get_task. The transcript is described "
+        "is, and what happened, with model_usage as in get_task. step_timings says how long each step "
+        "took: rows for the queue and each step that ran (seconds, status, running; the cut split into "
+        "judging, rendering and its report in parts; a note you wrote is timed from your first "
+        "get_agent_note_material to your save_agent_note, by_agent=true), total_seconds for the whole run, "
+        "overlapping when steps ran side by side. Answer the user's \"how long did it take\" from it. "
+        "The transcript is described "
         "(chars, preview, file path), not included; to write a note use get_agent_note_material, "
         "which hands it over in parts."),
     input_schema={

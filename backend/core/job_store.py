@@ -83,6 +83,11 @@ CREATE INDEX IF NOT EXISTS idx_model_calls_task ON model_calls(task_id, id);
 """
 
 
+def now_iso() -> str:
+    """The time as every record here stamps it."""
+    return _now_iso()
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 

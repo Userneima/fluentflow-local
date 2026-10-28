@@ -27,7 +27,7 @@ others will need gets a line here in the same change.
 exists and that no other file judges whether a task is still busy.
 
 - Whether a task is still working, on what, and whether it is finished: `backend/core/task_activity.py`
-- The steps a task records after it is queued: `backend/core/task_steps.py`
+- The steps a task records after it is queued, and how long each took (`timings`, the queue and the agent's own note included): `backend/core/task_steps.py`
 - The processing queue (which task runs now, which wait): `backend/core/task_queue.py`
 - What can be done to a task (the cut report's answers, cancel, stop a step, carry on), for the page and agents alike: `backend/core/task_actions.py`; stopping what a step started: `backend/core/task_stop.py`
 - What runs once a task's turn comes (pipeline, cut, note, compressed copy, Feishu): `backend/core/task_flow.py`

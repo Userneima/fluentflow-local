@@ -87,7 +87,8 @@ def test_local_job_detail_uses_local_projection(monkeypatch):
     detail = response.json()
     assert detail["steps"] == []
     assert detail["activity"]["busy"] is False
-    for key in ("steps", "activity"):
+    assert detail["step_timings"]["rows"] == []
+    for key in ("steps", "activity", "step_timings"):
         detail.pop(key)
     assert detail == local_task_detail.build_task_detail(_JOB)
 

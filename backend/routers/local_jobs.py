@@ -129,4 +129,5 @@ def get_job_processing_detail(request: Request, task_id: str) -> dict[str, Any]:
         **build_task_detail(job),
         "steps": steps,
         "activity": task_activity.activity(job, steps).as_dict(),
+        "step_timings": task_steps.timings(job, steps),
     }

@@ -109,6 +109,9 @@ def _task_package_response(job: dict[str, Any]) -> dict[str, Any]:
     package["note_pending"] = _note_pending(job)
     # What each step's model calls used and cost, and the whole task's total.
     package["model_usage"] = model_usage.for_task(str(job.get("task_id") or ""))
+    # How long each step took, the queue and the agent's own steps included.
+    task_id = str(job.get("task_id") or "")
+    package["step_timings"] = task_steps.timings(job, task_steps.steps_of([task_id]).get(task_id, []))
     # The version of the note in this package: what a save of an edit to it names.
     package["note_version"] = (job.get("result") or {}).get("note_version")
     package["note_alignment"] = note_section_times.status(job.get("result") or {})

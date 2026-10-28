@@ -23,6 +23,7 @@ task goes on. The task's results are the user's; the steps only describe them.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
 from backend.core import job_store, model_usage, task_stop
@@ -250,10 +251,168 @@ def settle(task_id: str, name: str, outcome: tuple[str, str | None]) -> None:
     finish(task_id, name, status, error)
 
 
+# ── a step the user's agent does ─────────────────────────────────────────────
+#
+# The note an agent writes is not run by the flow: with the note left to the
+# agent the flow records the note step skipped, and the agent writes it later
+# (or while the cut renders). Its time is kept on the step's own record, from
+# the agent first reading the material to its save, so the task page can say
+# how long the note took. Only the task's first note is timed: an edit or
+# rewrite days later is not part of processing the recording.
+
+AGENT_STARTED = "agent_started_at"
+AGENT_FINISHED = "agent_finished_at"
+
+
+def _row(task_id: str, name: str) -> dict[str, Any] | None:
+    for step in steps_of([task_id]).get(task_id, []):
+        if str(step.get("step_type") or "") == job_store.TASK_STEP_PREFIX + name:
+            return step
+    return None
+
+
+def agent_began(task_id: str, name: str) -> None:
+    """The agent read the material for this step; its clock starts now,
+    unless it already started or FluentFlow did the step itself."""
+    row = _row(task_id, name)
+    if row is None:
+        return
+    detail = row.get("result") if isinstance(row.get("result"), dict) else {}
+    if detail.get(AGENT_STARTED) or row.get("status") == DONE:
+        return
+    _write(task_id, name, str(row.get("status") or PENDING),
+           detail={**detail, AGENT_STARTED: job_store.now_iso()})
+
+
+def agent_finished(task_id: str, name: str) -> None:
+    """The agent saved this step's work: its clock stops, and a step the flow
+    had ended without it (skipped, failed) reads done. A step still open is
+    left for the flow to close."""
+    row = _row(task_id, name)
+    if row is None:
+        return
+    detail = row.get("result") if isinstance(row.get("result"), dict) else {}
+    if not detail.get(AGENT_STARTED) or detail.get(AGENT_FINISHED):
+        return
+    status = str(row.get("status") or PENDING)
+    _write(task_id, name, status if status in OPEN else DONE,
+           detail={**detail, AGENT_FINISHED: job_store.now_iso()})
+
+
+# ── how long each step took ──────────────────────────────────────────────────
+
+def _moment(value: Any) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+    if moment is not None and moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment
+
+
+def _seconds(start: datetime | None, end: datetime | None) -> float | None:
+    if start is None or end is None:
+        return None
+    return round(max(0.0, (end - start).total_seconds()), 1)
+
+
+def timings(job: Any, steps: list[dict[str, Any]] | None, *, now: datetime | None = None) -> dict[str, Any]:
+    """How long the task spent on each step, for the task page and agents.
+
+    One row per step that ran (a step that never ran or was skipped is left
+    out), in the order the steps run, plus the wait in the queue before the
+    first. The cut is split where its render began and ended: before it,
+    deciding what to cut (the user's agent, when it judges); then finding the
+    gaps and rendering; then writing the cut's report.
+    A step still running counts up to ``now``. ``total_seconds`` is the whole
+    run, from submission to the last step's end, so it is less than the rows
+    added up when steps ran side by side (``overlapping``)."""
+    now = now or datetime.now(timezone.utc)
+    by_name: dict[str, dict[str, Any]] = {}
+    for step in steps or []:
+        name = str(step.get("step_type") or "")[len(job_store.TASK_STEP_PREFIX):]
+        if name in ORDER:
+            by_name[name] = step
+    rows: list[dict[str, Any]] = []
+    for name in ORDER:
+        step = by_name.get(name)
+        if step is None:
+            continue
+        detail = step.get("result") if isinstance(step.get("result"), dict) else {}
+        status = str(step.get("status") or "")
+        start, end = _moment(step.get("started_at")), _moment(step.get("finished_at"))
+        by_agent = bool(detail.get(AGENT_STARTED))
+        if by_agent:
+            start, end = _moment(detail.get(AGENT_STARTED)), _moment(detail.get(AGENT_FINISHED))
+            if end is None:
+                status = RUNNING
+        if start is None or status == SKIPPED:
+            continue
+        running = status == RUNNING and end is None
+        row: dict[str, Any] = {
+            "step": name,
+            "label": LABELS[name],
+            "status": status,
+            "by_agent": by_agent,
+            "started_at": start.isoformat(),
+            "finished_at": end.isoformat() if end else None,
+            "seconds": _seconds(start, now if running else end),
+            "running": running,
+            "parts": [],
+        }
+        if name == CUT:
+            row["parts"] = _cut_parts(job, start, end, now if running else end)
+        rows.append(row)
+    created = _moment((job or {}).get("created_at"))
+    first = min((_moment(row["started_at"]) for row in rows), default=None)
+    waited = _seconds(created, first)
+    if waited is not None and waited >= 1:
+        rows.insert(0, {
+            "step": "queue", "label": "排队", "status": DONE, "by_agent": False,
+            "started_at": created.isoformat(), "finished_at": first.isoformat(),
+            "seconds": waited, "running": False, "parts": [],
+        })
+    ends = [now if row["running"] else _moment(row["finished_at"]) for row in rows]
+    last = max((end for end in ends if end is not None), default=None)
+    begin = created or first
+    overlapping = any(
+        _moment(later["started_at"]) < earlier_end
+        for index, later in enumerate(rows)
+        for earlier_end in ends[:index]
+        if earlier_end is not None and (earlier_end - _moment(later["started_at"])).total_seconds() >= 1
+    )
+    return {
+        "rows": rows,
+        "total_seconds": _seconds(begin, last) if rows else None,
+        "running": any(row["running"] for row in rows),
+        "overlapping": overlapping,
+    }
+
+
+def _cut_parts(job: Any, start: datetime, end: datetime | None, until: datetime | None) -> list[dict[str, Any]]:
+    state = _result(job).get("debreath")
+    if not isinstance(state, dict):
+        return []
+    render_start = _moment(state.get("started_at"))
+    if render_start is None or render_start < start or (end is not None and render_start > end):
+        return []
+    render_end = _moment(state.get("finished_at"))
+    parts = [
+        {"label": "判断剪哪里", "seconds": _seconds(start, render_start)},
+        {"label": "生成剪后视频", "seconds": _seconds(render_start, render_end or until)},
+    ]
+    # After the render the cut writes its report (``survey_cut._finish``).
+    after = _seconds(render_end, end) if render_end is not None else None
+    if after is not None and after >= 1:
+        parts.append({"label": "整理处理报告", "seconds": after})
+    return parts
+
+
 __all__ = [
     "BEFORE_TRANSCRIPT", "CORRECT", "CUT", "COMPRESS", "DONE", "ENDS", "FAILED", "FEISHU", "FETCH", "LABELS",
     "NOTE", "OPEN", "ORDER", "PENDING", "RUNNING", "SKIPPED", "STOPPED", "TRANSCRIBE",
-    "close_open", "compress_outcome", "cut_outcome", "feishu_outcome", "finish", "interrupted", "note_outcome",
+    "agent_began", "agent_finished", "close_open", "compress_outcome", "cut_outcome", "feishu_outcome", "finish", "interrupted", "note_outcome",
     "plan", "recover_after_restart", "reopen_from", "resume_point", "settle", "start", "status_of",
-    "statuses", "steps_of", "transcribe_outcome",
+    "statuses", "steps_of", "timings", "transcribe_outcome",
 ]

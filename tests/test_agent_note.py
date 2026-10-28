@@ -234,3 +234,21 @@ def test_plain_transcript_without_media_can_be_read_and_saved(job_store, monkeyp
     saved = an.save(TASK, note_markdown="# 研究问题\n\n研究问题应当明确。", client_id="anonymous",
                     base_version=material["note_version"])
     assert saved["result"]["summary_written_from"] == NOTE_FROM_AGENT
+
+
+def test_the_note_step_is_timed_from_the_material_to_the_save(job_store, tmp_path):
+    # The task page's time for the note (task_steps.timings): an agent's note
+    # runs from its read of the material to its save, and then reads done.
+    from backend.core import job_store as store, task_steps
+
+    task_steps.plan(TASK)
+    task_steps.finish(TASK, task_steps.NOTE, task_steps.SKIPPED)
+    material = _material(tmp_path)
+    task_steps_after_read = task_steps.steps_of([TASK])[TASK]
+    note = next(s for s in task_steps_after_read if s["step_type"].endswith(":note"))
+    assert note["result"][task_steps.AGENT_STARTED]
+    an.save(TASK, note_markdown="# 笔记\n\n" + "正文。" * 20, client_id="anonymous",
+            base_version=material["note_version"])
+    rows = task_steps.timings(store.get_job(TASK) or {}, task_steps.steps_of([TASK])[TASK])["rows"]
+    (row,) = [row for row in rows if row["step"] == "note"]
+    assert row["by_agent"] is True and row["status"] == task_steps.DONE and row["running"] is False
