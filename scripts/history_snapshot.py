@@ -6,8 +6,8 @@ modify application data. It summarizes:
 - backend uvicorn logs
 
 Outputs:
-- reports/fluentflow_history_snapshot.json
-- reports/fluentflow_history_snapshot.md
+- private/报告/fluentflow_history_snapshot.json
+- private/报告/fluentflow_history_snapshot.md
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from typing import Any
 
 DEFAULT_LOCALSTORAGE = Path("exports/fluentflow_localstorage.json")
 DEFAULT_LOG = Path("logs/uvicorn.log")
-DEFAULT_OUT_DIR = Path("reports")
+DEFAULT_OUT_DIR = Path("private/报告")
 
 TIERS = ("resume_ready", "needs_context", "internal_only", "unavailable")
 

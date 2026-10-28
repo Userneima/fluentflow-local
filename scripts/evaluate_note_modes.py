@@ -26,7 +26,7 @@ Example
 -------
     ./venv/bin/python scripts/evaluate_note_modes.py \
         --sample-dir "backend/data/eval/note_mode_comparison_口语-3" \
-        --output "reports/note_mode_eval/口语-3"
+        --output "private/报告/note_mode_eval/口语-3"
 
 By default it auto-detects the transcript (``transcript.json``) and every
 ``<mode>.md`` candidate note in the sample directory.
@@ -384,7 +384,7 @@ def main() -> int:
     parser.add_argument("--sample-dir", type=Path, required=True, help="Directory containing transcript.json and <mode>.md candidates")
     parser.add_argument("--transcript", type=Path, default=None, help="Explicit transcript path (json with text/segments, or plain text)")
     parser.add_argument("--candidate", action="append", default=[], help="Explicit candidate as mode=path (repeatable). Default: every *.md in sample dir")
-    parser.add_argument("--output", type=Path, default=None, help="Output dir (default: reports/note_mode_eval/<sample_dir name>)")
+    parser.add_argument("--output", type=Path, default=None, help="Output dir (default: private/报告/note_mode_eval/<sample_dir name>)")
     parser.add_argument("--provider", default=None, help="AI provider (default: env AI_PROVIDER or deepseek)")
     parser.add_argument("--model", default=None, help="Model id (default: provider default)")
     parser.add_argument("--reuse-gold", action="store_true", help="Reuse an existing gold_points.json in the output dir if present")
@@ -396,7 +396,7 @@ def main() -> int:
         print(f"sample dir not found: {sample_dir}", file=sys.stderr)
         return 2
     sample_id = sample_dir.name
-    output_dir = (args.output or Path("reports/note_mode_eval") / sample_id).expanduser().resolve()
+    output_dir = (args.output or Path("private/报告/note_mode_eval") / sample_id).expanduser().resolve()
 
     transcript = _load_transcript(sample_dir, args.transcript.expanduser().resolve() if args.transcript else None)
     candidates = _discover_candidates(sample_dir, args.candidate)

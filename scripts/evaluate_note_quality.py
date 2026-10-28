@@ -183,7 +183,7 @@ def main() -> int:
     parser.add_argument("--input", action="append", type=Path, default=[], help="Result/job JSON file or a directory of JSON files")
     parser.add_argument("--input-dir", type=Path, default=None, help="Directory of result/job JSON files")
     parser.add_argument("--review", type=Path, default=None, help="Optional JSON review payload")
-    parser.add_argument("--output-dir", type=Path, default=Path("reports/note_quality_eval"), help="Report output directory")
+    parser.add_argument("--output-dir", type=Path, default=Path("private/报告/note_quality_eval"), help="Report output directory")
     parser.add_argument("--stdout", action="store_true", help="Print the Markdown report instead of only writing files")
     args = parser.parse_args()
 
