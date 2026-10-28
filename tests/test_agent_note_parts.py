@@ -18,7 +18,11 @@ than the code:
   conversation) carries on from what is saved, and can read a saved part back.
 - Once the note is whole, the answer asks the agent for a read-through; re-saving
   one part updates that part in the note, and the note that can be put back is
-  still the one from before the agent started.
+  still the one from before the agent started. A change saved during the
+  read-through does not ask for another read-through (2026-10-27).
+- A conversation coming back to a note left half written learns which parts are
+  missing without fetching the material, and is told to hand them to a fresh
+  subagent (2026-10-27: the main conversation wrote the rest itself, slowly).
 - A part saved against a transcript that has since changed is not used.
 - Re-saving a part never overwrites changes made to the note after it was joined
   (an edit in the editor, another writer); a whole note handed back is accepted.
@@ -285,3 +289,33 @@ def test_a_part_saved_again_is_not_checked_again(job_store, tmp_path, small_part
     assert checked > 0 and len(calls) == checked
     assert answer["coverage"]["parts"][0]["checked"] is False
 
+
+
+def test_a_change_from_the_read_through_does_not_ask_for_another(job_store, tmp_path, small_parts):
+    _long(job_store)
+    total = _material(tmp_path)["total_parts"]
+    for index in range(1, total):
+        _save(index)
+    assert "通读一遍" in _save(total)["next"]
+
+    changed = _save(2, _note(2) + "\n\n通读后补上的一句。")
+
+    assert "通读一遍" not in changed["next"]
+    assert "改完就结束" in changed["next"]
+
+
+def test_a_half_written_note_says_which_parts_are_left(job_store, tmp_path, small_parts):
+    _long(job_store)
+    total = _material(tmp_path)["total_parts"]
+    assert an.unfinished_draft(TASK) is None
+    _save(1)
+    _save(2)
+
+    draft = an.unfinished_draft(TASK)
+
+    assert draft["saved_parts"] == [1, 2]
+    assert draft["remaining_parts"] == list(range(3, total + 1))
+    assert "fresh context" in draft["next"] and "small_parts=true" in draft["next"]
+    for index in range(3, total + 1):
+        _save(index)
+    assert an.unfinished_draft(TASK) is None

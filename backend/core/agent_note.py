@@ -113,6 +113,7 @@ READ_THROUGH_INSTRUCTION = (
     "前面提出后面才回答的问题。改动落在哪一部分，就用 save_agent_note 带同一个 part 重新保存那一部分；"
     "没有要改的就结束。"
 )
+READ_THROUGH_SAVED = "这一部分的修改已进笔记。通读中还有要改的部分照样存；改完就结束，不再通读第二遍。"
 
 
 _SERVED_FRAME = re.compile(r"\(/jobs/[^)\s]*?[?&]file=(note_\d+(?:_crop_[0-9a-f]{8})?\.jpg)\)")
@@ -510,8 +511,48 @@ def save_part(
     _write_store(task_id, parts, saved, joined=_note_of(updated), kept_replaced=kept or _replaced_of(updated),
                  basis_note=basis_note, model=model)
     answer["job"] = updated
-    answer["next"] = READ_THROUGH_INSTRUCTION if len(parts) > 1 else "笔记已保存。"
+    if len(parts) == 1:
+        answer["next"] = "笔记已保存。"
+    elif joined:
+        # A change from the read-through: one read-through per note, so the
+        # answer does not ask for another (2026-10-27: the note was read through
+        # again with nothing new found).
+        answer["next"] = READ_THROUGH_SAVED
+    else:
+        answer["next"] = READ_THROUGH_INSTRUCTION
     return answer
+
+
+def unfinished_draft(task_id: str) -> dict[str, Any] | None:
+    """Parts an agent saved before its note was whole, when the rest are not in.
+
+    Read from the store alone, without splitting the transcript again: this is
+    what a conversation coming back to the task sees first (get_task, the done
+    answer of wait_task), so it can hand the rest to a fresh subagent instead of
+    reading the material into its own conversation (2026-10-27: the writer
+    stopped after three of five parts and the main conversation wrote the rest
+    itself, at minutes per step)."""
+    store = _read_store(task_id)
+    total = store.get("total_parts")
+    saved = store.get("parts") if isinstance(store.get("parts"), dict) else {}
+    if store.get("joined_hash") or not isinstance(total, int) or not saved:
+        return None
+    done = sorted(int(key) for key in saved if str(key).isdigit())
+    remaining = [index for index in range(1, total + 1) if index not in done]
+    if not remaining:
+        return None
+    return {
+        "total_parts": total,
+        "saved_parts": done,
+        "remaining_parts": remaining,
+        "next": (
+            f"The note was being written in {total} parts and stopped with parts "
+            f"{', '.join(str(i) for i in remaining)} not in. Hand the rest to a new subagent with a fresh "
+            "context when your host has them (give it the task_id): it calls get_agent_note_material with "
+            "small_parts=true and part set to each number left, writes and saves only those, then does the "
+            "read-through the last save asks for. Do not fetch the material into this conversation."
+        ),
+    }
 
 
 def saved_part(task_id: str, *, part: int, client_id: str | None = None) -> dict[str, Any]:

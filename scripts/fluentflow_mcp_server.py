@@ -1285,8 +1285,10 @@ def get_agent_note_part(
         "to remove, the JSON to answer with), cases (the user's earlier cut decisions), timeline "
         "(timestamped transcript with numbered long gaps and whether the picture moved), shots "
         "(screenshots of the long gaps whose picture moved, as local paths; open them before deciding "
-        "those gaps). Then call save_agent_cut. If you do not answer within decide_within_seconds, or "
-        "this conversation closes, FluentFlow judges the cut itself."),
+        "those gaps). Then call save_agent_cut. Call it in a subagent with a fresh context when your "
+        "host has them (give it the task_id): the material is long, and read in the user's "
+        "conversation it is resent on every later turn. If you do not answer within "
+        "decide_within_seconds, or this conversation closes, FluentFlow judges the cut itself."),
     input_schema={
         "type": "object",
         "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},

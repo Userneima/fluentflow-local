@@ -529,6 +529,8 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             "note_version": (job.get("result") or {}).get("note_version"),
             "transcript_version": (job.get("result") or {}).get("transcript_version"),
             "note_alignment": note_section_times.status(job.get("result") or {}),
+            # Parts an agent saved before the note was whole: who carries on.
+            "note_draft": agent_note.unfinished_draft(task_id),
             "intelligence": (job.get("result") or {}).get("intelligence"),
             "deferred_ai_steps": {
                 key: value for key, value in (job.get("result") or {}).items()
@@ -602,9 +604,10 @@ async def wait_agent_task(
                 "note_status": brief["note"]["status"],
                 "task": brief,
             }
-            align = _alignment_next(job)
-            if align:
-                answer["next"] = align
+            draft = agent_note.unfinished_draft(task_id)
+            align = None if draft else _alignment_next(job)
+            if draft or align:
+                answer["next"] = draft["next"] if draft else align
             return answer
         if time.monotonic() >= deadline:
             return {
@@ -650,9 +653,11 @@ def _alignment_next(job: dict[str, Any]) -> Optional[str]:
 
 
 AGENT_CUT_NEXT = (
-    "FluentFlow is waiting for you to judge where to cut this recording. Call get_agent_cut_material, "
-    "judge, and send the decision with save_agent_cut. If you do not, FluentFlow judges it itself once "
-    "the time limit passes."
+    "FluentFlow is waiting for you to judge where to cut this recording. Hand it to a new subagent with a "
+    "fresh context when your host has them (give it the task_id): it calls get_agent_cut_material, judges, "
+    "sends the decision with save_agent_cut and the report with save_agent_cut_report, and tells you the "
+    "to_judge count. The material is long; read into this conversation, every later turn resends it. "
+    "If nobody answers, FluentFlow judges it itself once the time limit passes."
 )
 
 
@@ -974,7 +979,9 @@ def save_agent_note(
                 answer["package_url"] = f"/agent/v1/tasks/{task_id}/package"
                 align = _alignment_next(saved["job"])
                 if align:
-                    answer["next"] = f"{answer['next']} Then: {align}".strip()
+                    # Aligning reads the note at one version: a part changed
+                    # after that makes the material stale (2026-10-27).
+                    answer["next"] = f"{answer['next']} Once no part changes any more: {align}".strip()
             # The task's note as it is after this save: what the next save of a
             # part names (the note changes once every part is in).
             answer.update(_current_versions(task_id, request))

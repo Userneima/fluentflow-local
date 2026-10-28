@@ -52,10 +52,11 @@ Say this, in the user's language:
 
 The MCP tools appear in the user's next conversation with you. When asked for a note
 then: submit with `submit_local_media` or `submit_video_link` using the default
-`intelligence="agent"`; handle `agent_cut` with `get_agent_cut_material`, `save_agent_cut`
-and `save_agent_cut_report`; when `wait_task` returns `agent_note` ready, the cut is
+`intelligence="agent"`; hand `agent_cut` to a subagent with a fresh context, which uses
+`get_agent_cut_material`, `save_agent_cut` and `save_agent_cut_report`; when `wait_task` returns `agent_note` ready, the cut is
 rendering and the note can start. Fetch `get_agent_note_material`, write and check the note
 yourself (in a subagent with a fresh context), and `save_agent_note` with its `base_version`.
+A note left half written (`get_task`'s `note_draft`) goes to a new subagent for the parts left.
 Between `wait_task` calls say nothing; each call holds up to four minutes.
 `skip_summary=true` leaves writing to you; it does not complete the user's request.
 Configured keys do not change these defaults. Only delegate with `intelligence="fluentflow"`

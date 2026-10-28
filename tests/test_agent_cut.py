@@ -136,6 +136,9 @@ def test_a_waiting_task_says_so_and_wait_returns_at_once(api, tmp_path, no_pictu
     waited = api.post(f"/agent/v1/tasks/{task['id']}/wait", headers=_HEADERS, json={"timeout_seconds": 30}).json()
     assert waited["done"] is False and waited["agent_cut"]["status"] == "waiting"
     assert "get_agent_cut_material" in waited["agent_cut"]["next"]
+    # 2026-10-27: the cut material read in the main conversation was resent on
+    # every later turn; the answer hands the judging to a fresh subagent.
+    assert "fresh context" in waited["agent_cut"]["next"]
     got = api.get(f"/agent/v1/tasks/{task['id']}", headers=_HEADERS).json()
     assert got["task"]["agent_cut"]["status"] == "waiting"
     listed = job_store.list_jobs(limit=50)

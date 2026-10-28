@@ -261,3 +261,20 @@ def test_the_agent_is_told_to_align_the_note_it_wrote(jobs_db):
     waited = _wait(client, "t-agent", timeout_seconds=0)
     assert waited["done"] is True and "get_agent_alignment_material" in waited["next"]
     assert "next" not in _wait(client, "t-fluentflow", timeout_seconds=0)
+
+
+def test_a_note_left_half_written_is_handed_on_before_alignment(jobs_db, monkeypatch):
+    """2026-10-27: the writer stopped after three of five parts; the conversation
+    that came back wrote the rest itself. The done answer and get_task say which
+    parts are left and to give them to a fresh subagent; aligning waits."""
+    from backend.core.result_schema import NOTE_FROM_AGENT
+
+    _agent_note_with_sections(jobs_db, "t-half", written_from=NOTE_FROM_AGENT)
+    draft = {"total_parts": 5, "saved_parts": [1, 2, 3], "remaining_parts": [4, 5], "next": "hand on 4, 5"}
+    monkeypatch.setattr(local_agent.agent_note, "unfinished_draft", lambda task_id: draft)
+    client = _client()
+
+    waited = _wait(client, "t-half", timeout_seconds=0)
+    assert waited["next"] == "hand on 4, 5"
+    task = client.get("/agent/v1/tasks/t-half", headers=_HEADERS).json()["task"]
+    assert task["note_draft"]["remaining_parts"] == [4, 5]
