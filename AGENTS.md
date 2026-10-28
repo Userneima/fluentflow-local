@@ -79,6 +79,14 @@ Before changing any page, read `docs/06-界面规矩.md`: FluentFlow's words, wh
 
 Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests while working, the full suite once before pushing with `.venv/bin/python -m pytest -n auto` (pytest-xdist, about 40 seconds against 2 minutes one by one on the owner's Mac, 2026-10-24; install it with `.venv/bin/python -m pip install pytest-xdist` if missing; a test that fails only under `-n auto` usually depends on another test having run first; when the machine is busy `-n auto` can be killed by the system, exit code 137, so use `-n 4` then), and `python3 -m ruff check backend/ scripts/` (CI runs it; the test suite does not catch unused imports). Push finished, checked work to `main` as it is done, without asking; do not deploy, tag, or change a release version unless explicitly requested. Users install the latest release tag, not `main`, with three exceptions that reach every user the moment they are pushed: `install.sh` and `install.ps1` (fetched from `main`, then they download the release) and `backend/core/recommended_models.json` (every installed copy reads it from `main` daily). Changes to these three must work with the latest release.
 
+## Where files go
+
+Owner, 2026-10-28 (decision 8.15). The repository root holds code, configuration and the entry documents (`README.md`, `AGENTS.md`, `CLAUDE.md`, `AGENT_INSTALL.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, `VERSION`), nothing else; a script that writes output defaults to a folder under `private/`.
+
+- `docs/`: the numbered documents are the living ones; `docs/方案/` dated proposals, `docs/评测/` dated evaluations, `docs/交付记录/` one record per delivered sub-session, `docs/handoffs/` handoffs, deleted when the task is done.
+- `private/` (git-ignored, only in the main checkout): `测试记录/` real-run records (next section), `报告/` output of the evaluation scripts and review reports, `promo/` the promo film project and its cuts, `笔记考题/` note quizzes, `旧工作副本/` uncommitted files saved before a worktree was removed.
+- `.claude/worktrees/`: sub-session worktrees. Remove one once its branch is in `main`; a prototype kept for later stays as a branch, not a worktree.
+
 ## Test records
 
 When a real-run test needs a written record of the process (timings, models
