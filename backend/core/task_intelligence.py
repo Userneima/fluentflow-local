@@ -36,5 +36,5 @@ def uses_agent(options: dict[str, Any] | None) -> bool:
 def deferred_step() -> dict[str, Any]:
     return {
         "status": "skipped", "reason": "agent_required", "channel": "agent",
-        "detail": "由当前 agent 负责理解和判断；此步骤暂缺 agent 写回入口，未自动调用模型。",
+        "detail": "由当前 agent 负责理解和判断：未自动调用模型，agent 用 get_agent_correction_material 和 save_agent_correction 来做。",
     }

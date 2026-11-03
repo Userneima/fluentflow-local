@@ -72,8 +72,10 @@ misheard names and terms in the transcript from the subtitles in the picture and
 series' word list (`FluentFlow 校正文档.md`); `list_subtitle_corrections` and
 `list_glossary_corrections` show each change, the matching revert tools undo it after the
 user agrees, and `run_glossary_correction` runs the word-list step again on a finished task.
-Agent submissions currently defer source corrections and subtitle translation (`agent_required`):
-these lack agent write-back tools. Check names in the note without claiming the source was corrected.
+On agent submissions those corrections and the translation of English subtitles are the agent's:
+once the task is done, `wait_task` names them, and `get_agent_correction_material` /
+`save_agent_correction` hand over one page at a time and take the answer back, recorded and undone
+like the background's.
 When the user wants a review note (复习笔记, a second note reorganised by topic for learning
 it again), `write_review_note` writes it beside the follow-along note from the md the user
 corrected, and `revise_review_note` changes it at their word without starting over.

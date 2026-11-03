@@ -37,7 +37,7 @@ from backend.core.job_store import (
     list_jobs,
     upsert_job,
 )
-from backend.core import agent_alignment, feishu_sync, note_section_times, task_intelligence
+from backend.core import agent_alignment, agent_correction, feishu_sync, note_section_times, task_intelligence
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
@@ -539,6 +539,9 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
                 key: value for key, value in (job.get("result") or {}).items()
                 if isinstance(value, dict) and value.get("reason") == "agent_required"
             },
+            # Correcting the transcript and translating the subtitles, when
+            # they are left to the agent: get_agent_correction_material.
+            "agent_corrections_left": agent_correction.pending(job.get("result") or {}),
             # Tokens and money spent on models, the task's total and each step's.
             "model_usage": model_usage.for_task(task_id),
         },
@@ -608,9 +611,10 @@ async def wait_agent_task(
                 "task": brief,
             }
             draft = agent_note.unfinished_draft(task_id)
-            align = None if draft else _alignment_next(job)
-            if draft or align:
-                answer["next"] = draft["next"] if draft else align
+            correct = None if draft else _correction_next(job)
+            align = None if draft or correct else _alignment_next(job)
+            if draft or correct or align:
+                answer["next"] = draft["next"] if draft else (correct or align)
             return answer
         if time.monotonic() >= deadline:
             return {
@@ -643,6 +647,17 @@ ALIGN_NEXT = (
     "context when your host has them), from the material, not from memory."
 )
 ALIGN_AFTER_DONE = " Do it once wait_task says done=true; while the task works the material is refused."
+
+
+def _correction_next(job: dict[str, Any]) -> Optional[str]:
+    """What to say when correcting the transcript or translating its subtitles
+    was left to the agent; reading the picture's subtitles starts now, so
+    the material is ready by the time the agent asks for it."""
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    left = agent_correction.pending(result)
+    if agent_correction.SUBTITLES in left:
+        agent_correction.start_reading(str(job.get("task_id") or ""), result)
+    return agent_correction.next_hint(result)
 
 
 def _alignment_next(job: dict[str, Any]) -> Optional[str]:
@@ -895,6 +910,36 @@ def save_agent_alignment(request: Request, task_id: str, payload: Optional[dict[
         agent_alignment.save, task_id, client_id=_local_client_scope(request),
         material_version=body.get("material_version"), sections=body.get("sections"), model=body.get("model"),
         again=_truthy_json(body.get("again", False)),
+    )
+
+
+def _correction_call(action, *args, **kwargs):
+    try:
+        return {"ok": True, **action(*args, **kwargs)}
+    except agent_correction.CorrectionError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+@router.post("/tasks/{task_id}/agent-correction/material")
+def agent_correction_material(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    """One page of what the calling agent corrects the transcript or translates
+    the subtitles from (``step``: subtitles, glossary, translation)."""
+    body = payload or {}
+    return _correction_call(
+        agent_correction.material, task_id, body.get("step"), client_id=_local_client_scope(request),
+        page=body.get("page", 1),
+    )
+
+
+@router.post("/tasks/{task_id}/agent-correction")
+def save_agent_correction(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    """The calling agent's fixes (or translations) for one page; written into
+    every copy of the transcript, the subtitle files and the output folder."""
+    body = payload or {}
+    return _correction_call(
+        agent_correction.save, task_id, body.get("step"), client_id=_local_client_scope(request),
+        page=body.get("page"), material_version=body.get("material_version"), model=body.get("model"),
+        fixes=body.get("fixes"), translations=body.get("translations"),
     )
 
 

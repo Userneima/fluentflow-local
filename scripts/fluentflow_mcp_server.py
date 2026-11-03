@@ -280,10 +280,11 @@ _MEDIA_NOTE_FLOW = (
     "or API key is used. Background processing may use an Anthropic API key, a locally "
     "opted-in Claude subscription, or the configured text model. Only apply when a text "
     "model writes the note: note_mode, prompt_preset, system_prompt. Speaker separation "
-    "and Feishu settings follow the saved choices. Subtitle/glossary correction and "
-    "subtitle translation have no agent write-back interface yet: agent mode marks them "
-    "deferred, never silently runs background AI or claims they completed. Returns at once; "
-    "follow with wait_task."
+    "and Feishu settings follow the saved choices. Correcting the transcript (on-screen "
+    "subtitles, word list) and translating English subtitles are yours too: once the task is "
+    "done, wait_task's next names them; use get_agent_correction_material and "
+    "save_agent_correction before the note. FluentFlow never silently runs background AI "
+    "for them. Returns at once; follow with wait_task."
 )
 
 _INTELLIGENCE_SCHEMA = {
@@ -1138,6 +1139,87 @@ def save_agent_alignment(
 
 
 @tool(
+    description=("Correct a finished task's transcript or translate its subtitles yourself, in the current agent; "
+        "FluentFlow calls no model. step=subtitles: misheard words against the subtitles burned into the "
+        "picture (FluentFlow reads them locally; the first call may answer state=reading, ask again after "
+        "retry_after_seconds). step=glossary: misheard names and terms against the series' word list and the "
+        "context. step=translation: Chinese for an English recording's subtitles. Do them in that order, "
+        "before writing the note, when wait_task's next or get_task's agent_corrections_left names them; on "
+        "any finished task when the user asks. The transcript comes in pages of fixed sentence ranges: "
+        "returns page, pages, next_page, pages_done, material_version, the page's items or sentences and "
+        "instructions. Judge one page, save it with save_agent_correction and that page's material_version, "
+        "then take next_page. Sentences the user edited are left out (subtitles) or marked locked (glossary). "
+        "state=nothing_to_do (no subtitles in the picture, not English) says so; for subtitles, save once "
+        "with fixes=[] to record the step done. Refused with task_busy while the task is still processing. "
+        "Do it in a subagent with a fresh context when your host has them."),
+    input_schema={
+        "type": "object", "properties": {
+            "task_id": {"type": "string"},
+            "step": {"type": "string", "enum": ["subtitles", "glossary", "translation"]},
+            "page": {"type": "integer", "default": 1, "minimum": 1},
+            "api_base": {"type": "string"},
+        }, "required": ["task_id", "step"],
+    },
+)
+def get_agent_correction_material(
+    task_id: str, step: str, page: int = 1, api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/agent-correction/material",
+        api_base=api_base, client_id=client_id, payload={"step": step, "page": page},
+    )
+
+
+@tool(
+    description=("Save one page you judged from get_agent_correction_material. Pass the step, page and that page's "
+        "material_version, your actual model, and for subtitles/glossary fixes=[{id, from, to}] (glossary adds "
+        "basis glossary|context, why, and nth when from occurs more than once), for translation "
+        "translations=[{start_id, end_id, text_en, text_zh}]. An empty list is a page with nothing to change. "
+        "Each fix is checked the way a background model's is: a misheard word replaced, never a sentence, the "
+        "new text in a subtitle line or backed by the word list or a reason; applied lists what went in, "
+        "refused what did not hold. Each change goes into every copy of the transcript, the subtitle files and "
+        "the output folder, recorded with by=agent and your model, and is undone like the background's "
+        "(revert_subtitle_corrections, revert_glossary_corrections). A translated page replaces that page's "
+        "bilingual subtitles. A note already written is not rewritten. If a sentence of the page changed since "
+        "the material was read, returns stale and writes nothing: read the page again. The answer gives "
+        "pages_left, next_page and, when another step is left, next."),
+    input_schema={
+        "type": "object", "properties": {
+            "task_id": {"type": "string"},
+            "step": {"type": "string", "enum": ["subtitles", "glossary", "translation"]},
+            "page": {"type": "integer", "minimum": 1},
+            "material_version": {"type": "string"},
+            "fixes": {"type": "array", "items": {"type": "object", "properties": {
+                "id": {"type": "integer"}, "from": {"type": "string"}, "to": {"type": "string"},
+                "nth": {"type": "integer"}, "basis": {"type": "string", "enum": ["glossary", "context"]},
+                "why": {"type": "string"},
+            }, "required": ["id", "from", "to"]}},
+            "translations": {"type": "array", "items": {"type": "object", "properties": {
+                "start_id": {"type": "integer"}, "end_id": {"type": "integer"},
+                "text_en": {"type": "string"}, "text_zh": {"type": "string"},
+            }, "required": ["start_id", "end_id", "text_zh"]}},
+            "model": {"type": "string"},
+            "api_base": {"type": "string"},
+        }, "required": ["task_id", "step", "page", "material_version", "model"],
+    },
+)
+def save_agent_correction(
+    task_id: str, step: str, page: int, material_version: str, model: str,
+    fixes: list[dict[str, Any]] | None = None, translations: list[dict[str, Any]] | None = None,
+    api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"step": step, "page": page, "material_version": material_version, "model": model}
+    if fixes is not None:
+        payload["fixes"] = fixes
+    if translations is not None:
+        payload["translations"] = translations
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/agent-correction",
+        api_base=api_base, client_id=client_id, payload=payload,
+    )
+
+
+@tool(
     description=("Write a task's note yourself instead of a model FluentFlow is configured to pay for "
         "(the way to get a note on the user's own subscription). Returns the whole timestamped "
         "transcript, the frames as local file paths with their moments, and instructions (the "
@@ -1653,8 +1735,10 @@ def restore_note_version(
     description=("Words in the task's transcript that FluentFlow replaced from the subtitles burned into the "
         "video picture, right after transcription and before the note was written. Each has an id, the "
         "time, from (what the transcript said), to (the subtitle's spelling), and the subtitle line it "
-        "rests on. subtitle_correction says how the step went: skipped with its reason (no subtitles in "
-        "the picture, no text recognition on this machine, no picture, no model), no_changes or completed. "
+        "rests on; by=agent with the model when the agent made it (save_agent_correction). "
+        "subtitle_correction says how the step went: skipped with its reason (no subtitles in the picture, "
+        "no text recognition on this machine, no picture, no model, agent_required when it was left to the "
+        "agent), partial while the agent has pages left, no_changes or completed. "
         "Show the user these when they say a name or term in the transcript or note was changed wrongly."),
     input_schema={
         "type": "object",
@@ -1699,7 +1783,8 @@ def revert_subtitle_corrections(
         "after transcription (and after the subtitle check) and before the note was written. Each has an "
         "id, the time, sentence (its number in the transcript now; null when that sentence was edited "
         "since), from, to, basis (glossary: the word list's spelling, entry is that line; context: the "
-        "sentences around it decided, why says how) and the sentence before and after. "
+        "sentences around it decided, why says how), by=agent with the model when the agent made it "
+        "(save_agent_correction), and the sentence before and after. "
         "glossary_correction says how the step went: skipped with its reason (no transcript, no model), "
         "failed with the model's error, no_changes or completed, with counts by basis, the channel "
         "(subscription or a key) and the seconds it took."),

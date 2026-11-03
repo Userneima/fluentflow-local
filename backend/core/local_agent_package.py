@@ -26,7 +26,7 @@ from backend.core.local_decision_log import build_decision_log
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_processing_plan import build_processing_plan, ensure_processing_plan
 from backend.core.storage_paths import find_source_file
-from backend.core import note_section_times, task_activity
+from backend.core import agent_correction, note_section_times, task_activity
 from backend.core.result_schema import canonical_display_segments
 from backend.core.tool_trace_core import build_tool_trace
 
@@ -49,6 +49,16 @@ def _local_extra_next_actions(job: dict[str, Any], diagnosis: dict[str, Any]) ->
             "reason": "本机仍保留原始文件，可直接重新处理，不用重新选文件。",
         }]
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    left = agent_correction.pending(result)
+    if job.get("status") == "completed" and task_id and left and not task_activity.activity(job).busy:
+        # Before the note: the note reads the transcript these steps correct.
+        return [{
+            "action": "get_agent_correction_material", "method": "POST",
+            "path": f"/agent/v1/tasks/{task_id}/agent-correction/material",
+            "steps": left,
+            "reason": "修正转录稿（画面字幕、词表）和翻译字幕交给了你，FluentFlow 没有调用模型。"
+                      "按 step 逐页取材料、判断后用 save_agent_correction 交回。",
+        }]
     note_settled = str(result.get("summary_status") or "") not in {"pending", "running"}
     if job.get("status") == "completed" and task_id and note_settled and not str(result.get("summary_markdown") or "").strip():
         # No key configured, or the note was skipped or failed: the calling agent

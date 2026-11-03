@@ -273,35 +273,47 @@ def decide(
     for batch, answer in zip(batches, answers):
         allowed = set(batch) - set(protected)
         for fix in answer or []:
-            if not isinstance(fix, dict):
-                continue
-            try:
-                index = int(fix.get("id"))
-            except (TypeError, ValueError):
-                continue
-            if index not in allowed:
-                continue
-            sentence = _text(segments[index])
-            old, new = str(fix.get("from") or ""), str(fix.get("to") or "").strip()
-            if not sc._acceptable(old, new, sentence):
-                continue
-            at = _position(sentence, old, fix.get("nth"))
-            if at is None:
-                continue
-            entry = entry_for(new, glossary, old) if glossary.strip() else None
-            why = str(fix.get("why") or "").strip()[:200]
-            if entry is None and not why:
-                # A change the word list does not back and the model gives no
-                # reason for is not one it was sure of.
-                continue
-            record = {"index": index, "segment_index": index, "from": old, "to": new, "at": at,
-                      "basis": BASIS_GLOSSARY if entry else BASIS_CONTEXT}
-            if entry:
-                record["entry"] = entry
-            if why:
-                record["why"] = why
-            fixes.append(record)
+            checked = held_to_bounds(fix, segments, allowed, glossary)
+            if checked is not None:
+                fixes.append(checked)
     return fixes, calls, sum(1 for answer in answers if answer is None)
+
+
+def held_to_bounds(
+    fix: Any, segments: list[dict[str, Any]], allowed: set[int], glossary: str,
+) -> dict[str, Any] | None:
+    """One answered fix held to the bounds, whoever judged it (the model here,
+    the user's agent in ``agent_correction``): a sentence it may change, a
+    word replaced and not a sentence, found where it says, and backed by the
+    word list or by a reason. ``None`` when it does not hold."""
+    if not isinstance(fix, dict):
+        return None
+    try:
+        index = int(fix.get("id"))
+    except (TypeError, ValueError):
+        return None
+    if index not in allowed or not 0 <= index < len(segments):
+        return None
+    sentence = _text(segments[index])
+    old, new = str(fix.get("from") or ""), str(fix.get("to") or "").strip()
+    if not sc._acceptable(old, new, sentence):
+        return None
+    at = _position(sentence, old, fix.get("nth"))
+    if at is None:
+        return None
+    entry = entry_for(new, glossary, old) if glossary.strip() else None
+    why = str(fix.get("why") or "").strip()[:200]
+    if entry is None and not why:
+        # A change the word list does not back and the judge gives no
+        # reason for is not one it was sure of.
+        return None
+    record = {"index": index, "segment_index": index, "from": old, "to": new, "at": at,
+              "basis": BASIS_GLOSSARY if entry else BASIS_CONTEXT}
+    if entry:
+        record["entry"] = entry
+    if why:
+        record["why"] = why
+    return record
 
 
 # ── the whole step ────────────────────────────────────────────────────────
@@ -400,10 +412,13 @@ def _same_time(segments: list[dict[str, Any]], when: Any, word: str) -> int | No
     return hits[0] if len(hits) == 1 else None
 
 
-def onto_result(result: dict[str, Any], fixed: list[dict[str, Any]], records: list[dict[str, Any]]) -> dict[str, Any]:
+def onto_result(
+    result: dict[str, Any], fixed: list[dict[str, Any]], records: list[dict[str, Any]], field: str = FIELD,
+) -> dict[str, Any]:
     """``result`` with the corrected ``raw_segments`` and the same changes made
     in every other copy of the transcript (what the page shows, the copies on
-    the original's clock a re-export starts from), the records appended."""
+    the original's clock a re-export starts from), the records appended to
+    ``field`` (the subtitle check keeps its own, ``subtitle_corrections``)."""
     updated = dict(result)
     raw_before = [dict(s) for s in result.get("raw_segments") or [] if isinstance(s, dict)]
     updated["raw_segments"] = fixed
@@ -441,7 +456,7 @@ def onto_result(result: dict[str, Any], fixed: list[dict[str, Any]], records: li
     updated["transcript_text_preview"] = updated["transcript_text"][:200]
     if updated.get("corrected_segments"):
         updated["corrected_transcript_text"] = sc.joined(updated["corrected_segments"])
-    updated[FIELD] = [*[r for r in result.get(FIELD) or [] if isinstance(r, dict)], *records]
+    updated[field] = [*[r for r in result.get(field) or [] if isinstance(r, dict)], *records]
     return remember(result, updated)
 
 
@@ -477,6 +492,7 @@ __all__ = [
     "enabled",
     "entry_for",
     "fingerprints",
+    "held_to_bounds",
     "listing",
     "onto_result",
     "remember",

@@ -614,17 +614,28 @@ def decide(
                 item = by_id.get(int(fix.get("id")))
             except (TypeError, ValueError):
                 continue
-            old, new = str(fix.get("from") or ""), str(fix.get("to") or "").strip()
-            if item is None or not _acceptable(old, new, item["sentence"]):
-                continue
-            line = next((sub for sub in item["subtitles"] if _loose(new) in _loose(sub)), None)
-            if line is None:
-                continue
-            at = _position(item["sentence"], old, "".join(item["subtitles"]))
-            if at is None:
-                continue
-            fixes.append({"index": found[item["id"]]["index"], "from": old, "to": new, "at": at, "subtitle": line})
+            checked = held_to_picture(item, fix, found[item["id"]]["index"]) if item is not None else None
+            if checked is not None:
+                fixes.append(checked)
     return fixes, sum(1 for _answer_, lost in answers if lost)
+
+
+def held_to_picture(item: dict[str, Any], fix: dict[str, Any], index: int) -> dict[str, Any] | None:
+    """One answered fix held to the picture, whoever judged it (the model
+    here, the user's agent in ``agent_correction``): the replaced text is in
+    the sentence, the new text in a subtitle line around it. ``item`` carries
+    the ``sentence`` and its ``subtitles``; ``index`` is the sentence's place
+    in the transcript. ``None`` when it does not hold."""
+    old, new = str(fix.get("from") or ""), str(fix.get("to") or "").strip()
+    if not _acceptable(old, new, item["sentence"]):
+        return None
+    line = next((sub for sub in item["subtitles"] if _loose(new) in _loose(sub)), None)
+    if line is None:
+        return None
+    at = _position(item["sentence"], old, "".join(item["subtitles"]))
+    if at is None:
+        return None
+    return {"index": index, "from": old, "to": new, "at": at, "subtitle": line}
 
 
 def apply(segments: list[dict[str, Any]], fixes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -873,6 +884,7 @@ __all__ = [
     "cues",
     "decide",
     "enabled",
+    "held_to_picture",
     "joined",
     "locate",
     "mismatches",
