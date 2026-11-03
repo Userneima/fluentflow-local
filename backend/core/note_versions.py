@@ -53,7 +53,6 @@ EXPORT = "export"
 RESTORE = "restore"
 SWITCH_BACK = "switch_back"
 ADJUST = "adjust"
-POINTERS = "pointers"
 BY_LABELS = {
     WEB_EDIT: "网页编辑",
     OBSIDIAN: "Obsidian改了md",
@@ -65,7 +64,6 @@ BY_LABELS = {
     RESTORE: "恢复版本",
     SWITCH_BACK: "切回生成版",
     ADJUST: "时间改回原片",
-    POINTERS: "加视频顺序提示",
 }
 NOT_RECORDED = "未记录"
 _BY_CODES = {label: code for code, label in BY_LABELS.items()}

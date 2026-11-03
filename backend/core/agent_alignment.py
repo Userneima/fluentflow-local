@@ -169,8 +169,4 @@ def save(
     )
     if saved is None:
         raise _stale()
-    from backend.core import note_pointers
-
-    pointers = note_pointers.add_to_task(task_id)
-    return {"task_id": task_id, **times.status(saved["result"]), "answered": len(spans), "model": model.strip(),
-            "pointers_added": pointers["added"]}
+    return {"task_id": task_id, **times.status(saved["result"]), "answered": len(spans), "model": model.strip()}

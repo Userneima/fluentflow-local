@@ -1104,10 +1104,7 @@ def get_agent_alignment_material(
         "id must appear exactly once, each span finite, within the recording and end > start. "
         "If the note, transcript, cut timeline or table changed meanwhile, returns stale and writes "
         "nothing: get fresh material and judge again. Pass again=true when the material was read with "
-        "again=true. Never calls a model. Once the table covers the note, FluentFlow adds a one-line callout "
-        "where the note moved content far from the order of the recording, pointing to its chapter "
-        "(pointers_added says how many); the note and its files change by those lines only, so a note "
-        "version you hold before the save is stale after it."),
+        "again=true. Never calls a model or edits the note or its files."),
     input_schema={
         "type": "object", "properties": {
             "task_id": {"type": "string"}, "material_version": {"type": "string"},

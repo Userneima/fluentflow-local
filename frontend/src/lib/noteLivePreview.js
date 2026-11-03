@@ -109,9 +109,11 @@ const normalizeHeading = (text) => String(text || '')
     .replace(/\s+/g, '')
     .trim();
 
-const findFrom = (doc, wanted, from) => {
+export const findHeadingLine = (doc, target) => {
+    const wanted = String(target || '').replace(/^#+/, '').split('#').pop().trim();
+    if (!wanted) return null;
     let loose = null;
-    for (let n = from; n <= doc.lines; n += 1) {
+    for (let n = 1; n <= doc.lines; n += 1) {
         const line = doc.line(n);
         const match = line.text.match(/^#{1,6}\s+(.*)$/);
         if (!match) continue;
@@ -120,21 +122,6 @@ const findFrom = (doc, wanted, from) => {
         if (!loose && normalizeHeading(heading) === normalizeHeading(wanted)) loose = line;
     }
     return loose;
-};
-
-// `[[#第二十三章#（一）…]]` is Obsidian's path through the headings: each
-// part is looked for below the one before it, so a sub-section heading that
-// repeats across chapters lands in the right chapter. A part not found is
-// passed over.
-export const findHeadingLine = (doc, target) => {
-    const parts = String(target || '').replace(/^#+/, '').split('#').map((part) => part.trim()).filter(Boolean);
-    if (!parts.length) return null;
-    let from = 1;
-    for (const part of parts.slice(0, -1)) {
-        const line = findFrom(doc, part, from);
-        if (line) from = line.number + 1;
-    }
-    return findFrom(doc, parts[parts.length - 1], from) || findFrom(doc, parts[parts.length - 1], 1);
 };
 
 const flashHeading = StateEffect.define();
