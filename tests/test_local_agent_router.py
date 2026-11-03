@@ -619,8 +619,8 @@ def test_the_mcp_export_tool_leaves_the_route_to_the_server(monkeypatch):
     calls: list[dict] = []
     monkeypatch.setattr(mcp, "_agent_request", lambda method, route, **kw: calls.append(kw) or {"ok": True})
 
-    mcp.export_result("t1")
-    mcp.export_result("t1", lark_export_route="local_cli", folder_token="fld")
+    mcp.export_result("t1", "lark")
+    mcp.export_result("t1", "lark", lark_export_route="local_cli", folder_token="fld")
 
     assert "lark_export_route" not in calls[0]["payload"] and "folder_token" not in calls[0]["payload"]
     assert calls[1]["payload"]["lark_export_route"] == "local_cli"

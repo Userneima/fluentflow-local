@@ -645,6 +645,27 @@ def _connection_dropped(error: BaseException) -> bool:
                                http.client.IncompleteRead))
 
 
+# Douyin's video file itself could not be reached, after the parsing steps had
+# all succeeded. Measured 2026-10-31: a VPN in global mode routed the
+# *.douyinvod.com download abroad, where the TLS handshake timed out or the
+# connection was dropped every time, while the same machine on smart routing
+# downloaded it in seconds. The diagnosis (``local_error_diagnostics`` and the
+# page's ``format.js``) recognises this phrase and suggests direct routing.
+DOUYIN_MEDIA_UNREACHABLE = "抖音视频文件下载连不上"
+
+
+def _media_host_unreachable(error: BaseException) -> bool:
+    """A failure to reach or keep the media host: TLS, a dropped connection, a
+    timeout, a name or route that did not resolve. Not an answer from the server,
+    not a cancellation, not a size or disk refusal of our own."""
+    if isinstance(error, urllib.error.HTTPError):
+        return False
+    if isinstance(error, urllib.error.URLError):
+        return True
+    return isinstance(error, (ssl.SSLError, ConnectionError, TimeoutError, socket.timeout,
+                              http.client.RemoteDisconnected, http.client.IncompleteRead))
+
+
 def sanitize_filename_part(value: str) -> str:
     normalized = re.sub(r"[\\/:*?\"<>|#%&{}$!'@+`=]", " ", value or "")
     normalized = re.sub(r"\s+", " ", normalized).strip()
@@ -1652,8 +1673,10 @@ def download_file(
     except urllib.error.HTTPError as exc:
         scratch.unlink(missing_ok=True)
         raise RuntimeError(f"视频下载失败：{exc.code}") from exc
-    except BaseException:
+    except BaseException as exc:
         scratch.unlink(missing_ok=True)
+        if _host_matches_suffixes(_url_host(url), DOUYIN_MEDIA_HOST_SUFFIXES) and _media_host_unreachable(exc):
+            raise RuntimeError(f"{DOUYIN_MEDIA_UNREACHABLE}（{exc}）") from exc
         raise
     size_bytes = downloaded
     on_progress and on_progress(VideoSourceProgress(

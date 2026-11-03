@@ -225,7 +225,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
     # Codes and raw system or tool output that used to reach the user as is
     # (2026-10-18 review of every failure message on record).
     if raw == "user_cancelled":
-        return _diag("user_cancelled", "已取消", "这个任务是你取消的。", "需要的话点「再处理一次」。")
+        return _diag("user_cancelled", "已取消", "这个任务是你取消的。", "需要的话点「重新提交」。")
     if raw == "client_disconnect":
         return _diag(
             "client_disconnect", "上传中断了",
@@ -237,7 +237,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "render_failed", "导出剪后视频时出错了",
             "导出这一步出错了，原片没有动，剪辑判断和转录稿都还在。"
             + ("出错的是这台 Mac 的硬件编码器。" if "videotoolbox" in lowered else ""),
-            "让 FluentFlow 再导出一次（处理说明里点任意一处改判，或让你的 agent 用 debreath_task 重新剪）；连续失败的话把这条任务的报错发给维护者。",
+            "让 FluentFlow 再导出一次：处理记录里有「重做这一步」就点它（agent 用 resume_task），没有就在处理说明里点任意一处改判（agent 用 flip_cut_decision）。连续失败的话把这条任务的报错发给维护者。",
         )
 
     feishu = _feishu_diagnosis(raw, lowered)
@@ -375,6 +375,16 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "转写超时",
             "转写很长时间没有任何进展，被当作卡住中止了。",
             "重试一次。同一个文件反复卡住，把本机日志发给维护者。",
+        )
+    # Before the timeout and dropped-connection checks: its raw part says
+    # "timed out" or "EOF", but here the parsing had succeeded and only the
+    # video file was out of reach, which a global VPN caused (2026-10-31).
+    if "抖音视频文件下载连不上" in raw:
+        return _diag(
+            "douyin_media_unreachable",
+            "抖音视频下载连不上",
+            "链接已经解析成功，下载视频文件这一步连不上。多半是开着全局模式的 VPN 或加速器，把抖音的下载绕到了境外。",
+            "把 VPN 切成智能或规则模式，或把抖音（douyinvod.com）设成直连，再重新提交。",
         )
     if "视频下载超时" in raw or "timed out" in lowered or "timeout" in lowered:
         return _diag(
@@ -519,7 +529,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "unsupported_note_mode",
             "笔记模式不受支持",
             "当前版本不支持这类笔记生成模式。",
-            "选择“自动”或“高保真”后重新提交。",
+            "打开结果点「写笔记」再写一次；用 agent 提交的，让它提交时不指定笔记模式。",
             retryable=False,
         )
     if "empty result" in lowered or "returned empty" in lowered or "空笔记" in raw:

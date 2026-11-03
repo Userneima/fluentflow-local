@@ -542,7 +542,7 @@ def _prepare_cut_media(
                     "not_used_reason": (
                         "抽查发现剪掉的部分只比紧邻的说话声低一点点，这份材料录得很轻。"
                         "为了不把话剪掉，这次按原文件转写；剪辑表保留了，"
-                        "可以把「最短静音时长」调大之后自己再剪一次。"
+                        "想再剪的话，让你的 agent 用 debreath_task 把 min_silence_seconds 调大，只剪长空白。"
                     ),
                     "finished_at": _now(),
                 },
@@ -732,7 +732,7 @@ def resolve_source(task_id: str) -> Path:
     """
     source = find_source_file(task_id) or in_place_source_path(get_job(task_id))
     if not source:
-        raise DebreathError("源文件已不在本机（可能已过保留期），无法剪辑")
+        raise DebreathError("源文件已不在本机（可能被挪走或删掉了），无法剪辑；在首页重新提交原片")
     if source.suffix.lower() not in SUPPORTED_SUFFIXES:
         raise DebreathError(f"不支持这种文件（{source.suffix or '无扩展名'}）")
     return source

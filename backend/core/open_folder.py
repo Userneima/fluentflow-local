@@ -43,7 +43,7 @@ def open_command(folder: Path, platform: str | None = None) -> list[str]:
 
 def open_folder(folder: Path, *, launch: Callable[..., Any] | None = None) -> None:
     if not folder.is_dir():
-        raise OpenFolderError(f"产出文件夹不在原来的位置了：{folder}。挪回去，或者在处理记录里重新整理一次。")
+        raise OpenFolderError(f"产出文件夹不在原来的位置了：{folder}。把它挪回这个位置，就能从这里打开。")
     try:
         # Not waited on: the file manager is the user's window from here.
         (launch or subprocess.Popen)(

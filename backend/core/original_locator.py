@@ -153,7 +153,7 @@ def locate(task_id: str, client_id: str | None = None, *, search: Callable[[str]
         return stored
     field, recorded = _recorded(job)
     if recorded is None:
-        raise OriginalMissing("这个任务的原片已经不在本机了（可能过了保留期），没法再从原片重新导出。")
+        raise OriginalMissing("这个任务的原片已经不在本机了（可能被挪走或删掉了），没法再从原片重新导出；把原片放回原处，或在首页重新提交它。")
     if recorded.is_file():
         if _is_the_original(recorded, job, expected):
             return recorded

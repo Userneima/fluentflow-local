@@ -89,7 +89,7 @@ def build_note_generation_diagnosis(
             "severity": "neutral",
             "title": "本次开启了仅转录模式",
             "detail": "系统按设置跳过了 AI 笔记，转录和字幕已保留。",
-            "next_action": "需要笔记时，打开结果并重新生成。",
+            "next_action": "需要笔记时，打开结果点「写笔记」。",
             "retryable": True,
         }
     if status == "failed" or raw_error:
@@ -98,7 +98,7 @@ def build_note_generation_diagnosis(
         title = str(diagnosis.get("title") or "AI 笔记生成失败")
         next_action = str(
             diagnosis.get("next_action")
-            or "重新生成；如果仍失败，换一个笔记模式或缩短材料。"
+            or "打开结果点「写笔记」再试；如果仍失败，在设置页换一个写笔记的模型，或交给你的 agent 写。"
         )
         if code in {"unknown_error", "video_download_failed"}:
             code = "ai_note_failed"

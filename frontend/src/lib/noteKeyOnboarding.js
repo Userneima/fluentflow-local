@@ -93,7 +93,7 @@ export const agentSetupPrompt = (connection = {}) => {
     const server = mcpServerCommand(connection);
     const connect = server
         ? `把本机的 FluentFlow 接入成 MCP 服务，名字叫 fluentflow，命令是 ${server.command}，参数是 ${server.script}，不用填令牌。`
-        : '把本机的 FluentFlow 接入成 MCP 服务（FluentFlow 设置页的「Agent 接入」里有命令）。';
+        : '把本机的 FluentFlow 接入成 MCP 服务（FluentFlow 的「菜单 → Agent 接入」里有命令）。';
     return `${connect}接好后，我给你视频链接或本机的录像，你用 FluentFlow 提交、等它转录完，再用 get_agent_note_material 取材料、按里面的要求写笔记、用 save_agent_note 存回去。`;
 };
 export const NOTE_KEY_DONE = '好了，处理完的录像会自动写笔记。';

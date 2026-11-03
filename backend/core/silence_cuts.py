@@ -1581,7 +1581,7 @@ def plan_silence_cuts(
                 f"剪掉的部分只比紧邻的声音低不到 {MIN_LEVEL_SEPARATION_DB:g}dB"
                 f"（最窄 {measurement['narrowest_db']:.1f}dB）："
                 f"那几段录得很轻，{noise_db:g}dB 在那里分不开说话和空白。"
-                "先听这几处，或把「最短静音时长」调大只剪长空白"
+                "先听这几处；要只剪长空白，让你的 agent 用 debreath_task 调大 min_silence_seconds 再剪一次"
             )
     if drop_fragments and plan.cuts:
         plan = drop_voiceless_fragments(source, plan)
