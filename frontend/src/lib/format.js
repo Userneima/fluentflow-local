@@ -837,6 +837,21 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 nextEn: 'Retry once. If the same file gets stuck again, send the local log to the maintainer.',
             }),
         ],
+        // Before the timeout check: the raw part says "timed out" or "EOF", but
+        // the link had been parsed and only Douyin's video file was out of reach,
+        // which a global VPN caused (backend video_source, 2026-10-31).
+        [
+            raw.includes('抖音视频文件下载连不上'),
+            taskErrorDiagnosis({
+                code: 'douyin_media_unreachable',
+                titleZh: '抖音视频下载连不上',
+                titleEn: 'Douyin video unreachable',
+                detailZh: '链接已经解析成功，下载视频文件这一步连不上。多半是开着全局模式的 VPN 或加速器，把抖音的下载绕到了境外。',
+                detailEn: 'The link was parsed, but the video file itself could not be reached. Usually a VPN in global mode is routing Douyin abroad.',
+                nextZh: '把 VPN 切成智能或规则模式，或把抖音（douyinvod.com）设成直连，再重新提交。',
+                nextEn: 'Switch the VPN to smart or rule mode, or set Douyin (douyinvod.com) to direct, then submit again.',
+            }),
+        ],
         [
             raw.includes('视频下载超时') || (videoLink && (lower.includes('timed out') || lower.includes('timeout'))),
             taskErrorDiagnosis({

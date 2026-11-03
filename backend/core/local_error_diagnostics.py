@@ -376,6 +376,16 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "转写很长时间没有任何进展，被当作卡住中止了。",
             "重试一次。同一个文件反复卡住，把本机日志发给维护者。",
         )
+    # Before the timeout and dropped-connection checks: its raw part says
+    # "timed out" or "EOF", but here the parsing had succeeded and only the
+    # video file was out of reach, which a global VPN caused (2026-10-31).
+    if "抖音视频文件下载连不上" in raw:
+        return _diag(
+            "douyin_media_unreachable",
+            "抖音视频下载连不上",
+            "链接已经解析成功，下载视频文件这一步连不上。多半是开着全局模式的 VPN 或加速器，把抖音的下载绕到了境外。",
+            "把 VPN 切成智能或规则模式，或把抖音（douyinvod.com）设成直连，再重新提交。",
+        )
     if "视频下载超时" in raw or "timed out" in lowered or "timeout" in lowered:
         return _diag(
             "video_download_timeout",

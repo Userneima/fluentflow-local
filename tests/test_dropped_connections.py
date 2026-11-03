@@ -70,3 +70,50 @@ def test_the_user_reads_what_happened_not_the_ssl_error():
     diagnosis = diagnose_error(f"<urlopen error {DROPPED.reason}>")
     assert diagnosis["code"] == "network_connection_dropped"
     assert "SSL" not in diagnosis["detail"] and "代理" in diagnosis["next_action"]
+
+
+# ---- Douyin's video file out of reach behind a global VPN ---------------------
+#
+# Requirement (to-do, measured 2026-10-31): when downloading the video file
+# itself (a *.douyinvod.com address) fails with a connection or TLS error, the
+# message says it may be a VPN routing Douyin abroad and to set Douyin to
+# direct. Failures in the parsing steps keep their wording.
+
+HANDSHAKE_TIMEOUT = urllib.error.URLError(TimeoutError("_ssl.c:1011: The handshake operation timed out"))
+
+
+@pytest.mark.parametrize("failure", [DROPPED, HANDSHAKE_TIMEOUT], ids=["eof", "handshake-timeout"])
+def test_a_douyin_video_file_out_of_reach_suggests_the_vpn(opener, tmp_path, failure):
+    opener["opener"] = _Opener([failure] * vs._CONNECTION_ATTEMPTS)
+    with pytest.raises(RuntimeError) as raised:
+        vs.download_file(
+            "https://v26-web.douyinvod.com/abc/video.mp4", tmp_path / "v.mp4",
+            allowed_host_suffixes=vs.DOUYIN_MEDIA_HOST_SUFFIXES,
+        )
+    diagnosis = diagnose_error(str(raised.value))
+    assert diagnosis["code"] == "douyin_media_unreachable"
+    assert "VPN" in diagnosis["detail"] and "直连" in diagnosis["next_action"]
+    assert not list(tmp_path.iterdir()), "nothing half-written is left behind"
+
+
+def test_a_parsing_step_that_drops_keeps_its_wording(opener):
+    opener["opener"] = _Opener([DROPPED] * vs._CONNECTION_ATTEMPTS)
+    with pytest.raises(urllib.error.URLError) as raised:
+        vs.open_public_http_url("https://sph.miuistore.com/dy-check", timeout=5)
+    assert diagnose_error(str(raised.value))["code"] == "network_connection_dropped"
+
+
+def test_another_host_dropping_keeps_its_wording(opener, tmp_path):
+    opener["opener"] = _Opener([DROPPED] * vs._CONNECTION_ATTEMPTS)
+    with pytest.raises(urllib.error.URLError) as raised:
+        vs.download_file("https://cdn.example.com/video.mp4", tmp_path / "v.mp4")
+    assert diagnose_error(str(raised.value))["code"] == "network_connection_dropped"
+
+
+def test_an_answer_from_the_douyin_server_is_not_called_a_vpn_problem(opener, tmp_path):
+    refused = urllib.error.HTTPError("https://v26-web.douyinvod.com/x", 403, "Forbidden", {}, None)
+    opener["opener"] = _Opener([refused])
+    with pytest.raises(RuntimeError) as raised:
+        vs.download_file("https://v26-web.douyinvod.com/x", tmp_path / "v.mp4",
+                         allowed_host_suffixes=vs.DOUYIN_MEDIA_HOST_SUFFIXES)
+    assert "VPN" not in diagnose_error(str(raised.value))["detail"]

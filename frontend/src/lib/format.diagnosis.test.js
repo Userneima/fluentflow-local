@@ -185,3 +185,20 @@ describe('noteGenerationDiagnosis without any model key', () => {
         expect(diag.nextAction).toContain('Key');
     });
 });
+
+describe('Douyin video file out of reach', () => {
+    // Behind a global VPN the link parses but the douyinvod.com download times
+    // out or drops (2026-10-31); the user is told to route Douyin direct.
+    it('suggests the VPN when the video file itself could not be reached', () => {
+        const d = diagnoseTaskError('抖音视频文件下载连不上（<urlopen error _ssl.c:1011: The handshake operation timed out>）', 'zh', {sourceType: 'video_link'});
+        expect(d.code).toBe('douyin_media_unreachable');
+        expect(d.detail).toContain('VPN');
+        expect(d.nextAction).toContain('直连');
+    });
+
+    it('leaves an ordinary download timeout as it was', () => {
+        const d = diagnoseTaskError('视频下载超时', 'zh');
+        expect(d.code).toBe('video_download_timeout');
+        expect(d.detail).not.toContain('VPN');
+    });
+});
