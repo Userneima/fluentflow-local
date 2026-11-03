@@ -38,6 +38,7 @@ import NoteEditor from '../components/NoteEditor.jsx';
 import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
+import PlaybackSpeedMenu from '../components/PlaybackSpeedMenu.jsx';
 import {probeMedia} from '../lib/probeMedia.js';
 import {createPlaybackClock, usePlaybackTime} from '../lib/playbackClock.js';
 import {useNoteFollow} from '../lib/useNoteFollow.js';
@@ -433,6 +434,7 @@ const Editor = () => {
     const [mediaDuration, setMediaDuration] = useState(0);
     const [mediaPlaying, setMediaPlaying] = useState(false);
     const [followPlayback, setFollowPlayback] = useState(true);
+    const [playbackRate, setPlaybackRate] = useState(1);
     const [transcriptReviewMode, setTranscriptReviewMode] = useState('text');
     const [transcriptSaveStatus, setTranscriptSaveStatus] = useState('idle');
     const [summaryDraft, setSummaryDraft] = useState('');
@@ -995,12 +997,39 @@ const Editor = () => {
         } catch(_) {}
     }, [playbackDuration, playbackMemoryKey]);
 
+    // The transcript follows the playback like the note does (useNoteFollow):
+    // scrolling it by hand stops the following, so another part can be read
+    // while listening (2026-11-03: it was pulled back on every sentence);
+    // turning the switch back on brings the sentence playing into view at
+    // once, also while paused. Clicking a sentence's time follows again.
+    const revealPendingRef = useRef(false);
+    const pauseFollowing = useCallback(() => setFollowPlayback((value) => (value ? false : value)), []);
+    const resumeFollowing = useCallback(() => {
+        revealPendingRef.current = true;
+        setFollowPlayback(true);
+    }, []);
+    const followSwitch = (
+        <button type="button" onClick={followPlayback ? pauseFollowing : resumeFollowing} aria-pressed={followPlayback} className={chip(followPlayback)}>
+            {/* With the note following too, each switch names what it moves. */}
+            {followMockup ? (lang === 'zh' ? '转录稿跟随' : 'Transcript follows') : t('edit.followPlayback')}
+        </button>
+    );
     useEffect(() => {
         const followIndex = activeSegmentIndex;
-        if (!followPlayback || followIndex < 0 || !mediaPlaying) return;
+        const reveal = revealPendingRef.current;
+        revealPendingRef.current = false;
+        if (!followPlayback || followIndex < 0 || (!mediaPlaying && !reveal)) return;
         const node = segmentRefs.current[followIndex];
         if (node) node.scrollIntoView({block:'center', behavior:'smooth'});
     }, [activeSegmentIndex, followPlayback, mediaPlaying]);
+    // The speed is the page's, not the player's menu (PlaybackSpeedMenu), and
+    // is set again after a new file loads, which resets it.
+    useEffect(() => {
+        const media = mediaRef.current;
+        if (!media) return;
+        media.defaultPlaybackRate = playbackRate;
+        media.playbackRate = playbackRate;
+    }, [playbackRate, mediaUrl]);
 
     // Switching between text review and video review keeps the reader's
     // place: while playing, the sentence playing is brought into view;
@@ -1982,16 +2011,26 @@ const Editor = () => {
                                 ref={mediaRef}
                                 src={mediaUrl || undefined}
                                 controls={shouldShowVideoReview}
+                                controlsList="noplaybackrate"
                                 className={shouldShowVideoReview ? 'max-h-[min(58vh,36rem)] w-full shrink-0 rounded-[12px] bg-black object-contain' : 'hidden'}
                                 onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
-                                onLoadedMetadata={(e)=>restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0)}
+                                onLoadedMetadata={(e)=>{ e.currentTarget.playbackRate = playbackRate; restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0); }}
                                 onSeeked={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true})}
                                 onPlay={()=>setMediaPlaying(true)}
                                 onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
                                 onEnded={()=>setMediaPlaying(false)}
                             />
+                            {shouldShowVideoReview && (
+                                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                    {followSwitch}
+                                    <PlaybackSpeedMenu rate={playbackRate} onChange={setPlaybackRate} lang={lang}/>
+                                </div>
+                            )}
                             <div
                                 ref={transcriptScrollRef}
+                                data-testid="transcript-scroll"
+                                onWheel={pauseFollowing}
+                                onTouchMove={pauseFollowing}
                                 onCompositionStart={() => { transcriptComposingRef.current = true; }}
                                 onCompositionEnd={() => { transcriptComposingRef.current = false; }}
                                 className={shouldShowVideoReview
@@ -2071,10 +2110,8 @@ const Editor = () => {
                                                 <button type="button" onClick={togglePlayback} aria-label={mediaPlaying ? (lang === 'zh' ? '暂停' : 'Pause') : (lang === 'zh' ? '播放' : 'Play')} title={mediaPlaying ? (lang === 'zh' ? '暂停' : 'Pause') : (lang === 'zh' ? '播放' : 'Play')} className={iconButton('primary', 'md')}>
                                                     <SvgIcon name={mediaPlaying ? 'pause' : 'play_arrow'} className="text-lg"/>
                                                 </button>
-                                                <button type="button" onClick={()=>setFollowPlayback(v=>!v)} aria-pressed={followPlayback} className={chip(followPlayback)}>
-                                                    {/* With the note following too, each switch names what it moves. */}
-                                                    {followMockup ? (lang === 'zh' ? '转录稿跟随' : 'Transcript follows') : t('edit.followPlayback')}
-                                                </button>
+                                                {followSwitch}
+                                                <PlaybackSpeedMenu rate={playbackRate} onChange={setPlaybackRate} lang={lang} side="top"/>
                                                 {/* Which of the two files is playing. Both exist for a
                                                     cut task and they are different lengths, so leaving
                                                     this out makes the timeline unexplainable. */}
