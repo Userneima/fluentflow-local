@@ -315,7 +315,7 @@ async def resume_task(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
         raise Refused("上次停下的那一步还在收尾，过几秒再接着做。", "still_stopping")
     steps = task_steps.steps_of([task_id]).get(task_id, [])
     if not steps:
-        raise Refused("这个任务是在记录步骤之前处理的，没法从中断处接着做；可以用「重新处理」。", "no_steps")
+        raise Refused("这个任务是在记录步骤之前处理的，没法从中断处接着做；可以重新提交这个文件。", "no_steps")
     start_at = task_steps.resume_point(steps)
     if start_at is None:
         raise Refused("这个任务的每一步都已经做完了。", "nothing_to_resume")

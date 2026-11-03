@@ -225,7 +225,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
     # Codes and raw system or tool output that used to reach the user as is
     # (2026-10-18 review of every failure message on record).
     if raw == "user_cancelled":
-        return _diag("user_cancelled", "已取消", "这个任务是你取消的。", "需要的话点「再处理一次」。")
+        return _diag("user_cancelled", "已取消", "这个任务是你取消的。", "需要的话点「重新提交」。")
     if raw == "client_disconnect":
         return _diag(
             "client_disconnect", "上传中断了",
@@ -237,7 +237,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "render_failed", "导出剪后视频时出错了",
             "导出这一步出错了，原片没有动，剪辑判断和转录稿都还在。"
             + ("出错的是这台 Mac 的硬件编码器。" if "videotoolbox" in lowered else ""),
-            "让 FluentFlow 再导出一次（处理说明里点任意一处改判，或让你的 agent 用 debreath_task 重新剪）；连续失败的话把这条任务的报错发给维护者。",
+            "让 FluentFlow 再导出一次：处理记录里有「重做这一步」就点它（agent 用 resume_task），没有就在处理说明里点任意一处改判（agent 用 flip_cut_decision）。连续失败的话把这条任务的报错发给维护者。",
         )
 
     feishu = _feishu_diagnosis(raw, lowered)
@@ -519,7 +519,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "unsupported_note_mode",
             "笔记模式不受支持",
             "当前版本不支持这类笔记生成模式。",
-            "选择“自动”或“高保真”后重新提交。",
+            "打开结果点「写笔记」再写一次；用 agent 提交的，让它提交时不指定笔记模式。",
             retryable=False,
         )
     if "empty result" in lowered or "returned empty" in lowered or "空笔记" in raw:

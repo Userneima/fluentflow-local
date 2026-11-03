@@ -478,7 +478,7 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
             taskErrorDiagnosis({
                 code: 'user_cancelled', titleZh: '已取消', titleEn: 'Cancelled',
                 detailZh: '这个任务是你取消的。', detailEn: 'You cancelled this task.',
-                nextZh: '需要的话点「再处理一次」。', nextEn: 'Run it again if you need it.',
+                nextZh: '需要的话点「重新提交」。', nextEn: 'Click Submit again if you need it.',
             }),
         ],
         [
@@ -803,8 +803,8 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 code: 'platform_forbidden',
                 titleZh: '平台拒绝下载',
                 titleEn: 'Platform refused download',
-                detailZh: '平台拒绝下载当前视频。已尽量优先使用字幕；如果仍失败，请稍后重试、到设置开启「视频链接下载登录态」，或改用本机上的视频文件。',
-                detailEn: 'The platform refused this video download. FluentFlow will prefer captions when possible; retry later, enable "Video link login" in Settings, or upload the local video.',
+                detailZh: '平台拒绝下载当前视频。',
+                detailEn: 'The platform refused this video download.',
                 nextZh: '稍后重试、到设置开启「视频链接下载登录态」，或改用本机上的视频文件。',
                 nextEn: 'Retry later, enable "Video link login" in Settings, or upload the local video.',
             }),
@@ -843,8 +843,8 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 code: 'video_download_timeout',
                 titleZh: '视频下载超时',
                 titleEn: 'Video download timed out',
-                detailZh: '视频下载时间过长，可能是视频较大或当前网络较慢。笔记会优先尝试使用字幕；如仍失败，请稍后重试或改用本机上的视频文件。',
-                detailEn: 'The video download took too long, likely due to a large video or slow network. FluentFlow will prefer captions when possible; retry later or upload the local video.',
+                detailZh: '视频下载时间过长，可能是视频较大或当前网络较慢。',
+                detailEn: 'The video download took too long, likely due to a large video or slow network.',
                 nextZh: '稍后重试，或改用本机上的视频文件。',
                 nextEn: 'Retry later, or upload the local video.',
             }),
@@ -942,10 +942,10 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
                 code: 'unsupported_note_mode',
                 titleZh: '笔记模式不受当前版本支持',
                 titleEn: 'Note mode unsupported',
-                detailZh: '当前版本不支持这类笔记生成模式。请选择“自动”或“高保真”后重新提交任务。',
-                detailEn: 'This note generation mode is not supported by this version. Choose Auto or High fidelity and submit again.',
-                nextZh: '切换为“自动”或“高保真”后重新提交任务。',
-                nextEn: 'Switch to Auto or High fidelity and submit again.',
+                detailZh: '当前版本不支持这类笔记生成模式。',
+                detailEn: 'This note generation mode is not supported by this version.',
+                nextZh: '打开结果点「写笔记」再写一次；用 agent 提交的，让它提交时不指定笔记模式。',
+                nextEn: 'Open the result and click Write the note; if your agent submitted it, have it submit without a note mode.',
                 retryable: false,
             }),
         ],
@@ -1059,7 +1059,7 @@ export const noteGenerationDiagnosis = (result={}, lang='zh') => {
         const code = diag.code === 'unknown_error' ? 'ai_note_failed' : diag.code;
         const title = diag.code === 'unknown_error' ? (zh ? 'AI 笔记生成失败' : 'AI note generation failed') : diag.title;
         const nextAction = diag.code === 'unknown_error'
-            ? (zh ? '打开结果后点「写笔记」；如果仍失败，换一个笔记模式或缩短材料。' : 'Open the result and click Write the note; if it still fails, change the note mode or shorten the material.')
+            ? (zh ? '打开结果后点「写笔记」；如果仍失败，在设置页换一个写笔记的模型，或交给你的 agent 写。' : 'Open the result and click Write the note; if it still fails, pick another note model in Settings or hand it to your agent.')
             : diag.nextAction;
         return {
             ...base,
