@@ -483,3 +483,151 @@ def test_the_mcp_tools_reach_these_routes(monkeypatch):
     ]
     names = {tool["name"] for tool in mcp.TOOL_DEFINITIONS}
     assert {"get_agent_correction_material", "save_agent_correction"} <= names
+
+
+# ── after the independent review (2026-11-03) ─────────────────────────────
+
+def _bilingual_lines(segments, chinese):
+    return [{**seg, "text_zh": zh} for seg, zh in zip(segments, chinese)]
+
+
+def test_translating_one_page_again_keeps_the_rest_of_the_background_translation(agent, monkeypatch):
+    monkeypatch.setitem(ac.PAGE_SENTENCES, "translation", 2)
+    client, make = agent
+    task_id = make(ENGLISH, source_language="en", translation_status="completed",
+                   display_segments=_bilingual_lines(ENGLISH, ["中0", "中1", "中2"]))
+    packet = _material(client, task_id, "translation")
+
+    _save(client, task_id, packet, translations=[{"start_id": 0, "end_id": 0, "text_zh": "新"}])
+
+    result = _result(task_id)
+    assert [s.get("text_zh") for s in result["display_segments"]] == ["新", "中1", "中2"]
+    assert result["translation_status"] == "completed"
+    assert "中2" in _artifact(task_id, "transcript_bilingual_srt")
+
+
+def test_on_a_cut_task_the_originals_subtitles_keep_every_sentence(agent):
+    client, make = agent
+    cut_away = {"start": 12.0, "end": 14.0, "text": "This part was cut."}
+    source = [{**ENGLISH[0], "start": 10.0, "end": 12.0}, cut_away,
+              {**ENGLISH[1], "start": 14.0, "end": 16.0}, {**ENGLISH[2], "start": 16.0, "end": 19.0}]
+    task_id = make(ENGLISH, source_language="en", source_raw_segments=source, transcript_media="debreath_media",
+                   source_display_segments=[dict(source[0]), {**cut_away, "text_zh": "这段被剪掉了。"},
+                                            dict(source[2]), dict(source[3])])
+    packet = _material(client, task_id, "translation")
+
+    _save(client, task_id, packet, translations=[{"start_id": 2, "end_id": 2, "text_zh": "它们很有用。"}])
+
+    lines = _result(task_id)["source_display_segments"]
+    assert [(s["text"], s.get("text_zh")) for s in lines] == [
+        ("So today we will", None), ("This part was cut.", "这段被剪掉了。"),
+        ("talk about agents.", None), ("They are useful.", "它们很有用。")]
+
+
+def test_translating_keeps_the_english_the_user_wrote(agent):
+    client, make = agent
+    task_id = make(ENGLISH, source_language="en", translation_status="agent_required")
+    before = _result(task_id)
+    edited = [dict(s) for s in before["raw_segments"]]
+    edited[2]["text"] = "They are really useful."
+    job_store.save_result_changes(task_id, before, {**before, "raw_segments": edited,
+                                                    "display_segments": edited, "transcript_text": sc.joined(edited)})
+    packet = _material(client, task_id, "translation")
+    assert next(s for s in packet["sentences"] if s["id"] == 2).get("locked") is True
+
+    _save(client, task_id, packet, translations=[
+        {"start_id": 0, "end_id": 1, "text_en": "So today we will talk about agents.", "text_zh": "今天讲 agent。"},
+        {"start_id": 2, "end_id": 2, "text_en": "They are useful.", "text_zh": "它们真的很有用。"},
+    ])
+
+    lines = _result(task_id)["display_segments"]
+    assert [s["text"] for s in lines] == ["So today we will talk about agents.", "They are really useful."]
+    assert "They are useful." not in _artifact(task_id, "transcript_bilingual_srt")
+
+
+def test_a_correction_after_the_translation_reaches_the_bilingual_lines_and_is_undone_there(agent):
+    client, make = agent
+    spoken = [{"start": 0.0, "end": 2.0, "text": "We use Whisperflow"}, {"start": 2.0, "end": 4.0, "text": "every day."}]
+    task_id = make(spoken, source_language="en", translation_status="completed", display_segments=[
+        {"start": 0.0, "end": 4.0, "text": "We use Whisperflow every day.", "text_zh": "我们每天用它。",
+         "source_start_index": 0, "source_end_index": 1}])
+    packet = _material(client, task_id, "glossary")
+
+    _save(client, task_id, packet, fixes=[
+        {"id": 0, "from": "Whisperflow", "to": "Wispr Flow", "basis": "context", "why": "语音输入工具 Wispr Flow"}])
+
+    assert _result(task_id)["display_segments"][0]["text"] == "We use Wispr Flow every day."
+    assert "Wispr Flow" in _artifact(task_id, "transcript_bilingual_srt")
+    _post(client, f"/agent/v1/tasks/{task_id}/glossary-corrections/revert", {})
+    assert _result(task_id)["display_segments"][0]["text"] == "We use Whisperflow every day."
+
+
+def test_a_save_refused_as_stale_leaves_the_subtitle_files_alone(agent, monkeypatch):
+    client, make = agent
+    task_id = make()
+    packet = _material(client, task_id, "glossary")
+    srt_before = _artifact(task_id, "transcript_srt")
+    real = ac._save_fixes
+
+    def user_saves_meanwhile(*args, **kwargs):
+        answer = real(*args, **kwargs)
+        current = _result(task_id)
+        edited = [dict(s) for s in current["raw_segments"]]
+        edited[0]["text"] = "今天我们讲一下吧"
+        job_store.save_result_changes(task_id, current, {**current, "raw_segments": edited,
+                                                         "transcript_text": sc.joined(edited)})
+        return answer
+
+    monkeypatch.setattr(ac, "_save_fixes", user_saves_meanwhile)
+    answer = _save(client, task_id, packet, fixes=[{"id": 1, "from": "OpenCloud", "to": "OpenClaw", "basis": "glossary"}])
+
+    assert answer.status_code == 409 and answer.json()["detail"]["code"] == "stale"
+    assert _result(task_id)["raw_segments"][0]["text"] == "今天我们讲一下吧"
+    assert "OpenClaw" not in _result(task_id)["transcript_text"]
+    assert _artifact(task_id, "transcript_srt") == srt_before
+
+
+def test_the_picture_step_does_not_offer_or_change_a_sentence_the_user_edited(agent, no_video):
+    client, make = agent
+    task_id = make()
+    before = _result(task_id)
+    edited = [dict(s) for s in before["raw_segments"]]
+    edited[2]["text"] = "训练的应该是GOM跟KIMI吧"
+    job_store.save_result_changes(task_id, before, {**before, "raw_segments": edited, "transcript_text": sc.joined(edited)})
+    _store_track(task_id, CUES)
+    packet = _material(client, task_id, "subtitles")
+    assert 2 not in {i["id"] for i in packet["items"]}
+
+    saved = _save(client, task_id, packet, fixes=[{"id": 2, "from": "GOM", "to": "GLM-5"}]).json()
+
+    assert saved["applied"] == [] and len(saved["refused"]) == 1
+    assert _result(task_id)["raw_segments"][2]["text"] == "训练的应该是GOM跟KIMI吧"
+
+
+def test_a_failed_reading_of_the_picture_is_read_again_on_the_next_ask(agent, monkeypatch):
+    client, make = agent
+    task_id = make()
+    monkeypatch.setattr(ac, "played_video", lambda task_id, result: None)
+    calls = []
+
+    def reader(video, segments):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("ffmpeg was killed")
+        return {"status": "ready", "cues": CUES}
+
+    monkeypatch.setattr(ac, "read_picture", reader)
+
+    def settle():
+        for _ in range(100):
+            if task_id not in ac._reading:
+                return
+            asyncio.run(asyncio.sleep(0.02))
+
+    _material(client, task_id, "subtitles")
+    settle()
+    second = _material(client, task_id, "subtitles")
+    assert second["state"] == "reading" and second["last_error"] == "ffmpeg was killed"
+    settle()
+
+    assert _material(client, task_id, "subtitles")["state"] == "ready" and len(calls) == 2

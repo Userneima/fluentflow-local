@@ -492,6 +492,7 @@ def test_running_and_undoing_are_refused_while_the_task_is_being_worked_on(agent
 def test_an_edit_made_while_it_runs_is_not_overwritten(agent, monkeypatch):
     client, make, _model = agent
     task_id = make()
+    srt_before = _srt(task_id)
     real = gc.correct
 
     def edits_meanwhile(*args, **kwargs):
@@ -506,6 +507,8 @@ def test_an_edit_made_while_it_runs_is_not_overwritten(agent, monkeypatch):
 
     assert answer.status_code == 409 and answer.json()["detail"]["code"] == "transcript_moved"
     assert job_store.get_job(task_id)["result"]["transcript_text"] == "用户刚改的"
+    # Its subtitle files stay as they were too: the output folder copies them.
+    assert _srt(task_id) == srt_before
 
 
 def test_the_mcp_tools_reach_these_routes(monkeypatch):

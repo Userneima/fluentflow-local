@@ -37,7 +37,7 @@ from backend.core.job_store import (
     list_jobs,
     upsert_job,
 )
-from backend.core import agent_alignment, agent_correction, feishu_sync, note_section_times, task_intelligence
+from backend.core import agent_alignment, agent_correction, feishu_sync, note_section_times, task_intelligence, transcript_files
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_agent_package import build_agent_task_package, note_generation_diagnosis
@@ -1229,10 +1229,9 @@ def run_glossary_correction(request: Request, task_id: str) -> dict[str, Any]:
         result[glossary_correction.META] = outcome.meta(channel)
         if outcome.corrections:
             result = glossary_correction.onto_result(result, outcome.segments, outcome.corrections)
-            result = _attach_result_artifacts(task_id, result, parts=("transcript",))
         # Written only if the transcript is still the one the model read: an
-        # edit made meanwhile is the user's and stands.
-        saved = save_result_changes(task_id, before, result, client_id=client_id, unless_moved=("transcript_text",))
+        # edit made meanwhile is the user's and stands, and so do its files.
+        saved = transcript_files.save(task_id, before, result, client_id=client_id, unless_moved=("transcript_text",))
         if saved is None:
             raise HTTPException(status_code=409, detail={
                 "code": "transcript_moved",

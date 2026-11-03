@@ -797,6 +797,26 @@ def _find(
     return best[1] if best else None
 
 
+def bilingual_line(
+    segments: list[dict[str, Any]], start: Any, end: Any, word: str,
+) -> int | None:
+    """The one translated line (it has ``text_zh``) whose time covers the
+    sentence from ``start`` to ``end`` and that holds ``word`` exactly once.
+    A translation joins several sentences into one line, so a sentence's own
+    text is not found there; the change and its undo go into this line.
+    Lines a translation made are FluentFlow's: the editor puts the plain
+    sentences back when it saves."""
+    first, last = _seconds(start), _seconds(end)
+    if first is None or last is None or not word:
+        return None
+    hits = [i for i, seg in enumerate(segments)
+            if str(seg.get("text_zh") or "").strip()
+            and (_seconds(seg.get("start")) or 0.0) <= first + 0.05
+            and (_seconds(seg.get("end")) or 0.0) >= last - 0.05
+            and _text(seg).count(word) == 1]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _undone(text: str, record: dict[str, Any]) -> str:
     """``text`` with this one change taken out: at the place it was made when
     the text there is still the new spelling (「现在才做」 corrected to
@@ -848,8 +868,12 @@ def revert(
         hit = False
         for key, segments in lists.items():
             # The page's copies are the ones the user edits; the others follow.
-            index = _find(segments, record, "source_start" if key.startswith("source_") else "start",
+            clock = "source_start" if key.startswith("source_") else "start"
+            index = _find(segments, record, clock,
                           trusted if key in ("raw_segments", "display_segments") else None)
+            if index is None and key.endswith("display_segments"):
+                index = bilingual_line(segments, record.get(clock, record.get("start")),
+                                       record.get(clock.replace("start", "end"), record.get("end")), record["to"])
             if index is not None:
                 segments[index]["text"] = _undone(_text(segments[index]), record)
                 hit = True

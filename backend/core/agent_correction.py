@@ -44,10 +44,10 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import correction_notes, debreath_job, frame_text, job_store, task_activity
+from backend.core import correction_notes, debreath_job, frame_text, job_store, task_activity, transcript_files
 from backend.core import glossary_correction as gc
 from backend.core import subtitle_correction as sc
-from backend.core.result_artifacts import TRANSCRIPT_MEDIA_CUT, _attach_result_artifacts, artifact_target_path
+from backend.core.result_artifacts import TRANSCRIPT_MEDIA_CUT, artifact_target_path
 from backend.core.result_schema import content_versions
 from backend.core.storage_paths import find_source_file, in_place_source_path
 
@@ -243,15 +243,21 @@ def read_picture(
             "cues": [{"start": c.start, "end": c.end, "text": c.text} for c in track]}
 
 
+# Why the last reading of a task's track failed. Not kept beside the task: a
+# failure (ffmpeg killed, the recogniser busy) is read again on the next ask
+# instead of telling the agent for good that there is nothing to do.
+_failed: dict[str, str] = {}
+
+
 def _read_in_background(task_id: str, video: Path | None, segments: list[dict[str, Any]], reader: Callable) -> None:
     try:
         found = reader(video, segments)
-    except Exception as exc:  # noqa: BLE001 - recorded for the agent, never raised
-        logger.warning("Reading the subtitle track for %s failed: %s", task_id, exc)
-        found = {"status": "failed", "reason": str(exc)[:300]}
-    found["video"] = _video_key(video) if video is not None else None
-    try:
+        found["video"] = _video_key(video) if video is not None else None
         _track_path(task_id).write_text(json.dumps(found, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - reported to the agent, never raised
+        logger.warning("Reading the subtitle track for %s failed: %s", task_id, exc)
+        with _reading_lock:
+            _failed[task_id] = str(exc)[:300]
     finally:
         with _reading_lock:
             _reading.discard(task_id)
@@ -328,10 +334,11 @@ _TRANSLATION_INSTRUCTIONS = (
     "- 只能使用输入片段的原文信息，不要补充、总结或解释。\n"
     "- 可以轻微修正大小写、标点和明显口语断裂，但不要改写原意。\n"
     "- 每条输出覆盖连续的 id，不能跳跃、倒序或重叠，只用这一页的 id；context_before / context_after 只供参考。\n"
+    "- locked=true 的句子是用户改过的：照样翻译，但英文保留原句，不整理（交回的 text_en 会被原句替换）。\n"
     "- 不要为了变短而删除关键信息。\n"
     "交回：save_agent_correction，step=translation，带这一页的 page 和 material_version、"
     "translations=[{\"start_id\": 数字, \"end_id\": 数字, \"text_en\": \"整理后的英文\", \"text_zh\": \"中文翻译\"}]"
-    "（两端都包含）和你实际使用的 model。这一页交回后，它的双语字幕替换掉原来的。"
+    "（两端都包含）和你实际使用的 model。交回的句子换成你的翻译，没交的句子保留原来的中文（如果有）。"
 )
 
 
@@ -366,7 +373,7 @@ def material(
         return {**answer, **_subtitle_material(task_id, result, segments, window, protected)}
     if step == GLOSSARY:
         return {**answer, **_glossary_material(task_id, client_id, segments, window, protected)}
-    return {**answer, **_translation_material(result, segments, window)}
+    return {**answer, **_translation_material(result, segments, window, protected)}
 
 
 def _subtitle_items(
@@ -394,9 +401,12 @@ def _subtitle_material(
     video = played_video(task_id, result)
     track = _stored_track(task_id, video)
     if track is None:
+        with _reading_lock:
+            last_error = _failed.pop(task_id, None)
         state = start_reading(task_id, result)
         return {
             "state": "reading", "reading": state, "retry_after_seconds": 30,
+            **({"last_error": last_error} if last_error else {}),
             "instructions": "FluentFlow 正在本机读取画面上的字幕（一小时视频约一分钟，不调用模型）。"
                             "等 retry_after_seconds 秒后用同样的参数再取一次。",
         }
@@ -440,7 +450,9 @@ def _english(result: dict[str, Any]) -> bool:
     return language.startswith("en")
 
 
-def _translation_material(result: dict[str, Any], segments: list[dict[str, Any]], window: range) -> dict[str, Any]:
+def _translation_material(
+    result: dict[str, Any], segments: list[dict[str, Any]], window: range, protected: set[int],
+) -> dict[str, Any]:
     if not _english(result):
         return {"state": "nothing_to_do", "reason": "not_english",
                 "instructions": "这段录音不是英文，不需要中文对照字幕，这一步不用做。"}
@@ -448,7 +460,8 @@ def _translation_material(result: dict[str, Any], segments: list[dict[str, Any]]
     return {
         "state": "ready",
         "context_before": [_text(s) for s in segments[max(0, first - 3):first] if _text(s)],
-        "sentences": [{"id": i, "text": _text(segments[i])} for i in window if _text(segments[i])],
+        "sentences": [{"id": i, "text": _text(segments[i]), **({"locked": True} if i in protected else {})}
+                      for i in window if _text(segments[i])],
         "context_after": [_text(s) for s in segments[last + 1:last + 4] if _text(s)],
         "instructions": _TRANSLATION_INSTRUCTIONS,
     }
@@ -505,14 +518,14 @@ def save(
         raise _stale()
     if step == TRANSLATION:
         after, answer = _save_translation(task_id, before, segments, window, page, model,
-                                          _list(translations, "translations"))
+                                          _list(translations, "translations"), protected)
     else:
         after, answer = _save_fixes(task_id, client_id, before, step, segments, window, protected, page, model,
                                     _list(fixes, "fixes"))
     # Written only if the transcript is still the one this save was checked
     # against: an edit made in between is the user's and stands.
-    saved = job_store.save_result_changes(task_id, before, after, client_id=client_id,
-                                          unless_moved=("raw_segments", "transcript_text"))
+    saved = transcript_files.save(task_id, before, after, client_id=client_id,
+                                  unless_moved=("raw_segments", "display_segments", "transcript_text"))
     if saved is None:
         raise _stale()
     result = saved["result"]
@@ -573,7 +586,6 @@ def _save_fixes(
         after[_meta_key(step)]["status"] = "skipped"
     if records:
         after = gc.onto_result(after, fixed, records, field=field)
-        after = _attach_result_artifacts(task_id, after, parts=("transcript",))
     answer = {
         "applied": [{key: r.get(key) for key in ("id", "from", "to", "start", "subtitle", "basis", "entry", "why")
                      if r.get(key) is not None} for r in records],
@@ -617,10 +629,46 @@ def _bilingual(segments: list[dict[str, Any]], items: list[dict[str, Any]]) -> l
     return out
 
 
-def _on_source_clock(result: dict[str, Any], display: list[dict[str, Any]], segments: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-    """The same lines on the original's clock, for a transcript moved onto the
-    cut file: what a re-render of the cut starts from. Each sentence is found
-    in the original's copy by its text, in order."""
+def _items_shown(display: Any, segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The translated lines the subtitles show now, as stretches of
+    ``segments``: whoever translated them (the background, the agent, a page
+    saved earlier) and with the corrections made since. A line is found by
+    its time, the sentences inside it from first to last."""
+    found: list[dict[str, Any]] = []
+    taken = -1
+    for line in display if isinstance(display, list) else []:
+        if not isinstance(line, dict) or not str(line.get("text_zh") or "").strip():
+            continue
+        start, end = sc._seconds(line.get("start")), sc._seconds(line.get("end"))
+        if start is None or end is None:
+            continue
+        inside = [i for i, seg in enumerate(segments) if i > taken and _text(seg)
+                  and (sc._seconds(seg.get("start")) or 0.0) >= start - _EDGE
+                  and (sc._seconds(seg.get("end")) or 0.0) <= end + _EDGE]
+        if not inside or inside != list(range(inside[0], inside[-1] + 1)):
+            continue
+        found.append({"start_index": inside[0], "end_index": inside[-1],
+                      "text_en": str(line.get("text") or "").strip(), "text_zh": str(line.get("text_zh")).strip()})
+        taken = inside[-1]
+    return found
+
+
+_EDGE = 0.05
+
+
+def _covers_all(segments: list[dict[str, Any]], items: list[dict[str, Any]]) -> bool:
+    covered = {i for item in items for i in range(item["start_index"], item["end_index"] + 1)}
+    return all(i in covered for i, seg in enumerate(segments) if _text(seg))
+
+
+def _on_source_clock(
+    result: dict[str, Any], items: list[dict[str, Any]], segments: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    """The bilingual lines on the original's clock, for a transcript moved
+    onto the cut file: what a re-render of the cut starts from, so every
+    sentence of the original is in it, cut away or not. Each sentence is
+    found in the original's copy by its text, in order; a stretch the cut cut
+    away keeps the translation that copy already had."""
     source = [s for s in result.get("source_raw_segments") or [] if isinstance(s, dict)]
     if not source:
         return None
@@ -631,18 +679,20 @@ def _on_source_clock(result: dict[str, Any], display: list[dict[str, Any]], segm
             if _text(source[j]) == _text(seg):
                 where[index], cursor = j, j + 1
                 break
-    out = []
-    for line in display:
-        first, last = line.get("source_start_index"), line.get("source_end_index")
-        if first is None:
-            continue
-        if first in where and last in where:
-            out.append({**line, "start": source[where[first]].get("start"), "end": source[where[last]].get("end")})
-    return out
+    moved = [{**item, "start_index": where[item["start_index"]], "end_index": where[item["end_index"]]}
+             for item in items if item["start_index"] in where and item["end_index"] in where]
+    used = {i for item in moved for i in range(item["start_index"], item["end_index"] + 1)}
+    mapped = set(where.values())
+    for item in _items_shown(result.get("source_display_segments"), source):
+        stretch = set(range(item["start_index"], item["end_index"] + 1))
+        if not stretch & used and not stretch & mapped:
+            moved.append(item)
+    return _bilingual(source, sorted(moved, key=lambda i: i["start_index"]))
 
 
 def _save_translation(
-    task_id: str, before: dict[str, Any], segments: list[dict[str, Any]], window: range, page: int, model: str, answered: list[Any],
+    task_id: str, before: dict[str, Any], segments: list[dict[str, Any]], window: range, page: int, model: str,
+    answered: list[Any], protected: set[int],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not _english(before):
         raise CorrectionError("这段录音不是英文，不做中文对照字幕。", "not_english", 409)
@@ -657,27 +707,34 @@ def _save_translation(
         if first is None or first not in window or last not in window or last < first or first <= consumed or not zh:
             refused.append(item)
             continue
-        en = str(item.get("text_en") or "").strip() or " ".join(_text(s) for s in segments[first:last + 1]).strip()
+        joined = " ".join(_text(s) for s in segments[first:last + 1]).strip()
+        # A sentence the user edited keeps their words; the agent only
+        # tidies the English of sentences FluentFlow wrote.
+        mine = any(i in protected for i in range(first, last + 1))
+        en = joined if mine else (str(item.get("text_en") or "").strip() or joined)
         kept.append({"start_index": first, "end_index": last, "text_en": en, "text_zh": zh})
         consumed = last
     refused.extend(i for i in answered if not isinstance(i, dict))
-    stored = before.get(TRANSLATION_FIELD) if isinstance(before.get(TRANSLATION_FIELD), dict) else {}
-    earlier = [i for i in stored.get("items") or [] if isinstance(i, dict)] \
-        if stored.get("sentences") == len(segments) else []
-    items = sorted([i for i in earlier if i.get("start_index") not in window] + kept, key=lambda i: i["start_index"])
+    # What the subtitles show now stays where this answer brings nothing:
+    # the background's translation, earlier pages, the corrections made
+    # since. A line gives way only to the sentences the answer translates.
+    shown = _items_shown(before.get("display_segments"), segments)
+    answered_ids = {i for item in kept for i in range(item["start_index"], item["end_index"] + 1)}
+    outside = [i for i in shown if not set(range(i["start_index"], i["end_index"] + 1)) & answered_ids]
+    items = sorted(outside + kept, key=lambda i: i["start_index"])
     display = _bilingual(segments, items)
     meta = _step_meta(before, TRANSLATION, segments, [page], model, applied=len(kept), refused=len(refused))
-    meta["items"] = items
+    if meta["status"] == "partial" and _covers_all(segments, items):
+        meta["status"] = "completed"
     after = dict(before)
     after[TRANSLATION_FIELD] = meta
     after["display_segments"] = display
-    source = _on_source_clock(before, display, segments)
+    source = _on_source_clock(before, items, segments)
     if source is not None:
         after["source_display_segments"] = source
     after["translation_status"] = "completed" if meta["status"] != "partial" else "partial"
     after["translation_error"] = None
     after["subtitle_mode"] = "bilingual_zh" if any(line.get("text_zh") for line in display) else "source_only"
-    after = _attach_result_artifacts(task_id, after, parts=("transcript",))
     return after, {"translated": len(kept), "refused": [{"item": i, "why": "id 不在这一页、倒序或重叠，或缺 text_zh"} for i in refused]}
 
 

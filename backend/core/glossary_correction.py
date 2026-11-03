@@ -436,6 +436,12 @@ def onto_result(
             at = _same_sentence(segments, before, occurrence)
             if at is not None:
                 segments[at]["text"] = record["sentence_after"]
+            elif key.endswith("display_segments") and (line := sc.bilingual_line(
+                    segments, record.get("source_start" if key.startswith("source_") else "start"),
+                    record.get("source_end" if key.startswith("source_") else "end"), record["from"])) is not None:
+                # A translation joined this sentence with others into one line.
+                at = line
+                segments[at]["text"] = _text(segments[at]).replace(record["from"], record["to"], 1)
             elif "corrected" in key:
                 # The retired text-model correction rewrote whole sentences
                 # into this copy, which the note and an agent read first on

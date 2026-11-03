@@ -1183,8 +1183,10 @@ def get_agent_correction_material(
         "new text in a subtitle line or backed by the word list or a reason; applied lists what went in, "
         "refused what did not hold. Each change goes into every copy of the transcript, the subtitle files and "
         "the output folder, recorded with by=agent and your model, and is undone like the background's "
-        "(revert_subtitle_corrections, revert_glossary_corrections). A translated page replaces that page's "
-        "bilingual subtitles. A note already written is not rewritten. If a sentence of the page changed since "
+        "(revert_subtitle_corrections, revert_glossary_corrections). Translations replace the bilingual "
+        "lines of the sentences they cover; the rest keep theirs (the background's included), and a sentence "
+        "the user edited keeps its English. A note already written is not rewritten. If a sentence of the "
+        "page changed since "
         "the material was read, returns stale and writes nothing: read the page again. The answer gives "
         "pages_left, next_page and, when another step is left, next."),
     input_schema={
