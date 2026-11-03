@@ -394,7 +394,7 @@ def test_an_edit_made_after_sorting_into_a_subfolder_reaches_the_task(tmp_path, 
     assert task not in output_folder.notes_to_find_again()
 
 
-def test_a_renamed_folder_is_found_and_a_moved_one_is_not_recreated(tmp_path, pdfs):
+def test_a_renamed_folder_is_found_and_a_moved_one_is_not_recreated(tmp_path, pdfs, tmp_path_factory):
     source = _recording(tmp_path)
     task = _task(source, note="# 笔记\n")
     first = output_folder.sync(task)
@@ -404,12 +404,49 @@ def test_a_renamed_folder_is_found_and_a_moved_one_is_not_recreated(tmp_path, pd
     folder.rename(renamed)
     assert output_folder.sync(task)["path"] == str(renamed)
 
-    moved = tmp_path / "elsewhere"
-    moved.mkdir()
+    # Out of the course folder (here tmp_path, two levels above the folder).
+    moved = tmp_path_factory.mktemp("elsewhere")
     renamed.rename(moved / renamed.name)
     record = output_folder.sync(task)
     assert "不在原来的位置" in record["error"]
     assert sorted(p.name for p in source.parent.iterdir()) == [source.name]
+
+
+def test_a_folder_moved_within_the_course_folder_is_found_and_kept_in_step(tmp_path, pdfs):
+    """Owner, 2026-11-03: the lessons' recordings went into 1.源视频/<类别>/ and
+    each lesson's whole folder into 2.剪后视频/<类别>/, both inside the course
+    folder. FluentFlow finds the folder there, records where it is now, and
+    an Obsidian edit made there still reaches the task."""
+    import os
+
+    course = tmp_path / "张和"
+    lessons = course / "实战 1"
+    lessons.mkdir(parents=True)
+    source = lessons / "3-第一次汇报.mp4"
+    source.write_bytes(b"original")
+    task = _task(source, note="# 笔记\n\n第一版。\n")
+    folder = Path(output_folder.sync(task)["path"])
+    output_folder._WORKER.submit(lambda: None).result()
+
+    (course / "1.源视频" / "实战 1").mkdir(parents=True)
+    source.rename(course / "1.源视频" / "实战 1" / source.name)
+    target = course / "2.剪后视频" / "实战 1"
+    target.mkdir(parents=True)
+    folder.rename(target / folder.name)
+    md = target / folder.name / f"{source.stem}_笔记.md"
+    md.write_text("# 笔记\n\n挪过去以后在 Obsidian 里改的。\n", encoding="utf-8")
+    later = md.stat().st_mtime + 120
+    os.utime(md, (later, later))
+
+    assert task in output_folder.notes_to_find_again()
+    record = output_folder.sync(task)
+
+    assert record["error"] is None
+    assert record["path"] == str(target / folder.name)
+    assert "挪过去以后在 Obsidian 里改的" in job_store.get_job(task)["result"]["summary_markdown"]
+    # Not even an empty 过程文件 for the change log of the edit taken in.
+    output_folder._WORKER.submit(lambda: None).result()
+    assert not (lessons / folder.name).exists(), "nothing made again at the old place"
 
 
 def test_link_videos_go_to_the_platforms_own_video_folder(monkeypatch):

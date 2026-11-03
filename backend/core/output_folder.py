@@ -33,6 +33,7 @@ when a conversation remembered to.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import os
 import re
@@ -42,7 +43,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from backend.core import job_store, note_versions
 from backend.core.storage_paths import _artifact_storage_dir
@@ -214,6 +215,45 @@ def _link_folders(root: Path) -> list[Path]:
     ]
 
 
+# How far a moved folder is looked for: within the folder two levels above
+# where it was (the course folder holding 实战 1/<recording>), this many
+# levels down, visiting at most this many folders.
+AROUND_DEPTH = 3
+AROUND_LIMIT = 3000
+
+
+def _around(known: Path) -> Iterator[Path]:
+    """The folders near where ``known`` was, for a folder the user moved
+    within the same course folder (owner, 2026-11-03: the lessons' folders
+    moved from 张和/实战 1/ into 张和/2.剪后视频/实战 1/). Searched lazily,
+    only once the nearer places did not have it. Another task's folder and
+    过程文件 are not looked into; a course folder that is the home folder or
+    higher is not searched."""
+    base = known.parent.parent
+    home = Path.home()
+    if base == base.parent or home.is_relative_to(base) or not base.is_dir():
+        return
+    visited = 0
+    level = [base]
+    for _ in range(AROUND_DEPTH):
+        below = []
+        for parent in level:
+            try:
+                children = sorted(c for c in parent.iterdir() if c.is_dir() and not c.name.startswith("."))
+            except OSError:
+                continue
+            for child in children:
+                visited += 1
+                if visited > AROUND_LIMIT:
+                    return
+                if child.name == PROCESS_DIRNAME:
+                    continue
+                yield child
+                if not _owners(child):
+                    below.append(child)
+        level = below
+
+
 def _stem(source: Path) -> str:
     return _UNSAFE.sub("_", source.stem).strip() or "recording"
 
@@ -296,9 +336,10 @@ def _folder_for(task_id: str, source: Path) -> tuple[Path, str]:
     (``place``).
 
     Once a task has a folder the user may rename or move it. Renamed in place
-    it is found again by its marker; moved somewhere unknown it is not
-    recreated beside the recording, which would leave the user two folders
-    for one recording (owner, 2026-10-15)."""
+    it is found again by its marker, and so it is when moved elsewhere within
+    the same course folder (``_around``); moved further it is not recreated
+    beside the recording, which would leave the user two folders for one
+    recording (owner, 2026-10-15)."""
     job = job_store.get_job(task_id) or {}
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     previous = str((result.get(RESULT_KEY) or {}).get("path") or "") if isinstance(result.get(RESULT_KEY), dict) else ""
@@ -307,10 +348,12 @@ def _folder_for(task_id: str, source: Path) -> tuple[Path, str]:
     known = Path(previous)
     # A link download's original sits inside its own folder, so that folder is
     # source.parent itself: found after the user moved it to a new link root.
-    for folder in [known, source.parent] + [
+    nearer = [known, source.parent] + [
         child for parent in dict.fromkeys([known.parent, source.parent]) if parent.is_dir()
         for child in sorted(parent.iterdir()) if child.is_dir()
-    ] + (_link_folders(link_root()) if _is_link_task(job) else []):
+    ] + (_link_folders(link_root()) if _is_link_task(job) else [])
+    # Further afield only once the nearer places did not have it.
+    for folder in itertools.chain(nearer, _around(known)):
         if folder.is_dir():
             for task, suffix in _owners(folder):
                 if task == task_id:
@@ -521,6 +564,13 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any], note_changed
                     shutil.copyfile(path, target)
         md = folder / f"{stem}_{NOTE_LABEL}{suffix}.md"
         previous = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
+        if previous.get("md_path") and previous["md_path"] != str(md):
+            # Found somewhere new: the new place is stored before an edit is
+            # taken in, or what follows a saved note (修改记录, versions kept)
+            # writes into the old place and makes it again.
+            moved = {**previous, "path": str(folder), "md_path": str(md)}
+            _record(task_id, moved)
+            result = {**result, RESULT_KEY: moved}
         # The md may have been edited where it sits (in Obsidian) since it was
         # written: take that in before anything writes over or removes it.
         taken = _take_in_edits(task_id, md, process / md.name, text.rstrip() + "\n", result, previous,
