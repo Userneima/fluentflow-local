@@ -8,9 +8,8 @@ export const PLAYBACK_SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
 // new sentence, so a speed could not be picked there during playback
 // (2026-11-03). This menu is closed only by a choice, Escape or a click
 // outside it.
-const PlaybackSpeedMenu = ({rate, onChange, lang = 'zh', side = 'bottom', align = 'left'}) => (
+const PlaybackSpeedMenu = ({rate, onChange, lang = 'zh', align = 'left'}) => (
     <DropdownMenu
-        side={side}
         align={align}
         trigger={(
             <button type="button" aria-label={lang === 'zh' ? '播放速度' : 'Playback speed'} title={lang === 'zh' ? '播放速度' : 'Playback speed'} className={button('secondary', 'sm')}>

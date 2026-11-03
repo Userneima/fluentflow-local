@@ -13,9 +13,8 @@ const dropdownIconMap = {
 // The trigger is a real <button> so the menu opens from the keyboard and
 // announces itself. A trigger that already is a <button> is reused with the
 // menu attributes added (its own `disabled` and classes stay); anything else
-// is wrapped in one. `side` opens the menu above the trigger, for a
-// trigger at the bottom of the page.
-export const DropdownMenu = ({trigger, items, align='right', side='bottom'}) => {
+// is wrapped in one.
+export const DropdownMenu = ({trigger, items, align='right'}) => {
     const [open, setOpen] = useState(false);
     const close = () => setOpen(false);
     const wrapperRef = useRef(null);
@@ -37,7 +36,7 @@ export const DropdownMenu = ({trigger, items, align='right', side='bottom'}) => 
         <div className="relative" ref={wrapperRef}>
             {triggerNode}
             {open && (
-                <div ref={menuRef} role="menu" className={`absolute ${side==='top'?'bottom-full mb-1':'top-full mt-1'} ${align==='right'?'right-0':'left-0'} z-50 min-w-[180px] p-1 ${floatingLayer}`}>
+                <div ref={menuRef} role="menu" className={`absolute top-full mt-1 ${align==='right'?'right-0':'left-0'} z-50 min-w-[180px] p-1 ${floatingLayer}`}>
                     {items.map((it,i) => it.divider ? (
                         <div key={i} role="separator" className="border-t border-slate-100 my-1"/>
                     ) : (

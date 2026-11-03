@@ -1949,9 +1949,9 @@ const Editor = () => {
                                             </div>
                                         </div>
                                         <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
-                                            {/* In video review the player's own bar has no follow switch
-                                                or speed (PlaybackSpeedMenu), so they sit up here. */}
-                                            {shouldShowVideoReview && mediaUrl && (
+                                            {/* The follow switch and the speed sit here in both review
+                                                modes, beside the switch between them. */}
+                                            {mediaUrl && (
                                                 <>
                                                     {followSwitch}
                                                     <PlaybackSpeedMenu rate={playbackRate} onChange={setPlaybackRate} lang={lang} align="right"/>
@@ -2112,8 +2112,6 @@ const Editor = () => {
                                                 <button type="button" onClick={togglePlayback} aria-label={mediaPlaying ? (lang === 'zh' ? '暂停' : 'Pause') : (lang === 'zh' ? '播放' : 'Play')} title={mediaPlaying ? (lang === 'zh' ? '暂停' : 'Pause') : (lang === 'zh' ? '播放' : 'Play')} className={iconButton('primary', 'md')}>
                                                     <SvgIcon name={mediaPlaying ? 'pause' : 'play_arrow'} className="text-lg"/>
                                                 </button>
-                                                {followSwitch}
-                                                <PlaybackSpeedMenu rate={playbackRate} onChange={setPlaybackRate} lang={lang} side="top"/>
                                                 {/* Which of the two files is playing. Both exist for a
                                                     cut task and they are different lengths, so leaving
                                                     this out makes the timeline unexplainable. */}
