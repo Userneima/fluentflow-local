@@ -1916,8 +1916,8 @@ const Editor = () => {
                         <div ref={splitContainerRef} className="flex min-h-0 flex-1 gap-0 overflow-hidden">
                             <section style={paneStyles.left} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${surfaceCard}`}>
                                 <div className="border-b border-[#e4e0e0] px-4 py-3 dark:border-white/[0.12]">
-                                    <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                                        <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                                        <div className="min-w-0 shrink-0">
                                             <div className="flex items-center gap-2">
                                                 <SvgIcon name="subject" className="text-[18px] text-[#111111] dark:text-white"/>
                                                 <h2 className="truncate font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
@@ -1948,7 +1948,15 @@ const Editor = () => {
                                                 )}
                                             </div>
                                         </div>
-                                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                                        <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+                                            {/* In video review the player's own bar has no follow switch
+                                                or speed (PlaybackSpeedMenu), so they sit up here. */}
+                                            {shouldShowVideoReview && mediaUrl && (
+                                                <>
+                                                    {followSwitch}
+                                                    <PlaybackSpeedMenu rate={playbackRate} onChange={setPlaybackRate} lang={lang} align="right"/>
+                                                </>
+                                            )}
                                             {canShowVideoReview && segments.length > 0 && (
                                                 <div className={segmentGroup}>
                                                     <button
@@ -2020,12 +2028,6 @@ const Editor = () => {
                                 onPause={(e)=>{ updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true}); setMediaPlaying(false); }}
                                 onEnded={()=>setMediaPlaying(false)}
                             />
-                            {shouldShowVideoReview && (
-                                <div className="flex shrink-0 flex-wrap items-center gap-2">
-                                    {followSwitch}
-                                    <PlaybackSpeedMenu rate={playbackRate} onChange={setPlaybackRate} lang={lang}/>
-                                </div>
-                            )}
                             <div
                                 ref={transcriptScrollRef}
                                 data-testid="transcript-scroll"
