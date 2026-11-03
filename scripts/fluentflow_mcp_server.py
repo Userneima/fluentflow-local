@@ -1013,9 +1013,13 @@ def write_note_from_cut_media(
 
 
 @tool(
-    description=("Export a completed task note. target=pdf writes a PDF with its screenshots to output_dir "
-        "(default ~/Documents/FluentFlow 笔记) and returns pdf_path; it needs Chrome or Edge on the "
-        "machine, and without one returns html_path to print instead. target=lark exports to Feishu/Lark. "
+    description=("Export a completed task note; target is required. A task with an output folder "
+        "(output_folder.path in its package) already has its PDF and md there, kept up to date: "
+        "name that folder instead of exporting another PDF. target=pdf writes a separate PDF with its "
+        "screenshots to output_dir (default ~/Documents/FluentFlow 笔记), for a task with no output "
+        "folder or when the user asks, and returns pdf_path; it needs Chrome or Edge on the "
+        "machine, and without one returns html_path to print instead. target=lark exports to Feishu/Lark, "
+        "only when the user reads in Feishu. "
         "For Feishu: without lark_export_route or "
         "folder_token the user's export settings apply (route, then folder), else auto: "
         "lark-cli when it is signed in, otherwise the user's Feishu app. The document "
@@ -1024,7 +1028,7 @@ def write_note_from_cut_media(
         "type": "object",
         "properties": {
             "task_id": {"type": "string"},
-            "target": {"type": "string", "enum": ["lark", "pdf"], "default": "lark"},
+            "target": {"type": "string", "enum": ["pdf", "lark"]},
             "output_dir": {"type": "string", "description": "pdf only: folder to write the PDF in."},
             "title": {"type": "string"},
             "lark_export_route": {
@@ -1038,12 +1042,12 @@ def write_note_from_cut_media(
             },
             "api_base": {"type": "string"},
         },
-        "required": ["task_id"],
+        "required": ["task_id", "target"],
     },
 )
 def export_result(
     task_id: str,
-    target: str = "lark",
+    target: str,
     title: str | None = None,
     lark_export_route: str | None = None,
     folder_token: str | None = None,
