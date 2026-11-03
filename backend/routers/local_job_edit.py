@@ -176,8 +176,8 @@ def update_job_summary(
 def request_note_section_times(request: Request, task_id: str) -> dict[str, Any]:
     """The editor has a note open (``?follow=on``) and some of its sections
     have no time: an older note, a heading renamed, an earlier try that
-    failed. Queues one match; the page may ask on every look. Writes only the
-    table, never the note."""
+    failed. Queues one match; the page may ask on every look. Writes the table,
+    and into the note only the pointers to moved content (note_pointers.py)."""
     from backend.core import note_section_times
 
     job = get_job(task_id, client_id=_local_client_scope(request))

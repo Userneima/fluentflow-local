@@ -86,8 +86,9 @@ material and never from memory.
    (`id`, `primary: {start, end}`, `others: [{start, end}]`) and your actual `model`.
    Seconds and H:MM:SS are accepted. Missing, duplicate or invented ids and invalid times
    are refused. If any read or save returns `stale`, fetch fresh material and judge again;
-   never bypass its version. A save changes only the time table, never the note, files
-   or record order. If the table is already `ready`, no work is needed, unless the user says the
+   never bypass its version. A save changes the time table; once the table covers the
+   note, FluentFlow adds a one-line callout where the note moved content far from the
+   recording's order (`pointers_added`), and nothing else in the note, files or record order. If the table is already `ready`, no work is needed, unless the user says the
    times are wrong or they were not judged from the material: then pass `again=true` to
    `get_agent_alignment_material` (every page) and to `save_agent_alignment`. Every section is
    asked and the whole table is replaced.

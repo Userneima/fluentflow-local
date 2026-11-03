@@ -4,7 +4,9 @@ The editor highlights the section being played and offers a time beside each
 heading. The note is reorganised by topic and rewritten, so the match is made
 by a model reading the note and the timed transcript, not by matching words.
 The table is kept in the task's result under ``note_section_times``, never in
-the md: the Obsidian and Feishu copies of the note are untouched.
+the md: the Obsidian and Feishu copies of the note are untouched. Once it
+covers the note, the only lines it puts into the note are the pointers to
+content moved far from the recording's order (``note_pointers``).
 
 When it is made: once a note is saved (a separate request, the note prompt is
 not changed), the first time an older note is opened in the editor, and again
@@ -60,6 +62,9 @@ REALIGN_ALL_SHARE = 0.5
 PART_MARKER = re.compile(r"<!--\s*第\s*\d+/\d+\s*部分.*?-->")
 HEADING = re.compile(r"^(#{2,3})\s+(.*?)\s*#*\s*$")
 FENCE = re.compile(r"^\s*(```|~~~)")
+# A pointer to content the note moved (note_pointers.py). Left out of a
+# section's body hash: adding or deleting one is not a change to align again.
+POINTER_LINE = re.compile(r"^> \[!tip\] 视频 \d+:\d{2}(?::\d{2})? 起讲的")
 
 SYSTEM = (
     "你在给一篇视频笔记的章节标出它对应录像里的哪一段。笔记是按主题重组、改写过的，"
@@ -94,7 +99,8 @@ def body_hash(text: str) -> str:
 def note_sections(markdown: str) -> list[dict[str, Any]]:
     """The note's level-2 and level-3 headings in order, each with the hash of
     its own body: the lines up to the next level-2 or level-3 heading, part
-    markers removed, trimmed. Headings in code blocks are text."""
+    markers and pointers to moved content removed, trimmed. Headings in code
+    blocks are text."""
     lines = PART_MARKER.sub("", markdown or "").splitlines()
     heads: list[tuple[int, int, str]] = []
     in_fence = False
@@ -110,7 +116,7 @@ def note_sections(markdown: str) -> list[dict[str, Any]]:
     sections = []
     for index, (number, level, heading) in enumerate(heads):
         end = heads[index + 1][0] if index + 1 < len(heads) else len(lines)
-        body = "\n".join(lines[number + 1:end]).strip()
+        body = "\n".join(line for line in lines[number + 1:end] if not POINTER_LINE.match(line)).strip()
         sections.append({"index": index, "heading": heading, "level": level, "body_hash": body_hash(body)})
     return sections
 
@@ -191,6 +197,12 @@ def missing_sections(result: dict[str, Any]) -> tuple[list[dict[str, Any]], bool
     if len(missing) > len(sections) * REALIGN_ALL_SHARE:
         return sections, True
     return missing, False
+
+
+def covers_note(result: dict[str, Any]) -> bool:
+    """The table is on the file playing now and has a row for every section."""
+    table = stored_table(result)
+    return bool(table and table.get("sections")) and _timeline_matches(table, result) and not missing_sections(result)[0]
 
 
 def sections_to_align(result: dict[str, Any], *, again: bool = False) -> tuple[list[dict[str, Any]], bool]:
@@ -374,7 +386,10 @@ def align(task_id: str, *, chat: tuple[Chat, str, str] | None = None) -> dict[st
     # A running background answer cannot replace a table claimed by an agent.
     if not _save(task_id, result, saved):
         return {"state": "skipped"}
-    return {"state": "ready", "asked": len(ask), "answered": len(spans), "whole": whole}
+    from backend.core import note_pointers
+
+    pointers = note_pointers.add_to_task(task_id)
+    return {"state": "ready", "asked": len(ask), "answered": len(spans), "whole": whole, "pointers": pointers["added"]}
 
 
 def alignment_table(result: dict[str, Any], ask: list[dict[str, Any]], spans: dict[int, dict[str, Any]], *, whole: bool) -> dict[str, Any]:

@@ -10,6 +10,9 @@
 const PART_MARKER = /<!--\s*第\s*\d+\/\d+\s*部分.*?-->/g;
 const HEADING = /^(#{2,3})\s+(.*?)\s*#*\s*$/;
 const FENCE = /^\s*(```|~~~)/;
+// A pointer to content the note moved (backend/core/note_pointers.py): not
+// part of the section's body hash, as on the service.
+const POINTER_LINE = /^> \[!tip\] 视频 \d+:\d{2}(?::\d{2})? 起讲的/;
 const encoder = new TextEncoder();
 
 // FNV-1a (32 bit) of the text's UTF-8 bytes, as 8 hex digits; the service
@@ -37,7 +40,7 @@ export const noteSections = (markdown) => {
     });
     return heads.map((head, index) => {
         const end = index + 1 < heads.length ? heads[index + 1].number : lines.length;
-        const body = lines.slice(head.number + 1, end).join('\n').trim();
+        const body = lines.slice(head.number + 1, end).filter((line) => !POINTER_LINE.test(line)).join('\n').trim();
         return {index, heading: head.heading, level: head.level, line: head.number + 1, bodyHash: bodyHash(body)};
     });
 };

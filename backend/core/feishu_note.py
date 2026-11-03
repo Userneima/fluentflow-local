@@ -146,7 +146,9 @@ def to_feishu(markdown: str, *, first_link: int = 0, divider_after: bool = False
     links: list[HeadingLink] = []
 
     def heading_link(match: re.Match[str]) -> str:
-        heading = match.group(1).strip()
+        # ``[[#章#小节]]`` is Obsidian's path through the headings: the last
+        # part is the heading linked to.
+        heading = match.group(1).split("#")[-1].strip() or match.group(1).strip()
         label = _LABEL_STRIP.sub("", (match.group(2) or heading)).strip() or heading
         placeholder = f"{PLACEHOLDER_PREFIX}{first_link + len(links) + 1}"
         links.append(HeadingLink(placeholder=placeholder, label=label, heading=heading))
