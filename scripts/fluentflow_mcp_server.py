@@ -132,6 +132,12 @@ def _require_local_edition(api_base: str) -> dict[str, Any] | None:
     return None
 
 
+# What the backend says when a task id matches nothing, in either wording, and
+# what an agent is told instead: the usual cause is an id copied short.
+_MISSING_TASK = ("Job not found", "任务不存在")
+_TASK_NOT_FOUND = "没有这个任务（task_id 要完整的 32 位）。用 list_tasks 按标题找到它的编号。"
+
+
 def _agent_request(
     method: str,
     path: str,
@@ -160,12 +166,15 @@ def _agent_request(
         message = str(exc)
         if exc.status == 401:
             message += _UNAUTHORIZED_HINT
-        return {
-            "ok": False,
-            "error": message,
-            "status": exc.status,
-            "payload": exc.payload if isinstance(exc.payload, dict) else None,
-        }
+        answer: dict[str, Any] = {"ok": False, "error": message, "status": exc.status}
+        # The backend's detail is the message above; say it once, and lift what
+        # else it carries (code, existing_task_id, ...) to where agents look.
+        detail = exc.payload.get("detail") if isinstance(exc.payload, dict) else None
+        if isinstance(detail, dict):
+            answer.update({k: v for k, v in detail.items() if k not in ("message", "detail") and k not in answer})
+        if exc.status == 404 and message in _MISSING_TASK and "/tasks/" in path:
+            answer.update(code="task_not_found", error=_TASK_NOT_FOUND)
+        return answer
 
 
 def _options(**values: Any) -> dict[str, Any]:
@@ -280,7 +289,11 @@ _TOOLS: dict[str, tuple[Any, dict[str, Any]]] = {}
 def tool(*, description: str, input_schema: dict[str, Any], meta: dict[str, Any] | None = None):
     """Register the function below as a tool, described here and nowhere else."""
     def register(func):
-        definition = {"name": func.__name__, "description": description, "inputSchema": input_schema}
+        # api_base stays a keyword of every function (tests, another port), but
+        # an agent never needs it: FLUENTFLOW_API_BASE picks the backend.
+        properties = {k: v for k, v in (input_schema.get("properties") or {}).items() if k != "api_base"}
+        schema = {**input_schema, "properties": properties} if "properties" in input_schema else input_schema
+        definition = {"name": func.__name__, "description": description, "inputSchema": schema}
         if meta:
             definition["_meta"] = meta
         _TOOLS[func.__name__] = (func, definition)
@@ -290,23 +303,14 @@ def tool(*, description: str, input_schema: dict[str, Any], meta: dict[str, Any]
 
 # Who writes the note on a media submission, said once for both submit tools.
 _MEDIA_NOTE_FLOW = (
-    "The current agent handles understanding and judgement by default, even when model keys "
-    "are configured. FluentFlow transcribes the original, then YOU decide what to cut "
-    "(breath gaps, waiting, sound checks, repeated talk) with get_agent_cut_material, "
-    "save_agent_cut and save_agent_cut_report. It renders the cut and moves the transcript "
-    "onto its timeline. Defaults are cut_judge=agent and skip_summary=true: wait_task "
-    "returns agent_cut while you must judge; after done, write from get_agent_note_material "
-    "and save_agent_note, checking coverage yourself. Never wait for Claude to fail first. "
-    "intelligence=fluentflow delegates to configured background models only when you cannot "
-    "do the work, failed, or the user requested it; tell the user why and which allowance "
-    "or API key is used. Background processing may use an Anthropic API key, a locally "
-    "opted-in Claude subscription, or the configured text model. Only apply when a text "
-    "model writes the note: note_mode, prompt_preset, system_prompt. Speaker separation "
-    "and Feishu settings follow the saved choices. Correcting the transcript (on-screen "
-    "subtitles, word list) and translating English subtitles are yours too: once the task is "
-    "done, wait_task's next names them; use get_agent_correction_material and "
-    "save_agent_correction before the note. FluentFlow never silently runs background AI "
-    "for them. Returns at once; follow with wait_task."
+    "The current agent does the judging by default, even when model keys are configured; never "
+    "wait for Claude to fail first. FluentFlow transcribes the original, then YOU decide what to cut "
+    "(breath gaps, waiting, sound checks, repeated talk) and write the note. Defaults are "
+    "cut_judge=agent and skip_summary=true. Returns at once; follow with wait_task, which comes back "
+    "whenever you have something to do (judge the cut, correct the transcript, write the note from "
+    "get_agent_note_material) and names the tools in next. intelligence=fluentflow hands the work to "
+    "the configured background models: only when you cannot do it, failed, or the user asked, and "
+    "tell the user whose allowance or API key it uses."
 )
 
 _INTELLIGENCE_SCHEMA = {
@@ -328,9 +332,7 @@ _TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's fr
 
 @tool(
     description=("Submit one audio or video file that stays where it is, by absolute path "
-        "on this machine. Local edition only; the backend accepts it from localhost "
-        "only, and this tool says so plainly when the other edition is the one "
-        "answering. One file per call — loop for a folder. "
+        "on this machine. One file per call; loop for a folder. "
         + _MEDIA_NOTE_FLOW),
     input_schema={
         "type": "object",
@@ -744,11 +746,24 @@ def cancel_task(task_id: str, api_base: str | None = None, client_id: str | None
         "ref (to turn it around with flip_cut_decision) and its key (to agree with it with "
         "answer_cut_decisions); the section with to_judge=true is what the user should look at; "
         "user_changes are the user's earlier turnarounds (undo one with undo_cut_change by its index); "
-        "agreed lists the keys already agreed. Refused with code no_report for a task with no report."),
-    input_schema=_TASK_ONLY,
+        "agreed lists the keys already agreed. Sections the page folds away come as folded=true with "
+        "item_count only; pass section=<its title> to read that one in full. Refused with code no_report "
+        "for a task with no report."),
+    input_schema={
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "section": {"type": "string"}},
+        "required": ["task_id"],
+    },
 )
-def get_cut_report(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/cut-report", api_base=api_base, client_id=client_id)
+def get_cut_report(
+    task_id: str, section: str | None = None, api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    from urllib.parse import urlencode
+
+    path = f"/agent/v1/tasks/{task_id}/cut-report"
+    if section:
+        path += "?" + urlencode({"section": section})
+    return _agent_request("GET", path, api_base=api_base, client_id=client_id)
 
 
 @tool(
@@ -1211,7 +1226,7 @@ def get_agent_correction_material(
         "new text in a subtitle line or backed by the word list or a reason; applied lists what went in, "
         "refused what did not hold. Each change goes into every copy of the transcript, the subtitle files and "
         "the output folder, recorded with by=agent and your model, and is undone like the background's "
-        "(revert_subtitle_corrections, revert_glossary_corrections). Translations replace the bilingual "
+        "(revert_transcript_corrections). Translations replace the bilingual "
         "lines of the sentences they cover; the rest keep theirs (the background's included), and a sentence "
         "the user edited keeps its English. A note already written is not rewritten. If a sentence of the "
         "page changed since "
@@ -1648,12 +1663,13 @@ def apply_note_rule(
     description=("Find tasks: newest first, or only those whose title, note title (the note's first heading) "
         "or file name contains query. Use it to find which task a screenshot of a note came from: "
         "search a few characters of the title in the screenshot. Returns task_id, title, note_title, "
-        "created_at, status, has_note."),
+        "created_at, status, has_note; at most 100 a call, and has_more=true when more match (narrow the "
+        "query)."),
     input_schema={
         "type": "object",
         "properties": {
             "query": {"type": "string"},
-            "limit": {"type": "integer", "default": 20},
+            "limit": {"type": "integer", "default": 20, "maximum": 100},
             "api_base": {"type": "string"},
         },
     },
@@ -1769,71 +1785,93 @@ def restore_note_version(
     )
 
 
-@tool(
-    description=("Words in the task's transcript that FluentFlow replaced from the subtitles burned into the "
-        "video picture, right after transcription and before the note was written. Each has an id, the "
-        "time, from (what the transcript said), to (the subtitle's spelling), and the subtitle line it "
-        "rests on; by=agent with the model when the agent made it (save_agent_correction). "
-        "subtitle_correction says how the step went: skipped with its reason (no subtitles in the picture, "
-        "no text recognition on this machine, no picture, no model, agent_required when it was left to the "
-        "agent), partial while the agent has pages left, no_changes or completed. "
-        "Show the user these when they say a name or term in the transcript or note was changed wrongly."),
-    input_schema={
-        "type": "object",
-        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-        "required": ["task_id"],
-    },
-)
-def list_subtitle_corrections(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/subtitle-corrections", api_base=api_base, client_id=client_id)
+# Where each source's records live; written out whole so the route check in
+# tests/test_agent_surface.py sees every path a tool calls.
+_CORRECTION_ROUTES = {
+    "subtitles": "/agent/v1/tasks/{task_id}/subtitle-corrections",
+    "glossary": "/agent/v1/tasks/{task_id}/glossary-corrections",
+}
+_CORRECTION_REVERTS = {
+    "subtitles": "/agent/v1/tasks/{task_id}/subtitle-corrections/revert",
+    "glossary": "/agent/v1/tasks/{task_id}/glossary-corrections/revert",
+}
+
+
+def _correction_route(source: str, routes: dict[str, str], task_id: str) -> str | None:
+    template = routes.get(str(source or "").strip().lower())
+    return template.format(task_id=task_id) if template else None
+
+
+def _bad_source(source: Any) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "code": "bad_source",
+        "error": f"source 只能是 subtitles（画面字幕修正）或 glossary（词表和上下文纠正），收到的是 {source!r}。",
+    }
 
 
 @tool(
-    description=("Undo subtitle corrections: each named one (ids from list_subtitle_corrections, or all when ids "
-        "is empty) goes back to what the transcript said. Ask the user first. Refused with code "
-        "task_busy while the task is still transcribing, cutting or writing its note: wait for it to "
-        "finish. The task's transcript (every copy of it), "
-        "its subtitle files and the output folder follow; a note already written is not rewritten "
-        "(regenerate_note does that if the user wants it). not_found lists ids whose sentence was "
-        "edited since and could not be found."),
+    description=("Words FluentFlow changed in the task's transcript after transcription and before the note. "
+        "source=subtitles: replaced from the subtitles burned into the picture; each has from (what the "
+        "transcript said), to (the subtitle's spelling) and the subtitle line it rests on; "
+        "subtitle_correction says how that step went (skipped with its reason, partial while the agent has "
+        "pages left, no_changes, completed). source=glossary: corrected from the series' word list "
+        "(FluentFlow 校正文档.md in the recording's folder or above) and the surrounding sentences; each has "
+        "sentence (its number in the transcript now; null when edited since), from, to, basis (glossary: "
+        "the word list's spelling, entry_ref indexes the line in entries; context: why says how) and the "
+        "sentence before and after the change; glossary_correction says how that step went. Every record "
+        "has an id and the time; by=agent with the model when the agent made it (save_agent_correction). "
+        "Only corrections still in force are listed; reverted_count says how many were undone, and "
+        "include_reverted=true lists those too. Show the user these when they say a name or term in the "
+        "transcript or note was changed wrongly."),
     input_schema={
         "type": "object",
         "properties": {
             "task_id": {"type": "string"},
-            "ids": {"type": "array", "items": {"type": "string"}},
-            "api_base": {"type": "string"},
+            "source": {"type": "string", "enum": ["subtitles", "glossary"]},
+            "include_reverted": {"type": "boolean", "default": False},
         },
-        "required": ["task_id"],
+        "required": ["task_id", "source"],
     },
 )
-def revert_subtitle_corrections(
-    task_id: str, ids: list[str] | None = None, api_base: str | None = None, client_id: str | None = None,
+def list_transcript_corrections(
+    task_id: str, source: str, include_reverted: bool = False,
+    api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    return _agent_request(
-        "POST", f"/agent/v1/tasks/{task_id}/subtitle-corrections/revert",
-        api_base=api_base, client_id=client_id, payload={"ids": ids or []},
-    )
+    path = _correction_route(source, _CORRECTION_ROUTES, task_id)
+    if path is None:
+        return _bad_source(source)
+    if include_reverted:
+        path += "?include_reverted=true"
+    return _agent_request("GET", path, api_base=api_base, client_id=client_id)
 
 
 @tool(
-    description=("Words in the task's transcript that FluentFlow corrected from the series' word list "
-        "(FluentFlow 校正文档.md in the recording's folder or above) and the surrounding sentences, "
-        "after transcription (and after the subtitle check) and before the note was written. Each has an "
-        "id, the time, sentence (its number in the transcript now; null when that sentence was edited "
-        "since), from, to, basis (glossary: the word list's spelling, entry is that line; context: the "
-        "sentences around it decided, why says how), by=agent with the model when the agent made it "
-        "(save_agent_correction), and the sentence before and after. "
-        "glossary_correction says how the step went: skipped with its reason (no transcript, no model), "
-        "failed with the model's error, no_changes or completed, with counts by basis, the channel "
-        "(subscription or a key) and the seconds it took."),
+    description=("Undo transcript corrections of one source (subtitles or glossary): each named one (ids from "
+        "list_transcript_corrections with the same source, or all of that source when ids is empty) goes "
+        "back to what the transcript said, in every copy of the transcript, the subtitle files and the "
+        "output folder. Ask the user first. Refused with code task_busy while the task is still "
+        "transcribing, cutting or writing its note: wait for it to finish. A note already written is not "
+        "rewritten (regenerate_note does that if the user wants it). not_found lists ids whose sentence "
+        "was edited since and could not be found."),
     input_schema={
         "type": "object",
-        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
-        "required": ["task_id"],
+        "properties": {
+            "task_id": {"type": "string"},
+            "source": {"type": "string", "enum": ["subtitles", "glossary"]},
+            "ids": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["task_id", "source"],
     },
 )
-def list_glossary_corrections(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    return _agent_request("GET", f"/agent/v1/tasks/{task_id}/glossary-corrections", api_base=api_base, client_id=client_id)
+def revert_transcript_corrections(
+    task_id: str, source: str, ids: list[str] | None = None,
+    api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    path = _correction_route(source, _CORRECTION_REVERTS, task_id)
+    if path is None:
+        return _bad_source(source)
+    return _agent_request("POST", path, api_base=api_base, client_id=client_id, payload={"ids": ids or []})
 
 
 @tool(
@@ -1842,7 +1880,7 @@ def list_glossary_corrections(task_id: str, api_base: str | None = None, client_
         "found for the recording's folder (with no word list, only what the context makes certain is "
         "changed). Sentences the user edited in the editor are left alone. Each change replaces a misheard "
         "word, never a sentence; the new changes join the task's records and undo the same way "
-        "(list_glossary_corrections, revert_glossary_corrections). The transcript, its subtitle files and "
+        "(list_transcript_corrections, revert_transcript_corrections with source=glossary). The transcript, its subtitle files and "
         "the output folder follow; a note already written is not rewritten (regenerate_note does that if "
         "the user wants it). Uses the Claude subscription first when this machine opted into it, else the "
         "configured text model; takes a minute or two for an hour of recording. Refused with code "
@@ -1858,30 +1896,6 @@ def run_glossary_correction(task_id: str, api_base: str | None = None, client_id
     return _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/glossary-corrections/run",
         api_base=api_base, client_id=client_id, payload={}, timeout=900,
-    )
-
-
-@tool(
-    description=("Undo glossary corrections: each named one (ids from list_glossary_corrections, or all when ids "
-        "is empty) goes back to what the transcript said, in every copy of the transcript, the subtitle "
-        "files and the output folder. Ask the user first. Refused with code task_busy while the task is "
-        "still being processed. not_found lists ids whose sentence was edited since and could not be found."),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "task_id": {"type": "string"},
-            "ids": {"type": "array", "items": {"type": "string"}},
-            "api_base": {"type": "string"},
-        },
-        "required": ["task_id"],
-    },
-)
-def revert_glossary_corrections(
-    task_id: str, ids: list[str] | None = None, api_base: str | None = None, client_id: str | None = None,
-) -> dict[str, Any]:
-    return _agent_request(
-        "POST", f"/agent/v1/tasks/{task_id}/glossary-corrections/revert",
-        api_base=api_base, client_id=client_id, payload={"ids": ids or []},
     )
 
 
@@ -1968,6 +1982,39 @@ def _result(payload: Any) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
 
 
+def _for_agent(value: Any) -> Any:
+    """The backend's answers name the package by its HTTP path, for scripts;
+    an agent reads it with a tool, so say that instead."""
+    if isinstance(value, dict):
+        return {
+            ("package" if key == "package_url" else key): (
+                "get_task_package" if key == "package_url" else _for_agent(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_for_agent(item) for item in value]
+    return value
+
+
+def _bad_argument(name: str, func: Any, args: dict[str, Any]) -> dict[str, Any] | None:
+    """An integer or boolean argument the agent sent as something else, said
+    plainly instead of a Python traceback from deep in the call."""
+    schema = (_TOOLS.get(name, (None, {}))[1].get("inputSchema") or {}).get("properties") or {}
+    for key, value in args.items():
+        kind = (schema.get(key) or {}).get("type")
+        if value is None:
+            continue
+        if kind == "integer" and not (isinstance(value, int) and not isinstance(value, bool)):
+            if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+                args[key] = int(value)
+                continue
+            return {"ok": False, "code": "bad_argument", "error": f"{key} 要传整数，收到的是 {value!r}。"}
+        if kind == "boolean" and not isinstance(value, bool):
+            return {"ok": False, "code": "bad_argument", "error": f"{key} 要传 true 或 false，收到的是 {value!r}。"}
+    return None
+
+
 def _call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
     func = TOOL_FUNCTIONS.get(name)
     if func is None:
@@ -1975,7 +2022,7 @@ def _call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
     args = arguments if isinstance(arguments, dict) else {}
     signature = inspect.signature(func)
     accepted = {key: value for key, value in args.items() if key in signature.parameters}
-    payload = func(**accepted)
+    payload = _bad_argument(name, func, accepted) or _for_agent(func(**accepted))
     result = _result(payload)
     if isinstance(payload, dict) and payload.get("ok") is False:
         result["isError"] = True

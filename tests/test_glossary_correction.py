@@ -518,9 +518,9 @@ def test_the_mcp_tools_reach_these_routes(monkeypatch):
     calls: list[tuple] = []
     monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
 
-    mcp.list_glossary_corrections("t1")
+    mcp.list_transcript_corrections("t1", "glossary")
     mcp.run_glossary_correction("t1")
-    mcp.revert_glossary_corrections("t1", ["a"])
+    mcp.revert_transcript_corrections("t1", "glossary", ["a"])
 
     assert calls == [
         ("GET", "/agent/v1/tasks/t1/glossary-corrections", None),
@@ -528,7 +528,7 @@ def test_the_mcp_tools_reach_these_routes(monkeypatch):
         ("POST", "/agent/v1/tasks/t1/glossary-corrections/revert", {"ids": ["a"]}),
     ]
     names = {tool["name"] for tool in mcp.TOOL_DEFINITIONS}
-    assert {"list_glossary_corrections", "run_glossary_correction", "revert_glossary_corrections"} <= names
+    assert {"list_transcript_corrections", "run_glossary_correction", "revert_transcript_corrections"} <= names
 
 
 # ── in the pipeline ───────────────────────────────────────────────────────

@@ -487,6 +487,8 @@ def list_agent_tasks(request: Request, query: str = "", limit: int = 20) -> dict
     searched and both are returned for the agent to judge.
     """
     needle = query.strip().lower()
+    # At most 100 a call; has_more says a narrower query would find the rest.
+    cap = max(1, min(int(limit or 20), 100))
     found = []
     for job in list_jobs(limit=None, client_id=_local_client_scope(request), include_result=True):
         result = job.get("result") if isinstance(job.get("result"), dict) else {}
@@ -504,9 +506,10 @@ def list_agent_tasks(request: Request, query: str = "", limit: int = 20) -> dict
             "status": job.get("status"),
             "has_note": bool(note.strip()),
         })
-        if len(found) >= max(1, min(int(limit or 20), 100)):
+        if len(found) > cap:
             break
-    return {"ok": True, "tasks": found}
+    more = len(found) > cap
+    return {"ok": True, "tasks": found[:cap], "has_more": more}
 
 
 @router.get("/tasks/{task_id}")
@@ -791,8 +794,8 @@ async def _async_action(call):
 
 
 @router.get("/tasks/{task_id}/cut-report")
-def get_agent_cut_report(request: Request, task_id: str) -> dict[str, Any]:
-    return _action(lambda: task_actions.cut_report(task_id, _local_client_scope(request)))
+def get_agent_cut_report(request: Request, task_id: str, section: str = "") -> dict[str, Any]:
+    return _action(lambda: task_actions.cut_report(task_id, _local_client_scope(request), section or None))
 
 
 @router.post("/tasks/{task_id}/cut-report/flip")
@@ -1124,15 +1127,40 @@ def restore_note_version(
     )
 
 
+def _corrections_view(records: list[Any], include_reverted: bool) -> dict[str, Any]:
+    """What an agent reads of a task's correction records: the ones still in
+    force unless it asks for the reverted too (half the records of a long
+    recording were undone and would double its size), and each word-list line
+    once, in ``entries``, with the record pointing at it by ``entry_ref``."""
+    kept = [r for r in records if isinstance(r, dict) and (include_reverted or not r.get("reverted"))]
+    entries: list[str] = []
+    shown = []
+    for record in kept:
+        entry = record.get("entry")
+        if isinstance(entry, str) and entry:
+            if entry not in entries:
+                entries.append(entry)
+            record = {key: value for key, value in record.items() if key != "entry"}
+            record["entry_ref"] = entries.index(entry)
+        shown.append(record)
+    view: dict[str, Any] = {
+        "corrections": shown,
+        "reverted_count": sum(1 for r in records if isinstance(r, dict) and r.get("reverted")),
+    }
+    if entries:
+        view["entries"] = entries
+    return view
+
+
 @router.get("/tasks/{task_id}/subtitle-corrections")
-def list_subtitle_corrections(request: Request, task_id: str) -> dict[str, Any]:
+def list_subtitle_corrections(request: Request, task_id: str, include_reverted: bool = False) -> dict[str, Any]:
     """The words fixed from the subtitles in the picture, and how the step went."""
     result = _job_for_request(request, task_id).get("result") or {}
     return {
         "ok": True,
         "task_id": task_id,
         "subtitle_correction": result.get("subtitle_correction"),
-        "corrections": result.get("subtitle_corrections") or [],
+        **_corrections_view(result.get("subtitle_corrections") or [], include_reverted),
     }
 
 
@@ -1193,14 +1221,14 @@ def _glossary_chat() -> tuple[Any, str | None]:
 
 
 @router.get("/tasks/{task_id}/glossary-corrections")
-def list_glossary_corrections(request: Request, task_id: str) -> dict[str, Any]:
+def list_glossary_corrections(request: Request, task_id: str, include_reverted: bool = False) -> dict[str, Any]:
     """The words fixed from the word list and the context, and how the step went."""
     result = _job_for_request(request, task_id).get("result") or {}
     return {
         "ok": True,
         "task_id": task_id,
         "glossary_correction": result.get(glossary_correction.META),
-        "corrections": glossary_correction.listing(result),
+        **_corrections_view(glossary_correction.listing(result), include_reverted),
     }
 
 

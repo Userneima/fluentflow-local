@@ -69,8 +69,8 @@ changed, `list_note_versions` shows every kept version with what
 replaced it, `read_note_version` reads one, and `restore_note_version` (after the user
 agrees) puts it back everywhere the note is kept. In the delegated background flow FluentFlow corrects
 misheard names and terms in the transcript from the subtitles in the picture and from the
-series' word list (`FluentFlow 校正文档.md`); `list_subtitle_corrections` and
-`list_glossary_corrections` show each change, the matching revert tools undo it after the
+series' word list (`FluentFlow 校正文档.md`); `list_transcript_corrections` (source
+`subtitles` or `glossary`) shows each change, `revert_transcript_corrections` undoes it after the
 user agrees, and `run_glossary_correction` runs the word-list step again on a finished task.
 On agent submissions those corrections and the translation of English subtitles are the agent's:
 once the task is done, `wait_task` names them, and `get_agent_correction_material` /

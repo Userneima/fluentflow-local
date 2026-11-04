@@ -62,8 +62,11 @@ def test_submit_transcript_returns_at_once_and_passes_the_note_settings(monkeypa
 def test_descriptions_say_what_the_tools_really_do():
     for name in ("submit_local_media", "submit_video_link"):
         text = _description(name)
-        assert "only apply when a text model writes the note" in text
-        assert "anthropic api key" in text and "subscription" in text
+        # Which options only a text model reads is said on each of them, not twice.
+        props = next(i for i in mcp.TOOL_DEFINITIONS if i["name"] == name)["inputSchema"]["properties"]
+        for option in ("note_mode", "prompt_preset", "system_prompt"):
+            assert "only used when a text model writes the note" in props[option]["description"].lower()
+        assert "intelligence=fluentflow" in text and "allowance or api key" in text
     assert "original recording" in _description("write_note_from_cut_media")
     assert "new task" in _description("retry_task") and "completed" in _description("retry_task")
     noise = next(i for i in mcp.TOOL_DEFINITIONS if i["name"] == "debreath_task")["inputSchema"]["properties"]["noise_db"]

@@ -260,7 +260,8 @@ def _not_waiting(state: dict[str, Any]) -> str:
     if status == DECIDED or status == DONE:
         return "这个任务的剪辑已经判断过了。"
     if status == FALLBACK:
-        return f"这个任务已经改由 FluentFlow 自己判断：{state.get('fallback_reason') or ''}".strip()
+        reason = str(state.get("fallback_reason") or "").strip()
+        return "这个任务现在不需要判断剪辑：它当时改由 FluentFlow 自己判断了" + (f"（{reason}）。" if reason else "。")
     return "这个任务没有在等你判断剪辑（提交时 cut_judge 设为 agent，或 FluentFlow 没有判断模型时才会等）。"
 
 

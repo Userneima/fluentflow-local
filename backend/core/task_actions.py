@@ -168,10 +168,14 @@ def answer_cut_decisions(task_id: str, keys: list[str], verdict: str,
         raise Refused(str(exc), "cut_report") from exc
 
 
-def cut_report(task_id: str, client_id: Optional[str] = None) -> dict[str, Any]:
+def cut_report(task_id: str, client_id: Optional[str] = None, section: Optional[str] = None) -> dict[str, Any]:
     """The processing report as an agent reads it: every decision with the
     ``ref`` that turns it around and the ``key`` that agrees with it, the
-    user's earlier changes (``index`` undoes one) and the answers so far."""
+    user's earlier changes (``index`` undoes one) and the answers so far.
+
+    The sections the page folds away (其他处理 held 194 of 203 items, 82% of
+    a long recording's report) come as a title and a count; ``section`` names
+    one to read in full."""
     job = _job(task_id, client_id, "任务不存在")
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     survey = debreath_job.debreath_state(result).get("survey") or {}
@@ -183,11 +187,7 @@ def cut_report(task_id: str, client_id: Optional[str] = None) -> dict[str, Any]:
         "ok": True,
         "task_id": task_id,
         "summary": report.get("summary"),
-        "sections": [
-            {"title": section.get("title"), "to_judge": bool(section.get("judge")),
-             "items": [{k: item.get(k) for k in keep if item.get(k) is not None} for item in section.get("items") or []]}
-            for section in report.get("sections") or []
-        ],
+        "sections": [_report_section(part, keep, section) for part in report.get("sections") or []],
         "user_changes": [
             {"index": index, **{k: change.get(k) for k in ("kind", "start", "end", "model_said", "user_said", "at", "undone_at")}}
             for index, change in enumerate(survey.get("user_changes") or [])
@@ -195,6 +195,15 @@ def cut_report(task_id: str, client_id: Optional[str] = None) -> dict[str, Any]:
         "agreed": sorted((survey.get("verdicts") or {}).keys()),
         "rerendering": bool(survey.get("rerendering")),
     }
+
+
+def _report_section(part: dict[str, Any], keep: tuple[str, ...], wanted: Optional[str]) -> dict[str, Any]:
+    items = part.get("items") or []
+    shown: dict[str, Any] = {"title": part.get("title"), "to_judge": bool(part.get("judge"))}
+    folded = bool(part.get("folded")) and not part.get("judge")
+    if folded and (wanted or "").strip() != str(part.get("title") or ""):
+        return {**shown, "folded": True, "item_count": len(items)}
+    return {**shown, "items": [{k: item.get(k) for k in keep if item.get(k) is not None} for item in items]}
 
 
 # ── cancel, stop, carry on ───────────────────────────────────────────────────

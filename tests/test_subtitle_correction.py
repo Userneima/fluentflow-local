@@ -330,15 +330,18 @@ def test_the_mcp_tools_reach_these_routes(monkeypatch):
     calls: list[tuple] = []
     monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
 
-    mcp.list_subtitle_corrections("t1")
-    mcp.revert_subtitle_corrections("t1", ["a"])
+    mcp.list_transcript_corrections("t1", "subtitles")
+    mcp.list_transcript_corrections("t1", "subtitles", include_reverted=True)
+    mcp.revert_transcript_corrections("t1", "subtitles", ["a"])
 
     assert calls == [
         ("GET", "/agent/v1/tasks/t1/subtitle-corrections", None),
+        ("GET", "/agent/v1/tasks/t1/subtitle-corrections?include_reverted=true", None),
         ("POST", "/agent/v1/tasks/t1/subtitle-corrections/revert", {"ids": ["a"]}),
     ]
+    assert mcp.list_transcript_corrections("t1", "screen")["code"] == "bad_source"
     names = {tool["name"] for tool in mcp.TOOL_DEFINITIONS}
-    assert {"list_subtitle_corrections", "revert_subtitle_corrections"} <= names
+    assert {"list_transcript_corrections", "revert_transcript_corrections"} <= names
 
 
 # ── in the pipeline ───────────────────────────────────────────────────────
