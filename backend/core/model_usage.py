@@ -354,14 +354,14 @@ def _admit(made: Call, at: datetime) -> None:
     found = (prices().get("providers") or {}).get(made.provider)
     currency = str(found.get("currency") or "") if isinstance(found, dict) else ""
     with _budget_lock:
-        over = [kind for kind, limit in limits.items()
+        over = [(kind, limit) for kind, limit in limits.items()
                 if kind in ("calls", currency) and _spent.get(kind, 0.0) >= limit]
         if not over:
             _spent["calls"] += 1
             return
         where = current()
         _refused_in.add((where.task_id, where.step))
-    used = "、".join(f"{kind} {_spent.get(kind, 0):g}/{limits[kind]:g}" for kind in over)
+    used = "、".join(f"{kind} {_spent.get(kind, 0):g}/{limit:g}" for kind, limit in over)
     _record(made, at, 0.0, ok=False, error=f"{BUDGET_EXCEEDED}（{used}）")
     raise BudgetExceeded(f"{BUDGET_EXCEEDED}（{used}），这次调用没有发出。")
 

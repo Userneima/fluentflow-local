@@ -787,14 +787,15 @@ def _find(
         return exact[0]
     if start is None:
         return None
-    best: tuple[float, int] | None = None
+    best_index: int | None = None
+    best_distance = math.inf
     for i, seg in enumerate(segments):
         if record["to"] not in _text(seg) or (trusted is not None and not trusted(_text(seg))):
             continue
         distance = abs((_seconds(seg.get("start")) or 0.0) - start)
-        if distance <= 2.0 and (best is None or distance < best[0]):
-            best = (distance, i)
-    return best[1] if best else None
+        if distance <= 2.0 and distance < best_distance:
+            best_index, best_distance = i, distance
+    return best_index
 
 
 def bilingual_line(
