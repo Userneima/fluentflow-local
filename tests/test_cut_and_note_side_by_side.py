@@ -36,6 +36,23 @@ from test_visual_note_job import TASK, job_store, no_ambient_key, vn_result  # n
 RANGES = cut_timeline.kept_ranges({"keeps": [{"start": 0, "end": 10}, {"start": 20, "end": 100}]})
 
 
+@pytest.fixture(autouse=True)
+def _no_steps_recorded_yet():
+    """Each scenario here is a task running for the first time. TASK is shared
+    with test_visual_note_job and test_agent_note, whose steps land in the same
+    test database; a note step left there as done made the flow carry the
+    task on without writing the note (decision 6.42), so these failed only
+    when that file ran first, as it does in CI's alphabetical order."""
+    import sqlite3
+
+    from backend.core import job_store as store
+
+    store.ensure_job_db()
+    with sqlite3.connect(store.DEFAULT_DB_PATH) as conn:
+        conn.execute("DELETE FROM job_steps WHERE task_id = ? AND step_type LIKE ?",
+                     (TASK, store.TASK_STEP_PREFIX + "%"))
+
+
 # ── the flow ───────────────────────────────────────────────────────────────
 
 class Flow:

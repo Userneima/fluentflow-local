@@ -154,10 +154,12 @@ class WholeTask:
 
 
 def _patch(task_id, **changes):
+    # Only the changed fields, as the real steps write (save_result_changes):
+    # the cut and the note run side by side, and putting back the whole
+    # result read earlier let the cut erase the note just saved.
     job = job_store.get_job(task_id) or {}
-    result = dict(job.get("result") or {})
-    result.update(changes)
-    job_store.update_job_result(task_id, result)
+    before = dict(job.get("result") or {})
+    job_store.save_result_changes(task_id, before, {**before, **changes})
 
 
 def _run_whole_task(monkeypatch, task_id, *, side_by_side=False):
