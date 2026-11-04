@@ -222,7 +222,14 @@ def test_mcp_tools_use_authenticated_routes_and_report_stale(task, monkeypatch):
     no_version = client.post(path.removesuffix("/material"), json={"sections": []}, headers=headers)
     assert no_version.status_code == 409 and no_version.json()["detail"]["code"] == "stale"
     info = client.get(f"/agent/v1/tasks/{task}", headers=headers).json()
-    assert info["task"]["note_alignment"]["state"] == "ready"
+    package = client.get(f"/agent/v1/tasks/{task}/package", headers=headers).json()
+    rows = len(job(task)["result"][times.RESULT_KEY]["sections"])
+    # Agents are told whether sections have times, not the rows: the rows
+    # were nine tenths of get_task on a long note.
+    for brief in (info["task"]["note_alignment"], package["note_alignment"]):
+        assert brief["state"] == "ready"
+        assert brief["section_count"] == rows and brief["missing"] == 0
+        assert "sections" not in brief and "timeline" not in brief
 
 
 def test_background_that_was_already_running_cannot_overwrite_agent_table(task):

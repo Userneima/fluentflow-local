@@ -114,7 +114,7 @@ def _task_package_response(job: dict[str, Any]) -> dict[str, Any]:
     package["step_timings"] = task_steps.timings(job, task_steps.steps_of([task_id]).get(task_id, []))
     # The version of the note in this package: what a save of an edit to it names.
     package["note_version"] = (job.get("result") or {}).get("note_version")
-    package["note_alignment"] = note_section_times.status(job.get("result") or {})
+    package["note_alignment"] = note_section_times.brief(job.get("result") or {})
     return package
 
 
@@ -531,7 +531,7 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             # the note, so a change made elsewhere meanwhile is not replaced.
             "note_version": (job.get("result") or {}).get("note_version"),
             "transcript_version": (job.get("result") or {}).get("transcript_version"),
-            "note_alignment": note_section_times.status(job.get("result") or {}),
+            "note_alignment": note_section_times.brief(job.get("result") or {}),
             # Parts an agent saved before the note was whole: who carries on.
             "note_draft": agent_note.unfinished_draft(task_id),
             "intelligence": (job.get("result") or {}).get("intelligence"),

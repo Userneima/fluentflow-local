@@ -32,7 +32,7 @@ def _job(**overrides) -> dict:
 def test_local_package_has_no_cloud_sections():
     package = build_agent_task_package(_job())
 
-    assert package["agent_task_package_version"] == "2"
+    assert package["agent_task_package_version"] == "3"
     assert "usage" not in package  # no quota concepts locally
     assert "execution" not in package  # no desktop-sync concepts locally
     assert package["task"]["task_id"] == "t-1"

@@ -233,6 +233,28 @@ def _watching(answer: dict[str, Any], task_id: Any, api_base: str | None, client
     return answer
 
 
+# Codex cuts a tool result at about 10,000 tokens whatever the tool declares
+# (``anthropic/maxResultSizeChars`` is read by Claude Code only): in its
+# records of 2026-10 the note material of a 15-minute recording was cut. These
+# two fields go first, the part a cut keeps, so the agent knows how long the
+# whole answer is and how to read the rest.
+_CUT_OFF_HINT = (
+    "If your host shortened this result (a truncation notice, or fewer characters than result_chars), "
+    "read the rest from the saved or stored full result in slices before you judge or write, or call "
+    "again with small_parts=true where the tool takes it."
+)
+
+
+def _with_length(answer: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(answer, dict) or answer.get("ok") is False:
+        return answer
+    rest = {key: value for key, value in answer.items() if key not in {"result_chars", "if_cut_off"}}
+    shaped = {"result_chars": 0, "if_cut_off": _CUT_OFF_HINT, **rest}
+    for _ in range(3):  # the count's own digits change the count; settles at once
+        shaped["result_chars"] = len(json.dumps(shaped, ensure_ascii=False))
+    return shaped
+
+
 _CUT_JUDGE_SCHEMA = {
     "type": "string",
     "enum": ["auto", "agent", "fluentflow"],
@@ -508,6 +530,8 @@ def submit_transcript(
         "resume_task would carry it on from. note_version "
         "is the version of the note now: read it before you change the note, and pass it as "
         "base_version when you save (save_agent_note, regenerate_note, write_note_from_cut_media). "
+        "note_alignment says whether the note's sections have playback times: state, section_count, "
+        "missing (how many have none). "
         "model_usage is what the task's model calls used: total, then steps (each with label, "
         "models, calls, input_tokens, cached_input_tokens, output_tokens, cost and its parts in "
         "items). cost maps a currency to an amount (CNY for DeepSeek, USD for Anthropic), worked "
@@ -596,12 +620,16 @@ def wait_task(
         "overlapping when steps ran side by side. Answer the user's \"how long did it take\" from it. "
         "The transcript is described "
         "(chars, preview, file path), not included; to write a note use get_agent_note_material, "
-        "which hands it over in parts."),
+        "which hands it over in parts. note_alignment says whether the note's sections have times "
+        "(state, section_count, missing); the times themselves come with get_agent_alignment_material."),
     input_schema={
         "type": "object",
         "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
         "required": ["task_id"],
     },
+    # The whole note is in it: 76,371 characters on a 3.5-hour interview,
+    # which Claude Code would otherwise save to a file past 50,000.
+    meta={"anthropic/maxResultSizeChars": 500_000},
 )
 def get_task_package(
     task_id: str,
@@ -1236,9 +1264,11 @@ def save_agent_correction(
         "and have it fetch, write and save. It works as soon as wait_task returns agent_note ready, "
         "while the cut video still renders: the transcript is already on the cut video's clock, the "
         "frames are taken at the moments the cut will show, and both stay the same once it is "
-        "rendered, so the note is saved as usual. If the result came back truncated or saved to "
-        "a file because it was too large for one tool result, call again with small_parts=true: "
-        "the recording then comes in total_parts parts to fetch, write and save one at a time. "
+        "rendered, so the note is saved as usual. result_chars, first in the answer, is its whole "
+        "length: if your host cut the result short (Codex does at about 10,000 tokens) or saved it "
+        "to a file, read the rest from the stored result in slices before writing, or call again "
+        "with small_parts=true: the recording then comes in total_parts parts to fetch, write and "
+        "save one at a time. "
         "The first call for a video extracts frames (up to a minute). note_version is the task's "
         "note as you read it: pass it to save_agent_note as base_version."),
     input_schema={
@@ -1266,14 +1296,14 @@ def get_agent_note_material(
     refusal = _require_local_edition(normalize_api_base(api_base))
     if refusal is not None:
         return refusal
-    return _agent_request(
+    return _with_length(_agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/agent-note/material",
         api_base=api_base,
         client_id=client_id,
         payload={"part": int(part or 1), "small_parts": bool(small_parts)},
         timeout=300,
-    )
+    ))
 
 
 @tool(
@@ -1380,7 +1410,9 @@ def get_agent_note_part(
         "(screenshots of the long gaps whose picture moved, as local paths; open them before deciding "
         "those gaps). Then call save_agent_cut. Call it in a subagent with a fresh context when your "
         "host has them (give it the task_id): the material is long, and read in the user's "
-        "conversation it is resent on every later turn. If you do not answer within "
+        "conversation it is resent on every later turn. result_chars, first in the answer, is its whole "
+        "length: if your host cut the result short (Codex does at about 10,000 tokens), read the rest "
+        "from the stored result in slices before deciding. If you do not answer within "
         "decide_within_seconds, or this conversation closes, FluentFlow judges the cut itself."),
     input_schema={
         "type": "object",
@@ -1393,9 +1425,9 @@ def get_agent_cut_material(task_id: str, api_base: str | None = None, client_id:
     refusal = _require_local_edition(normalize_api_base(api_base))
     if refusal is not None:
         return refusal
-    return _watching(_agent_request(
+    return _with_length(_watching(_agent_request(
         "GET", f"/agent/v1/tasks/{task_id}/agent-cut/material", api_base=api_base, client_id=client_id,
-    ), task_id, api_base, client_id)
+    ), task_id, api_base, client_id))
 
 
 @tool(

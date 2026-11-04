@@ -29,7 +29,7 @@ from backend.core.title_display import display_title_for_user
 from backend.core.note_diagnosis import build_note_generation_diagnosis
 
 
-AGENT_TASK_PACKAGE_VERSION = "2"
+AGENT_TASK_PACKAGE_VERSION = "3"
 
 
 @dataclass(frozen=True)

@@ -99,7 +99,7 @@ def _mock_package(task_id: str, *, failed: bool, source_type: str = "video_link"
     )
     return {
         "ok": True,
-        "agent_task_package_version": "2",
+        "agent_task_package_version": "3",
         "task": {"task_id": task_id, "status": status, "stage": "failed" if failed else "done"},
         "source": {
             "type": source_type,

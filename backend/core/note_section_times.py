@@ -443,6 +443,26 @@ def status(result: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def brief(result: dict[str, Any] | None) -> dict[str, Any]:
+    """What an agent reads in ``get_task`` and the task package: whether the
+    note's sections have times, not the rows themselves.
+
+    The rows went into both answers until 2026-11-04 and were nine tenths of
+    ``get_task`` on a long note (15,532 of 16,533 characters); an agent only
+    needs to know whether sections are missing, and reads the rows, when it
+    aligns, from ``get_agent_alignment_material``.
+    """
+    current = status(result)
+    return {
+        "state": current["state"],
+        "section_count": len(current["sections"]),
+        "missing": current["missing"],
+        "error": current["error"],
+        "aligned_at": current["aligned_at"],
+        "executor": current["executor"],
+    }
+
+
 def request(result: dict[str, Any]) -> dict[str, Any]:
     """The editor has the note open and some of its sections have no time:
     queue a match. A note saved in the editor less than ``QUIET_SECONDS`` ago
