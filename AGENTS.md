@@ -49,7 +49,7 @@ exists and that no other file judges whether a task is still busy.
 - Whether a model call may go out in a test run (the budget) and whether the fake model answers it: `model_usage.call`; what the fake model answers: `backend/core/fake_model.py`. Every exit asks `call.fake` before sending (`tests/test_test_run_switches.py` fails on one that does not)
 - Correcting the transcript from on-screen subtitles and from the word list: `backend/core/subtitle_correction.py`, `backend/core/glossary_correction.py`; the current agent doing them, and translating the subtitles, from paged material (which steps are left to it, the pages and their versions, how its answer lands): `backend/core/agent_correction.py`
 - Saving a correction of a task's transcript and then its txt/srt/vtt files, so a refused save leaves the files alone: `backend/core/transcript_files.py`
-- The output folder beside a recording: `backend/core/output_folder.py`; keeping a note in step with Feishu: `backend/core/feishu_sync.py`
+- The output folder beside a recording, or where a `FluentFlow 产出位置.md` above it says (`output_parent`), and finding it after it moved: `backend/core/output_folder.py`; following a moved recording: `backend/core/original_locator.py`; keeping a note in step with Feishu: `backend/core/feishu_sync.py`
 - Matching note sections to playback times: `backend/core/note_section_times.py`; the current agent reading material and returning its table: `backend/core/agent_alignment.py`
 - What each processing step currently uses, for the settings page and agents: `backend/core/workflow_status.py`
 - Where runtime data lives: `backend/core/runtime_paths.py`; which edition answers: `backend/core/edition_identity.py`
@@ -63,6 +63,13 @@ and playback with note following. Do not split it for its own sake. The routes
 in `backend/routers/` only turn requests into calls; what they call lives in
 `backend/core`, and the agent routes (`backend/routers/local_agent.py`) import
 nothing from the page's routes (`tests/test_agent_surface.py`).
+
+When adding or changing an MCP tool (the audit behind these: `docs/方案/2026-11-04-MCP工具体检.md`):
+
+- Tools that always come in pairs differing by one argument are one tool with that argument (`list_transcript_corrections` takes `source`).
+- An answer that grows with the recording gives a brief by default and a way to read the rest (a section, a page, `include_reverted`). Add such a read to `READS` in `tests/test_mcp_size_budget.py`, which reads a recording as long as the largest real one and fails past 50,000 characters, the length Claude Code still shows inline. A tool that must return more declares `anthropic/maxResultSizeChars`; Codex cuts anything past about 10,000 tokens regardless, so put what the agent needs to read the rest first.
+- A refusal carries a `code` and says what to do next. Answers name tools, not HTTP paths, and schemas leave out what an agent never sets (`api_base`).
+- The same test caps each tool definition at 3,500 characters and all of them at 55,000. Over budget, shorten what grew; raise a number only with the reason beside it and a decision log entry.
 
 ## Open problems
 

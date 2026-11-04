@@ -162,13 +162,37 @@ def locate(task_id: str, client_id: str | None = None, *, search: Callable[[str]
             f"「{recorded.name}」和处理时的不是同一个文件（处理时长 {_clock(expected or 0)}，"
             f"现在是 {_clock(found or 0)}）。把处理时那份放回 {recorded.parent}，再试一次。"
         )
+    moved = _search_moved(job, field, recorded, expected, search)
+    if moved is not None:
+        return moved
+    raise OriginalMissing(
+        f"原片找不到了：原来在 {recorded}。把它放回原处，或放在电脑上任何文件夹里、保持原来的文件名，再试一次。"
+    )
+
+
+def _search_moved(
+    job: dict[str, Any], field: str, recorded: Path, expected: float | None, search: Callable[[str], list[Path]],
+) -> Path | None:
     for candidate in search(recorded.name):
         if _is_the_original(candidate, job, expected):
             _follow(job, field, candidate)
             return candidate
-    raise OriginalMissing(
-        f"原片找不到了：原来在 {recorded}。把它放回原处，或放在电脑上任何文件夹里、保持原来的文件名，再试一次。"
-    )
+    return None
+
+
+def follow_moved(task_id: str, *, search: Callable[[str], list[Path]] | None = None) -> Path | None:
+    """Where the user's recording is now, when it is no longer where the task
+    recorded it: found by name, checked to be the same recording, and the
+    task follows it. FluentFlow's own stored copy does not count here: the
+    output folder is placed by the user's file. None when it is where it was,
+    or cannot be found."""
+    job = job_store.get_job(task_id)
+    if not job:
+        return None
+    field, recorded = _recorded(job)
+    if recorded is None or recorded.is_file():
+        return None
+    return _search_moved(job, field, recorded, expected_duration(job), search or spotlight)
 
 
 def _follow(job: dict[str, Any], field: str, path: Path) -> None:
@@ -180,4 +204,4 @@ def _follow(job: dict[str, Any], field: str, path: Path) -> None:
     job_store.update_job_metadata(str(job["task_id"]), fields)
 
 
-__all__ = ["FINGERPRINT_KEY", "OriginalMissing", "expected_duration", "fingerprint", "locate", "remember", "spotlight"]
+__all__ = ["FINGERPRINT_KEY", "OriginalMissing", "expected_duration", "fingerprint", "follow_moved", "locate", "remember", "spotlight"]

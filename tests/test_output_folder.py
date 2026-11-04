@@ -449,6 +449,93 @@ def test_a_folder_moved_within_the_course_folder_is_found_and_kept_in_step(tmp_p
     assert not (lessons / folder.name).exists(), "nothing made again at the old place"
 
 
+RULE = "# FluentFlow 产出位置\n\n这里的录像，笔记文件夹建在：\n\n产出位置：../2.剪后视频\n"
+
+
+def test_a_rule_file_puts_the_note_folder_where_it_says(tmp_path, pdfs):
+    """Owner, 2026-11-04: recordings in 张和/1.源视频/<类别>/, each lesson's
+    folder made straight in 张和/2.剪后视频/<类别>/, nothing beside the
+    recording."""
+    sources = tmp_path / "张和" / "1.源视频"
+    (sources / "实战 1").mkdir(parents=True)
+    (sources / output_folder.OUTPUT_RULE_NAME).write_text(RULE, encoding="utf-8")
+    source = sources / "实战 1" / "4-第二次汇报.mp4"
+    source.write_bytes(b"original")
+    task = _task(source, note="# 笔记\n")
+
+    record = output_folder.sync(task)
+
+    expected = tmp_path / "张和" / "2.剪后视频" / "实战 1" / "4-第二次汇报"
+    assert record["error"] is None and record["path"] == str(expected)
+    assert (expected / "4-第二次汇报_笔记.md").is_file()
+    assert sorted(p.name for p in source.parent.iterdir()) == [source.name]
+
+
+def test_without_a_rule_the_folder_stays_beside_the_recording(tmp_path, pdfs):
+    source = _recording(tmp_path)
+    task = _task(source, note="# 笔记\n")
+
+    assert output_folder.sync(task)["path"] == str(source.parent / source.stem)
+
+
+def test_a_recording_and_its_folder_moved_apart_are_found_again(tmp_path, pdfs, monkeypatch):
+    """Lessons 1 and 2 (owner, 2026-11-04): the recording went from
+    Downloads/张和/实战 1/ to 张和/1.源视频/实战 1/, its folder to
+    张和/2.剪后视频/实战 1/. The recording is found by name and checked to be
+    the same file, the folder by the rule beside it; the task follows both."""
+    from backend.core import original_locator
+
+    old = tmp_path / "Downloads" / "张和" / "实战 1"
+    old.mkdir(parents=True)
+    source = old / "2-答疑.mp4"
+    source.write_bytes(b"original")
+    task = _task(source, note="# 笔记\n")
+    folder = Path(output_folder.sync(task)["path"])
+    output_folder._WORKER.submit(lambda: None).result()
+
+    course = tmp_path / "研二" / "张和"
+    (course / "1.源视频" / "实战 1").mkdir(parents=True)
+    (course / "1.源视频" / output_folder.OUTPUT_RULE_NAME).write_text(RULE, encoding="utf-8")
+    (course / "2.剪后视频" / "实战 1").mkdir(parents=True)
+    moved_source = course / "1.源视频" / "实战 1" / source.name
+    source.rename(moved_source)
+    folder.rename(course / "2.剪后视频" / "实战 1" / folder.name)
+    import shutil
+
+    shutil.rmtree(tmp_path / "Downloads")
+    monkeypatch.setattr(original_locator, "spotlight", lambda name: [moved_source] if name == source.name else [])
+
+    record = output_folder.sync(task)
+
+    assert record["error"] is None
+    assert record["path"] == str(course / "2.剪后视频" / "实战 1" / folder.name)
+    assert output_folder.original_path(job_store.get_job(task)) == moved_source
+
+
+def test_a_different_file_with_the_same_name_is_not_followed(tmp_path, pdfs, monkeypatch):
+    from backend.core import original_locator
+
+    old = tmp_path / "旧" / "实战 1"
+    old.mkdir(parents=True)
+    source = old / "2-答疑.mp4"
+    source.write_bytes(b"original")
+    task = _task(source, note="# 笔记\n")
+    job_store.update_job_metadata(task, {original_locator.FINGERPRINT_KEY: original_locator.fingerprint(source)})
+    folder = Path(output_folder.sync(task)["path"])
+    output_folder._WORKER.submit(lambda: None).result()
+    other = tmp_path / "别处" / "2-答疑.mp4"
+    other.parent.mkdir()
+    other.write_bytes(b"another recording")
+    import shutil
+
+    shutil.rmtree(tmp_path / "旧")
+    monkeypatch.setattr(original_locator, "spotlight", lambda name: [other])
+
+    assert "不在原来的位置" in output_folder.sync(task)["error"]
+    assert output_folder.original_path(job_store.get_job(task)) == source
+    assert not folder.exists()
+
+
 def test_link_videos_go_to_the_platforms_own_video_folder(monkeypatch):
     """Owner, 2026-10-16: on Windows the user's video folder is Videos; a
     Movies folder there would be a stray new one."""

@@ -215,6 +215,38 @@ def _link_folders(root: Path) -> list[Path]:
     ]
 
 
+# A file in a folder of recordings that says where their note folders go
+# (owner, 2026-11-04: 张和/1.源视频/<类别>/ for recordings,
+# 张和/2.剪后视频/<类别>/ for each lesson's folder). Its line
+# 「产出位置：<path>」 names that place, relative to the file's own folder;
+# a recording in a sub-folder gets its note folder in the same sub-folder
+# there. Looked for beside the recording and in the folders above it, up to
+# the home folder, the nearest one counting.
+OUTPUT_RULE_NAME = "FluentFlow 产出位置.md"
+_OUTPUT_RULE_LINE = re.compile(r"^\s*产出位置\s*[：:]\s*(.+?)\s*$", re.MULTILINE)
+
+
+def output_parent(source: Path) -> Path:
+    """The folder a recording's note folder is made in: beside it, unless an
+    ``OUTPUT_RULE_NAME`` above it names another place."""
+    home = Path.home()
+    for folder in [source.parent, *source.parent.parents]:
+        rule = folder / OUTPUT_RULE_NAME
+        try:
+            text = rule.read_text(encoding="utf-8") if rule.is_file() else None
+        except OSError:
+            text = None
+        if text is not None:
+            match = _OUTPUT_RULE_LINE.search(text)
+            if match:
+                target = Path(match.group(1)).expanduser()
+                target = target if target.is_absolute() else folder / target
+                return Path(os.path.normpath(target / source.parent.relative_to(folder)))
+        if folder == home or folder == folder.parent:
+            break
+    return source.parent
+
+
 # How far a moved folder is looked for: within the folder two levels above
 # where it was (the course folder holding 实战 1/<recording>), this many
 # levels down, visiting at most this many folders.
@@ -318,17 +350,19 @@ def place(task_id: str, source: Path) -> tuple[Path, str]:
                 _add_owner(folder, task_id, suffix)
                 return folder, suffix
         raise OutputFolderError(f"这个文件夹里的结果版本太多了，先清理一下：{folder}")
-    base = source.parent / stem
+    parent = output_parent(source)
+    base = parent / stem
     candidates = [base] + [base.with_name(f"{base.name} ({n})") for n in range(2, MAX_FOLDERS_PER_RECORDING + 1)]
     for candidate in candidates:
         if candidate.is_dir() and _owner(candidate) == task_id:
             return candidate, ""
     for candidate in candidates:
         if not candidate.exists():
+            parent.mkdir(parents=True, exist_ok=True)
             candidate.mkdir(parents=False)
             _add_owner(candidate, task_id, "")
             return candidate, ""
-    raise OutputFolderError(f"「{base.name}」开头的文件夹太多了，先清理一下：{source.parent}")
+    raise OutputFolderError(f"「{base.name}」开头的文件夹太多了，先清理一下：{parent}")
 
 
 def _folder_for(task_id: str, source: Path) -> tuple[Path, str]:
@@ -348,12 +382,27 @@ def _folder_for(task_id: str, source: Path) -> tuple[Path, str]:
     known = Path(previous)
     # A link download's original sits inside its own folder, so that folder is
     # source.parent itself: found after the user moved it to a new link root.
-    nearer = [known, source.parent] + [
-        child for parent in dict.fromkeys([known.parent, source.parent]) if parent.is_dir()
-        for child in sorted(parent.iterdir()) if child.is_dir()
-    ] + (_link_folders(link_root()) if _is_link_task(job) else [])
+    def near(recording: Path) -> list[Path]:
+        parents = dict.fromkeys([known.parent, recording.parent, output_parent(recording)])
+        return [recording.parent] + [
+            child for parent in parents if parent.is_dir() for child in sorted(parent.iterdir()) if child.is_dir()
+        ]
+
+    def followed() -> Iterator[Path]:
+        # The recording moved too: found by name and checked to be the same
+        # file (original_locator), its new place is looked around as well.
+        if source.exists() or _is_link_task(job):
+            return
+        from backend.core import original_locator
+
+        moved = original_locator.follow_moved(task_id)
+        if moved is not None:
+            yield from near(moved)
+            yield from _around(moved.parent / moved.stem)
+
+    nearer = [known] + near(source) + (_link_folders(link_root()) if _is_link_task(job) else [])
     # Further afield only once the nearer places did not have it.
-    for folder in itertools.chain(nearer, _around(known)):
+    for folder in itertools.chain(nearer, _around(known), followed()):
         if folder.is_dir():
             for task, suffix in _owners(folder):
                 if task == task_id:
