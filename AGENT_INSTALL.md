@@ -40,6 +40,12 @@ When neither `claude` nor `codex` is found, the script prints the command to reg
 as an MCP server; register it in whatever tool you are. The MCP server reads its access
 token from the repository `.env`, so the registration carries no secret.
 
+On Codex, one tool call is given up after 300 seconds. Tell the user, and add it only if
+they agree, that one line under `[mcp_servers.fluentflow-local]` in `~/.codex/config.toml`
+lets FluentFlow's waits run longer, so a long recording costs fewer turns of their Codex
+allowance: `tool_timeout_sec = 900` (measured 2026-11-05: a single call then held 420
+seconds without an extra turn). It changes nothing else.
+
 ## Tell the user how to use it
 
 Say this, in the user's language:
@@ -57,7 +63,9 @@ then: submit with `submit_local_media` or `submit_video_link` using the default
 rendering and the note can start. Fetch `get_agent_note_material`, write and check the note
 yourself (in a subagent with a fresh context), and `save_agent_note` with its `base_version`.
 A note left half written (`get_task`'s `note_draft`) goes to a new subagent for the parts left.
-Between `wait_task` calls say nothing; each call holds up to four minutes.
+Between `wait_task` calls say nothing; call it as a tool call of its own (not from a
+script), and each call holds up to four minutes. On Codex spawn subagents with
+`fork_turns="none"`, and start the cut's subagent only once `agent_cut` is waiting.
 `skip_summary=true` leaves writing to you; it does not complete the user's request.
 Configured keys do not change these defaults. Only delegate with `intelligence="fluentflow"`
 when you cannot do it, failed, or the user asks; explain which configured model pays.

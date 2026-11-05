@@ -15,6 +15,13 @@ in the user's terms:
 - A note the user's agent writes is timed from its first read of the material
   to its save, and reads done, though the flow had recorded the note skipped.
   Until it saves, it reads as still being written.
+- When the user's agent judges the cut (2026-11-05), the cut's row starts
+  where FluentFlow began preparing what the agent reads, and its parts show
+  preparing, waiting for the agent to fetch it, the agent judging, and the
+  work after the decision; they add up to the row.
+- Transcript corrections the agent did are timed from its first page read to
+  the save that left none, and matching the note's sections to playback is a
+  row of its own once the agent did it.
 - Only the first note is timed: reading or saving again later (an edit, a
   rewrite) does not change it, and a note FluentFlow wrote itself keeps its
   own time.
@@ -216,3 +223,33 @@ def test_a_fresh_run_clears_the_agent_time(task_id):
     task_steps.agent_began(task_id, task_steps.NOTE)
     task_steps.plan(task_id)
     assert note_row(task_id) is None
+
+
+def test_a_cut_the_agent_judged_shows_the_preparing_and_the_judging():
+    job = {"created_at": at(0), "result": {
+        "agent_cut": {"prepare_started": at(100), "since": at(209), "material_at": at(214), "decided_at": at(302)},
+        "debreath": {"started_at": at(335), "finished_at": at(1049)},
+    }}
+    steps = [step("transcribe", "done", 0, 100), step("cut", "done", 304, 1051)]
+    row = rows_by_step(task_steps.timings(job, steps, now=T0))["cut"]
+    assert row["by_agent"] is True
+    assert row["started_at"] == at(100)
+    assert [(part["label"], part["seconds"]) for part in row["parts"]] == [
+        ("准备判断材料", 109), ("等 agent 取材料", 5), ("agent 判断剪哪里", 88),
+        ("按决定算剪辑", 31), ("生成剪后视频", 714), ("整理处理报告", 2),
+    ]
+    assert row["seconds"] == 951
+    assert sum(part["seconds"] for part in row["parts"]) == pytest.approx(row["seconds"], abs=3)
+
+
+def test_corrections_by_the_agent_and_its_alignment_are_timed():
+    job = {"created_at": at(0), "result": {}}
+    steps = [
+        step("correct", "done", 100, 101, {"agent_started_at": at(900), "agent_finished_at": at(1121)}),
+        step("note", "done", None, 1000, {"agent_started_at": at(1130), "agent_finished_at": at(1456),
+                                          "align_started_at": at(1460), "align_finished_at": at(1513)}),
+    ]
+    rows = rows_by_step(task_steps.timings(job, steps, now=T0))
+    assert (rows["correct"]["by_agent"], rows["correct"]["seconds"]) == (True, 221)
+    assert list(rows)[-1] == "align"
+    assert (rows["align"]["label"], rows["align"]["seconds"], rows["align"]["by_agent"]) == ("对齐章节时间", 53, True)

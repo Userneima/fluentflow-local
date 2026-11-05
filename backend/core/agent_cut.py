@@ -180,6 +180,7 @@ def prepare(task_id: str, client_id: str | None) -> bool:
     """Measure what the judge reads, store it on the task and start waiting.
     Blocking (a decode of the recording); runs in the queue. False when there
     is nothing to judge, and the task is cut as usual."""
+    prepare_started = _now()
     job = job_store.get_job(task_id, client_id=client_id) or {}
     result = dict(job.get("result") or {})
     segments = survey_cut._texted(result.get("raw_segments"))
@@ -199,7 +200,7 @@ def prepare(task_id: str, client_id: str | None) -> bool:
     def start(state: dict[str, Any], _result: dict[str, Any]) -> None:
         state.clear()
         state.update({
-            "status": WAITING, "since": _now(), "choice": choice_of(job),
+            "status": WAITING, "since": _now(), "prepare_started": prepare_started, "choice": choice_of(job),
             "duration": plan.source_duration_seconds,
             "plan_cuts": [[c.start, c.end] for c in plan.cuts],
             "timeline": material.timeline,

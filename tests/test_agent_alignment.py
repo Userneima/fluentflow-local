@@ -284,3 +284,22 @@ def test_aligning_again_through_the_mcp_tools(task, monkeypatch):
     tools = {tool["name"]: tool for tool in mcp.TOOL_DEFINITIONS}
     assert "again" in tools["get_agent_alignment_material"]["inputSchema"]["properties"]
     assert "again=true" in tools["get_agent_alignment_material"]["description"]
+
+
+def test_the_agents_first_alignment_is_timed_on_the_task_page(task):
+    """2026-11-05: the agent's alignment took 53 s and the task page showed nothing."""
+    from backend.core import task_steps
+
+    task_steps.plan(task)
+    for name in task_steps.ORDER:  # the task is done
+        task_steps.finish(task, name, task_steps.DONE)
+    material_packet = material(task)
+    detail = task_steps._row(task, task_steps.NOTE)["result"] or {}
+    assert detail.get(task_steps.ALIGN_STARTED) and not detail.get(task_steps.ALIGN_FINISHED)
+    save(task, material_packet)
+    detail = task_steps._row(task, task_steps.NOTE)["result"]
+    first = (detail[task_steps.ALIGN_STARTED], detail[task_steps.ALIGN_FINISHED])
+
+    save(task, material(task))  # read and saved again later: an edit, not processing
+    detail = task_steps._row(task, task_steps.NOTE)["result"]
+    assert (detail[task_steps.ALIGN_STARTED], detail[task_steps.ALIGN_FINISHED]) == first

@@ -271,14 +271,17 @@ def _row(task_id: str, name: str) -> dict[str, Any] | None:
     return None
 
 
-def agent_began(task_id: str, name: str) -> None:
+def agent_began(task_id: str, name: str, *, left_to_agent: bool = False) -> None:
     """The agent read the material for this step; its clock starts now,
-    unless it already started or FluentFlow did the step itself."""
+    unless it already started or FluentFlow did the step itself.
+    ``left_to_agent``: the flow closed the step having left it to the agent
+    (the transcript corrections on an agent submission), so its row reads
+    done although the work is still the agent's."""
     row = _row(task_id, name)
     if row is None:
         return
     detail = row.get("result") if isinstance(row.get("result"), dict) else {}
-    if detail.get(AGENT_STARTED) or row.get("status") == DONE:
+    if detail.get(AGENT_STARTED) or (row.get("status") == DONE and not left_to_agent):
         return
     _write(task_id, name, str(row.get("status") or PENDING),
            detail={**detail, AGENT_STARTED: job_store.now_iso()})
@@ -297,6 +300,24 @@ def agent_finished(task_id: str, name: str) -> None:
     status = str(row.get("status") or PENDING)
     _write(task_id, name, status if status in OPEN else DONE,
            detail={**detail, AGENT_FINISHED: job_store.now_iso()})
+
+
+ALIGN_STARTED = "align_started_at"
+ALIGN_FINISHED = "align_finished_at"
+
+
+def agent_aligning(task_id: str, *, finished: bool = False) -> None:
+    """The agent read (or saved) the material for matching the note's sections
+    to playback times: kept on the note's row, shown as a row of its own.
+    The first read and the first save count; aligning again later is an edit."""
+    row = _row(task_id, NOTE)
+    if row is None:
+        return
+    detail = row.get("result") if isinstance(row.get("result"), dict) else {}
+    key = ALIGN_FINISHED if finished else ALIGN_STARTED
+    if detail.get(key) or (finished and not detail.get(ALIGN_STARTED)):
+        return
+    _write(task_id, NOTE, str(row.get("status") or PENDING), detail={**detail, key: job_store.now_iso()})
 
 
 # ── how long each step took ──────────────────────────────────────────────────
@@ -363,7 +384,25 @@ def timings(job: Any, steps: list[dict[str, Any]] | None, *, now: datetime | Non
         }
         if name == CUT:
             row["parts"] = _cut_parts(job, start, end, now if running else end)
+            judged = _agent_cut_parts(job, start)
+            if judged:
+                begin, before = judged
+                row["started_at"] = begin.isoformat()
+                row["seconds"] = _seconds(begin, now if running else end)
+                row["by_agent"] = True
+                row["parts"] = before + [
+                    {**part, "label": "按决定算剪辑"} if part["label"] == "判断剪哪里" else part
+                    for part in row["parts"]
+                ]
         rows.append(row)
+        if name == NOTE and detail.get(ALIGN_STARTED):
+            align_start, align_end = _moment(detail.get(ALIGN_STARTED)), _moment(detail.get(ALIGN_FINISHED))
+            rows.append({
+                "step": "align", "label": "对齐章节时间", "status": DONE if align_end else RUNNING,
+                "by_agent": True, "started_at": align_start.isoformat(),
+                "finished_at": align_end.isoformat() if align_end else None,
+                "seconds": _seconds(align_start, align_end or now), "running": align_end is None, "parts": [],
+            })
     created = _moment((job or {}).get("created_at"))
     first = min((_moment(row["started_at"]) for row in rows), default=None)
     waited = _seconds(created, first)
@@ -390,6 +429,28 @@ def timings(job: Any, steps: list[dict[str, Any]] | None, *, now: datetime | Non
     }
 
 
+def _agent_cut_parts(job: Any, cut_start: datetime) -> tuple[datetime, list[dict[str, Any]]] | None:
+    """When the user's agent judged the cut: the cut step's row starts once
+    the agent decided, so what came before is added in front of it, from
+    the cut's own record (2026-11-05: a lesson's 1 m 49 s of preparing the
+    material and 88 s of judging were missing, and the 31 s after the
+    decision read as the judging)."""
+    state = _result(job).get("agent_cut")
+    if not isinstance(state, dict):
+        return None
+    prepared, since = _moment(state.get("prepare_started")), _moment(state.get("since"))
+    fetched, decided = _moment(state.get("material_at")), _moment(state.get("decided_at"))
+    if since is None or decided is None or decided > cut_start:
+        return None
+    parts: list[dict[str, Any]] = []
+    if prepared is not None and prepared <= since:
+        parts.append({"label": "准备判断材料", "seconds": _seconds(prepared, since)})
+    if fetched is not None and (fetched - since).total_seconds() >= 1:
+        parts.append({"label": "等 agent 取材料", "seconds": _seconds(since, fetched)})
+    parts.append({"label": "agent 判断剪哪里", "seconds": _seconds(fetched or since, decided)})
+    return (prepared if prepared is not None and prepared <= since else since), parts
+
+
 def _cut_parts(job: Any, start: datetime, end: datetime | None, until: datetime | None) -> list[dict[str, Any]]:
     state = _result(job).get("debreath")
     if not isinstance(state, dict):
@@ -412,7 +473,7 @@ def _cut_parts(job: Any, start: datetime, end: datetime | None, until: datetime 
 __all__ = [
     "BEFORE_TRANSCRIPT", "CORRECT", "CUT", "COMPRESS", "DONE", "ENDS", "FAILED", "FEISHU", "FETCH", "LABELS",
     "NOTE", "OPEN", "ORDER", "PENDING", "RUNNING", "SKIPPED", "STOPPED", "TRANSCRIBE",
-    "agent_began", "agent_finished", "close_open", "compress_outcome", "cut_outcome", "feishu_outcome", "finish", "interrupted", "note_outcome",
+    "agent_aligning", "agent_began", "agent_finished", "close_open", "compress_outcome", "cut_outcome", "feishu_outcome", "finish", "interrupted", "note_outcome",
     "plan", "recover_after_restart", "reopen_from", "resume_point", "settle", "start", "status_of",
     "statuses", "steps_of", "timings", "transcribe_outcome",
 ]

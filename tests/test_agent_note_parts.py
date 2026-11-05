@@ -22,6 +22,10 @@ than the code:
   one part updates that part in the note, and the note that can be put back is
   still the one from before the agent started. A change saved during the
   read-through does not ask for another read-through (2026-10-27).
+- Parts are written without an opening, so the read-through asks for the
+  whole note's title and opening paragraph, saved with part 1; the joined
+  note then starts with that title and opening (2026-11-05: lesson four's
+  note began with the file name and its first part).
 - A conversation coming back to a note left half written learns which parts are
   missing without fetching the material, and is told to hand them to a fresh
   subagent (2026-10-27: the main conversation wrote the rest itself, slowly).
@@ -341,3 +345,19 @@ def test_a_half_written_note_says_which_parts_are_left(job_store, tmp_path, smal
     for index in range(3, total + 1):
         _save(index)
     assert an.unfinished_draft(TASK) is None
+
+
+def test_the_read_through_writes_the_title_and_opening_that_part_one_carries(job_store, tmp_path, small_parts):
+    _long(job_store)
+    total = _material(tmp_path)["total_parts"]
+    for index in range(1, total):
+        _save(index)
+    last = _save(total)
+    assert "一级标题" in last["next"] and "part=1" in last["next"]
+
+    opening = "# 最小二乘法从推导到前提\n\n这一课讲最小二乘法怎么推出来、什么时候能用。\n\n"
+    _save(1, opening + _note(1))
+    note = job_store["result"]["summary_markdown"]
+    assert note.startswith("# 最小二乘法从推导到前提")
+    assert note.count("\n# ") == 0, "one title"
+    assert note.index("这一课讲最小二乘法") < note.index("第 1 部分讲的内容")

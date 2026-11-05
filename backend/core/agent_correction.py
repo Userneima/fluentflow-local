@@ -44,7 +44,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import correction_notes, debreath_job, frame_text, job_store, task_activity, transcript_files
+from backend.core import correction_notes, debreath_job, frame_text, job_store, task_activity, task_steps, transcript_files
 from backend.core import glossary_correction as gc
 from backend.core import subtitle_correction as sc
 from backend.core.result_artifacts import TRANSCRIPT_MEDIA_CUT, artifact_target_path
@@ -363,6 +363,9 @@ def material(
     window = _window(segments, step, page)
     protected = gc.edited_by_user(result)
     total = _pages(segments, step)
+    if step in pending(result):
+        # Its time on the task page runs from the first page read to the last saved.
+        task_steps.agent_began(task_id, task_steps.CORRECT, left_to_agent=True)
     answer: dict[str, Any] = {
         "task_id": task_id, "step": step, "page": page, "pages": total,
         "next_page": page + 1 if page < total else None,
@@ -529,11 +532,15 @@ def save(
     if saved is None:
         raise _stale()
     result = saved["result"]
+    if not pending(result):
+        task_steps.agent_finished(task_id, task_steps.CORRECT)
     meta = _meta_of(result, step)
     left = [p for p in range(1, int(meta.get("pages") or 1) + 1) if p not in (meta.get("pages_done") or [])]
     return {
         "task_id": task_id, "step": step, "page": page, "model": model, **answer,
         "status": meta.get("status"), "pages_left": left,
+        # The whole step so far, all pages: what to tell the user when it is done.
+        "step_applied": meta.get("applied"), "step_refused": meta.get("refused"),
         "next_page": next((p for p in left if p > page), left[0] if left else None),
         "transcript_version": content_versions(result).get("transcript_version"),
         "next": next_hint(result) or None,
@@ -589,7 +596,11 @@ def _save_fixes(
     answer = {
         "applied": [{key: r.get(key) for key in ("id", "from", "to", "start", "subtitle", "basis", "entry", "why")
                      if r.get(key) is not None} for r in records],
-        "refused": [_refusal(fix) for fix in refused],
+        "refused": [
+            _refusal(fix) if step == SUBTITLES
+            else {**_refusal(fix), "why": gc.why_refused(fix, segments, allowed, glossary, protected)}
+            for fix in refused
+        ],
     }
     return after, answer
 

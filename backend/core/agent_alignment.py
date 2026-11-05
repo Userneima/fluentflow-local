@@ -11,7 +11,7 @@ import json
 import math
 from typing import Any
 
-from backend.core import job_store, note_section_times as times, task_activity
+from backend.core import job_store, note_section_times as times, task_activity, task_steps
 from backend.core.result_schema import canonical_display_segments
 
 PAGE_CHARS = 12000
@@ -66,6 +66,9 @@ def material(
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
         raise AlignmentError("offset 必须是非负整数")
     result = _read(task_id, client_id)
+    if (times.stored_table(result) or {}).get("aligned_by") != "agent":
+        # The first alignment's time on the task page; a later one is an edit.
+        task_steps.agent_aligning(task_id)
     if offset or material_version:
         if not material_version or material_version != _version(result, again):
             raise _stale()
@@ -169,4 +172,5 @@ def save(
     )
     if saved is None:
         raise _stale()
+    task_steps.agent_aligning(task_id, finished=True)
     return {"task_id": task_id, **times.status(saved["result"]), "answered": len(spans), "model": model.strip()}

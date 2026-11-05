@@ -12,6 +12,7 @@ const LABELS_EN = {
     correct: 'Correct transcript',
     cut: 'Cut',
     note: 'Write note',
+    align: 'Match sections to playback',
     compress: 'Compressed copy',
     feishu: 'Send to Feishu',
 };
@@ -20,6 +21,10 @@ const PART_LABELS_EN = {
     判断剪哪里: 'Decide what to cut',
     生成剪后视频: 'Render the cut video',
     整理处理报告: 'Write the cut report',
+    准备判断材料: 'Prepare what the agent judges',
+    '等 agent 取材料': 'Wait for the agent to fetch it',
+    'agent 判断剪哪里': 'Agent decides what to cut',
+    按决定算剪辑: 'Work out the cut from the decision',
 };
 
 const durationText = (seconds, zh) => {

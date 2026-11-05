@@ -631,3 +631,55 @@ def test_a_failed_reading_of_the_picture_is_read_again_on_the_next_ask(agent, mo
     settle()
 
     assert _material(client, task_id, "subtitles")["state"] == "ready" and len(calls) == 2
+
+
+# ── a refusal says what to fix; the last save gives the step's totals ─────
+# (2026-11-05, lesson four through Codex: four fixes refused with one general
+# sentence were never sent again, each lacked nth, and the agent told the
+# user three.)
+
+def test_a_refusal_says_what_to_fix_and_the_fix_then_lands(agent):
+    client, make = agent
+    twice = [*SEGMENTS[:3], {"start": 12.0, "end": 16.0, "text": "OpenCloud跑起来比OpenCloud旧版快"}]
+    task_id = make(segments=twice)
+    packet = _material(client, task_id, "glossary")
+
+    saved = _save(client, task_id, packet, fixes=[
+        {"id": 3, "from": "OpenCloud", "to": "OpenClaw", "basis": "glossary"},
+        {"id": 1, "from": "OpenClould", "to": "OpenClaw", "basis": "glossary"},
+        {"id": 2, "from": "GOM", "to": "GLM", "basis": "context"},
+    ]).json()
+    why = {r["from"]: r["why"] for r in saved["refused"]}
+    assert "出现 2 次" in why["OpenCloud"] and "nth" in why["OpenCloud"]
+    assert "不在这句里" in why["OpenClould"]
+    assert "why" in why["GOM"]
+    assert (saved["step_applied"], saved["step_refused"]) == (0, 3)
+
+    packet = _material(client, task_id, "glossary")
+    again = _save(client, task_id, packet, fixes=[
+        {"id": 3, "from": "OpenCloud", "to": "OpenClaw", "basis": "glossary", "nth": 1},
+    ]).json()
+    assert len(again["applied"]) == 1
+    assert _result(task_id)["raw_segments"][3]["text"] == "OpenClaw跑起来比OpenCloud旧版快"
+    assert (again["step_applied"], again["step_refused"]) == (1, 3)
+
+
+def test_the_agents_corrections_are_timed_from_first_read_to_last_save(agent, no_video):
+    from backend.core import task_steps
+
+    client, make = agent
+    task_id = make()
+    task_steps.plan(task_id)
+    for name in task_steps.ORDER:  # the task is done; the flow left the corrections to the agent
+        task_steps.finish(task_id, name, task_steps.DONE)
+    _store_track(task_id, [], status="none", reason="画面里没有字幕")
+
+    packet = _material(client, task_id, "glossary")
+    row = task_steps._row(task_id, task_steps.CORRECT)
+    assert row["result"].get(task_steps.AGENT_STARTED)
+    _save(client, task_id, packet, fixes=[])
+    assert not (task_steps._row(task_id, task_steps.CORRECT)["result"] or {}).get(task_steps.AGENT_FINISHED)
+
+    subtitles = _material(client, task_id, "subtitles")
+    _save(client, task_id, subtitles, fixes=[])
+    assert task_steps._row(task_id, task_steps.CORRECT)["result"].get(task_steps.AGENT_FINISHED)

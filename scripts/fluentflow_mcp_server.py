@@ -1496,8 +1496,8 @@ def get_agent_note_part(
         "(timestamped transcript with numbered long gaps and whether the picture moved), shots "
         "(screenshots of the long gaps whose picture moved, as local paths; open them before deciding "
         "those gaps). A long recording comes in total_parts parts, each small enough for a host that "
-        "shows about 10,000 tokens of a result (Codex): call again with part set to next_part until it "
-        "is null, then judge and call save_agent_cut. Call it in a subagent with a fresh context when "
+        "shows about 10,000 tokens of a result (Codex): call again, one part per call, with part set to "
+        "next_part until it is null, then judge and call save_agent_cut. Call it in a subagent with a fresh context when "
         "your host has them (give it the task_id): read in the user's conversation, the material is "
         "resent on every later turn. If you do not answer within decide_within_seconds, or this "
         "conversation closes, FluentFlow judges the cut itself."),

@@ -279,6 +279,34 @@ def decide(
     return fixes, calls, sum(1 for answer in answers if answer is None)
 
 
+def why_refused(
+    fix: Any, segments: list[dict[str, Any]], allowed: set[int], glossary: str, protected: set[int] | frozenset[int] = frozenset(),
+) -> str:
+    """Why ``held_to_bounds`` turned this fix down, said so the agent can fix
+    and send it again (2026-11-05: four fixes refused with one general
+    sentence were never resent; each lacked nth)."""
+    if not isinstance(fix, dict):
+        return "不是对象。"
+    try:
+        index = int(fix.get("id"))
+    except (TypeError, ValueError):
+        return "id 不是这一页里句子的编号。"
+    if index in protected:
+        return "这句是用户改过的，不改。"
+    if index not in allowed or not 0 <= index < len(segments):
+        return "这句不在这一页。"
+    sentence = _text(segments[index])
+    old, new = str(fix.get("from") or ""), str(fix.get("to") or "").strip()
+    if old and old not in sentence:
+        return f"from「{old}」不在这句里，照句子原样写。"
+    if not sc._acceptable(old, new, sentence):
+        return "这不是换一个词：from 要短、只框住听错的部分，to 和它差不多长，不加括号里的内容，也不能只改大小写或空格。"
+    count = sentence.count(old)
+    if count > 1 and _position(sentence, old, fix.get("nth")) is None:
+        return f"from「{old}」在这句里出现 {count} 次，加 nth 写明改第几次（从 1 数）再交。"
+    return "词表里没有支持这个改法的条目，也没有写 why；有依据就写进 why 再交。"
+
+
 def held_to_bounds(
     fix: Any, segments: list[dict[str, Any]], allowed: set[int], glossary: str,
 ) -> dict[str, Any] | None:
