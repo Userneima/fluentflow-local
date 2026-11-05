@@ -228,3 +228,13 @@ describe('the transcript following the playback', () => {
         expect(scrolled.at(-1)).toContain('00:22');
     });
 });
+
+// The note follows the playback in every editor (decision 6.56): opening a
+// record with no extra address reads the note's section times.
+describe('the note following the playback', () => {
+    it('reads the section times without anything added to the address', async () => {
+        jobs.t1 = {result: task('t1', {summary_markdown: '## 一、开场\n\n内容'})};
+        mount('/editor?task=t1');
+        await waitFor(() => expect(globalThis.fetch.mock.calls.some(([url]) => String(url).includes('/jobs/t1/note/section-times'))).toBe(true));
+    });
+});

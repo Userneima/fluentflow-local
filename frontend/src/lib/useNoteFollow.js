@@ -2,7 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {alsoAt, matchRows, normalizeRows, noteSections, rowHolds, sectionAt} from './noteFollow.js';
 
 // The editor page's side of the note following playback (decision 6.37,
-// mock-up behind `?follow=on`). Reads the section times every POLL_MS while
+// on in every editor, decision 6.56). Reads the section times every POLL_MS while
 // the note is open, and asks the service to match whatever has no time (an
 // older note, a heading renamed here, an earlier try that failed): the
 // service waits for typing to stop, backs off after a failure and ignores a

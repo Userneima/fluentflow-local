@@ -337,9 +337,6 @@ const Editor = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const urlTaskId = searchParams.get('task') || '';
     const urlWantsCutReview = searchParams.get('review') === 'cut';
-    // Mock-up of the note following playback (decision 6.37), off unless the
-    // address asks for it.
-    const followMockup = searchParams.get('follow') === 'on';
     const [urlTask, setUrlTask] = useState({id: '', state: 'idle'});
     const urlTaskIdRef = useRef(urlTaskId);
     urlTaskIdRef.current = urlTaskId;
@@ -972,7 +969,7 @@ const Editor = () => {
         if (follow) setFollowPlayback(true);
     }, [playbackDuration, updateMediaCurrentTime]);
     const noteFollow = useNoteFollow({
-        enabled: followMockup,
+        enabled: true,
         taskId: result?.task_id || '',
         noteReady,
         markdown: summaryMarkdownForEditor,
@@ -1010,8 +1007,8 @@ const Editor = () => {
     }, []);
     const followSwitch = (
         <button type="button" onClick={followPlayback ? pauseFollowing : resumeFollowing} aria-pressed={followPlayback} className={chip(followPlayback)}>
-            {/* With the note following too, each switch names what it moves. */}
-            {followMockup ? (lang === 'zh' ? '转录稿跟随' : 'Transcript follows') : t('edit.followPlayback')}
+            {/* The note follows too, so each switch names what it moves. */}
+            {t('edit.followPlayback')}
         </button>
     );
     useEffect(() => {

@@ -1,4 +1,4 @@
-// The note following playback (decision 6.37, mock-up behind `?follow=on`).
+// The note following playback (decision 6.37, on in every editor, decision 6.56).
 // The service keeps, for the level-2 and level-3 headings, the span of the
 // recording each came from (`note_section_times`, one row per section with a
 // stable `id`). How a row finds its section in the note as it is now is the

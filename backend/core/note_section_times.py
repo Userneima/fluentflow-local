@@ -604,7 +604,7 @@ def switched_on() -> bool:
 def start() -> None:
     """Called at service start. Saved notes are matched on their own only
     when ``FLUENTFLOW_NOTE_SECTION_TIMES`` is on (the mock-up's switch for the
-    service; the page's is ``?follow=on``): each match is a model call. Off in
+    service; the page asks whenever a note is open): each match is a model call. Off in
     tests and scripts, which save notes without wanting one."""
     global _enabled
     _enabled = switched_on()

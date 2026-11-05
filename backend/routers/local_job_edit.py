@@ -174,7 +174,7 @@ def update_job_summary(
 
 @router.post("/jobs/{task_id}/note/section-times")
 def request_note_section_times(request: Request, task_id: str) -> dict[str, Any]:
-    """The editor has a note open (``?follow=on``) and some of its sections
+    """The editor has a note open and some of its sections
     have no time: an older note, a heading renamed, an earlier try that
     failed. Queues one match; the page may ask on every look. Writes only the
     table, never the note."""
