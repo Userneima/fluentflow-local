@@ -8,6 +8,8 @@ Requirements (owner, 2026-10-16):
    copy is kept and used next time, offline included. An unreadable one is
    ignored and the copy shipped with the build stands.
 3. Nothing about the user is sent: the request carries no data.
+4. The kept copy is never seen half written: two refreshes can overlap, and a
+   reader between a truncate and the write read an empty file (CI, 2026-11-05).
 """
 
 from __future__ import annotations
@@ -76,3 +78,25 @@ def test_the_table_is_checked_at_most_once_a_day(monkeypatch):
     model_defaults.table(now=1_000_000 + 3600)
     model_defaults.table(now=1_000_000 + 25 * 3600)
     assert len(started) == 2
+
+
+def test_the_kept_copy_is_swapped_in_whole(monkeypatch, tmp_path):
+    cache = tmp_path / "table.json"
+    cache.write_text(json.dumps({"providers": {"deepseek": {"text": "deepseek-old"}}}), encoding="utf-8")
+    seen_before_swap = []
+    real_replace = model_defaults.os.replace
+
+    def replace(source, target):
+        # Up to the swap, the kept copy is still the whole old one.
+        seen_before_swap.append(json.loads(cache.read_text(encoding="utf-8")))
+        real_replace(source, target)
+
+    monkeypatch.setenv(model_defaults.URL_ENV, "https://example.test/table.json")
+    monkeypatch.setattr(model_defaults.httpx, "get",
+                        lambda *a, **k: httpx.Response(200, json={"providers": {"deepseek": {"text": "deepseek-new"}}}))
+    monkeypatch.setattr(model_defaults.os, "replace", replace)
+    model_defaults._refresh()
+
+    assert seen_before_swap == [{"providers": {"deepseek": {"text": "deepseek-old"}}}]
+    assert json.loads(cache.read_text(encoding="utf-8"))["providers"]["deepseek"]["text"] == "deepseek-new"
+    assert [p.name for p in tmp_path.iterdir()] == ["table.json"], "no temporary file is left behind"

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -89,7 +90,17 @@ def _refresh() -> None:
     try:
         cache = _cache_file()
         cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"providers": fetched}, ensure_ascii=False), encoding="utf-8")
+        # Written beside it and swapped in whole: two refreshes can overlap (a
+        # stale check starts one while another runs), and a reader caught
+        # between a truncate and the write read an empty file (CI, 2026-11-05).
+        fd, temp = tempfile.mkstemp(dir=cache.parent, prefix=f".{cache.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"providers": fetched}, ensure_ascii=False))
+            os.replace(temp, cache)
+        except BaseException:
+            Path(temp).unlink(missing_ok=True)
+            raise
     except OSError:
         logger.info("could not keep the model table", exc_info=True)
     with _lock:
