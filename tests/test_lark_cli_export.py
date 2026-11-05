@@ -314,3 +314,17 @@ def test_a_note_whose_lists_all_start_at_one_reads_nothing_more(tmp_path):
     _export("# 标题\n\n1. 甲\n2. 乙\n", runner, None)
 
     assert not any("full" in c["cmd"] for c in runner.of("+fetch"))
+
+
+def test_an_item_that_reads_like_another_list_item_is_left_alone(tmp_path):
+    note = "# 标题\n\n1. 同一句\n\n> 引用\n\n2. 同一句\n"
+    shown = (
+        '<ol><li id="doxA" seq="1" seq-marker="1. ">同一句</li></ol>'
+        '<blockquote id="doxQ"><p id="doxP">引用</p></blockquote>'
+        '<ol><li id="doxB" seq="1" seq-marker="1. ">同一句</li></ol>'
+    )
+    runner = FakeCli(outline=shown)
+
+    _export(note, runner, None)
+
+    assert not [c for c in runner.of("+update") if _flag(c["cmd"], "--command") == "block_replace"]

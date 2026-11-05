@@ -686,7 +686,7 @@ _RE_FEISHU_LIST_START = re.compile(r'<ol><li id="([^"]+)"[^>]*\bseq="1"[^>]*>(.*
 
 def _list_item_key(text: str) -> str:
     plain = re.sub(r"\]\([^)]*\)|<[^>]+>|&[a-z]+;|[*`_\[\]]", "", text)
-    return re.sub(r"\s+", "", plain)[:24]
+    return re.sub(r"\s+", "", plain)
 
 
 def _restore_list_numbers(
@@ -703,15 +703,22 @@ def _restore_list_numbers(
     leaves the document as it is."""
     # Only an item numbered past 1 right after something other than a list
     # item can have been restarted; a note without one is not read again.
-    numbers: dict[str, list[int]] = {}
+    # An item is matched by its whole text, and only when no other list item
+    # in the note reads the same, so no other list is ever renumbered.
+    numbers: dict[str, int] = {}
+    seen: dict[str, int] = {}
     previous = ""
     for line in "\n".join(part.text for part in parts).split("\n"):
         if not line.strip():
             continue
         match = _RE_NOTE_ORDERED.match(line)
-        if match and int(match.group(1)) != 1 and not _RE_NOTE_ORDERED.match(previous):
-            numbers.setdefault(_list_item_key(match.group(2)), []).append(int(match.group(1)))
+        if match:
+            key = _list_item_key(match.group(2))
+            seen[key] = seen.get(key, 0) + 1
+            if int(match.group(1)) != 1 and not _RE_NOTE_ORDERED.match(previous):
+                numbers[key] = int(match.group(1))
         previous = line
+    numbers = {key: number for key, number in numbers.items() if seen[key] == 1}
     if not numbers:
         return
     try:
@@ -725,15 +732,15 @@ def _restore_list_numbers(
         return
     document = fetched.get("document") if isinstance(fetched.get("document"), dict) else fetched
     for match in _RE_FEISHU_LIST_START.finditer(str(document.get("content") or "")):
-        found = numbers.get(_list_item_key(match.group(2))) or []
-        if len(found) != 1:
+        number = numbers.get(_list_item_key(match.group(2)))
+        if number is None:
             continue
         try:
             _run(
                 runner,
                 [bin_path, "docs", "+update", "--doc", doc_id, "--command", "block_replace",
                  "--block-id", match.group(1),
-                 "--content", f'<ol><li seq="{found[0]}">{match.group(2)}</li></ol>', "--as", "user"],
+                 "--content", f'<ol><li seq="{number}">{match.group(2)}</li></ol>', "--as", "user"],
                 timeout=60,
             )
         except LarkCliError as exc:
