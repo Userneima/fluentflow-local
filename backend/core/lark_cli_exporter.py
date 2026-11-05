@@ -676,7 +676,68 @@ def _finish(
         revision = (updated.get("document") or {}).get("revision_id") if isinstance(updated.get("document"), dict) else None
         if revision is not None:
             sync["revision_id"] = revision
+    _restore_list_numbers(runner, bin_path, doc_id, parts)
     _snapshot(runner, bin_path, doc_id, sync)
+
+
+_RE_NOTE_ORDERED = re.compile(r"^\s*(\d+)[.）]\s+(.+)$")
+_RE_FEISHU_LIST_START = re.compile(r'<ol><li id="([^"]+)"[^>]*\bseq="1"[^>]*>(.*?)</li>', re.S)
+
+
+def _list_item_key(text: str) -> str:
+    plain = re.sub(r"\]\([^)]*\)|<[^>]+>|&[a-z]+;|[*`_\[\]]", "", text)
+    return re.sub(r"\s+", "", plain)[:24]
+
+
+def _restore_list_numbers(
+    runner: Runner, bin_path: str, doc_id: str, parts: List[feishu_note.Section],
+) -> None:
+    """Give back the number of a list item that Feishu restarted at 1.
+
+    Feishu numbers each run of adjacent list items from 1, and its markdown
+    import keeps no number, so an item cut off from its list by a block between
+    items (a check quote under item 2, say) showed as 1 instead of 3. Each list
+    that starts at 1 in the document while the note numbers that item higher
+    gets its number set (checked against lark-cli 1.0.70, 2026-11-05: an
+    ``<li seq="3">`` written with ``block_replace`` shows as 3). A failure
+    leaves the document as it is."""
+    # Only an item numbered past 1 right after something other than a list
+    # item can have been restarted; a note without one is not read again.
+    numbers: dict[str, list[int]] = {}
+    previous = ""
+    for line in "\n".join(part.text for part in parts).split("\n"):
+        if not line.strip():
+            continue
+        match = _RE_NOTE_ORDERED.match(line)
+        if match and int(match.group(1)) != 1 and not _RE_NOTE_ORDERED.match(previous):
+            numbers.setdefault(_list_item_key(match.group(2)), []).append(int(match.group(1)))
+        previous = line
+    if not numbers:
+        return
+    try:
+        fetched = _run(
+            runner,
+            [bin_path, "docs", "+fetch", "--doc", doc_id, "--detail", "full", "--as", "user"],
+            timeout=60,
+        )
+    except LarkCliError as exc:
+        logger.warning("lark-cli could not read %s to check list numbers: %s", doc_id, exc)
+        return
+    document = fetched.get("document") if isinstance(fetched.get("document"), dict) else fetched
+    for match in _RE_FEISHU_LIST_START.finditer(str(document.get("content") or "")):
+        found = numbers.get(_list_item_key(match.group(2))) or []
+        if len(found) != 1:
+            continue
+        try:
+            _run(
+                runner,
+                [bin_path, "docs", "+update", "--doc", doc_id, "--command", "block_replace",
+                 "--block-id", match.group(1),
+                 "--content", f'<ol><li seq="{found[0]}">{match.group(2)}</li></ol>', "--as", "user"],
+                timeout=60,
+            )
+        except LarkCliError as exc:
+            logger.warning("lark-cli could not renumber a list item in %s: %s", doc_id, exc)
 
 
 def _snapshot(runner: Runner, bin_path: str, doc_id: str, sync: dict[str, Any]) -> None:

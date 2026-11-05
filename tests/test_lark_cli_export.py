@@ -285,3 +285,32 @@ def test_lark_cli_counts_as_ready_only_with_a_signed_in_user():
 def test_lark_cli_is_not_ready_when_it_is_not_installed(monkeypatch):
     monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: None)
     assert cli.lark_cli_ready(runner=_status({"available": True})) is False
+
+
+# ── list numbers ────────────────────────────────────────────────────────────
+
+def test_a_list_item_feishu_restarted_at_one_gets_its_note_number_back(tmp_path):
+    """Feishu numbers each run of list items from 1, so a check quote under
+    item 2 made item 3 of a synced note show as 1 (owner, 2026-11-05)."""
+    note = "# 标题\n\n1. 甲\n2. 乙\n\n   > 核对：乙\n\n3. **Chronicle**：丙\n"
+    shown = (
+        '<ol><li id="doxA" seq="1" seq-marker="1. ">甲</li><li id="doxB" seq-marker="2. ">乙</li></ol>'
+        '<blockquote id="doxQ"><p id="doxP">核对：乙</p></blockquote>'
+        '<ol><li id="doxC" seq="1" seq-marker="1. "><b>Chronicle</b>：丙</li></ol>'
+    )
+    runner = FakeCli(outline=shown)
+
+    _export(note, runner, None)
+
+    replaced = [c["cmd"] for c in runner.of("+update") if _flag(c["cmd"], "--command") == "block_replace"]
+    assert len(replaced) == 1, "only the list that restarted is touched"
+    assert _flag(replaced[0], "--block-id") == "doxC"
+    assert _flag(replaced[0], "--content") == '<ol><li seq="3"><b>Chronicle</b>：丙</li></ol>'
+
+
+def test_a_note_whose_lists_all_start_at_one_reads_nothing_more(tmp_path):
+    runner = FakeCli()
+
+    _export("# 标题\n\n1. 甲\n2. 乙\n", runner, None)
+
+    assert not any("full" in c["cmd"] for c in runner.of("+fetch"))
