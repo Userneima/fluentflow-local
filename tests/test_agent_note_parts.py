@@ -29,7 +29,11 @@ than the code:
 - A conversation coming back to a note left half written learns which parts are
   missing without fetching the material, and is told to hand them to a fresh
   subagent (2026-10-27: the main conversation wrote the rest itself, slowly).
-- A part saved against a transcript that has since changed is not used.
+- A part saved against a transcript that has since changed is not used while
+  the note is still being written. Once the parts are joined into the note, a
+  word corrected in the transcript afterwards does not undo them: each part
+  can still be read back and saved on its own (2026-11-05: four corrections
+  after lesson four's note made three parts read as never saved).
 - Re-saving a part never overwrites changes made to the note after it was joined
   (an edit in the editor, another writer); a whole note handed back is accepted.
 """
@@ -361,3 +365,26 @@ def test_the_read_through_writes_the_title_and_opening_that_part_one_carries(job
     assert note.startswith("# 最小二乘法从推导到前提")
     assert note.count("\n# ") == 0, "one title"
     assert note.index("这一课讲最小二乘法") < note.index("第 1 部分讲的内容")
+
+
+def test_after_the_join_a_corrected_word_leaves_every_part_readable_and_savable(job_store, tmp_path, small_parts):
+    _long(job_store)
+    total = _material(tmp_path)["total_parts"]
+    for index in range(1, total + 1):
+        _save(index)
+    assert job_store["result"]["summary_markdown"] != "原来的文字笔记"
+
+    # A misheard word corrected after the note was written.
+    segments = job_store["result"]["display_segments"]
+    middle = len(segments) // 2
+    segments[middle] = {**segments[middle], "text": segments[middle]["text"].replace("最小二乘法", "最小二乘")}
+    assert _material(tmp_path)["total_parts"] == total
+
+    for index in range(1, total + 1):
+        assert "部分讲的内容" in an.saved_part(TASK, part=index, client_id="anonymous")["markdown"]
+    again = _save(2, _note(2) + "\n\n通读后补上的一句。")
+    assert again["completed"] is True and again["remaining_parts"] == []
+    note = job_store["result"]["summary_markdown"]
+    assert "通读后补上的一句" in note
+    for index in range(1, total + 1):
+        assert f"第 {index} 部分讲的内容" in note

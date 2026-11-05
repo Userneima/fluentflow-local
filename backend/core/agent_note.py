@@ -536,7 +536,7 @@ def save_part(
     if joined and joined != _hash(str(result.get("summary_markdown") or "")):
         store = {}
         joined = None
-    saved = _valid_parts(store, parts)
+    saved = _valid_parts(store, parts, joined=bool(joined))
     coverage = _not_again([target]) if part in saved else _coverage([draft], [target], checker)
     saved[part] = _stored(target, draft.markdown, coverage["parts"][0])
     basis_note = basis_note or str(store.get("basis_note") or "")
@@ -620,7 +620,10 @@ def saved_part(task_id: str, *, part: int, client_id: str | None = None) -> dict
     _media, parts, _segments = _eligible(task_id, job)
     if not 1 <= part <= len(parts):
         raise AgentNoteError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")
-    saved = _valid_parts(_read_store(task_id), parts)
+    store = _read_store(task_id)
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    joined = bool(store.get("joined_hash")) and store.get("joined_hash") == _hash(str(result.get("summary_markdown") or ""))
+    saved = _valid_parts(store, parts, joined=joined)
     if part not in saved:
         raise AgentNoteError(f"第 {part} 部分还没有保存过（或转录改过之后没有重新保存）")
     return {
@@ -727,12 +730,21 @@ def _read_store(task_id: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _valid_parts(store: dict[str, Any], parts: list[claude_vision.TranscriptPart]) -> dict[int, dict[str, Any]]:
+def _valid_parts(store: dict[str, Any], parts: list[claude_vision.TranscriptPart], *,
+                 joined: bool = False) -> dict[int, dict[str, Any]]:
     """The saved parts that still match the transcript as it is now split.
 
-    A part is kept only while its stretch of transcript is unchanged: after an
-    edit to the transcript, or a change in how it splits, the saved note no
-    longer describes that stretch and is written again.
+    While the note is being written, a part is kept only while its stretch of
+    transcript is unchanged: after an edit to the transcript, or a change in
+    how it splits, the saved note no longer describes that stretch and is
+    written again.
+
+    Once they are joined into the task's note (``joined``), the parts are that
+    note's pieces, and a word corrected in the transcript afterwards does not
+    undo them: they are kept while the transcript splits into as many parts,
+    so the read-through and a later fix can still read and save one part
+    (2026-11-05: four corrections after lesson four's note made parts 5, 6 and
+    9 read as never saved, and the note could only be saved whole).
     """
     saved = store.get("parts") if isinstance(store.get("parts"), dict) else {}
     if store.get("total_parts") != len(parts):
@@ -740,7 +752,7 @@ def _valid_parts(store: dict[str, Any], parts: list[claude_vision.TranscriptPart
     valid = {}
     for part in parts:
         entry = saved.get(str(part.index))
-        if isinstance(entry, dict) and entry.get("transcript_hash") == _hash(part.text):
+        if isinstance(entry, dict) and (joined or entry.get("transcript_hash") == _hash(part.text)):
             valid[part.index] = entry
     return valid
 
