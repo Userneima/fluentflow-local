@@ -328,3 +328,18 @@ def test_an_item_that_reads_like_another_list_item_is_left_alone(tmp_path):
     _export(note, runner, None)
 
     assert not [c for c in runner.of("+update") if _flag(c["cmd"], "--command") == "block_replace"]
+
+
+def test_an_item_with_an_ampersand_still_matches_feishus_escaped_text(tmp_path):
+    note = "# 标题\n\n1. 甲\n\n> 引用\n\n2. 读 A & B\n"
+    shown = (
+        '<ol><li id="doxA" seq="1" seq-marker="1. ">甲</li></ol>'
+        '<blockquote id="doxQ"><p id="doxP">引用</p></blockquote>'
+        '<ol><li id="doxB" seq="1" seq-marker="1. ">读 A &amp; B</li></ol>'
+    )
+    runner = FakeCli(outline=shown)
+
+    _export(note, runner, None)
+
+    replaced = [c["cmd"] for c in runner.of("+update") if _flag(c["cmd"], "--command") == "block_replace"]
+    assert [_flag(c, "--block-id") for c in replaced] == ["doxB"]

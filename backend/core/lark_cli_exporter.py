@@ -40,6 +40,7 @@ screenshot became. It is what keeping the two copies in step starts from.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
 import os
@@ -685,7 +686,9 @@ _RE_FEISHU_LIST_START = re.compile(r'<ol><li id="([^"]+)"[^>]*\bseq="1"[^>]*>(.*
 
 
 def _list_item_key(text: str) -> str:
-    plain = re.sub(r"\]\([^)]*\)|<[^>]+>|&[a-z]+;|[*`_\[\]]", "", text)
+    # Feishu's XML escapes & < > that the note writes as they are.
+    plain = html.unescape(re.sub(r"<[^>]+>", "", text))
+    plain = re.sub(r"\]\([^)]*\)|[*`_\[\]]", "", plain)
     return re.sub(r"\s+", "", plain)
 
 
