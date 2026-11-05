@@ -1963,73 +1963,110 @@ def run_glossary_correction(task_id: str, api_base: str | None = None, client_id
     ))
 
 
+_REVIEW_WRITER = {
+    "type": "string", "enum": ["agent", "fluentflow"], "default": "agent",
+    "description": "agent (default): you write it from the material. fluentflow: FluentFlow's own model does.",
+}
+_REVIEW_AGENT_FIELDS = {
+    "part": {"type": "integer", "default": 1, "description": "Which part of the material to read, 1 to total_parts."},
+    "note_markdown": {"type": "string", "description": "The whole note you wrote; leave out to read the material."},
+    "material_version": {"type": "string", "description": "From the material, required with note_markdown."},
+    "model": {"type": "string", "description": "Which model wrote it, recorded on the note."},
+}
+
+
+def _review_note(
+    payload: dict[str, Any], writer: str, part: int, note_markdown: str | None, material_version: str | None,
+    model: str, model_route: str, model_timeout: float, tool_name: str, api_base: str | None, client_id: str | None,
+) -> dict[str, Any]:
+    """The review note written by the agent at hand (the default, decision
+    5.47) or by FluentFlow's model; the same material and checks either way."""
+    if writer == "fluentflow":
+        return _held(tool_name, payload, lambda: _agent_request(
+            "POST", model_route, api_base=api_base, client_id=client_id, payload=payload, timeout=model_timeout,
+        ))
+    if note_markdown:
+        return _agent_request(
+            "POST", "/agent/v1/review-notes/agent", api_base=api_base, client_id=client_id, timeout=300,
+            payload={**payload, "note_markdown": note_markdown, "material_version": material_version, "model": model},
+        )
+    answer = _agent_request(
+        "POST", "/agent/v1/review-notes/agent-material", api_base=api_base, client_id=client_id, timeout=120,
+        payload={**payload, "part": int(part or 1)},
+    )
+    if answer.get("ok") is not False:
+        last = answer.get("part") == answer.get("total_parts")
+        answer["next"] = (
+            f"Read every part first (part=2 up to {answer.get('total_parts')}). " if not last else ""
+        ) + (f"Write the whole note as the rules in part 1 say, then call {tool_name} again with the same "
+             "arguments plus note_markdown, material_version and model.")
+    return _with_length(answer)
+
+
 @tool(
-    description=("Write the review note (复习笔记) for a recording: a second note, beside the follow-along note "
-        "(<名>_笔记.md), reorganised by topic for learning it again later. It opens with the main line and a "
-        "map of the chapters; each point appears once with its sources as links back to the follow-along "
-        "note's chapters plus the time in the cut video; the user's own question boxes are folded into the "
-        "points they ask about; the speaker's predictions are marked as the judgement at recording time; "
-        "then a term list, 10 to 15 self-test questions, what is still unclear, and which version of the "
-        "follow-along note it was written from. Written as <名>_复习笔记.md with a PDF beside it; an earlier "
-        "one is kept in 过程文件/历史版本. The base is the follow-along md as it is on disk now, with the "
-        "user's corrections; later edits to it do not change the review note until it is written again. "
-        "Give task_id, or note_path (the follow-along md's path) when the user moved the output folder and "
-        "FluentFlow can no longer find it; with note_path only, the task is found from the folder when it "
-        "can be (given both, they must be the same note). note_path must be a follow-along note in the "
-        "user's home folder. A second task's note on the same recording (<名>_笔记 (2).md) gets "
-        "<名>_复习笔记 (2).md. Only when the user asks for one. Uses the Claude subscription first when this machine "
-        "opted into it, the user's key taking over if it fails; takes about ten minutes for a three-hour "
-        "recording. Refused with code review_note_failed and the reason (no model, the note not found, an "
-        "incomplete answer: nothing is written and the task is not affected), already_running while one is "
-        "being written."),
+    description=("Write the review note (复习笔记): a second note beside the follow-along note (<名>_笔记.md), "
+        "reorganised by topic for learning it again, written from the follow-along md as it is on disk now, "
+        "with the user's corrections. Only when the user asks. By default you write it: call without "
+        "note_markdown for the material (part 1 has the writing rules, then the note, its chapter table and "
+        "the cut video's transcript), read every part, write the note as the rules say and call again with "
+        "note_markdown and material_version. Hand this to a new subagent with a fresh context. FluentFlow "
+        "turns the 〔S12 1:05:20〕 sources into links back to the follow-along note, writes "
+        "<名>_复习笔记.md with a PDF and keeps an earlier one in 过程文件/历史版本. writer=fluentflow has "
+        "FluentFlow's own model write it instead (about ten minutes for three hours). Give task_id, or "
+        "note_path (the follow-along md) when the user moved the output folder. Refused with code stale when "
+        "a note changed after you read the material (read it again), review_note_failed with the reason "
+        "(nothing written), already_running."),
     input_schema={
         "type": "object",
         "properties": {
             "task_id": {"type": "string"},
             "note_path": {"type": "string", "description": "The follow-along note md, when the output folder was moved."},
-            "api_base": {"type": "string"},
+            "writer": _REVIEW_WRITER,
+            **_REVIEW_AGENT_FIELDS,
         },
     },
 )
 def write_review_note(
-    task_id: str | None = None, note_path: str | None = None, api_base: str | None = None, client_id: str | None = None,
+    task_id: str | None = None, note_path: str | None = None, writer: str = "agent", part: int = 1,
+    note_markdown: str | None = None, material_version: str | None = None, model: str = "",
+    api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    payload = {"task_id": task_id, "note_path": note_path}
-    return _held("write_review_note", payload, lambda: _agent_request(
-        "POST", "/agent/v1/review-notes",
-        api_base=api_base, client_id=client_id, payload=payload, timeout=2700,
-    ))
+    return _review_note(
+        {"task_id": task_id, "note_path": note_path}, writer, part, note_markdown, material_version, model,
+        "/agent/v1/review-notes", 2700, "write_review_note", api_base, client_id,
+    )
 
 
 @tool(
-    description=("Change an existing review note as the user asked, without writing it again from the "
-        "follow-along note: pass the user's feedback as instruction (what to change and what to leave). "
-        "The rest of the note, its sources, question boxes and term list stay as they are; the links back to "
-        "the follow-along note are kept exactly. The previous version goes to 过程文件/历史版本 and the PDF "
-        "is printed again. Give task_id, or note_path (the review note or the follow-along note beside it). "
-        "Takes a few minutes. Refused with code review_note_failed and the reason when there is no review "
-        "note yet or the answer was incomplete (nothing is written). unknown_sources lists citations the "
-        "model got wrong (written as （出处待核）); lost_links lists old links it dropped."),
+    description=("Change an existing review note as the user asked instead of writing it again: instruction is "
+        "the user's feedback (what to change, what to leave). Works like write_review_note: by default you "
+        "read the material in parts (the rules, the feedback, the current note with sources as 〔编号 时间〕 "
+        "and old links as 〔L1〕 to copy as they are), write the whole changed note and call again with "
+        "note_markdown and material_version; writer=fluentflow has FluentFlow's model do it. The previous "
+        "version goes to 过程文件/历史版本 and the PDF is printed again. Give task_id, or note_path (the review "
+        "note or the follow-along note). unknown_sources lists citations matching no chapter (written as "
+        "（出处待核）); lost_links lists old links the new note dropped."),
     input_schema={
         "type": "object",
         "properties": {
             "task_id": {"type": "string"},
             "note_path": {"type": "string"},
             "instruction": {"type": "string"},
-            "api_base": {"type": "string"},
+            "writer": _REVIEW_WRITER,
+            **_REVIEW_AGENT_FIELDS,
         },
         "required": ["instruction"],
     },
 )
 def revise_review_note(
-    instruction: str, task_id: str | None = None, note_path: str | None = None,
+    instruction: str, task_id: str | None = None, note_path: str | None = None, writer: str = "agent",
+    part: int = 1, note_markdown: str | None = None, material_version: str | None = None, model: str = "",
     api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    payload = {"task_id": task_id, "note_path": note_path, "instruction": instruction}
-    return _held("revise_review_note", payload, lambda: _agent_request(
-        "POST", "/agent/v1/review-notes/revise",
-        api_base=api_base, client_id=client_id, timeout=1800, payload=payload,
-    ))
+    return _review_note(
+        {"task_id": task_id, "note_path": note_path, "instruction": instruction}, writer, part, note_markdown,
+        material_version, model, "/agent/v1/review-notes/revise", 1800, "revise_review_note", api_base, client_id,
+    )
 
 
 # Every tool, in the order written: each is described where it is defined (``tool``).

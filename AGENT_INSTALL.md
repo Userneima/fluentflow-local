@@ -77,8 +77,9 @@ once the task is done, `wait_task` names them, and `get_agent_correction_materia
 `save_agent_correction` hand over one page at a time and take the answer back, recorded and undone
 like the background's.
 When the user wants a review note (复习笔记, a second note reorganised by topic for learning
-it again), `write_review_note` writes it beside the follow-along note from the md the user
-corrected, and `revise_review_note` changes it at their word without starting over.
+it again), `write_review_note` hands the agent the material to write it from the md the user
+corrected and saves it beside the follow-along note, and `revise_review_note` changes it at their
+word without starting over; with `writer="fluentflow"` FluentFlow's own model writes instead.
 `get_cut_report` shows what the cut removed and kept; `flip_cut_decision` (after the user
 agrees) turns one decision around and renders the cut again. `stop_task_step` stops the
 step a task is on, `cancel_task` cancels one still transcribing, and `resume_task` carries

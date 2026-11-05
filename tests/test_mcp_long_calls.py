@@ -42,8 +42,8 @@ def backend(monkeypatch):
 
 
 SLOW_CALLS = [
-    ("write_review_note", {"task_id": "t1"}),
-    ("revise_review_note", {"task_id": "t1", "instruction": "术语表加上 RAG"}),
+    ("write_review_note", {"task_id": "t1", "writer": "fluentflow"}),
+    ("revise_review_note", {"task_id": "t1", "instruction": "术语表加上 RAG", "writer": "fluentflow"}),
     ("run_glossary_correction", {"task_id": "t1"}),
     ("draft_note_part", {"task_id": "t1", "rules": "规则", "part": 2}),
     ("save_agent_note", {"task_id": "t1", "note_markdown": "# 笔记", "model_check": True}),
@@ -74,8 +74,8 @@ def test_a_slow_call_says_still_working_and_the_repeat_waits_on_the_same_run(bac
 
 def test_different_arguments_are_a_different_run(backend):
     calls, release = backend
-    server._call_tool("revise_review_note", {"task_id": "t1", "instruction": "改 A"})
-    server._call_tool("revise_review_note", {"task_id": "t1", "instruction": "改 B"})
+    server._call_tool("revise_review_note", {"task_id": "t1", "instruction": "改 A", "writer": "fluentflow"})
+    server._call_tool("revise_review_note", {"task_id": "t1", "instruction": "改 B", "writer": "fluentflow"})
     assert [payload["instruction"] for _path, payload in calls] == ["改 A", "改 B"]
     release.set()
 
@@ -83,7 +83,7 @@ def test_different_arguments_are_a_different_run(backend):
 def test_a_call_that_finishes_in_time_is_answered_directly(backend):
     calls, release = backend
     release.set()
-    answer = server._call_tool("write_review_note", {"task_id": "t1"})
+    answer = server._call_tool("write_review_note", {"task_id": "t1", "writer": "fluentflow"})
     assert '"written": true' in answer["content"][0]["text"]
     assert len(calls) == 1
 

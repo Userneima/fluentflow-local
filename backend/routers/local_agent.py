@@ -1769,7 +1769,7 @@ def _review_note_call(request: Request, payload: dict[str, Any], run: Any) -> di
     try:
         return {"ok": True, **run(review_note, task_id, note_path)}
     except review_note.ReviewNoteError as exc:
-        raise HTTPException(status_code=409 if exc.code == "already_running" else 422,
+        raise HTTPException(status_code=409 if exc.code in ("already_running", "stale") else 422,
                             detail={"code": exc.code, "message": str(exc)}) from exc
 
 
@@ -1778,6 +1778,28 @@ def write_review_note(request: Request, payload: dict[str, Any] = Body(default_f
     """Write the review note beside a task's follow-along note, or beside the
     md at ``note_path`` when the output folder was moved."""
     return _review_note_call(request, payload, lambda core, task_id, note_path: core.generate(task_id, note_path))
+
+
+def _instruction(payload: dict[str, Any]) -> str | None:
+    """Revising when the agent passes the user's feedback, writing when not."""
+    value = payload.get("instruction")
+    return None if value is None else str(value)
+
+
+@router.post("/review-notes/agent-material")
+def review_note_agent_material(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """One part of the review note's material, for the agent to write (or,
+    with ``instruction``, revise) it itself (decision 5.47)."""
+    return _review_note_call(request, payload, lambda core, task_id, note_path: core.agent_material(
+        task_id, note_path, _instruction(payload), int(payload.get("part") or 1)))
+
+
+@router.post("/review-notes/agent")
+def save_review_note_from_agent(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Write the review note the agent wrote from that material."""
+    return _review_note_call(request, payload, lambda core, task_id, note_path: core.save_from_agent(
+        str(payload.get("note_markdown") or ""), str(payload.get("material_version") or ""),
+        task_id=task_id, note_path=note_path, instruction=_instruction(payload), model=str(payload.get("model") or "")))
 
 
 @router.post("/review-notes/revise")

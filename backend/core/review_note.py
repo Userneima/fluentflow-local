@@ -514,7 +514,9 @@ def generate(task_id: str | None = None, note_path: str | None = None, *, chat: 
             _running.discard(key)
 
 
-def _generate(path: Path, job: dict[str, Any] | None, chat: tuple[Chat, str] | None) -> dict[str, Any]:
+def _write_inputs(path: Path, job: dict[str, Any] | None) -> dict[str, Any]:
+    """What writing the review note reads: the same for FluentFlow's model and
+    for an agent (``agent_material``), so both write from one material."""
     text = path.read_text(encoding="utf-8")
     if not text.strip():
         raise ReviewNoteError("底稿是空的。")
@@ -527,19 +529,43 @@ def _generate(path: Path, job: dict[str, Any] | None, chat: tuple[Chat, str] | N
         note_markdown=text, note_name=path.name, table=table, transcript=transcript,
         version=version, playback_name=_playback_name(path), glossary=correction_notes.for_path(path),
     )
+    return {"version": version, "table": table, "system": system, "user": user}
+
+
+def _model(chat: tuple[Chat, str] | None) -> tuple[Chat, str]:
     found = chat if chat is not None else default_chat()
     if found is None:
         raise ReviewNoteError("这台电脑上没有能写复习笔记的模型：没登录 Claude 订阅，也没有配置 Key。")
-    ask, channel = found
-    started = datetime.now()
+    return found
+
+
+def _asked(ask: Chat, job: dict[str, Any] | None, system: str, user: str) -> str:
     try:
         with _usage_scope(job):
-            answer = _strip_fence(ask(system, user))
+            return _strip_fence(ask(system, user))
     except Exception as exc:  # noqa: BLE001 - the reason goes back to the agent
         raise ReviewNoteError(f"模型调用失败：{exc}") from exc
+
+
+def _check_complete(answer: str) -> None:
     missing = [heading for heading in REQUIRED_HEADINGS if heading not in answer]
     if missing:
-        raise ReviewNoteError(f"模型的回答不完整（缺「{'」「'.join(h[3:] for h in missing)}」），没有写入，可以再试一次。")
+        raise ReviewNoteError(f"写出的复习笔记不完整（缺「{'」「'.join(h[3:] for h in missing)}」），没有写入，可以再试一次。")
+
+
+def _generate(path: Path, job: dict[str, Any] | None, chat: tuple[Chat, str] | None) -> dict[str, Any]:
+    inputs = _write_inputs(path, job)
+    ask, channel = _model(chat)
+    started = datetime.now()
+    answer = _asked(ask, job, inputs["system"], inputs["user"])
+    return _finish_write(path, job, inputs, answer, _answered_by(ask, channel), started)
+
+
+def _finish_write(
+    path: Path, job: dict[str, Any] | None, inputs: dict[str, Any], answer: str, written_by: str, started: datetime,
+) -> dict[str, Any]:
+    _check_complete(answer)
+    version, table = inputs["version"], inputs["table"]
     note, unknown = expand_sources(answer, table)
     note = _with_base_line(note, version)
     target = review_path_for(path)
@@ -551,7 +577,7 @@ def _generate(path: Path, job: dict[str, Any] | None, chat: tuple[Chat, str] | N
         "pdf_error": pdf.get("error"),
         "base": version,
         "written_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "written_by": _answered_by(ask, channel),
+        "written_by": written_by,
         "seconds": round((datetime.now() - started).total_seconds(), 1),
         "unknown_sources": unknown,
         "timed_sections": sum(1 for row in table if row["start"] is not None),
@@ -582,9 +608,26 @@ def revise(
     again from the base (decision 8.8: a structural or wording change rewrites
     only what it touches). ``note_path`` is the review note or the
     follow-along note beside it; or give the task."""
+    base, review, job = _locate_revision(note_path, instruction, task_id)
+    key = _running_key(base)
+    with _running_lock:
+        if key in _running:
+            raise ReviewNoteError("这份笔记的复习笔记已经在生成了。", code="already_running")
+        _running.add(key)
+    try:
+        return _revise(base, review, job, instruction, chat)
+    finally:
+        with _running_lock:
+            _running.discard(key)
+
+
+def _locate_revision(
+    note_path: str | None, instruction: str, task_id: str | None,
+) -> tuple[Path, Path, dict[str, Any] | None]:
+    """The follow-along note, the review note to change, and their task.
+    ``note_path`` is the review note or the follow-along note beside it."""
     if not instruction.strip():
         raise ReviewNoteError("要说明这次按什么意见改。")
-    review: Path | None = None
     if note_path and _REVIEW_NAME.match(Path(note_path).stem):
         review = _real_md(note_path)
         bases = [candidate for candidate in base_paths_for(review) if candidate.is_file()]
@@ -599,40 +642,35 @@ def revise(
     _refuse_on_test_copy(job)
     if not review.is_file():
         raise ReviewNoteError(f"还没有复习笔记：{review}")
-    key = _running_key(base)
-    with _running_lock:
-        if key in _running:
-            raise ReviewNoteError("这份笔记的复习笔记已经在生成了。", code="already_running")
-        _running.add(key)
-    try:
-        return _revise(base, review, job, instruction, chat)
-    finally:
-        with _running_lock:
-            _running.discard(key)
+    return base, review, job
 
 
-def _revise(
-    base: Path, review: Path, job: dict[str, Any] | None, instruction: str, chat: tuple[Chat, str] | None,
-) -> dict[str, Any]:
+def _revise_inputs(base: Path, review: Path, job: dict[str, Any] | None, instruction: str) -> dict[str, Any]:
     rows = ((job or {}).get("result") or {}).get(note_section_times.RESULT_KEY) or {}
     table = section_table(base.read_text(encoding="utf-8"), base.stem, rows.get("sections") if isinstance(rows, dict) else None)
     current = review.read_text(encoding="utf-8")
     base_line = next(iter(_BASE_LINE.findall(current)), "")
     draft, kept = collapse_sources(_BASE_LINE.sub("", current), table)
-    found = chat if chat is not None else default_chat()
-    if found is None:
-        raise ReviewNoteError("这台电脑上没有能写复习笔记的模型：没登录 Claude 订阅，也没有配置 Key。")
-    ask, channel = found
-    started = datetime.now()
     user = f"# 用户的意见\n\n{instruction.strip()}\n\n# 现在的复习笔记\n\n{draft.strip()}\n"
-    try:
-        with _usage_scope(job):
-            answer = _strip_fence(ask(skill_text() + REVISE_RULES, user))
-    except Exception as exc:  # noqa: BLE001 - the reason goes back to the agent
-        raise ReviewNoteError(f"模型调用失败：{exc}") from exc
-    missing = [heading for heading in REQUIRED_HEADINGS if heading not in answer]
-    if missing:
-        raise ReviewNoteError(f"模型的回答不完整（缺「{'」「'.join(h[3:] for h in missing)}」），没有写入，可以再试一次。")
+    return {"table": table, "base_line": base_line, "kept": kept, "system": skill_text() + REVISE_RULES, "user": user}
+
+
+def _revise(
+    base: Path, review: Path, job: dict[str, Any] | None, instruction: str, chat: tuple[Chat, str] | None,
+) -> dict[str, Any]:
+    inputs = _revise_inputs(base, review, job, instruction)
+    ask, channel = _model(chat)
+    started = datetime.now()
+    answer = _asked(ask, job, inputs["system"], inputs["user"])
+    return _finish_revise(review, job, instruction, inputs, answer, _answered_by(ask, channel), started)
+
+
+def _finish_revise(
+    review: Path, job: dict[str, Any] | None, instruction: str, inputs: dict[str, Any], answer: str,
+    revised_by: str, started: datetime,
+) -> dict[str, Any]:
+    _check_complete(answer)
+    table, kept, base_line = inputs["table"], inputs["kept"], inputs["base_line"]
     note, unknown = expand_sources(answer, table)
     lost = [kept[key] for key in kept if key not in note]
     for key, original in kept.items():
@@ -645,7 +683,7 @@ def _revise(
         "pdf_path": pdf.get("pdf_path"),
         "pdf_error": pdf.get("error"),
         "revised_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "revised_by": _answered_by(ask, channel),
+        "revised_by": revised_by,
         "instruction": instruction.strip(),
         "seconds": round((datetime.now() - started).total_seconds(), 1),
         "unknown_sources": unknown,
@@ -655,6 +693,85 @@ def _revise(
         before = (job.get("result") or {}).get(RESULT_KEY) or {}
         record["record_error"] = _record(str(job.get("task_id") or ""), {**before, "last_revision": record})
     return {"task_id": (job or {}).get("task_id"), **record}
+
+
+# The current agent writes it from the same material (decision 6.48: the
+# agent at hand does the writing by default). Codex shows about 10,000 tokens
+# of one tool result, so the material comes in parts that fit.
+AGENT_PART_CHARS = 15_000
+AGENT_PREFIX = "agent"
+
+
+def _material_version(inputs: dict[str, Any]) -> str:
+    return hashlib.sha256(f"{inputs['system']}\0{inputs['user']}".encode("utf-8")).hexdigest()[:16]
+
+
+def _agent_target(
+    task_id: str | None, note_path: str | None, instruction: str | None,
+) -> tuple[Path, Path, dict[str, Any] | None, dict[str, Any]]:
+    """The follow-along note, where the review note goes, the task, and what
+    writing (no ``instruction``) or revising it reads."""
+    if instruction is None:
+        base, job = locate(task_id, note_path)
+        _refuse_on_test_copy(job)
+        return base, review_path_for(base), job, _write_inputs(base, job)
+    base, review, job = _locate_revision(note_path, instruction, task_id)
+    return base, review, job, _revise_inputs(base, review, job, instruction)
+
+
+def agent_material(
+    task_id: str | None = None, note_path: str | None = None, instruction: str | None = None, part: int = 1,
+) -> dict[str, Any]:
+    """One part of what FluentFlow's model would read: the writing rules and
+    the material, for the agent to write (or, with ``instruction``, revise)
+    the review note itself and hand it back with ``save_from_agent``."""
+    base, review, job, inputs = _agent_target(task_id, note_path, instruction)
+    whole = f"# 写法\n\n{inputs['system'].strip()}\n\n{inputs['user'].strip()}\n"
+    parts = [whole[i:i + AGENT_PART_CHARS] for i in range(0, len(whole), AGENT_PART_CHARS)] or [""]
+    if not 1 <= int(part) <= len(parts):
+        raise ReviewNoteError(f"没有第 {part} 部分，材料一共 {len(parts)} 部分。", code="bad_part")
+    return {
+        "task_id": (job or {}).get("task_id"),
+        "note_path": str(base),
+        "review_path": str(review),
+        "material_version": _material_version(inputs),
+        "part": int(part),
+        "total_parts": len(parts),
+        "text": parts[int(part) - 1],
+    }
+
+
+def save_from_agent(
+    answer: str, material_version: str, *, task_id: str | None = None, note_path: str | None = None,
+    instruction: str | None = None, model: str = "",
+) -> dict[str, Any]:
+    """Write the review note the agent wrote from ``agent_material``, through
+    the same checks and steps as one FluentFlow's model wrote. Refused with
+    code ``stale`` when the follow-along note or the review note changed since
+    the material was read: the answer would undo what the user changed."""
+    base, review, job, _ = _agent_target(task_id, note_path, instruction)
+    key = _running_key(base)
+    with _running_lock:
+        if key in _running:
+            raise ReviewNoteError("这份笔记的复习笔记已经在生成了。", code="already_running")
+        _running.add(key)
+    try:
+        # Read again under the lock: what is checked is what gets written over.
+        inputs = (_write_inputs(base, job) if instruction is None
+                  else _revise_inputs(base, review, job, instruction))
+        if _material_version(inputs) != str(material_version or "").strip():
+            raise ReviewNoteError(
+                "取材料之后，随看笔记或复习笔记又被改过（或材料版本没填对），没有写入。"
+                "重新取一次材料，按新材料写好再交。", code="stale",
+            )
+        by = f"{AGENT_PREFIX}:{model.strip()}" if model.strip() else AGENT_PREFIX
+        text = _strip_fence(answer or "")
+        if instruction is None:
+            return _finish_write(base, job, inputs, text, by, datetime.now())
+        return _finish_revise(review, job, instruction, inputs, text, by, datetime.now())
+    finally:
+        with _running_lock:
+            _running.discard(key)
 
 
 def _pdf(note: str, target: Path) -> dict[str, Any]:
@@ -688,7 +805,10 @@ def _record(task_id: str, record: dict[str, Any]) -> str | None:
 
 
 __all__ = [
+    "AGENT_PART_CHARS",
     "ANSWER_MAX_TOKENS",
+    "agent_material",
+    "save_from_agent",
     "RESULT_KEY",
     "ReviewNoteError",
     "default_chat",
