@@ -262,7 +262,7 @@ def _watch(task_id: Any, api_base: str | None, client_id: str | None) -> None:
         return
     with _watch_lock:
         _watched[str(task_id)] = (api_base, client_id)
-        if _heartbeat_enabled and (_heart is None or not _heart.is_alive()):
+        if _heartbeat_enabled and _heart is None:
             _heart = threading.Thread(target=_heartbeat_loop, name="fluentflow-heartbeat", daemon=True)
             _heart.start()
 
@@ -287,6 +287,7 @@ def _heartbeat_once() -> None:
 
 
 def _heartbeat_loop() -> None:
+    global _heart
     while True:
         try:
             _heartbeat_once()
@@ -294,6 +295,9 @@ def _heartbeat_loop() -> None:
             pass
         with _watch_lock:
             if not _watched:
+                # Cleared under the lock: a task watched once this lock is
+                # released starts a new loop, not one that is about to end.
+                _heart = None
                 return
         time.sleep(HEARTBEAT_SECONDS)
 

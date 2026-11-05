@@ -418,8 +418,14 @@ def status(result: dict[str, Any] | None) -> dict[str, Any]:
     result = result or {}
     table = stored_table(result)
     task_id = str(result.get("task_id") or "")
-    ask, _whole = missing_sections(result) if result.get("summary_markdown") else ([], False)
-    if not uses_agent(result) and task_id and (task_id in _RUNNING or task_id in _QUEUED or task_id in _TIMERS):
+    summary = str(result.get("summary_markdown") or "")
+    ask, _whole = missing_sections(result) if summary else ([], False)
+    if summary and not note_sections(summary):
+        # Only a title, or no heading at all: no section to give a time to.
+        # Read as missing, the agent was told to align a note with nothing
+        # to align, after every wait, for good (review of bfc2894, 2026-11-05).
+        state = "ready"
+    elif not uses_agent(result) and task_id and (task_id in _RUNNING or task_id in _QUEUED or task_id in _TIMERS):
         state = "aligning"
     elif table and table.get("error") and ask:
         state = "failed"

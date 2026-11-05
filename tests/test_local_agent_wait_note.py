@@ -263,6 +263,21 @@ def test_the_agent_is_told_to_align_the_note_it_wrote(jobs_db):
     assert "next" not in _wait(client, "t-fluentflow", timeout_seconds=0)
 
 
+def test_a_note_without_sections_is_not_sent_to_be_aligned(jobs_db):
+    """A note with only a title, or no heading, has no section to time; the
+    wait must not keep telling the agent to align it (review, 2026-11-05)."""
+    from backend.core.result_schema import NOTE_FROM_AGENT
+
+    for task_id, note in (("t-title", "# 笔记\n\n只有正文。"), ("t-plain", "只有正文，没有标题。")):
+        _store(jobs_db, task_id, stage="done", summary_status="completed", result={
+            **_TRANSCRIPT, "summary_markdown": note, "summary_skipped": False,
+            "summary_status": "completed", "summary_written_from": NOTE_FROM_AGENT,
+            "display_segments": [{"start": 0, "end": 10, "text": "大家好"}],
+        })
+        waited = _wait(_client(), task_id, timeout_seconds=0)
+        assert waited["done"] is True and "next" not in waited
+
+
 def test_a_note_left_half_written_is_handed_on_before_alignment(jobs_db, monkeypatch):
     """2026-10-27: the writer stopped after three of five parts; the conversation
     that came back wrote the rest itself. The done answer and get_task say which

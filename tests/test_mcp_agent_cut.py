@@ -74,6 +74,32 @@ def test_an_unanswered_heartbeat_keeps_every_task(monkeypatch):
     assert set(mcp._watched) == {"t1"}
 
 
+def test_a_task_watched_as_the_heartbeat_ends_gets_a_new_heartbeat(monkeypatch):
+    """The loop that finds nothing to report ends; a task watched right after
+    must start a new loop, not count on the one that is ending (review, 2026-11-05)."""
+    _install(monkeypatch)
+    started = []
+
+    class FakeThread:
+        def __init__(self, target, name, daemon):
+            started.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(mcp, "_heartbeat_enabled", True)
+    monkeypatch.setattr(mcp, "_heart", None)
+    monkeypatch.setattr(mcp.threading, "Thread", FakeThread)
+    monkeypatch.setattr(mcp, "_heartbeat_once", lambda: None)
+    mcp._watch("t1", None, None)
+    assert len(started) == 1
+    mcp._watched.clear()
+    mcp._heartbeat_loop()  # nothing left to report: the loop ends
+    assert mcp._heart is None
+    mcp._watch("t2", None, None)
+    assert len(started) == 2
+
+
 def test_waiting_and_submitting_tell_the_agent_about_judging_the_cut():
     tools = {tool["name"]: tool["description"] for tool in mcp.TOOL_DEFINITIONS}
     assert "get_agent_cut_material" in tools["wait_task"]
