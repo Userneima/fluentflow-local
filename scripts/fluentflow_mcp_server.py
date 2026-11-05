@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import inspect
 import json
 import sys
@@ -179,6 +180,67 @@ def _agent_request(
 
 def _options(**values: Any) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value not in (None, "")}
+
+
+# A call that can take longer than a host waits for one tool call. Codex stops
+# waiting after 300 seconds unless its config raises tool_timeout_sec (measured
+# 2026-10-27, decision 5.40) while FluentFlow goes on working; writing a review
+# note takes up to 45 minutes. So such a call is answered "still working" after
+# HOLD_SECONDS, and calling the same tool again with the same arguments waits
+# on the same run instead of starting a second one. The run lives on a daemon
+# thread of this process: when the conversation ends, so does the waiting.
+HOLD_SECONDS = 240
+# A finished run nobody came back for is dropped after this, so asking for the
+# same thing much later starts afresh instead of returning an old answer.
+UNCLAIMED_SECONDS = 1800
+
+
+class _Run:
+    def __init__(self, work: Any) -> None:
+        self.done = threading.Event()
+        self.answer: dict[str, Any] | None = None
+        self.finished_at = 0.0
+        self.thread = threading.Thread(target=self._go, args=(work,), name="fluentflow-long-call", daemon=True)
+
+    def _go(self, work: Any) -> None:
+        try:
+            self.answer = work()
+        except Exception as exc:  # noqa: BLE001 - said to the agent, not raised on a thread nobody reads
+            self.answer = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        self.finished_at = time.monotonic()
+        self.done.set()
+
+
+_runs: dict[str, _Run] = {}
+_runs_lock = threading.Lock()
+
+
+def _held(tool_name: str, arguments: dict[str, Any], work: Any) -> dict[str, Any]:
+    """``work()``'s answer if it comes within HOLD_SECONDS, else "still
+    working"; the same tool with the same arguments picks the run up again."""
+    key = tool_name + ":" + hashlib.sha256(
+        json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
+    with _runs_lock:
+        now = time.monotonic()
+        for stale in [k for k, r in _runs.items() if r.done.is_set() and now - r.finished_at > UNCLAIMED_SECONDS]:
+            del _runs[stale]
+        run = _runs.get(key)
+        if run is None:
+            run = _runs[key] = _Run(work)
+            run.thread.start()
+    if not run.done.wait(HOLD_SECONDS):
+        return {
+            "ok": True,
+            "code": "still_working",
+            "message": "FluentFlow 还在做这一步，没有出错。",
+            "next": (f"Call {tool_name} again with exactly the same arguments: it keeps waiting on this run and "
+                     "does not start another. Say nothing to the user in between."),
+        }
+    with _runs_lock:
+        if _runs.get(key) is run:
+            del _runs[key]
+    return run.answer or {"ok": False, "error": "no answer"}
 
 
 # Which tasks this conversation is responsible for, reported to FluentFlow
@@ -1374,16 +1436,17 @@ def save_agent_note(
     refusal = _require_local_edition(normalize_api_base(api_base))
     if refusal is not None:
         return refusal
-    return _agent_request(
-        "POST",
-        f"/agent/v1/tasks/{task_id}/agent-note",
-        api_base=api_base,
-        client_id=client_id,
-        payload=_options(note_markdown=note_markdown, part=part, part_notes=part_notes, basis_note=basis_note,
-                         model=model, base_version=base_version, model_check=model_check),
-        # A delegated model check may read each full transcript part.
-        timeout=600,
-    )
+    payload = _options(note_markdown=note_markdown, part=part, part_notes=part_notes, basis_note=basis_note,
+                       model=model, base_version=base_version, model_check=model_check)
+
+    def save() -> dict[str, Any]:
+        return _agent_request(
+            "POST", f"/agent/v1/tasks/{task_id}/agent-note", api_base=api_base, client_id=client_id,
+            # A delegated model check may read each full transcript part.
+            payload=payload, timeout=600,
+        )
+
+    return _held("save_agent_note", {"task_id": task_id, **payload}, save) if model_check else save()
 
 
 @tool(
@@ -1612,10 +1675,11 @@ def draft_note_part(
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    return _agent_request(
+    payload = {"rules": rules, "part": int(part or 1)}
+    return _held("draft_note_part", {"task_id": task_id, **payload}, lambda: _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/note-draft", api_base=api_base, client_id=client_id,
-        payload={"rules": rules, "part": int(part or 1)}, timeout=600,
-    )
+        payload=payload, timeout=600,
+    ))
 
 
 @tool(
@@ -1893,10 +1957,10 @@ def revert_transcript_corrections(
     },
 )
 def run_glossary_correction(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
-    return _agent_request(
+    return _held("run_glossary_correction", {"task_id": task_id}, lambda: _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/glossary-corrections/run",
         api_base=api_base, client_id=client_id, payload={}, timeout=900,
-    )
+    ))
 
 
 @tool(
@@ -1930,10 +1994,11 @@ def run_glossary_correction(task_id: str, api_base: str | None = None, client_id
 def write_review_note(
     task_id: str | None = None, note_path: str | None = None, api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    return _agent_request(
+    payload = {"task_id": task_id, "note_path": note_path}
+    return _held("write_review_note", payload, lambda: _agent_request(
         "POST", "/agent/v1/review-notes",
-        api_base=api_base, client_id=client_id, payload={"task_id": task_id, "note_path": note_path}, timeout=2700,
-    )
+        api_base=api_base, client_id=client_id, payload=payload, timeout=2700,
+    ))
 
 
 @tool(
@@ -1960,11 +2025,11 @@ def revise_review_note(
     instruction: str, task_id: str | None = None, note_path: str | None = None,
     api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    return _agent_request(
+    payload = {"task_id": task_id, "note_path": note_path, "instruction": instruction}
+    return _held("revise_review_note", payload, lambda: _agent_request(
         "POST", "/agent/v1/review-notes/revise",
-        api_base=api_base, client_id=client_id, timeout=1800,
-        payload={"task_id": task_id, "note_path": note_path, "instruction": instruction},
-    )
+        api_base=api_base, client_id=client_id, timeout=1800, payload=payload,
+    ))
 
 
 # Every tool, in the order written: each is described where it is defined (``tool``).
