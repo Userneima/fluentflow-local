@@ -303,3 +303,16 @@ def test_the_agents_first_alignment_is_timed_on_the_task_page(task):
     save(task, material(task))  # read and saved again later: an edit, not processing
     detail = task_steps._row(task, task_steps.NOTE)["result"]
     assert (detail[task_steps.ALIGN_STARTED], detail[task_steps.ALIGN_FINISHED]) == first
+
+
+def test_nothing_to_align_starts_no_clock(task, monkeypatch):
+    """Review, 2026-11-05: a note whose sections all had times started the
+    clock and no save ever ended it, so the page showed it running."""
+    from backend.core import task_steps
+
+    task_steps.plan(task)
+    for name in task_steps.ORDER:
+        task_steps.finish(task, name, task_steps.DONE)
+    monkeypatch.setattr(aa.times, "sections_to_align", lambda result, again=False: ([], False))
+    assert material(task)["state"] == "ready"
+    assert not (task_steps._row(task, task_steps.NOTE)["result"] or {}).get(task_steps.ALIGN_STARTED)

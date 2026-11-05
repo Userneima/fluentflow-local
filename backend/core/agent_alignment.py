@@ -66,9 +66,7 @@ def material(
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
         raise AlignmentError("offset 必须是非负整数")
     result = _read(task_id, client_id)
-    if (times.stored_table(result) or {}).get("aligned_by") != "agent":
-        # The first alignment's time on the task page; a later one is an edit.
-        task_steps.agent_aligning(task_id)
+    first_by_agent = (times.stored_table(result) or {}).get("aligned_by") != "agent"
     if offset or material_version:
         if not material_version or material_version != _version(result, again):
             raise _stale()
@@ -85,6 +83,10 @@ def material(
             raise _stale()
         result = saved["result"]
     ask, whole = times.sections_to_align(result, again=again)
+    if ask and first_by_agent:
+        # The first alignment's time on the task page, only when there is
+        # something to align (a save then ends it); a later one is an edit.
+        task_steps.agent_aligning(task_id)
     segments = canonical_display_segments(result)
     duration = max(float(segment.get("end") or 0) for segment in segments)
     prompt = times.build_prompt(str(result["summary_markdown"]), ask, times.transcript_lines(segments), duration) if ask else ""
