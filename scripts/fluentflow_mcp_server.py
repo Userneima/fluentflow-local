@@ -634,7 +634,7 @@ WAIT_MAX_SECONDS = 600
 
 @tool(
     description=("Wait for a task, cut and note included, without spending a turn on each check: one call "
-        "holds up to timeout_seconds (default 240, at most 600) and returns the moment you have something "
+        "holds up to timeout_seconds (240 to 600; less is taken as 240) and returns the moment you have something "
         "to do. Between calls do nothing and tell the user nothing; call again straight away. A task reads "
         "completed once its transcript is stored, but done stays false while the recording is being cut "
         "(cut_running=true), until the note is written, failed or skipped (note_pending=true), and while "
@@ -666,7 +666,11 @@ def wait_task(
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    held = min(max(float(timeout_seconds if timeout_seconds is not None else WAIT_DEFAULT_SECONDS), 0), WAIT_MAX_SECONDS)
+    # A shorter wait saves nothing (it returns the moment there is something
+    # to do) and costs a turn each time: on 2026-11-05 Codex passed 55 seconds
+    # on every call of a 3-hour lesson, turns that each resend the conversation.
+    held = min(max(float(timeout_seconds if timeout_seconds is not None else WAIT_DEFAULT_SECONDS),
+                   WAIT_DEFAULT_SECONDS), WAIT_MAX_SECONDS)
     # Reported for the whole wait, not only once it returns.
     _watch(task_id, api_base, client_id)
     return _watching(_agent_request(
