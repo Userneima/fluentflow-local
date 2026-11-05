@@ -88,8 +88,14 @@ def _bullet_block(text: str) -> dict:
     return {"block_type": _BT_BULLET, "bullet": _text_body(text)}
 
 
-def _ordered_block(text: str) -> dict:
-    return {"block_type": _BT_ORDERED, "ordered": _text_body(text)}
+def _ordered_block(text: str, sequence: Optional[int] = None) -> dict:
+    body = _text_body(text)
+    if sequence is not None:
+        # Feishu numbers each run of adjacent ordered blocks from 1, so an item
+        # separated from its list (a quote or note between items) needs its
+        # number stated, or it restarts at 1.
+        body["style"] = {"sequence": str(sequence)}
+    return {"block_type": _BT_ORDERED, "ordered": body}
 
 
 def _code_block(code: str) -> dict:
@@ -106,7 +112,7 @@ def _image_fallback_block(alt: str, src: str) -> dict:
     return _text_block(f"图片：{label}")
 
 
-_RE_ORDERED = re.compile(r"^\d+[.）]\s+(.+)")
+_RE_ORDERED = re.compile(r"^(\d+)[.）]\s+(.+)")
 _RE_MD_IMAGE = re.compile(r"^!\[(.*?)\]\((.*?)\)$")
 _RE_MD_TABLE_ALIGN = re.compile(
     r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?$"
@@ -180,7 +186,10 @@ def _markdown_to_feishu_blocks_with_image_refs(
 
         # ordered list
         elif (m := _RE_ORDERED.match(stripped)):
-            blocks.append(_ordered_block(m.group(1)))
+            number = int(m.group(1))
+            follows_list = bool(blocks) and blocks[-1]["block_type"] == _BT_ORDERED
+            auto = number == 1 or follows_list
+            blocks.append(_ordered_block(m.group(2), None if auto else number))
 
         # blockquote → render as italic paragraph with "❝" prefix
         elif stripped.startswith("> "):

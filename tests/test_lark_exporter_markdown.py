@@ -234,3 +234,15 @@ def test_a_folder_path_is_only_sent_when_one_was_chosen(monkeypatch):
 def test_the_exporter_knows_which_notes_carry_a_table():
     assert lx.markdown_contains_table(NOTE) is True
     assert lx.markdown_contains_table("# 没有表格\n\n只有正文。") is False
+
+
+def test_a_list_item_after_a_quote_keeps_its_number_instead_of_restarting():
+    """Feishu numbers each run of adjacent ordered blocks from 1; a check
+    quote between items 2 and 3 made item 3 show as 1 in a synced note."""
+    blocks = lx.markdown_to_feishu_blocks(
+        "1. 甲\n2. 乙\n\n   > 核对：乙的说明\n\n3. 丙\n4. 丁\n"
+    )
+    ordered = _blocks_of_type(blocks, lx._BT_ORDERED)
+    sequences = [b["ordered"].get("style", {}).get("sequence") for b in ordered]
+    assert [_text(b) for b in ordered] == ["甲", "乙", "丙", "丁"]
+    assert sequences == [None, None, "3", None]
