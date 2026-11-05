@@ -685,9 +685,10 @@ _RE_NOTE_ORDERED = re.compile(r"^\s*(\d+)[.）]\s+(.+)$")
 _RE_FEISHU_LIST_START = re.compile(r'<ol><li id="([^"]+)"[^>]*\bseq="1"[^>]*>(.*?)</li>', re.S)
 
 
-def _list_item_key(text: str) -> str:
-    # Feishu's XML escapes & < > that the note writes as they are.
-    plain = html.unescape(re.sub(r"<[^>]+>", "", text))
+def _list_item_key(text: str, *, xml: bool = False) -> str:
+    # Feishu's XML has tags, and escapes the & < > that the note writes as
+    # they are; only the XML side loses its tags.
+    plain = html.unescape(re.sub(r"<[^>]+>", "", text)) if xml else text
     plain = re.sub(r"\]\([^)]*\)|[*`_\[\]]", "", plain)
     return re.sub(r"\s+", "", plain)
 
@@ -735,7 +736,7 @@ def _restore_list_numbers(
         return
     document = fetched.get("document") if isinstance(fetched.get("document"), dict) else fetched
     for match in _RE_FEISHU_LIST_START.finditer(str(document.get("content") or "")):
-        number = numbers.get(_list_item_key(match.group(2)))
+        number = numbers.get(_list_item_key(match.group(2), xml=True))
         if number is None:
             continue
         try:
