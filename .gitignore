@@ -1,6 +1,7 @@
 .venv/
 .DS_Store
-.claude/
+.claude/*
+!.claude/rules/
 .pytest_cache/
 __pycache__/
 *.py[cod]

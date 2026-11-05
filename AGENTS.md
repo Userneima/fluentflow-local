@@ -64,12 +64,7 @@ in `backend/routers/` only turn requests into calls; what they call lives in
 `backend/core`, and the agent routes (`backend/routers/local_agent.py`) import
 nothing from the page's routes (`tests/test_agent_surface.py`).
 
-When adding or changing an MCP tool (the audit behind these: `docs/方案/2026-11-04-MCP工具体检.md`):
-
-- Tools that always come in pairs differing by one argument are one tool with that argument (`list_transcript_corrections` takes `source`).
-- An answer that grows with the recording gives a brief by default and a way to read the rest (a section, a page, `include_reverted`). Add such a read to `READS` in `tests/test_mcp_size_budget.py`, which reads a recording as long as the largest real one and fails past 50,000 characters, the length Claude Code still shows inline. A tool that must return more declares `anthropic/maxResultSizeChars`; Codex cuts anything past about 10,000 tokens regardless, so put what the agent needs to read the rest first.
-- A refusal carries a `code` and says what to do next. Answers name tools, not HTTP paths, and schemas leave out what an agent never sets (`api_base`).
-- The same test caps each tool definition at 3,500 characters and all of them at 55,000. Over budget, shorten what grew; raise a number only with the reason beside it and a decision log entry.
+Before adding or changing an MCP tool, read `.claude/rules/mcp-tools.md` (Claude Code loads it on its own when it opens the tool files).
 
 ## Open problems
 
