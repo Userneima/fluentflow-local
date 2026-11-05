@@ -49,7 +49,7 @@ def test_the_agent_fetches_decides_and_reports(monkeypatch):
     mcp.save_agent_cut_report("t1", summary="s", sections=[])
     sent = [(method, path, payload) for method, path, payload in calls if path != "/health"]
     assert sent == [
-        ("GET", "/agent/v1/tasks/t1/agent-cut/material", None),
+        ("GET", "/agent/v1/tasks/t1/agent-cut/material?part=1", None),
         ("POST", "/agent/v1/tasks/t1/agent-cut", {"keep_gaps": [{"id": 2, "reason": "演示"}], "remove": [], "model": "m"}),
         ("POST", "/agent/v1/tasks/t1/agent-cut/report", {"report": {"summary": "s", "sections": []}}),
     ]
@@ -98,7 +98,7 @@ def test_a_long_wait_does_not_hold_the_conversations_other_calls(monkeypatch):
         if path.endswith("/wait"):
             release.wait(5)
             return {"ok": True, "done": True}
-        if path.endswith("/agent-cut/material"):
+        if "/agent-cut/material" in path:
             fetched.set()
         return {"ok": True}
 

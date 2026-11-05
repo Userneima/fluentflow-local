@@ -613,11 +613,17 @@ async def wait_agent_task(
                 "note_status": brief["note"]["status"],
                 "task": brief,
             }
+            # One step at a time, in the order they build on each other: a
+            # note left half written, the transcript corrections, the note,
+            # then its alignment.
             draft = agent_note.unfinished_draft(task_id)
-            correct = None if draft else _correction_next(job)
-            align = None if draft or correct else _alignment_next(job)
-            if draft or correct or align:
-                answer["next"] = draft["next"] if draft else (correct or align)
+            result = job.get("result") if isinstance(job.get("result"), dict) else {}
+            step = (
+                (draft or {}).get("next") or _correction_next(job)
+                or agent_note.write_next(result) or _alignment_next(job)
+            )
+            if step:
+                answer["next"] = step
             return answer
         if time.monotonic() >= deadline:
             return {
@@ -699,12 +705,13 @@ def _agent_cut_call(action, *args, **kwargs):
 
 
 @router.get("/tasks/{task_id}/agent-cut/material")
-def agent_cut_material(request: Request, task_id: str) -> dict[str, Any]:
+def agent_cut_material(request: Request, task_id: str, part: int = 1) -> dict[str, Any]:
     """What the calling agent judges this task's cut from: the instructions
     FluentFlow's own judge gets, the user's earlier cut decisions, the
-    timeline, and screenshots as paths on this machine."""
+    timeline, and screenshots as paths on this machine; in parts when it is
+    longer than a host shows of one answer."""
     _job_for_request(request, task_id)
-    return {"ok": True, **_agent_cut_call(agent_cut.material, task_id, _local_client_scope(request))}
+    return {"ok": True, **_agent_cut_call(agent_cut.material, task_id, _local_client_scope(request), part)}
 
 
 @router.post("/tasks/{task_id}/agent-cut")
@@ -939,11 +946,17 @@ def save_agent_correction(request: Request, task_id: str, payload: Optional[dict
     """The calling agent's fixes (or translations) for one page; written into
     every copy of the transcript, the subtitle files and the output folder."""
     body = payload or {}
-    return _correction_call(
+    answer = _correction_call(
         agent_correction.save, task_id, body.get("step"), client_id=_local_client_scope(request),
         page=body.get("page"), material_version=body.get("material_version"), model=body.get("model"),
         fixes=body.get("fixes"), translations=body.get("translations"),
     )
+    if isinstance(answer, dict) and answer.get("ok") is not False and not answer.get("next") \
+            and answer.get("next_page") is None:
+        # The last correction is in: the note, which waited for it, is next.
+        job = _job_for_request(request, task_id)
+        answer["next"] = agent_note.write_next(job.get("result") or {})
+    return answer
 
 
 @router.post("/tasks/{task_id}/agent-note/material")
@@ -961,20 +974,23 @@ def agent_note_material(
     """
     part = int((payload or {}).get("part") or 1)
     small_parts = bool((payload or {}).get("small_parts"))
+    # The writing rules alone, read once in small parts: no frames are taken.
+    instructions_only = small_parts and bool((payload or {}).get("instructions_only"))
     job = _job_for_request(request, task_id)
     result = job.get("result") or {}
     # While this task's own cut renders it holds the queue, so nothing else
     # transcribes: taking frames now overlaps the render, as FluentFlow's own
     # note does (``survey_cut.ranges_while_rendering``).
-    if (not agent_note._stored_frames(task_id, result) and not survey_cut.ranges_while_rendering(result)
-            and queue_is_busy()):
+    if (not instructions_only and not agent_note._stored_frames(task_id, result)
+            and not survey_cut.ranges_while_rendering(result) and queue_is_busy()):
         raise HTTPException(
             status_code=409,
             detail="有任务正在处理中，等队列空下来再取材料，避免抽帧和转录同时跑。",
         )
     try:
         return {"ok": True, **agent_note.material(
-            task_id, part=part, small_parts=small_parts, client_id=_local_client_scope(request),
+            task_id, part=part, small_parts=small_parts, instructions_only=instructions_only,
+            client_id=_local_client_scope(request),
             keyframe_extractor=extract_keyframes,
         )}
     except visual_note_job.VisualNoteError as exc:

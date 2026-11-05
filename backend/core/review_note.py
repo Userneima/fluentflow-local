@@ -697,8 +697,9 @@ def _finish_revise(
 
 # The current agent writes it from the same material (decision 6.48: the
 # agent at hand does the writing by default). Codex shows about 10,000 tokens
-# of one tool result, so the material comes in parts that fit.
-AGENT_PART_CHARS = 15_000
+# of one tool result and Chinese runs about 0.8 tokens a character, so the
+# material comes in parts that fit; the rules are at the start of part 1.
+AGENT_PART_CHARS = 9_000
 AGENT_PREFIX = "agent"
 
 

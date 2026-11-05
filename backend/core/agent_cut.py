@@ -32,6 +32,7 @@ recorded (``decided_after_seconds``) so they can be set from history later.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import threading
 import time
@@ -231,7 +232,35 @@ DECISION_HOW = (
 )
 
 
-def material(task_id: str, client_id: str | None) -> dict[str, Any]:
+# Codex shows about 10,000 tokens of one tool result, keeping its start and
+# end and dropping the middle without keeping the whole (its session records,
+# 2026-11-04); Chinese runs about 0.8 tokens a character. A three-hour
+# recording's timeline is about 89,000 characters, so it comes in parts of
+# whole lines. When everything fits in one answer it is one part; otherwise
+# part 1 is how to judge (instructions, the user's earlier decisions, the
+# screenshots) and the timeline follows from part 2.
+PART_CHARS = 9_000
+ONE_PART_CHARS = 11_000
+
+
+def _timeline_parts(timeline: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in timeline.splitlines():
+        if current and size + len(line) + 1 > PART_CHARS:
+            parts.append("\n".join(current))
+            current, size = [], 0
+        current.append(line)
+        size += len(line) + 1
+    if current:
+        parts.append("\n".join(current))
+    return parts or [""]
+
+
+def material(task_id: str, client_id: str | None, part: Any = 1) -> dict[str, Any]:
+    if isinstance(part, bool) or not isinstance(part, int):
+        raise AgentCutError("part 必须是从 1 开始的整数")
     job = job_store.get_job(task_id, client_id=client_id)
     if not job:
         raise AgentCutError("任务不存在")
@@ -244,13 +273,31 @@ def material(task_id: str, client_id: str | None) -> dict[str, Any]:
 
     state = _save(task_id, client_id, fetched)
     shots = state.get("shots") or []
-    return {
-        "task_id": task_id,
+    how = {
         "instructions": survey_cut.SYSTEM + (survey_cut.SHOTS_NOTE + AGENT_NOTE if shots else ""),
         "cases": cut_cases.as_text(cut_cases.collect()),
-        "timeline": state.get("timeline") or "",
         "shots": shots,
         "how_to_answer": DECISION_HOW,
+    }
+    timeline = str(state.get("timeline") or "")
+    whole = len(timeline) + len(json.dumps(how, ensure_ascii=False))
+    pages: list[dict[str, Any]] = (
+        [{**how, "timeline": timeline}] if whole <= ONE_PART_CHARS
+        else [how] + [{"timeline": text} for text in _timeline_parts(timeline)]
+    )
+    if not 1 <= part <= len(pages):
+        raise AgentCutError(f"材料一共 {len(pages)} 部分，part 要在 1 到 {len(pages)} 之间。")
+    more = part < len(pages)
+    return {
+        "task_id": task_id,
+        "part": part,
+        "total_parts": len(pages),
+        "next_part": part + 1 if more else None,
+        **({"read_on": (
+            "The material is not all here. Read every part (get_agent_cut_material with part set to next_part "
+            "until it is null) before you judge: the timeline runs in order, gap ids included."
+        )} if more else {}),
+        **pages[part - 1],
         "decide_within_seconds": state.get("decision_limit_seconds"),
     }
 
@@ -303,13 +350,15 @@ def decide(task_id: str, client_id: str | None, answer: Any, model: str = "") ->
 
     _save(task_id, client_id, decided)
     facts = cut_report.facts({**record, "judged_by": judged_by}, segments)
+    # What to do comes first and the facts last: a host that shows only the
+    # start and end of a long answer (Codex) keeps both.
     return {
         "task_id": task_id,
         "kept_gaps": len(record.get("kept_gaps") or []),
         "removed": len(record.get("removed") or []),
         "removal_refused": record.get("removal_refused"),
-        "facts": cut_report.fact_lines(facts),
         "report_instructions": cut_report.SYSTEM,
+        "facts_count": len(facts),
         "next": (
             "FluentFlow is cutting with your decision now (it waits for its queue). Organise the facts "
             "above into the processing report as report_instructions say and call save_agent_cut_report "
@@ -318,6 +367,7 @@ def decide(task_id: str, client_id: str | None, answer: Any, model: str = "") ->
             "number, and point them to the task's page in FluentFlow to judge them there; do not ask them "
             "in chat, they need the video to judge."
         ),
+        "facts": cut_report.fact_lines(facts),
     }
 
 

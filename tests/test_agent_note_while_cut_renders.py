@@ -14,6 +14,13 @@ what the agent needs rather than from the code:
 - One wait can hold up to ten minutes; it returns at once when the agent can
   start its note (once, not on every later wait), when the task is done, and
   with the current state when its time runs out.
+- When correcting the transcript is left to the agent (every agent task), the
+  note waits for it, so it reads the corrected transcript (2026-11-05 review:
+  the corrections are refused while the task works, so a note started while
+  the cut rendered always read the transcript as transcribed). No early
+  start is offered; once the task is done the agent is told to correct
+  first, and the last correction saved says the note is next. A task whose
+  note is written is not asked for it again.
 """
 
 from __future__ import annotations
@@ -195,11 +202,11 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
-def _store(db, task_id, *, debreath, summary="", stage="cut"):
+def _store(db, task_id, *, debreath, summary="", stage="cut", **extra):
     js.upsert_job(
         task_id=task_id, status="completed", stage=stage, client_id=LOCAL_OWNER_ID, summary_status="skipped",
         result={"task_id": task_id, "intelligence": "agent", "transcript_text": "转录。",
-                "summary_markdown": summary, "summary_skipped": True, "debreath": debreath},
+                "summary_markdown": summary, "summary_skipped": True, "debreath": debreath, **extra},
         db_path=db,
     )
 
@@ -373,3 +380,61 @@ def test_the_mcp_wait_stays_under_codexs_limit_by_default_and_never_past_ten_min
     assert calls[0]["payload"]["timeout_seconds"] + 10 < 300 and calls[0]["timeout"] < 300
     assert calls[1]["payload"]["timeout_seconds"] == 600
     assert calls[1]["timeout"] > 600
+
+
+# --- corrections before the note ------------------------------------------------
+
+def _corrections_left() -> dict:
+    from backend.core import task_intelligence
+
+    return {"subtitle_correction": task_intelligence.deferred_step(),
+            "glossary_correction": task_intelligence.deferred_step()}
+
+
+def test_no_early_note_while_the_corrections_are_left_to_the_agent(jobs_db, cut_open):
+    _store(jobs_db, "t-fix-first", debreath={"status": dj.STATUS_RUNNING, "stage": "rendering", **_DECIDED},
+           **_corrections_left())
+    waited = _wait(_client(), "t-fix-first", timeout_seconds=1, poll_interval_seconds=0.5)
+    assert "agent_note" not in waited
+    assert waited["done"] is False
+
+
+def test_once_done_the_corrections_come_first_then_the_note(jobs_db, monkeypatch):
+    from backend.core import agent_correction
+
+    monkeypatch.setattr(agent_correction, "start_reading", lambda *a, **k: None)
+    done = {"status": dj.STATUS_COMPLETED, "stage": "done"}
+    _store(jobs_db, "t-order", debreath=done, stage="done", **_corrections_left())
+    first = _wait(_client(), "t-order", timeout_seconds=1, poll_interval_seconds=0.5)
+    assert first["done"] is True
+    assert "get_agent_correction_material" in first["next"]
+
+    # Corrections done: the note is next.
+    _store(jobs_db, "t-order", debreath=done, stage="done")
+    second = _wait(_client(), "t-order", timeout_seconds=1, poll_interval_seconds=0.5)
+    assert "get_agent_note_material" in second["next"]
+
+    # The note written: not asked for again.
+    _store(jobs_db, "t-order", debreath=done, stage="done", summary="# 笔记")
+    third = _wait(_client(), "t-order", timeout_seconds=1, poll_interval_seconds=0.5)
+    assert "get_agent_note_material" not in (third.get("next") or "")
+
+
+def test_the_last_correction_saved_says_the_note_is_next(jobs_db, monkeypatch):
+    from backend.core import agent_correction
+
+    done = {"status": dj.STATUS_COMPLETED, "stage": "done"}
+    _store(jobs_db, "t-last", debreath=done, stage="done")
+    answers = iter([
+        {"step": "glossary", "page": 1, "next_page": 2, "next": None},
+        {"step": "glossary", "page": 2, "next_page": None, "next": None},
+    ])
+    monkeypatch.setattr(agent_correction, "save", lambda *a, **k: next(answers))
+    client = _client()
+    body = {"step": "glossary", "page": 1, "material_version": "v", "model": "m", "fixes": []}
+
+    middle = client.post("/agent/v1/tasks/t-last/agent-correction", headers=_HEADERS, json=body).json()
+    last = client.post("/agent/v1/tasks/t-last/agent-correction", headers=_HEADERS, json=body).json()
+
+    assert not middle.get("next")
+    assert "get_agent_note_material" in last["next"]

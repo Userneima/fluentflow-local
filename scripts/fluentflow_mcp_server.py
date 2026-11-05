@@ -1341,11 +1341,9 @@ def save_agent_correction(
         "and have it fetch, write and save. It works as soon as wait_task returns agent_note ready, "
         "while the cut video still renders: the transcript is already on the cut video's clock, the "
         "frames are taken at the moments the cut will show, and both stay the same once it is "
-        "rendered, so the note is saved as usual. result_chars, first in the answer, is its whole "
-        "length: if your host cut the result short (Codex does at about 10,000 tokens) or saved it "
-        "to a file, read the rest from the stored result in slices before writing, or call again "
-        "with small_parts=true: the recording then comes in total_parts parts to fetch, write and "
-        "save one at a time. "
+        "rendered, so the note is saved as usual. On a host that shows about 10,000 tokens of a result "
+        "(Codex) start with small_parts=true: call once with instructions_only=true for the writing "
+        "rules, then fetch, write and save the total_parts parts one at a time. "
         "The first call for a video extracts frames (up to a minute). note_version is the task's "
         "note as you read it: pass it to save_agent_note as base_version."),
     input_schema={
@@ -1355,8 +1353,9 @@ def save_agent_correction(
             "part": {"type": "integer", "default": 1, "description": "Which part, from 1 to total_parts (small_parts only)."},
             "small_parts": {
                 "type": "boolean", "default": False,
-                "description": "Hand the recording over in parts of about 15,000 characters, for a host whose tool results are too small for the whole transcript.",
+                "description": "Hand the recording over in parts of about 7,000 characters, for a host whose tool results are too small for the whole transcript.",
             },
+            "instructions_only": {"type": "boolean", "description": "small_parts only: the writing rules, once, without a part."},
             "api_base": {"type": "string"},
         },
         "required": ["task_id"],
@@ -1367,6 +1366,7 @@ def get_agent_note_material(
     task_id: str,
     part: int = 1,
     small_parts: bool = False,
+    instructions_only: bool = False,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1378,7 +1378,8 @@ def get_agent_note_material(
         f"/agent/v1/tasks/{task_id}/agent-note/material",
         api_base=api_base,
         client_id=client_id,
-        payload={"part": int(part or 1), "small_parts": bool(small_parts)},
+        payload={"part": int(part or 1), "small_parts": bool(small_parts),
+                 "instructions_only": bool(instructions_only)},
         timeout=300,
     ))
 
@@ -1486,25 +1487,32 @@ def get_agent_note_part(
         "to remove, the JSON to answer with), cases (the user's earlier cut decisions), timeline "
         "(timestamped transcript with numbered long gaps and whether the picture moved), shots "
         "(screenshots of the long gaps whose picture moved, as local paths; open them before deciding "
-        "those gaps). Then call save_agent_cut. Call it in a subagent with a fresh context when your "
-        "host has them (give it the task_id): the material is long, and read in the user's "
-        "conversation it is resent on every later turn. result_chars, first in the answer, is its whole "
-        "length: if your host cut the result short (Codex does at about 10,000 tokens), read the rest "
-        "from the stored result in slices before deciding. If you do not answer within "
-        "decide_within_seconds, or this conversation closes, FluentFlow judges the cut itself."),
+        "those gaps). A long recording comes in total_parts parts, each small enough for a host that "
+        "shows about 10,000 tokens of a result (Codex): call again with part set to next_part until it "
+        "is null, then judge and call save_agent_cut. Call it in a subagent with a fresh context when "
+        "your host has them (give it the task_id): read in the user's conversation, the material is "
+        "resent on every later turn. If you do not answer within decide_within_seconds, or this "
+        "conversation closes, FluentFlow judges the cut itself."),
     input_schema={
         "type": "object",
-        "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
+        "properties": {
+            "task_id": {"type": "string"},
+            "part": {"type": "integer", "description": "Which part, from 1 (the default)."},
+            "api_base": {"type": "string"},
+        },
         "required": ["task_id"],
     },
     meta={"anthropic/maxResultSizeChars": 500_000},
 )
-def get_agent_cut_material(task_id: str, api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+def get_agent_cut_material(
+    task_id: str, part: int = 1, api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
     refusal = _require_local_edition(normalize_api_base(api_base))
     if refusal is not None:
         return refusal
     return _with_length(_watching(_agent_request(
-        "GET", f"/agent/v1/tasks/{task_id}/agent-cut/material", api_base=api_base, client_id=client_id,
+        "GET", f"/agent/v1/tasks/{task_id}/agent-cut/material?part={int(part)}",
+        api_base=api_base, client_id=client_id,
     ), task_id, api_base, client_id))
 
 

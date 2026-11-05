@@ -7,10 +7,12 @@ than the code:
 - By default one call returns the whole transcript, and the whole note is saved
   in one call (owner, 2026-10-16: a note is no strain for an agent; a host's
   limit on one tool result can be raised).
-- With small_parts, what one call for material returns fits in one tool result of the agent's
-  host. Claude Code takes about 25,000 tokens; Chinese runs about one token per
-  character (measured on a 60,000-character part: 54,766 tokens), so the whole
-  answer stays under 25,000 characters.
+- With small_parts, what one call for material returns fits in what Codex shows
+  of one tool result, about 10,000 tokens (2026-11-05 review); Chinese runs
+  about 0.8 tokens a character, so each answer stays under 12,000 characters.
+  The writing rules do not fit beside a part, so they come once, from a call
+  with instructions_only, and no part repeats them; each part says where they
+  are, so a subagent given only that part still finds them.
 - Each part is saved as soon as it is written. The task's note does not change
   until every part is in; then it is the parts joined, and the note before the
   agent started can still be put back.
@@ -48,9 +50,9 @@ def _long(job_store, *, lines: int = 12):
     ]
 
 
-def _material(tmp_path, part=1, small=True):
-    return an.material(TASK, part=part, small_parts=small, client_id="anonymous",
-                       keyframe_extractor=_fake_extractor(tmp_path))
+def _material(tmp_path, part=1, small=True, instructions_only=False):
+    return an.material(TASK, part=part, small_parts=small, instructions_only=instructions_only,
+                       client_id="anonymous", keyframe_extractor=_fake_extractor(tmp_path))
 
 
 def _note(index: int) -> str:
@@ -107,7 +109,27 @@ def test_one_call_for_material_fits_one_tool_result(job_store, tmp_path):
     assert first["total_parts"] > 1
     for index in range(1, first["total_parts"] + 1):
         material = _material(tmp_path, part=index)
-        assert len(json.dumps({"ok": True, **material}, ensure_ascii=False)) < 25_000
+        assert len(json.dumps({"ok": True, **material}, ensure_ascii=False)) < 12_000
+    rules = _material(tmp_path, instructions_only=True)
+    assert len(json.dumps({"ok": True, **rules}, ensure_ascii=False)) < 12_000
+
+
+def test_in_small_parts_the_rules_come_once_and_each_part_points_to_them(job_store, tmp_path):
+    job_store["result"]["display_segments"] = [
+        {"start": 20.0 + i, "end": 20.8 + i, "text": LINE * 25} for i in range(70)
+    ]
+    whole = _material(tmp_path, small=False)
+    rules = _material(tmp_path, instructions_only=True)
+    assert "transcript" not in rules and "frames" not in rules
+    assert rules["total_parts"] > 1
+    # The same rules a whole-recording call gets.
+    assert rules["instructions"] in whole["instructions"]
+    assert "save_agent_note" in rules["instructions"]
+    for index in range(1, rules["total_parts"] + 1):
+        part = _material(tmp_path, part=index)
+        assert rules["instructions"] not in part["instructions"]
+        assert "instructions_only=true" in part["instructions"]
+        assert f"第 {index} 部分" in part["instructions"]
 
 
 def test_the_note_changes_only_when_every_part_is_in(job_store, tmp_path, small_parts):

@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, correction_notes, cut_timeline, note_coverage, note_skills, note_versions, visual_note_check
-from backend.core import debreath_job, model_usage, survey_cut, task_steps
+from backend.core import agent_correction, debreath_job, model_usage, survey_cut, task_steps
 from backend.core import visual_note_job as vn
 from backend.core.claude_vision import FrameInput
 from backend.core.result_artifacts import (
@@ -64,14 +64,16 @@ _AGENT_CHANNEL = Channel(
     write=lambda *_args, **_kwargs: None,
 )
 
-# A part is sized for the agent's host, not for a request FluentFlow makes. Claude
-# Code hands a tool result over 25,000 tokens to the agent as a file to read in
-# pieces, and its file reader stops at the same size; Chinese runs about one
-# token a character (measured 2026-10-14: a 60,000-character part came to 54,766
-# tokens and arrived as a file). 15,000 characters leaves room for the
-# instructions, the user's own rules and the list of frames in the same answer.
-# The frame note's own requests keep claude_vision's larger parts.
-AGENT_PART_CHARS = 15_000
+# Small parts are for a host that shows little of one tool result: Codex shows
+# about 10,000 tokens and drops the middle without keeping the whole (its
+# session records, 2026-11-04); Chinese runs about 0.8 tokens a character.
+# The writing rules (about 6,000 characters with the user's own) would not fit
+# beside a part, so in small parts they come once, from a call with
+# ``instructions_only``, and each part carries its transcript, its frames and
+# what is particular to it. Measured on a 2-hour lesson (2026-11-05, 70,000
+# characters of transcript, 101 frames): parts of 7,000 characters came to at
+# most 11,461 characters of answer, 8,000 to 13,199.
+AGENT_PART_CHARS = 7_000
 
 # Parts saved so far, kept beside the task's other artifacts so a conversation
 # that was compacted, or a new one, carries on from them.
@@ -102,6 +104,12 @@ SAVE_INSTRUCTION = (
     "\n\n交回之前，按上面写法里「不漏」一节对照这部分转录逐条查一遍，没写到的写进讲它的那一段。"
     "默认由你自己查漏，保存不会另调模型。只有你无法检查或用户明确要求，才带 model_check=true 委托后台检查；"
     "这会使用配置的模型额度。返回 coverage.missing 非空时，补上值得写的内容再保存一次。"
+)
+
+# In small parts the writing rules come once, not with every part.
+SMALL_PARTS_RULES = (
+    "写法和交回方式不在这一部分里：这次对话还没读过，先带 small_parts=true、instructions_only=true "
+    "调一次 get_agent_note_material 读写法，再照它写这一部分。"
 )
 
 # Said once the last part is in. Each part only saw its own stretch, so what the
@@ -154,6 +162,8 @@ def tell_ready_while_cut_renders(job: dict[str, Any]) -> bool:
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     if result.get("intelligence") != "agent" or str(result.get("summary_markdown") or "").strip():
         return False
+    if _corrections_first(result):
+        return False
     if not survey_cut.ranges_while_rendering(result):
         return False
     told = artifact_target_path(str(job.get("task_id") or ""), _START_TOLD_FILENAME)
@@ -161,6 +171,35 @@ def tell_ready_while_cut_renders(job: dict[str, Any]) -> bool:
         return False
     told.write_text(vn._now() + "\n", encoding="utf-8")
     return True
+
+
+def _corrections_first(result: dict[str, Any]) -> bool:
+    """Whether correcting the transcript is left to the agent and not done:
+    the note waits for it, so it reads the corrected transcript (2026-11-05
+    review: an agent task defers both corrections, which are refused while the
+    task works, so a note started while the cut renders always read the
+    transcript as transcribed). Translating the subtitles does not hold the
+    note: the note does not read them."""
+    left = agent_correction.pending(result)
+    return agent_correction.SUBTITLES in left or agent_correction.GLOSSARY in left
+
+
+WRITE_NEXT = (
+    "The transcript is ready and the note is yours to write. Write it in a subagent with a fresh context "
+    "when your host has them (give it the task_id): get_agent_note_material (small_parts=true on a host "
+    "that shows about 10,000 tokens of a tool result, such as Codex), then save_agent_note, as the material "
+    "says."
+)
+
+
+def write_next(result: dict[str, Any]) -> str | None:
+    """What to say once nothing is left before the note and the agent has not
+    written it: an agent task whose note FluentFlow does not write."""
+    if result.get("intelligence") != "agent" or str(result.get("summary_markdown") or "").strip():
+        return None
+    if _corrections_first(result):
+        return None
+    return WRITE_NEXT
 
 
 def _refuse_draft_off_its_clock(task_id: str, media: Any) -> None:
@@ -284,23 +323,38 @@ def material(
     *,
     part: int = 1,
     small_parts: bool = False,
+    instructions_only: bool = False,
     client_id: str | None = None,
     keyframe_extractor: Callable[..., Any],
     frame_collector: Callable[..., list[FrameInput]] = vn.collect_frames,
 ) -> dict[str, Any]:
     """Everything the note is written from, and how to hand it back: the whole
-    recording, or with ``small_parts`` one part of it."""
+    recording, or with ``small_parts`` one part of it, the writing rules then
+    coming once from a call with ``instructions_only``."""
     job = _job(task_id, client_id)
     _set_small_parts(task_id, small_parts)
     media, parts, segments = _eligible(task_id, job)
     if not 1 <= part <= len(parts):
         raise AgentNoteError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
-    frames = _frames(task_id, client_id, result, media, segments, keyframe_extractor, frame_collector)
-    chosen = parts[part - 1]
     # The note's time on the task page runs from here to the save.
     task_steps.agent_began(task_id, task_steps.NOTE)
     skill = note_skills.load_note_skill()
+    rules = (claude_vision.system_prompt(correction_notes.rules_for(task_id, skill.rules, client_id))
+             + SAVE_INSTRUCTION)
+    if small_parts and instructions_only:
+        return {
+            "task_id": task_id,
+            "title": result.get("display_title") or result.get("filename") or "",
+            "total_parts": len(parts),
+            "instructions": rules,
+            "skill": {"path": str(skill.path), "default": skill.is_default, "version": skill.version},
+            "note_version": content_versions(result).get("note_version"),
+            "next": "Write by these rules from each part: get_agent_note_material with small_parts=true and part.",
+        }
+    frames = _frames(task_id, client_id, result, media, segments, keyframe_extractor, frame_collector)
+    chosen = parts[part - 1]
+    shared = SMALL_PARTS_RULES if small_parts and len(parts) > 1 else rules
     planned_marker = artifact_target_path(task_id, _PLANNED_MATERIAL_FILENAME)
     if getattr(media, "planned_ranges", ()):
         planned_marker.write_text(vn._now() + "\n", encoding="utf-8")
@@ -313,9 +367,7 @@ def material(
         "total_parts": chosen.total,
         "starts_at": chosen.starts_at,
         "ends_at": chosen.ends_at,
-        "instructions": claude_vision.system_prompt(correction_notes.rules_for(task_id, skill.rules, client_id))
-        + claude_vision.part_instruction(chosen)
-        + SAVE_INSTRUCTION,
+        "instructions": shared + claude_vision.part_instruction(chosen),
         "transcript": chosen.text,
         "frames": [
             {"filename": frame.filename, "path": str(frame.path), "at": _clock(frame.timestamp_seconds)}
@@ -550,7 +602,8 @@ def unfinished_draft(task_id: str) -> dict[str, Any] | None:
         "next": (
             f"The note was being written in {total} parts and stopped with parts "
             f"{', '.join(str(i) for i in remaining)} not in. Hand the rest to a new subagent with a fresh "
-            "context when your host has them (give it the task_id): it calls get_agent_note_material with "
+            "context when your host has them (give it the task_id): it reads the writing rules once "
+            "(get_agent_note_material with small_parts=true and instructions_only=true), then calls it with "
             "small_parts=true and part set to each number left, writes and saves only those, then does the "
             "read-through the last save asks for. Do not fetch the material into this conversation."
         ),

@@ -203,7 +203,11 @@ def _fact_line(fact: dict[str, Any]) -> str:
         parts.append(f"后一句「{fact['after']}」")
     if fact.get("said"):
         parts.append(f"这段说的「{fact['said']}」")
-    parts.append(f"理由：{fact['default']}")
+    # A removed long gap's reason only repeats its length and picture, above;
+    # left out, the facts of a 3-hour recording fit what Codex shows of one
+    # answer (2026-11-05: 139 facts, 13,387 characters with it).
+    if not (fact["kind"] == "long_gap" and fact["action"] == "removed"):
+        parts.append(f"理由：{fact['default']}")
     return " · ".join(parts)
 
 
