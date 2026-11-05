@@ -358,3 +358,18 @@ def test_an_item_with_angle_brackets_in_its_text_still_matches(tmp_path):
 
     replaced = [c["cmd"] for c in runner.of("+update") if _flag(c["cmd"], "--command") == "block_replace"]
     assert [_flag(c, "--block-id") for c in replaced] == ["doxB"]
+
+
+def test_an_item_with_an_inline_tag_in_the_note_still_matches(tmp_path):
+    note = "# 标题\n\n1. 甲\n\n> 引用\n\n2. <b>重点</b> 和 a < b\n"
+    shown = (
+        '<ol><li id="doxA" seq="1" seq-marker="1. ">甲</li></ol>'
+        '<blockquote id="doxQ"><p id="doxP">引用</p></blockquote>'
+        '<ol><li id="doxB" seq="1" seq-marker="1. "><b>重点</b> 和 a &lt; b</li></ol>'
+    )
+    runner = FakeCli(outline=shown)
+
+    _export(note, runner, None)
+
+    replaced = [c["cmd"] for c in runner.of("+update") if _flag(c["cmd"], "--command") == "block_replace"]
+    assert [_flag(c, "--block-id") for c in replaced] == ["doxB"]

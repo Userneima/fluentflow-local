@@ -685,10 +685,15 @@ _RE_NOTE_ORDERED = re.compile(r"^\s*(\d+)[.）]\s+(.+)$")
 _RE_FEISHU_LIST_START = re.compile(r'<ol><li id="([^"]+)"[^>]*\bseq="1"[^>]*>(.*?)</li>', re.S)
 
 
+_RE_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>")
+
+
 def _list_item_key(text: str, *, xml: bool = False) -> str:
-    # Feishu's XML has tags, and escapes the & < > that the note writes as
-    # they are; only the XML side loses its tags.
-    plain = html.unescape(re.sub(r"<[^>]+>", "", text)) if xml else text
+    # Both sides can hold tags (<b> in a note); Feishu's XML also escapes the
+    # & < > that the note writes as they are, as in "> 2 且 < 5".
+    plain = _RE_TAG.sub("", text)
+    if xml:
+        plain = html.unescape(plain)
     plain = re.sub(r"\]\([^)]*\)|[*`_\[\]]", "", plain)
     return re.sub(r"\s+", "", plain)
 
