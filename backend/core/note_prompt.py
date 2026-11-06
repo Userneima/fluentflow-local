@@ -67,14 +67,24 @@ def for_text_model(
     return body
 
 
-def transcript_for_note(result: dict[str, Any]) -> tuple[str, bool]:
+def transcript_for_note(result: dict[str, Any], *, copy: str | None = None) -> tuple[str, bool]:
     """The transcript a text model writes from, and whether its lines carry
     speaker labels: the corrected one when there is one, as「说话人 A：」lines
     when two or more people were told apart. The first note and every
-    rewrite read it from here, so a rewrite no longer loses who said what."""
+    rewrite read it from here, so a rewrite no longer loses who said what.
+
+    ``copy`` names which of the task's two copies to read, ``"original"`` or
+    ``"corrected"``: a rewrite from the page reads the one whose text the
+    page sent, with that copy's own lines."""
     from backend.core.speaker_diarization import build_speaker_annotated_transcript
 
-    if result.get("transcript_edited"):
+    if copy == "original":
+        transcript = str(result.get("transcript_text") or "")
+        segments = result.get("raw_segments") or []
+    elif copy == "corrected":
+        transcript = str(result.get("corrected_transcript_text") or "")
+        segments = result.get("corrected_segments") or []
+    elif result.get("transcript_edited"):
         # Saved from the editor: the user's text is the newest, and the save
         # does not touch the corrected copy.
         transcript = str(result.get("transcript_text") or "")

@@ -460,3 +460,34 @@ def test_a_submitted_transcript_is_recorded_as_fluentflows_own_text(monkeypatch)
     assert gc.edited_by_user(result) == set()
     result["raw_segments"][1]["text"] = "今天讲本地版，我改过"
     assert gc.edited_by_user(result) == {1}
+
+
+def test_a_rewrite_reads_the_copy_the_page_sent_with_that_copys_speakers(monkeypatch):
+    """A task keeps the original transcript and a corrected one, both told
+    apart by speaker. The page sends one of them; the rewrite reads that one,
+    with its own speaker lines, never the other copy's words (Codex push
+    review, 2026-11-06: sending the original read the corrected lines)."""
+    jobs, _ = _install_store(monkeypatch)
+    jobs["t2"] = {"task_id": "t2", "result": {
+        "task_id": "t2", "filename": "周会.mp4",
+        "transcript_text": "签量式问卷下周上线。好的。",
+        "raw_segments": [{"start": 0, "end": 1, "text": "签量式问卷下周上线。", "speaker": "A"},
+                         {"start": 1, "end": 2, "text": "好的。", "speaker": "B"}],
+        "corrected_transcript_text": "轻量式问卷下周上线。好的。",
+        "corrected_segments": [{"start": 0, "end": 1, "text": "轻量式问卷下周上线。", "speaker": "A"},
+                               {"start": 1, "end": 2, "text": "好的。", "speaker": "B"}],
+    }}
+    captured: list[dict] = []
+    monkeypatch.setattr(local_note_regen, "summarize_transcript_with_metadata",
+                        lambda transcript, **kwargs: captured.append({"transcript": transcript, **kwargs}) or _summary_result())
+
+    for sent in ("签量式问卷下周上线。好的。", "轻量式问卷下周上线。好的。"):
+        response = _client().post("/regenerate-summary", headers=_HEADERS,
+                                  data={"transcript": sent, "task_id": "t2", "note_mode": "direct"})
+        assert response.status_code == 200, response.text
+
+    original, corrected = captured
+    assert "签量式" in original["transcript"] and "轻量式" not in original["transcript"]
+    assert "轻量式" in corrected["transcript"] and "签量式" not in corrected["transcript"]
+    for call in (original, corrected):
+        assert call["speaker_labeled"] is True and "说话人 A" in call["transcript"] and "说话人 B" in call["transcript"]

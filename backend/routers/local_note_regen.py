@@ -101,12 +101,19 @@ async def regenerate_summary(
     # task keeps, the rewrite reads the task's own copy with its speaker
     # labels, as the first note did (10-18 review, item 6); text the page has
     # and the task does not (an edit not yet saved) is read as sent.
+    # The labels come from the copy whose text was sent: the original's lines
+    # for the original, the corrected lines for the corrected one, never the
+    # other copy's words in place of what the page sent.
     note_input, speaker_labeled = transcript, False
     stored = initial_result or {}
-    if transcript.strip() and transcript.strip() in {
-        str(stored.get("transcript_text") or "").strip(), str(stored.get("corrected_transcript_text") or "").strip(),
-    }:
-        labeled, has_labels = note_prompt.transcript_for_note(stored)
+    sent = transcript.strip()
+    copy = (
+        "original" if sent and sent == str(stored.get("transcript_text") or "").strip()
+        else "corrected" if sent and sent == str(stored.get("corrected_transcript_text") or "").strip()
+        else None
+    )
+    if copy is not None:
+        labeled, has_labels = note_prompt.transcript_for_note(stored, copy=copy)
         if has_labels:
             note_input, speaker_labeled = labeled, True
     kwargs = local_ai_kwargs(
