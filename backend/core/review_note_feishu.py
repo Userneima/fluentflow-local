@@ -174,6 +174,7 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
             response = cli.export_markdown_via_lark_cli(
                 title, markdown, task_id=task_id, artifact_root=_artifact_root(), runner=runner, state=STATE,
                 parent_token=str(node.get("parent_node_token") or "") or None,
+                previous=_made_unrecorded(runner, bin_path, node, title, str(follow.get("url") or "")),
             )
             # Recorded before the move, so a failed move never makes a second document.
             _record(task_id, sync=response.get("sync"), url=response.get("url"), title=title, moved=False)
@@ -191,6 +192,29 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
             feishu_modified_at=modified_at or 0, pushed_at=datetime.now(timezone.utc).isoformat(),
             error=None if moved else _MOVE_FAILED)
     return response
+
+
+def _made_unrecorded(
+    runner: Any, bin_path: str, follow_node: dict[str, Any], title: str, follow_url: str,
+) -> dict[str, Any] | None:
+    """A review note document made beside the follow-along note by a push cut
+    off before the task recorded it: found by its title among the
+    follow-along note's siblings and written into again, not made twice. Its
+    chapters are read again from it (``sections`` None)."""
+    from backend.core import lark_cli_exporter as cli
+
+    command = [bin_path, "wiki", "+node-list", "--space-id", str(follow_node.get("space_id") or ""), "--as", "user"]
+    if follow_node.get("parent_node_token"):
+        command[5:5] = ["--parent-node-token", str(follow_node["parent_node_token"])]
+    data = cli._run(runner, command, timeout=60)
+    items = data.get("items") or data.get("nodes") or []
+    found = next((item for item in items if isinstance(item, dict) and item.get("title") == title
+                  and item.get("obj_token")), None)
+    if found is None:
+        return None
+    doc_id = str(found["obj_token"])
+    url = follow_url.replace(str(follow_node.get("obj_token") or "\0"), doc_id) if follow_url else ""
+    return {"doc_id": doc_id, "url": url, "images": [], "headings": {}, "sections": None, "link_errors": []}
 
 
 _MOVE_FAILED = "复习笔记已发到飞书，但随看笔记没能挪到它下面，要手动拖一下。"

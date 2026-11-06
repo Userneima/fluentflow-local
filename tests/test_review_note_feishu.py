@@ -65,6 +65,12 @@ class FakeWiki(FakeDoc):
                 return _ok({"node_token": REVIEW_NODE, "obj_token": DOC, "title": self.titles[-1],
                             "parent_node_token": self.created_under[-1] or "", "space_id": "sp1"})
             return _ok({})
+        if cmd[1:3] == ["wiki", "+node-list"]:
+            self.calls.append(list(cmd))
+            parent = _flag(cmd, "--parent-node-token") if "--parent-node-token" in cmd else ""
+            items = [{"title": t, "obj_token": DOC, "node_token": REVIEW_NODE}
+                     for t, under in zip(self.titles, self.created_under) if (under or "") == parent]
+            return _ok({"items": items})
         if cmd[1:3] == ["wiki", "+move"]:
             self.calls.append(list(cmd))
             if self.fail_move:
@@ -183,3 +189,26 @@ def test_the_watch_finds_review_notes_not_in_feishu_yet(wiki, tmp_path, monkeypa
     rnf.check()
 
     assert waiting in scheduled and other not in scheduled
+
+
+def test_a_push_cut_off_before_it_was_recorded_writes_into_the_same_document(wiki, tmp_path, monkeypatch):
+    task_id, _ = _lesson(tmp_path)
+    real_record = rnf._record
+    calls = {"n": 0}
+
+    def cut_off(task, **fields):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise SystemExit("service stopped")
+        return real_record(task, **fields)
+
+    monkeypatch.setattr(rnf, "_record", cut_off)
+    with pytest.raises(SystemExit):
+        rnf.push(task_id, runner=wiki)
+    monkeypatch.setattr(rnf, "_record", real_record)
+
+    rnf.push(task_id, runner=wiki)
+
+    assert wiki.creates() == 1
+    assert wiki.parents[FOLLOW_NODE] == REVIEW_NODE
+    assert _record(task_id)["moved"] is True
