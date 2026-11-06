@@ -188,8 +188,8 @@ def build_prompt(
         f"# 材料一：底稿（随看笔记 {note_name}，修改于 {version['modified_at']}）\n\n"
         f"{note_markdown.strip()}\n\n"
         f"# 材料二：转录稿（剪后视频 {playback_name} 上的时间，每行约 15 秒）\n\n{lines}\n\n"
-        f"底稿约 {len(note_markdown)} 字。复习笔记全文写 {len(note_markdown) // 3} 到 {len(note_markdown) // 2} 字，"
-        f"其中各章正文（不算术语表、自测题和最后两节）合计不超过 {len(note_markdown) * 3 // 8} 字。"
+        f"底稿约 {len(note_markdown)} 字。复习笔记不设字数上限：底稿里的实质内容全部保留，"
+        "只删寒暄、闲聊、导航和重复。"
         "按写法写这条录像的复习笔记，只输出笔记本身。"
     )
     return skill_text() + correction_notes.as_section(glossary), material

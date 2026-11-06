@@ -201,7 +201,7 @@ def test_the_model_sees_the_users_corrections_and_the_transcript_and_no_chapter_
     assert "〔编号" not in system and "**出处**" not in system and "每项带" not in system
     assert "正文里不写出处" in system and "（转录稿补充）：" in system and "## 出处信息" in system
     assert "转录里说读请求占九成" in user
-    assert f"复习笔记全文写 {len(BASE) // 3} 到 {len(BASE) // 2} 字" in user
+    assert "复习笔记不设字数上限：底稿里的实质内容全部保留" in user
 
 
 def test_a_moved_folder_is_reached_by_the_md_path_and_still_finds_its_task(tmp_path):
