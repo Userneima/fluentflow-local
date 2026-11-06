@@ -148,3 +148,18 @@ def test_an_export_cut_off_by_a_restart_has_one_recovery(exports):
     task_steps.start(task_id, task_steps.FEISHU)
     assert task_id in task_steps.interrupted()
     assert task_id not in task_actions.stepped_tasks_cut_off()
+
+
+def test_a_restart_after_the_answer_was_written_closes_the_step(exports):
+    """Codex push review, 2026-11-06: the document came, the step was still
+    open when the service stopped; it was left saying "sending to Feishu"."""
+    from backend.core import task_steps
+
+    task_id = _task(lark_response={"url": "u"})
+    job_store.update_job_result(task_id, {**job_store.get_job(task_id)["result"],
+                                          task_flow.AGENT_EXPORT_PENDING: 1.0})
+    task_steps.start(task_id, task_steps.FEISHU)
+    task_flow.resume_agent_exports()
+    assert task_steps.status_of(task_id, task_steps.FEISHU) == task_steps.DONE
+    assert task_flow.AGENT_EXPORT_PENDING not in job_store.get_job(task_id)["result"]
+    assert all(call["task_id"] != task_id for call in exports)

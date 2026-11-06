@@ -801,7 +801,10 @@ def resume_agent_exports() -> int:
         if task_id and export_agent_note_if_asked(task_id, job.get("client_id")) is not None:
             started += 1
         elif task_id:
-            # Nothing to do any more (exported, or no longer asked for).
+            # Nothing to do any more (exported, or no longer asked for); a
+            # step the restart left open is closed with what came of it.
+            if task_steps.status_of(task_id, task_steps.FEISHU) == task_steps.RUNNING:
+                task_steps.settle(task_id, task_steps.FEISHU, task_steps.feishu_outcome(job))
             _clear_pending(task_id, job.get("client_id"))
     return started
 
