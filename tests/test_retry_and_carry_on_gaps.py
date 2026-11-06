@@ -16,6 +16,7 @@ terms:
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -125,3 +126,44 @@ def test_a_note_left_unfinished_is_written_again_when_carried_on(task_id):
 
     job_store.upsert_job(task_id=task_id, status="completed", result={**base, "summary_status": "completed"})
     assert not task_flow._note_left_unfinished(task_id, None)
+
+
+@pytest.mark.parametrize("with_context", [True, False])
+def test_a_cut_the_agent_judged_ends_finished(task_id, monkeypatch, with_context):
+    """(Codex push review) The agent's-cut path makes no compressed copy (nor,
+    resumed without its context, a Feishu export): the task ends finished,
+    with those steps skipped, not failed as not reached."""
+    from backend.core import agent_cut, output_folder, task_flow
+
+    job_store.upsert_job(task_id=task_id, status="completed")
+    task_steps.plan(task_id)
+    for name in (task_steps.FETCH, task_steps.TRANSCRIBE, task_steps.CORRECT):
+        task_steps.start(task_id, name)
+        task_steps.finish(task_id, name, task_steps.DONE)
+
+    async def cut_then_note(step, hand_off, **_cut):
+        task_steps.finish(task_id, task_steps.CUT, task_steps.DONE)
+        task_steps.start(task_id, task_steps.NOTE)
+        task_steps.finish(task_id, task_steps.NOTE, task_steps.DONE)
+
+    async def turn(*_a):
+        return asyncio.Event()
+
+    async def feishu(ctx):
+        task_steps.finish(task_id, task_steps.FEISHU, task_steps.SKIPPED)
+
+    monkeypatch.setattr(agent_cut, "check", lambda *_a: {"status": agent_cut.DECIDED})
+    monkeypatch.setattr(agent_cut, "decider", lambda _state: None)
+    monkeypatch.setattr(agent_cut, "finished", lambda *_a: None)
+    monkeypatch.setattr(task_flow, "_take_queue_turn", turn)
+    monkeypatch.setattr(task_flow, "_cut_then_note", cut_then_note)
+    monkeypatch.setattr(task_flow, "_feishu_step", feishu)
+    monkeypatch.setattr(output_folder, "schedule_sync", lambda *_a: None)
+
+    ctx = SimpleNamespace(task_id_value=task_id, client_id=None) if with_context else None
+    asyncio.run(task_flow.continue_after_agent(task_id, None, ctx))
+
+    steps = task_steps.steps_of([task_id])[task_id]
+    named = task_steps.statuses(steps)
+    assert task_steps.FAILED not in named.values(), named
+    assert task_steps.resume_point(steps) is None

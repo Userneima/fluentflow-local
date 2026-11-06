@@ -505,8 +505,12 @@ async def _cut_note_and_export_after_agent(task_id: str, client_id: Optional[str
         step = ctx if ctx is not None else types.SimpleNamespace(task_id_value=task_id, client_id=client_id)
         await _cut_then_note(step, lambda: loop.call_soon_threadsafe(turn.set), **cut)
         await loop.run_in_executor(None, agent_cut.finished, task_id, client_id)
+        # This path makes no compressed copy, and without the pipeline's
+        # context no Feishu export: not needed, so skipped, not left for
+        # ``close_open`` to read as not reached (Codex push review).
         if ctx is not None:
             await _feishu_step(ctx)
+        task_steps.skip_open(task_id)
         try:
             output_folder.schedule_sync(task_id)
         except Exception as exc:  # noqa: BLE001 - the task's own results stand

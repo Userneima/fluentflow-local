@@ -152,6 +152,15 @@ def close_open(task_id: str, *, stopped: bool = False, error: str = UNFINISHED_E
             ended_early = True
 
 
+def skip_open(task_id: str) -> None:
+    """The run is over and the steps not started were not needed (a link that
+    gave captions has nothing to transcribe or cut): skipped, unlike the ones
+    ``close_open`` finds left over by a run that ended early."""
+    for name, status in statuses(steps_of([task_id]).get(task_id, [])).items():
+        if status == PENDING:  # one still running is not over
+            finish(task_id, name, SKIPPED)
+
+
 def interrupted() -> list[str]:
     """Tasks a stopped service left with a step not yet at an end."""
     try:

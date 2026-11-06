@@ -415,6 +415,8 @@ async def _download_then_process(
             return
         task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
         task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
+        # Captions: nothing to transcribe, correct, cut, compress or export.
+        task_steps.skip_open(task_id)
         await JOB_EVENTS.publish(task_id, {"stage": "done", "progress": 100, "result": result})
         return
 
