@@ -731,6 +731,40 @@ const areCardPropsEqual = (prev, next) => {
 };
 const AgentTaskCard = memo(AgentTaskCardView, areCardPropsEqual);
 
+// The Feishu documents this machine has made (automatic exports included),
+// newest first. Moved here from the settings page, where history did not
+// belong (decision 6.21); folded, since it is looked at now and then.
+export const LarkExportList = ({exports, lang}) => {
+    const [open, setOpen] = useState(false);
+    if (!exports?.length) return null;
+    const zh = lang === 'zh';
+    return (
+        <section data-testid="lark-export-list" className="space-y-2">
+            <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className={chip(open)}>
+                {zh ? '飞书导出记录' : 'Feishu exports'}
+                <span className="tabular-nums opacity-70">{exports.length}</span>
+                <ChevronDown className={`size-3.5 transition ${open ? 'rotate-180' : ''}`} strokeWidth={2.15}/>
+            </button>
+            {open ? (
+                <ul className="space-y-1">
+                    {exports.map((item) => (
+                        <li key={item.url} className="flex items-baseline gap-3 text-[13px] font-semibold">
+                            <a href={item.url} target="_blank" rel="noopener noreferrer" className={`min-w-0 truncate ${linkButton('blue')}`}>
+                                {item.title}
+                            </a>
+                            {item.timestamp ? (
+                                <span className="shrink-0 text-[12px] text-[#85868c] dark:text-white/50">
+                                    {formatTaskDateTime(item.timestamp, lang)}
+                                </span>
+                            ) : null}
+                        </li>
+                    ))}
+                </ul>
+            ) : null}
+        </section>
+    );
+};
+
 const RECORD_FILTERS = [
     {id: 'all', zh: '全部', en: 'All', match: () => true},
     // Anything still producing a result: queued or running, and a finished
@@ -746,7 +780,7 @@ const AgentTasks = () => {
     // Read the shared task list + mutations from AppProvider; this page no
     // longer keeps a private jobs state, warm cache, or writes the cache
     // (plan Stage 3b).
-    const {currentJob, setCurrentJob, setLastResult, addToHistory, removeFromHistory, tasks: jobs, ingestJobs, markCancelled, revertCancelled, restoreTask, abortPendingUpload} = useApp();
+    const {currentJob, setCurrentJob, setLastResult, addToHistory, removeFromHistory, tasks: jobs, ingestJobs, markCancelled, revertCancelled, restoreTask, abortPendingUpload, larkExports} = useApp();
     const {getJob, cancelJob, deleteJob, retryJob, stopJobStep, resumeJob, createVideoSourceJob, downloadJobMedia} = useApi();
     const {loadSettings} = useSettings();
     const location = useLocation();
@@ -1195,6 +1229,8 @@ const AgentTasks = () => {
                         />
                     ))}
                 </section>
+
+                <LarkExportList exports={larkExports} lang={lang}/>
             </div>
         </main>
     );

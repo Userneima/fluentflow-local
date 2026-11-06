@@ -122,6 +122,16 @@ def isolate_local_auth_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_douyin_short_link_lookup(monkeypatch):
+    """Submitting a Douyin short link looks up where it points (is it an
+    image post?); a test run does not reach Douyin. Tests about it patch
+    ``douyin_short_link_target`` themselves."""
+    from backend.core import video_source
+
+    monkeypatch.setattr(video_source, "douyin_short_link_target", lambda url, timeout=5.0: None)
+
+
+@pytest.fixture(autouse=True)
 def software_encoder_unless_a_test_asks(monkeypatch):
     """The cut video defaults to the Mac's hardware encoder wherever there is
     one, so without this the same test renders differently on a Mac and on CI.

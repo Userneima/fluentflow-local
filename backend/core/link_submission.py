@@ -47,12 +47,16 @@ from backend.core.runtime_env import truthy
 from backend.core.storage_paths import _video_source_storage_dir
 from backend.core.title_display import display_title_for_user
 from backend.core.video_source import (
+    DOUYIN_IMAGE_POST_MESSAGE,
+    DOUYIN_PAID_MESSAGE,
     SavedVideoSource,
     VideoSourceProgress,
     display_title_for_source_input,
     download_video_source,
     extra_urls_ignored,
     extract_first_url,
+    is_douyin_image_post,
+    is_douyin_url,
     normalize_source_link,
 )
 from backend.core.task_flow import run_pipeline_then_note
@@ -417,10 +421,11 @@ async def _download_then_process(
     try:
         media_preflight = await asyncio.to_thread(preflight_media_file, target_path)
     except MediaPreflightError as exc:
+        error, code = downloaded_file_refusal(exc, input_text)
         await fail(
             "import",
-            exc,
-            media_preflight={"status": "rejected", "code": exc.code, **exc.metadata},
+            error,
+            media_preflight={"status": "rejected", "code": code, **exc.metadata},
         )
         return
 
@@ -541,6 +546,10 @@ async def submit_video_source_job(
         raise HTTPException(status_code=400, detail="缺少视频分享文本或视频链接")
     if len(input_text) > 4000:
         raise HTTPException(status_code=400, detail="分享文本过长")
+    if await asyncio.to_thread(is_douyin_image_post, input_text):
+        # Said at once: an image post has nothing to transcribe, and finding
+        # out after the queue and the resolver cost the user minutes.
+        raise HTTPException(status_code=400, detail=DOUYIN_IMAGE_POST_MESSAGE)
     duplicate = _refuse_or_reuse_duplicate(input_text, client_id, allow_duplicate=allow_duplicate)
     if duplicate is not None:
         return duplicate
@@ -620,6 +629,17 @@ async def submit_video_source_job(
         "extra_urls_ignored": ignored_extra,
         **({"warning": EXTRA_URLS_WARNING} if ignored_extra else {}),
     }
+
+
+def downloaded_file_refusal(exc: MediaPreflightError, input_text: str) -> tuple[Any, str]:
+    """What to tell the user about a downloaded file the checks refused.
+
+    A Douyin file whose container reads and whose sound does not decode is a
+    paid video's encrypted copy (2026-10-28, 归芯: "文件可能已损坏" told the
+    user nothing); said as that (owner, 2026-11-06)."""
+    if exc.code == "media_audio_unreadable" and is_douyin_url(extract_first_url(input_text or "") or ""):
+        return DOUYIN_PAID_MESSAGE, "douyin_paid"
+    return exc, exc.code
 
 
 def link_of(job: dict[str, Any]) -> str:

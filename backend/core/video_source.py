@@ -819,6 +819,43 @@ def is_douyin_image_post_url(url: str) -> bool:
     return bool(re.search(r"/(note|slides)/", path))
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102 - stop at the first answer
+        return None
+
+
+def douyin_short_link_target(url: str, *, timeout: float = 5.0) -> str | None:
+    """Where a ``v.douyin.com`` short link points, read from its redirect
+    without following it; None for any other link or when it cannot tell."""
+    if _url_host(url) != "v.douyin.com":
+        return None
+    validate_public_http_url(url, allowed_host_suffixes=("douyin.com",))
+    request = urllib.request.Request(url, method="GET", headers={"User-Agent": BILIBILI_USER_AGENT})
+    try:
+        urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout).close()
+    except urllib.error.HTTPError as exc:
+        location = exc.headers.get("Location") if exc.headers else None
+        return urllib.parse.urljoin(url, location) if location else None
+    except Exception:  # noqa: BLE001 - unknown: the download step finds out
+        return None
+    return None
+
+
+def is_douyin_image_post(input_text: str) -> bool:
+    """Whether the link in ``input_text`` is a Douyin image post (图文),
+    asked at submission so the user hears it at once rather than after a
+    queue and a resolver call (owner, 2026-11-06). A short link is looked up
+    once (a few seconds at most); when that fails, the download step still
+    refuses an image post as before."""
+    url = extract_first_url(input_text or "")
+    if not url or not is_douyin_url(url):
+        return False
+    if is_douyin_image_post_url(normalize_douyin_url(url)):
+        return True
+    target = douyin_short_link_target(url)
+    return bool(target) and is_douyin_image_post_url(target)
+
+
 def is_youtube_url(url: str) -> bool:
     try:
         host = (urllib.parse.urlparse(url).hostname or "").lower()
@@ -1401,10 +1438,17 @@ def _cookie_store_unreadable(detail: str | None) -> bool:
     ))
 
 
-DOUYIN_IMAGE_POST_MESSAGE = "图文作品没有可转写的音视频：这个抖音链接是图文作品（图片加配乐）。请换一个视频链接。"
+DOUYIN_IMAGE_POST_MESSAGE = "这是抖音的图文帖，没有视频（图文作品没有可转写的音视频）。请换一个视频链接。"
 DOUYIN_NO_MEDIA_MESSAGE = (
     "抖音没有给出可下载的视频：可能是图文作品（图文作品没有可转写的音视频）、视频已删除或设为私密。"
     "请在抖音里打开确认；能播放的话，把视频下载到本机后用「本机文件」处理。"
+)
+# A paid Douyin video comes down as an encrypted file: the container reads,
+# no frame or sound decodes (2026-10-28, 归芯; the resolver's page says
+# nothing of it beforehand, checked 2026-11-06).
+DOUYIN_PAID_MESSAGE = (
+    "这像是抖音的付费视频，下载不了：抖音给的文件是加密的，画面和声音都解不开。"
+    "能在抖音里正常播放的话，录屏后用「本机文件」处理。"
 )
 GENERIC_UNRESOLVED_MESSAGE = "暂时无法自动解析这个视频链接，请改用本机上的视频文件"
 _BILIBILI_LOGIN_REASONS = frozenset({"login_required", "forbidden", "premium_only"})
