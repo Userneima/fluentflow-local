@@ -452,3 +452,28 @@ def test_a_push_that_cannot_read_its_chapters_back_says_so_on_the_task(monkeypat
 def test_a_stopped_document_is_not_in_sync():
     assert feishu_sync.recorded_sync({"lark_response": {"via": "lark_cli", "sync": {
         "doc_id": DOC, "sections": None, "stopped": "飞书那份已被删除"}}}) is None
+
+
+def test_an_export_cut_off_after_creating_its_document_writes_into_it_again(tmp_path, monkeypatch):
+    """(owner, 2026-11-06) A document created by an export that was cut off
+    before the task recorded it (the service stopped while screenshots
+    uploaded) is written into again by the next export, not made twice."""
+    doc = FakeDoc()
+
+    def cut_off(*_args, **_kwargs):
+        raise KeyboardInterrupt("the service stopped")
+
+    monkeypatch.setattr(cli, "_insert_images", cut_off)
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t1", artifact_root=tmp_path, runner=doc)
+    monkeypatch.undo()
+    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    created = doc.writes.count("create")
+
+    result = cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert created == 1 and doc.writes.count("create") == 1, "no second document"
+    assert result["url"] == URL
+    assert not (tmp_path / "t1" / cli.CREATED).exists()
+    cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t2", artifact_root=tmp_path, runner=doc)
+    assert doc.writes.count("create") == 2, "another task still gets its own document"

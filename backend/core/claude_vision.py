@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from backend.core import fake_model, model_usage, note_skills, task_steps
+from backend.core import fake_model, model_answers, model_usage, note_skills, task_steps
 from backend.core.cut_timeline import SPEAKER_LABEL_PREAMBLE
 
 logger = logging.getLogger(__name__)
@@ -647,24 +647,37 @@ def write_visual_note(
         "messages": [{"role": "user", "content": build_user_content(text, picked)}],
         "output_config": {"format": {"type": "json_schema", "schema": NOTE_SCHEMA}},
     }
-    try:
-        with model_usage.call(model_usage.ANTHROPIC, chosen_model) as call:
-            if call.fake:
-                message = fake_model.anthropic_message(fake_model.reply(request["system"], text))
-            else:
-                with active.messages.stream(**request) as stream:
-                    message = stream.get_final_message()
-            call.anthropic(message)
-    except ClaudeVisionError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - mapped to something a user can act on
-        raise ClaudeVisionError(_friendly(exc), actionable=_is_actionable(exc)) from exc
+    answered: dict[str, Any] = {}
 
-    # A safety decline arrives as a normal response, not an error, and its
-    # content can be empty — read stop_reason before trusting content.
-    if getattr(message, "stop_reason", None) == "refusal":
-        raise ClaudeVisionError("Claude 拒绝了这次请求，没有生成笔记。可以换一段素材再试。")
-    raw = _response_text(message)
+    def ask() -> str:
+        try:
+            with model_usage.call(model_usage.ANTHROPIC, chosen_model) as call:
+                if call.fake:
+                    message = fake_model.anthropic_message(fake_model.reply(request["system"], text))
+                else:
+                    with active.messages.stream(**request) as stream:
+                        message = stream.get_final_message()
+                call.anthropic(message)
+        except ClaudeVisionError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - mapped to something a user can act on
+            raise ClaudeVisionError(_friendly(exc), actionable=_is_actionable(exc)) from exc
+        # A safety decline arrives as a normal response, not an error, and its
+        # content can be empty — read stop_reason before trusting content.
+        if getattr(message, "stop_reason", None) == "refusal":
+            raise ClaudeVisionError("Claude 拒绝了这次请求，没有生成笔记。可以换一段素材再试。")
+        answered["message"] = message
+        return _response_text(message)
+
+    # A note cut off halfway reads the parts already written (``model_answers``).
+    raw = model_answers.remembered(
+        model_answers.request_key(
+            "claude_vision", chosen_model, max_tokens, request["system"], text, [f.filename for f in picked],
+            images=[f.path for f in picked],
+        ),
+        ask,
+    )
+    message = answered.get("message")
     if not raw:
         raise ClaudeVisionError("Claude 没有返回内容，笔记未生成")
     try:
@@ -683,7 +696,7 @@ def write_visual_note(
         transcript_chars=len(text),
         transcript_chars_dropped=fitted.chars_dropped,
         transcript_covered_until=fitted.covered_until,
-        usage=_usage_from_message(message),
+        usage=_usage_from_message(message) if message is not None else {},
     )
 
 

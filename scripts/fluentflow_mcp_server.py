@@ -1360,8 +1360,8 @@ def save_agent_correction(
             "task_id": {"type": "string"},
             "part": {"type": "integer", "default": 1, "description": "Which part, from 1 to total_parts (small_parts only)."},
             "small_parts": {
-                "type": "boolean", "default": False,
-                "description": "Hand the recording over in parts of about 7,000 characters, for a host whose tool results are too small for the whole transcript.",
+                "type": "boolean",
+                "description": "Hand the recording over in parts of about 7,000 characters, for a host whose tool results cannot hold the whole transcript. Left out: as last time.",
             },
             "instructions_only": {"type": "boolean", "description": "small_parts only: the writing rules, once, without a part."},
             "api_base": {"type": "string"},
@@ -1373,7 +1373,7 @@ def save_agent_correction(
 def get_agent_note_material(
     task_id: str,
     part: int = 1,
-    small_parts: bool = False,
+    small_parts: bool | None = None,
     instructions_only: bool = False,
     api_base: str | None = None,
     client_id: str | None = None,
@@ -1386,8 +1386,8 @@ def get_agent_note_material(
         f"/agent/v1/tasks/{task_id}/agent-note/material",
         api_base=api_base,
         client_id=client_id,
-        payload={"part": int(part or 1), "small_parts": bool(small_parts),
-                 "instructions_only": bool(instructions_only)},
+        payload={"part": int(part or 1), "instructions_only": bool(instructions_only),
+                 **({} if small_parts is None else {"small_parts": bool(small_parts)})},
         timeout=300,
     ))
 

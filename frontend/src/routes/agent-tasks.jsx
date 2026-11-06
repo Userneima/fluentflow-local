@@ -508,7 +508,9 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
     const diagnosis = failed
         ? diagnoseTaskError(job?.error_reason || job?.result?.summary_error || '', lang, taskErrorContextForJob(job))
         : null;
-    const retryUseless = failedTerminal && mediaSourceForJob(job) === 'video_link' && diagnosis && !diagnosis.retryable;
+    // A transcript file has no recording to run again: its retry always answered 404 (10-18 review, item 16).
+    const retryUseless = failedTerminal && (mediaSourceForJob(job) === 'transcript_file'
+        || (mediaSourceForJob(job) === 'video_link' && diagnosis && !diagnosis.retryable));
     const outcome = taskOutcome(job, lang);
     const cutTile = debreathTile(job, lang);
     const reportAvailable = hasReport(job);

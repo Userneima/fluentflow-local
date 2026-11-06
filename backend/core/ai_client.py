@@ -14,7 +14,7 @@ import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from backend.core import fake_model, model_usage
+from backend.core import fake_model, model_answers, model_usage
 from backend.core import text_providers
 from backend.core.ai_config import (
     DEFAULT_DEEPSEEK_MODEL,
@@ -186,16 +186,22 @@ def _chat(
     *,
     temperature: float = 0.3,
 ) -> str:
-    resp, model = _create(
-        client, model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=temperature,
+    def ask() -> str:
+        resp, _model = _create(
+            client, model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=temperature,
+        )
+        msg = resp.choices[0].message
+        return (msg.content or "").strip()
+
+    # A step carried on after an interruption reads what it was answered then.
+    return model_answers.remembered(
+        model_answers.request_key("chat", _provider_of(client), model, system, user, temperature), ask,
     )
-    msg = resp.choices[0].message
-    return (msg.content or "").strip()
 
 
 def _image_to_base64_data_url(image_path: str) -> str:
@@ -224,16 +230,23 @@ def _vision_chat(
             "type": "image_url",
             "image_url": {"url": data_url},
         })
-    resp, model = _create(
-        client, model, may_replace=False,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": content},
-        ],
-        temperature=temperature,
+    def ask() -> str:
+        resp, _model = _create(
+            client, model, may_replace=False,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": content},
+            ],
+            temperature=temperature,
+        )
+        msg = resp.choices[0].message
+        return (msg.content or "").strip()
+
+    return model_answers.remembered(
+        model_answers.request_key("vision_chat", _provider_of(client), model, system, user_text, temperature,
+                                  images=image_paths),
+        ask,
     )
-    msg = resp.choices[0].message
-    return (msg.content or "").strip()
 
 
 def can_use_multimodal(provider: str | None) -> bool:

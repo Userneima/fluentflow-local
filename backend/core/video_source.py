@@ -451,6 +451,18 @@ def is_supported_source_url(url: str) -> bool:
     return any(check(url) for check in (is_douyin_url, is_bilibili_url, is_youtube_url, is_probably_direct_video_url))
 
 
+def link_of_task(job: dict[str, Any]) -> str | None:
+    """The link a link task fetches its video from, or None for any other
+    task: the full link kept as ``video_source_url``, else the first link in
+    the share text older tasks kept. A retry fetches it again."""
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    if job.get("source_type") != "video_link" and not metadata.get("video_source_url"):
+        return None
+    return str(metadata.get("video_source_url") or "").strip() or extract_first_url(
+        str(metadata.get("video_source_input_preview") or "")
+    )
+
+
 def extract_first_url(input_text: str) -> str | None:
     """The link to fetch: the first one FluentFlow supports, else the first one.
 

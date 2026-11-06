@@ -80,6 +80,15 @@ CREATE TABLE IF NOT EXISTS model_calls (
     reported_cost_usd REAL
 );
 CREATE INDEX IF NOT EXISTS idx_model_calls_task ON model_calls(task_id, id);
+CREATE TABLE IF NOT EXISTS model_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    step TEXT NOT NULL,
+    request_key TEXT NOT NULL,
+    answer TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_model_answers_task ON model_answers(task_id, step, request_key, id);
 """
 
 
@@ -1234,6 +1243,55 @@ def list_model_calls(
     return [{**dict(row), "ok": bool(row["ok"])} for row in rows]
 
 
+def insert_model_answer(
+    task_id: str, step: str, request_key: str, answer: str, *, db_path: Path | str = DEFAULT_DB_PATH,
+) -> None:
+    """A model's answer to one request of a step still open
+    (``model_usage.remembered``), kept so a run that carries the step on after
+    an interruption reads it instead of paying for it again."""
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path)) as conn:
+        conn.execute(
+            "INSERT INTO model_answers (created_at, task_id, step, request_key, answer) VALUES (?, ?, ?, ?, ?)",
+            (_now_iso(), task_id, step, request_key, answer),
+        )
+
+
+def list_model_answers(
+    task_id: str, step: str, request_key: str, *, db_path: Path | str = DEFAULT_DB_PATH,
+) -> list[str]:
+    """The answers kept for this request of this step, in the order given."""
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT answer FROM model_answers WHERE task_id = ? AND step = ? AND request_key = ? ORDER BY id",
+            (task_id, step, request_key),
+        ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def count_model_answers(task_id: str, step: str | None = None, *, db_path: Path | str = DEFAULT_DB_PATH) -> int:
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path)) as conn:
+        if step is None:
+            row = conn.execute("SELECT COUNT(id) FROM model_answers WHERE task_id = ?", (task_id,)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(id) FROM model_answers WHERE task_id = ? AND step = ?", (task_id, step),
+            ).fetchone()
+    return int(row[0] or 0)
+
+
+def delete_model_answers(task_id: str, step: str | None = None, *, db_path: Path | str = DEFAULT_DB_PATH) -> None:
+    """Drop the answers kept for a step (every step when ``step`` is None)."""
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path)) as conn:
+        if step is None:
+            conn.execute("DELETE FROM model_answers WHERE task_id = ?", (task_id,))
+        else:
+            conn.execute("DELETE FROM model_answers WHERE task_id = ? AND step = ?", (task_id, step))
+
+
 def repair_truncated_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> int:
     """Put back titles an earlier suffix rule cut at their first dot.
 
@@ -1298,6 +1356,7 @@ def delete_jobs(
         if allowed_ids:
             step_placeholders = ",".join("?" for _ in allowed_ids)
             conn.execute(f"DELETE FROM job_steps WHERE task_id IN ({step_placeholders})", allowed_ids)
+            conn.execute(f"DELETE FROM model_answers WHERE task_id IN ({step_placeholders})", allowed_ids)
         cursor = conn.execute(f"DELETE FROM jobs WHERE {where}", params)
         return int(cursor.rowcount or 0)
 

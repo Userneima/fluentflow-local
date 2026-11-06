@@ -53,6 +53,37 @@ def event(task_id: str) -> threading.Event:
         return found
 
 
+class Either:
+    """Set when any of its events is: a step's own stop (its coroutine was
+    cancelled) or the task's (the user stopped the step, the service is
+    stopping). Read like a ``threading.Event``."""
+
+    def __init__(self, *events: threading.Event) -> None:
+        self._events = events
+
+    def is_set(self) -> bool:
+        return any(found.is_set() for found in self._events)
+
+    def set(self) -> None:
+        self._events[0].set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        import time
+
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not self.is_set():
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+        return True
+
+
+def either(task_id: str, own: threading.Event) -> Either:
+    """``own``, or this task's stop event: what a step running on worker
+    threads watches so that stopping the task stops it too."""
+    return Either(own, event(task_id))
+
+
 def requested(task_id: str) -> bool:
     with _lock:
         found = _events.get(task_id)
@@ -138,4 +169,4 @@ def shutting_down() -> bool:
     return _shutting_down.is_set()
 
 
-__all__ = ["begin", "bound", "bound_runner", "current", "event", "request", "requested", "service_started", "shutdown", "shutting_down", "track", "untrack"]
+__all__ = ["Either", "either", "begin", "bound", "bound_runner", "current", "event", "request", "requested", "service_started", "shutdown", "shutting_down", "track", "untrack"]

@@ -39,7 +39,7 @@ from backend.core.ai_summarizer import (
 from backend.core.media_probe import media_duration_seconds
 from backend.core.runtime_env import truthy
 from backend.core.ai_client import _chat, _get_client, _normalize_model, _normalize_provider, _provider_api_key
-from backend.core import correction_notes, glossary_correction, model_usage, subtitle_correction, task_intelligence
+from backend.core import correction_notes, glossary_correction, model_usage, subtitle_correction, task_intelligence, task_stop
 from backend.core.claude_text import claude_chat, subscription_first
 from backend.core.media_job_stages import (
     clean_transcript,
@@ -348,7 +348,10 @@ async def _run_subtitle_correction_stage(
     # The step runs in a worker thread, which a cancelled task does not stop
     # by itself: without this it went on decoding the whole video and calling
     # the model after the task was cancelled (review, 2026-10-25).
-    stop = threading.Event()
+    # Stopped with the task too (the user's 停下, the service stopping), not
+    # only when this coroutine is cancelled: it used to run every batch to the
+    # end first (165 seconds, 2026-10-26).
+    stop = task_stop.either(ctx.task_id_value, threading.Event())
     try:
         outcome = await ctx.loop.run_in_executor(
             None, model_usage.carry(lambda: subtitle_correction.correct_from_subtitles(video, segments, chat, stop=stop)),
@@ -356,6 +359,10 @@ async def _run_subtitle_correction_stage(
     except asyncio.CancelledError:
         stop.set()
         raise
+    if outcome.status == "cancelled":
+        # The task was stopped under it: the transcript is not stored as if
+        # corrected, the run ends here as a cancelled one.
+        raise asyncio.CancelledError()
     log_event(
         task_id=ctx.task_id_value,
         event_name="subtitle_correction_completed" if outcome.status != "failed" else "subtitle_correction_failed",
@@ -389,7 +396,10 @@ async def _run_glossary_correction_stage(
         glossary = correction_notes.for_task(ctx.task_id_value, ctx.client_id)
     except Exception:  # noqa: BLE001 - no word list is an answer, not an error
         glossary = ""
-    stop = threading.Event()
+    # Stopped with the task too (the user's 停下, the service stopping), not
+    # only when this coroutine is cancelled: it used to run every batch to the
+    # end first (165 seconds, 2026-10-26).
+    stop = task_stop.either(ctx.task_id_value, threading.Event())
     try:
         outcome = await ctx.loop.run_in_executor(
             None, model_usage.carry(lambda: glossary_correction.correct(segments, glossary, chat, stop=stop)),
@@ -397,6 +407,10 @@ async def _run_glossary_correction_stage(
     except asyncio.CancelledError:
         stop.set()
         raise
+    if outcome.status == "cancelled":
+        # The task was stopped under it: the transcript is not stored as if
+        # corrected, the run ends here as a cancelled one.
+        raise asyncio.CancelledError()
     log_event(
         task_id=ctx.task_id_value,
         event_name="glossary_correction_completed" if outcome.status != "failed" else "glossary_correction_failed",

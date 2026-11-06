@@ -973,9 +973,12 @@ def agent_note_material(
     waits for an idle queue the same way the frame note does.
     """
     part = int((payload or {}).get("part") or 1)
-    small_parts = bool((payload or {}).get("small_parts"))
+    asked = (payload or {}).get("small_parts")
+    # Not given: as the note was being handed over (``agent_note.material``).
+    small_parts = None if asked is None else bool(asked)
     # The writing rules alone, read once in small parts: no frames are taken.
-    instructions_only = small_parts and bool((payload or {}).get("instructions_only"))
+    instructions_only = bool(small_parts if small_parts is not None else agent_note._small_parts(task_id)) and bool(
+        (payload or {}).get("instructions_only"))
     job = _job_for_request(request, task_id)
     result = job.get("result") or {}
     # While this task's own cut renders it holds the queue, so nothing else

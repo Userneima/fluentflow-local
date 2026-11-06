@@ -187,6 +187,52 @@ class CarryingExecutor(ThreadPoolExecutor):
         return super().submit(carry(fn), *args, **kwargs)
 
 
+def stoppable_map(fn: Callable[[Any], Any], items: Iterable[Any], *, workers: int,
+                  check_stop: Callable[[], None]) -> list[Any]:
+    """``fn`` over ``items`` on up to ``workers`` threads that keep the task
+    and step, results in order, the first failure (in order) raised: what
+    ``list(CarryingExecutor(...).map(fn, items))`` gives, except that it does
+    not wait for requests already sent once the step is stopped.
+    ``check_stop`` raises when it is: a request sent over HTTP cannot be called
+    back, and waiting for its answer kept a stopping service alive for 165
+    seconds (2026-10-26). The threads are daemons, so a service that exits
+    does not wait for them either; an answer that still comes back while it
+    runs is kept for the step (``model_answers``).
+    """
+    queue = list(items)
+    if not queue:
+        return []
+    results: list[Any] = [None] * len(queue)
+    errors: dict[int, BaseException] = {}
+    lock = threading.Lock()
+    finished = threading.Event()
+    state = {"next": 0, "done": 0}
+
+    def work() -> None:
+        while True:
+            with lock:
+                index = state["next"]
+                if index >= len(queue):
+                    return
+                state["next"] += 1
+            try:
+                results[index] = fn(queue[index])
+            except BaseException as exc:  # noqa: BLE001 - raised to the caller below
+                errors[index] = exc
+            with lock:
+                state["done"] += 1
+                if state["done"] == len(queue):
+                    finished.set()
+
+    for number in range(max(1, min(workers, len(queue)))):
+        threading.Thread(target=carry(work), name=f"model-call-{number}", daemon=True).start()
+    while not finished.wait(0.2):
+        check_stop()
+    if errors:
+        raise errors[min(errors)]
+    return results
+
+
 # ── recording ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -263,6 +309,8 @@ def call(provider: str, model: str, billing: str = KEY) -> Iterator[Call]:
     if fake_model.enabled():
         record_of.provider = record_of.billing = FAKE
         record_of.fake = True
+        if fake_model.answer_seconds():
+            time.sleep(fake_model.answer_seconds())
     else:
         _admit(record_of, at)
     started = time.perf_counter()
@@ -620,7 +668,7 @@ def for_task(task_id: str) -> dict[str, Any] | None:
 
 __all__ = [
     "ANTHROPIC", "BUDGET_EXCEEDED", "BudgetExceeded", "CarryingExecutor", "FAKE", "api_price", "budget",
-    "budget_refused", "reset_budget", "spent", "test_run", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
+    "budget_refused", "reset_budget", "spent", "stoppable_map", "test_run", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
     "OUTSIDE_TASKS_LABEL", "call", "carry", "cost", "current", "enter_step", "for_task", "outside_tasks",
     "outside_tasks_or_none", "item", "leave_step", "part_of", "prices",
     "provider_of_base_url", "scope", "summarize", "unit_prices", "works_for",

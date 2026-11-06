@@ -202,7 +202,13 @@ class LocalTaskDetailPolicy:
             return False
         if find_source_file(_text(job.get("task_id"))) is not None:
             return True
-        return in_place_source_path(job) is not None
+        if in_place_source_path(job) is not None:
+            return True
+        # A link task cut off while downloading fetches the link again
+        # (10-18 review, item 16: it was told its file was gone).
+        from backend.core.video_source import link_of_task
+
+        return bool(link_of_task(job))
 
     @staticmethod
     def additional_stage_step(_stage: str) -> str | None:

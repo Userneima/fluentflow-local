@@ -14,7 +14,7 @@ import logging
 import threading
 from typing import Callable
 
-from backend.core import claude_code_note, claude_vision, fake_model, model_usage
+from backend.core import claude_code_note, claude_vision, fake_model, model_answers, model_usage
 from backend.core.visual_note_channel import CHANNEL_SUBSCRIPTION, preferred_channel, resolve_channel
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,11 @@ Chat = Callable[[str, str], str]
 
 def _api_key_chat(api_key: str | None, model: str, max_tokens: int = TEXT_MAX_TOKENS) -> Chat:
     def chat(system: str, user: str) -> str:
+        return model_answers.remembered(
+            model_answers.request_key("claude_text", model, max_tokens, system, user), lambda: ask(system, user),
+        )
+
+    def ask(system: str, user: str) -> str:
         client = claude_vision.anthropic.Anthropic(api_key=claude_vision.resolve_api_key(api_key))
         try:
             with model_usage.call(model_usage.ANTHROPIC, model) as call:

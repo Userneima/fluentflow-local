@@ -216,6 +216,19 @@ def anthropic_message(text: str) -> Any:
     return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason="end_turn", usage=None)
 
 
+# How long every other exit waits before it answers: 0 unless set, so a test
+# run can stop a step while its requests are out (a step's answers kept for
+# carrying on, ``model_answers``).
+ANSWER_SECONDS_ENV = "FLUENTFLOW_FAKE_MODEL_ANSWER_SECONDS"
+
+
+def answer_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get(ANSWER_SECONDS_ENV) or 0))
+    except ValueError:
+        return 0.0
+
+
 def seconds() -> float:
     try:
         return max(0.0, float(os.environ.get(SECONDS_ENV) or DEFAULT_SECONDS))

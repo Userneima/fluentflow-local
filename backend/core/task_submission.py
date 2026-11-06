@@ -573,14 +573,10 @@ async def _retry_link_task(
     Returns None when the task is not a link task or no link can be found.
     """
     metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
-    if job.get("source_type") != "video_link" and not metadata.get("video_source_url"):
-        return None
-    from backend.core.video_source import extract_first_url
+    from backend.core.video_source import link_of_task
     from backend.core.link_submission import submit_video_source_job
 
-    link = str(metadata.get("video_source_url") or "").strip() or extract_first_url(
-        str(metadata.get("video_source_input_preview") or "")
-    )
+    link = link_of_task(job)
     if not link:
         return None
     stored = metadata.get("queue_options")
@@ -636,6 +632,13 @@ async def retry_task(
         raise HTTPException(status_code=404, detail="Job not found")
     if job.get("status") in {"queued", "running"}:
         raise HTTPException(status_code=409, detail="这个任务还在排队或处理中，先取消（agent 用 cancel_task）再重新提交。")
+    # Who judges the cut goes with the task: a task submitted for the user's
+    # agent to judge was judged by FluentFlow after a retry (10-18 review,
+    # item 16).
+    recorded = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    judge = recorded.get("cut_judge") or (recorded.get("folder_intake") or {}).get("cut_judge")
+    if judge:
+        carry = {"cut_judge": judge, **(carry or {})}
     in_place = _in_place_origin(job)
     if in_place is not None:
         return await _retry_in_place(

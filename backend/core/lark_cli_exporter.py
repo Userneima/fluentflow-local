@@ -298,14 +298,26 @@ def export_markdown_via_lark_cli(
         raise LarkCliError(
             f"{LARK_CLI_NOT_FOUND}. Install @larksuite/cli globally or set FLUENTFLOW_LARK_CLI_BIN."
         )
+    resumed = None
+    if not (previous and previous.get("doc_id")):
+        # A document this task created in an export cut off before it was
+        # recorded is written into again, not made a second time.
+        resumed = _created_unrecorded(artifact_root, task_id)
+        if resumed is not None:
+            previous = resumed
     if previous and previous.get("doc_id") and sections_unread(previous):
         previous = reread_sections(previous, task_id=task_id, artifact_root=artifact_root,
                                    bin_path=bin_path, runner=runner)
     if previous and previous.get("doc_id") and isinstance(previous.get("sections"), list):
-        return _update(
+        updated = _update(
             markdown, previous, bin_path=bin_path, timeout=timeout, task_id=task_id,
             artifact_root=artifact_root, keep_feishu=keep_feishu, runner=runner,
         )
+        if resumed is not None:
+            _forget_created(artifact_root, task_id)
+            if _local_images_in(markdown):
+                updated["image_upload_errors"] = [*updated.get("image_upload_errors", []), INTERRUPTED_IMAGES]
+        return updated
 
     space = (wiki_space or os.environ.get("FLUENTFLOW_LARK_CLI_WIKI_SPACE") or "").strip() or DEFAULT_WIKI_SPACE
     parts = feishu_note.sections(markdown)
@@ -343,6 +355,12 @@ def export_markdown_via_lark_cli(
             f"「{title}」的文档。返回内容：{_tail(json.dumps(data, ensure_ascii=False))}"
         )
 
+    if doc_id:
+        # From here the document exists: an export cut off before it is
+        # recorded on the task finds it again (``_created_unrecorded``).
+        save_pushed_note(artifact_root, task_id, markdown)
+        _remember_created(artifact_root, task_id, {"doc_id": doc_id, "url": doc_url,
+                                                   "revision_id": document.get("revision_id")})
     images, errors = _insert_images(runner, bin_path, doc_id, pending)
     sync = {
         "doc_id": doc_id or None,
@@ -357,7 +375,52 @@ def export_markdown_via_lark_cli(
     if doc_id:
         _finish(runner, bin_path, doc_id, doc_url, links, parts, sync)
         save_pushed_note(artifact_root, task_id, markdown)
+        _forget_created(artifact_root, task_id)
     return _response(sync, pending, missing, images, errors, wiki_space=space)
+
+
+CREATED = "feishu_created.json"
+INTERRUPTED_IMAGES = "上次发到飞书时在传截图前被打断，这篇里的截图没有补上"
+
+
+def _created_path(artifact_root: Optional[Path], task_id: Optional[str]) -> Optional[Path]:
+    if artifact_root is None or not task_id:
+        return None
+    return Path(artifact_root) / task_id / CREATED
+
+
+def _remember_created(artifact_root: Optional[Path], task_id: Optional[str], document: dict[str, Any]) -> None:
+    path = _created_path(artifact_root, task_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("could not note the Feishu document of %s: %s", task_id, exc)
+
+
+def _forget_created(artifact_root: Optional[Path], task_id: Optional[str]) -> None:
+    path = _created_path(artifact_root, task_id)
+    if path is not None:
+        path.unlink(missing_ok=True)
+
+
+def _created_unrecorded(artifact_root: Optional[Path], task_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """The document an export of this task created and never finished, as a
+    ``sync`` whose chapters are read again from it, or None."""
+    path = _created_path(artifact_root, task_id)
+    if path is None or not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, dict) or not document.get("doc_id"):
+        return None
+    return {"doc_id": str(document["doc_id"]), "url": str(document.get("url") or ""),
+            "revision_id": document.get("revision_id"), "images": [], "headings": {},
+            "sections": None, "link_errors": []}
 
 
 PUSHED_NOTE = "feishu_pushed.md"

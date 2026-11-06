@@ -326,7 +326,7 @@ def material(
     task_id: str,
     *,
     part: int = 1,
-    small_parts: bool = False,
+    small_parts: bool | None = None,
     instructions_only: bool = False,
     client_id: str | None = None,
     keyframe_extractor: Callable[..., Any],
@@ -334,9 +334,15 @@ def material(
 ) -> dict[str, Any]:
     """Everything the note is written from, and how to hand it back: the whole
     recording, or with ``small_parts`` one part of it, the writing rules then
-    coming once from a call with ``instructions_only``."""
+    coming once from a call with ``instructions_only``. ``small_parts`` not
+    given keeps how the note was being handed over: an agent carrying a note on
+    in a new conversation, without the flag, used to turn the parts back into
+    one and leave the saved parts unmatched (10-18 review, item 18)."""
     job = _job(task_id, client_id)
-    _set_small_parts(task_id, small_parts)
+    if small_parts is None:
+        small_parts = _small_parts(task_id)
+    else:
+        _set_small_parts(task_id, small_parts)
     media, parts, segments = _eligible(task_id, job)
     if not 1 <= part <= len(parts):
         raise AgentNoteError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")

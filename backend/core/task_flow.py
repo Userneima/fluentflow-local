@@ -134,9 +134,11 @@ def _write_note_holding_slot(
                 task_id, client_id, on_local_work_done=hand_off,
                 **({"planned_ranges": planned_ranges} if planned_ranges else {}),
             )
-        if task_stop.requested(task_id):
+        if task_stop.requested(task_id) and not task_stop.shutting_down():
             # Its Claude was stopped with the step: the note says so, not
-            # what the stopped command line printed.
+            # what the stopped command line printed. The service stopping is
+            # no stop of the user's: the note stays unfinished and the restart
+            # writes it (decision 6.63).
             local_intake_flow._patch_result(task_id, client_id, {
                 "summary_status": "failed", "summary_error": task_steps.STOPPED_NOTE, "summary_skipped": False,
             })
@@ -144,6 +146,8 @@ def _write_note_holding_slot(
         # Picking its pictures stopped with the step (``frame_extractor``).
         if not task_stop.requested(task_id):
             raise
+        if task_stop.shutting_down():
+            return
         local_intake_flow._patch_result(task_id, client_id, {
             "summary_status": "failed", "summary_error": task_steps.STOPPED_NOTE, "summary_skipped": False,
         })
@@ -157,6 +161,24 @@ def _write_note_holding_slot(
     finally:
         if holding:
             slots.release()
+
+
+def _note_left_unfinished(task_id: str, client_id: Optional[str]) -> bool:
+    """A note this flow began and never finished, cut off or stopped: its body
+    is saved before its check against the transcript runs, so "the task has a
+    note" did not mean the note step was done, and carrying the task on used
+    to record the step failed instead of finishing it (2026-11-06, measured).
+    Written again, its answers read back (``model_answers``); never a note the
+    user edited."""
+    job = get_job(task_id, client_id=client_id) or {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if str(job.get("status") or "") != "completed" or result.get("note_declined") or result.get("summary_edited"):
+        return False
+    if not str(result.get("summary_markdown") or "").strip():
+        return False
+    return str(result.get("summary_status") or "").lower() in {"running", "pending"} or (
+        result.get("summary_error") == task_steps.STOPPED_NOTE
+    )
 
 
 async def _write_note_after_transcript(
@@ -180,7 +202,7 @@ async def _write_note_after_transcript(
     note failure must not take them away. `write_note` records the reason where the
     note belongs.
     """
-    if not local_intake_flow.note_is_wanted(task_id, client_id):
+    if not (local_intake_flow.note_is_wanted(task_id, client_id) or _note_left_unfinished(task_id, client_id)):
         # No note to write here: the pipeline wrote it, or none was asked for.
         task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
         return

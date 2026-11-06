@@ -26,7 +26,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
-from backend.core import job_store, model_usage, task_stop
+from backend.core import job_store, model_answers, model_usage, task_stop
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,9 @@ ENDS = frozenset({DONE, FAILED, SKIPPED, STOPPED})
 
 RESTART_ERROR = "服务重启中断了这一步。"
 UNFINISHED_ERROR = "这一步没有正常结束。"
+# A step never started because the run ended early with nothing before it
+# failed or stopped: it did not happen, and the task is not done without it.
+NOT_REACHED_ERROR = "处理意外中断，这一步没做到。"
 # What a step the user stopped says until it is carried on.
 STOPPED_NOTE = "已停下，点「接着做」从这一步开始。"
 
@@ -90,6 +93,7 @@ def start(task_id: str, name: str) -> None:
     (``model_usage``)."""
     _write(task_id, name, RUNNING, started=True)
     model_usage.enter_step(task_id, name)
+    model_answers.step_started(task_id, name)
 
 
 def finish(task_id: str, name: str, status: str, error: str | None = None) -> None:
@@ -99,6 +103,11 @@ def finish(task_id: str, name: str, status: str, error: str | None = None) -> No
         status, error = FAILED, model_usage.BUDGET_EXCEEDED
     _write(task_id, name, status, error=error or None, finished=True)
     model_usage.leave_step(task_id, name)
+    # The answers it paid for stay for a run that carries it on when it was
+    # cut off rather than ended by itself (``model_answers``).
+    model_answers.step_ended(task_id, name, status, keep=(
+        status == STOPPED or task_stop.shutting_down() or error in (RESTART_ERROR, UNFINISHED_ERROR)
+    ))
 
 
 def steps_of(task_ids: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
@@ -112,20 +121,35 @@ def steps_of(task_ids: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
 def close_open(task_id: str, *, stopped: bool = False, error: str = UNFINISHED_ERROR) -> None:
     """End every step still open once its runner is gone.
 
-    A step that never started did not happen (skipped); one that was running
-    did not finish (failed). When the task was stopped, both are stopped: they
-    did not happen because the user stopped them.
+    One that was running did not finish (failed). One that never started is
+    skipped when a step before it failed: that failure is what carrying the
+    task on starts from. With none before it failed, the run ended early for
+    no reason a step recorded, and the step failed as not reached: skipped,
+    the task read as finished without it (2026-11-06). When the task was
+    stopped, every open step is stopped: they did not happen because the user
+    stopped them.
     """
-    for step in steps_of([task_id]).get(task_id, []):
+    ended_early = False
+    for step in sorted(steps_of([task_id]).get(task_id, []), key=lambda each: ORDER.index(
+            str(each.get("step_type") or "")[len(job_store.TASK_STEP_PREFIX):])
+            if str(each.get("step_type") or "")[len(job_store.TASK_STEP_PREFIX):] in ORDER else len(ORDER)):
         name = str(step.get("step_type") or "")[len(job_store.TASK_STEP_PREFIX):]
-        if name not in ORDER or step.get("status") not in OPEN:
+        if name not in ORDER:
+            continue
+        if step.get("status") in (FAILED, STOPPED):
+            ended_early = True
+        if step.get("status") not in OPEN:
             continue
         if stopped:
             finish(task_id, name, STOPPED)
         elif step.get("status") == RUNNING:
             finish(task_id, name, FAILED, error)
-        else:
+            ended_early = True
+        elif ended_early:
             finish(task_id, name, SKIPPED)
+        else:
+            finish(task_id, name, FAILED, NOT_REACHED_ERROR)
+            ended_early = True
 
 
 def interrupted() -> list[str]:

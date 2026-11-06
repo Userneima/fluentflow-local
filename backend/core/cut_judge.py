@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from backend.core import fake_model, model_usage
+from backend.core import fake_model, model_answers, model_usage
 
 VISION_BASE_URL_ENV = "FLUENTFLOW_VISION_BASE_URL"
 VISION_API_KEY_ENV = "FLUENTFLOW_VISION_API_KEY"
@@ -81,6 +81,17 @@ def _subscription(model: str) -> Ask:
     return ask
 
 
+def _remembered(kind: str, model: str, ask: Ask) -> Ask:
+    """``ask``, with the answers of a cut cut off halfway read back when it
+    is carried on (``model_answers``)."""
+    def remembered(system: str, user: str, images: list[Image]) -> str:
+        key = model_answers.request_key(
+            kind, model, system, user, [label for label, _path in images], images=[path for _label, path in images],
+        )
+        return model_answers.remembered(key, lambda: ask(system, user, images))
+    return remembered
+
+
 def _api_key(api_key: str | None) -> Ask:
     from backend.core import claude_vision
 
@@ -100,7 +111,7 @@ def _api_key(api_key: str | None) -> Ask:
             call.anthropic(message)
         return claude_vision._response_text(message)
 
-    return ask
+    return _remembered("cut_judge_claude", model, ask)
 
 
 def vision_endpoint() -> tuple[str, str, str] | None:
@@ -132,7 +143,7 @@ def _openai_compatible(base: str, key: str, model: str) -> Ask:
             call.openai(response)
         return (response.choices[0].message.content or "").strip()
 
-    return ask
+    return _remembered("cut_judge_vision", f"{base} {model}", ask)
 
 
 def _text_model() -> Judge | None:

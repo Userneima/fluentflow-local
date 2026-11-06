@@ -45,6 +45,7 @@ exists and that no other file judges whether a task is still busy.
 - How a review note is written: `backend/note_skills/fluentflow-review-note/SKILL.md`; writing and revising it beside the follow-along note, by the agent or FluentFlow's model: `backend/core/review_note.py`
 - Changing passages of a note by their exact text (each found exactly once, all pairs or none), for the follow-along and the review note alike: `backend/core/note_replace.py`
 - The text-model note and the calls to text models: `backend/core/ai_summarizer.py`, `backend/core/ai_client.py`
+- A step's model answers kept until it is done, so carrying it on after an interruption does not pay again: `backend/core/model_answers.py` (every exit that asks with text goes through `remembered`)
 - Recording each model call (which task, step, model, tokens) and what a task's calls cost: `backend/core/model_usage.py`; the prices: `backend/core/model_prices.json`. Every exit that calls a model wraps its request in `model_usage.call`, and work handed to another thread goes through `model_usage.carry` or `CarryingExecutor`
 - Whether this service runs on a test copy of the task database, and what it may then write (only tasks made in the copy; no carrying on at startup, no Feishu): `backend/core/test_copy.py`
 - Whether a model call may go out in a test run (the budget) and whether the fake model answers it: `model_usage.call`; what the fake model answers: `backend/core/fake_model.py`. Every exit asks `call.fake` before sending (`tests/test_test_run_switches.py` fails on one that does not)

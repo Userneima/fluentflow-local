@@ -285,8 +285,7 @@ def decide(
             answer = once(batch)
         return answer["fixes"] if answer is not None else None
 
-    with model_usage.CarryingExecutor(max_workers=MODEL_WORKERS) as pool:
-        answers = list(pool.map(ask, batches))
+    answers = model_usage.stoppable_map(ask, batches, workers=MODEL_WORKERS, check_stop=lambda: sc._stopped(stop))
     fixes: list[dict[str, Any]] = []
     for batch, answer in zip(batches, answers):
         allowed = set(batch) - set(protected)
