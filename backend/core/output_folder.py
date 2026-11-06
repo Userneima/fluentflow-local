@@ -744,6 +744,25 @@ def _take_in_edits(
     return None
 
 
+def md_edit_pending(result: dict[str, Any] | None) -> bool:
+    """Whether the md in the output folder was changed after FluentFlow last
+    wrote it and that change is not yet the task's note (an Obsidian edit
+    still settling): a write of the task's note now would bury it."""
+    folder = (result or {}).get(RESULT_KEY) if isinstance((result or {}).get(RESULT_KEY), dict) else {}
+    if not folder.get("md_path"):
+        return False
+    md = Path(str(folder["md_path"]))
+    try:
+        text = md.read_text(encoding="utf-8")
+        mtime = md.stat().st_mtime
+    except OSError:
+        return False
+    written = folder.get("md_written_digest")
+    if not text.strip() or (written and _digest(text) == written):
+        return False
+    return mtime > _last_written_at(folder) + 1.0
+
+
 def _digest_note(note: str) -> str:
     return hashlib.sha256(note.encode("utf-8")).hexdigest()
 

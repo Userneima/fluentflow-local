@@ -1143,6 +1143,17 @@ def restore_note_version(
     )
 
 
+@router.post("/tasks/{task_id}/note/replace")
+def replace_note_text(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    """Change one passage of the note: ``old_text``, found exactly once, becomes
+    ``new_text``, through the same write a restore uses."""
+    body = payload or {}
+    return _history_call(
+        note_history.replace_text, task_id, body.get("old_text"), body.get("new_text"),
+        base_version=body.get("base_version"), reason=body.get("reason"), client_id=_local_client_scope(request),
+    )
+
+
 def _corrections_view(records: list[Any], include_reverted: bool) -> dict[str, Any]:
     """What an agent reads of a task's correction records: the ones still in
     force unless it asks for the reverted too (half the records of a long

@@ -76,7 +76,9 @@ part as you write it. When a note lost content or the
 user wants an earlier version, `过程文件/修改记录.md` beside the note says what each change
 changed, `list_note_versions` shows every kept version with what
 replaced it, `read_note_version` reads one, and `restore_note_version` (after the user
-agrees) puts it back everywhere the note is kept. In the delegated background flow FluentFlow corrects
+agrees) puts it back everywhere the note is kept. To fix a word or a sentence of a saved
+note, `replace_note_text` changes that passage alone (named by its exact text, which must
+occur once); `save_agent_note` is for handing back a note rewritten as a whole. In the delegated background flow FluentFlow corrects
 misheard names and terms in the transcript from the subtitles in the picture and from the
 series' word list (`FluentFlow 校正文档.md`); `list_transcript_corrections` (source
 `subtitles` or `glossary`) shows each change, `revert_transcript_corrections` undoes it after the

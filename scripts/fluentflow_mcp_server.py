@@ -1397,6 +1397,7 @@ def get_agent_note_material(
         "whole transcript yourself before saving. No model is called by default. "
         "model_check=true explicitly delegates coverage checking to configured models as fallback; "
         "coverage.missing then lists points to consider adding once. "
+        "To change a few words of a saved note use replace_note_text instead. "
         "Use note_markdown for a whole note, or part to save parts before joining; a part far shorter "
         "than what was said in it is kept and the answer's short and next ask you once to check it "
         "for the speaker's reasons and the questions asked, then save it again. "
@@ -1783,7 +1784,7 @@ def list_tasks(
         "(the note now: note_version, chars, chars_change, changed_by) and versions, newest first: "
         "version_id, saved_at, side (where that version lived: 本地 = the md in the output folder, "
         "FluentFlow = the task's note, 飞书 = the Feishu document), replaced_by (what wrote over it: "
-        "web_edit, obsidian, agent_note, rewrite, generated, feishu_pull, export, restore, switch_back, adjust; "
+        "web_edit, obsidian, agent_note, agent_edit, rewrite, generated, feishu_pull, export, restore, switch_back, adjust; "
         "null for versions kept before this was recorded, shown as 未记录), chars, chars_change "
         "(against the previous version on the same side; the 飞书 side is Feishu's export format and "
         "runs a few hundred characters longer than the others) and sharp_drop (at least 1,000 characters and half the "
@@ -1864,6 +1865,42 @@ def restore_note_version(
     return _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/note/versions/{quote(version_id, safe='')}/restore",
         api_base=api_base, client_id=client_id, payload={"base_version": base_version},
+    )
+
+
+@tool(
+    description=("Change one or two passages of a task's note in place: old_text, copied exactly from the "
+        "note (get_task_package has it), becomes new_text (empty deletes it). Use this to fix a word, a "
+        "sentence or a paragraph; use save_agent_note only to hand back a note you rewrote as a whole. "
+        "old_text must occur exactly once: otherwise nothing changes and the answer has code "
+        "not_found_in_note or ambiguous (with how many times it occurs; include more of the "
+        "surrounding text). base_version is get_task's note_version; when the note changed since, "
+        "code stale and nothing changes: read it again. One call per passage, each with the "
+        "note_version the last answer gave. The replaced note is kept as a version (replaced_by "
+        "agent_edit), reason goes into 过程文件/修改记录.md, and the md, PDF and Feishu copy follow "
+        "(the answer's follows)."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "old_text": {"type": "string", "description": "The passage as it is in the note, character for character."},
+            "new_text": {"type": "string", "description": "What it becomes; empty string deletes it."},
+            "base_version": {"type": "string", "description": "get_task's note_version, or the last answer's."},
+            "reason": {"type": "string", "description": "Optional: one line on why, written into the change log."},
+            "api_base": {"type": "string"},
+        },
+        "required": ["task_id", "old_text", "new_text", "base_version"],
+    },
+)
+def replace_note_text(
+    task_id: str, old_text: str, new_text: str, base_version: str, reason: str | None = None,
+    api_base: str | None = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    payload = {"old_text": old_text, "new_text": new_text, "base_version": base_version}
+    if reason:
+        payload["reason"] = reason
+    return _agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/note/replace", api_base=api_base, client_id=client_id, payload=payload,
     )
 
 

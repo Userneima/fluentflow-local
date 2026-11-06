@@ -46,6 +46,7 @@ SIDES = (LOCAL, TASK, FEISHU)
 WEB_EDIT = "web_edit"
 OBSIDIAN = "obsidian"
 AGENT_NOTE = "agent_note"
+AGENT_EDIT = "agent_edit"
 REWRITE = "rewrite"
 GENERATED = "generated"
 FEISHU_PULL = "feishu_pull"
@@ -57,6 +58,7 @@ BY_LABELS = {
     WEB_EDIT: "网页编辑",
     OBSIDIAN: "Obsidian改了md",
     AGENT_NOTE: "agent写入",
+    AGENT_EDIT: "agent改字",
     REWRITE: "重写笔记",
     GENERATED: "生成笔记",
     FEISHU_PULL: "飞书拉回",
@@ -100,13 +102,15 @@ def note_hash(note: str) -> str:
     return hashlib.sha256(note.encode("utf-8")).hexdigest()[:16]
 
 
-def declare(fields: dict[str, Any], by: str) -> dict[str, Any]:
+def declare(fields: dict[str, Any], by: str, reason: str | None = None) -> dict[str, Any]:
     """``fields`` (a result, or the fields about to be written into one) with
-    ``by`` recorded as what wrote its note. Call it after the note is final."""
+    ``by`` recorded as what wrote its note, and the writer's ``reason`` when it
+    gave one. Call it after the note is final."""
     fields[RESULT_FIELD] = {
         "by": by,
         "note": note_hash(str(fields.get("summary_markdown") or "")),
         "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        **({"reason": reason} if reason else {}),
     }
     return fields
 
@@ -121,6 +125,14 @@ def changed_by(result: dict[str, Any] | None) -> str | None:
     if declared.get("note") != note_hash(str(result.get("summary_markdown") or "")):
         return None
     return str(declared["by"])
+
+
+def reason(result: dict[str, Any] | None) -> str | None:
+    """Why the writer of the task's current note changed it, when it said."""
+    if changed_by(result) is None:
+        return None
+    text = (result or {}).get(RESULT_FIELD, {}).get("reason")
+    return str(text) if text else None
 
 
 @dataclass(frozen=True)

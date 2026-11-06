@@ -507,3 +507,133 @@ def test_a_write_naming_a_note_version_the_task_no_longer_has_writes_nothing(tmp
                                       expect_versions={"note_version": read["note_version"]})
 
     assert "别处刚改的" in _result(task)["summary_markdown"]
+
+
+# ── 5. an agent changing a passage ─────────────────────────────────────────
+# Requirement (owner, 2026-11-06): an agent fixing one sentence changes that
+# passage alone, named by its text: it must occur exactly once, the note
+# version it read must still be current, and the change lands like any other
+# deliberate change (task, folder, Feishu, kept version), recorded as the
+# agent's edit, not as an edit on the page.
+
+def _replace(task: str, old: str, new: str, base: str | None = None, **extra):
+    return _agent().post(f"/agent/v1/tasks/{task}/note/replace", headers=AGENT, json={
+        "old_text": old, "new_text": new,
+        "base_version": base if base is not None else _result(task)["note_version"], **extra,
+    })
+
+
+def test_an_agent_replaces_one_passage_everywhere_and_it_is_recorded_as_its_edit(tmp_path, _quiet):
+    task, md = _task(tmp_path)
+    before = _result(task)["summary_markdown"]
+    _quiet.clear()
+
+    response = _replace(task, "框架的话。", "框架讲的是三层结构。", reason="听写错了")
+
+    assert response.status_code == 200, response.text
+    answer = response.json()
+    result = _result(task)
+    assert answer["replaced"] is True and answer["note_version"] == result["note_version"]
+    assert result["summary_markdown"] == before.replace("框架的话。", "框架讲的是三层结构。")
+    assert note_versions.changed_by(result) == note_versions.AGENT_EDIT
+    assert result["summary_edited"] is True
+    output_folder.sync(task)
+    assert "框架讲的是三层结构。" in md.read_text(encoding="utf-8")
+    kept = [v for v in note_versions.kept(md) if v.by == note_versions.AGENT_EDIT]
+    assert kept and "框架的话。" in kept[-1].path.read_text(encoding="utf-8")
+    assert all(v.by != note_versions.WEB_EDIT for v in note_versions.kept(md))
+    log = (md.parent / output_folder.PROCESS_DIRNAME / "修改记录.md").read_text(encoding="utf-8")
+    assert "agent改字" in log and "原因：听写错了" in log and "框架讲的是三层结构" in log
+
+
+def test_a_replace_whose_text_is_not_in_the_note_changes_nothing(tmp_path):
+    task, md = _task(tmp_path)
+    before, count = _result(task)["summary_markdown"], len(note_versions.kept(md))
+
+    response = _replace(task, "笔记里没有这句。", "随便")
+
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "not_found_in_note"
+    assert _result(task)["summary_markdown"] == before and len(note_versions.kept(md)) == count
+
+
+def test_a_replace_whose_text_occurs_twice_says_how_many_times_and_changes_nothing(tmp_path):
+    task, md = _task(tmp_path)
+    before = _result(task)["summary_markdown"]
+
+    response = _replace(task, "的话。", "的内容。")
+
+    detail = response.json()["detail"]
+    assert response.status_code == 409 and detail["code"] == "ambiguous" and "2 次" in detail["message"]
+    assert _result(task)["summary_markdown"] == before
+
+
+def test_a_replace_on_a_note_that_moved_on_is_refused_and_changes_nothing(tmp_path):
+    task, md = _task(tmp_path)
+    read_at = _result(task)["note_version"]
+    _web_edit(task, _result(task)["summary_markdown"].replace("开场的话。", "网页上改的开场。"))
+
+    response = _replace(task, "框架的话。", "agent 改的框架。", base=read_at)
+
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "stale"
+    note = _result(task)["summary_markdown"]
+    assert "网页上改的开场。" in note and "框架的话。" in note
+    assert _replace(task, "框架的话。", "x", base="").status_code == 422
+
+
+def test_the_replace_tool_reaches_its_route(monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import fluentflow_mcp_server as mcp
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
+    mcp.replace_note_text("t1", "旧", "新", "abc", reason="why")
+    assert calls == [("POST", "/agent/v1/tasks/t1/note/replace",
+                      {"old_text": "旧", "new_text": "新", "base_version": "abc", "reason": "why"})]
+
+
+def test_overlapping_occurrences_count_as_more_than_one(tmp_path):
+    task, _md = _task(tmp_path, NOTE.replace("开场的话。", "哈哈哈。"))
+
+    response = _replace(task, "哈哈", "嗯")
+
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "ambiguous"
+
+
+def test_a_replace_does_not_bury_an_obsidian_edit_not_yet_taken_in(tmp_path):
+    # The md is taken in only after a minute without edits, so the task's
+    # note_version still reads current right after the user edits the md.
+    task, md = _task(tmp_path)
+    read_at = _result(task)["note_version"]
+    _edit(md, md.read_text(encoding="utf-8").replace("开场的话。", "Obsidian 里刚改的开场。"))
+
+    response = _replace(task, "框架的话。", "agent 改的框架。", base=read_at)
+
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "stale"
+    note = _result(task)["summary_markdown"]
+    assert "Obsidian 里刚改的开场。" in note and "框架的话。" in note
+    assert "Obsidian 里刚改的开场。" in md.read_text(encoding="utf-8")
+    again = _replace(task, "框架的话。", "agent 改的框架。")
+    assert again.status_code == 200, again.text
+    assert "Obsidian 里刚改的开场。" in _result(task)["summary_markdown"]
+
+
+def test_a_refused_write_leaves_the_note_file_as_the_saved_note(tmp_path, monkeypatch):
+    from backend.core import note_history
+
+    task, _md = _task(tmp_path)
+    keep_current = note_history._keep_current
+
+    def edit_meanwhile(*args, **kwargs):
+        keep_current(*args, **kwargs)
+        result = _result(task)
+        job_store.save_result_changes(task, result, note_versions.declare(
+            {**result, "summary_markdown": result["summary_markdown"] + "\n网页上同时加的一句。\n"},
+            note_versions.WEB_EDIT))
+
+    monkeypatch.setattr(note_history, "_keep_current", edit_meanwhile)
+    response = _replace(task, "框架的话。", "agent 改的框架。")
+
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "stale"
+    artifact = _result(task)["artifacts"]["summary_md"]
+    text = (_artifact_storage_dir() / task / artifact["filename"]).read_text(encoding="utf-8")
+    assert "agent 改的框架" not in text and "框架的话。" in text

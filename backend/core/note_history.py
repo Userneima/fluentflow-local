@@ -147,8 +147,8 @@ def _stored(task_id: str, md: Path, text: str) -> str:
     return output_folder._stored_form(task_id, text, prefixes)
 
 
-def _keep_current(task_id: str, md: Path, result: dict[str, Any]) -> None:
-    """Everything the restore is about to replace, kept first. The task's note
+def _keep_current(task_id: str, md: Path, result: dict[str, Any], by: str = note_versions.RESTORE) -> None:
+    """Everything a restore or an agent's edit is about to replace, kept first. The task's note
     is the note now: the md in the folder catches up with it only after a
     minute without edits, so a copy of the md alone could miss the last edit.
     When the md says the same, that copy is kept instead, so the folder's own
@@ -160,11 +160,54 @@ def _keep_current(task_id: str, md: Path, result: dict[str, Any]) -> None:
     except OSError:
         on_disk = ""
     if on_disk.strip() and _stored(task_id, md, on_disk).strip() == note.strip():
-        note_versions.keep(md, on_disk, note_versions.LOCAL, note_versions.RESTORE)
+        note_versions.keep(md, on_disk, note_versions.LOCAL, by)
         return
-    note_versions.keep(md, note, note_versions.TASK, note_versions.RESTORE)
+    note_versions.keep(md, note, note_versions.TASK, by)
     if on_disk.strip():
-        note_versions.keep(md, on_disk, note_versions.LOCAL, note_versions.RESTORE)
+        note_versions.keep(md, on_disk, note_versions.LOCAL, by)
+
+
+def _write(
+    task_id: str, md: Path, before: dict[str, Any], note: str, *, by: str, client_id: str | None,
+    fields: dict[str, Any] | None = None, reason: str | None = None, stale: str | None = None,
+) -> dict[str, Any]:
+    """Make ``note`` the task's note, the way an agent's deliberate change of
+    it goes: what it replaces kept first (``by`` names the writer), the same
+    fields the page's save writes, written only while the note is still the
+    one ``before`` holds, then the folder and Feishu brought in step now.
+    Returns the saved job; a note that moved on meanwhile raises stale."""
+    from backend.core.result_artifacts import _attach_result_artifacts
+
+    _keep_current(task_id, md, before, by)
+    current = str(before.get("summary_markdown") or "")
+    after = dict(before)
+    if not after.get("summary_edited") and not after.get("summary_original_markdown"):
+        after["summary_original_markdown"] = current
+    after.update({
+        "summary_markdown": note,
+        "summary_skipped": False,
+        "summary_status": "completed",
+        "summary_error": None,
+        "summary_edited": True,
+        "summary_edited_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        **(fields or {}),
+    })
+    note_versions.declare(after, by, reason=reason)
+    after = _attach_result_artifacts(task_id, after, parts=("summary",))
+    # Written only while the note is still the one checked by the caller: a
+    # page save or an Obsidian edit taken in between would otherwise be
+    # replaced without being kept.
+    saved = save_result_changes(task_id, before, after, client_id=client_id, unless_moved=("summary_markdown",))
+    if not saved:
+        job = get_job(task_id, client_id=client_id)
+        if job:
+            # The note file the download reads was written above: put back
+            # the note that stayed.
+            _attach_result_artifacts(task_id, _result(job), parts=("summary",))
+            raise NoteHistoryError(stale or STALE, code="stale")
+        raise NoteHistoryError("任务不存在", status=404, code="not_found")
+    _follow_now(task_id, saved.get("result"))
+    return saved
 
 
 def restore_version(
@@ -193,32 +236,8 @@ def restore_version(
         return {"ok": True, "task_id": task_id, "restored": False, "message": "笔记现在就是这一版，没有改动。",
                 "note_version": content_versions(before).get("note_version")}
 
-    _keep_current(task_id, md, before)
-    from backend.core.result_artifacts import _attach_result_artifacts
-
-    after = dict(before)
-    if not after.get("summary_edited") and not after.get("summary_original_markdown"):
-        after["summary_original_markdown"] = current
-    after.update({
-        "summary_markdown": note,
-        "summary_skipped": False,
-        "summary_status": "completed",
-        "summary_error": None,
-        "summary_edited": True,
-        "summary_edited_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "summary_restored_from": version.id,
-    })
-    note_versions.declare(after, note_versions.RESTORE)
-    after = _attach_result_artifacts(task_id, after, parts=("summary",))
-    # Written only while the note is still the one checked above: a page
-    # save or an Obsidian edit taken in between would otherwise be replaced
-    # without being kept.
-    saved = save_result_changes(task_id, before, after, client_id=client_id, unless_moved=("summary_markdown",))
-    if not saved:
-        if get_job(task_id, client_id=client_id):
-            raise NoteHistoryError(STALE, code="stale")
-        raise NoteHistoryError("任务不存在", status=404, code="not_found")
-    _follow_now(task_id, saved.get("result"))
+    saved = _write(task_id, md, before, note, by=note_versions.RESTORE, client_id=client_id,
+                   fields={"summary_restored_from": version.id})
     restored = saved.get("result") if isinstance(saved.get("result"), dict) else {}
     return {
         "ok": True,
@@ -231,8 +250,86 @@ def restore_version(
     }
 
 
+REPLACE_STALE = ("笔记在你读到之后又被改过（网页、Obsidian、飞书或别的 agent），这次替换没有执行，笔记没有改动。"
+                 "用 get_task 重新读 note_version 和笔记，确认原文还在，再带新的 base_version 替换。")
+
+
+def _occurrences(text: str, part: str) -> int:
+    """How many places ``part`` starts at in ``text``, overlapping ones too
+    ("哈哈" occurs twice in "哈哈哈")."""
+    count, start = 0, text.find(part)
+    while start >= 0:
+        count += 1
+        start = text.find(part, start + 1)
+    return count
+
+
+def replace_text(
+    task_id: str, old_text: Any, new_text: Any, *, base_version: Any,
+    reason: Any = None, client_id: str | None = None,
+) -> dict[str, Any]:
+    """Change one passage of the task's note: ``old_text``, which must occur in
+    the note exactly once, becomes ``new_text``.
+
+    Requirement (owner, 2026-11-06): an agent fixing a sentence handed back
+    the whole 50,000-character note, or went round the tools to the page's
+    save and was recorded as an edit on the page. This is the agent's own
+    small edit: named version, kept history, recorded as ``agent_edit``, and
+    the same follow-through as a restore (folder, Feishu)."""
+    if not isinstance(base_version, str) or not base_version.strip():
+        raise NoteHistoryError("替换要带上 base_version：get_task 的 note_version。",
+                               status=422, code="base_version_required")
+    if not isinstance(old_text, str) or not old_text:
+        raise NoteHistoryError("old_text 不能为空：写要改掉的那段原文，照笔记里的字一字不差。",
+                               status=422, code="old_text_required")
+    if not isinstance(new_text, str):
+        raise NoteHistoryError("new_text 要是字符串；删掉那段就传空字符串。", status=422, code="new_text_required")
+    job = _job(task_id, client_id)
+    before = _result(job)
+    if base_version.strip() != content_versions(before).get("note_version"):
+        raise NoteHistoryError(REPLACE_STALE, code="stale")
+    from backend.core import output_folder
+
+    if output_folder.md_edit_pending(before):
+        # An edit made in Obsidian reaches the task's note only once the md
+        # has been left alone for a minute; replacing in the task's note now
+        # would write over it in the md. Take it in first: the note then has
+        # a new version, and the agent reads it again.
+        output_folder.sync(task_id)
+        raise NoteHistoryError(REPLACE_STALE, code="stale")
+    current = str(before.get("summary_markdown") or "")
+    count = _occurrences(current, old_text)
+    if count == 0:
+        raise NoteHistoryError(
+            "old_text 在笔记里一次也没出现，笔记没有改动。照 get_task_package 读到的笔记原样复制那段字"
+            "（包括标点、空格和换行），再替换。", code="not_found_in_note")
+    if count > 1:
+        raise NoteHistoryError(
+            f"old_text 在笔记里出现了 {count} 次，不知道改哪一处，笔记没有改动。把前后的字多带一些，"
+            "让它在笔记里只出现一次再替换。", code="ambiguous")
+    if old_text == new_text:
+        return {"ok": True, "task_id": task_id, "replaced": False, "message": "new_text 和 old_text 相同，笔记没有改动。",
+                "note_version": content_versions(before).get("note_version")}
+    note = current.replace(old_text, new_text, 1)
+    if not note.strip():
+        raise NoteHistoryError("替换后笔记成了空的，没有执行。要重写整篇用 save_agent_note。", code="empty")
+    md = note_versions.md_for(task_id, before)
+    why = str(reason).strip() if isinstance(reason, str) and reason.strip() else None
+    saved = _write(task_id, md, before, note, by=note_versions.AGENT_EDIT, client_id=client_id, reason=why,
+                   stale=REPLACE_STALE)
+    after = saved.get("result") if isinstance(saved.get("result"), dict) else {}
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "replaced": True,
+        "chars": note_versions.chars(note),
+        "note_version": content_versions(after).get("note_version"),
+        "follows": _follows(after),
+    }
+
+
 def _follow_now(task_id: str, result: Any) -> None:
-    """A restore is one deliberate act, not typing: the folder and Feishu are
+    """A restore or an agent's edit is one deliberate act, not typing: the folder and Feishu are
     brought in step now rather than after the minute an editor's saves wait."""
     from backend.core import feishu_sync, output_folder
 

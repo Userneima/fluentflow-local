@@ -188,13 +188,15 @@ def _changed_share(before: str, after: str) -> float:
     return changed / total
 
 
-def entry(before: str, after: str, by: str | None, at: datetime | None = None) -> str | None:
-    """The entry for one change of the note, or None when nothing changed."""
+def entry(before: str, after: str, by: str | None, at: datetime | None = None,
+          reason: str | None = None) -> str | None:
+    """The entry for one change of the note, or None when nothing changed.
+    ``reason`` is what the writer said the change was for, when it said."""
     if before.strip() == after.strip():
         return None
     stamp = (at or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     who = note_versions.BY_LABELS.get(by or "", note_versions.NOT_RECORDED)
-    head = f"## {stamp} · {who}\n\n"
+    head = f"## {stamp} · {who}\n\n" + (f"原因：{_one_line(reason)}\n\n" if reason else "")
     size_before, size_after = note_versions.chars(before), note_versions.chars(after)
     if note_versions.sharp_drop(size_before, size_after):
         return head + f"字数骤降：从 {size_before} 字到 {size_after} 字。\n"
@@ -238,7 +240,7 @@ def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[st
     if not old.strip() or old == new:
         return  # a first note replaces nothing
     try:
-        text = entry(old, new, note_versions.changed_by(after))
+        text = entry(old, new, note_versions.changed_by(after), reason=note_versions.reason(after))
         if text:
             record(path_for(task_id, after), text)
     except Exception as exc:  # noqa: BLE001 - the save stands without its log entry
