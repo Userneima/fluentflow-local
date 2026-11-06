@@ -371,10 +371,13 @@ async def _carry_on(job: dict[str, Any], start_at: str, *, route: str) -> None:
 
 def stepped_tasks_cut_off() -> list[str]:
     """Tasks a stopped service left with a step not at its end, apart from
-    those waiting for the user's agent (``task_flow.resume_agent_cuts``)."""
+    those waiting for the user's agent (``task_flow.resume_agent_cuts``) and
+    those exporting an agent's note to Feishu (``task_flow.resume_agent_exports``):
+    each of those has one recovery of its own."""
     return [
         task_id for task_id in task_steps.interrupted()
         if not task_flow.agent_cut_goes_on(get_job(task_id))
+        and not task_flow.agent_export_goes_on(get_job(task_id))
     ]
 
 

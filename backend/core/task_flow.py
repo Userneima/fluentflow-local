@@ -782,6 +782,12 @@ _AGENT_EXPORTS_LOCK = threading.Lock()
 AGENT_EXPORT_PENDING = "agent_lark_export_pending_since"
 
 
+def agent_export_goes_on(job: dict | None) -> bool:
+    """Whether a restart left this task's Feishu step to ``resume_agent_exports``."""
+    result = (job or {}).get("result")
+    return isinstance(result, dict) and bool(result.get(AGENT_EXPORT_PENDING))
+
+
 def resume_agent_exports() -> int:
     """At startup: the agent's notes a restart caught waiting to be exported
     to Feishu are exported (Codex push review, 2026-11-06: the wait is a

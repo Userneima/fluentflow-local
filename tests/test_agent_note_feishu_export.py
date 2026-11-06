@@ -135,3 +135,16 @@ def test_a_restart_during_the_export_still_exports_the_note(exports, monkeypatch
     assert len(exports) == 1
     assert task_flow.AGENT_EXPORT_PENDING not in job_store.get_job(task_id)["result"]
     assert task_flow.resume_agent_exports() == 0
+
+
+def test_an_export_cut_off_by_a_restart_has_one_recovery(exports):
+    """Codex push review, 2026-11-06: the step-by-step recovery also picked
+    the open Feishu step up and settled it before the document came."""
+    from backend.core import task_actions, task_steps
+
+    task_id = _task()
+    job_store.update_job_result(task_id, {**job_store.get_job(task_id)["result"],
+                                          task_flow.AGENT_EXPORT_PENDING: 1.0})
+    task_steps.start(task_id, task_steps.FEISHU)
+    assert task_id in task_steps.interrupted()
+    assert task_id not in task_actions.stepped_tasks_cut_off()
