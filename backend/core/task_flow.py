@@ -753,6 +753,10 @@ def export_agent_note_if_asked(task_id: str, client_id: str | None) -> threading
         if task_id in _AGENT_EXPORTS:
             return None
         _AGENT_EXPORTS.add(task_id)
+    if not result.get(AGENT_EXPORT_PENDING):
+        # Kept on the task, so a restart during the wait still exports it
+        # (``resume_agent_exports``).
+        update_job_result(task_id, {**result, AGENT_EXPORT_PENDING: time.time()}, client_id=client_id)
     source_filename = str(job.get("source_filename") or "")
     title = str(result.get("display_title") or metadata.get("display_title") or "")
 
@@ -760,6 +764,11 @@ def export_agent_note_if_asked(task_id: str, client_id: str | None) -> threading
         try:
             _export_agent_note(task_id, client_id, job, options, source_filename, title)
         finally:
+            latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
+            if latest.get(AGENT_EXPORT_PENDING):
+                latest = dict(latest)
+                latest.pop(AGENT_EXPORT_PENDING, None)
+                update_job_result(task_id, latest, client_id=client_id)
             with _AGENT_EXPORTS_LOCK:
                 _AGENT_EXPORTS.discard(task_id)
 
@@ -770,6 +779,28 @@ def export_agent_note_if_asked(task_id: str, client_id: str | None) -> threading
 
 _AGENT_EXPORTS: set[str] = set()
 _AGENT_EXPORTS_LOCK = threading.Lock()
+# On the task's result while an agent's note waits to go to Feishu.
+AGENT_EXPORT_PENDING = "agent_lark_export_pending_since"
+
+
+def resume_agent_exports() -> int:
+    """At startup: the agent's notes a restart caught waiting to be exported
+    to Feishu are exported (Codex push review, 2026-11-06: the wait is a
+    thread, and nothing else would have started it again)."""
+    started = 0
+    for job in list_jobs_by_statuses(("completed",), include_result=True):
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        if not result.get(AGENT_EXPORT_PENDING):
+            continue
+        task_id = str(job.get("task_id") or "")
+        if task_id and export_agent_note_if_asked(task_id, job.get("client_id")) is not None:
+            started += 1
+        elif task_id:
+            # Nothing to do any more (exported, or no longer asked for).
+            cleared = dict(result)
+            cleared.pop(AGENT_EXPORT_PENDING, None)
+            update_job_result(task_id, cleared, client_id=job.get("client_id"))
+    return started
 
 
 # How long the agent's note has to stay unchanged before it is exported: an

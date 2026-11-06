@@ -112,3 +112,19 @@ def test_saves_in_a_row_are_exported_once_as_the_last_one(exports, monkeypatch):
         job_store.update_job_result(task_id, {**job_store.get_job(task_id)["result"], "summary_markdown": f"# 周会\n\n第 {n} 版"})
     thread.join(5)
     assert [call["summary_markdown"] for call in exports] == ["# 周会\n\n第 2 版"]
+
+
+def test_a_restart_during_the_wait_still_exports_the_note(exports, monkeypatch):
+    """Codex push review, 2026-11-06: the wait before the export is a thread;
+    a restart then lost the export for good."""
+    task_id = _task()
+    # What a restart leaves: the mark on the task, no thread.
+    job_store.update_job_result(task_id, {**job_store.get_job(task_id)["result"],
+                                          task_flow.AGENT_EXPORT_PENDING: 1.0})
+    assert task_flow.resume_agent_exports() == 1
+    deadline = time.time() + 5
+    while task_flow.AGENT_EXPORT_PENDING in job_store.get_job(task_id)["result"] and time.time() < deadline:
+        time.sleep(0.02)
+    assert len(exports) == 1
+    assert task_flow.AGENT_EXPORT_PENDING not in job_store.get_job(task_id)["result"]
+    assert task_flow.resume_agent_exports() == 0

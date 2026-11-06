@@ -329,6 +329,13 @@ async def lifespan(app: FastAPI):
     stranded_notes = recover_stranded_notes()
     if stranded_notes:
         logger.info("Startup recovery cleared %s stranded visual notes", stranded_notes)
+    if not copy:
+        # An agent's note a restart caught waiting to go to Feishu.
+        from backend.core.task_flow import resume_agent_exports
+
+        exports = resume_agent_exports()
+        if exports:
+            logger.info("Startup restarted %s Feishu exports of agents' notes", exports)
     if (interrupted or stepped) and not copy:
         # Off the startup path: each re-queue probes its file, and the page
         # should not wait on that to load. Oldest first, as they were queued.
