@@ -762,3 +762,109 @@ def test_a_word_reaches_the_copy_an_old_correction_rewrote():
 
     undone, _reverted, _missing = gc.revert(updated, None)
     assert undone["corrected_segments"][0]["text"] == "我想要研究一下OpenCloud"
+
+
+# ── words the list does not name, and the ones left in doubt ──────────────
+#
+# Requirement (owner, 2026-11-06, from the fourth lesson, where 「签量式问卷」
+# and 「投刊」 stayed because neither was in the word list):
+# - a misheard word the list does not name, an ordinary Chinese word included,
+#   is changed when the context makes it certain, with the reason recorded;
+# - a word that reads misheard but cannot be settled keeps its words and gets
+#   「（存疑）」 right after it; the guess goes in the record, not the text;
+# - a mark is recorded and undone like any change, and never put in a sentence
+#   the user edited, nor twice after the same word.
+
+LESSON = [
+    {"start": 0.0, "end": 2.0, "text": "我们先做一个签量式问卷"},
+    {"start": 2.0, "end": 4.0, "text": "这个要花很多投刊"},
+    {"start": 4.0, "end": 6.0, "text": "然后交给拉模拟去跑"},
+    {"start": 6.0, "end": 8.0, "text": "这个就是口语有点乱但是能听懂"},
+]
+
+
+def _lesson_judge(items):
+    out = []
+    for item in items:
+        text = item["text"]
+        if "签量式" in text:
+            out.append({"id": item["id"], "from": "签量式", "to": "轻量式", "basis": "context",
+                        "why": "做问卷，前后说的是轻量的调研"})
+        if "投刊" in text:
+            out.append({"id": item["id"], "from": "投刊", "to": "token", "basis": "context",
+                        "why": "说的是模型调用花的 token"})
+        if "拉模拟" in text:
+            out.append({"id": item["id"], "from": "拉模拟", "to": "LangSmith", "basis": "doubt",
+                        "why": "像工具名，听不出是哪个"})
+    return out
+
+
+def test_an_ordinary_word_heard_as_its_homophone_is_changed_from_the_context():
+    outcome = gc.correct(LESSON, GLOSSARY, Model(_lesson_judge))
+
+    texts = _texts(outcome.segments)
+    assert texts[0] == "我们先做一个轻量式问卷"
+    assert texts[1] == "这个要花很多token"
+    record = next(r for r in outcome.corrections if r["from"] == "签量式")
+    assert record["basis"] == "context" and record["why"]
+
+
+def test_a_word_left_in_doubt_keeps_its_words_and_is_marked_where_it_stands():
+    outcome = gc.correct(LESSON, GLOSSARY, Model(_lesson_judge))
+
+    texts = _texts(outcome.segments)
+    assert texts[2] == "然后交给拉模拟（存疑）去跑"
+    assert "LangSmith" not in texts[2]
+    record = next(r for r in outcome.corrections if r["basis"] == "doubt")
+    assert record["from"] == "拉模拟" and record["to"] == "拉模拟（存疑）"
+    assert record["guess"] == "LangSmith" and record["why"]
+    assert record["sentence_before"] == "然后交给拉模拟去跑"
+    meta = outcome.meta()
+    assert meta["marked_doubt"] == 1 and meta["from_context"] == 2
+
+
+def test_a_doubt_mark_is_undone_like_a_change():
+    outcome = gc.correct(LESSON, GLOSSARY, Model(_lesson_judge))
+    result = gc.onto_result({"raw_segments": [dict(s) for s in LESSON], "transcript_text": sc.joined(LESSON)},
+                            outcome.segments, outcome.corrections)
+    mark = next(r for r in result[gc.FIELD] if r["basis"] == "doubt")
+
+    undone, reverted, missing = gc.revert(result, [mark["id"]])
+
+    assert reverted == [mark["id"]] and missing == []
+    assert _texts(undone["raw_segments"])[2] == "然后交给拉模拟去跑"
+    assert _texts(undone["raw_segments"])[0] == "我们先做一个轻量式问卷"
+
+
+def test_a_sentence_the_user_edited_is_not_marked():
+    outcome = gc.correct(LESSON, GLOSSARY, Model(_lesson_judge), protected={2})
+
+    assert _texts(outcome.segments)[2] == "然后交给拉模拟去跑"
+    assert all(r["basis"] != "doubt" for r in outcome.corrections)
+
+
+def test_a_second_run_does_not_mark_the_same_word_again():
+    first = gc.correct(LESSON, GLOSSARY, Model(_lesson_judge))
+    second = gc.correct(first.segments, GLOSSARY, Model(_lesson_judge))
+
+    assert _texts(second.segments)[2] == "然后交给拉模拟（存疑）去跑"
+
+
+def test_a_doubt_covers_a_word_not_a_sentence():
+    def judge(items):
+        return [{"id": item["id"], "from": item["text"], "to": "", "basis": "doubt", "why": "整句读不通"}
+                for item in items if "口语" in item["text"]]
+
+    outcome = gc.correct(LESSON, GLOSSARY, Model(judge))
+
+    assert outcome.corrections == []
+    reason = gc.why_refused({"id": 3, "from": LESSON[3]["text"], "basis": "doubt"}, LESSON, {3}, GLOSSARY)
+    assert "短" in reason
+
+
+def test_the_model_and_the_agent_judge_by_the_same_rules():
+    from backend.core import agent_correction
+
+    agent_text = agent_correction._GLOSSARY_INSTRUCTIONS.format(glossary="")
+    assert gc.RULES in gc._system("") and gc.RULES in agent_text
+    assert "doubt" in gc.RULES and "（存疑）" in gc.RULES

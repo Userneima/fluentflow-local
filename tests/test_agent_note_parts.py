@@ -36,6 +36,12 @@ than the code:
   after lesson four's note made three parts read as never saved).
 - Re-saving a part never overwrites changes made to the note after it was joined
   (an edit in the editor, another writer); a whole note handed back is accepted.
+- A part whose note is far shorter than what was said in it (under about a
+  third, times left out) is saved, and the answer asks the writer, once for
+  that part, to check it against the transcript for the speaker's reasons and
+  the questions asked, and save it again; saved again, as it was or filled,
+  it is not asked about again (2026-11-06: Codex writing lesson four's twelve
+  parts in one go kept a fifth of each and lost a third of the reasons).
 """
 
 from __future__ import annotations
@@ -388,3 +394,50 @@ def test_after_the_join_a_corrected_word_leaves_every_part_readable_and_savable(
     assert "通读后补上的一句" in note
     for index in range(1, total + 1):
         assert f"第 {index} 部分讲的内容" in note
+
+
+def _filled(index: int) -> str:
+    """A note as long as what was said in its part."""
+    part = an._parts(an._eligible(TASK, an._job(TASK, "anonymous"))[1][0].text, small=True)[0]
+    return f"## 第 {index} 部分讲的内容\n\n" + "写到了推导的每一步和讲者给的理由。" * (len(part.text) // 15)
+
+
+def test_a_part_far_shorter_than_what_was_said_is_saved_and_checked_once(job_store, tmp_path, small_parts):
+    _long(job_store)
+    total = _material(tmp_path)["total_parts"]
+
+    first = _save(1, "## 一句话\n\n推导用到了最小二乘法。")
+
+    assert first["remaining_parts"] == list(range(2, total + 1))  # kept all the same
+    assert first["short"]["share"] < an.SHORT_PART_SHARE
+    assert "理由" in first["next"] and "part=1" in first["next"]
+    again = _save(1, "## 一句话\n\n推导用到了最小二乘法。")  # checked, nothing missing
+    assert "short" not in again
+    assert "再查一遍" not in again["next"]
+
+
+def test_a_part_as_long_as_what_was_said_is_not_questioned(job_store, tmp_path, small_parts):
+    _long(job_store)
+    _material(tmp_path)
+
+    saved = _save(1, _filled(1))
+
+    assert "short" not in saved
+    assert "再查一遍" not in saved["next"]
+
+
+def test_the_share_leaves_out_the_times_in_the_material():
+    part = an.claude_vision.TranscriptPart(text="[00:01] 一二三四五\n[00:02] 六七八九十", index=1, total=1)
+    assert an.note_share("一二三四五", part) == 0.5
+
+
+def test_in_small_parts_each_part_is_handed_to_a_fresh_subagent(job_store, tmp_path, small_parts):
+    # 2026-11-06: one Codex context writing all twelve parts of lesson four kept
+    # a fifth to a third of each and lost the speaker's reasons; one fresh
+    # context per part kept half to two thirds.
+    _long(job_store)
+    _material(tmp_path)
+
+    saved = _save(1, _filled(1))
+
+    assert "新开的、不带前面对话的子助手" in saved["next"]

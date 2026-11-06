@@ -102,7 +102,7 @@ SAVE_INSTRUCTION = (
     "录像分成几部分时，每写完一部分就带上 part（这一部分的序号）保存，不用等全部写完；"
     "存过的部分留在 FluentFlow 里，换了对话也能接着写下一部分，全部存齐后才替换任务的笔记。"
     "截图在本机的路径就是 frames 里的 path，打开看过再决定引不引用；引用时只写文件名。"
-    "\n\n交回之前，按上面写法里「不漏」一节对照这部分转录逐条查一遍，没写到的写进讲它的那一段。"
+    "\n\n交回之前，按上面写法里「不漏」一节对照这部分转录逐条查一遍，讲者每个判断的理由和每组问答都要对到，没写到的写进讲它的那一段。"
     "默认由你自己查漏，保存不会另调模型。只有你无法检查或用户明确要求，才带 model_check=true 委托后台检查；"
     "这会使用配置的模型额度。返回 coverage.missing 非空时，补上值得写的内容再保存一次。"
 )
@@ -539,7 +539,12 @@ def save_part(
         joined = None
     saved = _valid_parts(store, parts, joined=bool(joined))
     coverage = _not_again([target]) if part in saved else _coverage([draft], [target], checker)
+    told = bool((saved.get(part) or {}).get("short_told"))
+    share = note_share(draft.markdown, target)
+    short = share < SHORT_PART_SHARE and not told
     saved[part] = _stored(target, draft.markdown, coverage["parts"][0])
+    if short or told:
+        saved[part]["short_told"] = True
     basis_note = basis_note or str(store.get("basis_note") or "")
     model = model or str(store.get("model") or "")
     remaining = [p.index for p in parts if p.index not in saved]
@@ -555,8 +560,17 @@ def save_part(
     if remaining:
         _write_store(task_id, parts, saved, joined_hash=joined, kept_replaced=kept,
                      basis_note=basis_note, model=model)
-        answer["next"] = f"第 {part} 部分已保存。还差第 {'、'.join(str(i) for i in remaining)} 部分，写完一部分存一部分。"
-        return answer
+        left = "、".join(str(i) for i in remaining)
+        # In small parts (Codex) each part gets a fresh context: one context
+        # writing every part let each later part shrink and drop the
+        # speaker's reasons (2026-11-06, lesson four; numbers at SHORT_PART_SHARE).
+        answer["next"] = (
+            f"第 {part} 部分已保存。还差第 {left} 部分：每一部分交给一个新开的、不带前面对话的子助手写"
+            "（它先读一次写法，再只读那一部分），这一部分写完的子助手就此结束；没有子助手可开时接着写下一部分。"
+            if _small_parts(task_id) else
+            f"第 {part} 部分已保存。还差第 {left} 部分，写完一部分存一部分。"
+        )
+        return _tell_if_short(answer, short, part, draft.markdown, target, share)
     cleaned = [
         claude_vision.VisualNoteDraft(markdown=saved[p.index]["markdown"], basis_note=basis_note, model=model)
         for p in parts
@@ -578,6 +592,40 @@ def save_part(
         answer["next"] = READ_THROUGH_SAVED
     else:
         answer["next"] = READ_THROUGH_INSTRUCTION
+    return _tell_if_short(answer, short, part, draft.markdown, target, share)
+
+
+# A part's note this much shorter than what was said in it was, on the fourth
+# lesson, a part that lost the speaker's reasons (2026-11-06). Codex writing all
+# twelve parts in one conversation kept 18 to 30 per cent of each part's spoken
+# text and 63 per cent of the reasons on a fixed sheet; the same parts written
+# one at a time kept 51 to 70 per cent and 93 to 96 per cent of the reasons; the
+# third lesson's note, Claude in one go, kept 49 per cent and all of them.
+# Length does not judge the note: it only asks the writer, once per part, to
+# check it against the transcript, and a part checked and saved again as it
+# was is taken as it is.
+SHORT_PART_SHARE = 0.35
+_TIME_PREFIX = re.compile(r"^\[[0-9:]+\]\s*", re.M)
+
+
+def note_share(markdown: str, part: claude_vision.TranscriptPart) -> float:
+    """The part's note against what was said in it (times and line breaks
+    left out, which are about half of the material's characters)."""
+    spoken = _TIME_PREFIX.sub("", part.text).replace("\n", "")
+    return len(markdown.strip()) / max(len(spoken), 1)
+
+
+def _tell_if_short(answer: dict[str, Any], short: bool, part: int, markdown: str,
+                   target: claude_vision.TranscriptPart, share: float) -> dict[str, Any]:
+    if not short:
+        return answer
+    spoken = len(_TIME_PREFIX.sub("", target.text).replace("\n", ""))
+    answer["short"] = {"note_chars": len(markdown.strip()), "spoken_chars": spoken, "share": round(share, 2)}
+    answer["next"] = (
+        f"第 {part} 部分的笔记只有 {len(markdown.strip())} 字，是这部分讲话（{spoken} 字）的 {round(share * 100)}%，"
+        "可能漏了内容：按写法「不漏」一节对照这部分转录再查一遍，讲者的每个判断和他给的理由、每组问答都写到了没有，"
+        f"补上后带 part={part} 再存一次。查过确实没漏，也再存一次，之后不再提醒。\n\n" + str(answer.get("next") or "")
+    )
     return answer
 
 

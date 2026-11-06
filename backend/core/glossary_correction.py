@@ -9,8 +9,11 @@ Now a model reads the transcript with the word list and the sentences around
 each one and says which words were misheard; the code holds it to replacing a
 word, never rewriting a sentence.
 
-- With a word list a misheard word takes the list's spelling. Without one the
-  model may still fix what the context makes certain, and nothing else.
+- With a word list a misheard word takes the list's spelling. Words the list
+  does not name, ordinary words heard as their homophones included, are fixed
+  when the context makes them certain; a word that reads misheard but cannot
+  be settled keeps its words and gets 「（存疑）」 after it, the judge's guess
+  kept in the record (owner, 2026-11-06).
 - The same bounds as the subtitle check (``subtitle_correction``, decision
   4.14): what is taken out is short, what goes in is about as long, no bracket
   the sentence did not have, a word said twice is replaced only where the
@@ -59,6 +62,9 @@ MODEL_WORKERS = 4
 
 BASIS_GLOSSARY = "glossary"
 BASIS_CONTEXT = "context"
+BASIS_DOUBT = "doubt"
+# Put after a word the judge thought misheard but could not settle.
+DOUBT_MARK = "（存疑）"
 
 _OFF = {"0", "false", "no", "off", "disabled"}
 
@@ -129,21 +135,33 @@ def edited_by_user(result: dict[str, Any]) -> set[int]:
 
 # ── the model's judgement ─────────────────────────────────────────────────
 
-_SYSTEM = """你会收到一段语音识别转录稿，按顺序一句一行。转录是机器做的，常把人名、公司名、产品名、模型名、英文术语和缩写、数字说法听错成发音相近的字或词。你的任务是找出这些听错的词，给出正确写法。
-
-{glossary}
-
-规则：
+# The rules for judging a page, the same for FluentFlow's model and the
+# user's agent (``agent_correction``); only how the answer goes back differs.
+#
+# Words outside the word list (owner, 2026-11-06, from the fourth lesson: 449
+# fixes, nearly all words the list named, while 「签量式问卷」「清亮」 for
+# 轻量 and 「投刊」 for token stayed): the context decides them too, ordinary
+# Chinese words included. What the context makes certain is replaced; what
+# reads misheard but cannot be settled keeps its words and is marked
+# 「（存疑）」 where it stands, with the guess in the record, never in the text.
+RULES = """规则：
 - 只改听错的词，不润色、不改句子：不补字、不删语气词和重复、不改标点、不改说法、不把口语改成书面语。
 - 有词表时，转录里出现词表列的听法或发音相近的写法、而且上下文说的就是这个东西，改成词表的正确写法，basis 写 "glossary"。
-- 词表里没有的，只有上下文让你非常确定时才改（同一个名字在别处写对了、说的显然是某个知名产品或术语），basis 写 "context"，why 用中文写一句依据。拿不准就不改。
-- 普通的中文词句，就算读着别扭，也不改；只改专有名词、英文、数字说法这类听错的词。
+- 词表里没有的听错词，也按上下文改：专有名词、英文术语和缩写、数字说法，以及听成了同音、近音字的普通词（比如「签量式问卷」是「轻量式问卷」，「投刊」是「token」）。判断的依据是：照转录稿读不通，换成发音相近的那个词就通顺，而且前后文说的正是它（同一个词在别处写对了，或者话题就是它）。有把握就改，basis 写 "context"，why 用中文写一句依据。
+- 读起来像听错了、但换成哪个词拿不准（有两三种可能，或者只是读不通、猜不出是什么），不改，basis 写 "doubt"：from 框住读不通的那个词，to 写你最可能的猜测（猜不出就留空），why 写一句为什么拿不准。FluentFlow 会在这个词后面标「（存疑）」，猜测只进修改记录，不进正文。
+- 读着别扭、但能读通、不像听错的口语，不改也不标：口语本来就不规整。
 - from：这一句里原样出现的一段文字，只框住听错的部分，尽量短。from 在这句里出现不止一次时，加 nth 写明是第几次出现（从 1 数）。
 - to：正确写法。不加括号注释，不加解释。
 - context_before 和 context_after 里的句子只供参考，不改。
-- 一句里有几处听错，分几条写。
+- 一句里有几处听错，分几条写。"""
 
-只输出 JSON：{{"fixes": [{{"id": 编号, "from": "...", "to": "...", "basis": "glossary 或 context", "why": "一句依据"}}]}}。不改的不要列出。"""
+_SYSTEM = """你会收到一段语音识别转录稿，按顺序一句一行。转录是机器做的，常把人名、公司名、产品名、模型名、英文术语和缩写、数字说法，以及一些普通词，听错成发音相近的字或词。你的任务是找出这些听错的词，给出正确写法；拿不准的标出来。
+
+{glossary}
+
+""" + RULES.replace("{", "{{").replace("}", "}}") + """
+
+只输出 JSON：{{"fixes": [{{"id": 编号, "from": "...", "to": "...", "basis": "glossary、context 或 doubt", "why": "一句依据"}}]}}。不改也不标的不要列出。"""
 
 _GLOSSARY_SECTION = "下面是用户为这一系列录像整理的词表：正确写法、是什么、转录常听成什么。\n\n{text}"
 _NO_GLOSSARY = "这一系列还没有词表，只能靠上下文判断。"
@@ -299,6 +317,13 @@ def why_refused(
     old, new = str(fix.get("from") or ""), str(fix.get("to") or "").strip()
     if old and old not in sentence:
         return f"from「{old}」不在这句里，照句子原样写。"
+    if str(fix.get("basis") or "").strip() == BASIS_DOUBT:
+        if not _doubtable(old, sentence):
+            return "存疑只框住读不通的那个词或短语，from 要短。"
+        count = sentence.count(old)
+        if count > 1 and _position(sentence, old, fix.get("nth")) is None:
+            return f"from「{old}」在这句里出现 {count} 次，加 nth 写明标第几次（从 1 数）再交。"
+        return "这个词后面已经标过「（存疑）」。"
     if not sc._acceptable(old, new, sentence):
         return "这不是换一个词：from 要短、只框住听错的部分，to 和它差不多长，不加括号里的内容，也不能只改大小写或空格。"
     count = sentence.count(old)
@@ -313,7 +338,8 @@ def held_to_bounds(
     """One answered fix held to the bounds, whoever judged it (the model here,
     the user's agent in ``agent_correction``): a sentence it may change, a
     word replaced and not a sentence, found where it says, and backed by the
-    word list or by a reason. ``None`` when it does not hold."""
+    word list or by a reason; or a word marked 「（存疑）」 (basis doubt).
+    ``None`` when it does not hold."""
     if not isinstance(fix, dict):
         return None
     try:
@@ -324,6 +350,8 @@ def held_to_bounds(
         return None
     sentence = _text(segments[index])
     old, new = str(fix.get("from") or ""), str(fix.get("to") or "").strip()
+    if str(fix.get("basis") or "").strip() == BASIS_DOUBT:
+        return _doubt(fix, index, sentence, old, new)
     if not sc._acceptable(old, new, sentence):
         return None
     at = _position(sentence, old, fix.get("nth"))
@@ -344,6 +372,31 @@ def held_to_bounds(
     return record
 
 
+
+def _doubt(fix: dict[str, Any], index: int, sentence: str, old: str, guess: str) -> dict[str, Any] | None:
+    """A word the judge thought misheard and could not settle: kept as it was
+    said, with 「（存疑）」 after it. Recorded and undone like a fix; the
+    guess goes in the record, not the transcript."""
+    if not _doubtable(old, sentence):
+        return None
+    at = _position(sentence, old, fix.get("nth"))
+    if at is None or sentence[at + len(old):].startswith(DOUBT_MARK):
+        # Marked already (a second run over the same sentence).
+        return None
+    record: dict[str, Any] = {"index": index, "segment_index": index, "from": old, "to": old + DOUBT_MARK,
+                              "at": at, "basis": BASIS_DOUBT}
+    if guess and guess != old and not (sc._BRACKETS & set(guess)):
+        record["guess"] = guess[:60]
+    why = str(fix.get("why") or "").strip()[:200]
+    if why:
+        record["why"] = why
+    return record
+
+
+def _doubtable(old: str, sentence: str) -> bool:
+    """A word or short phrase of the sentence, the same size a fix may take."""
+    return bool(old.strip()) and old in sentence and sc._words(old) <= sc.MAX_REPLACED_WORDS
+
 # ── the whole step ────────────────────────────────────────────────────────
 
 @dataclass
@@ -361,11 +414,13 @@ class GlossaryCorrectionResult:
 
     def meta(self, channel: str | None = None) -> dict[str, Any]:
         by_list = sum(1 for r in self.corrections if r.get("basis") == BASIS_GLOSSARY)
+        doubts = sum(1 for r in self.corrections if r.get("basis") == BASIS_DOUBT)
         data: dict[str, Any] = {
             "status": self.status,
             "applied": len(self.corrections),
             "from_glossary": by_list,
-            "from_context": len(self.corrections) - by_list,
+            "from_context": len(self.corrections) - by_list - doubts,
+            "marked_doubt": doubts or None,
             "sentences": self.sentences,
             "left_as_edited": self.protected or None,
             "glossary_chars": self.glossary_chars,
@@ -515,7 +570,9 @@ def listing(result: dict[str, Any]) -> list[dict[str, Any]]:
 
 __all__ = [
     "BASIS_CONTEXT",
+    "BASIS_DOUBT",
     "BASIS_GLOSSARY",
+    "DOUBT_MARK",
     "FIELD",
     "FINGERPRINTS",
     "GlossaryCorrectionResult",
@@ -529,6 +586,7 @@ __all__ = [
     "held_to_bounds",
     "listing",
     "onto_result",
+    "RULES",
     "remember",
     "revert",
 ]

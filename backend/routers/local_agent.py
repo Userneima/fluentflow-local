@@ -1289,7 +1289,7 @@ def run_glossary_correction(request: Request, task_id: str) -> dict[str, Any]:
         "task_id": task_id,
         "glossary_correction": outcome.meta(channel),
         "corrections": [
-            {key: r.get(key) for key in ("id", "from", "to", "basis", "entry", "why", "start")}
+            {key: r.get(key) for key in ("id", "from", "to", "basis", "entry", "guess", "why", "start")}
             for r in outcome.corrections
         ],
     }
