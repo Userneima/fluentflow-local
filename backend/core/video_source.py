@@ -829,9 +829,11 @@ def douyin_short_link_target(url: str, *, timeout: float = 5.0) -> str | None:
     without following it; None for any other link or when it cannot tell."""
     if _url_host(url) != "v.douyin.com":
         return None
-    validate_public_http_url(url, allowed_host_suffixes=("douyin.com",))
     request = urllib.request.Request(url, method="GET", headers={"User-Agent": BILIBILI_USER_AGENT})
     try:
+        # Inside the try: a name that does not resolve now (the network is
+        # down) is "cannot tell", and the link is submitted as usual.
+        validate_public_http_url(url, allowed_host_suffixes=("douyin.com",))
         urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout).close()
     except urllib.error.HTTPError as exc:
         location = exc.headers.get("Location") if exc.headers else None

@@ -19,6 +19,9 @@ from backend.core import video_source as vs
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.media_preflight import MediaPreflightError
 
+# Taken at import, before the autouse stand-in in conftest replaces it.
+_REAL_SHORT_LINK_LOOKUP = vs.douyin_short_link_target
+
 
 def test_an_image_post_is_known_from_its_link():
     assert vs.is_douyin_image_post("https://www.douyin.com/note/7560000000000000000")
@@ -65,3 +68,13 @@ def test_a_douyin_file_whose_sound_does_not_decode_is_called_a_paid_video():
     assert code == "media_audio_unreadable"
     empty = MediaPreflightError("media_file_empty", "媒体文件为空")
     assert link_submission.downloaded_file_refusal(empty, "https://www.douyin.com/video/1")[1] == "media_file_empty"
+
+
+def test_a_short_link_that_cannot_be_looked_up_is_not_known(monkeypatch):
+    """Codex push review, 2026-11-06: a name that did not resolve (network
+    down) raised out of the submission instead of letting it through."""
+    def no_dns(url, **kwargs):
+        raise ValueError("无法解析链接域名")
+
+    monkeypatch.setattr(vs, "validate_public_http_url", no_dns)
+    assert _REAL_SHORT_LINK_LOOKUP("https://v.douyin.com/AbCdEf/") is None
