@@ -147,6 +147,10 @@ def normalize_result_for_storage(result: dict[str, Any] | None) -> dict[str, Any
     # the one Claude wrote from the frames (of either file). Clients ask this
     # rather than comparing the stamp to one value.
     next_result["note_from_frames"] = next_result.get("summary_written_from") in FRAME_NOTE_WRITTEN_FROM
+    from backend.core import note_versions
+
+    if note_versions.STALE_FIELD in next_result and not note_versions.still_stale(next_result):
+        next_result.pop(note_versions.STALE_FIELD, None)
     for key in LEGACY_SEGMENT_KEYS:
         next_result.pop(key, None)
     if raw:

@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Form, HTTPException, Request
 
-from backend.core import feishu_sync, note_versions
+from backend.core import feishu_sync, note_prompt, note_versions
 from backend.core.event_context import event_metadata, new_task_id
 from backend.core.event_logger import log_event
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli
@@ -88,6 +88,9 @@ async def export_lark(
         None, _local_lark_export_target, lark_export_route, lark_via_cli
     )
     resolved = resolve_lark_doc_title(markdown, filename_stem="", form_title=title)
+    # A note a text model wrote says so at its top (decision 5.3).
+    owned_result = ((get_job(task_id_value, client_id=client_id) or {}).get("result") or {}) if task_id else {}
+    markdown = note_prompt.with_text_model_line(markdown, owned_result)
     kwargs: dict[str, Any] = {}
     if (app_id := resolve_secret(lark_app_id, "lark_app_id")):
         kwargs["app_id"] = app_id

@@ -1381,6 +1381,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 model_usage.carry(lambda: summarize_transcript_with_metadata(
                     note_input_text,
                     speaker_labeled=bool(note_speaker_text),
+                    task_id=ctx.task_id_value,
+                    client_id=ctx.client_id,
                     **kwargs,
                 )),
             )

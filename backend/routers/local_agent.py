@@ -44,7 +44,7 @@ from backend.core.local_agent_package import build_agent_task_package, note_gene
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.result_schema import FRAME_NOTE_WRITTEN_FROM
 from backend.core.local_entry_guards import claim_task_id, friendly_error, local_ai_kwargs
-from backend.core import correction_notes, glossary_correction, model_usage, subtitle_correction, task_actions, task_activity, task_steps
+from backend.core import correction_notes, glossary_correction, note_prompt, model_usage, subtitle_correction, task_actions, task_activity, task_steps
 from backend.core import agent_cut, agent_note, survey_cut, local_folder_intake, note_feedback, note_history, note_pdf, note_skills, note_versions, visual_note_job
 from backend.core.local_keyframe_provider import extract_keyframes
 from backend.core import speaker_diarization as speaker_diarization_core
@@ -232,7 +232,9 @@ async def _write_transcript_task(
             summary_result = await loop.run_in_executor(
                 None,
                 model_usage.carry(
-                    lambda: summarize_transcript_with_metadata(transcript, **kwargs),
+                    lambda: summarize_transcript_with_metadata(
+                        transcript, task_id=task_id_value, client_id=client_id, **kwargs,
+                    ),
                     task_id=task_id_value, step=task_steps.NOTE,
                 ),
             )
@@ -1500,9 +1502,10 @@ async def regenerate_agent_task_note(
         if str(result.get("corrected_transcript_text") or "").strip()
         else "transcript_text"
     )
-    transcript = str(
-        result.get("corrected_transcript_text") or result.get("transcript_text") or ""
-    ).strip()
+    # What the first note read, speaker labels included (``note_prompt``,
+    # 10-18 review, item 6).
+    transcript, speaker_labeled = note_prompt.transcript_for_note(result)
+    transcript = transcript.strip()
     if not transcript:
         raise HTTPException(status_code=400, detail="No transcript available for note regeneration")
 
@@ -1527,7 +1530,9 @@ async def regenerate_agent_task_note(
         summary_result = await loop.run_in_executor(
             None,
             model_usage.carry(
-                lambda: summarize_transcript_with_metadata(transcript, **kwargs),
+                lambda: summarize_transcript_with_metadata(
+                    transcript, speaker_labeled=speaker_labeled, task_id=task_id, client_id=client_id, **kwargs,
+                ),
                 task_id=task_id, step=task_steps.NOTE,
             ),
         )
@@ -1591,7 +1596,7 @@ async def regenerate_agent_task_note(
         "summary_original_markdown": None,
         # The note is now the text model's; an earlier frame-note stamp would
         # make the page describe it as Claude reading the frames.
-        "summary_written_from": "text_regeneration",
+        "summary_written_from": note_prompt.TEXT_REGENERATION,
         "requested_note_mode": summary_result.requested_mode,
         "resolved_note_mode": summary_result.resolved_mode,
         "note_mode_chunk_count": summary_result.chunk_count,
@@ -1679,6 +1684,8 @@ async def export_agent_task(
         payload.get("title") or result.get("display_title") or job.get("source_filename") or task_id
     ).strip()
     resolved_title = resolve_lark_doc_title(markdown, filename_stem="", form_title=title)
+    # A note a text model wrote says so at its top (decision 5.3).
+    markdown = note_prompt.with_text_model_line(markdown, result)
     # The request's route and folder, else the user's export settings, else
     # auto. Local-owner routes only; hosted account OAuth is rejected inside.
     # "auto" asks lark-cli whether it is signed in; keep that off the event loop.

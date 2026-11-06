@@ -378,8 +378,8 @@ def _write_text_note_instead(
     from backend.core.event_logger import log_event
     from backend.core.local_entry_guards import local_ai_kwargs
 
+    from backend.core import note_prompt
     from backend.core.result_artifacts import _attach_result_artifacts
-    from backend.core.speaker_diarization import build_speaker_annotated_transcript
 
     job = get_job(task_id, client_id=client_id) or {}
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
@@ -414,6 +414,21 @@ def _write_text_note_instead(
     if on_local_work_done is not None:
         on_local_work_done()  # nothing below uses this machine
     if not kwargs.get("api_key"):
+        if str(result.get("summary_markdown") or "").strip():
+            # A note is already there (the cut was changed after it was
+            # written): it stays, and says it is about the cut before the
+            # change, with how to get one for this cut (10-18 review, item 1).
+            _patch_result(task_id, client_id, {
+                "summary_status": "completed",
+                note_versions.STALE_FIELD: note_versions.stale(
+                    str(result.get("summary_markdown") or ""),
+                    f"剪辑改过了，这篇笔记还是改之前那版剪辑写的（{reason}也没有填文本模型的 Key）。"
+                    "让你的 agent 重写这篇笔记，就会按现在的剪辑写。",
+                ),
+                "summary_error": None,
+            })
+            upsert_job(task_id=task_id, status="completed", stage="done", summary_status="completed")
+            return
         # No model at all is a setup the product offers ("转录照常进行，笔记可以交给
         # 你的 agent 来写"), not a failure: recorded as skipped, with the reason, so
         # the page says what to do instead of "failed, try again", which cannot help.
@@ -426,24 +441,12 @@ def _write_text_note_instead(
         })
         upsert_job(task_id=task_id, status="completed", stage="done", summary_status="skipped")
         return
-    # Same input as the pipeline's note stage: the corrected transcript when
-    # there is one, written as speaker-prefixed lines when two or more people
-    # were told apart.
-    transcript = str(result.get("corrected_transcript_text") or result.get("transcript_text") or "")
-    segments = result.get("corrected_segments") or result.get("raw_segments") or []
-    speaker_text = build_speaker_annotated_transcript(segments if isinstance(segments, list) else [])
-    from backend.core import correction_notes
-
-    corrections = correction_notes.as_section(correction_notes.for_task(task_id, client_id))
-    if corrections:
-        # The series' correction document rides with the user's own prompt,
-        # or with the default one when they kept it.
-        from backend.core.ai_prompts import FLUENTFLOW_SYSTEM_PROMPT
-
-        kwargs = {**kwargs, "system_prompt": (kwargs.get("system_prompt") or FLUENTFLOW_SYSTEM_PROMPT) + corrections}
+    # The transcript every text-model note reads (``note_prompt``); the
+    # rules and the series' correction documents come with the task id.
+    note_input, speaker_labeled = note_prompt.transcript_for_note(result)
     try:
         summary = summarize_transcript_with_metadata(
-            speaker_text or transcript, speaker_labeled=bool(speaker_text), **kwargs
+            note_input, speaker_labeled=speaker_labeled, task_id=task_id, client_id=client_id, **kwargs
         )
         markdown = str(summary.markdown or "").strip()
         if not markdown:
@@ -462,8 +465,8 @@ def _write_text_note_instead(
         "summary_status": "completed",
         "summary_error": None,
         "summary_skipped": False,
-        "note_written_by": "text_fallback",
-        "summary_written_from": "text_fallback",
+        "note_written_by": note_prompt.TEXT_FALLBACK,
+        "summary_written_from": note_prompt.TEXT_FALLBACK,
         "note_fallback_reason": reason,
         # Which text model, for the editor's 笔记说明: "a text model" alone
         # did not say whose.
@@ -481,9 +484,12 @@ def _write_text_note_instead(
     if latest:
         before = dict(latest.get("result") or {})
         next_result = {**before, **fields}
+        # The note this replaces (a hand-edited one, an agent's) stays
+        # restorable, as when Claude rewrites it (10-18 review, item 1).
+        next_result["visual_note"] = visual_note_job.record_replaced_note(before, replaced_by=note_prompt.TEXT_FALLBACK)
         speaker_payload = next_result.get("speaker_diarization")
         if isinstance(speaker_payload, dict):
-            next_result["speaker_diarization"] = {**speaker_payload, "note_input_labeled": bool(speaker_text)}
+            next_result["speaker_diarization"] = {**speaker_payload, "note_input_labeled": speaker_labeled}
         # The downloadable note file, as the pipeline writes it.
         save_result_changes(
             task_id, before, _attach_result_artifacts(task_id, next_result, parts=("summary",)), client_id=client_id,

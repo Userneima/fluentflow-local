@@ -319,7 +319,9 @@ async def summarize_transcript_source(
     started_at = time.perf_counter()
     try:
         summary_result = await loop.run_in_executor(
-            None, model_usage.carry(lambda: summarize_transcript_with_metadata(note_transcript_text, **kwargs))
+            None, model_usage.carry(lambda: summarize_transcript_with_metadata(
+                note_transcript_text, task_id=task_id_value, client_id=client_id, **kwargs,
+            ))
         )
         summary_md = summary_result.markdown
         if not summary_md.strip():

@@ -102,6 +102,22 @@ def note_hash(note: str) -> str:
     return hashlib.sha256(note.encode("utf-8")).hexdigest()[:16]
 
 
+# A note that no longer matches what it was written from (the cut changed and
+# nothing could write it again), with why. Bound to that note's text: once the
+# note changes (an edit, any rewrite) the mark is dropped on save
+# (``result_schema.normalize_result_for_storage``), so no writer has to clear it.
+STALE_FIELD = "note_stale"
+
+
+def stale(note: str, why: str) -> dict[str, str]:
+    return {"note": note_hash(note), "reason": why}
+
+
+def still_stale(result: dict[str, Any]) -> bool:
+    mark = result.get(STALE_FIELD)
+    return isinstance(mark, dict) and mark.get("note") == note_hash(str(result.get("summary_markdown") or ""))
+
+
 def declare(fields: dict[str, Any], by: str, reason: str | None = None) -> dict[str, Any]:
     """``fields`` (a result, or the fields about to be written into one) with
     ``by`` recorded as what wrote its note, and the writer's ``reason`` when it

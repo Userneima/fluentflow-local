@@ -85,9 +85,14 @@ export const noteWriterBatchClause = (writer, lang = 'zh') => {
 // Whether this task's note was written by the text model because the frame
 // note could not run (local_intake_flow._write_text_note_instead). The person
 // expected a note with screenshots and has to be told why there are none.
-export const noteWasTextFallback = (result) => (
-    result?.note_written_by === 'text_fallback' || result?.summary_written_from === 'text_fallback'
-);
+// A rewrite by the text model counts too (10-18 review, item 6): it saw no
+// pictures either. ``summary_written_from`` is set by every writer, so a stale
+// ``note_written_by`` from an earlier note does not count once it is set.
+export const noteWasTextFallback = (result) => {
+    const from = String(result?.summary_written_from || '');
+    if (from) return from === 'text_fallback' || from === 'text_regeneration';
+    return result?.note_written_by === 'text_fallback';
+};
 
 // What the editor's 笔记说明 shows: who wrote this note, from what, and — when
 // it is not the note the person expected — why, and how to get that one. Was a
@@ -129,6 +134,20 @@ export const noteExplanation = (result, lang = 'zh', connection = {}) => {
     if (from === 'debreath_media_note') rows.push({label: zh ? '哪个版本' : 'Version', value: zh ? '剪掉空白后的版本' : 'The cut version'});
     if (from === 'source_media_note') rows.push({label: zh ? '哪个版本' : 'Version', value: zh ? '原片' : 'The original'});
 
+    // The cut changed and nothing could write the note again: it is about the
+    // cut before the change (10-18 review, item 1). The backend drops the mark
+    // once the note changes.
+    const stale = String(result?.note_stale?.reason || '').trim();
+    if (stale) {
+        return {
+            attention: true,
+            rows,
+            why: stale,
+            agentPrompt: agentNotePrompt(result, lang, connection),
+            keyOption: '',
+        };
+    }
+
     return {
         attention: fallback,
         rows,
@@ -150,6 +169,9 @@ export const noteExplanation = (result, lang = 'zh', connection = {}) => {
 // login, a failed call) is shown as it was given.
 const fallbackWhy = (result, lang) => {
     const zh = lang === 'zh';
+    if (String(result?.summary_written_from || '') === 'text_regeneration') {
+        return zh ? '这篇是按文字重写的：文本模型只读了转录稿，没看画面。' : 'This note was rewritten from the text: the text model read the transcript only, not the frames.';
+    }
     const reason = String(result?.note_fallback_reason || '').trim();
     if (!reason) return zh ? '这次没连上 Claude。' : 'Claude could not be reached this time.';
     if (/Anthropic/.test(reason) && /API Key/i.test(reason) && /(还没有配置|没有配置|not configured|no .*key)/i.test(reason)) {

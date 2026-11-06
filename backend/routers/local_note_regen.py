@@ -19,6 +19,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
 from backend.core import model_usage, note_versions, task_steps, visual_note_job
+from backend.core import note_prompt
 from backend.core.ai_summarizer import summarize_transcript_with_metadata
 from backend.core.chapter_coverage import bind_chapter_coverage_time_ranges
 from backend.core.event_context import event_metadata
@@ -96,6 +97,18 @@ async def regenerate_summary(
     else:
         task_id_value = claim_task_id(None, client_id=client_id)
     initial_result = deepcopy(existing_job.get("result")) if existing_job else None
+    # The page sends the transcript as plain text. When that is the text the
+    # task keeps, the rewrite reads the task's own copy with its speaker
+    # labels, as the first note did (10-18 review, item 6); text the page has
+    # and the task does not (an edit not yet saved) is read as sent.
+    note_input, speaker_labeled = transcript, False
+    stored = initial_result or {}
+    if transcript.strip() and transcript.strip() in {
+        str(stored.get("transcript_text") or "").strip(), str(stored.get("corrected_transcript_text") or "").strip(),
+    }:
+        labeled, has_labels = note_prompt.transcript_for_note(stored)
+        if has_labels:
+            note_input, speaker_labeled = labeled, True
     kwargs = local_ai_kwargs(
         deepseek_api_key=deepseek_api_key,
         openai_api_key=openai_api_key,
@@ -109,7 +122,9 @@ async def regenerate_summary(
     try:
         summary_result = await loop.run_in_executor(
             None, model_usage.carry(
-                lambda: summarize_transcript_with_metadata(transcript, **kwargs), task_id=task_id_value, step=task_steps.NOTE,
+                lambda: summarize_transcript_with_metadata(
+                    note_input, speaker_labeled=speaker_labeled, task_id=task_id_value, client_id=client_id, **kwargs,
+                ), task_id=task_id_value, step=task_steps.NOTE,
             ),
         )
         md = summary_result.markdown
@@ -148,7 +163,7 @@ async def regenerate_summary(
             # The note is now the text model's. Without this the stamp of an
             # earlier frame note stayed, and the page kept describing a text
             # rewrite as Claude reading the frames.
-            "summary_written_from": "text_regeneration",
+            "summary_written_from": note_prompt.TEXT_REGENERATION,
         }
         note_versions.declare(payload, note_versions.REWRITE)
         existing = (

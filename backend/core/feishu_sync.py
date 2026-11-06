@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import feishu_note, job_store, note_versions
+from backend.core import feishu_note, job_store, note_prompt, note_versions
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +208,8 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
     title = str(result.get("lark_doc_title") or "") or resolve_lark_doc_title(note, filename_stem="", form_title=None)
     try:
         response = export_markdown_via_lark_cli(
-            title, note, task_id=task_id, artifact_root=_artifact_storage_dir(),
+            # A note a text model wrote says so at its top (decision 5.3).
+            title, note_prompt.with_text_model_line(note, result), task_id=task_id, artifact_root=_artifact_storage_dir(),
             previous=sync, keep_feishu=keeper(task_id, result), runner=runner,
         )
     except Exception as exc:  # noqa: BLE001 - the note itself is fine
@@ -293,7 +294,8 @@ def _with_note(task_id: str, result: dict[str, Any], note: str) -> dict[str, Any
     if not after.get("summary_edited") and not after.get("summary_original_markdown"):
         after["summary_original_markdown"] = str(result.get("summary_markdown") or "")
     after.update({
-        "summary_markdown": note,
+        # The line the Feishu copy was given never becomes part of the note.
+        "summary_markdown": note_prompt.without_text_model_line(note),
         "summary_skipped": False,
         "summary_status": "completed",
         "summary_error": None,

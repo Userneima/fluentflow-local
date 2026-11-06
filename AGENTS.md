@@ -41,10 +41,10 @@ exists and that no other file judges whether a task is still busy.
 - The stretches a decided cut keeps while it renders (what an agent's note is written from meanwhile): `backend/core/survey_cut.py` (`ranges_while_rendering`); whether the agent can start its note then: `backend/core/agent_note.py` (`ready_while_cut_renders`)
 - Who handles understanding on an agent submission (current agent by default, explicit background delegation): `backend/core/task_intelligence.py`
 - Whether Claude writes the note, through the subscription or a key: `backend/core/visual_note_channel.py`
-- How a note is written: `backend/note_skills/fluentflow-note-default/SKILL.md` (a user's own skill replaces it, `FLUENTFLOW_NOTE_SKILL_DIR`)
+- How a note is written: `backend/note_skills/fluentflow-note-default/SKILL.md` (a user's own skill replaces it, `FLUENTFLOW_NOTE_SKILL_DIR`), for Claude, the agent and a text model alike; what a text model is told on top of it, the transcript it reads, and the 「没看画面」 line on its notes' copies: `backend/core/note_prompt.py`
 - How a review note is written: `backend/note_skills/fluentflow-review-note/SKILL.md`; writing and revising it beside the follow-along note, by the agent or FluentFlow's model: `backend/core/review_note.py`
 - Changing passages of a note by their exact text (each found exactly once, all pairs or none), for the follow-along and the review note alike: `backend/core/note_replace.py`
-- The text-model note and the calls to text models: `backend/core/ai_summarizer.py`, `backend/core/ai_client.py`
+- Running the text-model note (direct, by chapters, the coverage check) and the calls to text models: `backend/core/ai_summarizer.py`, `backend/core/ai_client.py`
 - A step's model answers kept until it is done, so carrying it on after an interruption does not pay again: `backend/core/model_answers.py` (every exit that asks with text goes through `remembered`)
 - Recording each model call (which task, step, model, tokens) and what a task's calls cost: `backend/core/model_usage.py`; the prices: `backend/core/model_prices.json`. Every exit that calls a model wraps its request in `model_usage.call`, and work handed to another thread goes through `model_usage.carry` or `CarryingExecutor`
 - Whether this service runs on a test copy of the task database, and what it may then write (only tasks made in the copy; no carrying on at startup, no Feishu): `backend/core/test_copy.py`

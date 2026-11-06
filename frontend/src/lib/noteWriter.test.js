@@ -109,3 +109,25 @@ describe('noteExplanation of other reasons', () => {
         expect(explained.why).toBe('本机 Claude 的登录已过期。');
     });
 });
+
+// 10-18 review, items 1 and 6: a rewrite by the text model saw no pictures
+// either, and a note left from before the cut changed says so.
+describe('noteExplanation of a text rewrite and of a note for an older cut', () => {
+    it('says a text rewrite read the transcript only, and offers the agent', () => {
+        const info = noteExplanation({task_id: 't', summary_written_from: 'text_regeneration'}, 'zh');
+        expect(info.attention).toBe(true);
+        expect(info.why).toContain('按文字重写');
+        expect(info.agentPrompt).toContain('get_agent_note_material');
+    });
+
+    it('a leftover note_written_by does not count once another writer stamped the note', () => {
+        const info = noteExplanation({summary_written_from: 'agent_note', note_written_by: 'text_fallback'}, 'zh');
+        expect(info.attention).toBe(false);
+    });
+
+    it('says the note is about the cut before the change', () => {
+        const info = noteExplanation({task_id: 't', summary_written_from: 'debreath_media_note', note_stale: {reason: '剪辑改过了，这篇笔记还是改之前那版剪辑写的。'}}, 'zh');
+        expect(info.attention).toBe(true);
+        expect(info.why).toContain('改之前那版剪辑');
+    });
+});

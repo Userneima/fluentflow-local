@@ -1673,9 +1673,9 @@ def list_note_feedback(api_base: str | None = None, client_id: str | None = None
 
 
 @tool(
-    description=("Have FluentFlow's own model write one part of a task's note with candidate rules, without "
-        "saving it, for verifying a rule when FluentFlow writes the user's notes. When no model is "
-        "configured, write the part yourself from get_agent_note_material with the candidate rules."),
+    description=("Have FluentFlow's own model (the one that wrote the task's note) write one part with "
+        "candidate rules, unsaved, to verify a rule when FluentFlow writes the user's notes. With no "
+        "model configured, write the part yourself from get_agent_note_material with the candidate rules."),
     input_schema={
         "type": "object",
         "properties": {

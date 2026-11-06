@@ -31,13 +31,10 @@ from backend.core.ai_config import (
 
 # Full system prompt: FluentFlow 知识架构师（飞书云文档 Markdown）
 from backend.core.ai_prompts import (
-    FLUENTFLOW_SYSTEM_PROMPT,
     _NOTE_OUTPUT_GUARDRAILS,
     _NOTE_SPEAKER_ATTRIBUTION,
     _EVIDENCE_SPEAKER_ATTRIBUTION,
-    _NOTE_CONTENT_POLICY,
     _NOTE_OUTPUT_LANGUAGE,
-    _FEISHU_NOTE_FORMATTING_PREFERENCES,
     _VISUAL_REQUEST_PLANNER_SYSTEM,
     _VISUAL_FRAME_SELECTOR_SYSTEM,
     _BATCH_CONDENSE_SYSTEM,
@@ -281,13 +278,20 @@ def _compose_note_system_prompt(
     system_prompt: str | None,
     *,
     speaker_labeled: bool = False,
+    task_id: str | None = None,
+    client_id: str | None = None,
 ) -> str:
-    base = (system_prompt or "").strip() or FLUENTFLOW_SYSTEM_PROMPT
+    """The note skill Claude and the agent write with, plus the text-only part
+    and the task's correction documents (``note_prompt``); ``system_prompt``
+    is what was asked for this one note, after them. Then the guards against
+    the prompt leaking into the note, and the speaker rule when the lines carry
+    labels."""
+    from backend.core import note_prompt
+
+    base = note_prompt.for_text_model(task_id, client_id, extra=system_prompt)
     return (
         f"{base.rstrip()}"
-        f"{_NOTE_CONTENT_POLICY}"
         f"{_NOTE_OUTPUT_LANGUAGE}"
-        f"{_FEISHU_NOTE_FORMATTING_PREFERENCES}"
         f"{_NOTE_OUTPUT_GUARDRAILS}"
         f"{_NOTE_SPEAKER_ATTRIBUTION if speaker_labeled else ''}"
     )
@@ -1158,6 +1162,9 @@ def _run_chapter_coverage_mode(
     speaker_labeled: bool = False,
     deadline: _NoteDeadline | None = None,
 ) -> SummaryResult:
+    """``prompt`` is the whole note prompt (``_compose_note_system_prompt``):
+    each chapter and the stitching read it after their own short task, so a
+    long recording is written by the same rules as a short one."""
     deadline = deadline or _NoteDeadline()
     segments = _chapter_segments(transcript_text, segment_chars)
     valid_segment_ids = {segment["segment_id"] for segment in segments}
@@ -1165,8 +1172,8 @@ def _run_chapter_coverage_mode(
     # prefixed lines, chapter writing reads only the extracted evidence, and the
     # style pass rewrites the whole draft. A rule on just one of them loses it.
     evidence_system = _CHAPTER_EVIDENCE_SYSTEM + (_EVIDENCE_SPEAKER_ATTRIBUTION if speaker_labeled else "")
-    chapter_note_system = _CHAPTER_NOTE_SYSTEM + (_NOTE_SPEAKER_ATTRIBUTION if speaker_labeled else "")
-    chapter_style_system = _CHAPTER_STYLE_SYSTEM + (_NOTE_SPEAKER_ATTRIBUTION if speaker_labeled else "")
+    chapter_note_system = _CHAPTER_NOTE_SYSTEM + "\n\n# 写法\n\n" + prompt
+    chapter_style_system = _CHAPTER_STYLE_SYSTEM + "\n\n# 写法\n\n" + prompt
 
     def _extract_segment_evidence(batch: dict[str, Any]) -> list[Any]:
         payload = json.dumps([batch], ensure_ascii=False)
@@ -1383,9 +1390,12 @@ def _summarize_transcript_with_metadata(
     evidence_chunk_chars: int = 8_000,
     evidence_overlap: int = 300,
     speaker_labeled: bool = False,
+    task_id: str | None = None,
+    client_id: str | None = None,
 ) -> SummaryResult:
     """Generate a note and return mode/chunk metadata for product analysis.
 
+    ``task_id`` brings the task's correction documents into the rules.
     Set ``speaker_labeled`` when ``transcript`` carries「说话人 A：」line prefixes:
     every prompt in the chain then gets the attribution rule, so the labels
     survive evidence extraction instead of being dropped mid-pipeline.
@@ -1395,7 +1405,7 @@ def _summarize_transcript_with_metadata(
     provider_name = _normalize_provider(provider)
     client = _get_client(provider=provider_name, api_key=api_key)
     m = _normalize_model(provider_name, model)
-    prompt = _compose_note_system_prompt(system_prompt, speaker_labeled=speaker_labeled)
+    prompt = _compose_note_system_prompt(system_prompt, speaker_labeled=speaker_labeled, task_id=task_id, client_id=client_id)
     normalized_mode = _normalize_note_mode(note_mode)
     transcript_text = transcript.strip()
     transcript_length = len(transcript_text)
@@ -1613,7 +1623,6 @@ __all__ = [
     "DEFAULT_DEEPSEEK_MODEL",
     "DEFAULT_OPENAI_MODEL",
     "DEFAULT_QWEN_MODEL",
-    "FLUENTFLOW_SYSTEM_PROMPT",
     "DIRECT_MODE_MAX_CHARS",
     "HIGH_FIDELITY_NOTICE_CHARS",
     "SummaryResult",

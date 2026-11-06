@@ -160,9 +160,12 @@ def draft_part(task_id: str, *, rules: str, part: int = 1, client_id: str | None
 
     For verifying a candidate rule when FluentFlow, not the agent, writes the
     user's notes. Nothing is stored, and the frames are the ones already on
-    disk, so the draft sees the same pictures the task's note did.
+    disk, so the draft sees the same pictures the task's note did. A task whose
+    note a text model wrote is tried with the text model, the writer the rule
+    will meet there (10-18 review, item 4), as is any task when Claude cannot
+    write here but a text model can.
     """
-    from backend.core import claude_vision, note_preview, visual_note_channel
+    from backend.core import claude_vision, note_preview, note_prompt, visual_note_channel
     from backend.core import visual_note_job as vn
 
     if not _text(rules):
@@ -170,7 +173,12 @@ def draft_part(task_id: str, *, rules: str, part: int = 1, client_id: str | None
     job = vn.get_job(task_id, client_id=client_id)
     if not job:
         raise NoteFeedbackError("任务不存在")
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
     channel = visual_note_channel.resolve_channel(None)
+    if note_prompt.written_by_text_model(result) or not channel.available:
+        drafted = _draft_part_with_text_model(task_id, result, rules=rules, part=part, client_id=client_id)
+        if drafted is not None:
+            return drafted
     if not channel.available:
         raise NoteFeedbackError(f"{channel.unavailable_reason}。没有可用的模型时，由你（agent）按候选写法自己写这一部分。")
     media, transcript, _timeline, _segments = vn._require_eligible(task_id, job, api_key=None, channel=channel)
@@ -188,12 +196,36 @@ def draft_part(task_id: str, *, rules: str, part: int = 1, client_id: str | None
     if not 1 <= part <= len(parts):
         raise NoteFeedbackError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")
     chosen = parts[part - 1]
-    result = job.get("result") if isinstance(job.get("result"), dict) else {}
     frames = note_preview._existing_frames(task_id, result) if media.has_video else []
     draft = vn._checked_draft(channel.write, chosen, claude_vision.frames_for_part(frames, chosen),
                               api_key=None, rules=rules)
     return {"task_id": task_id, "part": chosen.index, "total_parts": chosen.total,
             "markdown": draft.markdown, "model": draft.model}
+
+
+def _draft_part_with_text_model(task_id: str, result: dict[str, Any], *, rules: str, part: int,
+                                client_id: str | None) -> dict[str, Any] | None:
+    """One part written by the configured text model with ``rules``, with the
+    prompt every text-model note gets; None when no text model is set up."""
+    from backend.core import claude_vision, note_prompt
+    from backend.core.ai_summarizer import text_model_chat, text_model_name
+    from backend.core.local_entry_guards import local_ai_kwargs
+
+    kwargs = local_ai_kwargs()
+    chat = text_model_chat(**kwargs)
+    if chat is None:
+        return None
+    transcript, _labeled = note_prompt.transcript_for_note(result)
+    from backend.core import agent_note
+
+    parts = claude_vision.transcript_parts(transcript, max_chars=agent_note.AGENT_PART_CHARS
+                                           if agent_note._small_parts(task_id) else len(transcript) + 1)
+    if not 1 <= part <= len(parts):
+        raise NoteFeedbackError(f"这段录像分成 {len(parts)} 部分，part 要在 1 到 {len(parts)} 之间")
+    chosen = parts[part - 1]
+    markdown = chat(note_prompt.for_text_model(task_id, client_id, rules=rules), chosen.text)
+    return {"task_id": task_id, "part": chosen.index, "total_parts": chosen.total,
+            "markdown": str(markdown or "").strip(), "model": text_model_name(**kwargs)}
 
 
 def list_feedback() -> list[dict[str, Any]]:

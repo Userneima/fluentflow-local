@@ -166,6 +166,10 @@ def export_pdf(
     title = heading or str(result.get("display_title") or result.get("filename") or task_id).strip()
     directory = Path(output_dir).expanduser() if output_dir else default_output_dir()
     stem = _UNSAFE_NAME.sub("_", filename or title)[:120 if filename else 80].strip() or task_id
+    from backend.core import note_prompt
+
+    # A note a text model wrote says so at its top (decision 5.3).
+    note = note_prompt.with_text_model_line(note, result)
     return {"task_id": task_id, **markdown_to_pdf(note, title, directory, stem, task_id=task_id)}
 
 

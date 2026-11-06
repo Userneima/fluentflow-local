@@ -346,6 +346,8 @@ def _agent_cut_media_note(result: dict[str, Any], artifacts: dict[str, dict[str,
         "note_from_frames": _text(result.get("summary_written_from")) in FRAME_NOTE_WRITTEN_FROM,
         "previous_note_restorable": bool(_text(replaced.get("previous_markdown"))),
         "note_artifact": VISUAL_NOTE_KIND if VISUAL_NOTE_KIND in artifacts else None,
+        # Set when the cut changed and nothing could write the note again.
+        "note_stale_reason": (result.get("note_stale") or {}).get("reason") if isinstance(result.get("note_stale"), dict) else None,
     }
 
 

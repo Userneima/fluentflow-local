@@ -60,6 +60,11 @@ def _auto_export_local_lark(**values: object) -> dict:
     else:
         target = "lark_openapi"
     title = resolve_lark_doc_title(str(values["summary_markdown"]), filename_stem=str(values["filename_stem"]), form_title=str(values.get("form_title") or ""))
+    from backend.core import note_prompt
+
+    # A note a text model wrote says so at its top (decision 5.3).
+    task_result = (get_job(str(values["task_id"])) or {}).get("result") or {}
+    values = {**values, "summary_markdown": note_prompt.with_text_model_line(str(values["summary_markdown"]), task_result)}
     if target == "lark_cli":
         response = export_markdown_via_lark_cli(title, str(values["summary_markdown"]), task_id=str(values["task_id"]), artifact_root=_artifact_storage_dir())
     else:

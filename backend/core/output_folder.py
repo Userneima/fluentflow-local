@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from backend.core import job_store, note_versions
+from backend.core import job_store, note_prompt, note_versions
 from backend.core.storage_paths import _artifact_storage_dir
 
 logger = logging.getLogger(__name__)
@@ -605,6 +605,9 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any], note_changed
         # Obsidian it shows its screenshots and is the copy people open
         # (owner, 2026-10-18). Its pictures stay in 过程文件.
         text, files = _note_for_folder(task_id, note, shots, relative_to=folder)
+        # A note a text model wrote says so at its top, in the md and so in
+        # the PDF (decision 5.3); taken out again when an edit comes back.
+        text = note_prompt.with_text_model_line(text, result)
         if files:
             shots.mkdir(exist_ok=True)
             for path in files:
@@ -628,6 +631,7 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any], note_changed
         if taken is not None:
             result, note, record["md_taken_in"] = taken
             text, files = _note_for_folder(task_id, note, shots, relative_to=folder)
+            text = note_prompt.with_text_model_line(text, result)
         try:
             on_disk = md.read_text(encoding="utf-8")
         except OSError:
@@ -736,7 +740,7 @@ def _take_in_edits(
         # in Obsidian while the task's note changed) can save it over a newer
         # note, and this is where that newer note is found again.
         note_versions.keep(md, would_write, note_versions.TASK, note_versions.OBSIDIAN)
-        stored = _stored_form(task_id, text, prefixes).strip()
+        stored = note_prompt.without_text_model_line(_stored_form(task_id, text, prefixes)).strip()
         after = _with_note(task_id, result, stored)
         job_store.save_result_changes(task_id, result, after)
         happened["kept"] = "file"
