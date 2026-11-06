@@ -29,9 +29,10 @@ from scripts import fluentflow_mcp_server as mcp
 # declare a larger anthropic/maxResultSizeChars; then that is its limit.
 HOST_INLINE_CHARS = 50_000
 
-# What every agent pays to load the tool list, and the longest single tool.
-# Measured after the audit: 52,499 in all, submit_video_link 3,251.
-ALL_DEFINITIONS_CHARS = 55_000
+# The longest single tool definition (submit_video_link was 3,251 after the
+# audit). There is no cap on all definitions together: Claude Code defers every
+# MCP tool by default and Codex defers them too (decision 8.21), so an agent
+# reads a definition only when it loads that tool.
 ONE_DEFINITION_CHARS = 3_500
 
 # The largest real task on record (2026-11-04): a 3.5-hour interview, a note of
@@ -53,8 +54,6 @@ def test_the_tool_list_stays_within_its_budget():
     sizes = {d["name"]: _definition_chars(d) for d in mcp.TOOL_DEFINITIONS}
     too_long = {name: size for name, size in sizes.items() if size > ONE_DEFINITION_CHARS}
     assert not too_long, f"tool definitions over {ONE_DEFINITION_CHARS} characters: {too_long}"
-    total = sum(sizes.values())
-    assert total <= ALL_DEFINITIONS_CHARS, f"all tool definitions: {total} > {ALL_DEFINITIONS_CHARS}"
 
 
 def _note() -> str:
