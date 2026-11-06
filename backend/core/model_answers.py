@@ -112,6 +112,7 @@ def remembered(key: str, ask: Callable[[], str]) -> str:
     run before this one already had it, else ``ask()``'s, kept."""
     where = model_usage.current()
     task_id, step = where.task_id, where.step
+    nth = run = 0  # set under the lock when the step is open; never read otherwise
     with _lock:
         open_step = bool(task_id and step and (task_id, step) in _open)
         if open_step:
