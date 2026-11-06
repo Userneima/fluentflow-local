@@ -8,6 +8,27 @@ import {linkButton} from '../lib/ui.js';
 const HintScope = createContext(null);
 
 export const HINT_SETTLE_MS = 1200;
+export const HINT_MAX_WIDTH = 272;
+const HINT_GAP = 8;
+
+// Where the bubble goes, in pixels from the control's left edge: as wide as
+// its text up to HINT_MAX_WIDTH and never wider than the pane, its left edge
+// under the control's left (or its right edge under the control's right), then
+// moved just enough to stay inside the pane. The arrow points at the control.
+export const placeHint = ({anchor, pane, natural, align = 'left'}) => {
+    const maxWidth = Math.max(0, Math.min(HINT_MAX_WIDTH, pane.width - 2 * HINT_GAP));
+    const width = Math.min(natural || maxWidth, maxWidth);
+    const wanted = align === 'right' ? anchor.right - width : anchor.left;
+    const lowest = pane.left + HINT_GAP;
+    const highest = pane.right - HINT_GAP - width;
+    const leftEdge = Math.max(lowest, Math.min(wanted, highest));
+    const arrowAt = anchor.left + Math.min(anchor.width / 2, 20) - leftEdge - 5;
+    return {
+        left: Math.round(leftEdge - anchor.left),
+        maxWidth: Math.round(maxWidth),
+        arrow: Math.round(Math.max(10, Math.min(arrowAt, width - 20))),
+    };
+};
 
 export const FeatureHintScope = ({children}) => {
     const [present, setPresent] = useState(() => new Set());
@@ -65,20 +86,41 @@ export const FeatureHint = ({id, when = true, align = 'left', lang = 'zh', child
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [open, scope, id]);
-    // The bubble opens towards the side with room inside the pane: in a
-    // narrow window a control at the right of its row wraps to the left.
+    // The bubble stays inside its pane: it opens from the control's side
+    // (`align`), slides over when that would cross the pane's edge (a control
+    // wraps to the other side in a narrow window), and narrows to the pane
+    // when the pane itself is dragged narrower than the bubble. Re-placed when
+    // the window or the pane changes size.
     const anchorRef = useRef(null);
     const bubbleRef = useRef(null);
-    const [side, setSide] = useState(align);
+    const [place, setPlace] = useState(null);
+    // The bubble's own width, taken once at its first, unplaced render (its
+    // text up to HINT_MAX_WIDTH), so a later narrow pane does not shrink it
+    // for good.
+    const naturalRef = useRef(0);
     useLayoutEffect(() => {
-        if (!open) return;
-        const anchor = anchorRef.current?.getBoundingClientRect();
-        const width = bubbleRef.current?.getBoundingClientRect().width || 0;
-        const box = (anchorRef.current?.closest('section') || document.body).getBoundingClientRect();
-        if (!anchor || !width || !box.width) return;
-        const fitsLeft = anchor.left + width <= box.right - 8;
-        const fitsRight = anchor.right - width >= box.left + 8;
-        setSide(align === 'right' ? (fitsRight || !fitsLeft ? 'right' : 'left') : (fitsLeft || !fitsRight ? 'left' : 'right'));
+        if (!open) return undefined;
+        const measure = () => {
+            const node = anchorRef.current;
+            const bubble = bubbleRef.current;
+            if (!node || !bubble) return;
+            const pane = node.closest('section') || document.body;
+            setPlace(placeHint({
+                anchor: node.getBoundingClientRect(),
+                pane: pane.getBoundingClientRect(),
+                natural: naturalRef.current || (naturalRef.current = bubble.getBoundingClientRect().width),
+                align,
+            }));
+        };
+        measure();
+        window.addEventListener('resize', measure);
+        const pane = anchorRef.current?.closest('section');
+        const observer = pane && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+        observer?.observe(pane);
+        return () => {
+            window.removeEventListener('resize', measure);
+            observer?.disconnect();
+        };
     }, [open, align]);
     const hint = FEATURE_HINTS.find((item) => item.id === id);
     return (
@@ -89,9 +131,10 @@ export const FeatureHint = ({id, when = true, align = 'left', lang = 'zh', child
                     ref={bubbleRef}
                     role="status"
                     data-testid={`feature-hint-${id}`}
-                    className={`absolute top-full z-30 mt-2.5 block w-max max-w-[min(17rem,calc(100vw-2.5rem))] rounded-[12px] bg-[#111111] px-3.5 py-3 text-left text-[12px] font-medium leading-relaxed text-white shadow-[0_16px_40px_-16px_rgba(17,17,17,0.55)] dark:bg-[#f2f2f3] dark:text-[#111111] ${side === 'right' ? 'right-0' : 'left-0'}`}
+                    style={place ? {left: place.left, maxWidth: place.maxWidth} : {left: 0, maxWidth: HINT_MAX_WIDTH}}
+                    className="absolute top-full z-30 mt-2.5 block w-max rounded-[12px] bg-[#111111] px-3.5 py-3 text-left text-[12px] font-medium leading-relaxed text-white shadow-[0_16px_40px_-16px_rgba(17,17,17,0.55)] dark:bg-[#f2f2f3] dark:text-[#111111]"
                 >
-                    <span aria-hidden="true" className={`absolute -top-1 h-2.5 w-2.5 rotate-45 bg-[#111111] dark:bg-[#f2f2f3] ${side === 'right' ? 'right-4' : 'left-4'}`}/>
+                    <span aria-hidden="true" style={{left: place ? place.arrow : 16}} className="absolute -top-1 h-2.5 w-2.5 rotate-45 bg-[#111111] dark:bg-[#f2f2f3]"/>
                     <span className="block whitespace-normal">{lang === 'zh' ? hint.zh : hint.en}</span>
                     <span className="mt-2 flex justify-end">
                         <button type="button" onClick={() => scope.dismiss(id)} className={linkButton('inherit', 'sm')}>

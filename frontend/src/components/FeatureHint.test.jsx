@@ -14,7 +14,7 @@
 
 import {act, cleanup, fireEvent, render, screen} from '@testing-library/react';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {FeatureHint, FeatureHintScope, FeatureHintsLine, HINT_SETTLE_MS} from './FeatureHint.jsx';
+import {FeatureHint, FeatureHintScope, FeatureHintsLine, HINT_MAX_WIDTH, HINT_SETTLE_MS, placeHint} from './FeatureHint.jsx';
 import {FEATURE_HINTS, FEATURE_HINTS_SEEN, readSeenHints} from '../lib/featureHints.js';
 
 const ORDER = FEATURE_HINTS.map((hint) => hint.id);
@@ -129,5 +129,44 @@ describe('the settings line', () => {
         render(<Page/>);
         settle();
         expect(shownHints()).toEqual(['note-follow']);
+    });
+});
+
+// The bubble stays inside the pane it is in (the editor's panes can be dragged
+// down to a quarter of the width and clip what crosses their edge).
+describe('where the bubble goes', () => {
+    const rect = (left, width) => ({left, right: left + width, width});
+    const inside = (anchor, pane, place) => {
+        const left = anchor.left + place.left;
+        const width = Math.min(HINT_MAX_WIDTH, place.maxWidth);
+        return left >= pane.left && left + width <= pane.right;
+    };
+
+    it('opens under the control when there is room', () => {
+        const anchor = rect(120, 80);
+        const place = placeHint({anchor, pane: rect(100, 600), natural: HINT_MAX_WIDTH});
+        expect(place.left).toBe(0);
+        expect(place.maxWidth).toBe(HINT_MAX_WIDTH);
+    });
+
+    it('lines up with the right edge of a control at the right of its row', () => {
+        const anchor = rect(600, 80);
+        const place = placeHint({anchor, pane: rect(100, 600), natural: HINT_MAX_WIDTH, align: 'right'});
+        expect(anchor.left + place.left + HINT_MAX_WIDTH).toBe(anchor.right);
+    });
+
+    it('slides over when a right-aligned control has wrapped to the left', () => {
+        const anchor = rect(110, 80);
+        const pane = rect(100, 300);
+        const place = placeHint({anchor, pane, natural: HINT_MAX_WIDTH, align: 'right'});
+        expect(inside(anchor, pane, place)).toBe(true);
+    });
+
+    it('narrows to a pane dragged narrower than the bubble', () => {
+        const anchor = rect(110, 60);
+        const pane = rect(100, 200);
+        const place = placeHint({anchor, pane, natural: HINT_MAX_WIDTH});
+        expect(place.maxWidth).toBe(184);
+        expect(inside(anchor, pane, place)).toBe(true);
     });
 });
