@@ -2063,11 +2063,10 @@ def _review_note(
     description=("Write the review note (复习笔记): a second note beside the follow-along note (<名>_笔记.md), "
         "reorganised by topic for learning it again, written from the follow-along md as it is on disk now, "
         "with the user's corrections. Only when the user asks. By default you write it: call without "
-        "note_markdown for the material (part 1 has the writing rules, then the note, its chapter table and "
+        "note_markdown for the material (part 1 has the writing rules, then the note and "
         "the cut video's transcript), read every part, write the note as the rules say and call again with "
-        "note_markdown and material_version. Hand this to a new subagent with a fresh context. FluentFlow "
-        "turns the 〔S12 1:05:20〕 sources into links back to the follow-along note, writes "
-        "<名>_复习笔记.md with a PDF and keeps an earlier one in 过程文件/历史版本. writer=fluentflow has "
+        "note_markdown and material_version. Hand this to a new subagent with a fresh context. The body has no sources (the user asks you where a point came from). FluentFlow "
+        "writes <名>_复习笔记.md with a PDF and keeps an earlier one in 过程文件/历史版本. writer=fluentflow has "
         "FluentFlow's own model write it instead (about ten minutes for three hours). Give task_id, or "
         "note_path (the follow-along md) when the user moved the output folder. Refused with code stale when "
         "a note changed after you read the material (read it again), review_note_failed with the reason "
@@ -2096,12 +2095,12 @@ def write_review_note(
 @tool(
     description=("Change an existing review note as the user asked instead of writing it again: instruction is "
         "the user's feedback (what to change, what to leave). Works like write_review_note: by default you "
-        "read the material in parts (the rules, the feedback, the current note with sources as 〔编号 时间〕 "
-        "and old links as 〔L1〕 to copy as they are), write the whole changed note and call again with "
+        "read the material in parts (the rules, the feedback, the current note; one written before sources "
+        "were dropped shows them as 〔编号 时间〕 and 〔L1〕: leave them unless the feedback says to remove them), "
+        "write the whole changed note and call again with "
         "note_markdown and material_version; writer=fluentflow has FluentFlow's model do it. The previous "
         "version goes to 过程文件/历史版本 and the PDF is printed again. Give task_id, or note_path (the review "
-        "note or the follow-along note). unknown_sources lists citations matching no chapter (written as "
-        "（出处待核）); lost_links lists old links the new note dropped."),
+        "note or the follow-along note)."),
     input_schema={
         "type": "object",
         "properties": {

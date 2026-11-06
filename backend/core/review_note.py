@@ -10,9 +10,15 @@ self-test questions and what is still unclear. How it is written lives in
 
 The base is the follow-along md on disk, not the note FluentFlow holds: the
 user corrects it in Obsidian, and a folder moved elsewhere (decision 6.34) is
-never synced back. The transcript is only for checking facts and finding each
-point's moment. Times come from the note-follow table (``note_section_times``)
-when the task has one, on the timeline of the cut video.
+never synced back. The transcript is for checking facts and adding what the
+base left out.
+
+The body carries no sources (owner, 2026-11-06, decision 5.55): he asks the
+agent where a point came from instead of reading 〔S12 1:05:20〕 links. Review
+notes written before that still carry links back to the follow-along note's
+chapters; revising one turns them into short ids for the model and back
+(``collapse_sources``, ``expand_sources``) and keeps or drops them as the
+model's answer does, without a warning either way.
 """
 
 from __future__ import annotations
@@ -107,8 +113,9 @@ def _clock(seconds: float | None) -> str:
 
 
 def section_table(note_markdown: str, note_stem: str, time_rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Every chapter and sub-chapter of the base note: an id the model cites
-    (``〔S12 1:05:20〕``), the Obsidian link that replaces it, a label (第五章,
+    """Every chapter and sub-chapter of the base note, for revising a review
+    note written when sources were still written: an id (``〔S12 1:05:20〕``),
+    the Obsidian link it stands for, a label (第五章,
     第五章（二）) and its time span. The model never copies the link itself:
     the note's file name is long and a hundred copies of it cost output and
     invite typos.
@@ -169,7 +176,6 @@ def build_prompt(
     *,
     note_markdown: str,
     note_name: str,
-    table: list[dict[str, Any]],
     transcript: list[tuple[float, str]],
     version: dict[str, Any],
     playback_name: str,
@@ -177,20 +183,11 @@ def build_prompt(
 ) -> tuple[str, str]:
     """The system prompt (the writing rules and the series' word list) and the
     material."""
-    rows = []
-    for row in table:
-        span = f"{_clock(row['start'])}–{_clock(row['end'])}" if row["start"] is not None else "时间未知"
-        others = "；".join(f"{_clock(a)}–{_clock(b)}" for a, b in row["others"])
-        indent = "  " if row["level"] == 3 else ""
-        rows.append(f"{indent}- 〔{row['id']}〕 {row['label']}　{row['heading']}　{span}"
-                    + (f"（其他出处 {others}）" if others else ""))
     lines = "\n".join(f"[{_clock(start)}] {text}" for start, text in transcript)
     material = (
         f"# 材料一：底稿（随看笔记 {note_name}，修改于 {version['modified_at']}）\n\n"
         f"{note_markdown.strip()}\n\n"
-        "# 材料二：章节表（出处写成〔编号 时间〕；时间是剪后视频上的时间）\n\n"
-        + "\n".join(rows)
-        + f"\n\n# 材料三：转录稿（剪后视频 {playback_name} 上的时间，每行约 15 秒）\n\n{lines}\n\n"
+        f"# 材料二：转录稿（剪后视频 {playback_name} 上的时间，每行约 15 秒）\n\n{lines}\n\n"
         f"底稿约 {len(note_markdown)} 字。复习笔记全文写 {len(note_markdown) // 3} 到 {len(note_markdown) // 2} 字，"
         f"其中各章正文（不算术语表、自测题和最后两节）合计不超过 {len(note_markdown) * 3 // 8} 字。"
         "按写法写这条录像的复习笔记，只输出笔记本身。"
@@ -203,35 +200,24 @@ def build_prompt(
 _TIME = r"\d{1,2}:\d{2}(?::\d{2})?"
 _CITE = re.compile(rf"〔\s*(S\d+)\s*(?:[，,、\s]\s*({_TIME})(?:\s*[–—\-~～至]\s*{_TIME})?)?\s*〕")
 _LEFTOVER_CITE = re.compile(r"〔\s*S\d+[^〕]*〕")
-UNKNOWN_SOURCE = "（出处待核）"
-
-
-def expand_sources(text: str, table: list[dict[str, Any]]) -> tuple[str, list[str]]:
+def expand_sources(text: str, table: list[dict[str, Any]]) -> str:
     """``〔S12 1:05:20〕`` → the chapter's Obsidian link and the time; without a
     time, the chapter's start; a chapter Obsidian cannot link to gets its
     label and the time. An id the table does not have, or a citation that
-    cannot be read, becomes 「（出处待核）」 and is returned, so no invented
-    source is written as if it were real."""
+    cannot be read, is dropped: no invented source is written as if it were
+    real, and sources are no longer asked for."""
     by_id = {row["id"]: row for row in table}
-    unknown: list[str] = []
 
     def swap(match: re.Match[str]) -> str:
         row = by_id.get(match.group(1))
         if row is None:
-            unknown.append(match.group(0))
-            return UNKNOWN_SOURCE
+            return ""
         moment = match.group(2) or _clock(row["start"])
         # Right after another link (「在 [[#知识点]]〔S9〕」) the two would run together.
         lead = "，" if match.start() > 0 and text[match.start() - 1] in "]〕" else ""
         return f"{lead}{row['link'] or row['label']} {moment}".rstrip()
 
-    expanded = _CITE.sub(swap, text)
-
-    def leftover(match: re.Match[str]) -> str:
-        unknown.append(match.group(0))
-        return UNKNOWN_SOURCE
-
-    return _LEFTOVER_CITE.sub(leftover, expanded), unknown
+    return _LEFTOVER_CITE.sub("", _CITE.sub(swap, text))
 
 
 _LINK = re.compile(rf"(?P<lead>(?<=\])，)?(?P<link>\[\[[^\]]+\]\])(?: (?P<time>{_TIME}))?")
@@ -521,15 +507,12 @@ def _write_inputs(path: Path, job: dict[str, Any] | None) -> dict[str, Any]:
     if not text.strip():
         raise ReviewNoteError("底稿是空的。")
     version = base_version(path, text)
-    result = (job or {}).get("result") or {}
-    rows = (result.get(note_section_times.RESULT_KEY) or {}).get("sections")
-    table = section_table(text, path.stem, rows if isinstance(rows, list) else None)
     transcript = note_section_times.transcript_lines(_segments(job, path))
     system, user = build_prompt(
-        note_markdown=text, note_name=path.name, table=table, transcript=transcript,
+        note_markdown=text, note_name=path.name, transcript=transcript,
         version=version, playback_name=_playback_name(path), glossary=correction_notes.for_path(path),
     )
-    return {"version": version, "table": table, "system": system, "user": user}
+    return {"version": version, "system": system, "user": user}
 
 
 def _model(chat: tuple[Chat, str] | None) -> tuple[Chat, str]:
@@ -565,9 +548,10 @@ def _finish_write(
     path: Path, job: dict[str, Any] | None, inputs: dict[str, Any], answer: str, written_by: str, started: datetime,
 ) -> dict[str, Any]:
     _check_complete(answer)
-    version, table = inputs["version"], inputs["table"]
-    note, unknown = expand_sources(answer, table)
-    note = _with_base_line(note, version)
+    version = inputs["version"]
+    # The rules ask for no sources; one written anyway out of habit names a
+    # chapter table the model was never given, so it is dropped.
+    note = _with_base_line(_LEFTOVER_CITE.sub("", answer), version)
     target = review_path_for(path)
     _write_in_place(target, note)
     pdf = _pdf(note, target)
@@ -579,9 +563,6 @@ def _finish_write(
         "written_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "written_by": written_by,
         "seconds": round((datetime.now() - started).total_seconds(), 1),
-        "unknown_sources": unknown,
-        "timed_sections": sum(1 for row in table if row["start"] is not None),
-        "sections": len(table),
     }
     if job:
         record["record_error"] = _record(str(job.get("task_id") or ""), record)
@@ -592,11 +573,12 @@ _BASE_LINE = re.compile(r"(?m)^- 底稿版本：.*\n?")
 
 REVISE_RULES = (
     "\n\n## 这次是修改一份已经写好的复习笔记\n\n"
-    "用户读过下面这份按上面写法写的复习笔记，提了意见。只按意见改；意见没提到的内容"
-    "（知识点的正文、出处、「我的笔记」框、判断框、术语表、自测题、还没弄清的）原样保留，"
+    "用户读过下面这份复习笔记，提了意见。只按意见改；意见没提到的内容"
+    "（知识点的正文、「我的笔记」框、判断框、术语表、自测题、还没弄清的）原样保留，"
     "只在结构变了需要跟着改时才改（比如三级标题的编号和顺序变了，自测题、知识地图和"
-    "「还没弄清的」里链到它的地方逐字跟着改）。出处照原样写成〔编号 时间〕；"
-    "〔L1〕〔L2〕这样的记号是要原样保留的旧链接，照抄在原处。"
+    "「还没弄清的」里链到它的地方逐字跟着改）。"
+    "早先写的笔记里可能还有〔S12 1:05:20〕〔L1〕这样的出处记号（现在的写法不再写出处）："
+    "意见没说要去掉，就照原样留在原处；要去掉就连同前面的「出处」字样整个删掉。不新加出处。"
     "只输出改好的整篇笔记，不加说明。"
 )
 
@@ -671,8 +653,7 @@ def _finish_revise(
 ) -> dict[str, Any]:
     _check_complete(answer)
     table, kept, base_line = inputs["table"], inputs["kept"], inputs["base_line"]
-    note, unknown = expand_sources(answer, table)
-    lost = [kept[key] for key in kept if key not in note]
+    note = expand_sources(answer, table)
     for key, original in kept.items():
         note = note.replace(key, original)
     note = note.rstrip() + "\n" + (base_line if base_line.endswith("\n") or not base_line else base_line + "\n")
@@ -686,8 +667,6 @@ def _finish_revise(
         "revised_by": revised_by,
         "instruction": instruction.strip(),
         "seconds": round((datetime.now() - started).total_seconds(), 1),
-        "unknown_sources": unknown,
-        "lost_links": lost,
     }
     if job:
         before = (job.get("result") or {}).get(RESULT_KEY) or {}
@@ -820,7 +799,6 @@ __all__ = [
     "collapse_sources",
     "REVIEW_SUFFIX",
     "SKILL_PATH",
-    "UNKNOWN_SOURCE",
     "base_paths_for",
     "base_version",
     "build_prompt",

@@ -4,17 +4,18 @@ Requirement (owner, 2026-11-05; decision 6.48: the current agent does the
 writing by default; most users drive FluentFlow from Codex):
 
 - The agent reads exactly what FluentFlow's model would read: the writing
-  rules, the follow-along note, its chapter table and the transcript, in
+  rules, the follow-along note and the transcript, in
   parts small enough for Codex to show whole.
 - What it hands back goes through the same steps as the model's answer:
-  sources become links back to the follow-along note, the base version is
+  the base version is
   stamped, an earlier review note is kept, a PDF is printed, the task records
   who wrote it, and an incomplete note is refused with nothing written.
 - If the follow-along note (or, revising, the review note) changed after the
   material was read, nothing is written: the answer would undo the user's
   edit. The agent is told to read the material again.
 - No model is called on this path.
-- Revising works the same way and keeps the old links exactly.
+- Revising works the same way; a review note written before sources were
+  dropped (decision 5.55) keeps its old links exactly when the answer does.
 - Through the MCP tool, the agent's way is the default; writer=fluentflow
   keeps FluentFlow's own model.
 """
@@ -28,7 +29,7 @@ import pytest
 from backend.core import job_store, review_note
 from scripts import fluentflow_mcp_server as mcp
 
-from tests.test_review_note import ANSWER, BASE, STEM, FakeChat, _folder, _task, home, no_browser  # noqa: F401
+from tests.test_review_note import ANSWER, BASE, STEM, FakeChat, _folder, _legacy, _task, home, no_browser  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +64,7 @@ def test_the_agent_reads_what_the_model_would_and_its_note_is_written_the_same_w
 
     by_agent = (folder / "课_复习笔记.md").read_text(encoding="utf-8")
     assert by_agent == by_model
-    assert f"[[{STEM}#一、为什么要扩容#（一）读太多|" in by_agent
+    assert by_agent.startswith(ANSWER.rstrip())
     assert list((folder / "过程文件" / "历史版本").glob("课_复习笔记_*.md"))
     assert answer["written_by"] == "agent:gpt-5-codex"
     assert job_store.get_job("t-agent-1")["result"]["review_note"]["written_by"] == "agent:gpt-5-codex"
@@ -113,19 +114,19 @@ def test_an_incomplete_note_is_refused_and_nothing_is_written(tmp_path):
 def test_revising_by_the_agent_keeps_every_link_and_refuses_after_the_review_note_changed(tmp_path):
     folder = _folder(tmp_path, task_id="t-agent-5")
     _task("t-agent-5", folder / f"{STEM}.md")
-    review_note.generate("t-agent-5", chat=(FakeChat(), "x"))
-    review = folder / "课_复习笔记.md"
+    review = _legacy(folder)
 
     text, version = _whole(note_path=str(review), instruction="三级标题改一下")
     assert "三级标题改一下" in text and "〔S1 0:40〕" in text
-    revised = ANSWER.replace("### （一）读请求占九成", "### （一）读请求占了九成")
+    draft = text.split("# 现在的复习笔记\n\n", 1)[1]
+    revised = draft.replace("### （一）读请求占九成", "### （一）读请求占了九成")
     answer = review_note.save_from_agent(revised, version, note_path=str(review), instruction="三级标题改一下")
 
     after = review.read_text(encoding="utf-8")
     assert "读请求占了九成" in after
     assert f"[[{STEM}#一、为什么要扩容#（一）读太多|第一章（一）]] 0:20" in after
     assert after.count("- 底稿版本：") == 1
-    assert answer["revised_by"] == "agent" and answer["lost_links"] == []
+    assert answer["revised_by"] == "agent" and "lost_links" not in answer
 
     _text, version = _whole(note_path=str(review), instruction="再改")
     review.write_text(after + "\n用户在 Obsidian 里加的一行。\n", encoding="utf-8")

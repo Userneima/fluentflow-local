@@ -6,14 +6,18 @@ Requirements (docs/方案/2026-10-25-复习笔记.md, owner, 2026-10-25 and 10-2
   and question boxes), never changing it; the transcript only checks facts.
 - Lands beside it as ``<名>_复习笔记.md`` with a PDF; says which version of
   the follow-along note it came from; an earlier one is kept, not lost.
-- Each source is a link back to the follow-along note's chapter that
-  Obsidian can follow, plus the time in the cut video.
+- The body carries no sources (owner, 2026-11-06, decision 5.55): the
+  model is given no chapter table, a stray citation is dropped silently, and
+  nothing about sources is reported. Review notes written earlier, with links
+  back to the follow-along note's chapters, can still be revised: the links
+  stay unless the model's answer drops them, and dropping them is not a
+  warning.
 - When the output folder was moved and FluentFlow cannot find it, the agent
   passes the md's path; the task is still found from the folder's marker.
 - Claude subscription first, the user's key when it fails (decisions 4.12,
   4.14). A failure says why, writes nothing and never fails the task.
 - Changing a written review note at the user's word (decision 8.8) reworks
-  that note, not the follow-along note, and keeps every link intact.
+  that note, not the follow-along note.
 """
 
 from __future__ import annotations
@@ -66,7 +70,9 @@ ANSWER = """# 数据库扩容：复习笔记
 > [!note] 我的笔记
 > 九成是看慢查询日志按小时统计的。
 
-**出处**：〔S1 0:40〕、〔S2〕
+（转录稿补充）：
+
+- 读请求按小时统计，高峰在晚上。
 
 ## 术语表
 
@@ -84,6 +90,16 @@ ANSWER = """# 数据库扩容：复习笔记
 
 - 录像日期：未知。
 """
+
+# A review note written before 2026-11-06, when each point carried its
+# sources as links back to the follow-along note.
+LEGACY = ANSWER.replace(
+    "- 读请求按小时统计，高峰在晚上。",
+    f"- 读请求按小时统计，高峰在晚上。[[{STEM}#一、为什么要扩容#（一）读太多|第一章（一）]] 0:20",
+).replace(
+    "## 术语表",
+    f"**出处**：[[{STEM}#一、为什么要扩容|第一章]] 0:40、[[{STEM}#一、为什么要扩容#（一）读太多|第一章（一）]] 0:20\n\n## 术语表",
+)
 
 SECTION_ROWS = [
     {"heading": "一、为什么要扩容", "level": 2, "primary": [10.0, 50.0], "others": []},
@@ -144,7 +160,7 @@ def no_browser(monkeypatch):
     return printed
 
 
-def test_written_beside_the_base_with_links_back_times_and_the_base_version(tmp_path, no_browser):
+def test_written_beside_the_base_without_sources_and_with_the_base_version(tmp_path, no_browser):
     folder = _folder(tmp_path)
     _task("t-review-1", folder / f"{STEM}.md")
     chat = FakeChat()
@@ -154,20 +170,21 @@ def test_written_beside_the_base_with_links_back_times_and_the_base_version(tmp_
     target = folder / "课_复习笔记.md"
     assert out["path"] == str(target)
     text = target.read_text(encoding="utf-8")
-    # A sub-chapter is reached through its chapter, as Obsidian resolves it.
-    assert f"[[{STEM}#一、为什么要扩容|第一章]] 0:40" in text
-    assert f"[[{STEM}#一、为什么要扩容#（一）读太多|第一章（一）]] 0:20" in text
-    assert "〔S" not in text
+    assert text.startswith(ANSWER.rstrip())
+    assert f"[[{STEM}#" not in text and "〔S" not in text
+    assert "（转录稿补充）：\n\n- 读请求按小时统计，高峰在晚上。\n" in text
     sha = hashlib.sha256(BASE.encode("utf-8")).hexdigest()
     assert f"内容指纹 {sha[:12]}" in text
     assert (folder / f"{STEM}.md").read_text(encoding="utf-8") == BASE
     assert no_browser and no_browser[0][1] == folder and no_browser[0][2] == "课_复习笔记"
     record = job_store.get_job("t-review-1")["result"]["review_note"]
     assert record["base"]["sha256"] == sha and record["written_by"] == "claude_code_subscription"
+    assert not {"unknown_sources", "lost_links", "timed_sections", "sections"} & set(record)
+    assert not {"unknown_sources", "lost_links"} & set(out)
     assert job_store.get_job("t-review-1")["status"] == "completed"
 
 
-def test_the_model_sees_the_users_corrections_the_chapters_and_the_transcript(tmp_path):
+def test_the_model_sees_the_users_corrections_and_the_transcript_and_no_chapter_table(tmp_path):
     root = tmp_path / "系列"
     folder = _folder(root)
     (root / "FluentFlow 校正文档.md").write_text("- 从库：只读副本。转录常听成：重库", encoding="utf-8")
@@ -179,7 +196,10 @@ def test_the_model_sees_the_users_corrections_the_chapters_and_the_transcript(tm
     system, user = chat.calls[0]
     assert "# 写一份复习笔记" in system and "转录常听成：重库" in system
     assert "看慢查询日志，按小时统计。" in user  # the user's own answer
-    assert "〔S2〕 第一章（一）" in user and "0:20–0:50" in user
+    assert "章节表" not in user and "〔S" not in user and "0:20–0:50" not in user
+    # The rules ask for no source: no citation form, no 出处 item, none per supplement.
+    assert "〔编号" not in system and "**出处**" not in system and "每项带" not in system
+    assert "正文里不写出处" in system and "（转录稿补充）：" in system and "## 出处信息" in system
     assert "转录里说读请求占九成" in user
     assert f"复习笔记全文写 {len(BASE) // 3} 到 {len(BASE) // 2} 字" in user
 
@@ -194,7 +214,7 @@ def test_a_moved_folder_is_reached_by_the_md_path_and_still_finds_its_task(tmp_p
     chat = FakeChat()
     out = review_note.generate(note_path=str(folder / f"{STEM}.md"), chat=(chat, "x"))
     assert out["task_id"] == "t-review-3"
-    assert "[[课_笔记#一、为什么要扩容|第一章]] 0:40" in (folder / "课_复习笔记.md").read_text(encoding="utf-8")
+    assert (folder / "课_复习笔记.md").read_text(encoding="utf-8").startswith(ANSWER.rstrip())
     assert "转录里说读请求占九成" in chat.calls[0][1]
 
 
@@ -206,8 +226,7 @@ def test_without_any_task_the_transcript_beside_the_note_is_used(tmp_path):
 
     assert out["task_id"] is None
     assert "读请求占了九成" in chat.calls[0][1]
-    assert "时间未知" in chat.calls[0][1]
-    assert "第一章（一）]]" in (folder / "课_复习笔记.md").read_text(encoding="utf-8")
+    assert (folder / "课_复习笔记.md").is_file()
 
 
 @pytest.mark.parametrize("chat", [
@@ -267,20 +286,33 @@ def test_the_subscription_comes_first_and_the_key_takes_over_when_it_fails(monke
     assert asked["max_tokens"] >= 32_000
 
 
-def test_revising_changes_the_review_note_only_and_keeps_every_link(tmp_path):
+def _legacy(folder: Path, name: str = "课_复习笔记.md") -> Path:
+    review = folder / name
+    review.write_text(LEGACY + "- 底稿版本：课_笔记.md，修改于 2026-10-30T10:00:00+08:00，内容指纹 abcdefabcdef\n",
+                      encoding="utf-8")
+    return review
+
+
+def test_revising_an_earlier_note_with_sources_keeps_its_links_when_the_answer_keeps_them(tmp_path):
     folder = _folder(tmp_path, task_id="t-review-6")
     _task("t-review-6", folder / f"{STEM}.md")
-    review_note.generate("t-review-6", chat=(FakeChat(), "x"))
+    _legacy(folder)
     before = (folder / "课_复习笔记.md").read_text(encoding="utf-8")
-    revised = ANSWER.replace("### （一）读请求占九成", "### （一）读请求占了九成").replace(
-        "[[#（一）读请求占九成|", "[[#（一）读请求占了九成|")
-    chat = FakeChat(revised)
+
+    class Revised(FakeChat):
+        def __call__(self, system, user):
+            self.calls.append((system, user))
+            return user.split("# 现在的复习笔记\n\n", 1)[1].replace(
+                "### （一）读请求占九成", "### （一）读请求占了九成")
+
+    chat = Revised()
 
     review_note.revise(str(folder / "课_复习笔记.md"), "三级标题改一下", chat=(chat, "x"))
 
     system, user = chat.calls[0]
     assert "三级标题改一下" in user
     assert "〔S1 0:40〕" in user and "〔S2 0:20〕" in user and f"[[{STEM}#" not in user
+    assert "不新加出处" in system
     assert "底稿版本" not in user
     after = (folder / "课_复习笔记.md").read_text(encoding="utf-8")
     assert f"[[{STEM}#一、为什么要扩容#（一）读太多|第一章（一）]] 0:20" in after
@@ -289,6 +321,22 @@ def test_revising_changes_the_review_note_only_and_keeps_every_link(tmp_path):
         line for line in after.splitlines() if "底稿版本" in line]
     assert (folder / f"{STEM}.md").read_text(encoding="utf-8") == BASE
     assert list((folder / "过程文件" / "历史版本").glob("课_复习笔记_*.md"))
+
+
+def test_revising_an_earlier_note_to_drop_its_sources_saves_it_without_a_warning(tmp_path):
+    folder = _folder(tmp_path, task_id="t-review-6b")
+    _task("t-review-6b", folder / f"{STEM}.md")
+    review = _legacy(folder)
+    chat = FakeChat(ANSWER)  # the same note with every source taken out
+
+    out = review_note.revise(str(review), "去掉正文里所有出处", chat=(chat, "x"))
+
+    after = review.read_text(encoding="utf-8")
+    assert f"[[{STEM}#" not in after and "**出处**" not in after and "〔" not in after
+    assert "- 读请求按小时统计，高峰在晚上。\n" in after
+    assert after.count("- 底稿版本：") == 1
+    assert not {"unknown_sources", "lost_links"} & set(out)
+    assert not {"unknown_sources", "lost_links"} & set(job_store.get_job("t-review-6b")["result"]["review_note"]["last_revision"])
 
 
 def _client() -> TestClient:
@@ -367,10 +415,11 @@ def test_the_second_task_on_a_recording_in_its_own_folder_uses_its_own_material(
     assert "第二条任务的转录" in chat.calls[0][1] and "第一条任务的转录" not in chat.calls[0][1]
     review = folder / "课_复习笔记 (2).md"
     assert out["path"] == str(review)
-    assert "[[课_笔记 (2)#一、为什么要扩容#（一）读太多|第一章（一）]] 2:00" in review.read_text(encoding="utf-8")
+    assert review.is_file()
     assert "review_note" in job_store.get_job("t-second")["result"]
     assert "review_note" not in job_store.get_job("t-first")["result"]
 
+    review.write_text(LEGACY.replace(f"[[{STEM}#", "[[课_笔记 (2)#").replace("0:20", "2:00"), encoding="utf-8")
     chat = FakeChat()
     revised = review_note.revise(str(review), "改一下", chat=(chat, "x"))
     assert revised["task_id"] == "t-second" and "〔S2 2:00〕" in chat.calls[0][1]
@@ -378,9 +427,7 @@ def test_the_second_task_on_a_recording_in_its_own_folder_uses_its_own_material(
 
 def _expanded_sample(table):
     text = "见，〔S1 0:40〕。在 [[#（一）读请求占九成]]〔S2〕，又见〔S3 1:00〕〔S1〕"
-    expanded, unknown = review_note.expand_sources(text, table)
-    assert not unknown
-    return expanded
+    return review_note.expand_sources(text, table)
 
 
 def test_a_link_goes_to_ids_and_back_letter_for_letter():
@@ -391,25 +438,24 @@ def test_a_link_goes_to_ids_and_back_letter_for_letter():
     collapsed, kept = review_note.collapse_sources(expanded, table)
 
     assert not kept and STEM not in collapsed
-    assert review_note.expand_sources(collapsed, table)[0] == expanded
+    assert review_note.expand_sources(collapsed, table) == expanded
 
 
 def test_a_heading_obsidian_cannot_follow_gets_words_and_time_and_still_goes_both_ways():
     base = BASE.replace("## 二、读写分离", "## 二、读|写 [分离] #1")
     table = review_note.section_table(base, STEM, SECTION_ROWS)
-    expanded, _ = review_note.expand_sources("见〔S3 1:00〕，再看〔S1〕", table)
+    expanded = review_note.expand_sources("见〔S3 1:00〕，再看〔S1〕", table)
 
     assert "第二章 1:00" in expanded and "读|写" not in expanded
     assert expanded.count("[[") == 1  # only the chapter Obsidian can open
     collapsed, kept = review_note.collapse_sources(expanded, table)
     assert "〔S3 1:00〕" in collapsed and not kept
-    assert review_note.expand_sources(collapsed, table)[0] == expanded
+    assert review_note.expand_sources(collapsed, table) == expanded
 
 
 def test_a_link_to_a_renamed_heading_is_kept_as_it_was_and_not_shown_to_the_model(tmp_path):
     folder = _folder(tmp_path)
-    review_note.generate(note_path=str(folder / f"{STEM}.md"), chat=(FakeChat(), "x"))
-    review = folder / "课_复习笔记.md"
+    review = _legacy(folder)
     old_link = f"[[{STEM}#零、早先的标题|第零章]] 0:05"
     review.write_text(review.read_text(encoding="utf-8").replace("**结论**：读太多。", f"**结论**：读太多。见{old_link}。"), encoding="utf-8")
 
@@ -423,23 +469,24 @@ def test_a_link_to_a_renamed_heading_is_kept_as_it_was_and_not_shown_to_the_mode
 
     assert "零、早先的标题" not in chat.calls[0][1] and "〔L1〕" in chat.calls[0][1]
     assert f"见{old_link}。" in review.read_text(encoding="utf-8")
-    assert out["lost_links"] == []
+    assert "lost_links" not in out
 
 
-def test_a_citation_written_loosely_is_read_and_an_invented_one_is_not_written_as_real(tmp_path):
+def test_a_citation_written_loosely_is_read_and_an_invented_one_is_dropped(tmp_path):
     table = review_note.section_table(BASE, STEM, SECTION_ROWS)
-    text, unknown = review_note.expand_sources("〔S1，0:40〕 〔S2 0:20–0:30〕 〔S999〕 〔S2,第二段〕", table)
+    text = review_note.expand_sources("〔S1，0:40〕 〔S2 0:20–0:30〕 〔S999〕 〔S2,第二段〕", table)
 
     assert f"[[{STEM}#一、为什么要扩容|第一章]] 0:40" in text
     assert f"第一章（一）]] 0:20" in text
-    assert "S999" not in text and "第二段" not in text
-    assert text.count(review_note.UNKNOWN_SOURCE) == 2
-    assert unknown == ["〔S999〕", "〔S2,第二段〕"]
+    assert "S999" not in text and "第二段" not in text and "出处待核" not in text
 
+    # A new note citing a chapter out of habit: the citation is dropped, no warning.
     folder = _folder(tmp_path)
     out = review_note.generate(note_path=str(folder / f"{STEM}.md"),
-                               chat=(FakeChat(ANSWER.replace("〔S2〕", "〔S2〕、〔S999〕")), "x"))
-    assert out["unknown_sources"] == ["〔S999〕"]
+                               chat=(FakeChat(ANSWER.replace("**结论**：读太多。", "**结论**：读太多。〔S2 0:20〕")), "x"))
+    written = (folder / "课_复习笔记.md").read_text(encoding="utf-8")
+    assert "**结论**：读太多。\n" in written and "〔" not in written
+    assert "unknown_sources" not in out
 
 
 def test_only_a_follow_along_note_in_the_users_home_is_read(tmp_path):
