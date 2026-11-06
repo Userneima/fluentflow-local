@@ -1462,7 +1462,7 @@ DOUYIN_NO_MEDIA_MESSAGE = (
 # nothing of it beforehand, checked 2026-11-06).
 DOUYIN_PAID_MESSAGE = (
     "这像是抖音的付费视频，下载不了：抖音给的文件是加密的，画面和声音都解不开。"
-    "能在抖音里正常播放的话，录屏后用「本机文件」处理。"
+    "能在抖音里正常播放的话，录屏后用「本机文件」处理；在抖音里看它不是付费视频的话，重新提交一次试试（下载坏了也会这样）。"
 )
 GENERIC_UNRESOLVED_MESSAGE = "暂时无法自动解析这个视频链接，请改用本机上的视频文件"
 _BILIBILI_LOGIN_REASONS = frozenset({"login_required", "forbidden", "premium_only"})
