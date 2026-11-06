@@ -54,6 +54,10 @@ _open: set[tuple[str, str]] = set()
 _asked: dict[tuple[str, str, str], int] = {}
 # Steps whose last request raised (the model unreachable), not answered.
 _unreachable: set[tuple[str, str]] = set()
+# Each step's run, counted up when it starts again and when its answers are
+# dropped: an answer that comes back for an older run (a request the step
+# stopped waiting for) is not kept (Codex push review).
+_runs: dict[tuple[str, str], int] = {}
 
 
 def request_key(*parts: Any, images: Iterable[str | Path] = ()) -> str:
@@ -73,6 +77,7 @@ def request_key(*parts: Any, images: Iterable[str | Path] = ()) -> str:
 def step_started(task_id: str, step: str) -> None:
     with _lock:
         _open.add((task_id, step))
+        _runs[(task_id, step)] = _runs.get((task_id, step), 0) + 1
         _unreachable.discard((task_id, step))
         for key in [key for key in _asked if key[:2] == (task_id, step)]:
             del _asked[key]
@@ -85,6 +90,8 @@ def step_ended(task_id: str, step: str, status: str, *, keep: bool) -> None:
         _open.discard((task_id, step))
         unreachable = (task_id, step) in _unreachable
         _unreachable.discard((task_id, step))
+        if not (keep or unreachable):
+            _runs[(task_id, step)] = _runs.get((task_id, step), 0) + 1
     if keep or unreachable:
         return
     try:
@@ -111,6 +118,7 @@ def remembered(key: str, ask: Callable[[], str]) -> str:
             counted = (task_id, step, key)
             nth = _asked.get(counted, 0)
             _asked[counted] = nth + 1
+            run = _runs.get((task_id, step), 0)
     if not open_step:
         return ask()
     try:
@@ -129,7 +137,8 @@ def remembered(key: str, ask: Callable[[], str]) -> str:
         raise
     with _lock:
         _unreachable.discard((task_id, step))
-    if isinstance(answer, str):
+        current_run = _runs.get((task_id, step), 0) == run
+    if isinstance(answer, str) and current_run:
         try:
             job_store.insert_model_answer(task_id, step, key, answer)
         except Exception:  # noqa: BLE001 - the answer goes back all the same

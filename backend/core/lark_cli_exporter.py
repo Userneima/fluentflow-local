@@ -314,6 +314,15 @@ def export_markdown_via_lark_cli(
             artifact_root=artifact_root, keep_feishu=keep_feishu, runner=runner,
         )
         if resumed is not None:
+            if not updated.get("sections_rewritten"):
+                # Nothing to rewrite: the document already holds this note,
+                # but the export was cut off before its chapter links were
+                # pointed at their chapters (``_finish``).
+                parts = feishu_note.sections(markdown)
+                links: List[feishu_note.HeadingLink] = []
+                _feishu_chunk(parts, list(range(len(parts))), links)
+                _finish(runner, bin_path, str(previous["doc_id"]), str(previous.get("url") or ""), links, parts,
+                        updated["sync"])
             _forget_created(artifact_root, task_id)
             if _local_images_in(markdown):
                 updated["image_upload_errors"] = [*updated.get("image_upload_errors", []), INTERRUPTED_IMAGES]

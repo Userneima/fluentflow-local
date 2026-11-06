@@ -474,6 +474,9 @@ def test_an_export_cut_off_after_creating_its_document_writes_into_it_again(tmp_
 
     assert created == 1 and doc.writes.count("create") == 1, "no second document"
     assert result["url"] == URL
+    heading = _ids(doc)["三、结尾"]
+    framework = next(t for t in doc.texts() if "框架的话" in t)
+    assert f"[第三章]({URL}#{heading})" in framework, "the links the cut-off export left are pointed at their chapters"
     assert not (tmp_path / "t1" / cli.CREATED).exists()
     cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t2", artifact_root=tmp_path, runner=doc)
     assert doc.writes.count("create") == 2, "another task still gets its own document"

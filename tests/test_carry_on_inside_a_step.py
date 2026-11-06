@@ -258,3 +258,30 @@ def test_a_key_written_note_carried_on_reads_its_answer_back(task_id, monkeypatc
 
     assert again.markdown == first.markdown and again.markdown
     assert len(calls) == 1
+
+
+def test_an_answer_that_comes_back_after_its_run_is_not_kept(task_id):
+    """(Codex push review) A request the step stopped waiting for can still
+    come back later; once the step was carried on and done, its answer is not
+    kept for a later run to read."""
+    model = CountingModel()
+    task_steps.start(task_id, task_steps.CORRECT)
+    late: dict[str, str] = {}
+    release = threading.Event()
+
+    def slow() -> str:
+        release.wait(5)
+        return "late answer"
+
+    out = threading.Thread(target=model_usage.carry(
+        lambda: late.setdefault("answer", model_answers.remembered(model_answers.request_key("test", "batch"), slow))))
+    out.start()
+    time.sleep(0.1)
+    task_steps.finish(task_id, task_steps.CORRECT, task_steps.STOPPED)
+    _run_step(task_id, task_steps.CORRECT, ["batch"], model)
+    task_steps.finish(task_id, task_steps.CORRECT, task_steps.DONE)
+    release.set()
+    out.join(5)
+
+    assert late["answer"] == "late answer"
+    assert job_store.count_model_answers(task_id) == 0
