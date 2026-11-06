@@ -734,7 +734,8 @@ const areCardPropsEqual = (prev, next) => {
 const AgentTaskCard = memo(AgentTaskCardView, areCardPropsEqual);
 
 // The Feishu documents this machine has made (automatic exports included),
-// newest first. Moved here from the settings page, where history did not
+// newest task first. No time beside them: no task records when it was
+// exported, and its last change is not that (Codex push review). Moved here from the settings page, where history did not
 // belong (decision 6.21); folded, since it is looked at now and then.
 export const LarkExportList = ({exports, lang}) => {
     const [open, setOpen] = useState(false);
@@ -750,15 +751,10 @@ export const LarkExportList = ({exports, lang}) => {
             {open ? (
                 <ul className="space-y-1">
                     {exports.map((item) => (
-                        <li key={item.url} className="flex items-baseline gap-3 text-[13px] font-semibold">
-                            <a href={item.url} target="_blank" rel="noopener noreferrer" className={`min-w-0 truncate ${linkButton('blue')}`}>
+                        <li key={item.url} className="text-[13px] font-semibold">
+                            <a href={item.url} target="_blank" rel="noopener noreferrer" className={`block min-w-0 truncate ${linkButton('blue')}`}>
                                 {item.title}
                             </a>
-                            {item.timestamp ? (
-                                <span className="shrink-0 text-[12px] text-[#85868c] dark:text-white/50">
-                                    {formatTaskDateTime(item.timestamp, lang)}
-                                </span>
-                            ) : null}
                         </li>
                     ))}
                 </ul>

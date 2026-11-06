@@ -40,7 +40,7 @@ from backend.core.media_intake import (
     adopt_source_file,
     path_size_mb,
 )
-from backend.core.media_preflight import MediaPreflightError, preflight_media_file
+from backend.core.media_preflight import MediaPreflightError, preflight_media_file, video_undecodable
 from backend.core.queue_options import _queue_options_from_mapping
 from backend.core.local_config import saved_choices
 from backend.core.runtime_env import truthy
@@ -423,7 +423,7 @@ async def _download_then_process(
     try:
         media_preflight = await asyncio.to_thread(preflight_media_file, target_path)
     except MediaPreflightError as exc:
-        error, code = downloaded_file_refusal(exc, input_text)
+        error, code = await asyncio.to_thread(downloaded_file_refusal, exc, input_text, target_path)
         await fail(
             "import",
             error,
@@ -633,13 +633,15 @@ async def submit_video_source_job(
     }
 
 
-def downloaded_file_refusal(exc: MediaPreflightError, input_text: str) -> tuple[Any, str]:
+def downloaded_file_refusal(exc: MediaPreflightError, input_text: str, path: Any) -> tuple[Any, str]:
     """What to tell the user about a downloaded file the checks refused.
 
-    A Douyin file whose container reads and whose sound does not decode is a
-    paid video's encrypted copy (2026-10-28, 归芯: "文件可能已损坏" told the
-    user nothing); said as that (owner, 2026-11-06)."""
-    if exc.code == "media_audio_unreadable" and is_douyin_url(extract_first_url(input_text or "") or ""):
+    A Douyin file that opens but whose sound and picture both fail to decode
+    is a paid video's encrypted copy (2026-10-28, 归芯: "文件可能已损坏" told
+    the user nothing); said as that (owner, 2026-11-06). Sound alone failing
+    is not enough: a damaged download can do that too (Codex push review)."""
+    if (exc.code == "media_audio_unreadable" and is_douyin_url(extract_first_url(input_text or "") or "")
+            and video_undecodable(path)):
         return DOUYIN_PAID_MESSAGE, "douyin_paid"
     return exc, exc.code
 

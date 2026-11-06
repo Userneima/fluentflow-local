@@ -181,6 +181,25 @@ def _verify_first_audio_segment(path: Path) -> None:
         ) from exc
 
 
+def video_undecodable(path: str | Path) -> bool:
+    """Whether the first second of the file's video fails to decode while the
+    file itself opens: what an encrypted (paid) download looks like. False when
+    it decodes, when there is no video, or when the check could not run."""
+    try:
+        ffmpeg = _require_binary("ffmpeg")
+        completed = subprocess.run(
+            [ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-xerror", "-t", "1",
+             "-i", str(path), "-map", "0:v:0", "-f", "null", "-"],
+            capture_output=True, timeout=20,
+        )
+    except (MediaPreflightError, subprocess.SubprocessError, OSError):
+        return False
+    stderr = (completed.stderr or b"").decode("utf-8", "replace")
+    if "matches no streams" in stderr or "Stream map" in stderr:
+        return False
+    return completed.returncode != 0
+
+
 def preflight_media_file(source_path: str | Path) -> MediaPreflightResult:
     """Reject deterministic bad media before queueing or provider usage."""
     path = Path(source_path).expanduser().resolve()

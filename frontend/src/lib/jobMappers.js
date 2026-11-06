@@ -526,7 +526,10 @@ export const larkExportsFromJobs = (jobs = [], manual = []) => {
         add({
             url,
             title: result.lark_doc_title || jobDisplayTitle(job),
-            timestamp: Date.parse(job.updated_at || job.created_at || '') || 0,
+            // When the task was made: it does not move when the note is edited
+            // or synced later, as the task's last change does. Not the moment of
+            // the export, which no task records, so the list does not show it.
+            timestamp: Date.parse(job.created_at || job.updated_at || '') || 0,
             taskId: job.task_id || null,
         });
     });

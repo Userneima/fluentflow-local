@@ -56,18 +56,52 @@ def test_submitting_an_image_post_is_refused_at_once_and_makes_no_task():
     assert len(job_store.list_jobs_by_statuses(("queued", "running"))) == before
 
 
-def test_a_douyin_file_whose_sound_does_not_decode_is_called_a_paid_video():
+def test_a_douyin_file_whose_sound_and_picture_do_not_decode_is_called_a_paid_video(monkeypatch):
     unreadable = MediaPreflightError("media_audio_unreadable", "媒体中的音频无法读取，可能已损坏。")
-    error, code = link_submission.downloaded_file_refusal(unreadable, "https://www.douyin.com/video/7670928280886807834")
+    douyin = "https://www.douyin.com/video/7670928280886807834"
+    monkeypatch.setattr(link_submission, "video_undecodable", lambda path: True)
+    error, code = link_submission.downloaded_file_refusal(unreadable, douyin, "f.mp4")
     assert code == "douyin_paid" and "付费视频" in str(error)
     diagnosis = diagnose_error(str(error))
     assert diagnosis["code"] == "douyin_paid" and "损坏" not in diagnosis["detail"]
 
     # Elsewhere, or another fault, it stays what the check found.
-    error, code = link_submission.downloaded_file_refusal(unreadable, "https://www.bilibili.com/video/BV1xx411c7mD")
-    assert code == "media_audio_unreadable"
+    assert link_submission.downloaded_file_refusal(
+        unreadable, "https://www.bilibili.com/video/BV1xx411c7mD", "f.mp4")[1] == "media_audio_unreadable"
     empty = MediaPreflightError("media_file_empty", "媒体文件为空")
-    assert link_submission.downloaded_file_refusal(empty, "https://www.douyin.com/video/1")[1] == "media_file_empty"
+    assert link_submission.downloaded_file_refusal(empty, douyin, "f.mp4")[1] == "media_file_empty"
+    # Sound alone failing while the picture decodes: a damaged file, not a
+    # paid one (Codex push review, 2026-11-06).
+    monkeypatch.setattr(link_submission, "video_undecodable", lambda path: False)
+    assert link_submission.downloaded_file_refusal(unreadable, douyin, "f.mp4")[1] == "media_audio_unreadable"
+
+
+def test_the_picture_check_tells_an_encrypted_file_from_a_good_one(tmp_path):
+    """On real files: a clean one decodes, one with its frames scrambled does
+    not (the paid download's shape: the container reads, the data does not)."""
+    import shutil
+    import subprocess
+
+    from backend.core.media_preflight import video_undecodable
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("no ffmpeg")
+    good = tmp_path / "good.mp4"
+    made = subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc=d=2:s=320x240", "-pix_fmt", "yuv420p",
+                           "-c:v", "libx264", "-y", str(good)], check=False)
+    if made.returncode != 0:
+        pytest.skip("this ffmpeg cannot write H.264")
+    assert not video_undecodable(good)
+    data = bytearray(good.read_bytes())
+    # Only the media data; the index (moov) stays readable, as in the paid file.
+    mdat = data.find(b"mdat")
+    size = int.from_bytes(data[mdat - 4:mdat], "big")
+    for i in range(mdat + 8, mdat - 4 + size, 7):
+        data[i] ^= 0x5A
+    scrambled = tmp_path / "scrambled.mp4"
+    scrambled.write_bytes(bytes(data))
+    assert video_undecodable(scrambled)
 
 
 def test_a_short_link_that_cannot_be_looked_up_is_not_known(monkeypatch):
