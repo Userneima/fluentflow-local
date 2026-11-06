@@ -39,7 +39,9 @@ REFRESH_SECONDS = 24 * 3600
 FETCH_TIMEOUT = httpx.Timeout(4.0, connect=3.0)
 
 _lock = threading.Lock()
-_state: dict[str, Any] = {"table": None, "checked_at": 0.0}
+# "generation" moves on at each reset, so a background refresh started before
+# it cannot land its table afterwards (a late one failed CI, 2026-11-06).
+_state: dict[str, Any] = {"table": None, "checked_at": 0.0, "generation": 0}
 
 
 def _cache_file() -> Path:
@@ -84,9 +86,14 @@ def _fetch() -> dict[str, dict[str, str]] | None:
 
 
 def _refresh() -> None:
+    with _lock:
+        generation = _state["generation"]
     fetched = _fetch()
     if fetched is None:
         return
+    with _lock:
+        if _state["generation"] != generation:
+            return
     try:
         cache = _cache_file()
         cache.parent.mkdir(parents=True, exist_ok=True)
@@ -104,7 +111,8 @@ def _refresh() -> None:
     except OSError:
         logger.info("could not keep the model table", exc_info=True)
     with _lock:
-        _state["table"] = fetched
+        if _state["generation"] == generation:
+            _state["table"] = fetched
 
 
 def table(*, now: float | None = None) -> dict[str, dict[str, str]]:
@@ -145,7 +153,7 @@ def defaults() -> dict[str, dict[str, str]]:
 
 def _reset_for_tests() -> None:
     with _lock:
-        _state.update({"table": None, "checked_at": 0.0})
+        _state.update({"table": None, "checked_at": 0.0, "generation": _state["generation"] + 1})
 
 
 __all__ = ["BUNDLED", "DEFAULT_URL", "URL_ENV", "default_model", "defaults", "table"]

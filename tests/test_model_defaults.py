@@ -15,6 +15,7 @@ Requirements (owner, 2026-10-16):
 from __future__ import annotations
 
 import json
+import threading
 
 import httpx
 import pytest
@@ -100,3 +101,23 @@ def test_the_kept_copy_is_swapped_in_whole(monkeypatch, tmp_path):
     assert seen_before_swap == [{"providers": {"deepseek": {"text": "deepseek-old"}}}]
     assert json.loads(cache.read_text(encoding="utf-8"))["providers"]["deepseek"]["text"] == "deepseek-new"
     assert [p.name for p in tmp_path.iterdir()] == ["table.json"], "no temporary file is left behind"
+
+
+def test_a_refresh_still_running_at_a_reset_does_not_land_afterwards(monkeypatch):
+    # The fetch a test started in the background finished during the next
+    # test and its table replaced that test's (CI, 2026-11-06).
+    release = threading.Event()
+
+    def slow_get(url, **kwargs):
+        release.wait(5)
+        return httpx.Response(200, json={"providers": {"deepseek": {"text": "deepseek-late"}}})
+
+    monkeypatch.setenv(model_defaults.URL_ENV, "https://example.test/table.json")
+    monkeypatch.setattr(model_defaults.httpx, "get", slow_get)
+    worker = threading.Thread(target=model_defaults._refresh)
+    worker.start()
+    model_defaults._reset_for_tests()
+    release.set()
+    worker.join(5)
+
+    assert ai_client._provider_default_model("deepseek") == "deepseek-flash"
