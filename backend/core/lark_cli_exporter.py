@@ -286,8 +286,15 @@ def export_markdown_via_lark_cli(
     previous: Optional[dict[str, Any]] = None,
     keep_feishu: Optional[Callable[[str], None]] = None,
     runner: Runner = subprocess.run,
+    parent_token: Optional[str] = None,
+    state: str = "",
 ) -> Dict[str, Any]:
     """Put the note in Feishu as the signed-in user, with its screenshots.
+
+    ``parent_token`` creates the document under that wiki node instead of at
+    the root of ``wiki_space``. ``state`` prefixes the files this task keeps
+    about its document, so a second document of the same task (its review
+    note) keeps its own.
 
     A note with no document yet gets a new one. A note whose document an
     earlier export recorded (``previous``, the ``sync`` it returned) is updated
@@ -302,16 +309,16 @@ def export_markdown_via_lark_cli(
     if not (previous and previous.get("doc_id")):
         # A document this task created in an export cut off before it was
         # recorded is written into again, not made a second time.
-        resumed = _created_unrecorded(artifact_root, task_id)
+        resumed = _created_unrecorded(artifact_root, task_id, state)
         if resumed is not None:
             previous = resumed
     if previous and previous.get("doc_id") and sections_unread(previous):
         previous = reread_sections(previous, task_id=task_id, artifact_root=artifact_root,
-                                   bin_path=bin_path, runner=runner)
+                                   bin_path=bin_path, runner=runner, state=state)
     if previous and previous.get("doc_id") and isinstance(previous.get("sections"), list):
         updated = _update(
             markdown, previous, bin_path=bin_path, timeout=timeout, task_id=task_id,
-            artifact_root=artifact_root, keep_feishu=keep_feishu, runner=runner,
+            artifact_root=artifact_root, keep_feishu=keep_feishu, runner=runner, state=state,
         )
         if resumed is not None:
             if not updated.get("sections_rewritten"):
@@ -323,7 +330,7 @@ def export_markdown_via_lark_cli(
                 _feishu_chunk(parts, list(range(len(parts))), links)
                 _finish(runner, bin_path, str(previous["doc_id"]), str(previous.get("url") or ""), links, parts,
                         updated["sync"])
-            _forget_created(artifact_root, task_id)
+            _forget_created(artifact_root, task_id, state)
             if _local_images_in(markdown):
                 updated["image_upload_errors"] = [*updated.get("image_upload_errors", []), INTERRUPTED_IMAGES]
         return updated
@@ -349,7 +356,7 @@ def export_markdown_via_lark_cli(
             "--doc-format", "markdown",
             "--title", title,
             "--content", "-",
-            "--parent-position", space,
+            *(["--parent-token", parent_token] if parent_token else ["--parent-position", space]),
             "--as", "user",
         ],
         timeout=timeout,
@@ -367,9 +374,9 @@ def export_markdown_via_lark_cli(
     if doc_id:
         # From here the document exists: an export cut off before it is
         # recorded on the task finds it again (``_created_unrecorded``).
-        save_pushed_note(artifact_root, task_id, markdown)
+        save_pushed_note(artifact_root, task_id, markdown, state)
         _remember_created(artifact_root, task_id, {"doc_id": doc_id, "url": doc_url,
-                                                   "revision_id": document.get("revision_id")})
+                                                   "revision_id": document.get("revision_id")}, state)
     images, errors = _insert_images(runner, bin_path, doc_id, pending)
     sync = {
         "doc_id": doc_id or None,
@@ -383,8 +390,8 @@ def export_markdown_via_lark_cli(
     }
     if doc_id:
         _finish(runner, bin_path, doc_id, doc_url, links, parts, sync)
-        save_pushed_note(artifact_root, task_id, markdown)
-        _forget_created(artifact_root, task_id)
+        save_pushed_note(artifact_root, task_id, markdown, state)
+        _forget_created(artifact_root, task_id, state)
     return _response(sync, pending, missing, images, errors, wiki_space=space)
 
 
@@ -392,14 +399,16 @@ CREATED = "feishu_created.json"
 INTERRUPTED_IMAGES = "上次发到飞书时在传截图前被打断，这篇里的截图没有补上"
 
 
-def _created_path(artifact_root: Optional[Path], task_id: Optional[str]) -> Optional[Path]:
+def _created_path(artifact_root: Optional[Path], task_id: Optional[str], state: str = "") -> Optional[Path]:
     if artifact_root is None or not task_id:
         return None
-    return Path(artifact_root) / task_id / CREATED
+    return Path(artifact_root) / task_id / f"{state}{CREATED}"
 
 
-def _remember_created(artifact_root: Optional[Path], task_id: Optional[str], document: dict[str, Any]) -> None:
-    path = _created_path(artifact_root, task_id)
+def _remember_created(
+    artifact_root: Optional[Path], task_id: Optional[str], document: dict[str, Any], state: str = "",
+) -> None:
+    path = _created_path(artifact_root, task_id, state)
     if path is None:
         return
     try:
@@ -409,16 +418,18 @@ def _remember_created(artifact_root: Optional[Path], task_id: Optional[str], doc
         logger.warning("could not note the Feishu document of %s: %s", task_id, exc)
 
 
-def _forget_created(artifact_root: Optional[Path], task_id: Optional[str]) -> None:
-    path = _created_path(artifact_root, task_id)
+def _forget_created(artifact_root: Optional[Path], task_id: Optional[str], state: str = "") -> None:
+    path = _created_path(artifact_root, task_id, state)
     if path is not None:
         path.unlink(missing_ok=True)
 
 
-def _created_unrecorded(artifact_root: Optional[Path], task_id: Optional[str]) -> Optional[dict[str, Any]]:
+def _created_unrecorded(
+    artifact_root: Optional[Path], task_id: Optional[str], state: str = "",
+) -> Optional[dict[str, Any]]:
     """The document an export of this task created and never finished, as a
     ``sync`` whose chapters are read again from it, or None."""
-    path = _created_path(artifact_root, task_id)
+    path = _created_path(artifact_root, task_id, state)
     if path is None or not path.is_file():
         return None
     try:
@@ -435,13 +446,13 @@ def _created_unrecorded(artifact_root: Optional[Path], task_id: Optional[str]) -
 PUSHED_NOTE = "feishu_pushed.md"
 
 
-def pushed_note_path(artifact_root: Optional[Path], task_id: Optional[str]) -> Optional[Path]:
+def pushed_note_path(artifact_root: Optional[Path], task_id: Optional[str], state: str = "") -> Optional[Path]:
     """The note as last pushed to Feishu: what edits made in Feishu are laid
     over when they come back, so the chapters not edited there keep the note's
     own text."""
     if artifact_root is None or not task_id:
         return None
-    return Path(artifact_root) / task_id / PUSHED_NOTE
+    return Path(artifact_root) / task_id / f"{state}{PUSHED_NOTE}"
 
 
 def sections_unread(sync: Optional[dict[str, Any]]) -> bool:
@@ -461,11 +472,12 @@ def reread_sections(
     artifact_root: Optional[Path],
     bin_path: str,
     runner: Runner,
+    state: str = "",
 ) -> dict[str, Any]:
     """``sync`` with its chapters read again: the note as last pushed, matched
     to the document's headings now. Raises when either cannot be read, so the
     caller writes nothing rather than a second document."""
-    path = pushed_note_path(artifact_root, task_id)
+    path = pushed_note_path(artifact_root, task_id, state)
     if path is None or not path.is_file():
         raise LarkCliError("飞书那份的章节对不上了：找不到上次推送的笔记。")
     pushed = path.read_text(encoding="utf-8")
@@ -485,8 +497,8 @@ def reread_sections(
     }
 
 
-def save_pushed_note(artifact_root: Optional[Path], task_id: Optional[str], markdown: str) -> None:
-    path = pushed_note_path(artifact_root, task_id)
+def save_pushed_note(artifact_root: Optional[Path], task_id: Optional[str], markdown: str, state: str = "") -> None:
+    path = pushed_note_path(artifact_root, task_id, state)
     if path is None:
         return
     try:
@@ -601,6 +613,7 @@ def _update(
     artifact_root: Optional[Path],
     keep_feishu: Optional[Callable[[str], None]],
     runner: Runner,
+    state: str = "",
 ) -> Dict[str, Any]:
     """Rewrite only the chapters that changed since ``previous`` was pushed.
 
@@ -685,7 +698,7 @@ def _update(
         if (image.get("block_id") not in deleted if image.get("block_id") else image.get("line") not in rewritten_lines)
     ] + images + [{**item, "file_token": None, "block_id": None} for item in missing]
     _finish(runner, bin_path, doc_id, doc_url, links, parts, sync)
-    save_pushed_note(artifact_root, task_id, markdown)
+    save_pushed_note(artifact_root, task_id, markdown, state)
     return {**_response(sync, pending, missing, images, errors), "updated": True, "sections_rewritten": rewritten}
 
 

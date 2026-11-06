@@ -561,6 +561,12 @@ def start_watch() -> None:
                 check_feishu()
             except Exception as exc:  # noqa: BLE001 - the next look tries again
                 logger.warning("looking for Feishu edits failed: %s", exc)
+            try:
+                from backend.core import review_note_feishu
+
+                review_note_feishu.check()
+            except Exception as exc:  # noqa: BLE001 - the next look tries again
+                logger.warning("looking for review notes to send to Feishu failed: %s", exc)
             time.sleep(CHECK_SECONDS)
 
     threading.Thread(target=loop, name="feishu-edits", daemon=True).start()

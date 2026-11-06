@@ -578,6 +578,7 @@ def _finish_write(
     }
     if job:
         record["record_error"] = _record(str(job.get("task_id") or ""), record)
+        _to_feishu(job)
     return {"task_id": (job or {}).get("task_id"), **record}
 
 
@@ -690,6 +691,7 @@ def _finish_revise(
     if job:
         before = (job.get("result") or {}).get(RESULT_KEY) or {}
         record["record_error"] = _record(str(job.get("task_id") or ""), {**before, "last_revision": record})
+        _to_feishu(job)
     return {"task_id": (job or {}).get("task_id"), **record}
 
 
@@ -844,6 +846,7 @@ def replace_text(
         if job:
             before = (job.get("result") or {}).get(RESULT_KEY) or {}
             record["record_error"] = _record(str(job.get("task_id") or ""), {**before, "last_edit": record})
+            _to_feishu(job)
         return {"task_id": (job or {}).get("task_id"), "replaced": True, "chars": len(note), **record}
     finally:
         with _running_lock:
@@ -862,6 +865,14 @@ def _pdf(note: str, target: Path) -> dict[str, Any]:
     if not made.get("pdf_path"):
         return {"pdf_path": None, "error": f"{made.get('reason') or 'PDF 没生成。'}md 已写好。{stale}"}
     return {"pdf_path": made["pdf_path"], "error": None}
+
+
+def _to_feishu(job: dict[str, Any]) -> None:
+    """The review note goes to Feishu above its follow-along note
+    (``review_note_feishu``), once it stops changing."""
+    from backend.core import review_note_feishu
+
+    review_note_feishu.schedule(str(job.get("task_id") or ""))
 
 
 def _record(task_id: str, record: dict[str, Any]) -> str | None:
