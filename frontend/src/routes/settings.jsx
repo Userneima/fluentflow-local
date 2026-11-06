@@ -25,6 +25,7 @@ import {LARK_EXPORT_ROUTE_LOCAL_CLI} from '../app/shared.jsx';
 import {useSettingsPageState} from './settings-state.js';
 import {NoteKeyOnboarding} from '../components/NoteKeyOnboarding.jsx';
 import {NoteStylePanel} from '../components/NoteStylePanel.jsx';
+import {FeatureHintsLine} from '../components/FeatureHint.jsx';
 import LocalAgentAccessPanel from '../components/LocalAgentAccessPanel.jsx';
 import {OutsideTasksUsageLine} from '../components/ModelUsageCard.jsx';
 import {dismissNoteKeyOnboarding} from '../lib/noteKeyOnboarding.js';
@@ -266,6 +267,7 @@ const Settings = () => {
                     </div>
                 )}
             </section>
+            <FeatureHintsLine lang={lang}/>
         </SettingsPageShell>
     );
 };

@@ -117,4 +117,17 @@ describe('editing a transcript segment', () => {
         expect(payload.segments[1].text).toBe('second line');
         expect(payload.edit_records[0]).toMatchObject({index: 0, before: 'hello world', after: 'hello worlds'});
     });
+
+    // The first-use hint about editing (decision 6.59) sits on the transcript's
+    // title once the page has settled, and 知道了 removes it.
+    it('points out once that the transcript can be edited', async () => {
+        localStorage.clear();
+        render(<MemoryRouter initialEntries={['/editor']}><Editor/></MemoryRouter>);
+        const hint = await screen.findByTestId('feature-hint-transcript-edit', {}, {timeout: 3000});
+        expect(hint.textContent).toContain('转录稿可以直接点进去改字');
+        fireEvent.click(screen.getByRole('button', {name: '知道了'}));
+        expect(screen.queryByTestId('feature-hint-transcript-edit')).toBeNull();
+        expect(JSON.parse(localStorage.getItem('fluentflow_feature_hints_seen'))).toContain('transcript-edit');
+        localStorage.clear();
+    });
 });

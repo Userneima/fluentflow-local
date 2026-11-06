@@ -39,6 +39,7 @@ import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
 import PlaybackSpeedMenu from '../components/PlaybackSpeedMenu.jsx';
+import {FeatureHint, FeatureHintScope} from '../components/FeatureHint.jsx';
 import {probeMedia} from '../lib/probeMedia.js';
 import {createPlaybackClock, usePlaybackTime} from '../lib/playbackClock.js';
 import {useNoteFollow} from '../lib/useNoteFollow.js';
@@ -1917,9 +1918,11 @@ const Editor = () => {
                                         <div className="min-w-0 shrink-0">
                                             <div className="flex items-center gap-2">
                                                 <SvgIcon name="subject" className="text-[18px] text-[#111111] dark:text-white"/>
-                                                <h2 className="truncate font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
-                                                    {lang === 'zh' ? '转录原文' : 'Transcript'}
-                                                </h2>
+                                                <FeatureHint id="transcript-edit" when={segments.length > 0 && visibleTranscriptView !== 'bilingual'} lang={lang}>
+                                                    <h2 className="truncate font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
+                                                        {lang === 'zh' ? '转录原文' : 'Transcript'}
+                                                    </h2>
+                                                </FeatureHint>
                                                 {(transcriptDirty || transcriptSaveStatus !== 'idle') && (
                                                     <span className={`inline-flex h-5 items-center gap-1 rounded-[8px] px-1.5 text-[11px] font-bold leading-none ${
                                                         transcriptSaveStatus === 'failed'
@@ -1950,7 +1953,7 @@ const Editor = () => {
                                                 modes, beside the switch between them. */}
                                             {mediaUrl && (
                                                 <>
-                                                    {followSwitch}
+                                                    <FeatureHint id="transcript-follow" align="right" lang={lang}>{followSwitch}</FeatureHint>
                                                     <PlaybackSpeedMenu rate={playbackRate} onChange={setPlaybackRate} lang={lang} align="right"/>
                                                 </>
                                             )}
@@ -2155,7 +2158,11 @@ const Editor = () => {
                                 <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-[#e4e0e0] bg-[#fbfbfb] px-4 py-3 dark:border-white/[0.12] dark:bg-white/[0.04]">
                                     <h2 className="flex shrink-0 items-center gap-2 whitespace-nowrap font-headline text-[15px] font-extrabold text-[#111111] dark:text-white">
                                         <SvgIcon name="psychology" className="text-[#111111] dark:text-white"/>
-                                        {lang === 'zh' ? '笔记正文' : 'Note'}
+                                        <FeatureHint id="review-note" when={hasEditableSummary && noteReady} lang={lang}>
+                                            <FeatureHint id="note-versions" when={hasEditableSummary && noteReady} lang={lang}>
+                                                {lang === 'zh' ? '笔记正文' : 'Note'}
+                                            </FeatureHint>
+                                        </FeatureHint>
                                     </h2>
                                     {summarySaveLabel && (
                                         <span className={`mr-auto whitespace-nowrap rounded-full border px-2 py-1 text-[11px] font-bold ${
@@ -2168,9 +2175,11 @@ const Editor = () => {
                                     )}
                                     <div className="flex shrink-0 items-center gap-2">
                                         {noteFollow.available && (
-                                            <button type="button" data-testid="note-follow-toggle" onClick={noteFollow.toggle} aria-pressed={noteFollow.following} className={chip(noteFollow.following)}>
-                                                {lang === 'zh' ? '笔记跟随' : 'Note follows'}
-                                            </button>
+                                            <FeatureHint id="note-follow" align="right" lang={lang}>
+                                                <button type="button" data-testid="note-follow-toggle" onClick={noteFollow.toggle} aria-pressed={noteFollow.following} className={chip(noteFollow.following)}>
+                                                    {lang === 'zh' ? '笔记跟随' : 'Note follows'}
+                                                </button>
+                                            </FeatureHint>
                                         )}
                                         {noteFollow.failedReason && (
                                             <span data-testid="note-follow-failed" title={noteFollow.failedReason} className="text-[12px] font-semibold text-[#666] dark:text-white/60">
@@ -2299,4 +2308,7 @@ const Editor = () => {
         );
 };
 
-export default Editor;
+// Each visit to the editor is one round of first-use hints (FeatureHint).
+const EditorPage = () => <FeatureHintScope><Editor/></FeatureHintScope>;
+
+export default EditorPage;
