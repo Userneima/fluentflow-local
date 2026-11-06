@@ -10,6 +10,7 @@ comes after), and a task that already has a document or an export error.
 
 from __future__ import annotations
 
+import time
 import uuid
 
 import pytest
@@ -27,6 +28,7 @@ def exports(monkeypatch):
 
     monkeypatch.setattr(task_flow, "_auto_export_local_lark", fake)
     monkeypatch.setattr(task_flow.test_copy, "enabled", lambda: False)
+    monkeypatch.setattr(task_flow, "AGENT_EXPORT_QUIET_SECONDS", 0.05)
     return calls
 
 
@@ -77,6 +79,7 @@ def test_a_save_during_the_export_makes_no_second_document_and_reaches_feishu(mo
 
     monkeypatch.setattr(task_flow, "_auto_export_local_lark", slow)
     monkeypatch.setattr(task_flow.test_copy, "enabled", lambda: False)
+    monkeypatch.setattr(task_flow, "AGENT_EXPORT_QUIET_SECONDS", 0.05)
     from backend.core import feishu_sync
 
     # As in use: a note has its Feishu document once the export recorded it.
@@ -87,9 +90,25 @@ def test_a_save_during_the_export_makes_no_second_document_and_reaches_feishu(mo
     task_id = _task()
     first = task_flow.export_agent_note_if_asked(task_id, None)
     assert first is not None
+    while not calls:  # the export has begun
+        time.sleep(0.01)
     job_store.update_job_result(task_id, {**job_store.get_job(task_id)["result"], "summary_markdown": "# 周会\n\n改过的正文"})
     assert task_flow.export_agent_note_if_asked(task_id, None) is None
     release.set()
     first.join(5)
     assert len(calls) == 1
     assert pushed == [task_id], "the note saved meanwhile goes to the same document"
+
+
+def test_saves_in_a_row_are_exported_once_as_the_last_one(exports, monkeypatch):
+    """An agent writing in parts saves several times in a row; the export
+    waits until the note stays unchanged, so a one-time copy through the
+    Feishu app has the finished note (Codex review, 2026-11-06)."""
+    monkeypatch.setattr(task_flow, "AGENT_EXPORT_QUIET_SECONDS", 0.4)
+    task_id = _task()
+    thread = task_flow.export_agent_note_if_asked(task_id, None)
+    for n in range(3):
+        time.sleep(0.05)
+        job_store.update_job_result(task_id, {**job_store.get_job(task_id)["result"], "summary_markdown": f"# 周会\n\n第 {n} 版"})
+    thread.join(5)
+    assert [call["summary_markdown"] for call in exports] == ["# 周会\n\n第 2 版"]

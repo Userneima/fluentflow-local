@@ -772,8 +772,32 @@ _AGENT_EXPORTS: set[str] = set()
 _AGENT_EXPORTS_LOCK = threading.Lock()
 
 
+# How long the agent's note has to stay unchanged before it is exported: an
+# agent writing in parts saves several times in a row (each part, then the
+# read-through), and an export through the Feishu app is a one-time copy
+# that later saves do not reach.
+AGENT_EXPORT_QUIET_SECONDS = 60.0
+AGENT_EXPORT_MAX_WAIT_SECONDS = 1800.0
+
+
+def _note_now(task_id: str, client_id: str | None) -> str:
+    return str(((get_job(task_id, client_id=client_id) or {}).get("result") or {}).get("summary_markdown") or "")
+
+
+def _wait_until_quiet(task_id: str, client_id: str | None) -> None:
+    deadline = time.monotonic() + AGENT_EXPORT_MAX_WAIT_SECONDS
+    seen = _note_now(task_id, client_id)
+    while time.monotonic() < deadline:
+        time.sleep(AGENT_EXPORT_QUIET_SECONDS)
+        now = _note_now(task_id, client_id)
+        if now == seen:
+            return
+        seen = now
+
+
 def _export_agent_note(task_id: str, client_id: str | None, job: dict, options: dict,
                        source_filename: str, title: str) -> None:
+    _wait_until_quiet(task_id, client_id)
     task_steps.start(task_id, task_steps.FEISHU)
     exported = export_written_note(
         task_id, client_id,
