@@ -712,37 +712,100 @@ async def _export_note_written_after_pipeline(ctx: MediaJobContext) -> None:
     """
     if not getattr(ctx, "do_lark", False) or not getattr(ctx, "note_deferred_to_visual_note", False):
         return
-    job = get_job(ctx.task_id_value, client_id=ctx.client_id) or {}
+    await asyncio.to_thread(
+        export_written_note,
+        ctx.task_id_value,
+        ctx.client_id,
+        source_type=ctx.source_type,
+        source_filename=ctx.source_filename,
+        filename_stem=ctx.display_title_value or Path(ctx.source_filename or "media").stem,
+        form_title=ctx.title or ctx.display_title_value,
+        lark_export_route=ctx.lark_export_route,
+        lark_via_cli=ctx.lark_via_cli,
+        lark_app_id=ctx.lark_app_id,
+        lark_app_secret=ctx.lark_app_secret,
+        folder_token=ctx.folder_token,
+    )
+
+
+def export_agent_note_if_asked(task_id: str, client_id: str | None) -> threading.Thread | None:
+    """After the user's agent saved a task's first note: send it to Feishu
+    when the task was submitted with "export to Feishu automatically" on.
+
+    The flow's own export step ran before the agent wrote anything and found
+    no note, so without this the user got no document and the editor waited
+    for one (10-18 review, item 13). In a thread of its own, returned when
+    one was started."""
+    job = get_job(task_id, client_id=client_id) or {}
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    options = metadata.get("queue_options") if isinstance(metadata.get("queue_options"), dict) else {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if not truthy(options.get("export_to_lark")) or test_copy.enabled():
+        return None
+    if str(job.get("status") or "") != "completed":
+        # Still being processed: the flow's own export step comes after.
+        return None
+    if result.get("lark_response") or result.get("lark_error"):
+        return None
+    source_filename = str(job.get("source_filename") or "")
+    title = str(result.get("display_title") or metadata.get("display_title") or "")
+
+    def run() -> None:
+        task_steps.start(task_id, task_steps.FEISHU)
+        export_written_note(
+            task_id, client_id,
+            source_type=job.get("source_type"),
+            source_filename=source_filename,
+            filename_stem=title or Path(source_filename or "media").stem,
+            form_title=str(options.get("title") or title),
+            lark_export_route=options.get("lark_export_route"),
+            lark_via_cli=options.get("lark_via_cli"),
+            lark_app_id=None,
+            lark_app_secret=None,
+            folder_token=options.get("folder_token"),
+        )
+        task_steps.settle(task_id, task_steps.FEISHU, task_steps.feishu_outcome(get_job(task_id, client_id=client_id)))
+
+    thread = threading.Thread(target=run, name=f"feishu-export-{task_id[:8]}", daemon=True)
+    thread.start()
+    return thread
+
+
+def export_written_note(task_id: str, client_id: str | None, *, source_type: Any, source_filename: Any,
+                        filename_stem: str, form_title: Any, lark_export_route: Any, lark_via_cli: Any,
+                        lark_app_id: Any, lark_app_secret: Any, folder_token: Any) -> None:
+    """Export the task's note to Feishu once, recording the document or the
+    error on the task. Never raises."""
+    job = get_job(task_id, client_id=client_id) or {}
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     markdown = str(result.get("summary_markdown") or "").strip()
     if not markdown or result.get("lark_response"):
         return
     started = time.perf_counter()
     common = {
-        "task_id": ctx.task_id_value,
-        "source_type": ctx.source_type,
-        "source_filename": ctx.source_filename,
+        "task_id": task_id,
+        "source_type": source_type,
+        "source_filename": source_filename,
         "summary_length": len(markdown),
         "stage": "export",
     }
     log_event(event_name="lark_export_started", metadata=event_metadata(trigger="auto_after_note"), **common)
     try:
-        export = await asyncio.to_thread(
-            _auto_export_local_lark,
-            task_id=ctx.task_id_value,
+        export = _auto_export_local_lark(
+            task_id=task_id,
             summary_markdown=markdown,
-            filename_stem=ctx.display_title_value or Path(ctx.source_filename or "media").stem,
-            form_title=ctx.title or ctx.display_title_value,
-            lark_export_route=ctx.lark_export_route,
-            lark_via_cli=ctx.lark_via_cli,
-            lark_app_id=ctx.lark_app_id,
-            lark_app_secret=ctx.lark_app_secret,
-            folder_token=ctx.folder_token,
+            filename_stem=filename_stem,
+            form_title=form_title,
+            lark_export_route=lark_export_route,
+            lark_via_cli=lark_via_cli,
+            lark_app_id=lark_app_id,
+            lark_app_secret=lark_app_secret,
+            folder_token=folder_token,
         )
     except Exception as exc:  # noqa: BLE001 - a failed export keeps the note
         message = friendly_error(exc)
-        latest = (get_job(ctx.task_id_value, client_id=ctx.client_id) or {}).get("result") or {}
-        update_job_result(ctx.task_id_value, {**latest, "lark_error": message}, client_id=ctx.client_id)
+        latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
+        update_job_result(task_id, {**latest, "lark_error": message}, client_id=client_id)
         log_event(
             event_name="lark_export_completed",
             duration_seconds=round(time.perf_counter() - started, 3),
@@ -753,13 +816,13 @@ async def _export_note_written_after_pipeline(ctx: MediaJobContext) -> None:
         )
         return
     response = export["response"]
-    latest = (get_job(ctx.task_id_value, client_id=ctx.client_id) or {}).get("result") or {}
-    update_job_result(ctx.task_id_value, {
+    latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
+    update_job_result(task_id, {
         **latest,
         "lark_doc_title": export["doc_title"],
         "lark_response": response,
         "lark_error": None,
-    }, client_id=ctx.client_id)
+    }, client_id=client_id)
     log_event(
         event_name="lark_export_completed",
         duration_seconds=round(time.perf_counter() - started, 3),

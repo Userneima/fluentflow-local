@@ -61,13 +61,20 @@ def test_the_hardware_encoder_is_the_default_where_there_is_one(monkeypatch):
     assert not dp.hardware_encode()
 
 
-def test_speed_also_transcribes_while_the_video_renders(monkeypatch):
-    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "speed")
-    monkeypatch.setattr(dp, "current", lambda: _machine(16, 8, hardware=True))
-    assert dp.hardware_encode() and dp.audio_first()
+def test_the_retired_speed_choice_reads_as_quality(monkeypatch):
+    """10-18 review, item 9: "speed first" did nothing in the default flow and
+    was taken off the settings page; a machine that had it chosen gets
+    "quality", and nothing transcribes while the video renders."""
+    from backend.core import local_config
 
-    monkeypatch.setattr(dp, "current", lambda: _machine(16, 8, hardware=False))
-    assert not dp.hardware_encode() and not dp.audio_first()
+    monkeypatch.setattr(dp, "current", lambda: _machine(16, 8, hardware=True))
+    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "speed")
+    assert dp.preset() == dp.PRESET_QUALITY
+    assert dp.hardware_encode() and not dp.audio_first()
+    monkeypatch.delenv("FLUENTFLOW_PROCESSING_PRESET")
+    local_config.save_preferences({"processing_preset": "speed"})
+    assert local_config.get_preference("processing_preset") == "quality"
+    assert dp.preset() == dp.PRESET_QUALITY
 
 
 def test_save_space_keeps_the_software_encoder_to_cap_the_bitrate(monkeypatch):
@@ -82,7 +89,7 @@ def test_size_caps_the_video_at_the_source_bitrate(monkeypatch):
 
 
 def test_an_explicit_switch_wins_over_the_preset(monkeypatch):
-    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "speed")
+    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "quality")
     monkeypatch.setattr(dp, "current", lambda: _machine(16, 8))
     monkeypatch.setenv("FLUENTFLOW_DEBREATH_HARDWARE_ENCODE", "0")
     assert not dp.hardware_encode()
@@ -274,7 +281,7 @@ def test_the_preset_saved_in_settings_is_used_and_env_wins(monkeypatch, no_saved
     assert dp.preset() == "quality"
     local_config.save_preferences({"processing_preset": "size"})
     assert dp.preset() == "size"
-    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "speed")
-    assert dp.preset() == "speed"
+    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "quality")
+    assert dp.preset() == "quality"
     with pytest.raises(ValueError):
         local_config.save_preferences({"processing_preset": "fastest"})

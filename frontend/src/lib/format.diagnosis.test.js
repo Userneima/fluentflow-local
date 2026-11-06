@@ -202,3 +202,22 @@ describe('Douyin video file out of reach', () => {
         expect(d.detail).not.toContain('VPN');
     });
 });
+
+describe('a permission error', () => {
+    it('names the macOS setting on a Mac and not on Windows (10-19 review, item 2)', () => {
+        const original = Object.getOwnPropertyDescriptor(globalThis.navigator, 'userAgent');
+        const setAgent = (value) => Object.defineProperty(globalThis.navigator, 'userAgent', {value, configurable: true});
+        try {
+            setAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)');
+            expect(diagnoseTaskError('Operation not permitted', 'zh').nextAction).toContain('完全磁盘访问权限');
+            setAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+            const windows = diagnoseTaskError('Permission denied', 'zh');
+            expect(windows.code).toBe('file_permission');
+            expect(windows.nextAction).not.toContain('系统设置');
+            expect(windows.detail).toContain('Windows');
+        } finally {
+            if (original) Object.defineProperty(globalThis.navigator, 'userAgent', original);
+            else delete globalThis.navigator.userAgent;
+        }
+    });
+});

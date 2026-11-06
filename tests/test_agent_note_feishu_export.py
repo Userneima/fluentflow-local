@@ -1,0 +1,61 @@
+"""An agent's note goes to Feishu when the task asked for it.
+
+Requirement (10-18 review, item 13): a task submitted with "export to Feishu
+automatically" on, whose note the user's agent writes, gets its Feishu
+document once the note is saved, the same as a note FluentFlow writes. The
+flow's own export step ran before the agent wrote anything. Not exported:
+a task that did not ask, a task still being processed (its own export step
+comes after), and a task that already has a document or an export error.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+
+from backend.core import job_store, task_flow
+
+
+@pytest.fixture
+def exports(monkeypatch):
+    calls: list[dict] = []
+
+    def fake(**values):
+        calls.append(values)
+        return {"doc_title": "标题", "export_target": "lark_cli", "response": {"url": "https://x.feishu.cn/docx/abc"}}
+
+    monkeypatch.setattr(task_flow, "_auto_export_local_lark", fake)
+    monkeypatch.setattr(task_flow.test_copy, "enabled", lambda: False)
+    return calls
+
+
+def _task(*, status="completed", export=True, **result) -> str:
+    task_id = f"fx-{uuid.uuid4().hex[:8]}"
+    job_store.upsert_job(task_id=task_id, status=status, source_filename="周会.mp4",
+                         metadata={"queue_options": {"export_to_lark": "true" if export else "false"}})
+    job_store.update_job_result(task_id, {"summary_markdown": "# 周会\n\n正文", **result})
+    return task_id
+
+
+def test_a_saved_agent_note_is_exported_once(exports):
+    task_id = _task()
+    thread = task_flow.export_agent_note_if_asked(task_id, None)
+    assert thread is not None
+    thread.join(5)
+    assert len(exports) == 1 and exports[0]["summary_markdown"].startswith("# 周会")
+    assert job_store.get_job(task_id)["result"]["lark_response"]["url"].endswith("abc")
+    # Saved again: the document is there, Feishu sync carries later edits.
+    assert task_flow.export_agent_note_if_asked(task_id, None) is None
+    assert len(exports) == 1
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"export": False},
+    {"status": "processing"},
+    {"lark_response": {"url": "u"}},
+    {"lark_error": "没有权限"},
+])
+def test_not_exported(exports, kwargs):
+    assert task_flow.export_agent_note_if_asked(_task(**kwargs), None) is None
+    assert exports == []

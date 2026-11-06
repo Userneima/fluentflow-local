@@ -3,6 +3,9 @@
 // extension cut such titles down to "5". Keep in step with KNOWN_SUFFIXES in
 // backend/core/title_display.py.
 const KNOWN_SUFFIX_RE = /\.(?:mp4|mov|m4v|mkv|webm|avi|flv|wmv|mpg|mpeg|ts|mp3|wav|flac|aac|ogg|m4a|wma|opus|aiff|aif|srt|vtt|ass|txt|md|docx|pdf)$/i;
+// The page runs on the machine FluentFlow runs on, so its browser says which
+// system a hint is for.
+const onWindows = () => typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent || '');
 export const fileNameStem = (name) => String(name || "").replace(KNOWN_SUFFIX_RE, "") || "";
 export const stripGeneratedFilenamePrefix = (name) => String(name || '').replace(/^(?:[0-9]{10,24}|BV[a-zA-Z0-9]{8,})[-_]+/, '');
 export const displayTitleForUser = (value, fallback='') => {
@@ -493,7 +496,13 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
         ],
         [
             lower.includes('operation not permitted') || lower.includes('permission denied'),
-            taskErrorDiagnosis({
+            onWindows() ? taskErrorDiagnosis({
+                code: 'file_permission', titleZh: '没有权限读写这个文件', titleEn: 'No permission to read or write this file',
+                detailZh: 'Windows 不让 FluentFlow 读写这个位置：文件可能正被别的程序打开，或者放在受保护的文件夹里（Windows 安全中心的「受控文件夹访问」）。',
+                detailEn: 'Windows kept FluentFlow from this location: the file may be open in another program, or sit in a protected folder (Controlled folder access in Windows Security).',
+                nextZh: '关掉正在用这个文件的程序再重试，或把文件挪到「视频」「文档」里再提交。',
+                nextEn: 'Close the program using the file and try again, or move the file to Videos or Documents.',
+            }) : taskErrorDiagnosis({
                 code: 'file_permission', titleZh: '没有权限读写这个文件', titleEn: 'No permission to read or write this file',
                 detailZh: 'macOS 的隐私设置挡住了 FluentFlow 读写这个位置，常见于「下载」「桌面」、外接硬盘和别的 App 的文件夹。',
                 detailEn: "macOS privacy settings kept FluentFlow from this location (often Downloads, Desktop, external drives or another app's folder).",

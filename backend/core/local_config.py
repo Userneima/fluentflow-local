@@ -131,7 +131,7 @@ def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = Non
 # live here, not only in the web page, so tasks driven by an AI tool (MCP) use
 # the same choices as the page. ``cpu_usage`` ("light" | "balanced" |
 # "full") is how much of the processor a cut may take, and
-# ``processing_preset`` ("quality" | "speed" | "size") what a cut favours; see
+# ``processing_preset`` ("quality" | "size"; a retired "speed" is saved as "quality") what a cut favours; see
 # ``device_profile``.
 #
 # ``ai_provider`` and ``ai_model`` (the text model that writes notes; empty
@@ -150,7 +150,7 @@ _BOOLEAN_PREFERENCES = ("speaker_diarization", "export_to_lark")
 _RETIRED_PREFERENCES = ("allow_miuistore",)
 LARK_EXPORT_ROUTES = ("auto", "local_cli", "openapi")
 CPU_USAGE_CHOICES = ("light", "balanced", "full")
-PROCESSING_PRESET_CHOICES = ("quality", "speed", "size")
+PROCESSING_PRESET_CHOICES = ("quality", "size")
 ALLOWED_COOKIE_BROWSERS = frozenset({
     "chrome", "edge", "firefox", "safari", "brave", "chromium", "opera", "vivaldi",
 })
@@ -193,6 +193,8 @@ def save_preferences(patch: dict[str, Any], path: Path | str | None = None) -> d
                 next_preferences.pop(key, None)
         elif key in ("cpu_usage", "processing_preset"):
             choice = str(value).strip().lower()
+            if key == "processing_preset" and choice == "speed":
+                choice = "quality"
             allowed = CPU_USAGE_CHOICES if key == "cpu_usage" else PROCESSING_PRESET_CHOICES
             if choice and choice not in allowed:
                 raise ValueError(f"不支持的选项：{value}")

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -700,6 +701,12 @@ def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, m
         expect_versions=expect_versions,
     )
     task_steps.agent_finished(task_id, task_steps.NOTE)
+    from backend.core import task_flow
+
+    try:
+        task_flow.export_agent_note_if_asked(task_id, client_id)
+    except Exception as exc:  # noqa: BLE001 - the note is saved; the export is extra
+        logging.getLogger(__name__).warning("Feishu export of %s not started: %s", task_id, exc)
     return stored
 
 

@@ -65,3 +65,27 @@ def test_the_hub_holds_it_while_a_task_waits_or_runs_and_lets_go_after():
     assert seen == [True]
     assert not guard.holding
     assert guard.active == 0
+
+
+def test_on_windows_a_holder_asks_the_system_to_stay_awake(monkeypatch):
+    """10-18 review, item 8: Windows used to get nothing."""
+    from backend.core import local_keep_awake as lka
+
+    monkeypatch.setattr(lka.sys, "platform", "win32")
+    command = KeepAwake()._resolved_command()
+    assert command[-1] == lka.WINDOWS_HOLDER
+    assert "SetThreadExecutionState(0x80000001)" in command[-1]
+
+
+def test_the_windows_holder_ends_when_the_server_lets_go_of_its_pipe():
+    """Its stdin is the server's: closed by a release, or by the server dying."""
+    from backend.core import local_keep_awake as lka
+
+    stand_in = lka.WINDOWS_HOLDER.replace(
+        "ctypes.windll.kernel32.SetThreadExecutionState(0x80000001); ", "")
+    guard = KeepAwake(command=[sys.executable, "-c", stand_in])
+    guard.acquire()
+    process = guard._process
+    assert process.stdin is not None and guard.holding
+    process.stdin.close()
+    assert process.wait(timeout=5) == 0

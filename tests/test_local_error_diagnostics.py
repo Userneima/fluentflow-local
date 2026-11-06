@@ -42,3 +42,19 @@ def test_a_backend_that_lost_its_own_folder_is_not_told_to_retry():
 def test_a_permission_error_on_a_named_file_is_not_mistaken_for_the_folder():
     diagnosis = diagnose_error("[Errno 1] Operation not permitted: '/Volumes/USB/a.mov'")
     assert diagnosis["code"] != "backend_folder_access_lost"
+
+
+def test_a_permission_error_points_at_what_exists_on_this_system(monkeypatch):
+    """10-19 review, item 2: the macOS privacy settings were named on Windows too."""
+    import backend.core.local_error_diagnostics as led
+
+    raw = "[Errno 13] Permission denied: 'C:\\Users\\a\\Videos\\会.mp4'"
+    monkeypatch.setattr(led.sys, "platform", "win32")
+    windows = diagnose_error(raw)
+    assert windows["code"] == "file_permission"
+    assert "完全磁盘访问" not in windows["next_action"] and "系统设置" not in windows["next_action"]
+    assert "C:\\Users\\a\\Videos\\会.mp4" in windows["detail"]
+
+    monkeypatch.setattr(led.sys, "platform", "darwin")
+    mac = diagnose_error("[Errno 1] Operation not permitted: '/Users/a/Downloads/会.mp4'")
+    assert "完全磁盘访问权限" in mac["next_action"]

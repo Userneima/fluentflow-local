@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from typing import Any
 
 
@@ -557,8 +558,16 @@ def diagnose_error(error: Any) -> dict[str, Any]:
             "稍后重试、配置浏览器 cookies，或改用本机上的视频文件。",
         )
     if "operation not permitted" in lowered or "permission denied" in lowered:
-        where = re.search(r"['\"](/[^'\"]+)['\"]", raw)
+        where = re.search(r"['\"](/[^'\"]+|[A-Za-z]:\\[^'\"]+)['\"]", raw)
         place = f"（{where.group(1)}）" if where else ""
+        if sys.platform == "win32":
+            # The macOS settings do not exist there (10-19 review, item 2).
+            return _diag(
+                "file_permission", "没有权限读写这个文件",
+                f"Windows 不让 FluentFlow 读写这个位置{place}：文件可能正被别的程序打开，"
+                "或者放在受保护的文件夹里（Windows 安全中心的「受控文件夹访问」）。",
+                "关掉正在用这个文件的程序再重试，或把文件挪到「视频」「文档」里再提交。",
+            )
         return _diag(
             "file_permission", "没有权限读写这个文件",
             f"macOS 的隐私设置挡住了 FluentFlow 读写这个位置{place}，常见于「下载」「桌面」、外接硬盘和别的 App 的文件夹。",

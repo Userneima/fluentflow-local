@@ -240,8 +240,6 @@ def cut_media(task_id: str, result: dict[str, Any]) -> CutMedia | None:
     point of the flow is which file the note read.
     """
     state = debreath_job.debreath_state(result)
-    if state.get("status") != debreath_job.STATUS_COMPLETED:
-        return None
     plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
 
     def recording() -> CutMedia | None:
@@ -256,6 +254,16 @@ def cut_media(task_id: str, result: dict[str, Any]) -> CutMedia | None:
             has_video=source.suffix.lower() in VIDEO_SUFFIXES,
             unchanged=True,
         )
+
+    if state.get("status") == debreath_job.STATUS_FAILED and not _transcript_is_native_to_cut_media(result):
+        # The cut did not come out, and the transcript is the recording's
+        # (transcribed before the cut, or the cut never used): the note reads
+        # the recording, pictures included. Without this an agent writing the
+        # note of a task whose cut failed got the transcript alone, while the
+        # recording sat there (10-18 review, item 7).
+        return recording()
+    if state.get("status") != debreath_job.STATUS_COMPLETED:
+        return None
 
     # The note reads whatever the transcript describes. That is the whole rule, and
     # it is why a declined cut no longer costs the user their note: when the spot
@@ -333,6 +341,8 @@ def _cut_media_reason(task_id: str, result: dict[str, Any]) -> str:
         return "这条录像还没有去气口（剪掉空白）后的版本。让你的 agent 用 debreath_task 剪一次，或在编辑器里点「重新转录」从原片再走一遍（会另起一条记录），笔记会根据剪好的文件来写。"
     if status == debreath_job.STATUS_RUNNING:
         return "去气口还在进行，等剪后的文件出来再写笔记。"
+    if status == debreath_job.STATUS_FAILED and not _transcript_is_native_to_cut_media(result):
+        return _missing_recording_reason(task_id, "剪后视频没有导出成功，笔记要读原片")
     if status == debreath_job.STATUS_FAILED:
         reason = str(state.get("error") or "").strip()
         return f"上一次去气口没成功{('：' + reason) if reason else ''}。让你的 agent 用 debreath_task 再剪一次，或在编辑器里点「重新转录」从原片再走一遍（会另起一条记录），剪成了再写笔记。"
@@ -513,6 +523,9 @@ def describe(
     if media.unchanged:
         state = debreath_job.debreath_state(result)
         reason = str(state.get("not_used_reason") or "").strip()
+        if not reason and state.get("status") == debreath_job.STATUS_FAILED:
+            error = str(state.get("error") or "").strip()
+            reason = f"剪后视频没有导出成功{('（' + error + '）') if error else ''}，笔记读原片。"
         payload["media_warnings"].append(
             # Two different reasons land on the same file, and the difference matters
             # to the user: nothing worth cutting is a clean recording, while a

@@ -38,7 +38,7 @@ _BROWSERS = {
     "chrome": "Chrome", "edge": "Edge", "firefox": "Firefox", "safari": "Safari", "brave": "Brave",
     "chromium": "Chromium", "opera": "Opera", "vivaldi": "Vivaldi",
 }
-_PRESETS = {"quality": ("画质优先", "picture first"), "speed": ("速度优先", "speed first"), "size": ("省空间", "save space")}
+_PRESETS = {"quality": ("画质优先", "picture first"), "size": ("省空间", "save space")}
 _CPU = {
     "light": ("省着用电脑", "light on the computer"),
     "balanced": ("给电脑留出余量", "leaves the computer room"),

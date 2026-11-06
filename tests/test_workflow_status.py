@@ -66,8 +66,8 @@ def test_without_a_model_the_page_says_loudness_and_an_agent_hears_it_decides(no
 
 
 def test_reports_the_preset_an_environment_override_sets(no_models, monkeypatch):
-    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "speed")
-    assert "速度优先" in _step(ws.workflow_status(), "cutting")["summary"]["zh"]
+    monkeypatch.setenv("FLUENTFLOW_PROCESSING_PRESET", "size")
+    assert "省空间" in _step(ws.workflow_status(), "cutting")["summary"]["zh"]
 
 
 def test_claude_writes_the_note_when_its_channel_works(no_models, monkeypatch):

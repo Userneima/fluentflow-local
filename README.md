@@ -35,7 +35,7 @@ agent 会先确认适用范围，再修改你的个人写法；只影响之后�
 ## 能在什么机器上跑
 
 - **macOS**：Apple 芯片（M 系列）转录走 GPU 加速。Intel Mac 也能装，转录走 CPU，会慢不少。
-  需要先装好 [Homebrew](https://brew.sh)，其余依赖安装脚本会自己补。
+  不需要先装别的东西，FFmpeg、Node.js 和 Python 由安装脚本装进 FluentFlow 自己的数据文件夹。
 - **Windows 10 / 11**：有 NVIDIA 显卡时走 GPU，没有就走 CPU。系统自带的 winget 会被用来补
   Python、Node.js 和 FFmpeg。
 
@@ -72,8 +72,8 @@ bash launchers/macos/setup-local.sh
 它会建虚拟环境、装 Python 和前端依赖、构建前端、下载转录模型，最后在桌面生成
 「FluentFlow Local.app」。装完双击桌面图标即可使用，不需要再开终端。
 
-整个过程不需要你回答任何问题。FFmpeg 和 Node.js 缺失时会用 Homebrew 直接装上；
-Homebrew 本身需要你自己先装（https://brew.sh），那一步要输密码。`--skip-desktop`
+整个过程不需要你回答任何问题，也不要密码。缺的 FFmpeg、Node.js 和 Python 装进 FluentFlow 自己的
+数据文件夹，不经过 Homebrew。`--skip-desktop`
 不生成桌面图标，`--skip-model` 不下转录模型（留到第一次转录时再下）。
 
 Apple 芯片的 Mac 上，Python 依赖按 `requirements-local.lock.macos-arm64.txt` 安装，那是一份
@@ -131,7 +131,9 @@ npm run build:frontend
    在放录像的文件夹里建一个「FluentFlow 产出位置.md」，写一行「产出位置：../2.剪后视频」这样的位置（相对这份文件所在的
    文件夹），里面子文件夹里的录像，产出就建在那个位置下同名的子文件夹里。原片和产出文件夹挪了位置，FluentFlow 会按
    文件名找回原片（核对是同一个文件），再照这条规则或在附近找到产出文件夹，接着同步。码率高的录像
-   另有一份不剪的压缩版；转录稿、字幕和截图在「过程文件」里。md 版用 Obsidian 打开最好；在 Obsidian 里改它，
+   另有一份不剪的压缩版（要有硬件 HEVC 编码器，目前只认 Mac 的；Windows 上不出这一份）；转录稿、字幕和截图在「过程文件」里。
+   文件夹里的字幕和转录稿只是副本，在那里改不会收回 FluentFlow，要改在编辑器里改；FluentFlow 更新它时，你改过的那份
+   改名成「原名_我的修改-时间」留在旁边。md 版用 Obsidian 打开最好；在 Obsidian 里改它，
    停下一分钟后会同步回 FluentFlow，PDF 跟着更新。每次被覆盖的整篇旧版都按时间存在「过程文件/历史版本」里，
    文件名末尾写着是谁把它换掉的（网页编辑、Obsidian、agent、重写、飞书、恢复）；每次改了什么记在
    「过程文件/修改记录.md」，新的在最上面：时间、谁改的、改在哪一章、原文和改成，整篇换掉的只写字数变化。
@@ -213,9 +215,8 @@ Anthropic API Key）；导出飞书发笔记内容和截图到你的飞书，默
 - **在 FluentFlow 里填一个模型 Key**：笔记在每个任务处理完时自动写好，费用由你的模型账号直接
   付，不经过我们。Key 都填在「设置 → 账号和 Key」：
 
-- **文本模型**：默认 DeepSeek，Key 在
-  [DeepSeek 开放平台](https://platform.deepseek.com/api_keys) 创建；也可以换成 OpenAI 或
-  通义千问。填好后每个任务处理完都会根据转录稿写一份笔记。
+- **文本模型**：推荐通义千问，也可以选 DeepSeek、Kimi、MiMo 或 OpenAI；在设置里选服务商，
+  页面上有各家创建 Key 的地址。填好后每个任务处理完都会根据转录稿写一份笔记。
 - **Anthropic API Key（可选）**：另外填上它，笔记改由 Claude 结合视频画面来写，能引用幻灯片和
   白板上的内容。Key 在 [Anthropic 控制台](https://console.anthropic.com/settings/keys) 创建。
 - 一个 Key 都没有，处理完会得到转录稿、字幕和剪好的音视频，笔记交给你的 agent 来写。
@@ -232,7 +233,7 @@ agent 为某一条单独指定的除外。
 钱数按服务商官网公布的单价、用服务商收钱的币种算（DeepSeek 按人民币，分高峰、非高峰两档，按调用时间算；Anthropic 按美元），是估算，以服务商后台的账单为准；
 价格表里没有的模型只显示 token。走 Claude 订阅的写「订阅，不按次计费」。不属于哪条录像的调用（检查 Key、整理笔记风格）在「设置 → 账号和 Key」最下面一行。问你的 agent 也能拿到同样的数。
 
-转录常把同一类录像里的人名、模型名、英文术语听错时，在录像所在的文件夹（或它上面一层）放一份
+转录常把同一类录像里的人名、模型名、英文术语听错时，在录像所在的文件夹（或它上面任意一层，几层都放了就一起读）放一份
 `FluentFlow 校正文档.md`，写上正确写法和常被听成什么，转录完就会照它改正转录稿，写笔记时也照它写对。怎么做、什么词该放进去、
 怎么分享给别人，见 [词表制作规则](docs/07-词表制作规则.md)。
 
@@ -288,7 +289,7 @@ FluentFlow Local 自带一个 MCP 服务（让 AI 工具直接调用本应用的
 
 1. 打开应用左下角「菜单 → Agent 接入」，复制 Claude Code 或 Codex 的命令到终端运行一次。在这台电脑上
    不用填令牌，MCP 服务自己从 `.env` 读；面板顶部写着有没有 agent 连上。也可以直接照
-   [AGENT_INSTALL.md](AGENT_INSTALL.md) 第 4 步注册。
+   [AGENT_INSTALL.md](AGENT_INSTALL.md)「Run one command」一节最后那段的命令注册。
 2. 想确认接通了，在仓库目录运行
    `.venv/bin/python scripts/check_mcp_server.py --backend-e2e`（Windows 为
    `.venv\Scripts\python.exe scripts\check_mcp_server.py --backend-e2e`）：它启动 MCP 服务、核对工具清单，

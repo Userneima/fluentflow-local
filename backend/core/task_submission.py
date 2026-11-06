@@ -635,7 +635,7 @@ async def retry_task(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.get("status") in {"queued", "running"}:
-        raise HTTPException(status_code=409, detail="Cancel the active job before retrying it")
+        raise HTTPException(status_code=409, detail="这个任务还在排队或处理中，先取消（agent 用 cancel_task）再重新提交。")
     in_place = _in_place_origin(job)
     if in_place is not None:
         return await _retry_in_place(

@@ -70,8 +70,9 @@ script), and each call holds up to four minutes. On Codex spawn subagents with
 Configured keys do not change these defaults. Only delegate with `intelligence="fluentflow"`
 when you cannot do it, failed, or the user asks; explain which configured model pays.
 `save_agent_note` never calls a checker unless you explicitly set `model_check=true`.
-A long recording comes in several
-parts; fetch and write each, then save them together. When a note lost content or the
+A recording is fetched and written in one go by
+default; when it is too long for one go, fetch it with `small_parts=true` and save each
+part as you write it. When a note lost content or the
 user wants an earlier version, `过程文件/修改记录.md` beside the note says what each change
 changed, `list_note_versions` shows every kept version with what
 replaced it, `read_note_version` reads one, and `restore_note_version` (after the user

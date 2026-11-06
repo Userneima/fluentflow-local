@@ -158,6 +158,9 @@ def test_a_note_drafted_on_the_cut_clock_is_refused_once_the_cut_failed(renderin
     # Material fetched again is on the original, and a note from it is taken.
     again = an.material(TASK, client_id="anonymous", keyframe_extractor=_fake_extractor(tmp_path))
     assert "[01:05] 看这张幻灯片上的公式" in again["transcript"]
+    # With pictures: the recording is still there, so a failed cut does not
+    # leave the agent writing from the transcript alone (10-18 review, item 7).
+    assert again["frames"], "a task whose cut failed still gets frames from the original"
     an.save(TASK, note_markdown="# 笔记\n\n[01:05] 公式。", client_id="anonymous")
     assert state["result"]["summary_markdown"].startswith("# 笔记")
 

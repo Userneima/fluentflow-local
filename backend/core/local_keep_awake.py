@@ -11,6 +11,12 @@ this server's pid as well: a server that dies without its ``finally`` does not
 leave the Mac unable to sleep. Idle sleep only — a closed lid, the user's own
 sleep command, or a low battery still win.
 
+On Windows a small Python process holds the same request through
+``SetThreadExecutionState`` (system required, display free to turn off) and
+reads its stdin, which this server holds open: it exits when released, and
+also when this server dies, because the pipe then closes (10-18 review,
+item 8: a long CPU transcription on Windows could stop when the PC slept).
+
 Elsewhere, or where ``caffeinate`` is missing, this does nothing.
 """
 
@@ -26,6 +32,14 @@ import threading
 logger = logging.getLogger(__name__)
 
 
+# ES_CONTINUOUS | ES_SYSTEM_REQUIRED, held until stdin closes.
+WINDOWS_HOLDER = (
+    "import ctypes, sys; "
+    "ctypes.windll.kernel32.SetThreadExecutionState(0x80000001); "
+    "sys.stdin.read()"
+)
+
+
 class KeepAwake:
     def __init__(self, command: list[str] | None = None) -> None:
         self._command = command
@@ -36,6 +50,8 @@ class KeepAwake:
     def _resolved_command(self) -> list[str] | None:
         if self._command is not None:
             return self._command
+        if sys.platform == "win32":
+            return [sys.executable, "-c", WINDOWS_HOLDER]
         if sys.platform != "darwin":
             return None
         binary = shutil.which("caffeinate")
@@ -62,9 +78,13 @@ class KeepAwake:
             try:
                 self._process = subprocess.Popen(
                     command,
-                    stdin=subprocess.DEVNULL,
+                    # The Windows holder lives while this pipe is open;
+                    # caffeinate ignores it.
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    # No console window flashing up on Windows.
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             except OSError as exc:
                 self._process = None
@@ -76,6 +96,11 @@ class KeepAwake:
             if self._active or self._process is None:
                 return
             process, self._process = self._process, None
+            if process.stdin is not None:
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
             process.terminate()
             try:
                 process.wait(timeout=5)

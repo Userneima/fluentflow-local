@@ -35,9 +35,13 @@ from pathlib import PureWindowsPath
 from typing import Any, Iterator, Sequence
 
 PRESET_QUALITY = "quality"
-PRESET_SPEED = "speed"
 PRESET_SIZE = "size"
-PRESETS = (PRESET_QUALITY, PRESET_SPEED, PRESET_SIZE)
+PRESETS = (PRESET_QUALITY, PRESET_SIZE)
+# "Speed first" was a third choice until 2026-11-06. All it did was start
+# transcribing while the cut rendered, which the default flow (transcribe
+# first, then cut) never does, so it chose the same as "quality" (10-18
+# review, item 9). A saved or set "speed" reads as "quality".
+RETIRED_PRESETS = {"speed": PRESET_QUALITY}
 
 # One cut encoder per this much memory: the render is a job's memory peak, and
 # three was what kept a 16GB machine clear of memory pressure.
@@ -113,8 +117,10 @@ def preset() -> str:
     """``FLUENTFLOW_PROCESSING_PRESET`` if set, else the choice saved on the
     settings page, else ``quality``."""
     chosen = (os.environ.get("FLUENTFLOW_PROCESSING_PRESET") or "").strip().lower()
+    chosen = RETIRED_PRESETS.get(chosen, chosen)
     if chosen not in PRESETS:
         chosen = _saved_choice("processing_preset")
+        chosen = RETIRED_PRESETS.get(chosen, chosen)
     return chosen if chosen in PRESETS else PRESET_QUALITY
 
 
@@ -325,10 +331,10 @@ def cap_video_bitrate() -> bool:
 
 
 def audio_first() -> bool:
-    explicit = _env_flag("FLUENTFLOW_DEBREATH_AUDIO_FIRST")
-    if explicit is not None:
-        return explicit
-    return preset() == PRESET_SPEED and current().hardware_video_encoder
+    """Transcribe the cut audio while the cut video renders. Only the old
+    order (cut, then transcribe) can, and only when switched on by
+    ``FLUENTFLOW_DEBREATH_AUDIO_FIRST``; no setting chooses it any more."""
+    return bool(_env_flag("FLUENTFLOW_DEBREATH_AUDIO_FIRST"))
 
 
 def summary() -> dict[str, Any]:

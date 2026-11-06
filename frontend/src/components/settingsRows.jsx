@@ -236,11 +236,6 @@ export const ProcessingPresetRow = ({state}) => {
             description: zh ? '剪后画面和原片一样清楚，共享文档里的小字也能读。' : 'The cut looks like the recording, small shared-document text included.',
         },
         {
-            value: 'speed',
-            label: zh ? '速度优先' : 'Speed first',
-            description: zh ? '剪视频的同时就开始转录，整体更快，处理时电脑更忙。' : 'Starts transcribing while the video is still being cut; faster overall, and the computer is busier while it runs.',
-        },
-        {
             value: 'size',
             label: zh ? '省空间' : 'Save space',
             description: zh ? '剪后文件不超过原片的码率，更小；码率低的录屏里小字会糊。' : 'The cut stays within the recording\'s bitrate, so it is smaller; small text in low-bitrate recordings blurs.',
@@ -249,7 +244,7 @@ export const ProcessingPresetRow = ({state}) => {
     return (
         <div className="p-5">
             <label className={`${fieldLabelClass} mb-2.5 block`}>{zh ? '处理偏好' : 'Processing preference'}</label>
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-2">
                 {options.map((option) => (
                     <RouteCard
                         key={option.value}

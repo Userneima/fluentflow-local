@@ -103,7 +103,7 @@ export const useSettingsPageState = () => {
             getPreferences().then((prefs) => {
                 if (!active || touchedPresetRef.current) return;
                 const stored = String(prefs?.processing_preset || '');
-                if (['quality', 'speed', 'size'].includes(stored)) setProcessingPreset(stored);
+                if (['quality', 'size'].includes(stored)) setProcessingPreset(stored);
             }).catch(() => {});
             const sync = {
                 getPreferences,
