@@ -747,40 +747,68 @@ def export_agent_note_if_asked(task_id: str, client_id: str | None) -> threading
         return None
     if result.get("lark_response") or result.get("lark_error"):
         return None
+    with _AGENT_EXPORTS_LOCK:
+        # One export per task: a part saved again while the first export
+        # runs must not make a second document.
+        if task_id in _AGENT_EXPORTS:
+            return None
+        _AGENT_EXPORTS.add(task_id)
     source_filename = str(job.get("source_filename") or "")
     title = str(result.get("display_title") or metadata.get("display_title") or "")
 
     def run() -> None:
-        task_steps.start(task_id, task_steps.FEISHU)
-        export_written_note(
-            task_id, client_id,
-            source_type=job.get("source_type"),
-            source_filename=source_filename,
-            filename_stem=title or Path(source_filename or "media").stem,
-            form_title=str(options.get("title") or title),
-            lark_export_route=options.get("lark_export_route"),
-            lark_via_cli=options.get("lark_via_cli"),
-            lark_app_id=None,
-            lark_app_secret=None,
-            folder_token=options.get("folder_token"),
-        )
-        task_steps.settle(task_id, task_steps.FEISHU, task_steps.feishu_outcome(get_job(task_id, client_id=client_id)))
+        try:
+            _export_agent_note(task_id, client_id, job, options, source_filename, title)
+        finally:
+            with _AGENT_EXPORTS_LOCK:
+                _AGENT_EXPORTS.discard(task_id)
 
     thread = threading.Thread(target=run, name=f"feishu-export-{task_id[:8]}", daemon=True)
     thread.start()
     return thread
 
 
+_AGENT_EXPORTS: set[str] = set()
+_AGENT_EXPORTS_LOCK = threading.Lock()
+
+
+def _export_agent_note(task_id: str, client_id: str | None, job: dict, options: dict,
+                       source_filename: str, title: str) -> None:
+    task_steps.start(task_id, task_steps.FEISHU)
+    exported = export_written_note(
+        task_id, client_id,
+        source_type=job.get("source_type"),
+        source_filename=source_filename,
+        filename_stem=title or Path(source_filename or "media").stem,
+        form_title=str(options.get("title") or title),
+        lark_export_route=options.get("lark_export_route"),
+        lark_via_cli=options.get("lark_via_cli"),
+        lark_app_id=None,
+        lark_app_secret=None,
+        folder_token=options.get("folder_token"),
+    )
+    latest = get_job(task_id, client_id=client_id)
+    task_steps.settle(task_id, task_steps.FEISHU, task_steps.feishu_outcome(latest))
+    # Saved again while it was exported: the document gets the latest note
+    # the way any later edit reaches it.
+    result = (latest or {}).get("result") or {}
+    if exported is not None and str(result.get("summary_markdown") or "").strip() != exported:
+        from backend.core import feishu_sync
+
+        if feishu_sync.recorded_sync(result) is not None:
+            feishu_sync.schedule_push_when_quiet(task_id)
+
+
 def export_written_note(task_id: str, client_id: str | None, *, source_type: Any, source_filename: Any,
                         filename_stem: str, form_title: Any, lark_export_route: Any, lark_via_cli: Any,
-                        lark_app_id: Any, lark_app_secret: Any, folder_token: Any) -> None:
+                        lark_app_id: Any, lark_app_secret: Any, folder_token: Any) -> str | None:
     """Export the task's note to Feishu once, recording the document or the
-    error on the task. Never raises."""
+    error on the task; the note sent when it went, else None. Never raises."""
     job = get_job(task_id, client_id=client_id) or {}
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     markdown = str(result.get("summary_markdown") or "").strip()
     if not markdown or result.get("lark_response"):
-        return
+        return None
     started = time.perf_counter()
     common = {
         "task_id": task_id,
@@ -814,7 +842,7 @@ def export_written_note(task_id: str, client_id: str | None, *, source_type: Any
             metadata=event_metadata(trigger="auto_after_note", raw_error=str(exc)),
             **common,
         )
-        return
+        return None
     response = export["response"]
     latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
     update_job_result(task_id, {
@@ -832,3 +860,4 @@ def export_written_note(task_id: str, client_id: str | None, *, source_type: Any
         metadata=event_metadata(trigger="auto_after_note", doc_title=export["doc_title"]),
         **common,
     )
+    return markdown

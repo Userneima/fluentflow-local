@@ -59,3 +59,37 @@ def test_a_saved_agent_note_is_exported_once(exports):
 def test_not_exported(exports, kwargs):
     assert task_flow.export_agent_note_if_asked(_task(**kwargs), None) is None
     assert exports == []
+
+
+def test_a_save_during_the_export_makes_no_second_document_and_reaches_feishu(monkeypatch):
+    """Codex review, 2026-11-06: a part saved again while the first export
+    ran started a second export, and a second document."""
+    import threading
+
+    release = threading.Event()
+    calls: list[str] = []
+    pushed: list[str] = []
+
+    def slow(**values):
+        calls.append(values["summary_markdown"])
+        release.wait(5)
+        return {"doc_title": "标题", "export_target": "lark_cli", "response": {"url": "u"}}
+
+    monkeypatch.setattr(task_flow, "_auto_export_local_lark", slow)
+    monkeypatch.setattr(task_flow.test_copy, "enabled", lambda: False)
+    from backend.core import feishu_sync
+
+    # As in use: a note has its Feishu document once the export recorded it.
+    monkeypatch.setattr(feishu_sync, "recorded_sync",
+                        lambda result: {"doc": "x"} if (result or {}).get("lark_response") else None)
+    monkeypatch.setattr(feishu_sync, "schedule_push_when_quiet", lambda task_id, delay=None: pushed.append(task_id))
+
+    task_id = _task()
+    first = task_flow.export_agent_note_if_asked(task_id, None)
+    assert first is not None
+    job_store.update_job_result(task_id, {**job_store.get_job(task_id)["result"], "summary_markdown": "# 周会\n\n改过的正文"})
+    assert task_flow.export_agent_note_if_asked(task_id, None) is None
+    release.set()
+    first.join(5)
+    assert len(calls) == 1
+    assert pushed == [task_id], "the note saved meanwhile goes to the same document"
