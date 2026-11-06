@@ -78,7 +78,8 @@ changed, `list_note_versions` shows every kept version with what
 replaced it, `read_note_version` reads one, and `restore_note_version` (after the user
 agrees) puts it back everywhere the note is kept. To fix a word or a sentence of a saved
 note, `replace_note_text` changes that passage alone (named by its exact text, which must
-occur once); `save_agent_note` is for handing back a note rewritten as a whole. In the delegated background flow FluentFlow corrects
+occur once; several passages go in one call as `replacements`, and one that does not fit
+changes none); `save_agent_note` is for handing back a note rewritten as a whole. In the delegated background flow FluentFlow corrects
 misheard names and terms in the transcript from the subtitles in the picture and from the
 series' word list (`FluentFlow 校正文档.md`); `list_transcript_corrections` (source
 `subtitles` or `glossary`) shows each change, `revert_transcript_corrections` undoes it after the
@@ -91,6 +92,8 @@ When the user wants a review note (复习笔记, a second note reorganised by to
 it again), `write_review_note` hands the agent the material to write it from the md the user
 corrected and saves it beside the follow-along note, and `revise_review_note` changes it at their
 word without starting over; with `writer="fluentflow"` FluentFlow's own model writes instead.
+To fix or delete passages of a review note without handing it back whole, `replace_note_text`
+with `note="review"` changes them in the md, leaving the user's own edits there alone.
 `get_cut_report` shows what the cut removed and kept; `flip_cut_decision` (after the user
 agrees) turns one decision around and renders the cut again. `stop_task_step` stops the
 step a task is on, `cancel_task` cancels one still transcribing, and `resume_task` carries

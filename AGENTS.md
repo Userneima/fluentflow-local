@@ -43,6 +43,7 @@ exists and that no other file judges whether a task is still busy.
 - Whether Claude writes the note, through the subscription or a key: `backend/core/visual_note_channel.py`
 - How a note is written: `backend/note_skills/fluentflow-note-default/SKILL.md` (a user's own skill replaces it, `FLUENTFLOW_NOTE_SKILL_DIR`)
 - How a review note is written: `backend/note_skills/fluentflow-review-note/SKILL.md`; writing and revising it beside the follow-along note, by the agent or FluentFlow's model: `backend/core/review_note.py`
+- Changing passages of a note by their exact text (each found exactly once, all pairs or none), for the follow-along and the review note alike: `backend/core/note_replace.py`
 - The text-model note and the calls to text models: `backend/core/ai_summarizer.py`, `backend/core/ai_client.py`
 - Recording each model call (which task, step, model, tokens) and what a task's calls cost: `backend/core/model_usage.py`; the prices: `backend/core/model_prices.json`. Every exit that calls a model wraps its request in `model_usage.call`, and work handed to another thread goes through `model_usage.carry` or `CarryingExecutor`
 - Whether this service runs on a test copy of the task database, and what it may then write (only tasks made in the copy; no carrying on at startup, no Feishu): `backend/core/test_copy.py`

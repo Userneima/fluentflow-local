@@ -637,3 +637,26 @@ def test_a_refused_write_leaves_the_note_file_as_the_saved_note(tmp_path, monkey
     artifact = _result(task)["artifacts"]["summary_md"]
     text = (_artifact_storage_dir() / task / artifact["filename"]).read_text(encoding="utf-8")
     assert "agent 改的框架" not in text and "框架的话。" in text
+
+
+def test_several_passages_change_in_one_call_and_one_bad_pair_changes_none(tmp_path):
+    task, md = _task(tmp_path)
+    before, count = _result(task)["summary_markdown"], len(note_versions.kept(md))
+
+    bad = _agent().post(f"/agent/v1/tasks/{task}/note/replace", headers=AGENT, json={
+        "base_version": _result(task)["note_version"],
+        "replacements": [{"old_text": "开场的话。", "new_text": "开场。"},
+                         {"old_text": "笔记里没有这句。", "new_text": "x"}],
+    })
+    assert bad.status_code == 409 and bad.json()["detail"]["code"] == "not_found_in_note"
+    assert "第 2 组" in bad.json()["detail"]["message"]
+    assert _result(task)["summary_markdown"] == before and len(note_versions.kept(md)) == count
+
+    good = _agent().post(f"/agent/v1/tasks/{task}/note/replace", headers=AGENT, json={
+        "base_version": _result(task)["note_version"],
+        "replacements": [{"old_text": "开场的话。", "new_text": "开场。"},
+                         {"old_text": "框架的话。", "new_text": ""}],
+    })
+    assert good.status_code == 200, good.text
+    assert good.json()["replacements"] == 2
+    assert _result(task)["summary_markdown"] == before.replace("开场的话。", "开场。").replace("框架的话。", "")

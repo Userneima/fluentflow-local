@@ -442,26 +442,32 @@ def _with_base_line(text: str, version: dict[str, Any]) -> str:
     return text.rstrip() + "\n" + line + "\n"
 
 
-def _keep_previous(target: Path) -> None:
+def _keep_previous(target: Path, label: str = "重新生成前") -> None:
     """Copy the review note about to be replaced into 「过程文件/历史版本」,
-    made when the folder has none: an earlier version is never just lost."""
+    made when the folder has none: an earlier version is never just lost.
+    ``label`` ends the copy's name: what was about to replace it."""
     if not target.is_file():
         return
     history = target.parent / "过程文件" / "历史版本"
     history.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    shutil.copy2(target, history / f"{target.stem}_{stamp}_重新生成前.md")
+    shutil.copy2(target, history / f"{target.stem}_{stamp}_{label}.md")
 
 
-def _write_in_place(target: Path, text: str) -> None:
+def _write_in_place(target: Path, text: str, *, label: str = "重新生成前", unchanged_from: str | None = None) -> None:
     """Keep the old one, then the whole new text in a file beside it, then
-    swapped in: a failure partway leaves the old note as it was."""
+    swapped in: a failure partway leaves the old note as it was. With
+    ``unchanged_from``, the note on disk is read once more just before the
+    swap and nothing is swapped in when it no longer says that (an Obsidian
+    save landed meanwhile): refused as ``stale``."""
     try:
-        _keep_previous(target)
+        _keep_previous(target, label)
         handle, temporary = tempfile.mkstemp(prefix=f".{target.stem}.", suffix=".md", dir=target.parent)
         try:
             with os.fdopen(handle, "w", encoding="utf-8") as stream:
                 stream.write(text)
+            if unchanged_from is not None and target.read_text(encoding="utf-8") != unchanged_from:
+                raise ReviewNoteError(REPLACE_STALE, code="stale")
             os.replace(temporary, target)
         except BaseException:
             Path(temporary).unlink(missing_ok=True)
@@ -557,6 +563,7 @@ def _finish_write(
     pdf = _pdf(note, target)
     record = {
         "path": str(target),
+        "review_version": review_version(note),
         "pdf_path": pdf.get("pdf_path"),
         "pdf_error": pdf.get("error"),
         "base": version,
@@ -610,6 +617,12 @@ def _locate_revision(
     ``note_path`` is the review note or the follow-along note beside it."""
     if not instruction.strip():
         raise ReviewNoteError("要说明这次按什么意见改。")
+    return _locate_review(note_path, task_id)
+
+
+def _locate_review(note_path: str | None, task_id: str | None) -> tuple[Path, Path, dict[str, Any] | None]:
+    """The follow-along note, the existing review note beside it, and their
+    task. ``note_path`` is the review note or the follow-along note."""
     if note_path and _REVIEW_NAME.match(Path(note_path).stem):
         review = _real_md(note_path)
         bases = [candidate for candidate in base_paths_for(review) if candidate.is_file()]
@@ -661,6 +674,7 @@ def _finish_revise(
     pdf = _pdf(note, review)
     record = {
         "path": str(review),
+        "review_version": review_version(note),
         "pdf_path": pdf.get("pdf_path"),
         "pdf_error": pdf.get("error"),
         "revised_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -754,6 +768,83 @@ def save_from_agent(
             _running.discard(key)
 
 
+def review_version(text: str) -> str:
+    """The review note's version: the fingerprint of the md as it is on disk.
+    The md is the review note (there is no copy in the task), so an edit made
+    in Obsidian is a new version the moment it is saved."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+REPLACE_STALE = ("复习笔记在你读到之后又被改过（Obsidian 或别的 agent），这次替换没有执行，复习笔记没有改动。"
+                 "重新读一遍复习笔记 md，确认原文还在，再替换（base_version 用这次回答里的 review_version，或不传）。")
+
+
+def replace_text(
+    old_text: Any = None, new_text: Any = None, *, task_id: str | None = None, note_path: str | None = None,
+    replacements: Any = None, base_version: Any = None, reason: Any = None,
+) -> dict[str, Any]:
+    """Change passages of the review note by their exact text, with no model
+    and no rewrite: each ``old_text`` must occur in the md exactly once, and
+    when any pair does not fit nothing changes (``note_replace``).
+
+    Requirement (owner, 2026-11-06): deleting one kind of content from a
+    14,000-character review note meant handing the whole note back through
+    ``revise_review_note``, and an agent went round the tools instead.
+
+    What the user changed is never written over: the md is read under the
+    note's lock and only the named passages change in it, so an edit made
+    elsewhere stays; an edit of a named passage leaves its old text missing,
+    which refuses the call; ``base_version`` (a ``review_version`` an answer
+    gave) refuses it when the md changed at all since; and the md is read
+    once more just before the new one is swapped in. The previous md goes to
+    「过程文件/历史版本」 and the PDF is printed again, as a revision does."""
+    from backend.core import note_replace
+
+    try:
+        wanted = note_replace.pairs(old_text, new_text, replacements)
+    except note_replace.ReplaceError as exc:
+        raise ReviewNoteError(str(exc), code=exc.code) from exc
+    base, review, job = _locate_review(note_path, task_id)
+    key = _running_key(base)
+    with _running_lock:
+        if key in _running:
+            raise ReviewNoteError("这份笔记的复习笔记正在生成或修改，等它写完再替换。", code="already_running")
+        _running.add(key)
+    try:
+        current = review.read_text(encoding="utf-8")
+        if isinstance(base_version, str) and base_version.strip() and base_version.strip() != review_version(current):
+            raise ReviewNoteError(REPLACE_STALE, code="stale")
+        try:
+            note = note_replace.apply(current, wanted)
+        except note_replace.ReplaceError as exc:
+            raise ReviewNoteError(str(exc), code=exc.code) from exc
+        if note == current:
+            return {"task_id": (job or {}).get("task_id"), "path": str(review), "replaced": False,
+                    "message": "new_text 和 old_text 相同，复习笔记没有改动。", "review_version": review_version(current)}
+        if not note.strip():
+            raise ReviewNoteError("替换后复习笔记成了空的，没有执行。", code="empty")
+        _write_in_place(review, note, label="agent改字前", unchanged_from=current)
+        pdf = _pdf(note, review)
+        why = str(reason).strip() if isinstance(reason, str) and reason.strip() else None
+        record = {
+            "path": str(review),
+            "review_version": review_version(note),
+            "pdf_path": pdf.get("pdf_path"),
+            "pdf_error": pdf.get("error"),
+            "edited_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "edited_by": "agent_edit",
+            "replacements": len(wanted),
+            **({"reason": why} if why else {}),
+        }
+        if job:
+            before = (job.get("result") or {}).get(RESULT_KEY) or {}
+            record["record_error"] = _record(str(job.get("task_id") or ""), {**before, "last_edit": record})
+        return {"task_id": (job or {}).get("task_id"), "replaced": True, "chars": len(note), **record}
+    finally:
+        with _running_lock:
+            _running.discard(key)
+
+
 def _pdf(note: str, target: Path) -> dict[str, Any]:
     from backend.core import note_pdf
 
@@ -796,6 +887,8 @@ __all__ = [
     "generate",
     "locate",
     "revise",
+    "replace_text",
+    "review_version",
     "collapse_sources",
     "REVIEW_SUFFIX",
     "SKILL_PATH",

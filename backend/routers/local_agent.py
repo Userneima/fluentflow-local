@@ -1145,12 +1145,14 @@ def restore_note_version(
 
 @router.post("/tasks/{task_id}/note/replace")
 def replace_note_text(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
-    """Change one passage of the note: ``old_text``, found exactly once, becomes
-    ``new_text``, through the same write a restore uses."""
+    """Change passages of the note: each ``old_text``, found exactly once,
+    becomes its ``new_text`` (or several pairs in ``replacements``), through
+    the same write a restore uses."""
     body = payload or {}
     return _history_call(
         note_history.replace_text, task_id, body.get("old_text"), body.get("new_text"),
-        base_version=body.get("base_version"), reason=body.get("reason"), client_id=_local_client_scope(request),
+        base_version=body.get("base_version"), replacements=body.get("replacements"), reason=body.get("reason"),
+        client_id=_local_client_scope(request),
     )
 
 
@@ -1796,7 +1798,8 @@ def _review_note_call(request: Request, payload: dict[str, Any], run: Any) -> di
     try:
         return {"ok": True, **run(review_note, task_id, note_path)}
     except review_note.ReviewNoteError as exc:
-        raise HTTPException(status_code=409 if exc.code in ("already_running", "stale") else 422,
+        conflict = ("already_running", "stale", "not_found_in_note", "ambiguous", "overlapping")
+        raise HTTPException(status_code=409 if exc.code in conflict else 422,
                             detail={"code": exc.code, "message": str(exc)}) from exc
 
 
@@ -1839,3 +1842,13 @@ def revise_review_note(request: Request, payload: dict[str, Any] = Body(default_
         request, payload,
         lambda core, task_id, note_path: core.revise(note_path, instruction, task_id=task_id),
     )
+
+
+@router.post("/review-notes/replace")
+def replace_review_note_text(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Change passages of the review note by their exact text, the way
+    ``/tasks/{id}/note/replace`` does for the follow-along note."""
+    return _review_note_call(request, payload, lambda core, task_id, note_path: core.replace_text(
+        payload.get("old_text"), payload.get("new_text"), task_id=task_id, note_path=note_path,
+        replacements=payload.get("replacements"), base_version=payload.get("base_version"),
+        reason=payload.get("reason")))

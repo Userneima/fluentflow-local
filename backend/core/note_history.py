@@ -254,36 +254,29 @@ REPLACE_STALE = ("笔记在你读到之后又被改过（网页、Obsidian、飞
                  "用 get_task 重新读 note_version 和笔记，确认原文还在，再带新的 base_version 替换。")
 
 
-def _occurrences(text: str, part: str) -> int:
-    """How many places ``part`` starts at in ``text``, overlapping ones too
-    ("哈哈" occurs twice in "哈哈哈")."""
-    count, start = 0, text.find(part)
-    while start >= 0:
-        count += 1
-        start = text.find(part, start + 1)
-    return count
-
-
 def replace_text(
-    task_id: str, old_text: Any, new_text: Any, *, base_version: Any,
-    reason: Any = None, client_id: str | None = None,
+    task_id: str, old_text: Any = None, new_text: Any = None, *, base_version: Any,
+    replacements: Any = None, reason: Any = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    """Change one passage of the task's note: ``old_text``, which must occur in
-    the note exactly once, becomes ``new_text``.
+    """Change passages of the task's note: each ``old_text``, which must occur
+    in the note exactly once, becomes its ``new_text`` (one pair, or several in
+    ``replacements``; ``note_replace``). Any pair that does not fit changes
+    nothing at all.
 
     Requirement (owner, 2026-11-06): an agent fixing a sentence handed back
     the whole 50,000-character note, or went round the tools to the page's
     save and was recorded as an edit on the page. This is the agent's own
     small edit: named version, kept history, recorded as ``agent_edit``, and
     the same follow-through as a restore (folder, Feishu)."""
+    from backend.core import note_replace
+
     if not isinstance(base_version, str) or not base_version.strip():
         raise NoteHistoryError("替换要带上 base_version：get_task 的 note_version。",
                                status=422, code="base_version_required")
-    if not isinstance(old_text, str) or not old_text:
-        raise NoteHistoryError("old_text 不能为空：写要改掉的那段原文，照笔记里的字一字不差。",
-                               status=422, code="old_text_required")
-    if not isinstance(new_text, str):
-        raise NoteHistoryError("new_text 要是字符串；删掉那段就传空字符串。", status=422, code="new_text_required")
+    try:
+        wanted = note_replace.pairs(old_text, new_text, replacements)
+    except note_replace.ReplaceError as exc:
+        raise NoteHistoryError(str(exc), status=exc.status, code=exc.code) from exc
     job = _job(task_id, client_id)
     before = _result(job)
     if base_version.strip() != content_versions(before).get("note_version"):
@@ -298,19 +291,13 @@ def replace_text(
         output_folder.sync(task_id)
         raise NoteHistoryError(REPLACE_STALE, code="stale")
     current = str(before.get("summary_markdown") or "")
-    count = _occurrences(current, old_text)
-    if count == 0:
-        raise NoteHistoryError(
-            "old_text 在笔记里一次也没出现，笔记没有改动。照 get_task_package 读到的笔记原样复制那段字"
-            "（包括标点、空格和换行），再替换。", code="not_found_in_note")
-    if count > 1:
-        raise NoteHistoryError(
-            f"old_text 在笔记里出现了 {count} 次，不知道改哪一处，笔记没有改动。把前后的字多带一些，"
-            "让它在笔记里只出现一次再替换。", code="ambiguous")
-    if old_text == new_text:
+    try:
+        note = note_replace.apply(current, wanted)
+    except note_replace.ReplaceError as exc:
+        raise NoteHistoryError(str(exc), status=exc.status, code=exc.code) from exc
+    if note == current:
         return {"ok": True, "task_id": task_id, "replaced": False, "message": "new_text 和 old_text 相同，笔记没有改动。",
                 "note_version": content_versions(before).get("note_version")}
-    note = current.replace(old_text, new_text, 1)
     if not note.strip():
         raise NoteHistoryError("替换后笔记成了空的，没有执行。要重写整篇用 save_agent_note。", code="empty")
     md = note_versions.md_for(task_id, before)
@@ -322,6 +309,7 @@ def replace_text(
         "ok": True,
         "task_id": task_id,
         "replaced": True,
+        "replacements": len(wanted),
         "chars": note_versions.chars(note),
         "note_version": content_versions(after).get("note_version"),
         "follows": _follows(after),

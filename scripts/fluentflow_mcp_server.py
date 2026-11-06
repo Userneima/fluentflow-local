@@ -1868,37 +1868,57 @@ def restore_note_version(
     )
 
 
+_REPLACEMENT = {
+    "type": "object",
+    "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}},
+    "required": ["old_text", "new_text"],
+}
+
+
 @tool(
-    description=("Change one or two passages of a task's note in place: old_text, copied exactly from the "
-        "note (get_task_package has it), becomes new_text (empty deletes it). Use this to fix a word, a "
-        "sentence or a paragraph; use save_agent_note only to hand back a note you rewrote as a whole. "
-        "old_text must occur exactly once: otherwise nothing changes and the answer has code "
-        "not_found_in_note or ambiguous (with how many times it occurs; include more of the "
-        "surrounding text). base_version is get_task's note_version; when the note changed since, "
-        "code stale and nothing changes: read it again. One call per passage, each with the "
-        "note_version the last answer gave. The replaced note is kept as a version (replaced_by "
-        "agent_edit), reason goes into 过程文件/修改记录.md, and the md, PDF and Feishu copy follow "
-        "(the answer's follows)."),
+    description=("Change passages of a note by their exact text: the follow-along note (note=follow, default) "
+        "or the review note (note=review). For fixing words, or deleting one kind of content in many places "
+        "(pass replacements, one call); revise_review_note / save_agent_note only for a rewrite or a change "
+        "needing judgement. old_text, copied exactly (get_task_package has the follow-along note; read the "
+        "review md), becomes new_text (empty deletes). Every old_text must occur exactly once, none "
+        "overlapping, else nothing changes: code not_found_in_note, ambiguous (add surrounding text) or "
+        "overlapping. base_version: follow, get_task's note_version (required); review, optional "
+        "review_version from an earlier answer. stale: the user changed the note, read it again. The old "
+        "note is kept as a version; md, PDF and Feishu follow. note_path: review in a moved folder."),
     input_schema={
         "type": "object",
         "properties": {
             "task_id": {"type": "string"},
-            "old_text": {"type": "string", "description": "The passage as it is in the note, character for character."},
-            "new_text": {"type": "string", "description": "What it becomes; empty string deletes it."},
-            "base_version": {"type": "string", "description": "get_task's note_version, or the last answer's."},
-            "reason": {"type": "string", "description": "Optional: one line on why, written into the change log."},
-            "api_base": {"type": "string"},
+            "note": {"type": "string", "enum": ["follow", "review"], "default": "follow"},
+            "old_text": {"type": "string"},
+            "new_text": {"type": "string"},
+            "replacements": {"type": "array", "items": _REPLACEMENT},
+            "base_version": {"type": "string"},
+            "note_path": {"type": "string"},
+            "reason": {"type": "string", "description": "Optional: one line on why, kept in the change log."},
         },
-        "required": ["task_id", "old_text", "new_text", "base_version"],
     },
 )
 def replace_note_text(
-    task_id: str, old_text: str, new_text: str, base_version: str, reason: str | None = None,
+    task_id: str | None = None, old_text: str | None = None, new_text: str | None = None,
+    base_version: str | None = None, reason: str | None = None, note: str = "follow",
+    replacements: list[dict[str, Any]] | None = None, note_path: str | None = None,
     api_base: str | None = None, client_id: str | None = None,
 ) -> dict[str, Any]:
-    payload = {"old_text": old_text, "new_text": new_text, "base_version": base_version}
+    payload: dict[str, Any] = {"base_version": base_version}
+    if replacements is not None:
+        payload["replacements"] = replacements
+    else:
+        payload.update({"old_text": old_text, "new_text": new_text})
     if reason:
         payload["reason"] = reason
+    if note == "review":
+        return _agent_request("POST", "/agent/v1/review-notes/replace", api_base=api_base, client_id=client_id,
+                              payload={**payload, "task_id": task_id, "note_path": note_path})
+    if note != "follow":
+        return {"ok": False, "code": "bad_note", "message": "note is follow (the default) or review."}
+    if not task_id:
+        return {"ok": False, "code": "task_id_required", "message": "Give task_id: the follow-along note is the task's."}
     return _agent_request(
         "POST", f"/agent/v1/tasks/{task_id}/note/replace", api_base=api_base, client_id=client_id, payload=payload,
     )
