@@ -157,3 +157,20 @@ def test_the_tool_reaches_the_review_route_with_note_review(monkeypatch):
         "base_version": None, "replacements": [{"old_text": "a", "new_text": ""}],
         "task_id": "t1", "note_path": None,
     })]
+
+
+def test_two_replaces_in_one_second_keep_both_earlier_versions(review, monkeypatch):
+    from datetime import datetime as real
+
+    class Frozen(real):
+        @classmethod
+        def now(cls, tz=None):
+            return real(2026, 11, 6, 18, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr(review_note, "datetime", Frozen)
+    assert _replace(old_text="先拆读，再拆写。", new_text="第一次").status_code == 200
+    assert _replace(old_text="第一次", new_text="第二次").status_code == 200
+
+    kept = [path.read_text(encoding="utf-8") for path in _history(review)]
+    assert len(kept) == 2 and ANSWER in kept
+    assert any("第一次" in text for text in kept)

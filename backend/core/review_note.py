@@ -451,7 +451,12 @@ def _keep_previous(target: Path, label: str = "重新生成前") -> None:
     history = target.parent / "过程文件" / "历史版本"
     history.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    shutil.copy2(target, history / f"{target.stem}_{stamp}_{label}.md")
+    copy = history / f"{target.stem}_{stamp}_{label}.md"
+    count = 2
+    while copy.exists():  # two changes in one second: the first copy stays
+        copy = history / f"{target.stem}_{stamp}_{label} ({count}).md"
+        count += 1
+    shutil.copy2(target, copy)
 
 
 def _write_in_place(target: Path, text: str, *, label: str = "重新生成前", unchanged_from: str | None = None) -> None:
