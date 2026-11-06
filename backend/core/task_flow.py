@@ -32,7 +32,7 @@ from backend.core import (
 )
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
-from backend.core.job_store import get_job, list_jobs_by_statuses, update_job_result
+from backend.core.job_store import get_job, list_jobs_by_statuses, save_result_changes
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli, lark_cli_ready
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_config import resolve_secret
@@ -756,7 +756,7 @@ def export_agent_note_if_asked(task_id: str, client_id: str | None) -> threading
     if not result.get(AGENT_EXPORT_PENDING):
         # Kept on the task, so a restart during the wait still exports it
         # (``resume_agent_exports``).
-        update_job_result(task_id, {**result, AGENT_EXPORT_PENDING: time.time()}, client_id=client_id)
+        save_result_changes(task_id, result, {**result, AGENT_EXPORT_PENDING: time.time()}, client_id=client_id)
     source_filename = str(job.get("source_filename") or "")
     title = str(result.get("display_title") or metadata.get("display_title") or "")
 
@@ -764,11 +764,7 @@ def export_agent_note_if_asked(task_id: str, client_id: str | None) -> threading
         try:
             _export_agent_note(task_id, client_id, job, options, source_filename, title)
         finally:
-            latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
-            if latest.get(AGENT_EXPORT_PENDING):
-                latest = dict(latest)
-                latest.pop(AGENT_EXPORT_PENDING, None)
-                update_job_result(task_id, latest, client_id=client_id)
+            _clear_pending(task_id, client_id)
             with _AGENT_EXPORTS_LOCK:
                 _AGENT_EXPORTS.discard(task_id)
 
@@ -797,10 +793,16 @@ def resume_agent_exports() -> int:
             started += 1
         elif task_id:
             # Nothing to do any more (exported, or no longer asked for).
-            cleared = dict(result)
-            cleared.pop(AGENT_EXPORT_PENDING, None)
-            update_job_result(task_id, cleared, client_id=job.get("client_id"))
+            _clear_pending(task_id, job.get("client_id"))
     return started
+
+
+def _clear_pending(task_id: str, client_id: str | None) -> None:
+    """Take the mark off, touching no other field of the result."""
+    result = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
+    if result.get(AGENT_EXPORT_PENDING):
+        cleared = {key: value for key, value in result.items() if key != AGENT_EXPORT_PENDING}
+        save_result_changes(task_id, result, cleared, client_id=client_id)
 
 
 # How long the agent's note has to stay unchanged before it is exported: an
@@ -887,8 +889,7 @@ def export_written_note(task_id: str, client_id: str | None, *, source_type: Any
         )
     except Exception as exc:  # noqa: BLE001 - a failed export keeps the note
         message = friendly_error(exc)
-        latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
-        update_job_result(task_id, {**latest, "lark_error": message}, client_id=client_id)
+        save_result_changes(task_id, result, {**result, "lark_error": message}, client_id=client_id)
         log_event(
             event_name="lark_export_completed",
             duration_seconds=round(time.perf_counter() - started, 3),
@@ -899,9 +900,8 @@ def export_written_note(task_id: str, client_id: str | None, *, source_type: Any
         )
         return None
     response = export["response"]
-    latest = (get_job(task_id, client_id=client_id) or {}).get("result") or {}
-    update_job_result(task_id, {
-        **latest,
+    save_result_changes(task_id, result, {
+        **result,
         "lark_doc_title": export["doc_title"],
         "lark_response": response,
         "lark_error": None,
