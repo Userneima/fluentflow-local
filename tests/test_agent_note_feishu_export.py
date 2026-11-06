@@ -28,7 +28,6 @@ def exports(monkeypatch):
 
     monkeypatch.setattr(task_flow, "_auto_export_local_lark", fake)
     monkeypatch.setattr(task_flow.test_copy, "enabled", lambda: False)
-    monkeypatch.setattr(task_flow, "AGENT_EXPORT_QUIET_SECONDS", 0.05)
     return calls
 
 
@@ -79,7 +78,6 @@ def test_a_save_during_the_export_makes_no_second_document_and_reaches_feishu(mo
 
     monkeypatch.setattr(task_flow, "_auto_export_local_lark", slow)
     monkeypatch.setattr(task_flow.test_copy, "enabled", lambda: False)
-    monkeypatch.setattr(task_flow, "AGENT_EXPORT_QUIET_SECONDS", 0.05)
     from backend.core import feishu_sync
 
     # As in use: a note has its Feishu document once the export recorded it.
@@ -100,23 +98,32 @@ def test_a_save_during_the_export_makes_no_second_document_and_reaches_feishu(mo
     assert pushed == [task_id], "the note saved meanwhile goes to the same document"
 
 
-def test_saves_in_a_row_are_exported_once_as_the_last_one(exports, monkeypatch):
-    """An agent writing in parts saves several times in a row; the export
-    waits until the note stays unchanged, so a one-time copy through the
-    Feishu app has the finished note (Codex review, 2026-11-06)."""
-    monkeypatch.setattr(task_flow, "AGENT_EXPORT_QUIET_SECONDS", 0.4)
+def test_the_task_reads_as_working_until_the_document_is_there(monkeypatch):
+    """Codex push review, 2026-11-06: a wait must not answer "done" while the
+    export is still to come."""
+    import threading
+
+    from backend.core import task_activity
+
+    release = threading.Event()
+    monkeypatch.setattr(task_flow, "_auto_export_local_lark", lambda **values: (
+        release.wait(5), {"doc_title": "t", "export_target": "lark_cli", "response": {"url": "u"}})[1])
+    monkeypatch.setattr(task_flow.test_copy, "enabled", lambda: False)
     task_id = _task()
     thread = task_flow.export_agent_note_if_asked(task_id, None)
-    for n in range(3):
-        time.sleep(0.05)
-        job_store.update_job_result(task_id, {**job_store.get_job(task_id)["result"], "summary_markdown": f"# 周会\n\n第 {n} 版"})
+    from backend.core import task_steps
+
+    assert task_steps.status_of(task_id, task_steps.FEISHU) == task_steps.RUNNING
+    assert task_activity.activity(job_store.get_job(task_id)).busy
+    release.set()
     thread.join(5)
-    assert [call["summary_markdown"] for call in exports] == ["# 周会\n\n第 2 版"]
+    assert task_steps.status_of(task_id, task_steps.FEISHU) == task_steps.DONE
+    assert not task_activity.activity(job_store.get_job(task_id)).busy
 
 
-def test_a_restart_during_the_wait_still_exports_the_note(exports, monkeypatch):
-    """Codex push review, 2026-11-06: the wait before the export is a thread;
-    a restart then lost the export for good."""
+def test_a_restart_during_the_export_still_exports_the_note(exports, monkeypatch):
+    """Codex push review, 2026-11-06: the export is a thread; a restart then
+    lost it for good."""
     task_id = _task()
     # What a restart leaves: the mark on the task, no thread.
     job_store.update_job_result(task_id, {**job_store.get_job(task_id)["result"],

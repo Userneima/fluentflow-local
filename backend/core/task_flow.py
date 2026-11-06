@@ -759,6 +759,9 @@ def export_agent_note_if_asked(task_id: str, client_id: str | None) -> threading
         save_result_changes(task_id, result, {**result, AGENT_EXPORT_PENDING: time.time()}, client_id=client_id)
     source_filename = str(job.get("source_filename") or "")
     title = str(result.get("display_title") or metadata.get("display_title") or "")
+    # Before the thread: from the save on, the task reads as working on its
+    # Feishu step, so a wait does not answer "done" before the document.
+    task_steps.start(task_id, task_steps.FEISHU)
 
     def run() -> None:
         try:
@@ -805,33 +808,8 @@ def _clear_pending(task_id: str, client_id: str | None) -> None:
         save_result_changes(task_id, result, cleared, client_id=client_id)
 
 
-# How long the agent's note has to stay unchanged before it is exported: an
-# agent writing in parts saves several times in a row (each part, then the
-# read-through), and an export through the Feishu app is a one-time copy
-# that later saves do not reach.
-AGENT_EXPORT_QUIET_SECONDS = 60.0
-AGENT_EXPORT_MAX_WAIT_SECONDS = 1800.0
-
-
-def _note_now(task_id: str, client_id: str | None) -> str:
-    return str(((get_job(task_id, client_id=client_id) or {}).get("result") or {}).get("summary_markdown") or "")
-
-
-def _wait_until_quiet(task_id: str, client_id: str | None) -> None:
-    deadline = time.monotonic() + AGENT_EXPORT_MAX_WAIT_SECONDS
-    seen = _note_now(task_id, client_id)
-    while time.monotonic() < deadline:
-        time.sleep(AGENT_EXPORT_QUIET_SECONDS)
-        now = _note_now(task_id, client_id)
-        if now == seen:
-            return
-        seen = now
-
-
 def _export_agent_note(task_id: str, client_id: str | None, job: dict, options: dict,
                        source_filename: str, title: str) -> None:
-    _wait_until_quiet(task_id, client_id)
-    task_steps.start(task_id, task_steps.FEISHU)
     exported = export_written_note(
         task_id, client_id,
         source_type=job.get("source_type"),
