@@ -580,11 +580,21 @@ def save_part(
                             for p in parts for item in (saved[p.index]["coverage"].get("missing") or [])]}
     updated = _finish(task_id, job, media, parts, cleaned, combined, basis_note=basis_note, model=model,
                       client_id=client_id, keep_replaced=kept, expect_versions=expect)
+    # The part that completed the note was short: the read-through is asked
+    # for once that part is checked and saved again, not before, and not
+    # skipped (Codex push review, 2026-11-06: the re-save was answered as a
+    # read-through change, "no second read-through", with none done yet).
+    owed = len(parts) > 1 and ((short and not joined) or (bool(store.get("read_through_owed")) and joined))
+    asked_now = bool(joined) and bool(store.get("read_through_owed"))
     _write_store(task_id, parts, saved, joined=_note_of(updated), kept_replaced=kept or _replaced_of(updated),
-                 basis_note=basis_note, model=model)
+                 basis_note=basis_note, model=model, read_through_owed=owed and not asked_now)
     answer["job"] = updated
     if len(parts) == 1:
         answer["next"] = "笔记已保存。"
+    elif short and not joined:
+        answer["next"] = "所有部分已经拼成一篇。这一部分补查存好以后，回答会请你通读整篇。"
+    elif asked_now:
+        answer["next"] = READ_THROUGH_INSTRUCTION
     elif joined:
         # A change from the read-through: one read-through per note, so the
         # answer does not ask for another (2026-10-27: the note was read through
@@ -814,7 +824,7 @@ def _valid_parts(store: dict[str, Any], parts: list[claude_vision.TranscriptPart
 
 def _write_store(task_id: str, parts, saved: dict[int, dict[str, Any]], *, joined: str | None = None,
                  joined_hash: str | None = None, kept_replaced: dict[str, Any] | None = None,
-                 basis_note: str, model: str) -> None:
+                 basis_note: str, model: str, read_through_owed: bool = False) -> None:
     """``joined`` is the task's note right after a join; ``joined_hash`` carries an
     earlier join forward while parts are being written again. ``kept_replaced``
     is the note from before the agent's first join, the one restore puts back."""
@@ -826,6 +836,7 @@ def _write_store(task_id: str, parts, saved: dict[int, dict[str, Any]], *, joine
         "kept_replaced": kept_replaced,
         "basis_note": basis_note,
         "model": model,
+        **({"read_through_owed": True} if read_through_owed else {}),
     }, ensure_ascii=False), encoding="utf-8")
 
 

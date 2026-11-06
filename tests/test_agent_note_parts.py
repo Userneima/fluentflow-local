@@ -332,7 +332,7 @@ def test_a_change_from_the_read_through_does_not_ask_for_another(job_store, tmp_
     total = _material(tmp_path)["total_parts"]
     for index in range(1, total):
         _save(index)
-    assert "通读一遍" in _save(total)["next"]
+    assert "通读一遍" in _save(total, _filled(total))["next"]
 
     changed = _save(2, _note(2) + "\n\n通读后补上的一句。")
 
@@ -362,7 +362,7 @@ def test_the_read_through_writes_the_title_and_opening_that_part_one_carries(job
     total = _material(tmp_path)["total_parts"]
     for index in range(1, total):
         _save(index)
-    last = _save(total)
+    last = _save(total, _filled(total))
     assert "一级标题" in last["next"] and "part=1" in last["next"]
 
     opening = "# 最小二乘法从推导到前提\n\n这一课讲最小二乘法怎么推出来、什么时候能用。\n\n"
@@ -441,3 +441,22 @@ def test_in_small_parts_each_part_is_handed_to_a_fresh_subagent(job_store, tmp_p
     saved = _save(1, _filled(1))
 
     assert "新开的、不带前面对话的子助手" in saved["next"]
+
+
+def test_a_short_last_part_still_gets_its_read_through_once_it_is_checked(job_store, tmp_path, small_parts):
+    # Codex push review, 2026-11-06: the re-save of a short last part was
+    # answered as a read-through change, so the read-through never happened.
+    _long(job_store)
+    total = _material(tmp_path)["total_parts"]
+    for index in range(1, total):
+        _save(index, _filled(index))
+
+    last = _save(total, "## 一句话\n\n推导用到了最小二乘法。")
+    assert last["completed"] is True and "short" in last
+    assert "get_agent_note_part" not in last["next"]
+
+    checked = _save(total, _filled(total))
+    assert checked["next"] == an.READ_THROUGH_INSTRUCTION
+
+    after = _save(2, _filled(2) + "\n\n通读后改的一句。")
+    assert after["next"] == an.READ_THROUGH_SAVED
