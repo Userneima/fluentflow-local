@@ -128,9 +128,22 @@ def pending(result: dict[str, Any] | None) -> bool:
     record = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
     if record.get("stopped"):
         return False
+    if _move_owed(record):
+        return True
     # The md as it was when pushed (the document holds it with its
     # screenshots pointed at the task's frames, so its own digest differs).
     return note_digest(review.read_text(encoding="utf-8")) != record.get("md_digest")
+
+
+MOVE_TRIES = 3
+
+
+def _move_owed(record: dict[str, Any]) -> bool:
+    """The review note is in Feishu but the follow-along note is not under it
+    yet (a move that failed, or a push cut off before it): tried again a few
+    times, then left to the user."""
+    return (isinstance(record.get("sync"), dict) and record.get("moved") is False
+            and int(record.get("move_tries") or 0) < MOVE_TRIES)
 
 
 def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None:
@@ -161,20 +174,30 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
         if previous is not None:
             keep = None
             modified = cli.modified_times(runner, bin_path, [str(previous["doc_id"])]).get(str(previous["doc_id"]))
-            if modified is not None and modified > int(record.get("feishu_modified_at") or 0):
+            # Not knowing when it last changed counts as changed: keeping a
+            # copy too many is cheap, losing an edit made in Feishu is not.
+            if modified is None or modified > int(record.get("feishu_modified_at") or 0):
                 keep = _keep_feishu_version(review)
             response = cli.export_markdown_via_lark_cli(
                 str(record.get("title") or review.stem), markdown, task_id=task_id,
                 artifact_root=_artifact_root(), previous=previous, keep_feishu=keep, runner=runner, state=STATE,
             )
             moved = record.get("moved")
+            if _move_owed(record):
+                _record(task_id, move_tries=int(record.get("move_tries") or 0) + 1)
+                node = _node(runner, bin_path, str(follow["doc_id"]))
+                moved = _move_under(runner, bin_path, node, str(previous["doc_id"]), task_id)
         else:
             node = _node(runner, bin_path, str(follow["doc_id"]))
             title = f"{node.get('title') or result.get('lark_doc_title') or review.stem}{TITLE_SUFFIX}"
+            parent = str(node.get("parent_node_token") or "")
+            if not parent and not _at_my_library_root(runner, bin_path, node):
+                raise cli.LarkCliError("随看笔记在另一个知识库的最上层，复习笔记只能建在某篇文档下面或「我的文档库」最上层。"
+                                       "把随看笔记挪进一个目录后会自动补上")
             response = cli.export_markdown_via_lark_cli(
                 title, markdown, task_id=task_id, artifact_root=_artifact_root(), runner=runner, state=STATE,
-                parent_token=str(node.get("parent_node_token") or "") or None,
-                previous=_made_unrecorded(runner, bin_path, node, title, str(follow.get("url") or "")),
+                parent_token=parent or None,
+                previous=_made_unrecorded(runner, bin_path, node, title, str(follow.get("url") or ""), task_id),
             )
             # Recorded before the move, so a failed move never makes a second document.
             _record(task_id, sync=response.get("sync"), url=response.get("url"), title=title, moved=False)
@@ -194,8 +217,17 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
     return response
 
 
+def _at_my_library_root(runner: Any, bin_path: str, node: dict[str, Any]) -> bool:
+    from backend.core import lark_cli_exporter as cli
+
+    data = cli._run(runner, [bin_path, "wiki", "+node-list", "--space-id", "my_library", "--page-all", "--as", "user"],
+                    timeout=60)
+    items = data.get("items") or data.get("nodes") or []
+    return any(isinstance(item, dict) and item.get("node_token") == node.get("node_token") for item in items)
+
+
 def _made_unrecorded(
-    runner: Any, bin_path: str, follow_node: dict[str, Any], title: str, follow_url: str,
+    runner: Any, bin_path: str, follow_node: dict[str, Any], title: str, follow_url: str, task_id: str,
 ) -> dict[str, Any] | None:
     """A review note document made beside the follow-along note by a push cut
     off before the task recorded it: found by its title among the
@@ -203,6 +235,11 @@ def _made_unrecorded(
     chapters are read again from it (``sections`` None)."""
     from backend.core import lark_cli_exporter as cli
 
+    # Only a push of this task leaves its pushed copy behind: a document of
+    # the same name that this task never made is not taken over.
+    pushed = cli.pushed_note_path(_artifact_root(), task_id, STATE)
+    if pushed is None or not pushed.is_file():
+        return None
     command = [bin_path, "wiki", "+node-list", "--space-id", str(follow_node.get("space_id") or ""), "--as", "user"]
     if follow_node.get("parent_node_token"):
         command[5:5] = ["--parent-node-token", str(follow_node["parent_node_token"])]

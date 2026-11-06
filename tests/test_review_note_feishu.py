@@ -212,3 +212,44 @@ def test_a_push_cut_off_before_it_was_recorded_writes_into_the_same_document(wik
     assert wiki.creates() == 1
     assert wiki.parents[FOLLOW_NODE] == REVIEW_NODE
     assert _record(task_id)["moved"] is True
+
+
+def test_a_move_cut_off_is_done_on_a_later_look(wiki, tmp_path, monkeypatch):
+    task_id, _ = _lesson(tmp_path)
+    monkeypatch.setattr(rnf, "_move_under", lambda *a: (_ for _ in ()).throw(SystemExit("service stopped")))
+    with pytest.raises(SystemExit):
+        rnf.push(task_id, runner=wiki)
+    monkeypatch.undo()
+    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr("backend.core.storage_paths._artifact_storage_dir", lambda: tmp_path / "artifacts")
+
+    assert rnf.pending(job_store.get_job(task_id)["result"])
+    rnf.push(task_id, runner=wiki)
+
+    assert wiki.parents[FOLLOW_NODE] == REVIEW_NODE and wiki.creates() == 1
+    assert not rnf.pending(job_store.get_job(task_id)["result"])
+
+
+def test_a_document_of_the_same_name_this_task_never_made_is_not_taken_over(wiki, tmp_path):
+    task_id, _ = _lesson(tmp_path)
+    wiki.titles.append("3.第一次汇报-0707" + rnf.TITLE_SUFFIX)
+    wiki.created_under.append(LESSON_PARENT)
+
+    rnf.push(task_id, runner=wiki)
+
+    assert wiki.creates() == 1 and _record(task_id)["error"] is None
+
+
+def test_a_feishu_edit_is_kept_when_its_time_cannot_be_read(wiki, tmp_path):
+    task_id, md = _lesson(tmp_path)
+    rnf.push(task_id, runner=wiki)
+    wiki.edit("一句话。", "飞书上改的。")
+    real = wiki.__call__
+    wiki.__class__ = type("NoMetas", (FakeWiki,), {
+        "__call__": lambda self, cmd, **k: _ok({"metas": []}) if cmd[1:3] == ["drive", "metas"] else real(cmd, **k)})
+    md.write_text(REVIEW.replace("一句话。", "本地改的。"), encoding="utf-8")
+
+    rnf.push(task_id, runner=wiki)
+
+    kept = list((md.parent / "过程文件" / "历史版本").glob("*飞书上改过*"))
+    assert kept and "飞书上改的" in kept[0].read_text(encoding="utf-8")
