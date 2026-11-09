@@ -12,6 +12,13 @@
 #   FLUENTFLOW_INSTALL_REF   which release tag (for example v0.7.0), default the latest
 $ErrorActionPreference = "Stop"
 
+# Python's UTF-8 mode for every Python this starts (the setup script, the
+# service, the MCP check), and the console decoding their output as UTF-8.
+# Without it, an English Windows prints in cp1252 and the first Chinese line
+# raises UnicodeEncodeError.
+$env:PYTHONUTF8 = "1"
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
+
 $RepoSlug = "Userneima/fluentflow-local"
 $Dir = if ($env:FLUENTFLOW_INSTALL_DIR) { $env:FLUENTFLOW_INSTALL_DIR } else { Join-Path $env:USERPROFILE "fluentflow-local" }
 $Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } else { "8000" }
@@ -61,8 +68,6 @@ if (-not (Test-Healthy)) {
     if (Test-Path $Launcher) {
         Start-Process $Launcher
     } else {
-        # UTF-8 mode, as the desktop launcher starts it (see FluentFlowLocal.ps1).
-        $env:PYTHONUTF8 = "1"
         Start-Process -WindowStyle Hidden -WorkingDirectory $Dir $Python @("-m", "uvicorn", "backend.local_main:app", "--host", "127.0.0.1", "--port", $Port)
     }
     for ($i = 0; $i -lt 90 -and -not (Test-Healthy); $i++) { Start-Sleep -Seconds 1 }

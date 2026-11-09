@@ -28,6 +28,14 @@ param([switch]$SkipModel)
 
 $ErrorActionPreference = "Stop"
 
+# Python's UTF-8 mode for every Python started here, and the console decoding
+# what they print as UTF-8. With output going to a pipe (an agent running this
+# script), Python otherwise prints in the code page: on an English Windows,
+# cp1252, the readiness check's first Chinese line raised UnicodeEncodeError
+# and failed the install at its last step.
+$env:PYTHONUTF8 = "1"
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = Split-Path -Parent (Split-Path -Parent $ScriptDir)
 $Venv = Join-Path $Repo ".venv"
