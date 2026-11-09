@@ -54,6 +54,10 @@ class McpStdioClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            # The server speaks UTF-8 on its pipes; without this the replies
+            # were read in the code page (cp1252 on an English Windows) and
+            # the check failed on the first Chinese character.
+            encoding="utf-8",
             bufsize=1,
         )
         self._next_id = 1
