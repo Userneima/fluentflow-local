@@ -128,3 +128,15 @@ describe('NoteWritingProgress', () => {
         }
     });
 });
+
+describe('NoteWritingProgress on another task', () => {
+    it('shows nothing of the task before', async () => {
+        getNoteProgress.mockResolvedValueOnce({progress: {...base, written_chars: 40}, draft: '上一个任务的草稿。'});
+        const view = render(<NoteWritingProgress taskId="t1" fallback="正在写笔记。"/>);
+        expect(await screen.findByText('上一个任务的草稿。')).toBeTruthy();
+        getNoteProgress.mockResolvedValue({progress: null, draft: ''});
+        view.rerender(<NoteWritingProgress taskId="t2" fallback="正在写笔记。"/>);
+        expect(screen.queryByText('上一个任务的草稿。')).toBeNull();
+        expect(screen.getByText('正在写笔记。')).toBeTruthy();
+    });
+});

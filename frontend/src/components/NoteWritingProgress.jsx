@@ -46,7 +46,8 @@ const NoteWritingProgress = ({taskId, fallback = '', requestOptions = {}, onWrit
     optionsRef.current = requestOptions;
     const doneRef = useRef(onWriterDone);
     doneRef.current = onWriterDone;
-    const [state, setState] = useState({progress: null, draft: '', fetchedAt: 0});
+    // Tagged with its task: a switch to another task shows nothing of this one.
+    const [state, setState] = useState({taskId: '', progress: null, draft: '', fetchedAt: 0});
 
     useEffect(() => {
         if (!taskId || typeof apiRef.current?.getNoteProgress !== 'function') return undefined;
@@ -62,7 +63,7 @@ const NoteWritingProgress = ({taskId, fallback = '', requestOptions = {}, onWrit
                 if (stopped) return;
                 if (body?.progress) {
                     reported = true;
-                    setState({progress: body.progress, draft: String(body.draft || ''), fetchedAt: Date.now()});
+                    setState({taskId, progress: body.progress, draft: String(body.draft || ''), fetchedAt: Date.now()});
                 } else if (reported && !finished) {
                     // Reported before and gone now: the writer is done. What it
                     // wrote stays, read as saving, until the page shows the note.
@@ -84,7 +85,8 @@ const NoteWritingProgress = ({taskId, fallback = '', requestOptions = {}, onWrit
         };
     }, [taskId]);
 
-    const {progress, draft, fetchedAt} = state;
+    const current = state.taskId === taskId ? state : {progress: null, draft: '', fetchedAt: 0};
+    const {progress, draft, fetchedAt} = current;
     if (!progress) {
         return <p className="text-sm italic text-[#666] dark:text-white/60">{fallback}</p>;
     }

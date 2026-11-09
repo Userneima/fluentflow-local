@@ -165,6 +165,8 @@ class _StreamingClient:
                 raise error
             chunks = [_Chunk(choices=[SimpleNamespace(delta=SimpleNamespace(content=piece), finish_reason=None)],
                              usage=None) for piece in self.pieces]
+            chunks.append(_Chunk(choices=[SimpleNamespace(delta=SimpleNamespace(content=""), finish_reason="stop")],
+                                 usage=None))
             chunks.append(_Chunk(choices=[], usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5)))
             return iter(chunks)
         return SimpleNamespace(
@@ -183,6 +185,18 @@ def test_a_call_made_while_a_note_is_shown_streams_and_returns_the_whole_answer(
     assert answer == "## 一、定义\n\n内容"
     assert grown[0] == "## 一、" and grown[-1] == answer
     assert client.requests[0]["stream"] is True
+
+
+def test_a_stream_that_stops_before_the_model_is_done_is_a_failure_not_a_note():
+    client = _StreamingClient(["## 一、", "写到一半"])
+    whole = client._create
+
+    def cut_off(**kwargs):
+        return iter(list(whole(**kwargs))[:-2])  # the connection drops: no end, no usage
+
+    client.chat.completions.create = cut_off
+    with pytest.raises(RuntimeError, match="中途断了"):
+        ai_client._chat(client, "deepseek-chat", "写笔记", "转录", on_text=lambda _text: None)
 
 
 def test_a_call_with_nothing_to_show_does_not_stream(monkeypatch):

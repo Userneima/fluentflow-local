@@ -220,6 +220,11 @@ def _read_stream(stream: Any, model: str, on_text: Callable[[str], None]) -> Any
                     logger.debug("progress callback failed", exc_info=True)
             if getattr(choice, "finish_reason", None):
                 finish_reason = choice.finish_reason
+    if finish_reason is None:
+        # The stream ended without the model saying it was done: a dropped
+        # connection, not an answer. Raised so the step fails (and can be
+        # carried on) instead of keeping half a note as a whole one.
+        raise RuntimeError("模型的回答中途断了，没有写完。")
     return SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="".join(pieces)), finish_reason=finish_reason)],
         usage=usage,
