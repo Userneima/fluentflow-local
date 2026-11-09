@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from backend.core import task_activity, task_steps
+from backend.core import note_progress, task_activity, task_steps
 from backend.core.job_store import (
     RESTART_INTERRUPTION_KEY,
     acknowledge_restart_interruptions,
@@ -36,10 +36,13 @@ def get_jobs(
     to the rows written since the newest ``updated_at`` the caller already has."""
     client_id = local_client_scope(request)
     limit_value = limit if limit and limit > 0 else None
+    # A note being written changes its row's progress without writing the row.
+    writing = note_progress.live_task_ids()
     jobs = (
-        list_jobs(limit=limit_value, client_id=client_id, updated_since=updated_since)
+        list_jobs(limit=limit_value, client_id=client_id, updated_since=updated_since, also_task_ids=writing)
         if include_result
-        else list_job_summaries(limit=limit_value, client_id=client_id, updated_since=updated_since)
+        else list_job_summaries(limit=limit_value, client_id=client_id, updated_since=updated_since,
+                                also_task_ids=writing)
     )
     steps = task_steps.steps_of(str(job.get("task_id") or "") for job in jobs)
     return {"jobs": [
@@ -115,6 +118,18 @@ def get_job_detail(request: Request, task_id: str) -> dict[str, Any]:
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return {**job, "task_snapshot": build_task_snapshot(job), "activity": task_activity.activity(job).as_dict()}
+
+
+@router.get("/jobs/{task_id}/note-progress")
+def get_note_progress(request: Request, task_id: str) -> dict[str, Any]:
+    """How far FluentFlow's own writer has got on the note, and the text written
+    so far; both empty when no writer is on it. Polled by the editor every few
+    seconds while the note is written, so it reads nothing it does not show."""
+    job = get_job(task_id, client_id=local_client_scope(request))
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    progress = task_activity.activity(job).note_progress
+    return {"progress": progress, "draft": note_progress.draft(task_id) if progress else ""}
 
 
 @router.get("/jobs/{task_id}/detail")

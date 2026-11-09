@@ -8,13 +8,14 @@ import base64
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Callable
 
 import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from backend.core import fake_model, model_answers, model_usage
+from backend.core import fake_model, model_answers, model_usage, note_progress
 from backend.core import text_providers
 from backend.core.ai_config import (
     DEFAULT_DEEPSEEK_MODEL,
@@ -167,15 +168,63 @@ def _create(client: OpenAI, model: str, *, may_replace: bool = True, **kwargs: A
         return _send(client, provider, fallback, **kwargs), fallback
 
 
-def _send(client: OpenAI, provider: str, model: str, **kwargs: Any) -> Any:
-    """One request, recorded (``model_usage``)."""
+def _send(client: OpenAI, provider: str, model: str, *, on_text: Callable[[str], None] | None = None,
+          **kwargs: Any) -> Any:
+    """One request, recorded (``model_usage``). With ``on_text`` the answer is
+    streamed and ``on_text`` gets the text so far as it grows, so the page can
+    show a note while it is written; the response returned is the same shape.
+    A provider that refuses the streaming request before answering anything
+    is asked again without streaming: nothing was written, so nothing is paid
+    twice."""
     with model_usage.call(provider, model) as call:
         if call.fake:
             response = fake_model.openai_response(fake_model.reply_to_messages(kwargs.get("messages")))
+            if on_text is not None:
+                fake_model.stream(str(response.choices[0].message.content or ""), on_text)
+        elif on_text is not None:
+            try:
+                stream = client.chat.completions.create(
+                    model=model, stream=True, stream_options={"include_usage": True}, **kwargs,
+                )
+            except Exception as exc:  # noqa: BLE001 - refused up front only
+                if getattr(exc, "status_code", None) != 400 or _model_gone(exc):
+                    raise
+                logger.warning("streaming refused by %s (%s); asking without streaming", model, exc)
+                stream = None
+                response = client.chat.completions.create(model=model, **kwargs)
+            if stream is not None:
+                response = _read_stream(stream, model, on_text)
         else:
             response = client.chat.completions.create(model=model, **kwargs)
         call.openai(response)
     return response
+
+
+def _read_stream(stream: Any, model: str, on_text: Callable[[str], None]) -> Any:
+    """A streamed answer read to its end, as one response with the usage the
+    last chunk carries."""
+    pieces: list[str] = []
+    usage = None
+    finish_reason = None
+    for chunk in stream:
+        if getattr(chunk, "usage", None) is not None:
+            usage = chunk.usage
+        for choice in getattr(chunk, "choices", None) or []:
+            delta = getattr(choice, "delta", None)
+            piece = getattr(delta, "content", None) if delta is not None else None
+            if piece:
+                pieces.append(piece)
+                try:
+                    on_text("".join(pieces))
+                except Exception:  # noqa: BLE001 - showing progress never stops the note
+                    logger.debug("progress callback failed", exc_info=True)
+            if getattr(choice, "finish_reason", None):
+                finish_reason = choice.finish_reason
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="".join(pieces)), finish_reason=finish_reason)],
+        usage=usage,
+        model=model,
+    )
 
 
 def _chat(
@@ -185,7 +234,15 @@ def _chat(
     user: str,
     *,
     temperature: float = 0.3,
+    on_text: Callable[[str], None] | None = None,
 ) -> str:
+    """``on_text``: stream the answer and hand it the text so far as it grows
+    (``_send``); by default, wherever the caller asked a note's progress to be
+    shown (``note_progress.showing``). An answer kept from before an
+    interruption is handed over whole."""
+    if on_text is None:
+        on_text = note_progress.sink()
+
     def ask() -> str:
         resp, _model = _create(
             client, model,
@@ -194,14 +251,21 @@ def _chat(
                 {"role": "user", "content": user},
             ],
             temperature=temperature,
+            **({"on_text": on_text} if on_text is not None else {}),
         )
         msg = resp.choices[0].message
         return (msg.content or "").strip()
 
     # A step carried on after an interruption reads what it was answered then.
-    return model_answers.remembered(
+    answer = model_answers.remembered(
         model_answers.request_key("chat", _provider_of(client), model, system, user, temperature), ask,
     )
+    if on_text is not None:
+        try:
+            on_text(answer)
+        except Exception:  # noqa: BLE001 - showing progress never stops the note
+            logger.debug("progress callback failed", exc_info=True)
+    return answer
 
 
 def _image_to_base64_data_url(image_path: str) -> str:

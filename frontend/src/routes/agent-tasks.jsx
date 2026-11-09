@@ -17,6 +17,8 @@ import {useConfirm} from '../components/ConfirmDialog.jsx';
 import {fmtCharCount, fmtDuration, progressMessageOf} from '../lib/format.js';
 import {DropdownMenu} from '../app/DropdownMenu.jsx';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
+import {noteProgressShort, noteProgressStatus} from '../lib/noteProgress.js';
+import {msgs} from '../app/shared.jsx';
 import {
     fmtBytes,
     fmtFileSize,
@@ -160,8 +162,19 @@ export const isAudioOnlySource = (job) => {
     return /\.(mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i.test(name);
 };
 
+// FluentFlow's own writer on the note says how far it has got
+// (backend note_progress); the stage the row was last written at does not.
+const noteProgressOf = (job) => job?.activity?.note_progress || null;
+const msgT = (lang) => (key) => msgs[lang]?.[key] ?? msgs.en[key] ?? key;
+
 const stageLabel = (job, lang) => {
     const isZh = lang === 'zh';
+    const writing = noteProgressOf(job);
+    if (writing) {
+        const short = noteProgressShort(writing, msgT(lang), lang);
+        const head = isZh ? '写笔记' : 'Writing note';
+        return short ? `${head} · ${short}` : head;
+    }
     const audioOnly = isAudioOnlySource(job);
     const labels = {
         upload: isZh ? '接收材料' : 'Receiving',
@@ -220,6 +233,7 @@ const liveStageDetail = (job, lang, aheadName = '') => {
     // thing on the card.
     const waiting = queueWaitDetail(job, lang, aheadName);
     if (waiting) return waiting;
+    if (noteProgressOf(job)) return noteProgressStatus(noteProgressOf(job), msgT(lang), lang);
     const progressMeta = job?.metadata?.video_source_progress || {};
     const loaded = progressMeta.loaded_bytes ? fmtBytes(progressMeta.loaded_bytes) : '';
     const total = progressMeta.total_bytes ? fmtBytes(progressMeta.total_bytes) : '';
@@ -597,7 +611,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                             {showNote ? <span className={factBlock}>{zh ? '笔记' : 'Note'} {noteTileValue(job, lang)}</span> : null}
                         </>
                     ) : (
-                        <span className={factBlock}>{stageLabel(job, lang)} · {progressLabel}</span>
+                        <span className={factBlock}>{stageLabel(job, lang)}{noteProgressOf(job) ? '' : ` · ${progressLabel}`}</span>
                     )}
                 </div>
                 <div className="col-start-2 row-start-1 row-span-2 flex items-start gap-2 self-start max-[699px]:row-start-2 max-[699px]:row-span-1">

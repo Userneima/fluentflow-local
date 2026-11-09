@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.core import agent_cut, debreath_job, task_steps, visual_note_job
+from backend.core import agent_cut, debreath_job, note_progress, task_steps, visual_note_job
 
 _LIVE_STATUSES = frozenset({"queued", "running", "processing"})
 
@@ -37,6 +37,9 @@ class Activity:
     # it on would start from (``task_actions.resume_task``), or None.
     stopped_steps: tuple[str, ...] = field(default_factory=tuple)
     resume_from: str | None = None
+    # How far FluentFlow's own writer has got, while the note is being
+    # written (``note_progress.snapshot``); None otherwise.
+    note_progress: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -55,6 +58,7 @@ class Activity:
             "resume_from": None if self.resume_from is None else {
                 "step": self.resume_from, "label": task_steps.LABELS.get(self.resume_from, self.resume_from),
             },
+            "note_progress": self.note_progress,
         }
 
 
@@ -94,7 +98,9 @@ def activity(job: dict[str, Any] | None, steps: list[dict[str, Any]] | None = No
                    if str((named.get(name) or {}).get("status")) == task_steps.RUNNING]
         current = running[0] if running else task_steps.TRANSCRIBE
         return Activity(busy=True, label=label, current_step=current,
-                        open_steps=open_steps or (current,), failed_steps=failed)
+                        open_steps=open_steps or (current,), failed_steps=failed,
+                        # A pipeline that writes its note before the task reads completed.
+                        note_progress=note_progress.snapshot(task_id) if task_id in note_progress.live_task_ids() else None)
     # Re-runs started on a finished task (a new cut, a rewritten note) keep
     # their state in the result, outside the steps.
     rerun: list[str] = []
@@ -111,7 +117,8 @@ def activity(job: dict[str, Any] | None, steps: list[dict[str, Any]] | None = No
     label_step = (running or list(working))[0]
     return Activity(busy=True, label="正在" + task_steps.LABELS[label_step], current_step=label_step,
                     open_steps=working,
-                    failed_steps=tuple(name for name in failed if name not in working))
+                    failed_steps=tuple(name for name in failed if name not in working),
+                    note_progress=note_progress.snapshot(task_id) if task_steps.NOTE in working else None)
 
 
 _DELETE_WORDS = {

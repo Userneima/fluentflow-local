@@ -342,6 +342,7 @@ def list_jobs(
     client_id: str | None = None,
     include_result: bool = True,
     updated_since: str | None = None,
+    also_task_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Jobs newest first.
 
@@ -350,6 +351,8 @@ def list_jobs(
     ``updated_at`` value, so a poll can ask for what changed instead of reading
     and summarising every result again. It is inclusive because the stamp has
     one-second precision; re-sending a row the caller already has is harmless.
+    ``also_task_ids`` are sent whatever their stamp: a note being written
+    changes what the row shows without writing the row (``note_progress``).
     """
     ensure_job_db(db_path)
     clauses: list[str] = []
@@ -359,8 +362,13 @@ def list_jobs(
         params.append(client_id)
     since = str(updated_since or "").strip()
     if since:
-        clauses.append("updated_at >= ?")
-        params.append(since)
+        extra = [str(task_id) for task_id in (also_task_ids or []) if task_id]
+        if extra:
+            clauses.append(f"(updated_at >= ? OR task_id IN ({','.join('?' for _ in extra)}))")
+            params.extend([since, *extra])
+        else:
+            clauses.append("updated_at >= ?")
+            params.append(since)
     # Decoding and sanitising every task's full result, segments and all, was
     # most of a two-to-three-second records page, and the reason the restart
     # guard's three-second request kept timing out. SQLite drops what a list
@@ -463,6 +471,7 @@ def list_job_summaries(
     db_path: Path | str = DEFAULT_DB_PATH,
     client_id: str | None = None,
     updated_since: str | None = None,
+    also_task_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     return list_jobs(
         limit=limit,
@@ -470,6 +479,7 @@ def list_job_summaries(
         client_id=client_id,
         include_result=False,
         updated_since=updated_since,
+        also_task_ids=also_task_ids,
     )
 
 

@@ -1,3 +1,8 @@
+import {noteProgressShort} from './noteProgress.js';
+import {msgs} from '../app/shared.jsx';
+
+const noteProgressT = (lang) => (key) => msgs[lang]?.[key] ?? msgs.en[key] ?? key;
+
 export const TASK_STATE_IDLE = 'idle';
 export const TASK_STATE_UPLOADING = 'uploading';
 export const TASK_STATE_QUEUED = 'queued';
@@ -71,7 +76,12 @@ export const taskStatusLabel = (job, lang = 'zh') => {
     const zh = lang === 'zh';
     if (state === TASK_STATE_UPLOADING) return zh ? '上传中' : 'Uploading';
     if (state === TASK_STATE_QUEUED) return zh ? '排队中' : 'Queued';
-    if (isNoteStillBeingWritten(job)) return zh ? '写笔记中' : 'Writing note';
+    if (isNoteStillBeingWritten(job)) {
+        // How far the writer has got, when it says (backend note_progress).
+        const short = noteProgressShort(job?.activity?.note_progress, noteProgressT(lang), lang);
+        const head = zh ? '写笔记中' : 'Writing note';
+        return short ? `${head} · ${short}` : head;
+    }
     const working = stillWorkingLabel(job);
     if (working) return zh ? working : 'Working';
     if (state === TASK_STATE_COMPLETED || state === TASK_STATE_CACHED_ONLY) return zh ? '已完成' : 'Completed';

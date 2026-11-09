@@ -47,7 +47,7 @@ from backend.core.ai_prompts import (
     _HIGH_FIDELITY_FINAL_WRAPPER,
     _BILINGUAL_SEGMENT_SYSTEM,
 )
-from backend.core import model_usage, note_coverage, task_steps
+from backend.core import model_usage, note_coverage, note_progress, task_steps
 from backend.core.ai_client import (
     _normalize_provider,
     _normalize_model,
@@ -230,6 +230,7 @@ def _fill_gaps(
     note: str,
     check: note_coverage.CoverageCheck,
     deadline: _NoteDeadline,
+    progress_id: str | None = None,
 ) -> tuple[str, bool, str | None]:
     """The note with what ``check`` found missing written back in by the same
     model under the same prompt. Returns the note, whether a revision was
@@ -239,6 +240,7 @@ def _fill_gaps(
         return note, False, None
     if deadline.out_of_time("覆盖率审查", note):
         return note, False, "覆盖率审查"
+    note_progress.stage(progress_id, note_progress.REVISING)
     revised = note_coverage.revise(
         lambda system, user: _strip_prompt_leakage(_chat(client, model, system, user, temperature=0.2)),
         prompt, note, check,
@@ -1161,6 +1163,7 @@ def _run_chapter_coverage_mode(
     max_final_input_chars: int,
     speaker_labeled: bool = False,
     deadline: _NoteDeadline | None = None,
+    progress_id: str | None = None,
 ) -> SummaryResult:
     """``prompt`` is the whole note prompt (``_compose_note_system_prompt``):
     each chapter and the stitching read it after their own short task, so a
@@ -1175,6 +1178,8 @@ def _run_chapter_coverage_mode(
     chapter_note_system = _CHAPTER_NOTE_SYSTEM + "\n\n# 写法\n\n" + prompt
     chapter_style_system = _CHAPTER_STYLE_SYSTEM + "\n\n# 写法\n\n" + prompt
 
+    note_progress.reading(progress_id, total=len(segments))
+
     def _extract_segment_evidence(batch: dict[str, Any]) -> list[Any]:
         payload = json.dumps([batch], ensure_ascii=False)
         try:
@@ -1187,6 +1192,8 @@ def _run_chapter_coverage_mode(
                 "segment %s; skipping it.", batch.get("segment_id"),
             )
             return []
+        finally:
+            note_progress.reading(progress_id, done_one=True)
 
     # Extract each segment's evidence concurrently, then assign stable sequential
     # IDs in the original order so downstream references stay deterministic.
@@ -1199,6 +1206,7 @@ def _run_chapter_coverage_mode(
         raise ValueError("Chapter coverage evidence extraction returned no usable evidence")
     deadline.check("提取证据")
 
+    note_progress.stage(progress_id, note_progress.PLANNING)
     outline_payload = json.dumps(_compact_evidence_view(evidence), ensure_ascii=False)
     raw_chapters = _chat_json_array(client, model, _CHAPTER_OUTLINE_SYSTEM, outline_payload, temperature=0.1)
     chapters = _normalize_chapters(raw_chapters, evidence)
@@ -1211,18 +1219,24 @@ def _run_chapter_coverage_mode(
             if evidence_id in evidence_by_id
         ]
 
-    def _write_chapter(chapter: dict[str, Any]) -> str:
+    def _write_chapter(indexed: tuple[int, dict[str, Any]]) -> str:
+        index, chapter = indexed
         user = json.dumps({
             "chapter_id": chapter["chapter_id"],
             "title": chapter["title"],
             "purpose": chapter.get("purpose") or "",
             "evidence": _chapter_evidence_for(chapter),
         }, ensure_ascii=False)
-        return _strip_prompt_leakage(_chat(client, model, chapter_note_system, user, temperature=0.2))
+        with note_progress.showing(progress_id, f"chapter:{index}"):
+            written = _strip_prompt_leakage(_chat(client, model, chapter_note_system, user, temperature=0.2))
+        note_progress.text(progress_id, f"chapter:{index}", written)
+        note_progress.chapter_done(progress_id, index)
+        return written
 
     deadline.check("规划章节")
+    note_progress.chapters(progress_id, [str(chapter.get("title") or "") for chapter in chapters])
     # Each chapter is written independently from its own evidence; run concurrently, keep order.
-    chapter_notes: list[str] = _parallel_map(_write_chapter, chapters)
+    chapter_notes: list[str] = _parallel_map(_write_chapter, list(enumerate(chapters)))
 
     draft = "\n\n".join(note for note in chapter_notes if note.strip())
     deadline_stage: str | None = None
@@ -1230,6 +1244,7 @@ def _run_chapter_coverage_mode(
         deadline_stage = "写各章"
         final_note = draft
     else:
+        note_progress.stage(progress_id, note_progress.UNIFYING)
         final_note = _accept_revision(
             draft,
             _strip_prompt_leakage(_chat(client, model, chapter_style_system, draft, temperature=0.2)),
@@ -1245,6 +1260,7 @@ def _run_chapter_coverage_mode(
     coverage_check = note_coverage.CoverageCheck(checked=False, point_count=len(evidence))
     coverage_revision_used = False
     if deadline_stage is None:
+        note_progress.stage(progress_id, note_progress.CHECKING)
         coverage_check = note_coverage.check_against_points(
             _text_checker(client, model),
             [{"id": item["evidence_id"], "text": item["text"], "source": item.get("quote") or ""} for item in evidence],
@@ -1252,7 +1268,7 @@ def _run_chapter_coverage_mode(
             rules=prompt,
         )
         revised_note, coverage_revision_used, deadline_stage = _fill_gaps(
-            client, model, prompt, final_note, coverage_check, deadline,
+            client, model, prompt, final_note, coverage_check, deadline, progress_id,
         )
         coverage_record = coverage_check.as_record(revised=revised_note != final_note)
         final_note = revised_note
@@ -1373,7 +1389,12 @@ def summarize_transcript_with_metadata(transcript: str, **kwargs: Any) -> Summar
 
     from backend.core.note_join import number_subheadings
 
-    result = _summarize_transcript_with_metadata(transcript, **kwargs)
+    # Which task's note this is, for the page's progress: the caller's task,
+    # else the task the call is made for. Not passed on as ``task_id``, which
+    # also brings that task's correction documents into the rules.
+    progress_id = str(kwargs.get("task_id") or model_usage.current().task_id or "") or None
+    with note_progress.tracking(progress_id, "text"):
+        result = _summarize_transcript_with_metadata(transcript, progress_id=progress_id, **kwargs)
     return replace(result, markdown=number_subheadings(result.markdown or ""))
 
 
@@ -1392,6 +1413,7 @@ def _summarize_transcript_with_metadata(
     speaker_labeled: bool = False,
     task_id: str | None = None,
     client_id: str | None = None,
+    progress_id: str | None = None,
 ) -> SummaryResult:
     """Generate a note and return mode/chunk metadata for product analysis.
 
@@ -1420,7 +1442,9 @@ def _summarize_transcript_with_metadata(
         )
 
     if resolved_mode == "direct":
-        draft = _strip_prompt_leakage(_chat(client, m, prompt, transcript_text))
+        note_progress.stage(progress_id, note_progress.WRITING)
+        with note_progress.showing(progress_id, "draft"):
+            draft = _strip_prompt_leakage(_chat(client, m, prompt, transcript_text))
         if not draft.strip() or deadline.out_of_time("写笔记", draft):
             return SummaryResult(
                 markdown=draft,
@@ -1432,8 +1456,9 @@ def _summarize_transcript_with_metadata(
                 deadline_hit=bool(draft.strip()),
                 deadline_stage="写笔记" if draft.strip() else None,
             )
+        note_progress.stage(progress_id, note_progress.CHECKING)
         check = note_coverage.check_against_transcript(_text_checker(client, m), transcript_text, draft, rules=prompt)
-        final_note, revision_used, deadline_stage = _fill_gaps(client, m, prompt, draft, check, deadline)
+        final_note, revision_used, deadline_stage = _fill_gaps(client, m, prompt, draft, check, deadline, progress_id)
         return SummaryResult(
             markdown=final_note,
             requested_mode=normalized_mode,
@@ -1458,6 +1483,7 @@ def _summarize_transcript_with_metadata(
             max_final_input_chars=max_final_input_chars,
             speaker_labeled=speaker_labeled,
             deadline=deadline,
+            progress_id=progress_id,
         )
 
     chunks = _chunk_text(transcript_text, evidence_chunk_chars, evidence_overlap)
@@ -1465,10 +1491,15 @@ def _summarize_transcript_with_metadata(
 
     evidence_system = _EVIDENCE_SYSTEM + (_EVIDENCE_SPEAKER_ATTRIBUTION if speaker_labeled else "")
 
+    note_progress.reading(progress_id, total=total)
+
     def _extract_evidence(indexed_chunk: tuple[int, str]) -> str:
         idx, chunk = indexed_chunk
         user = f"这是整段转录的第 {idx + 1}/{total} 部分，请提取证据。\n\n{chunk}"
-        return _chat(client, m, evidence_system, user, temperature=0.2)
+        try:
+            return _chat(client, m, evidence_system, user, temperature=0.2)
+        finally:
+            note_progress.reading(progress_id, done_one=True)
 
     # Each chunk's extraction is independent; run them concurrently but keep order.
     evidence_items: list[str] = _parallel_map(_extract_evidence, list(enumerate(chunks)))
@@ -1486,15 +1517,20 @@ def _summarize_transcript_with_metadata(
         )
 
     deadline.check("整理证据")
-    draft = _strip_prompt_leakage(_chat(client, m, prompt, _HIGH_FIDELITY_FINAL_WRAPPER + evidence))
+    note_progress.stage(progress_id, note_progress.WRITING)
+    with note_progress.showing(progress_id, "draft"):
+        draft = _strip_prompt_leakage(_chat(client, m, prompt, _HIGH_FIDELITY_FINAL_WRAPPER + evidence))
     deadline_stage: str | None = "写初稿" if deadline.out_of_time("写初稿", draft) else None
     # Checked against the transcript itself, not the condensed evidence: the
     # condensing is where a long recording's details are most likely lost.
     coverage_revision_used = False
     final_note = draft
     if deadline_stage is None:
+        note_progress.stage(progress_id, note_progress.CHECKING)
         check = note_coverage.check_against_transcript(_text_checker(client, m), transcript_text, draft, rules=prompt)
-        final_note, coverage_revision_used, deadline_stage = _fill_gaps(client, m, prompt, draft, check, deadline)
+        final_note, coverage_revision_used, deadline_stage = _fill_gaps(
+            client, m, prompt, draft, check, deadline, progress_id,
+        )
         coverage_checked = check.checked
         coverage_record = check.as_record(revised=final_note != draft)
         missing_count = check.missing_count if check.checked else None

@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import claude_vision, cut_timeline, debreath_job, model_usage, task_steps, visual_note_channel
-from backend.core import note_coverage, note_join, note_skills, note_versions, visual_note_check
+from backend.core import note_coverage, note_join, note_progress, note_skills, note_versions, visual_note_check
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
 from backend.core.event_context import event_metadata
@@ -1259,6 +1259,8 @@ def _run_visual_note(
     if not claimed:
         claim(task_id)
 
+    note_progress.start(task_id, "claude")
+    note_progress.stage(task_id, note_progress.FRAMES)
     try:
         _store(
             task_id,
@@ -1324,6 +1326,8 @@ def _run_visual_note(
         for part in parts:
             part = with_known_people(part, drafts)
             part_frames = claude_vision.frames_for_part(frames, part)
+            note_progress.part(task_id, index=part.index, total=part.total,
+                               starts_at=part.starts_at or "", ends_at=part.ends_at or "")
             if len(parts) > 1:
                 _store(
                     task_id,
@@ -1332,6 +1336,7 @@ def _run_visual_note(
                 )
             part_draft = _checked_draft(write, part, part_frames, api_key=api_key, rules=rules)
             if check_chat is not None:
+                note_progress.stage(task_id, note_progress.CHECKING)
                 _store(
                     task_id,
                     client_id=client_id,
@@ -1342,6 +1347,7 @@ def _run_visual_note(
             )
             drafts.append(part_draft)
             coverage_parts.append({"part": part.index, **part_coverage})
+            note_progress.part_done(task_id, index=part.index, text=part_draft.markdown or "")
         draft = _joined_draft(drafts, parts, title=note_title(job))
         cropped, frames_with_crops = apply_crops(draft.markdown, task_id, frames)
         cited = cited_frames(cropped, frames_with_crops)
@@ -1439,6 +1445,7 @@ def _run_visual_note(
         )
         raise
     finally:
+        note_progress.finish(task_id)
         release(task_id)
 
 

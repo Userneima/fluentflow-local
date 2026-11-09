@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -133,6 +134,44 @@ def _revised_note(user: str) -> str:
     return found.group(1).strip() if found and found.group(1).strip() else NOTE
 
 
+def _chapter_note(system: str, user: str) -> str | None:
+    """A long text-model note's own requests (``ai_summarizer`` chapter mode),
+    answered in their formats, so the fake run goes through its stages: the
+    points of each stretch, two chapters, then each chapter."""
+    from backend.core.ai_prompts import (
+        _CHAPTER_EVIDENCE_SYSTEM,
+        _CHAPTER_NOTE_SYSTEM,
+        _CHAPTER_OUTLINE_SYSTEM,
+        _CHAPTER_STYLE_SYSTEM,
+    )
+
+    if system.startswith(_CHAPTER_EVIDENCE_SYSTEM[:40]):
+        try:
+            segment = json.loads(user)[0]["segment_id"]
+        except (ValueError, LookupError, TypeError):
+            return "[]"
+        return _json([{"text": f"假模型：{segment} 的要点", "source_segment_ids": [segment], "importance": 3}])
+    if system == _CHAPTER_OUTLINE_SYSTEM:
+        try:
+            ids = [str(item.get("evidence_id")) for item in json.loads(user) if isinstance(item, dict)]
+        except (ValueError, TypeError):
+            ids = []
+        half = max(1, len(ids) // 2)
+        return _json([
+            {"title": "假模型的第一章", "used_evidence_ids": ids[:half]},
+            {"title": "假模型的第二章", "used_evidence_ids": ids[half:] or ids[:1]},
+        ])
+    if system.startswith(_CHAPTER_NOTE_SYSTEM[:40]):
+        try:
+            title = str(json.loads(user).get("title") or "一章")
+        except (ValueError, AttributeError):
+            title = "一章"
+        return f"## {title}\n\n假模型写的这一章（测试用），内容是固定的。\n\n- 第一个要点\n- 第二个要点\n"
+    if system.startswith(_CHAPTER_STYLE_SYSTEM[:40]):
+        return user  # one voice already
+    return None
+
+
 def _note(system: str) -> str:
     if "note_markdown" in system:
         return _json({"note_markdown": NOTE, "basis_note": MODEL_NOTE, "people": ""})
@@ -179,7 +218,7 @@ def reply(system: str, user: str) -> str:
     if part == "挑截图":
         return _json({"requests": [], "selections": []})
     if part in ("写正文", "按候选规则试写"):
-        return _note(system)
+        return _chapter_note(system, user) or _note(system)
     return _shaped(system)
 
 
@@ -220,6 +259,18 @@ def anthropic_message(text: str) -> Any:
 # run can stop a step while its requests are out (a step's answers kept for
 # carrying on, ``model_answers``).
 ANSWER_SECONDS_ENV = "FLUENTFLOW_FAKE_MODEL_ANSWER_SECONDS"
+
+
+def stream(text: str, on_text: Any) -> None:
+    """Hand ``text`` over the way a streamed answer grows: in a few pieces, a
+    moment apart when the run asks for slow answers, so a page can be watched
+    filling in."""
+    pieces = 6
+    pause = min(1.0, answer_seconds() / pieces)
+    for index in range(1, pieces + 1):
+        if pause:
+            time.sleep(pause)
+        on_text(text[: len(text) * index // pieces])
 
 
 def answer_seconds() -> float:

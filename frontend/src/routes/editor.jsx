@@ -34,6 +34,7 @@ import {
 } from '../app/shared.jsx';
 import {useApp} from '../app/AppContext.jsx';
 import {notePendingSentence, noteWriterLabel, resolveNoteWriter} from '../lib/noteWriter.js';
+import NoteWritingProgress from '../components/NoteWritingProgress.jsx';
 import NoteEditor from '../components/NoteEditor.jsx';
 import AgentNotePrompt from '../components/AgentNotePrompt.jsx';
 import NoteExplanation from '../components/NoteExplanation.jsx';
@@ -2301,7 +2302,15 @@ const Editor = () => {
                                             <AgentNotePrompt result={result} lang={lang}/>
                                         </div>
                                     ) : (
-                                        <p className="text-sm italic text-[#666] dark:text-white/60">{notePendingSentence(noteWriter, result, lang)}</p>
+                                        <NoteWritingProgress
+                                            taskId={result?.task_id}
+                                            fallback={notePendingSentence(noteWriter, result, lang)}
+                                            requestOptions={resultJobOptions}
+                                            // The writer finished: fetch the note once the task is done,
+                                            // as after carrying a task on (some routes never mark the
+                                            // note pending, so the page would not poll for it).
+                                            onWriterDone={() => { if (result?.task_id) setResumeWatch({taskId: result.task_id}); }}
+                                        />
                                     )}
                                     </div>
                                 )}
