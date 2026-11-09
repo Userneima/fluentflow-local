@@ -181,6 +181,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Run by hand on an English Windows, stdout is cp1252: the result's Chinese
+    # (a diagnosis line) raised UnicodeEncodeError after the check had passed.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="backslashreplace")
     args = parse_args(argv)
     try:
         payload = run_check(api_base=args.api_base, client_id=args.client_id, access_token=args.access_token, backend_e2e=args.backend_e2e)
