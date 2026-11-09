@@ -122,8 +122,12 @@ python_ok() {
 	if [[ "$1" == /usr/bin/python3* ]] && ! has_dev_tools; then
 		return 1
 	fi
-	"$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+	"$1" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 14) else 1)' >/dev/null 2>&1
 }
+# 上限 3.14：依赖（onnxruntime、ctranslate2、faster-whisper）只给 3.10 到 3.14 出了
+# 预编译包，更新的 Python（比如刚出的 3.15）会在 pip 深处报「onnxruntime 找不到匹配
+# 的版本」，看不出是版本的问题。这几个包给下一个 Python 出包后再放宽；
+# launchers/windows/setup-local.ps1 有同样的上限。
 
 python_minor_key() {
 	# 把 "3.14" 变成可比较的整数，用来在多个解释器里挑最新的那个。
@@ -189,15 +193,21 @@ fi
 VENV_PY="${VENV}/bin/python"
 
 if [[ -x "$VENV_PY" ]] && ! python_ok "$VENV_PY"; then
-	fail "已存在的虚拟环境是 $("$VENV_PY" -V 2>&1)，低于 3.10。
+	if "$VENV_PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+		# 比 3.14 新：多半是上一次用新 Python 装失败留下的，里面只有依赖包，重建。
+		echo "已有的虚拟环境是 $("$VENV_PY" -V 2>&1)，依赖装不上，删掉重建…"
+		rm -rf "$VENV"
+	else
+		fail "已存在的虚拟环境是 $("$VENV_PY" -V 2>&1)，低于 3.10。
 请删除它再重新运行本脚本：rm -rf ${VENV}"
+	fi
 fi
 
 if [[ ! -x "$VENV_PY" ]]; then
 	BASE_PY="$(best_python || true)"
 	if [[ -z "$BASE_PY" ]]; then
 		# 没有合格的 Python 就用 uv 装一个到用户目录：不要密码，不碰系统。
-		echo "没有找到 3.10 以上的 Python，用 uv 装一个到 ${TOOLS_DIR}…"
+		echo "没有找到 3.10 到 3.14 之间的 Python，用 uv 装一个到 ${TOOLS_DIR}…"
 		if [[ ! -x "${TOOLS_BIN}/uv" ]]; then
 			download "https://github.com/astral-sh/uv/releases/latest/download/uv-${ARCH_UV}-apple-darwin.tar.gz" \
 				"${TOOLS_DIR}/uv.tar.gz" || fail "uv 下载失败，请检查网络后重新运行本脚本。"

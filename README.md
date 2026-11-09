@@ -115,7 +115,7 @@ npm run build:frontend
 .venv/bin/python -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000
 ```
 
-需要 Python 3.10 以上和 FFmpeg。AI 与飞书凭据在应用的设置页里填写。运行数据默认
+需要 Python 3.10 到 3.14 和 FFmpeg。AI 与飞书凭据在应用的设置页里填写。运行数据默认
 保存在系统应用数据目录（macOS 是 `~/Library/Application Support/FluentFlow`），
 不在仓库中。
 

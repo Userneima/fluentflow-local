@@ -223,6 +223,10 @@ Write-Host ""
 # into its text: a stderr line arrives as an error record, which printed a
 # NativeCommandError trailer under every log line.
 $ErrorActionPreference = "Continue"
+# PowerShell decodes a native command's output with the console's code page
+# (GBK on a Chinese Windows), and the service writes UTF-8 under PYTHONUTF8, so
+# every Chinese line in this window and in local.log came out garbled.
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
 & $Python -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port 2>&1 | ForEach-Object {
     $Line = "$_"
     Write-Host $Line

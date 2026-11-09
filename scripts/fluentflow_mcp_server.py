@@ -2301,9 +2301,26 @@ def run_stdio(stdin=None, stdout=None) -> list[threading.Thread]:
     return [thread for thread in calls if thread.is_alive()]
 
 
+def _use_utf8_stdio() -> None:
+    """MCP messages are UTF-8 JSON. Claude Code and Codex start this process
+    over pipes without Python's UTF-8 mode, so on a Chinese Windows its stdin
+    and stdout used the ANSI code page, GBK: Chinese in replies reached the
+    agent as GBK bytes, an emoji in a note raised inside the call and left it
+    unanswered, and Chinese arguments (a passage to replace) were misread."""
+    for stream, options in (
+        (sys.stdin, {"encoding": "utf-8"}),
+        (sys.stdout, {"encoding": "utf-8", "newline": "\n"}),
+        (sys.stderr, {"encoding": "utf-8", "errors": "backslashreplace"}),
+    ):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(**options)
+
+
 def main() -> int:
     global _heartbeat_enabled
     _heartbeat_enabled = True
+    _use_utf8_stdio()
     # The host closing stdin ends the conversation: exit without finishing
     # the calls still out, or their heartbeat would outlive it.
     run_stdio()

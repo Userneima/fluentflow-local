@@ -118,32 +118,60 @@ if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
     }
 }
 
-if (-not (Test-Path $Python)) {
-    # The dependencies need 3.10 or newer; an older `py -3` builds a venv that
-    # then fails deep inside pip with an error that never mentions the version.
-    $PyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
-    $PythonOk = $false
-    if ($PyLauncher) {
+# The dependencies have prebuilt packages for Python 3.10 to 3.14 only. A newer
+# one (3.15, the default on a machine that just installed the latest Python)
+# fails deep inside pip, "onnxruntime: no matching distribution", with nothing
+# saying the version is the cause. Raise the upper bound here once
+# onnxruntime, ctranslate2 and faster-whisper publish packages for the next
+# Python; launchers/macos/setup-local.sh has the same bound.
+$PythonVersions = @("3.12", "3.13", "3.11", "3.14", "3.10")
+$PythonSupported = "import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 14) else 1)"
+
+function Find-SupportedPython {
+    $Launcher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if (-not $Launcher) { return $null }
+    foreach ($Version in $PythonVersions) {
         # try/catch because Windows PowerShell 5.1 turns a native command's
         # stderr into a terminating error under ErrorActionPreference=Stop, and
-        # py.exe with no Python installed writes exactly that.
+        # py.exe asked for a version it does not have writes exactly that.
         try {
-            & $PyLauncher.Source -3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>$null
-            $PythonOk = ($LASTEXITCODE -eq 0)
-        } catch {
-            $PythonOk = $false
-        }
+            & $Launcher.Source "-$Version" -c $PythonSupported 2>$null
+            if ($LASTEXITCODE -eq 0) { return @($Launcher.Source, "-$Version") }
+        } catch {}
     }
-    if (-not $PythonOk) {
+    return $null
+}
+
+# A venv left by an earlier attempt with an unsupported Python would fail the
+# same way on every rerun; it holds nothing but packages, so it is rebuilt.
+if (Test-Path $Python) {
+    try {
+        & $Python -c $PythonSupported 2>$null
+        $VenvOk = ($LASTEXITCODE -eq 0)
+    } catch {
+        $VenvOk = $false
+    }
+    if (-not $VenvOk) {
+        Write-Host "已有的虚拟环境是 $(& $Python -V 2>&1)，依赖装不上，删掉重建…"
+        Remove-Item -Recurse -Force $Venv
+    }
+}
+
+if (-not (Test-Path $Python)) {
+    $BasePython = Find-SupportedPython
+    if (-not $BasePython) {
         # User scope: the machine-wide installer asks for administrator rights.
-        Install-WithWinget "Python.Python.3.12" "3.10 以上的 Python" @("--scope", "user")
-        $PyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
-        if (-not $PyLauncher) {
+        Install-WithWinget "Python.Python.3.12" "3.10 到 3.14 之间的 Python" @("--scope", "user")
+        if (-not (Get-Command py.exe -ErrorAction SilentlyContinue)) {
             throw "Python 已经装好，但 PATH 里还找不到 py.exe。请开一个新的 PowerShell 窗口，重新运行本脚本。"
         }
+        $BasePython = Find-SupportedPython
+        if (-not $BasePython) {
+            throw "装好了 Python 3.12，但 py.exe 找不到它。请开一个新的 PowerShell 窗口，重新运行本脚本。"
+        }
     }
-    Write-Host "创建项目虚拟环境…"
-    Invoke-Checked $PyLauncher.Source @("-3", "-m", "venv", $Venv)
+    Write-Host "用 Python $($BasePython[1].TrimStart('-')) 创建项目虚拟环境…"
+    Invoke-Checked $BasePython[0] @($BasePython[1], "-m", "venv", $Venv)
 }
 
 Write-Host "安装 Python 依赖（体积较大，首次约需十几分钟）…"
