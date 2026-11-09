@@ -89,6 +89,19 @@ describe('useNoteFollow', () => {
         expect(result.current.editorProps.alsoKeys).toEqual(['r10']);
     });
 
+    it('reports how far into the section playing the talk is, in coarse steps', async () => {
+        const {result, clock} = setup();
+        await settle();
+        act(() => clock.set(100));
+        expect(result.current.editorProps.progress).toBe(0);
+        act(() => clock.set(350));
+        expect(result.current.editorProps.progress).toBe(0.5);
+        act(() => clock.set(351));
+        expect(result.current.editorProps.progress).toBe(0.5);
+        act(() => clock.set(599));
+        expect(result.current.editorProps.progress).toBe(0.98);
+    });
+
     it('pauses when the reader scrolls the note and comes back to the section playing on resume', async () => {
         const {result} = setup();
         await settle();

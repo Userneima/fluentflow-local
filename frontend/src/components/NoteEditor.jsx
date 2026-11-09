@@ -6,7 +6,7 @@ import {markdown, markdownKeymap} from '@codemirror/lang-markdown';
 import SvgIcon from './SvgIcon.jsx';
 import {noteLivePreview, syncFocus} from '../lib/noteLivePreview.js';
 import {lineStyleOf, setLineStyle, toggleInline, toggleList} from '../lib/noteEditorCommands.js';
-import {noteFollow, revealSection, setNoteFollow} from '../lib/noteFollowEditor.js';
+import {followSection, noteFollow, setNoteFollow} from '../lib/noteFollowEditor.js';
 import {toolbarButton} from '../lib/ui.js';
 
 // The note editor (decision 5.34): the note's markdown source edited in place,
@@ -264,8 +264,8 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
     }, [follow?.rows, follow?.activeKey, follow?.alsoKeys]);
 
     useEffect(() => {
-        if (follow?.following && follow?.activeKey) revealSection(viewRef.current, follow.activeKey);
-    }, [follow?.following, follow?.activeKey, follow?.revealToken]);
+        if (follow?.following && follow?.activeKey) followSection(viewRef.current, follow.activeKey, follow.progress ?? 0);
+    }, [follow?.following, follow?.activeKey, follow?.revealToken, follow?.progress]);
 
     const run = (command) => { const view = viewRef.current; if (view) command(view); };
     const labels = lang === 'zh'

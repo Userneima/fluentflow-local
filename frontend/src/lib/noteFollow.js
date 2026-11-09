@@ -117,3 +117,14 @@ export const alsoAt = (time, rows, activeId) => {
     if (!Number.isFinite(time) || !rows?.length) return [];
     return rows.filter((row) => row.id !== activeId && rowHolds(row, time)).map((row) => row.id);
 };
+
+// How far into the span of `row` that holds `time` the playback is, 0 to 1
+// (the main span first): where in its section the talk roughly is now. The
+// table times whole sections only; within one the note keeps the order of
+// the talk closely enough to scroll along by this share (decision 6.66).
+export const spanProgress = (row, time) => {
+    if (!row || !Number.isFinite(time)) return null;
+    const span = [row.primary, ...row.others].find((item) => inside(item, time));
+    if (!span) return null;
+    return Math.min(1, Math.max(0, (time - span[0]) / (span[1] - span[0])));
+};

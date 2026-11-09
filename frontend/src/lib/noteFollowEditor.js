@@ -126,21 +126,61 @@ export const noteFollow = (context = {}) => {
     return [followField, decorations, followTheme];
 };
 
-// Bring the heading of the section that has row `rowId` into view unless it
-// already is.
-export const revealSection = (view, rowId) => {
+// Keep the part of the section with row `rowId` that is being talked about in
+// view. `progress` (0 to 1) is how far into the section's span the playback
+// is; the place it points to is that share down the section's own text (to
+// its next heading of any level). A section that fits in the view is shown
+// from its heading, as before. A longer one is scrolled along: once the place
+// talked about leaves the upper two thirds of the view, it is brought back to
+// a quarter from the top, never above the section's heading (decision 6.66).
+// Moving to another section jumps; moving inside one scrolls smoothly.
+const lastFollowed = new WeakMap();
+
+// Where the scroller should be (its scrollTop), or null to stay: the section
+// spans `sectionTop` to `sectionBottom` in the scroller's own measure.
+// `entering`: the section has just become the one playing, so a long one is
+// shown from near its heading rather than wherever its start happens to sit.
+export const followScrollTop = ({sectionTop, sectionBottom, top, height, progress = 0, entering = false}) => {
+    const share = Math.min(1, Math.max(0, Number(progress) || 0));
+    let want;
+    if (sectionBottom - sectionTop <= height * 0.75) {
+        if (sectionTop >= top && sectionBottom <= top + height) return null;
+        want = sectionTop - 32;
+    } else {
+        const talked = sectionTop + share * (sectionBottom - sectionTop);
+        const headingShown = sectionTop >= top && sectionTop <= top + height * (entering ? 0.25 : 0.75);
+        if (talked >= top && talked <= top + height * 0.65 && (headingShown || sectionTop < top)) return null;
+        want = Math.max(sectionTop - 32, talked - height * 0.25);
+    }
+    want = Math.max(0, Math.round(want));
+    return Math.abs(want - top) < 4 ? null : want;
+};
+
+export const followSection = (view, rowId, progress = 0) => {
     if (!view || !rowId) return false;
     const {rows} = view.state.field(followField);
     const sections = noteSections(view.state.doc.toString());
     const matched = matchRows(rows || [], sections);
-    const section = sections.find((item) => matched.get(item.index)?.id === rowId);
-    if (!section) return false;
-    const pos = view.state.doc.line(section.line).from;
-    const block = view.lineBlockAt(pos);
+    const index = sections.findIndex((item) => matched.get(item.index)?.id === rowId);
+    if (index < 0) return false;
+    const doc = view.state.doc;
     const scroller = view.scrollDOM;
-    const top = scroller.scrollTop;
     const height = scroller.clientHeight;
-    if (height > 0 && block.top >= top && block.bottom <= top + height * 0.75) return false;
-    view.dispatch({effects: EditorView.scrollIntoView(pos, {y: 'start', yMargin: 32})});
+    if (!(height > 0)) return false;
+    const ownLast = index + 1 < sections.length ? sections[index + 1].line - 1 : doc.lines;
+    const first = view.lineBlockAt(doc.line(sections[index].line).from);
+    const last = view.lineBlockAt(doc.line(Math.max(ownLast, sections[index].line)).to);
+    // Line blocks are measured from the top of the document; the scroller's
+    // padding sits above it.
+    const origin = view.documentTop - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    const sectionTop = origin + first.top;
+    const sectionBottom = origin + last.bottom;
+    const top = scroller.scrollTop;
+    const same = lastFollowed.get(view) === rowId;
+    const want = followScrollTop({sectionTop, sectionBottom, top, height, progress, entering: !same});
+    lastFollowed.set(view, rowId);
+    if (want === null) return false;
+    if (typeof scroller.scrollTo === 'function') scroller.scrollTo({top: want, behavior: same ? 'smooth' : 'auto'});
+    else scroller.scrollTop = want;
     return true;
 };

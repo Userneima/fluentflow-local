@@ -4,7 +4,10 @@
 //   - Each heading with a row shows its time; clicking it asks the page to
 //     play from where the section is talked about most, naming the section.
 //   - The section playing is marked, heading and body, up to the next heading
-//     of its level or higher; while following, its heading is brought into view.
+//     of its level or higher; while following, its heading is brought into view,
+//     and a section longer than the view is scrolled through as the playback
+//     moves through its span, so the part being talked about stays in view
+//     (decision 6.66).
 //   - Only the main span (where a section is talked about most) is followed.
 //     A section that draws on the moment through another span, like the recap
 //     at the end of a meeting, is marked lightly and never scrolled to; its
@@ -23,7 +26,8 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {act, cleanup, fireEvent, render} from '@testing-library/react';
 import {EditorView} from '@codemirror/view';
 import NoteEditor from './NoteEditor.jsx';
-import {alsoAt, bodyHash, matchRows, normalizeRows, noteSections, sectionAt} from '../lib/noteFollow.js';
+import {alsoAt, bodyHash, matchRows, normalizeRows, noteSections, sectionAt, spanProgress} from '../lib/noteFollow.js';
+import {followScrollTop} from '../lib/noteFollowEditor.js';
 
 const noRects = () => ({length: 0, item: () => null, [Symbol.iterator]: function* () {}});
 const emptyRect = () => ({x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({})});
@@ -65,6 +69,21 @@ const ROWS = normalizeRows([
 ]);
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+// jsdom lays nothing out; give the note's scroller a height so following
+// has a view to keep the section in, and record where it is sent.
+const followScroller = () => {
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function () { return this.classList?.contains('cm-scroller') ? 400 : 0; });
+    const sent = [];
+    // jsdom keeps no scroll position and lays nothing out: the note is put
+    // far below the view, so any section playing is out of it.
+    vi.spyOn(EditorView.prototype, 'documentTop', 'get').mockReturnValue(5000);
+    const place = new WeakMap();
+    vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(function () { return place.get(this) || 0; });
+    vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(function (value) { place.set(this, value); });
+    HTMLElement.prototype.scrollTo = function (options) { sent.push(options); place.set(this, options.top); };
+    return sent;
+};
 
 const renderNote = (props = {}) => {
     const onChange = vi.fn();
@@ -134,6 +153,40 @@ describe('finding each row its section', () => {
     });
 });
 
+describe('scrolling through a long section', () => {
+    const long = {sectionTop: 1000, sectionBottom: 3000, height: 800};
+
+    it('tells how far into the span holding the moment the playback is', () => {
+        expect(spanProgress(ROWS[0], 161)).toBe(0);
+        expect(spanProgress(ROWS[0], 366)).toBeCloseTo(0.5);
+        expect(spanProgress(ROWS[0], 23)).toBeCloseTo(0.5);
+        expect(spanProgress(ROWS[0], 700)).toBe(null);
+    });
+
+    it('shows a long section from its heading when it starts', () => {
+        expect(followScrollTop({...long, top: 0, progress: 0})).toBe(968);
+        expect(followScrollTop({...long, top: 968, progress: 0.1})).toBe(null);
+        // Its heading half way down the view: left there while playing on,
+        // brought up when the section has just started playing.
+        expect(followScrollTop({...long, top: 600, progress: 0.02})).toBe(null);
+        expect(followScrollTop({...long, top: 600, progress: 0.02, entering: true})).toBe(968);
+    });
+
+    it('scrolls on once the part talked about leaves the upper two thirds of the view', () => {
+        // Half way through: 2000 is the place talked about, out of view at 968.
+        expect(followScrollTop({...long, top: 968, progress: 0.5})).toBe(1800);
+        // Then it stays while the place moves down the view.
+        expect(followScrollTop({...long, top: 1800, progress: 0.6})).toBe(null);
+        expect(followScrollTop({...long, top: 1800, progress: 0.9})).toBe(2600);
+    });
+
+    it('leaves a short section alone while it is in view, and brings it in otherwise', () => {
+        const short = {sectionTop: 1000, sectionBottom: 1300, height: 800};
+        expect(followScrollTop({...short, top: 900, progress: 0.9})).toBe(null);
+        expect(followScrollTop({...short, top: 0, progress: 0.9})).toBe(968);
+    });
+});
+
 describe('the note editor following playback', () => {
     it('shows a time beside each heading with a row and plays from it on click, without editing the note', () => {
         const {container, onChange, follow} = renderNote();
@@ -159,28 +212,28 @@ describe('the note editor following playback', () => {
     });
 
     it('brings the section playing into view while following, and not while paused', () => {
-        const scroll = vi.spyOn(EditorView, 'scrollIntoView');
+        const sent = followScroller();
         const {rerender} = renderNote({following: false});
         rerender({following: false, activeKey: 'r2'});
-        expect(scroll).not.toHaveBeenCalled();
+        expect(sent).toHaveLength(0);
         rerender({following: true, activeKey: 'r2'});
-        expect(scroll).toHaveBeenCalledTimes(1);
+        expect(sent).toHaveLength(1);
         rerender({following: true, activeKey: 'r9'});
-        expect(scroll).toHaveBeenCalledTimes(2);
+        expect(sent).toHaveLength(2);
     });
 
     it('marks the recap lightly without scrolling to it, and leaves the parent of the section playing unmarked', () => {
-        const scroll = vi.spyOn(EditorView, 'scrollIntoView');
+        const sent = followScroller();
         const {container, rerender, onChange} = renderNote({following: false});
         rerender({following: true, activeKey: 'r1', alsoKeys: ['r2', 'r9']});
-        expect(scroll).toHaveBeenCalledTimes(1);
+        expect(sent).toHaveLength(1);
         expect(lineOf(container, '第一处小结').className).toContain('cm-follow-also');
         expect(lineOf(container, '第一处小结').className).not.toContain('cm-follow-active');
         expect(lineOf(container, '两周一个').className).toContain('cm-follow-also');
         expect(lineOf(container, '稳定。').className).toContain('cm-follow-active');
 
         rerender({following: true, activeKey: 'r1', alsoKeys: ['r9']});
-        expect(scroll).toHaveBeenCalledTimes(1);
+        expect(sent).toHaveLength(1);
 
         rerender({following: true, activeKey: 'r11', alsoKeys: ['r1']});
         expect(lineOf(container, '一、做得好的').className).not.toContain('cm-follow-also');

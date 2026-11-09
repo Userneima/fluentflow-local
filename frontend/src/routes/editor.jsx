@@ -2014,13 +2014,18 @@ const Editor = () => {
                             half a second on a 7104-sentence transcript, stopped
                             playback while the page still showed it playing, and
                             lost the reading position. */}
+                        {/* Video review: the video takes all the height it can use and
+                            the sentence list below keeps about three lines (the one
+                            playing, one before, one after: decision 6.66); a narrow
+                            column, where the video is held by its width, leaves the
+                            list the rest. */}
                         <div className={shouldShowVideoReview ? 'flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4' : 'flex min-h-0 flex-1 flex-col overflow-hidden'}>
                             <video
                                 ref={mediaRef}
                                 src={mediaUrl || undefined}
                                 controls={shouldShowVideoReview}
                                 controlsList="noplaybackrate"
-                                className={shouldShowVideoReview ? 'max-h-[min(58vh,36rem)] w-full shrink-0 rounded-[12px] bg-black object-contain' : 'hidden'}
+                                className={shouldShowVideoReview ? 'min-h-0 w-full shrink rounded-[12px] bg-black object-contain' : 'hidden'}
                                 onTimeUpdate={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration})}
                                 onLoadedMetadata={(e)=>{ e.currentTarget.playbackRate = playbackRate; restoreMediaPosition(e.currentTarget, e.currentTarget.duration || durSec || 0); }}
                                 onSeeked={(e)=>updateMediaCurrentTime(e.currentTarget.currentTime || 0, {duration: e.currentTarget.duration || playbackDuration, force: true})}
@@ -2036,7 +2041,7 @@ const Editor = () => {
                                 onCompositionStart={() => { transcriptComposingRef.current = true; }}
                                 onCompositionEnd={() => { transcriptComposingRef.current = false; }}
                                 className={shouldShowVideoReview
-                                    ? 'hide-scrollbar min-h-[10rem] flex-1 overflow-y-auto rounded-[12px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]'
+                                    ? 'hide-scrollbar min-h-[9.75rem] flex-1 overflow-y-auto rounded-[12px] border border-[#e4e0e0] bg-[#fbfbfb] px-4 py-2 dark:border-white/[0.12] dark:bg-white/[0.05]'
                                     : 'hide-scrollbar min-h-0 flex-1 overflow-y-auto p-3'}
                             >
                                 <div className={shouldShowVideoReview ? 'divide-y divide-[#e4e0e0] dark:divide-white/[0.08]' : 'space-y-1.5'}>

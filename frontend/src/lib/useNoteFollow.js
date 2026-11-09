@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {alsoAt, matchRows, normalizeRows, noteSections, rowHolds, sectionAt} from './noteFollow.js';
+import {alsoAt, matchRows, normalizeRows, noteSections, rowHolds, sectionAt, spanProgress} from './noteFollow.js';
 
 // The editor page's side of the note following playback (decision 6.37,
 // on in every editor, decision 6.56). Reads the section times every POLL_MS while
@@ -15,6 +15,9 @@ import {alsoAt, matchRows, normalizeRows, noteSections, rowHolds, sectionAt} fro
 // `alsoKeys`: marked lightly, never scrolled to.
 
 export const POLL_MS = 20000;
+// How finely the place inside the section playing is reported: the note is
+// moved at most this many times while one section plays.
+export const PROGRESS_STEPS = 50;
 const ASK = new Set(['missing', 'partial', 'failed']);
 
 export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut, hasMedia, clock, apiFetch, apiBase, seek}) => {
@@ -25,6 +28,9 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
     // editor is not redrawn on every tick of the player.
     const [alsoJoined, setAlsoJoined] = useState('');
     const [revealToken, setRevealToken] = useState(0);
+    // How far into the section playing the talk is (0 to 1, in steps of
+    // 1/PROGRESS_STEPS), so the note scrolls through a long section too.
+    const [progress, setProgress] = useState(0);
     const pinnedRef = useRef(null);
     const activeRef = useRef(null);
 
@@ -79,7 +85,7 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
     }, [rows, foundIds]);
 
     useEffect(() => {
-        if (!foundRows.length) { setActiveKey(null); activeRef.current = null; setAlsoJoined(''); return undefined; }
+        if (!foundRows.length) { setActiveKey(null); activeRef.current = null; setAlsoJoined(''); setProgress(0); return undefined; }
         const update = (time) => {
             const pinned = foundRows.find((row) => row.id === pinnedRef.current);
             let key = null;
@@ -91,6 +97,11 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
             if (key) {
                 activeRef.current = key;
                 setActiveKey((previous) => (previous === key ? previous : key));
+            }
+            const share = spanProgress(foundRows.find((row) => row.id === activeRef.current), time);
+            if (share !== null) {
+                const step = Math.floor(share * PROGRESS_STEPS) / PROGRESS_STEPS;
+                setProgress((previous) => (previous === step ? previous : step));
             }
             const also = alsoAt(time, foundRows, activeRef.current).join(' ');
             setAlsoJoined((previous) => (previous === also ? previous : also));
@@ -126,6 +137,6 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
         alsoKeys,
         toggle: () => (following ? setFollowing(false) : resume()),
         resume,
-        editorProps: enabled ? {rows, activeKey, alsoKeys, following, revealToken, onSeek: seekSection, onUserScroll: pause} : null,
+        editorProps: enabled ? {rows, activeKey, alsoKeys, following, revealToken, progress, onSeek: seekSection, onUserScroll: pause} : null,
     };
 };
