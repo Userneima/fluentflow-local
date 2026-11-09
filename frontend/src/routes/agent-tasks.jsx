@@ -1058,10 +1058,13 @@ const AgentTasks = () => {
         if (!taskId || !artifact) return;
         const name = String(artifact.filename || '').split('/').pop() || `${taskId}_debreath.mp4`;
         setDownloadingTaskId(taskId);
+        setRetryError((prev) => (prev?.taskId === taskId ? null : prev));
         try {
             await downloadJobMedia(taskId, 'debreath_media', name);
         } catch (error) {
-            setError(error?.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable'));
+            // On the card itself, where the button was pressed: the page-wide
+            // error bar is cleared by the next poll and sits above a long list.
+            setRetryError({taskId, message: error?.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable')});
         } finally {
             setDownloadingTaskId('');
         }

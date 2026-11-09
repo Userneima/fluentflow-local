@@ -19,6 +19,7 @@ import {MemoryRouter, Route, Routes, useLocation} from 'react-router-dom';
 
 let tasks = [];
 const deleteJob = vi.fn(async () => ({}));
+const downloadJobMedia = vi.fn(async () => ({}));
 
 vi.mock('../app/AppContext.jsx', () => ({
     useApp: () => ({
@@ -49,7 +50,7 @@ vi.mock('../app/shared.jsx', async () => {
             deleteJob,
             retryJob: async () => ({}),
             createVideoSourceJob: async () => ({}),
-            downloadJobMedia: async () => ({}),
+            downloadJobMedia,
             openOutputFolder: async () => ({}),
         }),
     };
@@ -108,6 +109,20 @@ describe('a finished record', () => {
         fireEvent.click(within(dialog).getByTestId('confirm-dialog-confirm'));
         await waitFor(() => expect(deleteJob).toHaveBeenCalledWith('a', {}));
         expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+
+    // Push review 2026-11-09: a failed download used to go to the page-wide
+    // error bar, which the next poll clears and which sits above a long list.
+    it('says a failed cut-file download on the card whose button was pressed', async () => {
+        tasks = [finished('u', {
+            debreath: {status: 'completed', rendered: true},
+            artifacts: {debreath_media: {filename: 'u_debreath.mp4'}},
+        })];
+        downloadJobMedia.mockRejectedValueOnce(new Error('剪后文件读不到了'));
+        mount();
+        fireEvent.click(screen.getByRole('button', {name: '下载剪后文件'}));
+        expect((await screen.findByTestId('retry-error')).textContent).toContain('剪后文件读不到了');
+        expect(downloadJobMedia).toHaveBeenCalledWith('u', 'debreath_media', 'u_debreath.mp4');
     });
 
     it('carries no badge when nothing is wrong, the same as the start page', () => {
