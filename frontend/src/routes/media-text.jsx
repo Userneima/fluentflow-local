@@ -28,6 +28,7 @@ import {
     queueUploadItemsFromQueuedResponse,
 } from '../lib/queueUpload.js';
 import SvgIcon from '../components/SvgIcon.jsx';
+import {useConfirm} from '../components/ConfirmDialog.jsx';
 import {finishedDuplicateLink, submitIgnoredExtraUrls, submitWasDuplicateOfActive} from '../lib/linkRetry.js';
 import {noteWriterBatchClause, resolveNoteWriter, textModelKeyConfigured} from '../lib/noteWriter.js';
 import {NOTE_ATTENTION_IDS, workflowChoicesFrom} from '../lib/workflowStatus.js';
@@ -64,6 +65,7 @@ const ENTRY_TABS = [
 
 const MediaText = () => {
     const {t, lang} = useI18n();
+    const [confirm, confirmDialog] = useConfirm();
     const {
         history,
         tasks,
@@ -390,10 +392,15 @@ const MediaText = () => {
                     ? `\n（一次最多 ${LOCAL_PATHS_PER_BATCH} 个，这次处理前 ${taken.length} 个，剩下 ${left} 个之后再选一次）`
                     : `\n(At most ${LOCAL_PATHS_PER_BATCH} at a time: the first ${taken.length} now, choose the other ${left} afterwards.)`)
                 : '';
-            const confirmText = lang === 'zh'
-                ? `选了 ${chosen.length} 个文件。每个都会自动去气口、转录${clause}。继续吗？${tail}`
-                : `${chosen.length} files selected. Each one is cut and transcribed${clause}. Continue?${tail}`;
-            if (!window.confirm(confirmText)) return null;
+            const ok = await confirm({
+                tone: 'primary',
+                title: t('confirm.batchFilesTitle').replace('{count}', String(chosen.length)),
+                message: lang === 'zh'
+                    ? `每个都会自动去气口、转录${clause}。${tail}`
+                    : `Each one is cut and transcribed${clause}.${tail}`,
+                confirmLabel: t('confirm.batchAction'),
+            });
+            if (!ok) return null;
         }
         return processLocalPaths(taken, buildSubmitOptions(loadSettings()));
     };
@@ -510,10 +517,15 @@ const MediaText = () => {
             }
             const tail = skipped.length ? `\n（${skipped.join('；')}）` : '';
             const clause = noteWriterBatchClause(noteWriter, lang);
-            const confirmText = lang === 'zh'
-                ? `要处理这个文件夹里的 ${count} 个录像吗？每个都会自动去气口、转录${clause}。${tail}`
-                : `Process ${count} recordings in this folder? Each is cut and transcribed${clause}.${tail}`;
-            if (!window.confirm(confirmText)) return;
+            const ok = await confirm({
+                tone: 'primary',
+                title: t('confirm.batchFolderTitle').replace('{count}', String(count)),
+                message: lang === 'zh'
+                    ? `每个都会自动去气口、转录${clause}。${tail}`
+                    : `Each is cut and transcribed${clause}.${tail}`,
+                confirmLabel: t('confirm.batchAction'),
+            });
+            if (!ok) return;
             setDroppedWithoutPath(0);
             await processLocalFolder(chosen.path, buildSubmitOptions(loadSettings()));
             navigate('/agent');
@@ -692,10 +704,13 @@ const MediaText = () => {
     };
 
     const handleCancel = async () => {
-        const confirmText = lang === 'zh'
-            ? '取消当前正在上传或处理的任务？任务会中止，完整结果不会生成；如果任务已经进入队列，可到处理记录查看已取消记录。这不是删除历史记录。'
-            : 'Cancel the current upload or processing task? The task will stop and a complete result will not be created. If it already entered the queue, you can check the cancelled record in Processing records. This does not delete history.';
-        if (!window.confirm(confirmText)) return;
+        const ok = await confirm({
+            title: t('confirm.cancelTaskTitle'),
+            message: t('confirm.cancelUploadOrTaskDesc'),
+            confirmLabel: t('confirm.cancelTaskAction'),
+            cancelLabel: t('confirm.keepTask'),
+        });
+        if (!ok) return;
         abortPendingUpload();
         abortRef.current = null;
         if (currentJob?.taskId) {
@@ -984,6 +999,7 @@ const MediaText = () => {
                     </div>
                 </div>
             )}
+            {confirmDialog}
         </main>
     );
 };

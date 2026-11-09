@@ -13,6 +13,7 @@ import {
 import {CutReport, hasReport} from '../components/CutReport.jsx';
 import AgentCutWait from '../components/AgentCutWait.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
+import {useConfirm} from '../components/ConfirmDialog.jsx';
 import {fmtCharCount, fmtDuration, progressMessageOf} from '../lib/format.js';
 import {DropdownMenu} from '../app/DropdownMenu.jsx';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
@@ -774,7 +775,8 @@ const RECORD_FILTERS = [
 ];
 
 const AgentTasks = () => {
-    const {lang} = useI18n();
+    const {lang, t} = useI18n();
+    const [confirm, confirmDialog] = useConfirm();
     // Read the shared task list + mutations from AppProvider; this page no
     // longer keeps a private jobs state, warm cache, or writes the cache
     // (plan Stage 3b).
@@ -883,11 +885,14 @@ const AgentTasks = () => {
         }
     }, [location.state?.queueSubmitError, location.state?.queueSubmittedAt, navigate]);
 
-    const cancelPendingUpload = () => {
-        const confirmText = lang === 'zh'
-            ? '取消当前上传？尚未完成上传的文件不会进入处理队列；已进入队列的文件可在下方单独取消。'
-            : 'Cancel the current upload? Files not yet uploaded will not enter the queue. Already queued files can be cancelled below.';
-        if (!window.confirm(confirmText)) return;
+    const cancelPendingUpload = async () => {
+        const ok = await confirm({
+            title: t('confirm.cancelUploadTitle'),
+            message: t('confirm.cancelUploadDesc'),
+            confirmLabel: t('confirm.cancelUploadAction'),
+            cancelLabel: t('confirm.keepUpload'),
+        });
+        if (!ok) return;
         abortPendingUpload();
     };
 
@@ -895,10 +900,13 @@ const AgentTasks = () => {
     const cancelLiveJob = async (job) => {
         const taskId = taskIdForJob(job);
         if (!taskId) return;
-        const confirmText = lang === 'zh'
-            ? '取消这个正在处理的任务？任务会中止，完整结果不会生成；这不是删除历史记录。'
-            : 'Cancel this active task? The task will stop and a complete result will not be created. This does not delete history.';
-        if (!window.confirm(confirmText)) return;
+        const ok = await confirm({
+            title: t('confirm.cancelTaskTitle'),
+            message: t('confirm.cancelTaskDesc'),
+            confirmLabel: t('confirm.cancelTaskAction'),
+            cancelLabel: t('confirm.keepTask'),
+        });
+        if (!ok) return;
         setCancellingTaskId(taskId);
         markCancelled(taskId);
         try {
@@ -917,10 +925,12 @@ const AgentTasks = () => {
     const deleteTerminalJob = async (job) => {
         const taskId = taskIdForJob(job);
         if (!taskId || isLiveTask(job)) return;
-        const confirmText = lang === 'zh'
-            ? '删除这条处理记录？会清理这条记录可删除的任务文件；这不是取消正在执行的任务。'
-            : 'Delete this processing record? This also cleans up deletable task files; it does not cancel a running task.';
-        if (!window.confirm(confirmText)) return;
+        const ok = await confirm({
+            title: t('confirm.deleteRecordTitle'),
+            message: t('confirm.deleteRecordDesc'),
+            confirmLabel: t('confirm.deleteRecordAction'),
+        });
+        if (!ok) return;
         setDeletingTaskId(taskId);
         // Tombstone + drop through AppProvider so an in-flight poll cannot
         // resurrect it; restore if the backend delete fails (non-404).
@@ -1051,7 +1061,7 @@ const AgentTasks = () => {
         try {
             await downloadJobMedia(taskId, 'debreath_media', name);
         } catch (error) {
-            window.alert(error?.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable'));
+            setError(error?.message || (lang === 'zh' ? '剪后文件不可用' : 'The cut file is unavailable'));
         } finally {
             setDownloadingTaskId('');
         }
@@ -1230,6 +1240,7 @@ const AgentTasks = () => {
 
                 <LarkExportList exports={larkExports} lang={lang}/>
             </div>
+            {confirmDialog}
         </main>
     );
 };

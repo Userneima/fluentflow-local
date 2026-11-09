@@ -596,17 +596,15 @@ describe('local settings page', () => {
     // the service an empty value.
     it('removes a saved key after a confirmation', async () => {
         credentials = {deepseek_api_key_configured: true};
-        const confirm = vi.spyOn(window, 'confirm');
         render(<Settings/>);
         open('accounts');
         await screen.findByText('DeepSeek API Key');
-        confirm.mockReturnValueOnce(false);
         fireEvent.click(screen.getAllByRole('button', {name: '移除'})[0]);
+        fireEvent.click(await screen.findByTestId('confirm-dialog-cancel'));
         expect(saveCredentials).not.toHaveBeenCalled();
-        confirm.mockReturnValueOnce(true);
         fireEvent.click(screen.getAllByRole('button', {name: '移除'})[0]);
+        fireEvent.click(await screen.findByTestId('confirm-dialog-confirm'));
         await waitFor(() => expect(saveCredentials).toHaveBeenCalledWith({deepseek_api_key: ''}));
-        confirm.mockRestore();
     });
 
     it('offers no remove for a key that is not saved', async () => {

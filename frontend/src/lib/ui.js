@@ -2,12 +2,14 @@
 // Every <button> in the app takes its className from here, plus layout classes
 // (margin, width, flex placement) at most; ui-rules.test.js holds that.
 //
-// Actions come in four tones and three sizes:
+// Actions come in five tones and three sizes:
 //   primary    the one main action of an area: start, write the note, confirm
 //   secondary  everything else that does something
 //   quiet      low-key actions in a row of text: adjust, expand, close
 //   danger     only where the action itself is the danger (cancel a running
 //              task); delete lives in the "⋯" menu as a danger menu item
+//   destructive the confirm button of a confirmation dialog whose action
+//              cannot be taken back (delete a record, remove a key)
 // Controls that switch or select (segments, filter chips, toggles, nav,
 // menu items, toolbar) and whole rows that open something have their own
 // helpers below; they are not actions and carry no tone.
@@ -32,6 +34,7 @@ const BUTTON_TONES = {
     secondary: 'border border-[#dedada] bg-[#ffffff] text-[#111111] hover:bg-[#efeeee] dark:border-white/[0.14] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.12]',
     quiet: 'text-[#57585d] hover:bg-[#efeeee] hover:text-[#111111] dark:text-white/70 dark:hover:bg-white/[0.08] dark:hover:text-white',
     danger: 'border border-red-200 bg-[#ffffff] text-[#b91c1c] hover:bg-[#fef2f2] dark:border-red-400/40 dark:bg-transparent dark:text-red-300 dark:hover:bg-red-500/15',
+    destructive: 'bg-[#dc2626] text-white hover:bg-[#b91c1c] dark:bg-[#ef4444] dark:text-white dark:hover:bg-[#dc2626]',
 };
 
 export const BUTTON_TONE_NAMES = Object.keys(BUTTON_TONES);

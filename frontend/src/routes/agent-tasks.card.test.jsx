@@ -14,7 +14,7 @@
 // button; the right side holds only the folder and "更多" icon buttons.
 
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import {MemoryRouter, Route, Routes, useLocation} from 'react-router-dom';
 
 let tasks = [];
@@ -101,10 +101,13 @@ describe('a finished record', () => {
         mount();
         expect(screen.queryByRole('button', {name: '删除记录'})).toBeNull();
         fireEvent.click(screen.getByRole('button', {name: '更多'}));
-        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
         fireEvent.click(screen.getByRole('menuitem', {name: '删除记录'}));
-        expect(confirm).toHaveBeenCalledTimes(1);
+        const dialog = await screen.findByRole('alertdialog');
+        expect(dialog.textContent).toContain('confirm.deleteRecordDesc');
+        expect(deleteJob).not.toHaveBeenCalled();
+        fireEvent.click(within(dialog).getByTestId('confirm-dialog-confirm'));
         await waitFor(() => expect(deleteJob).toHaveBeenCalledWith('a', {}));
+        expect(screen.queryByRole('alertdialog')).toBeNull();
     });
 
     it('carries no badge when nothing is wrong, the same as the start page', () => {
@@ -251,9 +254,11 @@ describe('the list of records', () => {
         mount();
         expect(screen.queryByRole('button', {name: '取消'})).toBeNull();
         fireEvent.click(screen.getByRole('button', {name: '更多'}));
-        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
         fireEvent.click(screen.getByRole('menuitem', {name: '取消任务'}));
-        expect(confirm).toHaveBeenCalledTimes(1);
+        const dialog = await screen.findByRole('alertdialog');
+        expect(within(dialog).getByTestId('confirm-dialog-cancel').textContent).toBe('confirm.keepTask');
+        fireEvent.click(within(dialog).getByTestId('confirm-dialog-cancel'));
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     });
 
     // Review 2026-10-23: the two layout promises had no test. A fact block is

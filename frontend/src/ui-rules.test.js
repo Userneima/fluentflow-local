@@ -121,7 +121,7 @@ const LAYOUT_PROPS = new Set(['className', 'layout']);
 
 // String arguments of the helpers themselves (tone and size names) are not
 // classes.
-const HELPER_ARGS = new Set(['primary', 'secondary', 'quiet', 'danger', 'sm', 'md', 'lg', 'blue', 'inherit', 'default', 'error', 'warning', 'info', 'success', 'busy', 'muted']);
+const HELPER_ARGS = new Set(['primary', 'secondary', 'quiet', 'danger', 'destructive', 'sm', 'md', 'lg', 'blue', 'inherit', 'default', 'error', 'warning', 'info', 'success', 'busy', 'muted']);
 
 export const buttonStyleProblems = (files) => {
     const problems = [];
@@ -195,7 +195,7 @@ const darkOverrides = (() => {
 
 const everyUiClass = () => {
     const out = [];
-    const tones = ['primary', 'secondary', 'quiet', 'danger', 'blue', 'muted', 'inherit', 'warning', 'error', 'busy', 'default'];
+    const tones = ['primary', 'secondary', 'quiet', 'danger', 'destructive', 'blue', 'muted', 'inherit', 'warning', 'error', 'busy', 'default'];
     for (const value of Object.values(ui)) {
         if (typeof value === 'string') out.push(value);
         else if (typeof value === 'function') {
@@ -520,5 +520,17 @@ describe('the interface uses FluentFlow\'s words', () => {
         expect(wordingProblems([{path: 'x.jsx', text: "label: '本地文件'"}])).toHaveLength(1);
         expect(wordingProblems([{path: 'x.jsx', text: "detail: '先剪掉气口再转写'"}])).toHaveLength(1);
         expect(wordingProblems([{path: 'x.jsx', text: "if (raw.includes('转写超时'))"}])).toEqual([]);
+    });
+});
+
+// The browser's own dialogs sit at the top of the window, are titled with the
+// page's address and say OK instead of the action (user report, 2026-11-09).
+// Questions go through components/ConfirmDialog.jsx; messages go on the page.
+describe('no browser dialogs', () => {
+    it('no source calls window.confirm, alert or prompt', () => {
+        const hits = sourceFiles
+            .filter(({text}) => /\bwindow\.(?:confirm|alert|prompt)\s*\(/.test(text))
+            .map(({path}) => path);
+        expect(hits).toEqual([]);
     });
 });

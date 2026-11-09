@@ -1,5 +1,7 @@
 import SvgIcon from './SvgIcon.jsx';
 import {optionCard, button, linkButton, surfaceCard} from '../lib/ui.js';
+import {useI18n} from '../app/shared.jsx';
+import {useConfirm} from './ConfirmDialog.jsx';
 
 // Building blocks for the settings page, used together with the rows in
 // settingsRows.jsx.
@@ -121,15 +123,23 @@ export const SecretInput = ({state, name, group, keys, placeholder, type = 'pass
 // address, key and model). Shown only for one that is configured.
 export const SecretRemove = ({state, group, keys, label, lang}) => {
     const {removeSecrets, secretSaving} = state;
+    const {t} = useI18n();
+    const [confirm, confirmDialog] = useConfirm();
     const zh = lang === 'zh';
-    const remove = () => {
-        const ok = typeof window === 'undefined' || typeof window.confirm !== 'function'
-            || window.confirm(zh ? `移除已保存的${label}？移除后要重新填才能用。` : `Remove the saved ${label}? You will need to enter it again to use it.`);
+    const remove = async () => {
+        const ok = await confirm({
+            title: t('confirm.removeKeyTitle').replace('{label}', label),
+            message: t('confirm.removeKeyDesc'),
+            confirmLabel: t('confirm.removeKeyAction'),
+        });
         if (ok) removeSecrets(group, keys);
     };
     return (
-        <button type="button" disabled={secretSaving} onClick={remove} className={linkButton('muted', 'sm')}>
-            {zh ? '移除' : 'Remove'}
-        </button>
+        <>
+            <button type="button" disabled={secretSaving} onClick={remove} className={linkButton('muted', 'sm')}>
+                {zh ? '移除' : 'Remove'}
+            </button>
+            {confirmDialog}
+        </>
     );
 };

@@ -96,6 +96,12 @@ const mount = () => render(
     </MemoryRouter>,
 );
 
+// A batch of files or a folder asks first, in the product's own dialog.
+const acceptIfAsked = () => {
+    const accept = screen.queryByTestId('confirm-dialog-confirm');
+    if (accept) fireEvent.click(accept);
+};
+
 const submitThroughEveryEntry = async () => {
     // Dragged in, not found on disk: uploaded.
     mount();
@@ -107,13 +113,13 @@ const submitThroughEveryEntry = async () => {
     // Picked through the system dialog.
     mount();
     fireEvent.click(screen.getByText('拖放或选择音视频文件'));
-    await waitFor(() => expect(sent.paths).toBeTruthy());
+    await waitFor(() => { acceptIfAsked(); expect(sent.paths).toBeTruthy(); });
     cleanup();
 
     // A whole folder.
     mount();
     fireEvent.click(screen.getByText('处理整个文件夹'));
-    await waitFor(() => expect(sent.folder).toBeTruthy());
+    await waitFor(() => { acceptIfAsked(); expect(sent.folder).toBeTruthy(); });
     cleanup();
 
     // A link.
@@ -139,7 +145,6 @@ describe('every entry sends the same settings', () => {
         localStorage.setItem('fluentflow_settings', JSON.stringify({...SETTINGS, defaultSourceMode: 'upload'}));
         vi.stubGlobal('fetch', fetchStub);
         vi.stubGlobal('XMLHttpRequest', FakeXhr);
-        vi.spyOn(window, 'confirm').mockReturnValue(true);
     });
     afterEach(() => {
         cleanup();

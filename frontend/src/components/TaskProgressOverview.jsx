@@ -17,6 +17,7 @@ import {fmtCharCount, fmtDuration, shortReason} from '../lib/format.js';
 import {taskOutcome} from '../lib/taskState.js';
 import {useApp} from '../app/AppContext.jsx';
 import {button} from '../lib/ui.js';
+import {useConfirm} from './ConfirmDialog.jsx';
 
 const stageLabel = (stage, lang, {audioOnly = false} = {}) => {
     const isZh = lang === 'zh';
@@ -269,6 +270,7 @@ const outcomeHint = (outcome, pageData, isZh) => {
 
 const TaskProgressOverview = ({pageData}) => {
     const {lang, t} = useI18n();
+    const [confirm, confirmDialog] = useConfirm();
     const {cancelJobRecord} = useApi();
     const {currentJob, setCurrentJob} = useApp();
     const [cancelBusy, setCancelBusy] = useState(false);
@@ -334,10 +336,13 @@ const TaskProgressOverview = ({pageData}) => {
         : (activeCurrentJob?.stage === 'stt' ? sttStatusLabel(activeCurrentJob.sttStatus, t) : '');
     const handleCancel = async () => {
         if (!activeCurrentJob?.taskId || cancelBusy) return;
-        const confirmText = isZh
-            ? '取消当前正在处理的任务？任务会中止，完整结果不会生成；可到处理记录查看已取消记录。这不是删除历史记录。'
-            : 'Cancel the active task? The task will stop and a complete result will not be created. You can check the cancelled record in Processing records. This does not delete history.';
-        if (!window.confirm(confirmText)) return;
+        const ok = await confirm({
+            title: t('confirm.cancelTaskTitle'),
+            message: t('confirm.cancelTaskDesc'),
+            confirmLabel: t('confirm.cancelTaskAction'),
+            cancelLabel: t('confirm.keepTask'),
+        });
+        if (!ok) return;
         setCancelBusy(true);
         setCancelError('');
         try {
@@ -478,6 +483,7 @@ const TaskProgressOverview = ({pageData}) => {
             </div>
 
             <MediaPreparation prep={pageData?.media_preparation} lang={lang}/>
+            {confirmDialog}
         </section>
     );
 };
