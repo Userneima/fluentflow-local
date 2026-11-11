@@ -157,7 +157,7 @@ class FakeDoc:
             return _ok({"document": {"document_id": DOC, "content": self._xml(), "revision_id": self.revision}})
         if verb == "+update":
             command = _flag(cmd, "--command")
-            if command == "block_insert_after" and self.fail_insert:
+            if command == "block_insert_after" and self.fail_insert is True:
                 return _fail("request timed out")
             self.writes.append(command)
             self.revision += 1
@@ -172,6 +172,8 @@ class FakeDoc:
                 new = self._parse(kwargs.get("input") or "")
                 at = 0 if anchor == DOC else next(i for i, b in enumerate(self.blocks) if b["id"] == anchor) + 1
                 self.blocks[at:at] = new
+                if self.fail_insert == "after_writing":
+                    return _fail("request timed out")
             elif command == "str_replace":
                 pattern, content = _flag(cmd, "--pattern"), _flag(cmd, "--content")
                 hits = [b for b in self.blocks if pattern in b.get("text", "")]

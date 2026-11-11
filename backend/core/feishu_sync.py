@@ -204,19 +204,9 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
         # the document now would record them as pushed and never bring them back.
         cli, bin_path = _cli()
         modified = cli.modified_times(runner, bin_path, [str(sync["doc_id"])]).get(str(sync["doc_id"]))
-        if (modified is not None and modified > int(sync.get("feishu_modified_at") or 0)
-                and not sync.get("push_unfinished")):
+        if modified is not None and modified > int(sync.get("feishu_modified_at") or 0):
             return pull(task_id, modified_at=modified, runner=runner)
-    unfinished = sync.get("push_unfinished")
     sync = {key: value for key, value in sync.items() if key != "push_unfinished"}
-    if unfinished and isinstance(sync.get("sections"), list):
-        # The chapters the cut-off push was rewriting may be half written in
-        # the document: rewrite them whatever the note says now.
-        keys = set(unfinished) if isinstance(unfinished, list) else None
-        sync["sections"] = [
-            {**record, "digest": None} if keys is None or record.get("key") in keys else record
-            for record in sync["sections"]
-        ]
     title = str(result.get("lark_doc_title") or "") or resolve_lark_doc_title(note, filename_stem="", form_title=None)
     try:
         response = export_markdown_via_lark_cli(
@@ -230,14 +220,14 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
             return None
         logger.warning("Feishu copy of %s not updated: %s", task_id, exc)
         if isinstance(exc, UnfinishedUpdate):
-            # The document may hold a chapter half rewritten; the note is
-            # what it should be, so the next look finishes the push instead
-            # of bringing the half-written chapter back (2026-11-11).
+            # The document may hold these chapters half rewritten: the next
+            # pull takes them from the note and rewrites them, instead of
+            # bringing the half-written text back (2026-11-11).
             latest = job_store.get_job(task_id)
             latest_result = latest.get("result") if isinstance(latest, dict) else None
             response_now = (latest_result or {}).get("lark_response")
             if isinstance(response_now, dict) and isinstance(response_now.get("sync"), dict):
-                _record(task_id, lark_response={**response_now, "sync": {**response_now["sync"], "push_unfinished": exc.chapters or True}},
+                _record(task_id, lark_response={**response_now, "sync": {**response_now["sync"], "push_unfinished": exc.chapters}},
                         lark_sync_error=f"飞书那份只更新了一半（{exc}）。笔记本身没受影响，下次检查时会补完。")
                 return None
         _record(task_id, lark_sync_error=f"飞书那份没更新（{exc}）。笔记本身没受影响，下次改动时会再试。")
@@ -357,10 +347,6 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     sync = recorded_sync(result)
     if result is None or sync is None:
         return None
-    if sync.get("push_unfinished"):
-        # Feishu changed because our own push was cut off: finish it.
-        push(task_id, runner=runner)
-        return "kept_note"
     sync = _with_sections(task_id, result, sync, runner)
     if sync is None:
         return None
@@ -377,6 +363,11 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     current = feishu_note.feishu_section_records(content)
     old = sync.get("feishu_sections")
     response = result["lark_response"]
+    # Chapters a cut-off push was rewriting: what Feishu holds there is our
+    # own half-finished write, not an edit made in Feishu. They are taken from
+    # the note and written again (decision 6.68).
+    unfinished = set(sync.get("push_unfinished") or [])
+    sync = {key: value for key, value in sync.items() if key != "push_unfinished"}
 
     def settle(**changes: Any) -> None:
         settled = {**sync, "feishu_sections": current, **changes}
@@ -397,6 +388,8 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     ]
     if not edited:
         settle()
+        if unfinished:
+            push(task_id, runner=runner)
         return "nothing"
 
     pushed_path = cli.pushed_note_path(_artifact_storage_dir(), task_id)
@@ -425,13 +418,17 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     for tag, i1, i2, j1, j2 in opcodes:
         if tag == "equal":
             for i, j in zip(range(i1, i2), range(j1, j2)):
+                if current_ids[j][0] in unfinished:
+                    continue  # taken from the note below
                 same = old[i]["digest"] == current[j]["digest"]
                 feishu_side.append((current_ids[j], base[i].text if same and lined_up else back(feishu_parts[j])))
                 if not same:
                     feishu_changed.add(current_ids[j])
         else:
-            feishu_changed.update(old_ids[i] for i in range(i1, i2))
+            feishu_changed.update(old_ids[i] for i in range(i1, i2) if old_ids[i][0] not in unfinished)
             for j in range(j1, j2):
+                if current_ids[j][0] in unfinished:
+                    continue
                 feishu_side.append((current_ids[j], back(feishu_parts[j])))
                 feishu_changed.add(current_ids[j])
     from_feishu = _joined(text for _, text in feishu_side)
@@ -468,7 +465,7 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     for position, cid in enumerate(local_ids):
         if cid in placed:
             continue
-        if cid in base_text and (cid not in local_changed or feishu_later):
+        if cid in base_text and (cid not in local_changed or feishu_later) and cid[0] not in unfinished:
             continue  # removed in Feishu, and the note did not change it later
         before = next((local_ids[k] for k in range(position - 1, -1, -1) if local_ids[k] in placed), None)
         at = 0 if before is None else [c for c, _ in merged].index(before) + 1

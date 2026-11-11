@@ -298,3 +298,51 @@ def test_a_cut_off_push_is_finished_even_when_the_note_is_back_to_what_was_last_
 
     assert any("结尾的话" in t for t in doc.texts())
     assert not job_store.get_job(task)["result"]["lark_response"]["sync"].get("push_unfinished")
+
+
+def test_a_feishu_edit_to_another_chapter_still_comes_back_after_a_cut_off_push(doc, tmp_path):
+    task, _ = _task(doc, tmp_path)
+    _edit_note(task, "结尾的话", "本地改的结尾")
+    doc.fail_insert = True
+    feishu_sync.push(task, runner=doc)
+    doc.fail_insert = False
+    doc.edit("开场的话。", "飞书里改的开场。")
+
+    _pull(task, doc)
+
+    assert "飞书里改的开场。" in _note(task) and "本地改的结尾" in _note(task)
+    texts = doc.texts()
+    assert any("本地改的结尾" in t for t in texts) and any("飞书里改的开场。" in t for t in texts)
+
+
+def test_a_chapter_removed_by_a_cut_off_push_comes_back_when_the_note_keeps_it(doc, tmp_path):
+    task, _ = _task(doc, tmp_path)
+    full = _note(task)
+    ending = full[full.index("## 三、结尾"):]
+    _edit_note(task, ending, "")
+    _edit_note(task, "开场的话", "本地改的开场")
+    doc.fail_insert = True
+    feishu_sync.push(task, runner=doc)  # the ending is deleted, the opening's new words never written
+    doc.fail_insert = False
+    result = job_store.get_job(task)["result"]
+    job_store.update_job_result(task, {**result, "summary_markdown": full})  # the note is back as last pushed
+
+    _pull(task, doc)
+
+    assert "三、结尾" in doc.texts() and any("结尾的话" in t for t in doc.texts())
+    assert any(t.startswith("开场的话") for t in doc.texts())
+    assert "## 三、结尾" in _note(task)
+
+
+def test_a_chapter_written_before_the_answer_timed_out_is_not_written_twice(doc, tmp_path):
+    task, _ = _task(doc, tmp_path)
+    _edit_note(task, "## 三、结尾", "## 四、新加的一章\n\n新章的话。\n\n## 三、结尾")
+    doc.fail_insert = "after_writing"
+    feishu_sync.push(task, runner=doc)
+    doc.fail_insert = False
+
+    _pull(task, doc)
+
+    assert doc.texts().count("四、新加的一章") == 1
+    assert sum("新章的话。" in t for t in doc.texts()) == 1
+    assert _note(task).count("新章的话。") == 1
