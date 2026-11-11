@@ -603,6 +603,69 @@ def _local_images_in(text: str) -> int:
     return count
 
 
+def _write_ops(
+    ops: list,
+    parts: List[feishu_note.Section],
+    figures: List[int],
+    links: List[feishu_note.HeadingLink],
+    pending: List[dict[str, Any]],
+    missing: List[dict[str, Any]],
+    deleted: set[str],
+    *,
+    bin_path: str,
+    doc_id: str,
+    timeout: int,
+    task_id: Optional[str],
+    artifact_root: Optional[Path],
+    runner: Runner,
+) -> int:
+    """Run ``plan_update``'s deletes and inserts; returns the chapters written."""
+    rewritten = 0
+    for op in ops:
+        if isinstance(op, feishu_note.Delete):
+            for start in range(0, len(op.block_ids), 50):
+                chunk = op.block_ids[start:start + 50]
+                _run(
+                    runner,
+                    [bin_path, "docs", "+update", "--doc", doc_id, "--command", "block_delete",
+                     "--block-id", ",".join(chunk), "--as", "user"],
+                    timeout=timeout,
+                )
+                deleted.update(chunk)
+            continue
+        written = _feishu_chunk(parts, op.parts, links, body_only=op.body_only)
+        if not written.strip():
+            # Nothing the page shows (a part marker only): the delete was enough.
+            continue
+        content, wanted, gone = _prepare_images(
+            written, task_id=task_id, artifact_root=artifact_root, first_figure=figures[op.parts[0]],
+        )
+        pending.extend(wanted)
+        missing.extend(gone)
+        _run(
+            runner,
+            [bin_path, "docs", "+update", "--doc", doc_id, "--command", "block_insert_after",
+             "--block-id", op.anchor, "--doc-format", "markdown", "--content", "-", "--as", "user"],
+            timeout=timeout,
+            input_text=content,
+        )
+        rewritten += len(op.parts)
+    return rewritten
+
+
+class UnfinishedUpdate(RuntimeError):
+    """A chapter update that failed after it began writing: the document may
+    hold a chapter half rewritten (its old paragraphs deleted, the new ones
+    not written). The note is what the document should be; the next push
+    finishes the job (feishu_sync), instead of reading the half-written
+    chapter as an edit made in Feishu. ``chapters`` are the heading keys of
+    the chapters it was rewriting."""
+
+    def __init__(self, message: str, chapters: List[str]) -> None:
+        super().__init__(message)
+        self.chapters = chapters
+
+
 def _update(
     markdown: str,
     previous: dict[str, Any],
@@ -659,35 +722,13 @@ def _update(
     missing: List[dict[str, Any]] = []
     deleted: set[str] = set()
     rewritten = 0
-    for op in ops:
-        if isinstance(op, feishu_note.Delete):
-            for start in range(0, len(op.block_ids), 50):
-                chunk = op.block_ids[start:start + 50]
-                _run(
-                    runner,
-                    [bin_path, "docs", "+update", "--doc", doc_id, "--command", "block_delete",
-                     "--block-id", ",".join(chunk), "--as", "user"],
-                    timeout=timeout,
-                )
-                deleted.update(chunk)
-            continue
-        written = _feishu_chunk(parts, op.parts, links, body_only=op.body_only)
-        if not written.strip():
-            # Nothing the page shows (a part marker only): the delete was enough.
-            continue
-        content, wanted, gone = _prepare_images(
-            written, task_id=task_id, artifact_root=artifact_root, first_figure=figures[op.parts[0]],
-        )
-        pending.extend(wanted)
-        missing.extend(gone)
-        _run(
-            runner,
-            [bin_path, "docs", "+update", "--doc", doc_id, "--command", "block_insert_after",
-             "--block-id", op.anchor, "--doc-format", "markdown", "--content", "-", "--as", "user"],
-            timeout=timeout,
-            input_text=content,
-        )
-        rewritten += len(op.parts)
+    try:
+        rewritten = _write_ops(ops, parts, figures, links, pending, missing, deleted,
+                               bin_path=bin_path, doc_id=doc_id, timeout=timeout, task_id=task_id,
+                               artifact_root=artifact_root, runner=runner)
+    except Exception as exc:
+        rewriting = sorted({parts[j].key for op in ops if not isinstance(op, feishu_note.Delete) for j in op.parts})
+        raise UnfinishedUpdate(str(exc), rewriting) from exc
 
     images, errors = _insert_images(runner, bin_path, doc_id, pending)
     # A picture whose chapter was rewritten is in the new pictures, if it is

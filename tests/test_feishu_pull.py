@@ -17,6 +17,9 @@ Requirements (owner, 2026-10-21):
 6. A document deleted in Feishu stops the syncing, with the reason on the task.
 7. Feishu is asked when documents changed; a pull is queued only for one
    changed after the last push and left alone for a minute.
+8. (owner, 2026-11-11) A push cut off after it began writing is finished on
+   the next look, not taken for an edit made in Feishu: the note keeps its
+   text and Feishu gets it.
 """
 
 from __future__ import annotations
@@ -257,3 +260,41 @@ def test_only_documents_changed_since_the_push_and_left_alone_are_pulled(doc, tm
 
 def _heading_id(doc: FakeDoc, text: str) -> str:
     return next(b["id"] for b in doc.blocks if b["tag"].startswith("h") and b["text"] == text)
+
+
+def test_a_push_cut_off_after_clearing_a_chapter_is_finished_not_pulled_back(doc, tmp_path):
+    """2026-11-11, lesson three: a push deleted a chapter's paragraphs in
+    Feishu, the write of the new ones timed out, and the next look took the
+    emptied chapter for an edit made in Feishu, later than the note's, and
+    emptied the note's chapter too."""
+    task, md = _task(doc, tmp_path)
+    _edit_note(task, "结尾的话", "本地改的结尾")
+    doc.fail_insert = True
+
+    feishu_sync.push(task, runner=doc)
+
+    assert not any("结尾" in t for t in doc.texts() if "##" not in t and t != "三、结尾")
+    assert job_store.get_job(task)["result"]["lark_sync_error"]
+    doc.fail_insert = False
+    feishu_sync._NOTE_CHANGED_AT[task] = 0.0  # the cut-off write is later than the note's edit
+    _pull(task, doc)
+
+    assert "本地改的结尾" in _note(task)
+    assert any("本地改的结尾" in t for t in doc.texts())
+    assert not list(md.parent.glob("访谈_笔记_本地修改-*.md"))
+    result = job_store.get_job(task)["result"]
+    assert not result["lark_sync_error"] and not result["lark_response"]["sync"].get("push_unfinished")
+
+
+def test_a_cut_off_push_is_finished_even_when_the_note_is_back_to_what_was_last_pushed(doc, tmp_path):
+    task, _ = _task(doc, tmp_path)
+    _edit_note(task, "结尾的话", "本地改的结尾")
+    doc.fail_insert = True
+    feishu_sync.push(task, runner=doc)
+    doc.fail_insert = False
+    _edit_note(task, "本地改的结尾", "结尾的话")
+
+    _pull(task, doc)
+
+    assert any("结尾的话" in t for t in doc.texts())
+    assert not job_store.get_job(task)["result"]["lark_response"]["sync"].get("push_unfinished")

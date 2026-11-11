@@ -183,7 +183,7 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
 
     if test_copy.enabled():
         return None
-    from backend.core.lark_cli_exporter import export_markdown_via_lark_cli, note_digest
+    from backend.core.lark_cli_exporter import UnfinishedUpdate, export_markdown_via_lark_cli, note_digest
     from backend.core.note_title import resolve_lark_doc_title
     from backend.core.storage_paths import _artifact_storage_dir
 
@@ -193,7 +193,8 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
     if result is None or sync is None:
         return None
     note = str(result.get("summary_markdown") or "")
-    if not note.strip() or (previous is None and note_digest(note) == sync.get("note_digest")):
+    if not note.strip() or (previous is None and note_digest(note) == sync.get("note_digest")
+                            and not sync.get("push_unfinished")):
         return None
     if previous is None:
         sync = _with_sections(task_id, result, sync, runner)
@@ -203,8 +204,19 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
         # the document now would record them as pushed and never bring them back.
         cli, bin_path = _cli()
         modified = cli.modified_times(runner, bin_path, [str(sync["doc_id"])]).get(str(sync["doc_id"]))
-        if modified is not None and modified > int(sync.get("feishu_modified_at") or 0):
+        if (modified is not None and modified > int(sync.get("feishu_modified_at") or 0)
+                and not sync.get("push_unfinished")):
             return pull(task_id, modified_at=modified, runner=runner)
+    unfinished = sync.get("push_unfinished")
+    sync = {key: value for key, value in sync.items() if key != "push_unfinished"}
+    if unfinished and isinstance(sync.get("sections"), list):
+        # The chapters the cut-off push was rewriting may be half written in
+        # the document: rewrite them whatever the note says now.
+        keys = set(unfinished) if isinstance(unfinished, list) else None
+        sync["sections"] = [
+            {**record, "digest": None} if keys is None or record.get("key") in keys else record
+            for record in sync["sections"]
+        ]
     title = str(result.get("lark_doc_title") or "") or resolve_lark_doc_title(note, filename_stem="", form_title=None)
     try:
         response = export_markdown_via_lark_cli(
@@ -217,6 +229,17 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
             _stop(task_id, exc)
             return None
         logger.warning("Feishu copy of %s not updated: %s", task_id, exc)
+        if isinstance(exc, UnfinishedUpdate):
+            # The document may hold a chapter half rewritten; the note is
+            # what it should be, so the next look finishes the push instead
+            # of bringing the half-written chapter back (2026-11-11).
+            latest = job_store.get_job(task_id)
+            latest_result = latest.get("result") if isinstance(latest, dict) else None
+            response_now = (latest_result or {}).get("lark_response")
+            if isinstance(response_now, dict) and isinstance(response_now.get("sync"), dict):
+                _record(task_id, lark_response={**response_now, "sync": {**response_now["sync"], "push_unfinished": exc.chapters or True}},
+                        lark_sync_error=f"飞书那份只更新了一半（{exc}）。笔记本身没受影响，下次检查时会补完。")
+                return None
         _record(task_id, lark_sync_error=f"飞书那份没更新（{exc}）。笔记本身没受影响，下次改动时会再试。")
         return None
     response_before = result.get("lark_response") if isinstance(result.get("lark_response"), dict) else {}
@@ -334,6 +357,10 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     sync = recorded_sync(result)
     if result is None or sync is None:
         return None
+    if sync.get("push_unfinished"):
+        # Feishu changed because our own push was cut off: finish it.
+        push(task_id, runner=runner)
+        return "kept_note"
     sync = _with_sections(task_id, result, sync, runner)
     if sync is None:
         return None

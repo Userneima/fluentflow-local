@@ -57,6 +57,7 @@ class FakeDoc:
         self.calls: list[list[str]] = []
         self.fail_markdown_fetch = False
         self.fail_outline = False
+        self.fail_insert = False
         self.gone = False
         self.modified = 1700000000
         self._next = 0
@@ -156,6 +157,8 @@ class FakeDoc:
             return _ok({"document": {"document_id": DOC, "content": self._xml(), "revision_id": self.revision}})
         if verb == "+update":
             command = _flag(cmd, "--command")
+            if command == "block_insert_after" and self.fail_insert:
+                return _fail("request timed out")
             self.writes.append(command)
             self.revision += 1
             self.modified += 1
