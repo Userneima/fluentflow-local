@@ -386,3 +386,46 @@ def _cut_before_writing(real):
             raise cli.LarkCliError("request timed out")
         return real(runner, cmd, **kwargs)
     return run
+
+
+def test_a_feishu_edit_to_a_chapter_of_the_same_name_still_comes_back(doc, tmp_path):
+    task, _ = _task(doc, tmp_path)
+    _edit_note(task, "## 三、结尾", "## 小结\n\n第一个小结。\n\n## 三、结尾")
+    _edit_note(task, "结尾的话", "结尾的话\n\n## 小结\n\n第二个小结。")
+    feishu_sync.push(task, runner=doc)
+    _edit_note(task, "第一个小结。", "本地改的第一个小结。")
+    doc.fail_insert = True
+    feishu_sync.push(task, runner=doc)
+    doc.fail_insert = False
+    doc.edit("第二个小结。", "飞书里改的第二个小结。")
+
+    _pull(task, doc)
+
+    assert "本地改的第一个小结。" in _note(task) and "飞书里改的第二个小结。" in _note(task)
+
+
+def test_the_retry_mark_stays_until_the_finishing_push_succeeds(doc, tmp_path, monkeypatch):
+    task, _ = _task(doc, tmp_path)
+    _edit_note(task, "结尾的话", "本地改的结尾")
+    doc.fail_insert = True
+    feishu_sync.push(task, runner=doc)
+    doc.fail_insert = False
+    monkeypatch.setattr(feishu_sync, "push", lambda *a, **k: None)  # the finishing push never gets going
+
+    _pull(task, doc)
+
+    assert job_store.get_job(task)["result"]["lark_response"]["sync"].get("push_unfinished")
+
+
+def test_a_cut_off_push_waits_while_feishu_is_still_being_edited(doc, tmp_path, monkeypatch):
+    task, _ = _task(doc, tmp_path)
+    _edit_note(task, "结尾的话", "本地改的结尾")
+    doc.fail_insert = True
+    feishu_sync.push(task, runner=doc)
+    doc.fail_insert = False
+    doc.edit("开场的话。", "飞书里正在改的开场。")
+    queued: list = []
+    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: queued.append(fn))
+
+    assert task not in feishu_sync.check_feishu(now=doc.modified + 5, runner=doc)
+    assert not queued

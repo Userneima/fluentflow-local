@@ -653,15 +653,25 @@ def _write_ops(
     return rewritten
 
 
+def _occurrence_ids(keys: List[Any]) -> List[tuple[str, int]]:
+    seen: dict[str, int] = {}
+    found: List[tuple[str, int]] = []
+    for key in keys:
+        count = seen.get(str(key), 0)
+        seen[str(key)] = count + 1
+        found.append((str(key), count))
+    return found
+
+
 class UnfinishedUpdate(RuntimeError):
     """A chapter update that failed after it began writing: the document may
     hold a chapter half rewritten (its old paragraphs deleted, the new ones
     not written). The note is what the document should be; the next push
     finishes the job (feishu_sync), instead of reading the half-written
-    chapter as an edit made in Feishu. ``chapters`` are the heading keys of
-    the chapters it was rewriting."""
+    chapter as an edit made in Feishu. ``chapters`` are the chapters it was
+    changing, as (heading words, which occurrence of them)."""
 
-    def __init__(self, message: str, chapters: List[str]) -> None:
+    def __init__(self, message: str, chapters: List[tuple[str, int]]) -> None:
         super().__init__(message)
         self.chapters = chapters
 
@@ -729,13 +739,18 @@ def _update(
     except Exception as exc:
         # Every chapter the push was changing: rewritten, added, removed or
         # moved (a move is a delete and an insert with nothing else changed).
-        before = {(record.get("key"), record.get("digest")) for record in previous["sections"]}
-        after = {(part.key, part.digest) for part in parts}
+        # A chapter is its heading's words and which occurrence of them it
+        # is, so of two chapters with the same heading only the one changed
+        # is listed.
+        old_ids = _occurrence_ids([record.get("key") for record in previous["sections"]])
+        new_ids = _occurrence_ids([part.key for part in parts])
+        before = {(cid, record.get("digest")) for cid, record in zip(old_ids, previous["sections"])}
+        after = {(cid, part.digest) for cid, part in zip(new_ids, parts)}
         doomed = {block for op in ops if isinstance(op, feishu_note.Delete) for block in op.block_ids}
         rewriting = sorted(
-            {str(key) for key, _ in before ^ after}
-            | {parts[j].key for op in ops if not isinstance(op, feishu_note.Delete) for j in op.parts}
-            | {str(record.get("key")) for record in previous["sections"] if record.get("heading_id") in doomed}
+            {cid for cid, _ in before ^ after}
+            | {new_ids[j] for op in ops if not isinstance(op, feishu_note.Delete) for j in op.parts}
+            | {cid for cid, record in zip(old_ids, previous["sections"]) if record.get("heading_id") in doomed}
         )
         raise UnfinishedUpdate(str(exc), rewriting) from exc
 

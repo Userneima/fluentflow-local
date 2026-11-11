@@ -227,7 +227,7 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
             latest_result = latest.get("result") if isinstance(latest, dict) else None
             response_now = (latest_result or {}).get("lark_response")
             if isinstance(response_now, dict) and isinstance(response_now.get("sync"), dict):
-                _record(task_id, lark_response={**response_now, "sync": {**response_now["sync"], "push_unfinished": exc.chapters}},
+                _record(task_id, lark_response={**response_now, "sync": {**response_now["sync"], "push_unfinished": [list(cid) for cid in exc.chapters]}},
                         lark_sync_error=f"飞书那份只更新了一半（{exc}）。笔记本身没受影响，下次检查时会补完。")
                 return None
         _record(task_id, lark_sync_error=f"飞书那份没更新（{exc}）。笔记本身没受影响，下次改动时会再试。")
@@ -366,7 +366,8 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     # Chapters a cut-off push was rewriting: what Feishu holds there is our
     # own half-finished write, not an edit made in Feishu. They are taken from
     # the note and written again (decision 6.68).
-    unfinished = set(sync.get("push_unfinished") or [])
+    unfinished = {(str(item[0]), int(item[1])) for item in sync.get("push_unfinished") or []
+                  if isinstance(item, (list, tuple)) and len(item) == 2}
     sync = {key: value for key, value in sync.items() if key != "push_unfinished"}
 
     def settle(**changes: Any) -> None:
@@ -387,7 +388,8 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
         if tag != "equal" or any(old[i]["digest"] != current[j]["digest"] for i, j in zip(range(i1, i2), range(j1, j2)))
     ]
     if not edited:
-        settle()
+        # Kept until the push that finishes the job succeeds.
+        settle(**({"push_unfinished": sorted(unfinished)} if unfinished else {}))
         if unfinished:
             push(task_id, runner=runner)
         return "nothing"
@@ -418,16 +420,16 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     for tag, i1, i2, j1, j2 in opcodes:
         if tag == "equal":
             for i, j in zip(range(i1, i2), range(j1, j2)):
-                if current_ids[j][0] in unfinished:
+                if current_ids[j] in unfinished:
                     continue  # taken from the note below
                 same = old[i]["digest"] == current[j]["digest"]
                 feishu_side.append((current_ids[j], base[i].text if same and lined_up else back(feishu_parts[j])))
                 if not same:
                     feishu_changed.add(current_ids[j])
         else:
-            feishu_changed.update(old_ids[i] for i in range(i1, i2) if old_ids[i][0] not in unfinished)
+            feishu_changed.update(old_ids[i] for i in range(i1, i2) if old_ids[i] not in unfinished)
             for j in range(j1, j2):
-                if current_ids[j][0] in unfinished:
+                if current_ids[j] in unfinished:
                     continue
                 feishu_side.append((current_ids[j], back(feishu_parts[j])))
                 feishu_changed.add(current_ids[j])
@@ -465,7 +467,7 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     for position, cid in enumerate(local_ids):
         if cid in placed:
             continue
-        if cid in base_text and (cid not in local_changed or feishu_later) and cid[0] not in unfinished:
+        if cid in base_text and (cid not in local_changed or feishu_later) and cid not in unfinished:
             continue  # removed in Feishu, and the note did not change it later
         before = next((local_ids[k] for k in range(position - 1, -1, -1) if local_ids[k] in placed), None)
         at = 0 if before is None else [c for c, _ in merged].index(before) + 1
@@ -507,6 +509,9 @@ def _pull(task_id: str, *, modified_at: int | None, runner: Any) -> str | None:
     }
     if modified_at is not None:
         settled["feishu_modified_at"] = modified_at
+    if unfinished:
+        # Kept until the push that finishes the job succeeds.
+        settled["push_unfinished"] = sorted(unfinished)
     cli.save_pushed_note(_artifact_storage_dir(), task_id, from_feishu)
     after = _with_note(task_id, result, merged_note) if pulled else dict(result)
     after["lark_response"] = {**response, "sync": settled}
@@ -554,7 +559,7 @@ def check_feishu(now: float | None = None, runner: Any = subprocess.run) -> list
         if modified > recorded and clock - modified >= QUIET_SECONDS:
             _WORKER.submit(pull, task_id, modified_at=modified, runner=runner)
             queued.append(task_id)
-        elif _push_unfinished(task_id):
+        elif modified <= recorded and _push_unfinished(task_id):
             # Cut off before Feishu changed: nothing to pull, push again.
             _WORKER.submit(push, task_id, runner=runner)
             queued.append(task_id)
