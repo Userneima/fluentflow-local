@@ -727,10 +727,16 @@ def _update(
                                bin_path=bin_path, doc_id=doc_id, timeout=timeout, task_id=task_id,
                                artifact_root=artifact_root, runner=runner)
     except Exception as exc:
-        # Every chapter the push was changing: rewritten, added or removed.
+        # Every chapter the push was changing: rewritten, added, removed or
+        # moved (a move is a delete and an insert with nothing else changed).
         before = {(record.get("key"), record.get("digest")) for record in previous["sections"]}
         after = {(part.key, part.digest) for part in parts}
-        rewriting = sorted({str(key) for key, _ in before ^ after})
+        doomed = {block for op in ops if isinstance(op, feishu_note.Delete) for block in op.block_ids}
+        rewriting = sorted(
+            {str(key) for key, _ in before ^ after}
+            | {parts[j].key for op in ops if not isinstance(op, feishu_note.Delete) for j in op.parts}
+            | {str(record.get("key")) for record in previous["sections"] if record.get("heading_id") in doomed}
+        )
         raise UnfinishedUpdate(str(exc), rewriting) from exc
 
     images, errors = _insert_images(runner, bin_path, doc_id, pending)

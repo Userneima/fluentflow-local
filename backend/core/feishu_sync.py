@@ -554,7 +554,17 @@ def check_feishu(now: float | None = None, runner: Any = subprocess.run) -> list
         if modified > recorded and clock - modified >= QUIET_SECONDS:
             _WORKER.submit(pull, task_id, modified_at=modified, runner=runner)
             queued.append(task_id)
+        elif _push_unfinished(task_id):
+            # Cut off before Feishu changed: nothing to pull, push again.
+            _WORKER.submit(push, task_id, runner=runner)
+            queued.append(task_id)
     return queued
+
+
+def _push_unfinished(task_id: str) -> bool:
+    job = job_store.get_job(task_id)
+    result = job.get("result") if isinstance(job, dict) else None
+    return bool((recorded_sync(result) or {}).get("push_unfinished"))
 
 
 def _check_gone(task_id: str, doc_id: str, runner: Any) -> None:

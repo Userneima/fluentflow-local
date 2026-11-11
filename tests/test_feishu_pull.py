@@ -346,3 +346,43 @@ def test_a_chapter_written_before_the_answer_timed_out_is_not_written_twice(doc,
     assert doc.texts().count("四、新加的一章") == 1
     assert sum("新章的话。" in t for t in doc.texts()) == 1
     assert _note(task).count("新章的话。") == 1
+
+
+def test_a_chapter_moved_by_a_cut_off_push_is_not_lost(doc, tmp_path):
+    task, _ = _task(doc, tmp_path)
+    full = _note(task)
+    opening = full[full.index("## 一、开场"):full.index("## 二、框架")]
+    moved = full.replace(opening, "").rstrip("\n") + "\n\n" + opening
+    result = job_store.get_job(task)["result"]
+    job_store.update_job_result(task, {**result, "summary_markdown": moved})
+    doc.fail_insert = True
+    feishu_sync.push(task, runner=doc)
+    doc.fail_insert = False
+
+    _pull(task, doc)
+
+    assert "## 一、开场" in _note(task) and "开场的话。" in _note(task)
+    assert any("开场的话" in t for t in doc.texts())
+
+
+def test_a_push_cut_off_before_feishu_changed_is_tried_again_by_the_watch(doc, tmp_path, monkeypatch):
+    task, _ = _task(doc, tmp_path)
+    _edit_note(task, "结尾的话", "本地改的结尾")
+    monkeypatch.setattr(cli, "_run", _cut_before_writing(cli._run))
+    feishu_sync.push(task, runner=doc)
+    monkeypatch.undo()
+    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    ran: list = []
+    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: ran.append(fn(*a, **k)))
+
+    assert task in feishu_sync.check_feishu(now=doc.modified + 1000, runner=doc)
+    assert any("本地改的结尾" in t for t in doc.texts())
+    assert not job_store.get_job(task)["result"]["lark_response"]["sync"].get("push_unfinished")
+
+
+def _cut_before_writing(real):
+    def run(runner, cmd, **kwargs):
+        if "block_delete" in cmd or "block_insert_after" in cmd:
+            raise cli.LarkCliError("request timed out")
+        return real(runner, cmd, **kwargs)
+    return run
