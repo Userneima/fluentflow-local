@@ -577,6 +577,13 @@ def _sync_locked(task_id: str) -> dict[str, Any] | None:
         previous = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
         record = {**previous, "error": f"产出没能整理进原文件旁边的文件夹（{exc}）。任务里的结果都还在。"}
     _record(task_id, record)
+    # A note saved while this sync ran was saved before the folder was
+    # recorded on the task, so nothing refreshed the folder for it, and this
+    # sync read the task before it: the note never reached the folder (an
+    # agent's note saved as the task's folder was first filled, 2026-11-14).
+    now = job_store.get_job(task_id)
+    if now is not None and _what_the_folder_holds(now.get("result")) != _what_the_folder_holds(result):
+        schedule_sync(task_id)
     return record
 
 
@@ -903,6 +910,15 @@ def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[st
 
 job_store.add_result_listener(_on_result_saved)
 
+
+def refresh_now(task_id: str, result: Any) -> None:
+    """A deliberate change to the note (an agent's note, an agent's edit, a
+    restore) is one act, not typing: an existing folder is refreshed now
+    instead of after the minute an editor's saves wait. A task whose folder
+    is not recorded yet gets the note when its folder is first filled."""
+    if isinstance(result, dict) and isinstance(result.get(RESULT_KEY), dict):
+        schedule_sync(task_id)
+
 # How often the folders are looked at for an md saved elsewhere (Obsidian).
 EDIT_CHECK_SECONDS = 30.0
 # Obsidian saves every few keystrokes; an md is taken in once it has been
@@ -980,6 +996,7 @@ __all__ = [
     "file_name",
     "place",
     "deliver_media",
+    "refresh_now",
     "frame_file",
     "original_path",
     "schedule_sync",

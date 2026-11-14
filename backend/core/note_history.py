@@ -323,8 +323,7 @@ def _follow_now(task_id: str, result: Any) -> None:
 
     if not isinstance(result, dict):
         return
-    if isinstance(result.get(output_folder.RESULT_KEY), dict):
-        output_folder.schedule_sync(task_id)
+    output_folder.refresh_now(task_id, result)
     if feishu_sync.recorded_sync(result) is not None:
         feishu_sync.schedule_push_when_quiet(task_id, delay=0)
 

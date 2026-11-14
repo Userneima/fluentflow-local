@@ -765,7 +765,11 @@ def _finish(task_id, job, media, parts, cleaned, coverage, *, basis_note: str, m
         expect_versions=expect_versions,
     )
     task_steps.agent_finished(task_id, task_steps.NOTE)
-    from backend.core import task_flow
+    from backend.core import output_folder, task_flow
+
+    # The agent reports the note done when this returns: the folder beside the
+    # recording should have it by then, not a minute later (2026-11-14).
+    output_folder.refresh_now(task_id, stored.get("result"))
 
     try:
         task_flow.export_agent_note_if_asked(task_id, client_id)
