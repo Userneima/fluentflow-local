@@ -874,9 +874,9 @@ def finalize_note_if_unchanged(
     it is now. None when the basis moved (an edit made meanwhile wins) or the
     task is gone or cancelled.
 
-    ``finalize_job_result_if_unchanged`` compared the whole result: a cut's
-    progress or an export result written during a minutes-long model call
-    refused a note already paid for (audit, 2026-10-18)."""
+    Comparing the whole result instead would refuse a note already paid for
+    whenever a cut's progress or an export result was written during the
+    minutes-long model call (audit, 2026-10-18)."""
     task_id_value = str(task_id or "").strip()
     if not task_id_value:
         return None
@@ -918,74 +918,6 @@ def finalize_note_if_unchanged(
     saved = _row_to_dict(updated) if updated else None
     if saved is not None:
         _notify_result_saved(task_id_value, stored, saved.get("result"))
-    return saved
-
-
-def finalize_job_result_if_unchanged(
-    task_id: str,
-    expected_result: Any,
-    result: dict[str, Any],
-    *,
-    status: str,
-    stage: str,
-    progress: float | None,
-    summary_status: str,
-    error_reason: str | None = None,
-    db_path: Path | str = DEFAULT_DB_PATH,
-    client_id: str | None = None,
-) -> dict[str, Any] | None:
-    """Finalize an existing job only while its result still matches the caller's snapshot."""
-    task_id_value = str(task_id or "").strip()
-    if not task_id_value:
-        return None
-    ensure_job_db(db_path)
-    now = _now_iso()
-    with sqlite_connection(Path(db_path), timeout=10) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.execute("BEGIN IMMEDIATE")
-        if client_id is None:
-            row = conn.execute(
-                "SELECT * FROM jobs WHERE task_id = ?",
-                (task_id_value,),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT * FROM jobs WHERE task_id = ? AND client_id = ?",
-                (task_id_value, client_id),
-            ).fetchone()
-        current_result = (
-            normalize_result_for_read(_json_loads(row["result_json"])) if row else None
-        )
-        expected = normalize_result_for_read(expected_result)
-        if row is None or row["status"] == "cancelled" or current_result != expected:
-            conn.rollback()
-            return None
-        conn.execute(
-            """
-            UPDATE jobs
-            SET updated_at = ?, status = ?, stage = ?, progress = COALESCE(?, progress),
-                summary_status = ?, error_reason = ?, result_json = ?
-            WHERE task_id = ?
-            """,
-            (
-                now,
-                status,
-                stage,
-                progress,
-                summary_status,
-                error_reason,
-                _result_json_dumps(result),
-                task_id_value,
-            ),
-        )
-        updated = conn.execute(
-            "SELECT * FROM jobs WHERE task_id = ?",
-            (task_id_value,),
-        ).fetchone()
-        conn.commit()
-    saved = _row_to_dict(updated) if updated else None
-    if saved is not None:
-        _notify_result_saved(task_id_value, current_result, saved.get("result"))
     return saved
 
 
@@ -1087,35 +1019,6 @@ def cancel_job_steps(
             (now, now, task_id),
         )
         return int(cursor.rowcount or 0)
-
-
-def list_job_steps(
-    *,
-    task_id: str | None = None,
-    statuses: tuple[str, ...] | list[str] | None = None,
-    limit: int = 100,
-    db_path: Path | str = DEFAULT_DB_PATH,
-) -> list[dict[str, Any]]:
-    ensure_job_db(db_path)
-    safe_limit = max(1, min(int(limit or 100), 500))
-    where: list[str] = []
-    params: list[Any] = []
-    if task_id:
-        where.append("task_id = ?")
-        params.append(str(task_id))
-    status_values = [str(value).strip() for value in (statuses or []) if str(value).strip()]
-    if status_values:
-        placeholders = ",".join("?" for _ in status_values)
-        where.append(f"status IN ({placeholders})")
-        params.extend(status_values)
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-    with sqlite_connection(Path(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            f"SELECT * FROM job_steps {where_sql} ORDER BY id ASC LIMIT ?",
-            [*params, safe_limit],
-        ).fetchall()
-    return [_step_row_to_dict(row) for row in rows]
 
 
 TASK_STEP_PREFIX = "step:"

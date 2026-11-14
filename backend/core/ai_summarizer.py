@@ -1069,25 +1069,6 @@ def _build_chapter_coverage_table(
     }
 
 
-def _evidence_markdown(items: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    for item in items:
-        keywords = "、".join(item.get("keywords") or [])
-        source = ", ".join(item.get("source_segment_ids") or [])
-        parts = [
-            f"- {item['evidence_id']} | importance={item.get('importance')} | type={item.get('type')}",
-            f"  - 内容：{item.get('text')}",
-        ]
-        if keywords:
-            parts.append(f"  - 关键词：{keywords}")
-        if source:
-            parts.append(f"  - 来源片段：{source}")
-        if item.get("quote"):
-            parts.append(f"  - 原文：{item.get('quote')}")
-        lines.extend(parts)
-    return "\n".join(lines)
-
-
 _CN_DIGITS: Final[str] = "零一二三四五六七八九"
 
 # Only strips a leading heading NUMBER prefix (一、/ 第一、/ 3. / 3.1), never a

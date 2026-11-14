@@ -1371,18 +1371,6 @@ def _resolve_with_yt_dlp_once(
         return None, reason, detail or None
 
 
-def resolve_with_yt_dlp(
-    url: str,
-    cookies_from_browser: str | None = None,
-    *,
-    cancellation_event: threading.Event | None = None,
-) -> ResolvedVideo | None:
-    resolved, _, _ = _resolve_with_yt_dlp_attempt(
-        url, cookies_from_browser, **_cancellation_kwargs(cancellation_event)
-    )
-    return resolved
-
-
 def _resolve_with_miuistore_attempt(
     input_text: str,
     *,
