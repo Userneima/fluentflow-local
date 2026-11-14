@@ -140,14 +140,46 @@ const lastFollowed = new WeakMap();
 // spans `sectionTop` to `sectionBottom` in the scroller's own measure.
 // `entering`: the section has just become the one playing, so a long one is
 // shown from near its heading rather than wherever its start happens to sit.
-export const followScrollTop = ({sectionTop, sectionBottom, top, height, progress = 0, entering = false}) => {
+// Lines of a section that were not said in the recording: the fact checks
+// added after the lecture (a quote starting "**核对（日期）**", with the quote
+// lines after it) and empty lines. The reading point is placed by playback
+// progress over the other lines only, so two dozen checks in lesson three no
+// longer push it later than the talk (owner, 2026-11-14, decision 6.66).
+const CHECK_START = /^\s*>\s*\*\*核对（/;
+const QUOTE = /^\s*>/;
+export const unspokenLines = (lines) => {
+    let inCheck = false;
+    return lines.map((line) => {
+        if (CHECK_START.test(line)) inCheck = true;
+        else if (!QUOTE.test(line)) inCheck = false;
+        return inCheck || !line.trim();
+    });
+};
+
+// Where `share` of the way through the spoken lines falls, in pixels:
+// `blocks` are the section's lines, in order, as {top, bottom, spoken}.
+// null when none was spoken.
+export const spokenPoint = (blocks, share) => {
+    const spoken = blocks.filter((block) => block.spoken && block.bottom > block.top);
+    const total = spoken.reduce((sum, block) => sum + (block.bottom - block.top), 0);
+    if (!total) return null;
+    let left = Math.min(1, Math.max(0, Number(share) || 0)) * total;
+    for (const block of spoken) {
+        const tall = block.bottom - block.top;
+        if (left <= tall) return block.top + left;
+        left -= tall;
+    }
+    return spoken[spoken.length - 1].bottom;
+};
+
+export const followScrollTop = ({sectionTop, sectionBottom, top, height, progress = 0, entering = false, talkedAt = null}) => {
     const share = Math.min(1, Math.max(0, Number(progress) || 0));
     let want;
     if (sectionBottom - sectionTop <= height * 0.75) {
         if (sectionTop >= top && sectionBottom <= top + height) return null;
         want = sectionTop - 32;
     } else {
-        const talked = sectionTop + share * (sectionBottom - sectionTop);
+        const talked = Number.isFinite(talkedAt) ? talkedAt : sectionTop + share * (sectionBottom - sectionTop);
         const headingShown = sectionTop >= top && sectionTop <= top + height * (entering ? 0.25 : 0.75);
         if (talked >= top && talked <= top + height * 0.65 && (headingShown || sectionTop < top)) return null;
         want = Math.max(sectionTop - 32, talked - height * 0.25);
@@ -177,7 +209,14 @@ export const followSection = (view, rowId, progress = 0) => {
     const sectionBottom = origin + last.bottom;
     const top = scroller.scrollTop;
     const same = lastFollowed.get(view) === rowId;
-    const want = followScrollTop({sectionTop, sectionBottom, top, height, progress, entering: !same});
+    const bodyLines = [];
+    for (let number = sections[index].line + 1; number <= ownLast; number += 1) bodyLines.push(number);
+    const unspoken = unspokenLines(bodyLines.map((number) => doc.line(number).text));
+    const talkedAt = spokenPoint(bodyLines.map((number, i) => {
+        const block = view.lineBlockAt(doc.line(number).from);
+        return {top: origin + block.top, bottom: origin + block.bottom, spoken: !unspoken[i]};
+    }), progress);
+    const want = followScrollTop({sectionTop, sectionBottom, top, height, progress, entering: !same, talkedAt});
     lastFollowed.set(view, rowId);
     if (want === null) return false;
     if (typeof scroller.scrollTo === 'function') scroller.scrollTo({top: want, behavior: same ? 'smooth' : 'auto'});

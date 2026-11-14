@@ -15,6 +15,9 @@
 //   - (owner, 2026-11-14) A level-3 section talked about in two stretches is
 //     followed in both, when the other stretch falls inside a section of the
 //     same chapter; a section of another chapter still is not.
+//   - (owner, 2026-11-14) The fact checks added after the lecture ("> **核对（…）**")
+//     were not said: the reading point is placed by progress over the
+//     spoken lines only, never inside a check; the checks stay shown.
 //   - Neither the times nor the marking changes the markdown or reports an
 //     edit, so they can never be saved (decisions 6.27, 6.30); a newer note
 //     handed down by the page keeps them.
@@ -30,7 +33,7 @@ import {act, cleanup, fireEvent, render} from '@testing-library/react';
 import {EditorView} from '@codemirror/view';
 import NoteEditor from './NoteEditor.jsx';
 import {alsoAt, bodyHash, matchRows, normalizeRows, noteSections, sectionAt, spanProgress} from '../lib/noteFollow.js';
-import {followScrollTop} from '../lib/noteFollowEditor.js';
+import {followScrollTop, spokenPoint, unspokenLines} from '../lib/noteFollowEditor.js';
 
 const noRects = () => ({length: 0, item: () => null, [Symbol.iterator]: function* () {}});
 const emptyRect = () => ({x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({})});
@@ -302,6 +305,42 @@ describe('a subject talked about in two stretches', () => {
 
     it('scrolls through the second stretch by its own progress', () => {
         expect(spanProgress(rows.find((row) => row.id === 'c2c'), 1913)).toBeCloseTo(0.5, 2);
+    });
+});
+
+describe('fact checks are not on the timeline', () => {
+    const lines = [
+        '- 第一段讲的话。',
+        '',
+        '  > **核对（2026-11-05）**：这是课后补的核对。',
+        '  > 核对的第二行。',
+        '',
+        '- 第二段讲的话。',
+    ];
+
+    it('tells the check and the empty lines from the spoken ones', () => {
+        expect(unspokenLines(lines)).toEqual([false, true, true, true, true, false]);
+        expect(unspokenLines(['> 普通引用，是课上讲的。'])).toEqual([false]);
+    });
+
+    it('places the reading point over the spoken lines only, never inside a check', () => {
+        // Each line 20px tall; the check is 300px tall in the middle.
+        const tall = [20, 20, 150, 150, 20, 20];
+        let y = 0;
+        const unspoken = unspokenLines(lines);
+        const blocks = tall.map((h, i) => { const block = {top: y, bottom: y + h, spoken: !unspoken[i]}; y += h; return block; });
+        expect(spokenPoint(blocks, 0.25)).toBe(10);
+        expect(spokenPoint(blocks, 0.75)).toBe(360 + 10);
+        expect(spokenPoint(blocks, 0.5)).not.toBeGreaterThan(20);
+        for (const share of [0, 0.1, 0.3, 0.5, 0.6, 0.9, 1]) {
+            const at = spokenPoint(blocks, share);
+            expect(at <= 20 || at >= 360).toBe(true);
+        }
+    });
+
+    it('scrolls to the spoken point instead of the share of the whole section', () => {
+        const want = followScrollTop({sectionTop: 0, sectionBottom: 4000, top: 0, height: 800, progress: 0.5, talkedAt: 1000});
+        expect(want).toBe(800);
     });
 });
 });
