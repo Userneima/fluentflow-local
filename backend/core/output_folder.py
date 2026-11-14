@@ -670,11 +670,12 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any], note_changed
         # the old PDF was listed as current (review, 2026-11-14). A record from
         # before this field may already hold that stale PDF under the new
         # note's digest: its PDF counts as made from that note only when it is
-        # not older than the md, since every md write is followed by an export
+        # newer than the md, since every md write is followed by an export; an
+        # equal time (a disk that keeps coarse times) is exported once more
         # (Codex push review, 2026-11-14).
         if "pdf_digest" in previous:
             made_from = previous.get("pdf_digest")
-        elif pdf.is_file() and pdf.stat().st_mtime >= md.stat().st_mtime:
+        elif pdf.is_file() and pdf.stat().st_mtime > md.stat().st_mtime:
             made_from = previous.get("note_digest")
         else:
             made_from = None
