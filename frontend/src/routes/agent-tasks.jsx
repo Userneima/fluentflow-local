@@ -17,7 +17,7 @@ import {useConfirm} from '../components/ConfirmDialog.jsx';
 import {fmtCharCount, fmtDuration, progressMessageOf} from '../lib/format.js';
 import {DropdownMenu} from '../app/DropdownMenu.jsx';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
-import {noteProgressShort, noteProgressStatus} from '../lib/noteProgress.js';
+import {noteProgressStatus} from '../lib/noteProgress.js';
 import {
     fmtBytes,
     fmtFileSize,
@@ -51,6 +51,7 @@ import {
     resumeOffer,
     cutsToJudge,
     noteProgressT,
+    noteWritingLabel,
 } from '../lib/taskState.js';
 import {useJobPolling} from '../lib/useJobPolling.js';
 import {extraUrlsIgnoredNotice, retryInputForJob, retryOptionsForJob} from '../lib/linkRetry.js';
@@ -168,12 +169,8 @@ const noteProgressOf = (job) => job?.activity?.note_progress || null;
 
 const stageLabel = (job, lang) => {
     const isZh = lang === 'zh';
-    const writing = noteProgressOf(job);
-    if (writing) {
-        const short = noteProgressShort(writing, noteProgressT(lang), lang);
-        const head = isZh ? '写笔记' : 'Writing note';
-        return short ? `${head} · ${short}` : head;
-    }
+    const writing = noteWritingLabel(job, lang);
+    if (writing) return writing;
     const audioOnly = isAudioOnlySource(job);
     const labels = {
         upload: isZh ? '接收材料' : 'Receiving',
@@ -610,7 +607,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                             {showNote ? <span className={factBlock}>{zh ? '笔记' : 'Note'} {noteTileValue(job, lang)}</span> : null}
                         </>
                     ) : (
-                        <span className={factBlock}>{stageLabel(job, lang)}{noteProgressOf(job) ? '' : ` · ${progressLabel}`}</span>
+                        <span className={factBlock}>{stageLabel(job, lang)}{noteWritingLabel(job, lang) ? '' : ` · ${progressLabel}`}</span>
                     )}
                 </div>
                 <div className="col-start-2 row-start-1 row-span-2 flex items-start gap-2 self-start max-[699px]:row-start-2 max-[699px]:row-span-1">

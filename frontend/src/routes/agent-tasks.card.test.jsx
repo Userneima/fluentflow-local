@@ -209,6 +209,21 @@ describe('the list of records', () => {
         expect(titles).toEqual(['录像 recut', '录像 writing']);
     });
 
+    // 2026-11-14 (owner): the card's step line and its badge said 写笔记 and
+    // 写笔记中 for the same task, each from its own check; one label now.
+    it('names a note being written the same way on the step line and the badge', () => {
+        const progress = {writer: 'fluentflow', stage: 'planning', started_at: 0, elapsed_seconds: 5};
+        tasks = [{
+            task_id: 'w', status: 'running', stage: 'summary', progress: 70,
+            created_at: '2026-10-22T10:00:00Z', metadata: {display_title: '在写的'},
+            activity: {busy: true, current_step: 'note', label: '正在写笔记', note_progress: progress},
+        }];
+        mount();
+        expect(screen.getByTestId('task-outcome').textContent).toBe('写笔记中 · 定章节');
+        expect(screen.getAllByText('写笔记中 · 定章节').length).toBeGreaterThan(1);
+        expect(screen.queryByText(/^写笔记 ·/)).toBeNull();
+    });
+
     it('filters to records waiting for a judgement, and to records with a problem', () => {
         tasks = [
             finished('ok', {}),

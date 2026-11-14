@@ -72,17 +72,24 @@ export const stillWorkingLabel = (job = {}) => {
     return String(job.activity.label || '');
 };
 
+// 「写笔记中」, with how far the writer has got when it says (backend
+// note_progress), while the note is being written; '' otherwise. The task
+// list's card and every status badge read it from here.
+export const noteWritingLabel = (job = {}, lang = 'zh') => {
+    const progress = job?.activity?.note_progress || null;
+    if (!progress && !isNoteStillBeingWritten(job)) return '';
+    const short = noteProgressShort(progress, noteProgressT(lang), lang);
+    const head = lang === 'zh' ? '写笔记中' : 'Writing note';
+    return short ? `${head} · ${short}` : head;
+};
+
 export const taskStatusLabel = (job, lang = 'zh') => {
     const state = normalizeTaskState(job);
     const zh = lang === 'zh';
     if (state === TASK_STATE_UPLOADING) return zh ? '上传中' : 'Uploading';
     if (state === TASK_STATE_QUEUED) return zh ? '排队中' : 'Queued';
-    if (isNoteStillBeingWritten(job)) {
-        // How far the writer has got, when it says (backend note_progress).
-        const short = noteProgressShort(job?.activity?.note_progress, noteProgressT(lang), lang);
-        const head = zh ? '写笔记中' : 'Writing note';
-        return short ? `${head} · ${short}` : head;
-    }
+    const writing = noteWritingLabel(job, lang);
+    if (writing) return writing;
     const working = stillWorkingLabel(job);
     if (working) return zh ? working : 'Working';
     if (state === TASK_STATE_COMPLETED || state === TASK_STATE_CACHED_ONLY) return zh ? '已完成' : 'Completed';
