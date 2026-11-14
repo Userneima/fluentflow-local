@@ -207,7 +207,7 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
             _record(task_id, stopped="飞书那份复习笔记已被删除或打不开了，不再同步。", error=None)
             return None
         logger.warning("review note of %s not pushed to Feishu: %s", task_id, exc)
-        _record(task_id, error=f"复习笔记没发到飞书（{exc}）。笔记本身没受影响，下次改动时会再试。")
+        _record(task_id, error=f"复习笔记没发到飞书（{exc}）。笔记本身没受影响，下次检查时会再试。")
         return None
     sync = response.get("sync") if isinstance(response.get("sync"), dict) else {}
     modified_at = cli.modified_times(runner, bin_path, [str(sync.get("doc_id"))]).get(str(sync.get("doc_id")))

@@ -86,7 +86,7 @@ def _with_sections(task_id: str, result: dict[str, Any], sync: dict[str, Any], r
                                bin_path=bin_path, runner=runner)
     except Exception as exc:  # noqa: BLE001 - the note itself is fine
         logger.warning("chapters of the Feishu copy of %s not read again: %s", task_id, exc)
-        _record(task_id, lark_sync_error=f"飞书那份没更新：读不到它的章节目录（{exc}）。笔记本身没受影响，下次改动时会再试。")
+        _record(task_id, lark_sync_error=f"飞书那份没更新：读不到它的章节目录（{exc}）。笔记本身没受影响，下次检查时会再试。")
         return None
     response = result.get("lark_response") if isinstance(result.get("lark_response"), dict) else {}
     _record(task_id, lark_response={**response, "sync": sync})
@@ -175,10 +175,20 @@ def _stop(task_id: str, error: Exception) -> None:
 def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = subprocess.run) -> Any:
     """Bring the task's Feishu document up to date with its note. Returns the
     export response, or None when there was nothing to do (always on a test
-    copy, decision 8.11). Never raises: a
-    failure is recorded on the task as ``lark_sync_error``. ``previous``
-    replaces the recorded sync for this push (a pull that lost to the note
-    asks for the chapters edited in Feishu to be rewritten)."""
+    copy, decision 8.11). Never raises: every failure is recorded on the task
+    as ``lark_sync_error``, and the watch tries again on its next look
+    (decision 6.69). ``previous`` replaces the recorded sync for this push (a
+    pull that lost to the note asks for the chapters edited in Feishu to be
+    rewritten)."""
+    try:
+        return _push(task_id, previous=previous, runner=runner)
+    except Exception as exc:  # noqa: BLE001 - runs on a worker thread, where a raise is lost
+        logger.warning("Feishu copy of %s not updated: %s", task_id, exc)
+        _record(task_id, lark_sync_error=f"飞书那份没更新（{exc}）。笔记本身没受影响，下次检查时会再试。")
+        return None
+
+
+def _push(task_id: str, *, previous: dict[str, Any] | None, runner: Any) -> Any:
     from backend.core import test_copy
 
     if test_copy.enabled():
@@ -203,7 +213,14 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
         # Edits made in Feishu since the last push come in first; writing over
         # the document now would record them as pushed and never bring them back.
         cli, bin_path = _cli()
-        modified = cli.modified_times(runner, bin_path, [str(sync["doc_id"])]).get(str(sync["doc_id"]))
+        asked: list[str] = []
+        modified = cli.modified_times(runner, bin_path, [str(sync["doc_id"])], errors=asked).get(str(sync["doc_id"]))
+        if modified is None and asked:
+            # Without knowing whether Feishu changed, writing could bury an
+            # edit made there; try again on the next look.
+            _record(task_id, lark_sync_error=f"飞书那份没更新：读不到它在飞书上的修改时间（{asked[0]}）。"
+                                             "笔记本身没受影响，下次检查时会再试。")
+            return None
         if modified is not None and modified > int(sync.get("feishu_modified_at") or 0):
             return pull(task_id, modified_at=modified, runner=runner)
     sync = {key: value for key, value in sync.items() if key != "push_unfinished"}
@@ -230,7 +247,7 @@ def push(task_id: str, *, previous: dict[str, Any] | None = None, runner: Any = 
                 _record(task_id, lark_response={**response_now, "sync": {**response_now["sync"], "push_unfinished": [list(cid) for cid in exc.chapters]}},
                         lark_sync_error=f"飞书那份只更新了一半（{exc}）。笔记本身没受影响，下次检查时会补完。")
                 return None
-        _record(task_id, lark_sync_error=f"飞书那份没更新（{exc}）。笔记本身没受影响，下次改动时会再试。")
+        _record(task_id, lark_sync_error=f"飞书那份没更新（{exc}）。笔记本身没受影响，下次检查时会再试。")
         return None
     response_before = result.get("lark_response") if isinstance(result.get("lark_response"), dict) else {}
     pushed = response.get("sync") if isinstance(response.get("sync"), dict) else {}
@@ -559,17 +576,21 @@ def check_feishu(now: float | None = None, runner: Any = subprocess.run) -> list
         if modified > recorded and clock - modified >= QUIET_SECONDS:
             _WORKER.submit(pull, task_id, modified_at=modified, runner=runner)
             queued.append(task_id)
-        elif modified <= recorded and _push_unfinished(task_id):
-            # Cut off before Feishu changed: nothing to pull, push again.
+        elif modified <= recorded and _push_owed(task_id):
+            # The last push failed or was cut off, and Feishu has not changed
+            # since: nothing to pull, push again.
             _WORKER.submit(push, task_id, runner=runner)
             queued.append(task_id)
     return queued
 
 
-def _push_unfinished(task_id: str) -> bool:
+def _push_owed(task_id: str) -> bool:
+    """The last push did not finish: it failed (``lark_sync_error``) or was
+    cut off after it began writing (``push_unfinished``)."""
     job = job_store.get_job(task_id)
     result = job.get("result") if isinstance(job, dict) else None
-    return bool((recorded_sync(result) or {}).get("push_unfinished"))
+    sync = recorded_sync(result)
+    return sync is not None and bool(sync.get("push_unfinished") or (result or {}).get("lark_sync_error"))
 
 
 def _check_gone(task_id: str, doc_id: str, runner: Any) -> None:

@@ -933,9 +933,13 @@ def _snapshot(runner: Runner, bin_path: str, doc_id: str, sync: dict[str, Any]) 
         sync["feishu_modified_at"] = modified
 
 
-def modified_times(runner: Runner, bin_path: str, doc_ids: List[str]) -> Dict[str, int]:
+def modified_times(
+    runner: Runner, bin_path: str, doc_ids: List[str], errors: Optional[List[str]] = None,
+) -> Dict[str, int]:
     """When Feishu last saw each document change (seconds), for the ones it
-    reports; a document it does not report is left out."""
+    reports; a document it does not report is left out. A request that
+    failed is added to ``errors`` when given, so a caller can tell "Feishu
+    could not be asked" from "Feishu does not know this document"."""
     times: Dict[str, int] = {}
     for start in range(0, len(doc_ids), 50):
         chunk = doc_ids[start:start + 50]
@@ -948,6 +952,8 @@ def modified_times(runner: Runner, bin_path: str, doc_ids: List[str]) -> Dict[st
             )
         except LarkCliError as exc:
             logger.warning("lark-cli could not read when documents changed: %s", exc)
+            if errors is not None:
+                errors.append(str(exc))
             continue
         for meta in data.get("metas") or []:
             try:

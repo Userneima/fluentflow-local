@@ -343,7 +343,7 @@ def test_a_push_updates_the_document_and_records_it(monkeypatch, tmp_path):
     result = job_store.get_job(task_id)["result"]
     job_store.update_job_result(task_id, {**result, "summary_markdown": NOTE.replace("结尾的话", "新结尾")})
 
-    response = feishu_sync.push(task_id)
+    response = feishu_sync.push(task_id, runner=doc)
 
     assert response and response["url"] == URL
     stored = job_store.get_job(task_id)["result"]
@@ -353,7 +353,7 @@ def test_a_push_updates_the_document_and_records_it(monkeypatch, tmp_path):
     # Nobody edited the document in Feishu: it is the note as pushed, and no
     # Feishu-side copy is kept (tests/test_note_changes.py has both cases).
     assert not [path for path in note_versions.versions(md) if note_versions.FEISHU in path.name]
-    assert feishu_sync.push(task_id) is None, "nothing left to push"
+    assert feishu_sync.push(task_id, runner=doc) is None, "nothing left to push"
 
 
 def test_a_chapter_whose_body_shows_nothing_in_feishu_is_not_written_empty():

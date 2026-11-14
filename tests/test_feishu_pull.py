@@ -20,6 +20,9 @@ Requirements (owner, 2026-10-21):
 8. (owner, 2026-11-11) A push cut off after it began writing is finished on
    the next look, not taken for an edit made in Feishu: the note keeps its
    text and Feishu gets it.
+9. (owner, 2026-11-14) A push that fails, for any reason, says so on the
+   task and is tried again on the next look until it goes through; without
+   knowing whether Feishu changed, nothing is written.
 """
 
 from __future__ import annotations
@@ -429,3 +432,41 @@ def test_a_cut_off_push_waits_while_feishu_is_still_being_edited(doc, tmp_path, 
 
     assert task not in feishu_sync.check_feishu(now=doc.modified + 5, runner=doc)
     assert not queued
+
+
+def test_a_push_that_cannot_ask_feishu_when_it_changed_writes_nothing_says_so_and_is_tried_again(doc, tmp_path, monkeypatch):
+    """2026-11-11: the Feishu login ran out; the restored chapter of lesson
+    three never reached Feishu, the task showed no error, and nothing tried
+    again after the login was renewed."""
+    task, _ = _task(doc, tmp_path)
+    _edit_note(task, "结尾的话", "本地改的结尾")
+    writes = len(doc.writes)
+    real = FakeDoc.__call__
+    expired = {"on": True}
+
+    def login(self, cmd, **kwargs):
+        if expired["on"]:
+            from tests.test_feishu_chapter_update import _fail
+            return _fail("need_user_authorization")
+        return real(self, cmd, **kwargs)
+
+    monkeypatch.setattr(FakeDoc, "__call__", login)
+    assert feishu_sync.push(task, runner=doc) is None
+    assert len(doc.writes) == writes
+    assert "need_user_authorization" in job_store.get_job(task)["result"]["lark_sync_error"]
+
+    expired["on"] = False
+    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: fn(*a, **k))
+    assert task in feishu_sync.check_feishu(now=doc.modified + 1000, runner=doc)
+
+    assert any("本地改的结尾" in t for t in doc.texts())
+    assert not job_store.get_job(task)["result"]["lark_sync_error"]
+
+
+def test_a_push_that_breaks_unexpectedly_still_says_so(doc, tmp_path, monkeypatch):
+    task, _ = _task(doc, tmp_path)
+    _edit_note(task, "结尾的话", "本地改的结尾")
+    monkeypatch.setattr(feishu_sync, "_with_sections", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    assert feishu_sync.push(task, runner=doc) is None
+    assert "boom" in job_store.get_job(task)["result"]["lark_sync_error"]
