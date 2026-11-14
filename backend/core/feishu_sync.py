@@ -203,8 +203,10 @@ def _push(task_id: str, *, previous: dict[str, Any] | None, runner: Any) -> Any:
     if result is None or sync is None:
         return None
     note = str(result.get("summary_markdown") or "")
-    if not note.strip() or (previous is None and note_digest(note) == sync.get("note_digest")
-                            and not sync.get("push_unfinished")):
+    # A note recorded as pushed can still owe a push: a pull records the note
+    # it merged before pushing the chapters the note won, and that push can fail.
+    owed = sync.get("push_unfinished") or result.get("lark_sync_error")
+    if not note.strip() or (previous is None and note_digest(note) == sync.get("note_digest") and not owed):
         return None
     if previous is None:
         sync = _with_sections(task_id, result, sync, runner)

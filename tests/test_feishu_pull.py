@@ -470,3 +470,32 @@ def test_a_push_that_breaks_unexpectedly_still_says_so(doc, tmp_path, monkeypatc
 
     assert feishu_sync.push(task, runner=doc) is None
     assert "boom" in job_store.get_job(task)["result"]["lark_sync_error"]
+
+
+def test_chapters_the_note_won_in_a_pull_reach_feishu_when_their_push_failed(doc, tmp_path, monkeypatch):
+    task, _ = _task(doc, tmp_path)
+    doc.edit("结尾的话", "飞书里改的结尾")
+    _edit_note(task, "结尾的话", "本地改的结尾")
+    feishu_sync._NOTE_CHANGED_AT[task] = time.time() + 10_000
+    real = FakeDoc.__call__
+    down = {"on": True}
+
+    def before_writing(self, cmd, **kwargs):
+        # The push's first read of the document fails: nothing is written.
+        if down["on"] and cmd[2:3] == ["+fetch"] and "--detail" in cmd and "--scope" not in cmd:
+            from tests.test_feishu_chapter_update import _fail
+            return _fail("request timed out")
+        return real(self, cmd, **kwargs)
+
+    monkeypatch.setattr(FakeDoc, "__call__", before_writing)
+    _pull(task, doc)
+    down["on"] = False
+    result = job_store.get_job(task)["result"]
+    assert result["lark_sync_error"] and not result["lark_response"]["sync"].get("push_unfinished")
+    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: fn(*a, **k))
+
+    feishu_sync.check_feishu(now=doc.modified + feishu_sync.QUIET_SECONDS + 1, runner=doc)
+    feishu_sync.check_feishu(now=doc.modified + feishu_sync.QUIET_SECONDS + 1, runner=doc)
+
+    assert any("本地改的结尾" in t for t in doc.texts())
+    assert not job_store.get_job(task)["result"]["lark_sync_error"]
