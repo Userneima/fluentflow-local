@@ -663,10 +663,18 @@ def _sync_files(task_id: str, source: Path, result: dict[str, Any], note_changed
         record["md_mtime"] = md.stat().st_mtime
         pdf = folder / f"{stem}_{NOTE_LABEL}{suffix}.pdf"
         digest = hashlib.sha256(note.encode("utf-8")).hexdigest()
-        if changed or not pdf.is_file() or previous.get("note_digest") != digest:
+        # Which note the PDF was made from, apart from ``note_digest`` (the
+        # note the md was written from, which tells an Obsidian edit from a
+        # newer note). After a failed export the old PDF is still on disk: with
+        # only the md's digest to go by, no later refresh exported it again and
+        # the old PDF was listed as current (review, 2026-11-14). Records from
+        # before this field use the md's digest.
+        made_from = previous.get("pdf_digest") if "pdf_digest" in previous else previous.get("note_digest")
+        if changed or not pdf.is_file() or made_from != digest:
             record.update(_export_pdf(task_id, folder, f"{stem}_{NOTE_LABEL}{suffix}"))
         else:
             record["pdf_path"] = str(pdf)
+        record["pdf_digest"] = digest if record.get("pdf_path") else None
         record["note_digest"] = digest
     record["updated_at"] = datetime.now(timezone.utc).isoformat()
     return record

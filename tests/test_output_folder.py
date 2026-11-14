@@ -118,6 +118,36 @@ def test_the_note_is_refreshed_when_it_changes_and_only_then(tmp_path, pdfs):
     assert "改过的版本" in md.read_text(encoding="utf-8")
 
 
+def test_a_failed_pdf_export_is_retried_and_the_old_pdf_is_not_listed_as_current(tmp_path, pdfs, monkeypatch):
+    """Requirement: when the PDF of a changed note could not be made, the old
+    PDF left in the folder is not recorded as the current one, and the next
+    refresh exports it again even though the note has not changed since
+    (review, 2026-11-14: the new note's fingerprint was recorded anyway, so the
+    stale PDF stayed and was listed as current for good)."""
+    source = _recording(tmp_path)
+    task = _task(source, note="# 第八周\n\n第一版。\n")
+    output_folder.sync(task)
+    working = note_pdf.export_pdf
+    failed: list[str] = []
+
+    def broken(task_id, **kwargs):
+        failed.append(task_id)
+        raise RuntimeError("browser gone")
+
+    monkeypatch.setattr(note_pdf, "export_pdf", broken)
+    job_store.update_job_result(task, {**job_store.get_job(task)["result"], "summary_markdown": "# 第八周\n\n第二版。\n"})
+    record = output_folder.sync(task)
+    assert failed and record["pdf_path"] is None and record["pdf_error"]
+
+    monkeypatch.setattr(note_pdf, "export_pdf", working)
+    exports_before = len(pdfs)
+    record = output_folder.sync(task)  # nothing changed since the failure
+
+    assert len(pdfs) == exports_before + 1, "the PDF that failed is exported again"
+    assert record["pdf_error"] is None
+    assert record["pdf_path"] == str(source.parent / "week-8" / "week-8_笔记.pdf")
+
+
 def test_a_note_saved_later_schedules_a_refresh(tmp_path, pdfs, monkeypatch):
     source = _recording(tmp_path)
     task = _task(source, note="# 第八周\n\n第一版。\n")
