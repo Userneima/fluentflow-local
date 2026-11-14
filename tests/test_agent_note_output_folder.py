@@ -142,3 +142,42 @@ def test_the_save_answer_says_the_folder_follows(tmp_path, pdfs, monkeypatch):
     answer = answer.json()
 
     assert any("产出文件夹" in place and str(source.parent / "lecture") in place for place in answer["follows"]), answer
+
+
+def test_an_editor_save_during_a_later_sync_keeps_the_quiet_minute(tmp_path, pdfs, monkeypatch):
+    """Requirement: an editor's saves reach an existing folder only after a
+    minute with no changes, even when one lands while the folder is being
+    refreshed for something else. Catching up at once is only for the
+    folder's first fill (review, 2026-11-14: typing during a refresh exported
+    the PDF again with every save)."""
+    monkeypatch.setattr(output_folder, "SYNC_QUIET_SECONDS", 3600.0)
+    task_id, source = _finished_task(tmp_path)
+    an.save(task_id, note_markdown="# 最小二乘法\n\n第一版。", client_id=LOCAL_OWNER_ID)
+    output_folder.sync(task_id)
+    assert "第一版" in _md(source).read_text(encoding="utf-8")
+    exports_before = len(pdfs)
+
+    read_it = threading.Event()
+    go_on = threading.Event()
+    real = output_folder._sync_files
+
+    def slow_refresh(*args, **kwargs):
+        read_it.set()
+        assert go_on.wait(10)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(output_folder, "_sync_files", slow_refresh)
+    output_folder.schedule_sync(task_id)
+    assert read_it.wait(10)
+    before = job_store.get_job(task_id)["result"]
+    job_store.save_result_changes(  # what the page's editor does on a pause in typing
+        task_id, before, {**before, "summary_markdown": "# 最小二乘法\n\n编辑器里打的字。"},
+    )
+    go_on.set()
+    _wait_for_worker()
+    _wait_for_worker()
+
+    assert "编辑器里打的字" not in _md(source).read_text(encoding="utf-8")
+    assert len(pdfs) == exports_before  # the refresh found the note unchanged: no export
+    assert task_id in output_folder._QUIET_TIMERS  # it still arrives, after the quiet minute
+    output_folder._QUIET_TIMERS.pop(task_id).cancel()

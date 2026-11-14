@@ -581,9 +581,18 @@ def _sync_locked(task_id: str) -> dict[str, Any] | None:
     # recorded on the task, so nothing refreshed the folder for it, and this
     # sync read the task before it: the note never reached the folder (an
     # agent's note saved as the task's folder was first filled, 2026-11-14).
+    # Only that first fill catches up at once: once a folder was recorded,
+    # a change saved during the sync already queued its own refresh (now for
+    # an agent's note or a restore, after the quiet minute for an editor's
+    # typing), and an immediate one here would export the PDF again with
+    # every save while someone keeps typing (review, 2026-11-14).
     now = job_store.get_job(task_id)
     if now is not None and _what_the_folder_holds(now.get("result")) != _what_the_folder_holds(result):
-        schedule_sync(task_id)
+        previous = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
+        if previous.get("path"):
+            schedule_sync_when_quiet(task_id)
+        else:
+            schedule_sync(task_id)
     return record
 
 
