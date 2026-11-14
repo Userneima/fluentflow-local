@@ -88,16 +88,31 @@ const inside = (span, time) => time >= span[0] && time < span[1];
 
 export const rowHolds = (row, time) => !!row && (inside(row.primary, time) || row.others.some((span) => inside(span, time)));
 
-// The row to follow at `time` among `rows` (those found in the note): the
-// deepest heading whose main span (where the section is talked about most)
-// holds it; among several of one level, the latest start, then the first in
-// the note. A section that only
-// draws on this moment through one of its other spans is marked lightly
-// (`alsoAt`) and never scrolled to: the recap at the end of a meeting note
-// ("决定", "待办") draws on many moments of the body, and following it made the
-// note jump to the end and back (owner, 2026-10-25). `null` when no main span
-// holds it (the caller keeps the last one: people quietly writing in a shared
-// document still belong to the section before).
+// The level-2 chapter each row is in, by id: rows come in the note's order,
+// so a level-3 row belongs to the level-2 row before it.
+const chapters = (rows) => {
+    const found = new Map();
+    let chapter = null;
+    rows.forEach((row) => {
+        if (row.level <= 2) chapter = row.id;
+        found.set(row.id, chapter);
+    });
+    return found;
+};
+
+// The row to follow at `time` among `rows` (those found in the note, in the
+// note's order): the deepest heading whose main span (where the section is
+// talked about most) holds it; among several of one level, the latest start,
+// then the first in the note. A level-3 section of the same chapter that holds
+// this moment through one of its other spans goes before it: a subject talked
+// about in two stretches (lesson three's cache hit rate, 31:05 and again from
+// 35:24) is followed in both (owner, 2026-11-14, decision 6.70). A section of
+// another chapter that only draws on this moment through another span is
+// marked lightly (`alsoAt`) and never scrolled to: the recap at the end of a
+// meeting note ("决定", "待办") draws on many moments of the body, and
+// following it made the note jump to the end and back (owner, 2026-10-25).
+// `null` when no main span holds it (the caller keeps the last one: people
+// quietly writing in a shared document still belong to the section before).
 export const sectionAt = (time, rows) => {
     if (!Number.isFinite(time) || !rows?.length) return null;
     let best = null;
@@ -108,7 +123,17 @@ export const sectionAt = (time, rows) => {
         const better = !bestRank || rank[0] > bestRank[0] || (rank[0] === bestRank[0] && rank[1] > bestRank[1]);
         if (better) { best = row.id; bestRank = rank; }
     });
-    return best;
+    if (!best) return null;
+    const chapterOf = chapters(rows);
+    let second = null;
+    let secondStart = null;
+    rows.forEach((row) => {
+        if (row.id === best || row.level < 3 || chapterOf.get(row.id) !== chapterOf.get(best)) return;
+        row.others.forEach((span) => {
+            if (inside(span, time) && (secondStart === null || span[0] > secondStart)) { second = row.id; secondStart = span[0]; }
+        });
+    });
+    return second || best;
 };
 
 // The other rows that draw on `time` through one of their spans, besides

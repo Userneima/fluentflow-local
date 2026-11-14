@@ -12,6 +12,9 @@
 //     A section that draws on the moment through another span, like the recap
 //     at the end of a meeting, is marked lightly and never scrolled to; its
 //     parent heading is not marked (owner, 2026-10-25).
+//   - (owner, 2026-11-14) A level-3 section talked about in two stretches is
+//     followed in both, when the other stretch falls inside a section of the
+//     same chapter; a section of another chapter still is not.
 //   - Neither the times nor the marking changes the markdown or reports an
 //     edit, so they can never be saved (decisions 6.27, 6.30); a newer note
 //     handed down by the page keeps them.
@@ -264,4 +267,35 @@ describe('the note editor following playback', () => {
         const {container} = render(<NoteEditor markdown={NOTE} onChange={vi.fn()}/>);
         expect(container.querySelectorAll('.cm-follow-time')).toHaveLength(0);
     });
+
+describe('a subject talked about in two stretches', () => {
+    // Lesson three: 二、Jessie > （二）提示缓存怎么运作 1692-2124, （三）张和讲缓存命中率
+    // 2124-2337 and again 1865-1961; 四、小结 draws on 1865-1961 too.
+    const rows = normalizeRows([
+        {id: 'c2', heading: '二、Jessie', level: 2, body_hash: 'a', primary: [1535, 2446], others: []},
+        {id: 'c2a', heading: '（一）做法', level: 3, body_hash: 'b', primary: [1535, 1692], others: [[1818, 1865]]},
+        {id: 'c2b', heading: '（二）提示缓存怎么运作', level: 3, body_hash: 'c', primary: [1692, 2124], others: [[2352, 2431]]},
+        {id: 'c2c', heading: '（三）张和讲缓存命中率', level: 3, body_hash: 'd', primary: [2124, 2337], others: [[1865, 1961]]},
+        {id: 'c4', heading: '四、小结', level: 2, body_hash: 'e', primary: [4000, 4100], others: []},
+        {id: 'c4a', heading: '（一）决定', level: 3, body_hash: 'f', primary: [4000, 4050], others: [[1900, 1950]]},
+    ]);
+
+    it('follows the second stretch inside its own chapter, and comes back after it', () => {
+        expect(sectionAt(1800, rows)).toBe('c2b');
+        expect(sectionAt(1830, rows)).toBe('c2a');
+        expect(sectionAt(1866, rows)).toBe('c2c');
+        expect(sectionAt(1920, rows)).toBe('c2c');
+        expect(sectionAt(1962, rows)).toBe('c2b');
+        expect(sectionAt(2200, rows)).toBe('c2c');
+    });
+
+    it('never follows a section of another chapter there', () => {
+        expect(sectionAt(1920, rows)).not.toBe('c4a');
+        expect(alsoAt(1920, rows, sectionAt(1920, rows))).toContain('c4a');
+    });
+
+    it('scrolls through the second stretch by its own progress', () => {
+        expect(spanProgress(rows.find((row) => row.id === 'c2c'), 1913)).toBeCloseTo(0.5, 2);
+    });
+});
 });
