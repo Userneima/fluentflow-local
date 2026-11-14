@@ -1,7 +1,8 @@
 import {noteProgressShort} from './noteProgress.js';
 import {msgs} from '../app/shared.jsx';
 
-const noteProgressT = (lang) => (key) => msgs[lang]?.[key] ?? msgs.en[key] ?? key;
+// Translates FluentFlow's own message keys, English when a language lacks one.
+export const noteProgressT = (lang) => (key) => msgs[lang]?.[key] ?? msgs.en[key] ?? key;
 
 export const TASK_STATE_IDLE = 'idle';
 export const TASK_STATE_UPLOADING = 'uploading';

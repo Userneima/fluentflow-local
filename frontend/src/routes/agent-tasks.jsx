@@ -18,7 +18,6 @@ import {fmtCharCount, fmtDuration, progressMessageOf} from '../lib/format.js';
 import {DropdownMenu} from '../app/DropdownMenu.jsx';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
 import {noteProgressShort, noteProgressStatus} from '../lib/noteProgress.js';
-import {msgs} from '../app/shared.jsx';
 import {
     fmtBytes,
     fmtFileSize,
@@ -51,6 +50,7 @@ import {
     taskOutcome,
     resumeOffer,
     cutsToJudge,
+    noteProgressT,
 } from '../lib/taskState.js';
 import {useJobPolling} from '../lib/useJobPolling.js';
 import {extraUrlsIgnoredNotice, retryInputForJob, retryOptionsForJob} from '../lib/linkRetry.js';
@@ -165,13 +165,12 @@ export const isAudioOnlySource = (job) => {
 // FluentFlow's own writer on the note says how far it has got
 // (backend note_progress); the stage the row was last written at does not.
 const noteProgressOf = (job) => job?.activity?.note_progress || null;
-const msgT = (lang) => (key) => msgs[lang]?.[key] ?? msgs.en[key] ?? key;
 
 const stageLabel = (job, lang) => {
     const isZh = lang === 'zh';
     const writing = noteProgressOf(job);
     if (writing) {
-        const short = noteProgressShort(writing, msgT(lang), lang);
+        const short = noteProgressShort(writing, noteProgressT(lang), lang);
         const head = isZh ? '写笔记' : 'Writing note';
         return short ? `${head} · ${short}` : head;
     }
@@ -233,7 +232,7 @@ const liveStageDetail = (job, lang, aheadName = '') => {
     // thing on the card.
     const waiting = queueWaitDetail(job, lang, aheadName);
     if (waiting) return waiting;
-    if (noteProgressOf(job)) return noteProgressStatus(noteProgressOf(job), msgT(lang), lang);
+    if (noteProgressOf(job)) return noteProgressStatus(noteProgressOf(job), noteProgressT(lang), lang);
     const progressMeta = job?.metadata?.video_source_progress || {};
     const loaded = progressMeta.loaded_bytes ? fmtBytes(progressMeta.loaded_bytes) : '';
     const total = progressMeta.total_bytes ? fmtBytes(progressMeta.total_bytes) : '';
