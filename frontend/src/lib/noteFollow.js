@@ -113,7 +113,10 @@ const chapters = (rows) => {
 // following it made the note jump to the end and back (owner, 2026-10-25).
 // `null` when no main span holds it (the caller keeps the last one: people
 // quietly writing in a shared document still belong to the section before).
-export const sectionAt = (time, rows) => {
+// `allRows` are every row of the table, found in the note or not, so a
+// chapter whose heading was just renamed still parts its sections from the
+// chapter before.
+export const sectionAt = (time, rows, allRows = rows) => {
     if (!Number.isFinite(time) || !rows?.length) return null;
     let best = null;
     let bestRank = null;
@@ -124,7 +127,7 @@ export const sectionAt = (time, rows) => {
         if (better) { best = row.id; bestRank = rank; }
     });
     if (!best) return null;
-    const chapterOf = chapters(rows);
+    const chapterOf = chapters(allRows);
     let second = null;
     let secondStart = null;
     rows.forEach((row) => {

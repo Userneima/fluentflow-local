@@ -294,6 +294,12 @@ describe('a subject talked about in two stretches', () => {
         expect(alsoAt(1920, rows, sectionAt(1920, rows))).toContain('c4a');
     });
 
+    it('keeps chapters apart when a chapter heading is not found in the note', () => {
+        const withoutC4 = rows.filter((row) => row.id !== 'c4');
+        expect(sectionAt(1920, withoutC4, rows)).toBe('c2c');
+        expect(sectionAt(1920, withoutC4)).toBe('c4a'); // what joining it to the chapter before did
+    });
+
     it('scrolls through the second stretch by its own progress', () => {
         expect(spanProgress(rows.find((row) => row.id === 'c2c'), 1913)).toBeCloseTo(0.5, 2);
     });

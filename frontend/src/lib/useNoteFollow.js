@@ -92,7 +92,7 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
             if (pinned && rowHolds(pinned, time)) key = pinned.id;
             else {
                 pinnedRef.current = null;
-                key = sectionAt(time, foundRows);
+                key = sectionAt(time, foundRows, rows);
             }
             if (key) {
                 activeRef.current = key;
@@ -108,7 +108,7 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
         };
         update(clock.get());
         return clock.subscribe(update);
-    }, [clock, foundRows]);
+    }, [clock, foundRows, rows]);
 
     const pause = useCallback(() => setFollowing((value) => (value ? false : value)), []);
     const resume = useCallback(() => {
