@@ -34,7 +34,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import correction_notes, job_store, model_usage, note_section_times, task_steps
+from backend.core import correction_notes, job_store, model_usage, note_section_times, note_versions, task_steps
 from backend.core.result_schema import canonical_display_segments
 
 logger = logging.getLogger(__name__)
@@ -779,7 +779,7 @@ def review_version(text: str) -> str:
     """The review note's version: the fingerprint of the md as it is on disk.
     The md is the review note (there is no copy in the task), so an edit made
     in Obsidian is a new version the moment it is saved."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return note_versions.note_hash(text)
 
 
 REPLACE_STALE = ("复习笔记在你读到之后又被改过（Obsidian 或别的 agent），这次替换没有执行，复习笔记没有改动。"
