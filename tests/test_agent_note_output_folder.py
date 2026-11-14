@@ -1,9 +1,9 @@
 """An agent's note reaches the output folder beside the recording right away.
 
 Requirement (owner, 2026-11-14): when an agent saves a note with
-``save_agent_note``, the md and PDF in the task's output folder carry it as soon
-as the save returns and the folder has caught up, the first time as much as
-later. Before this, the first save only started the minute-long wait meant for
+``save_agent_note``, the md and PDF in the task's output folder are queued to
+follow at once (seconds, the PDF export runs in the background), the first time
+as much as later, and the answer says so. Before this, the first save only started the minute-long wait meant for
 an editor saving every few seconds, so the agent reported the note done while
 the folder still had none; and a save that landed while the folder was being
 filled for the first time was never written there at all.
@@ -20,6 +20,7 @@ import pytest
 import backend.core.agent_note as an
 import backend.core.debreath_job as dj
 from backend.core import job_store, note_pdf, output_folder
+from backend.core.local_request_scope import LOCAL_OWNER_ID
 from test_visual_note_job import SEGMENTS, _cut_media, no_ambient_key  # noqa: F401
 
 
@@ -64,7 +65,7 @@ def _finished_task(tmp_path: Path) -> tuple[str, Path]:
         },
     }
     job_store.upsert_job(
-        task_id=task_id, status="completed", result=result, client_id="anonymous",
+        task_id=task_id, status="completed", result=result, client_id=LOCAL_OWNER_ID,
         source_filename="lecture.mp4",
         metadata={"folder_intake": {"chosen_with": "folder_path", "original_path": str(source)}},
     )
@@ -86,7 +87,7 @@ def test_the_first_agent_note_is_in_the_folder_without_the_editors_wait(tmp_path
     output_folder.sync(task_id)  # the end of the task: the folder, with no note yet
     assert not _md(source).exists()
 
-    an.save(task_id, note_markdown="# 最小二乘法\n\n正文。", client_id="anonymous")
+    an.save(task_id, note_markdown="# 最小二乘法\n\n正文。", client_id=LOCAL_OWNER_ID)
     _wait_for_worker()
 
     assert "正文" in _md(source).read_text(encoding="utf-8")
@@ -111,9 +112,33 @@ def test_a_note_saved_while_the_folder_is_first_filled_is_not_lost(tmp_path, pdf
     monkeypatch.setattr(output_folder, "_sync_files", slow_fill)
     output_folder.schedule_sync(task_id)
     assert read_it.wait(10)
-    an.save(task_id, note_markdown="# 最小二乘法\n\n正文。", client_id="anonymous")
+    an.save(task_id, note_markdown="# 最小二乘法\n\n正文。", client_id=LOCAL_OWNER_ID)
     go_on.set()
     _wait_for_worker()
     _wait_for_worker()
 
     assert "正文" in _md(source).read_text(encoding="utf-8")
+
+
+def test_the_save_answer_says_the_folder_follows(tmp_path, pdfs, monkeypatch):
+    """The folder is written in the background: the agent's answer says it is
+    queued and where, so the agent does not report it as already there."""
+    from fastapi.testclient import TestClient
+
+    from backend.local_main import create_local_app
+
+    monkeypatch.setattr(output_folder, "SYNC_QUIET_SECONDS", 3600.0)
+    monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "test-token")
+    task_id, source = _finished_task(tmp_path)
+    output_folder.sync(task_id)
+
+    answer = TestClient(create_local_app()).post(
+        f"/agent/v1/tasks/{task_id}/agent-note", json={"note_markdown": "# 最小二乘法\n\n正文。"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    _wait_for_worker()
+
+    assert answer.status_code == 200, answer.text
+    answer = answer.json()
+
+    assert any("产出文件夹" in place and str(source.parent / "lecture") in place for place in answer["follows"]), answer

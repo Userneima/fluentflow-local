@@ -1048,6 +1048,7 @@ def save_agent_note(
             }
             if saved["job"] is not None:
                 answer["previous_note_restorable"] = True
+                answer["follows"] = note_history.follows(saved["job"].get("result") or {})
                 answer["package_url"] = f"/agent/v1/tasks/{task_id}/package"
                 align = _alignment_next(saved["job"])
                 if align:
@@ -1093,6 +1094,9 @@ def save_agent_note(
             "parts": coverage.get("parts") or [],
         },
         "package_url": f"/agent/v1/tasks/{task_id}/package",
+        # Where the note goes from here: the folder's md and PDF are queued,
+        # not written yet when this returns (push review, 2026-11-14).
+        "follows": note_history.follows(updated.get("result") or {}),
         "task": _task_brief(updated),
     }
 

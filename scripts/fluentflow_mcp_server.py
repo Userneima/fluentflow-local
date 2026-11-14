@@ -1403,7 +1403,9 @@ def get_agent_note_material(
         "for the speaker's reasons and the questions asked, then save it again. "
         "Cite frames by file name only. Too-short notes are refused. Pass base_version: "
         "a concurrent edit returns stale without replacing it; read, merge and save again "
-        "with the new note_version. Previous notes stay restorable. FluentFlow does not match the "
+        "with the new note_version. Previous notes stay restorable. The output folder's md and PDF "
+        "are queued to follow, usually within seconds; the answer's follows lists where the note "
+        "goes. FluentFlow does not match the "
         "sections of a note you wrote to playback times: once the task is done, align them with "
         "get_agent_alignment_material (the answer's next says so while times are missing)."),
     input_schema={

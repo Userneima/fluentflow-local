@@ -246,7 +246,7 @@ def restore_version(
         "version_id": version.id,
         "chars": note_versions.chars(note),
         "note_version": content_versions(restored).get("note_version"),
-        "follows": _follows(restored),
+        "follows": follows(restored),
     }
 
 
@@ -312,7 +312,7 @@ def replace_text(
         "replacements": len(wanted),
         "chars": note_versions.chars(note),
         "note_version": content_versions(after).get("note_version"),
-        "follows": _follows(after),
+        "follows": follows(after),
     }
 
 
@@ -328,15 +328,17 @@ def _follow_now(task_id: str, result: Any) -> None:
         feishu_sync.schedule_push_when_quiet(task_id, delay=0)
 
 
-def _follows(result: dict[str, Any]) -> list[str]:
+def follows(result: dict[str, Any]) -> list[str]:
     from backend.core import feishu_sync, output_folder
 
     # The folder and Feishu are updated in the background: what is written
     # here is that they were queued, and where a failure shows up.
     places = ["FluentFlow 任务里的笔记：已写入"]
     folder = result.get(output_folder.RESULT_KEY) if isinstance(result.get(output_folder.RESULT_KEY), dict) else {}
-    if folder.get("md_path"):
-        places.append(f"产出文件夹的 md 和 PDF（{folder['md_path']}）：已排队，通常几秒内更新；"
+    # A folder holding no note yet (the agent's first note) gets one now too.
+    where = folder.get("md_path") or folder.get("path")
+    if where:
+        places.append(f"产出文件夹的 md 和 PDF（{where}）：已排队，通常几秒内更新；"
                       "没更新时 get_task 的 output_folder.error 写原因")
     if feishu_sync.recorded_sync(result) is not None:
         places.append("飞书文档：已排队，只重写变了的章节，通常一分钟内；没更新时 get_task 的 lark_sync_error 写原因")
