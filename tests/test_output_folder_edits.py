@@ -206,8 +206,16 @@ def test_a_stale_copy_saved_over_a_newer_note_can_be_found_again(tmp_path, pdfs)
 def test_a_burst_of_saves_refreshes_the_folder_once_after_it_stops(monkeypatch):
     """The page saves after every pause in typing; each folder refresh exports
     the PDF, so a burst of saves is one refresh, after the last one."""
+    # Other tests in this process leave folder refreshes waiting on a timer
+    # (the result listener schedules one when a task's note changes); one
+    # firing during this test landed in the list (CI, 2026-11-14). Cancel
+    # them, and count only this test's task.
+    with output_folder._QUIET_LOCK:
+        for timer in output_folder._QUIET_TIMERS.values():
+            timer.cancel()
+        output_folder._QUIET_TIMERS.clear()
     synced: list[str] = []
-    monkeypatch.setattr(output_folder, "schedule_sync", synced.append)
+    monkeypatch.setattr(output_folder, "schedule_sync", lambda task_id: synced.append(task_id) if task_id == "t-burst" else None)
     monkeypatch.setattr(output_folder, "SYNC_QUIET_SECONDS", 0.3)
 
     for _ in range(5):
