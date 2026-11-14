@@ -1052,6 +1052,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 audio_path=out_audio,
             )
             cleanup_payload = _cleanup_payload(cleanup_result)
+            # Before the checkpoint, so the transcription step reads failed.
+            require_speech(transcript_text, segments_payload)
             checkpoint = _transcribed_checkpoint(
                 ctx, base_result=base_result, tr=tr, cleanup_payload=cleanup_payload,
                 raw_segments_payload=raw_segments_payload, segments_payload=segments_payload,
@@ -1070,9 +1072,9 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
              stt_realtime_factor, stt_model_for_result, in_path, playback_audio_path,
              enhanced_playback_audio_path, voice_presence, stt_audio_take,
              preprocess_artifacts) = _from_checkpoint(checkpoint)
+            require_speech(transcript_text, segments_payload)
             frame_paths, frame_metadata, visual_requests, visual_selections = [], [], [], []
             visual_evidence_error, visual_plan_covered_until = None, None
-        require_speech(transcript_text, segments_payload)
         # A correction that finished before an interruption is not run again:
         # its result is in the checkpoint, segments included.
         subtitle_fields: dict[str, Any] = dict(checkpoint.get("subtitle_fields") or {})
