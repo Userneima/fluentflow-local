@@ -37,6 +37,7 @@ from backend.core.lark_cli_exporter import export_markdown_via_lark_cli, lark_cl
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_config import resolve_secret
 from backend.core.local_entry_guards import friendly_error
+from backend.core.local_error_diagnostics import is_no_speech
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.core.media_job import RESUME_DIRNAME, MediaJobContext, execute_media_job
 from backend.core.note_title import resolve_lark_doc_title
@@ -442,8 +443,13 @@ async def _steps_before_transcript(ctx: Any, start_at: str) -> bool:
     if outcome[0] == task_steps.DONE:
         _drop_checkpoint(task_id)
     _raise_if_stopped(task_id)
-    # A failed transcription goes on as before: each later step finds
-    # nothing to work on and says so.
+    if outcome[0] == task_steps.FAILED and is_no_speech(outcome[1]):
+        # No one speaking: no cut, note, compressed copy or export of an empty
+        # transcript; the steps after it read as skipped (owner, 2026-11-14).
+        _drop_checkpoint(task_id)
+        return False
+    # Any other failed transcription goes on as before: each later step
+    # finds nothing to work on and says so.
     return True
 
 

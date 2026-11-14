@@ -36,6 +36,7 @@ from backend.core.ai_summarizer import (
     summarize_transcript_with_metadata,
     visual_requests_to_frame_segments,
 )
+from backend.core.local_error_diagnostics import NO_SPEECH
 from backend.core.media_probe import media_duration_seconds
 from backend.core.runtime_env import truthy
 from backend.core.ai_client import _chat, _get_client, _normalize_model, _normalize_provider, _provider_api_key
@@ -110,6 +111,15 @@ def _stt_realtime_factor(
     if not stt_elapsed_seconds or not duration_seconds or duration_seconds <= 0:
         return None
     return max(round(stt_elapsed_seconds / duration_seconds, 4), 0.0001)
+
+
+def require_speech(transcript_text: Any, segments: Any) -> None:
+    """Fail a transcription that heard no one (a screen recording that took
+    no system sound, a muted microphone): nothing after it has anything to
+    work on, so the task fails here and says why, and ``task_flow`` skips the
+    rest."""
+    if not str(transcript_text or "").strip() and not segments:
+        raise RuntimeError(NO_SPEECH)
 
 
 def _transcribed_total(duration_estimate_sec: float | None, transcription: Any) -> float | None:
@@ -1062,6 +1072,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
              preprocess_artifacts) = _from_checkpoint(checkpoint)
             frame_paths, frame_metadata, visual_requests, visual_selections = [], [], [], []
             visual_evidence_error, visual_plan_covered_until = None, None
+        require_speech(transcript_text, segments_payload)
         # A correction that finished before an interruption is not run again:
         # its result is in the checkpoint, segments included.
         subtitle_fields: dict[str, Any] = dict(checkpoint.get("subtitle_fields") or {})

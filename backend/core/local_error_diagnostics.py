@@ -213,6 +213,17 @@ def _feishu_rule(raw: str, lowered: str, via_cli: bool) -> dict[str, Any]:
     )
 
 
+# A recording in which the transcriber heard no one: the transcript is empty,
+# so the task ends at transcription instead of cutting, writing a note and
+# making a compressed copy of nothing (owner, 2026-11-14). The words start the
+# message stored on the task, which is diagnosed again when it is shown.
+NO_SPEECH = "这段录音里没检测到人声"
+
+
+def is_no_speech(error: Any) -> bool:
+    return NO_SPEECH in str(error or "")
+
+
 def diagnose_error(error: Any) -> dict[str, Any]:
     raw = str(error or "").strip()
     if not raw:
@@ -228,6 +239,14 @@ def diagnose_error(error: Any) -> dict[str, Any]:
     # (2026-10-18 review of every failure message on record).
     if raw == "user_cancelled":
         return _diag("user_cancelled", "已取消", "这个任务是你取消的。", "需要的话点「重新提交」。")
+    if is_no_speech(raw):
+        return _diag(
+            "no_speech", "没检测到人声",
+            f"{NO_SPEECH}，转录出来是空的，所以没有剪辑、没写笔记、也没做压缩副本。"
+            "常见原因是录屏时没采到系统声音，或者麦克风是静音的。",
+            "检查录屏软件的音频来源（系统声音、麦克风）后重新录；确定里面有人说话的话，把录像发给维护者。",
+            retryable=False,
+        )
     if raw == "client_disconnect":
         return _diag(
             "client_disconnect", "上传中断了",

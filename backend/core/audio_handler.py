@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from backend.core.local_error_diagnostics import NO_SPEECH
+
 AUDIO_SUFFIXES = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".webm"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".ts", ".m4v"}
 SILENCE_PEAK_THRESHOLD_DB = -80.0
@@ -42,7 +44,7 @@ def require_audible_audio(audio_path: str | Path) -> float:
 
     peak_db = float(match.group(1))
     if peak_db <= SILENCE_PEAK_THRESHOLD_DB:
-        raise RuntimeError("音频中没有检测到可转录的声音，请确认录制时包含系统声音或麦克风声音后重新提交。")
+        raise RuntimeError(NO_SPEECH)
     return peak_db
 
 
