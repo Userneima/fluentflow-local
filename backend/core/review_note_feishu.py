@@ -130,12 +130,19 @@ def pending(result: dict[str, Any] | None) -> bool:
         return False
     if _move_owed(record):
         return True
+    if isinstance(record.get("sync"), dict) and record.get("layout") != LAYOUT:
+        return True
     # The md as it was when pushed (the document holds it with its
     # screenshots pointed at the task's frames, so its own digest differs).
     return note_digest(review.read_text(encoding="utf-8")) != record.get("md_digest")
 
 
 MOVE_TRIES = 3
+
+# How the document is laid out (feishu_note._layout with tight=True, decision
+# 6.75). A document pushed with an earlier layout has every chapter written
+# again once, so it looks the same as one made today.
+LAYOUT = "tight-2026-11-16"
 
 
 def _move_owed(record: dict[str, Any]) -> bool:
@@ -180,9 +187,12 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
             # copy too many is cheap, losing an edit made in Feishu is not.
             if modified is None or modified > int(record.get("feishu_modified_at") or 0):
                 keep = _keep_feishu_version(review)
+            if record.get("layout") != LAYOUT and isinstance(previous.get("sections"), list):
+                previous = {**previous, "sections": [{**s, "digest": None} for s in previous["sections"]]}
             response = cli.export_markdown_via_lark_cli(
                 str(record.get("title") or review.stem), markdown, task_id=task_id,
                 artifact_root=_artifact_root(), previous=previous, keep_feishu=keep, runner=runner, state=STATE,
+                tight=True,
             )
             moved = record.get("moved")
             if _move_owed(record):
@@ -198,7 +208,7 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
                                        "把随看笔记挪进一个目录后会自动补上")
             response = cli.export_markdown_via_lark_cli(
                 title, markdown, task_id=task_id, artifact_root=_artifact_root(), runner=runner, state=STATE,
-                parent_token=parent or None,
+                parent_token=parent or None, tight=True,
                 previous=_made_unrecorded(runner, bin_path, node, title, str(follow.get("url") or ""), task_id),
             )
             # Recorded before the move, so a failed move never makes a second document.
@@ -215,7 +225,7 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
     modified_at = cli.modified_times(runner, bin_path, [str(sync.get("doc_id"))]).get(str(sync.get("doc_id")))
     _record(task_id, sync=sync, url=response.get("url"), moved=moved, md_digest=cli.note_digest(text),
             feishu_modified_at=modified_at or 0, pushed_at=datetime.now(timezone.utc).isoformat(),
-            error=None if moved else _MOVE_FAILED)
+            layout=LAYOUT, error=None if moved else _MOVE_FAILED)
     return response
 
 

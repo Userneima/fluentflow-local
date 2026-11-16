@@ -288,13 +288,15 @@ def export_markdown_via_lark_cli(
     runner: Runner = subprocess.run,
     parent_token: Optional[str] = None,
     state: str = "",
+    tight: bool = False,
 ) -> Dict[str, Any]:
     """Put the note in Feishu as the signed-in user, with its screenshots.
 
     ``parent_token`` creates the document under that wiki node instead of at
     the root of ``wiki_space``. ``state`` prefixes the files this task keeps
     about its document, so a second document of the same task (its review
-    note) keeps its own.
+    note) keeps its own. ``tight`` lays it out as the review note reads in
+    Obsidian (``feishu_note._layout``).
 
     A note with no document yet gets a new one. A note whose document an
     earlier export recorded (``previous``, the ``sync`` it returned) is updated
@@ -318,7 +320,7 @@ def export_markdown_via_lark_cli(
     if previous and previous.get("doc_id") and isinstance(previous.get("sections"), list):
         updated = _update(
             markdown, previous, bin_path=bin_path, timeout=timeout, task_id=task_id,
-            artifact_root=artifact_root, keep_feishu=keep_feishu, runner=runner, state=state,
+            artifact_root=artifact_root, keep_feishu=keep_feishu, runner=runner, state=state, tight=tight,
         )
         if resumed is not None:
             if not updated.get("sections_rewritten"):
@@ -327,7 +329,7 @@ def export_markdown_via_lark_cli(
                 # pointed at their chapters (``_finish``).
                 parts = feishu_note.sections(markdown)
                 links: List[feishu_note.HeadingLink] = []
-                _feishu_chunk(parts, list(range(len(parts))), links)
+                _feishu_chunk(parts, list(range(len(parts))), links, tight=tight)
                 _finish(runner, bin_path, str(previous["doc_id"]), str(previous.get("url") or ""), links, parts,
                         updated["sync"])
             _forget_created(artifact_root, task_id, state)
@@ -338,7 +340,7 @@ def export_markdown_via_lark_cli(
     space = (wiki_space or os.environ.get("FLUENTFLOW_LARK_CLI_WIKI_SPACE") or "").strip() or DEFAULT_WIKI_SPACE
     parts = feishu_note.sections(markdown)
     links: List[feishu_note.HeadingLink] = []
-    written = _feishu_chunk(parts, list(range(len(parts))), links)
+    written = _feishu_chunk(parts, list(range(len(parts))), links, tight=tight)
     export_markdown, pending, missing = _prepare_images(
         written,
         task_id=task_id,
@@ -510,6 +512,7 @@ def save_pushed_note(artifact_root: Optional[Path], task_id: Optional[str], mark
 
 def _feishu_chunk(
     parts: List[feishu_note.Section], indices: List[int], links: List[feishu_note.HeadingLink], *, body_only: bool = False,
+    tight: bool = False,
 ) -> str:
     """The chapters ``indices`` as written to Feishu, links numbered on from
     ``links`` (extended). A chapter followed by a ``##`` chapter other than
@@ -521,7 +524,7 @@ def _feishu_chunk(
         following = parts[index + 1] if index + 1 < len(parts) else None
         divider = following is not None and following.level == 2 and index + 1 != first_h2
         text = parts[index].body if body_only else parts[index].text
-        prepared = feishu_note.to_feishu(text, first_link=len(links), divider_after=divider)
+        prepared = feishu_note.to_feishu(text, first_link=len(links), divider_after=divider, tight=tight)
         links.extend(prepared.links)
         if prepared.markdown.strip():
             pieces.append(prepared.markdown.strip("\n"))
@@ -618,6 +621,7 @@ def _write_ops(
     task_id: Optional[str],
     artifact_root: Optional[Path],
     runner: Runner,
+    tight: bool = False,
 ) -> int:
     """Run ``plan_update``'s deletes and inserts; returns the chapters written."""
     rewritten = 0
@@ -633,7 +637,7 @@ def _write_ops(
                 )
                 deleted.update(chunk)
             continue
-        written = _feishu_chunk(parts, op.parts, links, body_only=op.body_only)
+        written = _feishu_chunk(parts, op.parts, links, body_only=op.body_only, tight=tight)
         if not written.strip():
             # Nothing the page shows (a part marker only): the delete was enough.
             continue
@@ -687,6 +691,7 @@ def _update(
     keep_feishu: Optional[Callable[[str], None]],
     runner: Runner,
     state: str = "",
+    tight: bool = False,
 ) -> Dict[str, Any]:
     """Rewrite only the chapters that changed since ``previous`` was pushed.
 
@@ -735,7 +740,7 @@ def _update(
     try:
         rewritten = _write_ops(ops, parts, figures, links, pending, missing, deleted,
                                bin_path=bin_path, doc_id=doc_id, timeout=timeout, task_id=task_id,
-                               artifact_root=artifact_root, runner=runner)
+                               artifact_root=artifact_root, runner=runner, tight=tight)
     except Exception as exc:
         # Every chapter the push was changing: rewritten, added, removed or
         # moved (a move is a delete and an insert with nothing else changed).

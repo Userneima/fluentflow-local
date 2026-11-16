@@ -253,3 +253,29 @@ def test_a_feishu_edit_is_kept_when_its_time_cannot_be_read(wiki, tmp_path):
 
     kept = list((md.parent / "过程文件" / "历史版本").glob("*飞书上改过*"))
     assert kept and "飞书上改的" in kept[0].read_text(encoding="utf-8")
+
+
+def test_in_feishu_a_colon_line_runs_into_its_list_and_a_check_stays_in_its_list(wiki, tmp_path):
+    """Owner, 2026-11-16: the review note in Feishu reads as it does in
+    Obsidian, with no empty paragraph under 「例子：」 nor around a 核对 in a list."""
+    review = REVIEW.replace("## 术语表", "**例子**：\n- 第一条。\n> **核对（2026-11-05）**：补一句。\n- 第二条。\n\n## 术语表")
+    task_id, _ = _lesson(tmp_path, review=review)
+
+    rnf.push(task_id, runner=wiki)
+
+    texts = [b for b in wiki.blocks]
+    at = next(i for i, b in enumerate(texts) if b.get("text", "").startswith("**例子**") or b.get("text", "").startswith("<b>例子"))
+    following = [b for b in texts[at + 1:at + 4]]
+    assert all(b.get("text") for b in following), [b.get("text") for b in following]
+
+
+def test_a_document_laid_out_the_old_way_is_written_again_once(wiki, tmp_path):
+    task_id, _ = _lesson(tmp_path)
+    rnf.push(task_id, runner=wiki)
+    record = job_store.get_job(task_id)["result"]
+    job_store.update_job_result(task_id, {**record, rnf.RESULT_KEY: {**record[rnf.RESULT_KEY], "layout": None}})
+
+    assert rnf.pending(job_store.get_job(task_id)["result"])
+    rnf.push(task_id, runner=wiki)
+
+    assert not rnf.pending(job_store.get_job(task_id)["result"]) and wiki.creates() == 1

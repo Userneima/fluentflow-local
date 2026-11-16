@@ -136,7 +136,7 @@ def _callout(lines: list[str], start: int) -> tuple[list[str], int]:
     return out, index
 
 
-def to_feishu(markdown: str, *, first_link: int = 0, divider_after: bool = False) -> FeishuMarkdown:
+def to_feishu(markdown: str, *, first_link: int = 0, divider_after: bool = False, tight: bool = False) -> FeishuMarkdown:
     """``markdown`` (the note as the md holds it) as written to Feishu. Link
     placeholders are numbered from ``first_link`` + 1, so pieces of one note
     written in the same push never share one. ``divider_after`` ends the piece
@@ -174,7 +174,7 @@ def to_feishu(markdown: str, *, first_link: int = 0, divider_after: bool = False
             continue
         out.append(_HEADING_LINK.sub(heading_link, _escape(line)))
         index += 1
-    laid = _layout(out)
+    laid = _layout(out, tight=tight)
     if divider_after:
         laid.extend(["", "---"])
     return FeishuMarkdown(markdown="\n".join(laid), links=links)
@@ -299,9 +299,22 @@ def _table(block: list[str]) -> list[str]:
     return [f"<table><colgroup>{cols}</colgroup><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"]
 
 
-def _layout(lines: list[str]) -> list[str]:
+def _ends_with_colon(block: list[str]) -> bool:
+    return bool(re.search(r"[：:]\s*$", block[-1]))
+
+
+def _is_quote(block: list[str]) -> bool:
+    return block[0].lstrip().startswith((">", "<callout"))
+
+
+def _layout(lines: list[str], *, tight: bool = False) -> list[str]:
+    """Blocks with an empty paragraph between them, as the owner's Feishu
+    notes look. ``tight`` (the review note, decision 6.75): no empty paragraph
+    under a line ending with a colon, nor between a list and a quote next to
+    it, as the review note reads in Obsidian."""
     out: list[str] = []
     previous = ""
+    previous_block: list[str] = []
     for block in _blocks(lines):
         kind = _block_kind(block)
         if kind == "prose" and len("".join(block).strip()) >= _PROSE_MIN_CHARS and not block[0].startswith("\u3000"):
@@ -311,9 +324,16 @@ def _layout(lines: list[str]) -> list[str]:
         if out:
             spaced = (previous not in ("heading", "hr") and kind not in ("heading", "hr")
                       and not (previous == "list" and kind == "list"))
+            if spaced and tight and (
+                _ends_with_colon(previous_block)
+                or (previous == "list" and _is_quote(block))
+                or (_is_quote(previous_block) and kind == "list")
+            ):
+                spaced = False
             out.extend(["", EMPTY_PARAGRAPH, ""] if spaced else [""])
         out.extend(block)
         previous = kind
+        previous_block = block
     return out
 
 
