@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
-from backend.core import job_store
+from backend.core import job_store, note_spacing
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +165,9 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
     record = result.get(RESULT_KEY) if isinstance(result.get(RESULT_KEY), dict) else {}
     previous = record.get("sync") if isinstance(record.get("sync"), dict) and record["sync"].get("doc_id") else None
     text = review.read_text(encoding="utf-8")
-    markdown = _with_task_images(task_id, text)
+    # The md keeps a 核对 right under a list item; Feishu's import needs the
+    # blank lines back to see it as its own quote (note_spacing).
+    markdown = note_spacing.for_renderers(_with_task_images(task_id, text))
     bin_path = cli._resolve_lark_cli_bin()
     if not bin_path:
         _record(task_id, error="没找到 lark-cli，复习笔记没发到飞书。")

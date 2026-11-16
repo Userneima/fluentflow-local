@@ -428,10 +428,10 @@ def test_a_cut_off_push_waits_while_feishu_is_still_being_edited(doc, tmp_path, 
     doc.fail_insert = False
     doc.edit("开场的话。", "飞书里正在改的开场。")
     queued: list = []
-    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: queued.append(fn))
+    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: queued.append(a[0] if a else None))
 
     assert task not in feishu_sync.check_feishu(now=doc.modified + 5, runner=doc)
-    assert not queued
+    assert task not in queued  # other tests' tasks may sit in the same job store
 
 
 def test_a_push_that_cannot_ask_feishu_when_it_changed_writes_nothing_says_so_and_is_tried_again(doc, tmp_path, monkeypatch):

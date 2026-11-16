@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.core import note_spacing
 from backend.core import job_store, review_note
 from scripts import fluentflow_mcp_server as mcp
 
@@ -60,7 +61,7 @@ def test_several_passages_change_the_old_one_is_kept_and_the_pdf_follows(review,
     assert response.status_code == 200, response.text
     answer = response.json()
     text = review.read_text(encoding="utf-8")
-    assert text == ANSWER.replace("先拆读，再拆写。", "先拆读请求，再拆写请求。").replace("- 读请求按小时统计，高峰在晚上。\n", "")
+    assert text == note_spacing.tidy(ANSWER.replace("先拆读，再拆写。", "先拆读请求，再拆写请求。").replace("- 读请求按小时统计，高峰在晚上。\n", ""))
     assert answer["replaced"] is True and answer["replacements"] == 2
     assert answer["review_version"] == review_note.review_version(text)
     kept = _history(review)

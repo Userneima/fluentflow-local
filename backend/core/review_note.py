@@ -34,7 +34,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import correction_notes, job_store, model_usage, note_section_times, note_versions, task_steps
+from backend.core import correction_notes, job_store, model_usage, note_section_times, note_spacing, note_versions, task_steps
 from backend.core.result_schema import canonical_display_segments
 
 logger = logging.getLogger(__name__)
@@ -562,7 +562,7 @@ def _finish_write(
     version = inputs["version"]
     # The rules ask for no sources; one written anyway out of habit names a
     # chapter table the model was never given, so it is dropped.
-    note = _with_base_line(_LEFTOVER_CITE.sub("", answer), version)
+    note = note_spacing.tidy(_with_base_line(_LEFTOVER_CITE.sub("", answer), version))
     target = review_path_for(path)
     _write_in_place(target, note)
     pdf = _pdf(note, target)
@@ -676,6 +676,7 @@ def _finish_revise(
     for key, original in kept.items():
         note = note.replace(key, original)
     note = note.rstrip() + "\n" + (base_line if base_line.endswith("\n") or not base_line else base_line + "\n")
+    note = note_spacing.tidy(note)
     _write_in_place(review, note)
     pdf = _pdf(note, review)
     record = {
@@ -825,6 +826,8 @@ def replace_text(
             note = note_replace.apply(current, wanted)
         except note_replace.ReplaceError as exc:
             raise ReviewNoteError(str(exc), code=exc.code) from exc
+        if note != current:
+            note = note_spacing.tidy(note)
         if note == current:
             return {"task_id": (job or {}).get("task_id"), "path": str(review), "replaced": False,
                     "message": "new_text 和 old_text 相同，复习笔记没有改动。", "review_version": review_version(current)}

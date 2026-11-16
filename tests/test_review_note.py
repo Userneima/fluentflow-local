@@ -30,6 +30,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.core import note_spacing
 from backend.core import claude_text, job_store, note_pdf, review_note
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.routers.local_agent import router as agent_router
@@ -170,9 +171,9 @@ def test_written_beside_the_base_without_sources_and_with_the_base_version(tmp_p
     target = folder / "课_复习笔记.md"
     assert out["path"] == str(target)
     text = target.read_text(encoding="utf-8")
-    assert text.startswith(ANSWER.rstrip())
+    assert text.startswith(note_spacing.tidy(ANSWER).rstrip())
     assert f"[[{STEM}#" not in text and "〔S" not in text
-    assert "（转录稿补充）：\n\n- 读请求按小时统计，高峰在晚上。\n" in text
+    assert "（转录稿补充）：\n- 读请求按小时统计，高峰在晚上。\n" in text
     sha = hashlib.sha256(BASE.encode("utf-8")).hexdigest()
     assert f"内容指纹 {sha[:12]}" in text
     assert (folder / f"{STEM}.md").read_text(encoding="utf-8") == BASE
@@ -214,7 +215,7 @@ def test_a_moved_folder_is_reached_by_the_md_path_and_still_finds_its_task(tmp_p
     chat = FakeChat()
     out = review_note.generate(note_path=str(folder / f"{STEM}.md"), chat=(chat, "x"))
     assert out["task_id"] == "t-review-3"
-    assert (folder / "课_复习笔记.md").read_text(encoding="utf-8").startswith(ANSWER.rstrip())
+    assert (folder / "课_复习笔记.md").read_text(encoding="utf-8").startswith(note_spacing.tidy(ANSWER).rstrip())
     assert "转录里说读请求占九成" in chat.calls[0][1]
 
 

@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.core import note_spacing
 from backend.core import job_store, review_note
 from scripts import fluentflow_mcp_server as mcp
 
@@ -64,7 +65,7 @@ def test_the_agent_reads_what_the_model_would_and_its_note_is_written_the_same_w
 
     by_agent = (folder / "课_复习笔记.md").read_text(encoding="utf-8")
     assert by_agent == by_model
-    assert by_agent.startswith(ANSWER.rstrip())
+    assert by_agent.startswith(note_spacing.tidy(ANSWER).rstrip())
     assert list((folder / "过程文件" / "历史版本").glob("课_复习笔记_*.md"))
     assert answer["written_by"] == "agent:gpt-5-codex"
     assert job_store.get_job("t-agent-1")["result"]["review_note"]["written_by"] == "agent:gpt-5-codex"

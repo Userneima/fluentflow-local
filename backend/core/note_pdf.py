@@ -91,6 +91,9 @@ def _markdown_for_print(text: str) -> str:
     four spaces per level, otherwise the items run on as one paragraph. Nothing
     changes inside code blocks.
     """
+    from backend.core import note_spacing
+
+    text = note_spacing.for_renderers(text)
     out: list[str] = []
     fenced = False
     for line in text.splitlines():
