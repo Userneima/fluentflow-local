@@ -136,7 +136,9 @@ def _callout(lines: list[str], start: int) -> tuple[list[str], int]:
     return out, index
 
 
-def to_feishu(markdown: str, *, first_link: int = 0, divider_after: bool = False, tight: bool = False) -> FeishuMarkdown:
+def to_feishu(
+    markdown: str, *, first_link: int = 0, divider_after: bool = False, tight: bool = False, gap_after: bool = False,
+) -> FeishuMarkdown:
     """``markdown`` (the note as the md holds it) as written to Feishu. Link
     placeholders are numbered from ``first_link`` + 1, so pieces of one note
     written in the same push never share one. ``divider_after`` ends the piece
@@ -177,6 +179,10 @@ def to_feishu(markdown: str, *, first_link: int = 0, divider_after: bool = False
     laid = _layout(out, tight=tight)
     if divider_after:
         laid.extend(["", "---"])
+    elif gap_after and any(line.strip() for line in laid):
+        # The line above the next (third-level or lower) heading, kept with
+        # this chapter as the divider is, so rewriting either keeps it.
+        laid.extend(["", EMPTY_PARAGRAPH])
     return FeishuMarkdown(markdown="\n".join(laid), links=links)
 
 
@@ -333,6 +339,7 @@ def _layout(lines: list[str], *, tight: bool = False) -> list[str]:
                 spaced = False
             if tight and kind == "heading" and previous not in ("heading", "hr") and block[0].startswith("###"):
                 spaced = True  # a third-level heading or below gets a line above it, as in Obsidian
+                # (between chapters the line comes from ``gap_after``)
             out.extend(["", EMPTY_PARAGRAPH, ""] if spaced else [""])
         out.extend(block)
         previous = kind

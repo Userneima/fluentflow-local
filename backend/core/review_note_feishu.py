@@ -142,7 +142,7 @@ MOVE_TRIES = 3
 # How the document is laid out (feishu_note._layout with tight=True, decision
 # 6.75). A document pushed with an earlier layout and without comments has
 # every chapter written again once, so it looks the same as one made today.
-LAYOUT = "tight-2026-11-16"
+LAYOUT = "tight-2026-11-16b"
 
 
 def _move_owed(record: dict[str, Any]) -> bool:

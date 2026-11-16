@@ -523,8 +523,10 @@ def _feishu_chunk(
     for index in indices:
         following = parts[index + 1] if index + 1 < len(parts) else None
         divider = following is not None and following.level == 2 and index + 1 != first_h2
+        gap = tight and following is not None and following.level >= 3
         text = parts[index].body if body_only else parts[index].text
-        prepared = feishu_note.to_feishu(text, first_link=len(links), divider_after=divider, tight=tight)
+        prepared = feishu_note.to_feishu(text, first_link=len(links), divider_after=divider, tight=tight,
+                                         gap_after=gap)
         links.extend(prepared.links)
         if prepared.markdown.strip():
             pieces.append(prepared.markdown.strip("\n"))

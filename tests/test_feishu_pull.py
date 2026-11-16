@@ -456,7 +456,7 @@ def test_a_push_that_cannot_ask_feishu_when_it_changed_writes_nothing_says_so_an
     assert "need_user_authorization" in job_store.get_job(task)["result"]["lark_sync_error"]
 
     expired["on"] = False
-    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: fn(*a, **k))
+    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: fn(*a, **k) if a and a[0] == task else None)  # other tests' tasks share the job store
     assert task in feishu_sync.check_feishu(now=doc.modified + 1000, runner=doc)
 
     assert any("本地改的结尾" in t for t in doc.texts())
@@ -492,7 +492,7 @@ def test_chapters_the_note_won_in_a_pull_reach_feishu_when_their_push_failed(doc
     down["on"] = False
     result = job_store.get_job(task)["result"]
     assert result["lark_sync_error"] and not result["lark_response"]["sync"].get("push_unfinished")
-    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: fn(*a, **k))
+    monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: fn(*a, **k) if a and a[0] == task else None)  # other tests' tasks share the job store
 
     feishu_sync.check_feishu(now=doc.modified + feishu_sync.QUIET_SECONDS + 1, runner=doc)
     feishu_sync.check_feishu(now=doc.modified + feishu_sync.QUIET_SECONDS + 1, runner=doc)

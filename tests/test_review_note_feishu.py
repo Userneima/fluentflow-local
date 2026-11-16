@@ -306,3 +306,13 @@ def test_a_third_level_heading_has_a_line_above_it_in_feishu():
     laid = feishu_note.to_feishu(md, tight=True).markdown
     assert "- 一条。\n\n<p></p>\n\n### （二）乙" in laid
     assert "段落。\n\n<p></p>\n\n**为什么**：\n\n- 因为。" in laid, "the heading's first paragraph is a block of its own"
+
+
+def test_between_chapters_a_third_level_heading_has_a_line_above_it(wiki, tmp_path):
+    review = REVIEW.replace("## 主线\n\n一句话。\n", "## 主线\n\n### （一）甲\n- 一条。\n\n### （二）乙\n- 两条。\n")
+    task_id, _ = _lesson(tmp_path, review=review)
+
+    rnf.push(task_id, runner=wiki)
+
+    at = next(i for i, b in enumerate(wiki.blocks) if b["tag"] == "h3" and "乙" in b["text"])
+    assert wiki.blocks[at - 1]["tag"] == "p" and not wiki.blocks[at - 1]["text"], [b["text"] for b in wiki.blocks[at - 3:at + 1]]
