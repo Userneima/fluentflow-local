@@ -25,7 +25,7 @@ _HEADING = re.compile(r"^#{1,6}\s")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
 _QUOTE = re.compile(r"^\s*>")
 _COLON_END = re.compile(r"[：:]\s*$")
-_FENCE = re.compile(r"^\s*(```|~~~)")
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 _TABLE = re.compile(r"^\s*\|")
 
 
@@ -33,13 +33,20 @@ def _blocks(text: str) -> list[tuple[bool, str]]:
     """Each line with whether it sits inside a fenced code block (fence
     lines count as inside)."""
     out: list[tuple[bool, str]] = []
-    fenced = False
+    opener = ""  # the fence that opened the block we are in
     for line in text.splitlines():
-        if _FENCE.match(line):
+        fence = _FENCE.match(line)
+        if fence and not opener:
+            opener = fence.group(1)
             out.append((True, line))
-            fenced = not fenced
             continue
-        out.append((fenced, line))
+        if fence and opener and fence.group(1)[0] == opener[0] and len(fence.group(1)) >= len(opener) \
+                and not line.strip()[len(fence.group(1)):].strip():
+            # Only a bare fence of the same kind, at least as long, closes it.
+            opener = ""
+            out.append((True, line))
+            continue
+        out.append((bool(opener), line))
     return out
 
 

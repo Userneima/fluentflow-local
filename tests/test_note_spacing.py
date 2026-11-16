@@ -118,3 +118,8 @@ def test_what_feishu_gets_has_each_quote_and_list_apart():
     assert "顺序写反了。\n\n- **TTL**" in spaced
     assert "**为什么**：\n\n- 上下文越来越长。" in spaced
     assert "```text\n代码里的空行\n\n保持原样\n```" in spaced
+
+
+def test_a_fence_inside_a_longer_fence_leaves_the_code_as_it_is():
+    note = "## 例子\n````markdown\n```python\nx = 1\n```\n\n\n还在代码里\n````\n"
+    assert note_spacing.tidy(note) == note
