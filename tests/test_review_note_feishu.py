@@ -21,7 +21,7 @@ import uuid
 import pytest
 
 import backend.core.lark_cli_exporter as cli
-from backend.core import job_store, review_note_feishu as rnf
+from backend.core import job_store, note_spacing, review_note_feishu as rnf
 from tests.test_feishu_chapter_update import DOC, FakeDoc, _flag, _ok
 
 FOLLOW_DOC = "doxFOLLOW"
@@ -44,6 +44,8 @@ REVIEW = """# 第三课：复习笔记
 
 
 class FakeWiki(FakeDoc):
+    comments = 0
+
     """lark-cli over a personal library: the follow-along note under a lesson
     folder, and the review note's document (``DOC``) once created."""
 
@@ -71,6 +73,9 @@ class FakeWiki(FakeDoc):
             items = [{"title": t, "obj_token": DOC, "node_token": REVIEW_NODE}
                      for t, under in zip(self.titles, self.created_under) if (under or "") == parent]
             return _ok({"items": items})
+        if cmd[1:3] == ["drive", "+list-comments"]:
+            self.calls.append(list(cmd))
+            return _ok({"count": self.comments, "items": [{"comment_id": "c1"}] * self.comments, "has_more": False})
         if cmd[1:3] == ["wiki", "+move"]:
             self.calls.append(list(cmd))
             if self.fail_move:
@@ -279,3 +284,25 @@ def test_a_document_laid_out_the_old_way_is_written_again_once(wiki, tmp_path):
     rnf.push(task_id, runner=wiki)
 
     assert not rnf.pending(job_store.get_job(task_id)["result"]) and wiki.creates() == 1
+
+
+def test_a_document_with_comments_is_not_laid_out_again(wiki, tmp_path):
+    task_id, _ = _lesson(tmp_path)
+    rnf.push(task_id, runner=wiki)
+    record = job_store.get_job(task_id)["result"]
+    job_store.update_job_result(task_id, {**record, rnf.RESULT_KEY: {**record[rnf.RESULT_KEY], "layout": None}})
+    wiki.comments = 1
+    writes = len(wiki.writes)
+
+    rnf.push(task_id, runner=wiki)
+
+    assert len(wiki.writes) == writes, "nothing deleted or written: the comments stay"
+
+
+def test_a_third_level_heading_has_a_line_above_it_in_feishu():
+    from backend.core import feishu_note
+
+    md = note_spacing.for_renderers("### （一）甲\n- 一条。\n\n### （二）乙\n**结论**：这一段要够长才算正文段落。\n\n**为什么**：\n- 因为。\n")
+    laid = feishu_note.to_feishu(md, tight=True).markdown
+    assert "- 一条。\n\n<p></p>\n\n### （二）乙" in laid
+    assert "段落。\n\n<p></p>\n\n**为什么**：\n\n- 因为。" in laid, "the heading's first paragraph is a block of its own"

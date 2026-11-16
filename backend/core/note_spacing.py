@@ -96,9 +96,11 @@ def tidy(text: str) -> str:
 
 
 def for_renderers(text: str) -> str:
-    """``text`` with a blank line before a quote or a list that follows other
-    text, and after a quote that other text follows, so a renderer keeps
-    each as its own block. Code blocks are left as they are."""
+    """``text`` with a blank line before a quote, a table or a list that
+    follows other text, after a quote that other text follows, and around
+    each heading, so a renderer (and Feishu's layout, which counts blocks by
+    blank lines) keeps each as its own block. Code blocks are left as they
+    are."""
     out: list[str] = []
     previous_code = False
     for code, line in _blocks(text):
@@ -108,6 +110,7 @@ def for_renderers(text: str) -> str:
             item, was_item = bool(_LIST_ITEM.match(line)), bool(_LIST_ITEM.match(previous))
             table, was_table = bool(_TABLE.match(line)), bool(_TABLE.match(previous))
             if ((quote and not was_quote) or (was_quote and not quote) or (table and not was_table)
+                    or _HEADING.match(previous) or _HEADING.match(line)
                     or (item and not was_item and not previous.startswith(" "))):
                 out.append("")
         out.append(line)

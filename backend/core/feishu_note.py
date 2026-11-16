@@ -311,7 +311,8 @@ def _layout(lines: list[str], *, tight: bool = False) -> list[str]:
     """Blocks with an empty paragraph between them, as the owner's Feishu
     notes look. ``tight`` (the review note, decision 6.75): no empty paragraph
     under a line ending with a colon, nor between a list and a quote next to
-    it, as the review note reads in Obsidian."""
+    it, and one above a third-level heading or below, as the review note
+    reads in Obsidian (a second-level heading has the divider above it)."""
     out: list[str] = []
     previous = ""
     previous_block: list[str] = []
@@ -330,6 +331,8 @@ def _layout(lines: list[str], *, tight: bool = False) -> list[str]:
                 or (_is_quote(previous_block) and kind == "list")
             ):
                 spaced = False
+            if tight and kind == "heading" and previous not in ("heading", "hr") and block[0].startswith("###"):
+                spaced = True  # a third-level heading or below gets a line above it, as in Obsidian
             out.extend(["", EMPTY_PARAGRAPH, ""] if spaced else [""])
         out.extend(block)
         previous = kind

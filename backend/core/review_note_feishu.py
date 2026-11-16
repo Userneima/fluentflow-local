@@ -140,8 +140,8 @@ def pending(result: dict[str, Any] | None) -> bool:
 MOVE_TRIES = 3
 
 # How the document is laid out (feishu_note._layout with tight=True, decision
-# 6.75). A document pushed with an earlier layout has every chapter written
-# again once, so it looks the same as one made today.
+# 6.75). A document pushed with an earlier layout and without comments has
+# every chapter written again once, so it looks the same as one made today.
 LAYOUT = "tight-2026-11-16"
 
 
@@ -187,8 +187,8 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
             # copy too many is cheap, losing an edit made in Feishu is not.
             if modified is None or modified > int(record.get("feishu_modified_at") or 0):
                 keep = _keep_feishu_version(review)
-            if record.get("layout") != LAYOUT and isinstance(previous.get("sections"), list):
-                previous = {**previous, "sections": [{**s, "digest": None} for s in previous["sections"]]}
+            if record.get("layout") != LAYOUT:
+                previous = _relaid(runner, bin_path, previous, task_id)
             response = cli.export_markdown_via_lark_cli(
                 str(record.get("title") or review.stem), markdown, task_id=task_id,
                 artifact_root=_artifact_root(), previous=previous, keep_feishu=keep, runner=runner, state=STATE,
@@ -227,6 +227,25 @@ def push(task_id: str, *, runner: Any = subprocess.run) -> dict[str, Any] | None
             feishu_modified_at=modified_at or 0, pushed_at=datetime.now(timezone.utc).isoformat(),
             layout=LAYOUT, error=None if moved else _MOVE_FAILED)
     return response
+
+
+def _relaid(runner: Any, bin_path: str, previous: dict[str, Any], task_id: str) -> dict[str, Any]:
+    """``previous`` with every chapter marked out of date, so the push writes
+    the whole document again in today's layout. Not when the document has
+    comments: rewriting a chapter deletes its blocks and the comments on them
+    with no way back; its chapters take the new layout as they change."""
+    from backend.core import lark_cli_exporter as cli
+
+    data = cli._run(runner, [bin_path, "drive", "+list-comments", "--token", str(previous["doc_id"]), "--type", "docx",
+                             "--solved-status", "all", "--page-size", "1", "--as", "user"], timeout=60)
+    if data.get("items") or int(data.get("count") or 0):
+        return previous
+    if not isinstance(previous.get("sections"), list):
+        # Chapters not read back after the last push: read them now, or the
+        # exporter would read them itself and find nothing to rewrite.
+        previous = cli.reread_sections(previous, task_id=task_id, artifact_root=_artifact_root(),
+                                       bin_path=bin_path, runner=runner, state=STATE)
+    return {**previous, "sections": [{**s, "digest": None} for s in previous["sections"]]}
 
 
 def _at_my_library_root(runner: Any, bin_path: str, node: dict[str, Any]) -> bool:
