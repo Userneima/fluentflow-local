@@ -67,6 +67,7 @@ Between `wait_task` calls say nothing; call it as a tool call of its own (not fr
 script), and each call holds up to four minutes. On Codex spawn subagents with
 `fork_turns="none"`, and start the cut's subagent only once `agent_cut` is waiting.
 `skip_summary=true` leaves writing to you; it does not complete the user's request.
+When the user only wants the transcript, submit with `cut=false`: nothing is cut and no cut waits for you.
 Configured keys do not change these defaults. Only delegate with `intelligence="fluentflow"`
 when you cannot do it, failed, or the user asks; explain which configured model pays.
 `save_agent_note` never calls a checker unless you explicitly set `model_check=true`.

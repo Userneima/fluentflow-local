@@ -379,6 +379,14 @@ _MEDIA_NOTE_FLOW = (
     "tell the user whose allowance or API key it uses."
 )
 
+_CUT_SCHEMA = {
+    "type": "boolean", "default": True,
+    "description": (
+        "false: transcript only. Nothing is cut and no cut waits for you; any note is from the "
+        "original. Not the same as save_agent_cut with empty lists (cut by defaults)."
+    ),
+}
+
 _INTELLIGENCE_SCHEMA = {
     "type": "string", "enum": ["agent", "fluentflow"], "default": "agent",
     "description": "Current agent first. fluentflow explicitly delegates to configured background models as fallback.",
@@ -413,6 +421,7 @@ _TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's fr
             "stt_model": {"type": "string"},
             "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
             "cut_judge": _CUT_JUDGE_SCHEMA,
+            "cut": _CUT_SCHEMA,
             "api_base": {"type": "string"},
         },
         "required": ["path"],
@@ -428,6 +437,7 @@ def submit_local_media(
     speaker_diarization: bool | None = None,
     system_prompt: str | None = None,
     cut_judge: str | None = None,
+    cut: bool | None = None,
     intelligence: str = "agent",
     api_base: str | None = None,
     client_id: str | None = None,
@@ -447,6 +457,7 @@ def submit_local_media(
             "options": agent_options(_options(
                 intelligence=intelligence,
                 cut_judge=cut_judge,
+                cut=None if cut is None or cut else "false",
                 skip_summary=None if skip_summary is None else ("true" if skip_summary else "false"),
                 note_mode=note_mode,
                 prompt_preset=prompt_preset,
@@ -483,6 +494,7 @@ def submit_local_media(
             "system_prompt": {"type": "string", "description": "Instructions for the note. " + _TEXT_MODEL_ONLY},
             "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
             "cut_judge": _CUT_JUDGE_SCHEMA,
+            "cut": _CUT_SCHEMA,
             "allow_duplicate": {
                 "type": "boolean",
                 "default": False,
@@ -507,6 +519,7 @@ def submit_video_link(
     speaker_diarization: bool | None = None,
     system_prompt: str | None = None,
     cut_judge: str | None = None,
+    cut: bool | None = None,
     intelligence: str = "agent",
     api_base: str | None = None,
     client_id: str | None = None,
@@ -524,6 +537,7 @@ def submit_video_link(
             "options": agent_options(_options(
                 intelligence=intelligence,
                 cut_judge=cut_judge,
+                cut=None if cut is None or cut else "false",
                 stt_provider=stt_provider,
                 skip_summary=None if skip_summary is None else ("true" if skip_summary else "false"),
                 note_mode=note_mode,

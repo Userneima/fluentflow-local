@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
-from backend.core import claude_code_note, local_intake_flow, task_flow, task_intelligence, test_copy, visual_note_channel
+from backend.core import agent_cut, claude_code_note, local_intake_flow, task_flow, task_intelligence, test_copy, visual_note_channel
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
@@ -639,6 +639,9 @@ async def retry_task(
     judge = recorded.get("cut_judge") or (recorded.get("folder_intake") or {}).get("cut_judge")
     if judge:
         carry = {"cut_judge": judge, **(carry or {})}
+    # And so does an agent's cut=false (only the transcript wanted).
+    if agent_cut.cut_declined(job):
+        carry = {"cut": False, **(carry or {})}
     in_place = _in_place_origin(job)
     if in_place is not None:
         return await _retry_in_place(

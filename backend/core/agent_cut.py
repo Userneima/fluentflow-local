@@ -104,6 +104,25 @@ def choice_of(job: dict[str, Any]) -> str | None:
     return str(value) if value in CHOICES else None
 
 
+def cut_declined(job: dict[str, Any]) -> bool:
+    """Whether the agent submitted this task with cut=false: it wanted the
+    transcript only, so the recording is neither judged nor cut. Recorded
+    beside ``cut_judge`` (link metadata, or the in-place origin) and carried
+    by a retry the same way."""
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    origin = metadata.get("folder_intake") if isinstance(metadata.get("folder_intake"), dict) else {}
+    return metadata.get("cut") is False or origin.get("cut") is False
+
+
+def cut_wanted_option(value: Any) -> bool:
+    """The submit option ``cut`` as given (bool or form text); left out is true."""
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+
 def normalized_choice(value: Any) -> str:
     text = str(value or "").strip().lower()
     if text not in CHOICES:
@@ -116,7 +135,7 @@ def should_wait(task_id: str, client_id: str | None) -> bool:
     if not local_intake_flow.survey_first_enabled():
         return False
     job = job_store.get_job(task_id, client_id=client_id) or {}
-    if str(job.get("status") or "") != "completed":
+    if str(job.get("status") or "") != "completed" or cut_declined(job):
         return False
     choice = choice_of(job)
     if choice is None or choice == "fluentflow":

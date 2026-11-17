@@ -36,7 +36,7 @@ exists and that no other file judges whether a task is still busy.
 - A note from a transcript file (an uploaded .srt/.vtt/.txt, or a link's captions): `backend/core/transcript_note.py`
 - Storing and reading task records: `backend/core/job_store.py`
 - What to cut, read from the whole timeline: `backend/core/survey_cut.py`
-- Which model judges the cut: `backend/core/cut_judge.py`; the user's agent judging it: `backend/core/agent_cut.py`
+- Which model judges the cut: `backend/core/cut_judge.py`; the user's agent judging it: `backend/core/agent_cut.py` (and whether an agent's submission is cut at all, `cut=false`: `cut_declined`)
 - Rendering the cut video: `backend/core/debreath_job.py`
 - The stretches a decided cut keeps while it renders (what an agent's note is written from meanwhile): `backend/core/survey_cut.py` (`ranges_while_rendering`); whether the agent can start its note then: `backend/core/agent_note.py` (`ready_while_cut_renders`)
 - Who handles understanding on an agent submission (current agent by default, explicit background delegation): `backend/core/task_intelligence.py`

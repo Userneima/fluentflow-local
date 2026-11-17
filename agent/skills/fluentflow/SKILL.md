@@ -16,6 +16,9 @@ frames, renders and saves. A configured key or installed Claude never takes prec
 over you. Do not first wait for another model to fail.
 
 Submission defaults are `intelligence="agent"`, `cut_judge="agent"`, `skip_summary=true`.
+When the user only wants the transcript, submit with `cut=false`: nothing is cut and you
+are not asked to judge a cut. Do not send `save_agent_cut` with empty lists for that; empty
+lists mean "cut by the defaults".
 The last switch leaves note writing to you; it does not mean the user's request ends
 at a transcript. Check the complete transcript and necessary frames yourself, then save.
 `save_agent_note` defaults to `model_check=false`: saving is not a request for a second

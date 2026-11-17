@@ -316,7 +316,15 @@ async def run_pipeline_then_note(
             if not await _steps_before_transcript(ctx, start_at):
                 return
         named = task_steps.statuses(task_steps.steps_of([task_id]).get(task_id, []))
-        if named.get(task_steps.CUT) != task_steps.DONE:
+        if named.get(task_steps.CUT) != task_steps.DONE and agent_cut.cut_declined(
+            get_job(task_id, client_id=ctx.client_id) or {}
+        ):
+            # Submitted with cut=false (only the transcript wanted): nothing
+            # is judged or cut; the rest runs as for an uncut recording.
+            task_steps.finish(task_id, task_steps.CUT, task_steps.SKIPPED)
+            if named.get(task_steps.NOTE) != task_steps.DONE:
+                await _write_note_after_transcript(task_id, ctx.client_id, on_local_work_done=hand_off)
+        elif named.get(task_steps.CUT) != task_steps.DONE:
             if agent_cut_unfinished(get_job(task_id, client_id=ctx.client_id)) or await _agent_judges_cut(ctx):
                 # The queue moves on while the user's agent judges; this task
                 # takes a new place in line once it has a decision.

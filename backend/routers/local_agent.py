@@ -347,6 +347,10 @@ async def create_agent_task(
         cut_judge = agent_cut.normalized_choice(options.get("cut_judge") or "auto")
     except agent_cut.AgentCutError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # cut=false: only the transcript is wanted, nothing is judged or cut.
+    # Recorded beside cut_judge, not as a queue option (the page has no such
+    # option); left out or true records nothing.
+    no_cut = {} if agent_cut.cut_wanted_option(options.pop("cut", None)) else {"cut": False}
 
     if local_path and input_type in {"", "local_path", "local_file", "local_media"}:
         # A recording that stays where it is. This exists because every other entry
@@ -378,7 +382,7 @@ async def create_agent_task(
             options=options_for_path,
             duration_limit_seconds=duration_limit,
             route=_ROUTE,
-            origin={"chosen_with": "agent_api", "folder": str(source.parent), "cut_judge": cut_judge},
+            origin={"chosen_with": "agent_api", "folder": str(source.parent), "cut_judge": cut_judge, **no_cut},
         )
         task_id_value = queued.get("task_id")
         return {
@@ -401,7 +405,7 @@ async def create_agent_task(
             raw_options=link_options,
             client_id=client_id,
             route=_ROUTE,
-            extra_metadata={"agent_input_type": "video_link", "cut_judge": cut_judge},
+            extra_metadata={"agent_input_type": "video_link", "cut_judge": cut_judge, **no_cut},
             allow_duplicate=allow_duplicate_requested(payload),
         )
         task_id_value = job["task_id"]

@@ -116,6 +116,10 @@ def preprocess_media(
     """
     if not cut_first_enabled() or survey_first_enabled():
         return None
+    from backend.core import agent_cut  # imports this module
+
+    if agent_cut.cut_declined(get_job(task_id) or {}):
+        return None
     path = Path(source)
     watch = watch or TaskWatch()
     audio_first = audio_first or device_profile.audio_first()
