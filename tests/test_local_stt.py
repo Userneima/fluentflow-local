@@ -137,8 +137,10 @@ class TestLocalStt(unittest.TestCase):
             TranscriptSegment(start=2, end=3, text="中文字幕志愿者 杨栋梁"),
             TranscriptSegment(start=3, end=4, text="字幕由Amara.org社区提供"),
             TranscriptSegment(start=4, end=5, text="下面看案例"),
+            TranscriptSegment(start=5, end=6, text="Amara.org 是字幕志愿者用的网站"),
         )
-        self.assertEqual([s.text for s in _drop_credit_lines(segments)], ["我们讲 FDE", "下面看案例"])
+        self.assertEqual([s.text for s in _drop_credit_lines(segments)],
+                         ["我们讲 FDE", "下面看案例", "Amara.org 是字幕志愿者用的网站"])
 
     def test_fast_profile_uses_greedy_decode(self) -> None:
         defaults = _transcribe_profile_defaults("fast")
