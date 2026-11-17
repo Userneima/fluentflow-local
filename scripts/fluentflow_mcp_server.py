@@ -1290,7 +1290,8 @@ def get_agent_correction_material(
 @tool(
     description=("Save one page you judged from get_agent_correction_material. Pass the step, page and that page's "
         "material_version, your actual model, and for subtitles/glossary fixes=[{id, from, to}] (glossary adds "
-        "basis glossary|context, why, and nth when from occurs more than once), for translation "
+        "basis glossary|context|doubt, why, and nth when from occurs more than once; doubt keeps the word and marks "
+        "it 「（存疑）」, with to as your guess), for translation "
         "translations=[{start_id, end_id, text_en, text_zh}]. An empty list is a page with nothing to change. "
         "Each fix is checked the way a background model's is: a misheard word replaced, never a sentence, the "
         "new text in a subtitle line or backed by the word list or a reason; applied lists what went in, "
@@ -1310,7 +1311,7 @@ def get_agent_correction_material(
             "material_version": {"type": "string"},
             "fixes": {"type": "array", "items": {"type": "object", "properties": {
                 "id": {"type": "integer"}, "from": {"type": "string"}, "to": {"type": "string"},
-                "nth": {"type": "integer"}, "basis": {"type": "string", "enum": ["glossary", "context"]},
+                "nth": {"type": "integer"}, "basis": {"type": "string", "enum": ["glossary", "context", "doubt"]},
                 "why": {"type": "string"},
             }, "required": ["id", "from", "to"]}},
             "translations": {"type": "array", "items": {"type": "object", "properties": {

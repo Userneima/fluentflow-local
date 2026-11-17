@@ -434,7 +434,9 @@ def _glossary_material(
             row["locked"] = True
         sentences.append(row)
     return {
-        "state": "ready", "glossary": glossary or None,
+        # The word list is in the instructions only: sent twice it cost every
+        # page its length again (Zhang He Week 2, 2026-11-17).
+        "state": "ready",
         "context_before": before, "sentences": sentences, "context_after": after,
         "instructions": _GLOSSARY_INSTRUCTIONS.format(glossary=section),
     }

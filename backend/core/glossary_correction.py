@@ -219,10 +219,12 @@ def entry_for(new: str, glossary: str, old: str | None = None) -> str | None:
             return line
     # A whole word of a listed name (Claude out of Claude Code, 竞品调研 out
     # of 黑客级竞品调研) is that entry; a piece of a word is not (code inside
-    # Codex, Agent inside subagent: Zhang He kickoff, 2026-10-25).
+    # Codex, Agent inside subagent: Zhang He kickoff, 2026-10-25), and nor is
+    # a piece of a dotted name (AI out of slock.ai, Zhang He Week 2, 2026-11-17).
     wanted = new.strip()
     if re.search(r"[A-Za-z0-9]", wanted):
-        pattern = re.compile(r"(?<![A-Za-z0-9])" + re.escape(wanted) + r"(?![A-Za-z0-9])", re.IGNORECASE)
+        pattern = re.compile(r"(?<![A-Za-z0-9.])" + re.escape(wanted) + r"(?![A-Za-z0-9]|\.[A-Za-z0-9])",
+                             re.IGNORECASE)
         found = lambda name: bool(pattern.search(name))  # noqa: E731
         listed = lambda line: True  # noqa: E731
     else:

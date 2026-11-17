@@ -164,6 +164,9 @@ def test_a_listed_name_inside_a_longer_word_is_not_that_entry():
     # is the context's doing (调研 is in the name, 掉眼 is not a listed hearing).
     assert gc.entry_for("调研", camp, "掉眼") is None
     assert gc.entry_for("Claude", glossary).startswith("- Claude Code：")
+    # AI is not the word list's because slock.ai is on it.
+    assert gc.entry_for("AI", "- slock.ai：讲师推荐研究的产品。转录常听成：vlog.rr\n", "AA") is None
+    assert gc.entry_for("slock.ai", "- slock.ai：讲师推荐研究的产品。转录常听成：vlog.rr\n").startswith("- slock")
 
 
 def test_a_spelling_the_word_list_does_not_have_counts_as_context_and_needs_a_reason():

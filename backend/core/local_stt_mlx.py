@@ -99,8 +99,10 @@ class RawSegment:
 _STOCK_OUTROS = frozenset({
     "thank you", "thank you.", "thanks for watching", "thanks for watching!",
     "thank you for watching", "thank you for watching.", "you",
-    "谢谢观看", "字幕由amara.org社区提供", "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目",
+    "谢谢观看",
 })
+# Channel credits (明镜与点点栏目, amara.org) are dropped in any language by
+# local_stt._drop_credit_lines.
 
 
 def _without_stray_outros(

@@ -563,6 +563,10 @@ def _looks_like_low_confidence_hallucination(seg: Any, *, use_no_speech_prob: bo
     return False
 
 
+# Pieces of those credits, compared after _normalize_for_repeat_filter.
+_CREDIT_MARKS = ("明镜与点点栏目", "字幕志愿者", "amaraorg")
+
+
 def _normalize_for_repeat_filter(text: str) -> str:
     return _SEGMENT_NORM_RE.sub("", text or "").lower()
 
@@ -655,6 +659,19 @@ def _drop_prompt_echoes(
             "Dropped %s segment(s) that echoed the initial prompt",
             len(segments) - len(kept),
         )
+    return kept
+
+
+def _drop_credit_lines(
+    segments: tuple[TranscriptSegment, ...],
+) -> tuple[TranscriptSegment, ...]:
+    """Drop the channel credits Whisper learnt from subtitled videos and writes
+    over silence or music in any language: 「请不吝点赞 订阅 转发 打赏支持明镜与点点栏目」,
+    「中文字幕志愿者 杨栋梁」. No speaker says these, so a line holding one is
+    dropped whole; seen twice in one Chinese lecture (张和 Week 2, 2026-11-17)."""
+    kept = tuple(s for s in segments if not any(mark in _normalize_for_repeat_filter(s.text) for mark in _CREDIT_MARKS))
+    if len(kept) != len(segments):
+        logger.info("Dropped %s Whisper credit line(s)", len(segments) - len(kept))
     return kept
 
 
@@ -914,7 +931,7 @@ def transcribe_audio(
     segments = _simplify_segments(segments)
     segments = _drop_prompt_echoes(segments, transcribe_defaults.get("initial_prompt"))
     segments = _drop_stuck_repetitions(segments)
-    segments = _filter_repeated_hallucination_segments(segments)
+    segments = _filter_repeated_hallucination_segments(_drop_credit_lines(segments))
     text = " ".join(s.text for s in segments)
     return TranscriptionResult(
         text=text,
@@ -991,7 +1008,7 @@ def _transcribe_with_mlx(
     segments = _simplify_segments(segments)
     segments = _drop_prompt_echoes(segments, defaults.get("initial_prompt"))
     segments = _drop_stuck_repetitions(segments)
-    segments = _filter_repeated_hallucination_segments(segments)
+    segments = _filter_repeated_hallucination_segments(_drop_credit_lines(segments))
     elapsed = time.perf_counter() - started_at
     logger.info(
         "MLX 转录完成：%.1fs 音频用时 %.1fs，句 %d",
@@ -1159,7 +1176,7 @@ def transcribe_audio_chunked(
             if on_progress and total_duration > 0:
                 on_progress(min((chunk.start + chunk.duration) / total_duration, 1.0))
 
-    segments = _filter_repeated_hallucination_segments(tuple(all_segments))
+    segments = _filter_repeated_hallucination_segments(_drop_credit_lines(tuple(all_segments)))
     return TranscriptionResult(
         text=" ".join(segment.text for segment in segments),
         segments=segments,

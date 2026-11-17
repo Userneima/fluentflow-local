@@ -13,6 +13,7 @@ from backend.core.local_stt import (
     _MAX_INITIAL_PROMPT_CHARS,
     _ZH_INITIAL_PROMPT,
     _build_transcribe_defaults,
+    _drop_credit_lines,
     _drop_prompt_echoes,
     _drop_stuck_repetitions,
     _filter_repeated_hallucination_segments,
@@ -128,6 +129,16 @@ class TestLocalStt(unittest.TestCase):
         )
         kept = _drop_stuck_repetitions(segments)
         self.assertEqual([s.text for s in kept], ["今天我们讲逆向工程", "这个技术很重要"])
+
+    def test_whisper_channel_credits_are_dropped_in_any_language(self) -> None:
+        segments = (
+            TranscriptSegment(start=0, end=1, text="我们讲 FDE"),
+            TranscriptSegment(start=1, end=2, text="请不吝点赞 订阅 转发 打赏支持明镜与点点栏目"),
+            TranscriptSegment(start=2, end=3, text="中文字幕志愿者 杨栋梁"),
+            TranscriptSegment(start=3, end=4, text="字幕由Amara.org社区提供"),
+            TranscriptSegment(start=4, end=5, text="下面看案例"),
+        )
+        self.assertEqual([s.text for s in _drop_credit_lines(segments)], ["我们讲 FDE", "下面看案例"])
 
     def test_fast_profile_uses_greedy_decode(self) -> None:
         defaults = _transcribe_profile_defaults("fast")

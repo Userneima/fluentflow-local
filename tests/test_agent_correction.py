@@ -138,7 +138,7 @@ def test_the_agents_glossary_fixes_land_in_the_transcript_and_subtitle_files_and
     client, make = agent
     task_id = make()
     packet = _material(client, task_id, "glossary")
-    assert packet["glossary"].startswith("- OpenClaw")
+    assert "glossary" not in packet and packet["instructions"].count("- OpenClaw") == 1
     assert [row["text"] for row in packet["sentences"]] == [seg["text"] for seg in SEGMENTS]
 
     saved = _save(client, task_id, packet, fixes=[
