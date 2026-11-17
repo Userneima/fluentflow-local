@@ -205,3 +205,27 @@ def test_the_mcp_submit_tools_pass_cut(monkeypatch):
     assert "cut" not in sent[2]["options"]
     for name in ("submit_local_media", "submit_video_link"):
         assert "cut" in mcp._TOOLS[name][1]["inputSchema"]["properties"]
+
+
+def test_the_note_of_a_task_not_cut_reads_the_original(monkeypatch, task_id, tmp_path):
+    """The note (FluentFlow's picture note, or the agent's material) is
+    written from the original recording, pictures included (Codex push
+    review, 2026-11-17)."""
+    from backend.core import visual_note_job as vn
+
+    original = tmp_path / "talk.mp4"
+    original.write_bytes(b"x")
+    job_store.upsert_job(task_id=task_id, status="completed",
+                         metadata={"cut_judge": "agent", "cut": False},
+                         result={"task_id": task_id, "transcript_text": "大家好"})
+    monkeypatch.setattr(vn, "find_source_file", lambda _task_id: original)
+    media = vn.cut_media(task_id, job_store.get_job(task_id)["result"])
+    assert media is not None and media.path == original and media.has_video and media.unchanged
+
+    # A task that was not declined and has no cut yet still has none.
+    other = f"{task_id}-cut"
+    job_store.upsert_job(task_id=other, status="completed", metadata={"cut_judge": "agent"})
+    try:
+        assert vn.cut_media(other, {}) is None
+    finally:
+        job_store.delete_jobs([other])

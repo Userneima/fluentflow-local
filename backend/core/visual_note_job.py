@@ -231,6 +231,12 @@ def _task_artifact_dir(task_id: str) -> Path:
     return _artifact_storage_dir() / task_id
 
 
+def _cut_declined(task_id: str) -> bool:
+    from backend.core import agent_cut  # imports this module through local_intake_flow
+
+    return agent_cut.cut_declined(get_job(task_id) or {})
+
+
 def cut_media(task_id: str, result: dict[str, Any]) -> CutMedia | None:
     """The de-breathed file for this task, or ``None`` with no guessing.
 
@@ -255,6 +261,10 @@ def cut_media(task_id: str, result: dict[str, Any]) -> CutMedia | None:
             unchanged=True,
         )
 
+    if not state and _cut_declined(task_id):
+        # Submitted with cut=false (only the transcript wanted): nothing is
+        # cut, so the note reads the recording, pictures included.
+        return recording()
     if state.get("status") == debreath_job.STATUS_FAILED and not _transcript_is_native_to_cut_media(result):
         # The cut did not come out, and the transcript is the recording's
         # (transcribed before the cut, or the cut never used): the note reads
@@ -337,6 +347,8 @@ def _cut_media_reason(task_id: str, result: dict[str, Any]) -> str:
     """
     state = debreath_job.debreath_state(result)
     status = state.get("status")
+    if not state and _cut_declined(task_id):
+        return _missing_recording_reason(task_id, "这个任务提交时选了不剪，笔记要读原录音")
     if not state:
         return "这条录像还没有去气口（剪掉空白）后的版本。让你的 agent 用 debreath_task 剪一次，或在编辑器里点「重新转录」从原片再走一遍（会另起一条记录），笔记会根据剪好的文件来写。"
     if status == debreath_job.STATUS_RUNNING:
