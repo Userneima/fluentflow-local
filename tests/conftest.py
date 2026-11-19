@@ -189,7 +189,7 @@ def no_real_account_programs(monkeypatch, tmp_path_factory):
             if name in _ACCOUNT_PROGRAMS:
                 found = shutil.which(program) or program
                 real = os.path.realpath(found)
-                if not real.startswith(temp_roots):
+                if not any(real == root or real.startswith(root + os.sep) for root in temp_roots):
                     raise RuntimeError(
                         f"a test tried to run the real {name} ({found}). Patch "
                         "lark_cli_run._run / lark_cli_ready (Feishu) or the "
