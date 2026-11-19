@@ -40,7 +40,7 @@ const ShellLayout = ({sideNavProps = {}, children}) => {
             className="flex h-dvh w-full overflow-clip bg-surface dark:bg-[#101010]"
             style={{'--sidebar-offset': collapsed ? '4.5rem' : '14rem'}}
         >
-            <SideNav collapsed={collapsed} onToggle={narrowWindow ? null : () => setSidebarCollapsed((value) => !value)} {...sideNavProps}/>
+            <SideNav collapsed={collapsed} peekOnHover={!narrowWindow} onToggle={narrowWindow ? null : () => setSidebarCollapsed((value) => !value)} {...sideNavProps}/>
             {/* clip, not hidden: a box with hidden overflow can still be scrolled by
                 the browser bringing a focused control into view, which slid the
                 whole page out of sight when a settings switch was clicked. Only

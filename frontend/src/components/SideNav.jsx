@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import {useI18n, useSettings} from '../app/shared.jsx';
 import {useDismissable} from '../lib/useDismissable.js';
+import {useHoverPeek} from '../lib/useHoverPeek.js';
 import {iconButton, navItem, menuItem, rowButton, floatingLayer} from '../lib/ui.js';
 
 const FluentFlowLogo = ({compact = false}) => (
@@ -42,8 +43,12 @@ const isNavItemActive = (itemPath, pathname) => {
 
 // Sidebar shell. The bottom entry is a plain menu (language, theme, agent
 // access, about); the Agent access panel is passed in by the app entry.
+// `collapsed` is the width the page makes room for. With `peekOnHover`, a
+// folded sidebar opens over the page while the pointer rests on it and folds
+// again after it leaves; the page underneath does not move (2026-11-19).
 const SideNav = ({
-    collapsed = false,
+    collapsed: layoutCollapsed = false,
+    peekOnHover = false,
     onToggle = () => {},
     agentAccessPanel: AgentAccessPanel = null,
 }) => {
@@ -57,6 +62,9 @@ const SideNav = ({
     const [agentAccessOpen, setAgentAccessOpen] = useState(false);
     const menuRef = useRef(null);
     const loc = useLocation();
+    const hover = useHoverPeek(peekOnHover && layoutCollapsed, menuOpen || agentAccessOpen);
+    const peeking = hover.peek;
+    const collapsed = layoutCollapsed && !peeking;
 
     const toggleTheme = useCallback(() => {
         const next = !isDark;
@@ -87,7 +95,12 @@ const SideNav = ({
     const versionInfo = window.FLUENTFLOW_CONFIG?.version || {};
     const versionLabel = versionInfo.version ? `v${versionInfo.version}` : 'local';
     const versionDetail = [versionInfo.shortCommit, versionInfo.dirty ? 'dirty' : null].filter(Boolean).join(' · ');
-    const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
+    const CollapseIcon = layoutCollapsed ? PanelLeftOpen : PanelLeftClose;
+    const toggleLabel = peeking
+        ? (lang === 'zh' ? '固定展开侧边栏' : 'Keep sidebar open')
+        : layoutCollapsed
+            ? (lang === 'zh' ? '展开侧边栏' : 'Expand sidebar')
+            : (lang === 'zh' ? '收起侧边栏' : 'Collapse sidebar');
     const ThemeIcon = isDark ? Sun : Moon;
     const entryTitle = lang === 'zh' ? '菜单' : 'Menu';
     const entrySubtitle = lang === 'zh' ? '语言、主题与关于' : 'Language, theme & about';
@@ -97,7 +110,12 @@ const SideNav = ({
         {path: '/about/changelog', icon: History, label: lang === 'zh' ? '版本更新' : 'Changelog'},
     ];
     return (
-        <aside className={`fixed left-0 top-0 z-50 flex h-dvh flex-col border-r border-[#e5e5e5] bg-[#fbfbfb] text-[#111111] transition-[width] duration-200 ease-out dark:border-white/[0.12] dark:bg-[#0a0a0a] dark:text-white/[0.92] ${collapsed ? 'w-[72px]' : 'w-56'}`}>
+        <aside
+            data-peeking={peeking ? 'yes' : undefined}
+            onMouseEnter={hover.onMouseEnter}
+            onMouseLeave={hover.onMouseLeave}
+            className={`fixed left-0 top-0 z-50 flex h-dvh flex-col border-r border-[#e5e5e5] bg-[#fbfbfb] text-[#111111] transition-[width,box-shadow] duration-200 ease-out dark:border-white/[0.12] dark:bg-[#0a0a0a] dark:text-white/[0.92] ${collapsed ? 'w-[72px]' : 'w-56'} ${peeking ? 'shadow-[0_24px_60px_-30px_rgba(17,17,17,0.45)]' : ''}`}
+        >
             <div className={`flex h-full min-h-0 flex-col ${collapsed ? 'px-2.5 py-5' : 'px-4 py-5'}`}>
                 <div className={`flex h-16 items-center ${collapsed ? 'mb-3 flex-col justify-center gap-1' : 'mb-3 justify-between gap-2'}`}>
                     <Link
@@ -119,10 +137,10 @@ const SideNav = ({
                     {onToggle ? (
                     <button
                         type="button"
-                        onClick={onToggle}
+                        onClick={() => { hover.closeNow(); onToggle(); }}
                         className={iconButton('quiet', 'sm')}
-                        aria-label={collapsed ? (lang === 'zh' ? '展开侧边栏' : 'Expand sidebar') : (lang === 'zh' ? '收起侧边栏' : 'Collapse sidebar')}
-                        title={collapsed ? (lang === 'zh' ? '展开侧边栏' : 'Expand sidebar') : (lang === 'zh' ? '收起侧边栏' : 'Collapse sidebar')}
+                        aria-label={toggleLabel}
+                        title={toggleLabel}
                     >
                         <CollapseIcon className="size-4" strokeWidth={1.9}/>
                     </button>
