@@ -8,7 +8,8 @@
 //      and the toggle offers to pin it open).
 //   3. Leaving folds it again after a short wait; coming back within that wait
 //      keeps it open. Entering again later opens it again.
-//   4. While its bottom menu is open it stays open; when the menu closes with
+//   4. While its bottom menu is open it stays open (also one opened during the
+//      close wait); when the menu closes with
 //      the pointer outside, it folds after the usual wait.
 //   5. The toggle while peeking pins it open (the owner's stored choice).
 //   6. Pinned open, or a narrow window (peekOnHover off): hovering changes nothing.
@@ -79,6 +80,17 @@ describe('a folded sidebar opens while the pointer rests on it', () => {
         fireEvent.click(menuButton);
         wait(PEEK_CLOSE_DELAY + 10);
         expect(wide()).toBe(false);
+    });
+
+    it('a menu opened while it is about to fold keeps it open', () => {
+        mount({collapsed: true, peekOnHover: true, onToggle: () => {}});
+        fireEvent.mouseEnter(aside());
+        wait(PEEK_OPEN_DELAY + 10);
+        fireEvent.mouseLeave(aside());
+        wait(PEEK_CLOSE_DELAY - 100);
+        fireEvent.click(screen.getByRole('button', {name: /菜单/}));
+        wait(PEEK_CLOSE_DELAY * 3);
+        expect(wide()).toBe(true);
     });
 
     it('the toggle while peeking pins it open', () => {

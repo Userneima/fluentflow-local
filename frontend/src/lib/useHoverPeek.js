@@ -48,10 +48,13 @@ export const useHoverPeek = (enabled, hold = false) => {
         if (!enabled) { clear(); setPeek(false); }
     }, [enabled, clear]);
 
-    // A menu closed while the pointer was already elsewhere.
+    // A menu opened during the close wait keeps it open; a menu closed while
+    // the pointer was already elsewhere starts the wait.
     useEffect(() => {
-        if (peek && !hold && !inside.current) later(() => setPeek(false), PEEK_CLOSE_DELAY);
-    }, [hold, peek, later]);
+        if (!peek) return;
+        if (hold) clear();
+        else if (!inside.current) later(() => setPeek(false), PEEK_CLOSE_DELAY);
+    }, [hold, peek, clear, later]);
 
     useEffect(() => clear, [clear]);
 
