@@ -435,12 +435,14 @@ def save_report(task_id: str, client_id: str | None, answer: Any) -> dict[str, A
     judge = next((section["items"] for section in shown["sections"] if section.get("judge")), [])
     standing = cut_trust.standing(state.get("judged_by"))
     if judge and standing["released"]:
-        # The user has kept agreeing with this judge: the page does not ask.
+        # The user closed this judge's reminders: the page does not ask.
         return {"task_id": task_id, "saved": True, "to_judge": 0, "to_judge_items": [],
-                "not_asked": cut_trust.released_sentence(standing)}
+                "not_asked": standing["sentence"]}
     return {
         "task_id": task_id, "saved": True, "to_judge": len(judge),
         "to_judge_items": [f"{item.get('text')}（{item.get('doubt')}）" for item in judge],
+        # The page asks the user whether to close these reminders; only he answers.
+        **({"reminder_offer": standing["sentence"]} if standing["offer"] else {}),
     }
 
 

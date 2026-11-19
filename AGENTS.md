@@ -41,7 +41,7 @@ exists and that no other file judges whether a task is still busy.
 - The address of a task's page (note and playback) given to agents as `page_url`: `backend/routers/agent_v1/common.py` (`_page_url`)
 - The agent routes (`/agent/v1`): `backend/routers/agent_v1/`, one module per group of routes; `backend/routers/local_agent.py` is the router the app mounts and includes them in path-matching order. What the route modules share is in `common.py`, and the names tests replace there (`get_job`, `_local_client_scope`, `summarize_transcript_with_metadata` and the rest its docstring lists) are called as `common.X`, so tests replace them on `common`; a name only one route module uses is replaced on that module
 - What to cut, read from the whole timeline: `backend/core/survey_cut.py`
-- Whether the cut report still asks the user about a judge's places (released once he kept agreeing with that judge), for the list, the page and agents: `backend/core/cut_trust.py`
+- Whether the cut report still asks the user about a judge's places (closing its reminders is offered once he kept agreeing with that judge, and done only on his answer, kept in the config as `cut_judge_reminders`), for the list, the page and agents: `backend/core/cut_trust.py`
 - Which model judges the cut: `backend/core/cut_judge.py`; the user's agent judging it: `backend/core/agent_cut.py` (and whether an agent's submission is cut at all, `cut=false`: `cut_declined`)
 - Rendering the cut video: `backend/core/debreath_job.py`
 - The stretches a decided cut keeps while it renders (what an agent's note is written from meanwhile): `backend/core/survey_cut.py` (`ranges_while_rendering`); whether the agent can start its note then: `backend/core/agent_note.py` (`ready_while_cut_renders`)

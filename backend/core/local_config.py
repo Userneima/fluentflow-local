@@ -120,6 +120,22 @@ def save_secret_patch(
         pass
 
 
+def save_section(name: str, value: Any, path: Path | str | None = None) -> None:
+    """Replace one top-level section of the config, keeping the rest (the
+    file also holds secrets, so it stays readable by the user only)."""
+    target = Path(path) if path else config_path()
+    current = load_config(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps({**current, name: value}, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    try:
+        target.chmod(0o600)
+    except OSError:
+        pass
+
+
 def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = None) -> dict[str, Any]:
     save_secret_patch(patch, allowed_fields=LOCAL_SENSITIVE_FIELDS, path=path)
     return credential_status(path=path)

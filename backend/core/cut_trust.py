@@ -1,28 +1,32 @@
 """Whether the user is still asked about a judge's cuts.
 
-Requirement (owner, 2026-11-19, decision 2.18). The processing report asks
-the user about what the judge was unsure of and what the rules always ask
-(removed talk, long cuts). On this machine 158 such places were asked, 105
-agreed with, none turned around. The user should stop being asked about a
-judge whose decisions he has kept agreeing with, while a judge without that
-record (another model, a weaker one, one that does not say which model it is)
-is still asked.
+Requirement (owner, 2026-11-19, decisions 2.18 and 2.19). The processing
+report asks the user about what the judge was unsure of and what the rules
+always ask (removed talk, long cuts). On this machine 158 such places were
+asked, 105 agreed with, none turned around. A judge whose decisions the user
+keeps agreeing with may stop being asked about, but only when the user says
+so; a judge without that record (another model, a weaker one, one that does
+not say which model it is) is always asked.
 
 So the record is kept per judge (``judged_by``, the exact name: an agent's
 Claude Opus and FluentFlow's own Claude subscription are two judges):
-- a judge is released once the user answered its places in at least
+- a judge qualifies once the user answered its places in at least
   ``RELEASE_TASKS`` tasks, at least ``RELEASE_ANSWERS`` places, and none of
   the latest ``RELEASE_ANSWERS`` answers turned a decision around;
-- one turnaround among them takes the release back, and the user is asked
-  again until enough clean answers gather;
+- a qualified judge is offered: the report asks whether to close its
+  reminders. Only the user's 关闭提醒 closes them; 继续问我 is not offered
+  again until ``RELEASE_ANSWERS`` more places are agreed with;
+- a turnaround after closing takes the closing back, and the user is asked
+  place by place until the judge qualifies and is offered again; reopening
+  counts as 继续问我;
 - a judge whose name says no model (``text_model``, whatever text model is
-  set; an agent that names its session, not its model) is never released.
+  set; an agent that names its session, not its model) is never offered.
 
-Released places are not answered for the user: nothing is written, so they
-never become cases (``cut_cases`` counts only what the user clicked). They
-stop counting as waiting, and the report says why it did not ask. The record
-is read from the tasks themselves, so it follows every answer, change and
-undo without being stored twice.
+Closed places are not answered for the user: nothing is written to the task,
+so they never become cases (``cut_cases`` counts only what the user clicked).
+They stop counting as waiting, and the report says why it did not ask. The
+answers are read from the tasks themselves; the user's choice per judge is
+kept in the local config (``cut_judge_reminders``).
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ import threading
 import time
 from typing import Any
 
-from backend.core import job_store
+from backend.core import job_store, local_config
 
 RELEASE_TASKS = 5
 RELEASE_ANSWERS = 30
@@ -122,46 +126,102 @@ def _record() -> dict[str, dict[str, Any]]:
     return record
 
 
+CHOICES_KEY = "cut_judge_reminders"
+OFFER = "这个 AI 的剪辑判断已多次确认，要关闭它的存疑提醒吗？"
+ASKED_AGAIN = "你最近改过这个 AI 的判断，这次逐处请你看。"
+CHOICES = {"close", "keep", "reopen"}
+
+
+class ChoiceError(ValueError):
+    """A choice about a judge's reminders that cannot be taken, in the user's words."""
+
+
+def _choice(judge: str | None) -> dict[str, Any]:
+    if not judge:
+        return {}
+    saved = local_config.load_config().get(CHOICES_KEY)
+    found = saved.get(judge) if isinstance(saved, dict) else None
+    return found if isinstance(found, dict) else {}
+
+
 def standing(judged_by: Any) -> dict[str, Any]:
-    """Where this judge stands with the user: released or not, on how many
-    answers, and whether a recent turnaround is why it is asked again."""
+    """Where this judge stands with the user: whether its reminders are closed
+    (``released``: its places are not asked), whether closing them is offered,
+    on how many answers, and whether a recent turnaround is why it is asked."""
     judge = judge_of(judged_by)
     entry: dict[str, Any] = (_record().get(judge) if judge else None) or {"tasks": 0, "answers": []}
     answers = sorted(entry["answers"])
     latest = answers[-RELEASE_ANSWERS:]
     turned = any(flipped for _, flipped in latest)
+    qualified = entry["tasks"] >= RELEASE_TASKS and len(latest) >= RELEASE_ANSWERS and not turned
+    choice = _choice(judge)
+    closed_at = str(choice.get("closed_at") or "")
+    closed = bool(closed_at) and not any(flipped and at > closed_at for at, flipped in answers)
+    kept_at = str(choice.get("kept_at") or "")
+    agreed_since = sum(1 for at, flipped in answers if not flipped and at > kept_at)
+    offered = qualified and not closed and (not kept_at or agreed_since >= RELEASE_ANSWERS)
+    agreed = sum(1 for _, flipped in answers if not flipped)
     return {
         "judge": judge,
-        "released": entry["tasks"] >= RELEASE_TASKS and len(latest) >= RELEASE_ANSWERS and not turned,
-        "agreed": sum(1 for _, flipped in answers if not flipped),
+        "released": closed,
+        "offer": offered,
+        "agreed": agreed,
         "tasks": entry["tasks"],
         "turned_recently": turned,
+        "sentence": closed_sentence(agreed) if closed else OFFER if offered else ASKED_AGAIN if turned else None,
     }
+
+
+def closed_sentence(agreed: int) -> str:
+    """Why the report did not ask, in the page's words."""
+    return f"你已关闭这个 AI 的存疑提醒（你确认过它 {agreed} 处判断、没改过），这些地方默认照它的判断，有不对的可以直接改。"
 
 
 def of_job(job: dict[str, Any]) -> dict[str, Any] | None:
     """``standing`` of the judge of this task's cut report; None without one."""
+    survey = _survey_of(job)
+    return standing(survey.get("judged_by")) if survey.get("report") else None
+
+
+def _survey_of(job: dict[str, Any]) -> dict[str, Any]:
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     state = result.get("debreath") if isinstance(result.get("debreath"), dict) else {}
-    survey = state.get("survey") if isinstance(state.get("survey"), dict) else {}
-    if not survey.get("report"):
-        return None
-    found = standing(survey.get("judged_by"))
-    sentence = released_sentence(found) if found["released"] else ASKED_AGAIN if found["turned_recently"] else None
-    return {**found, "sentence": sentence}
+    survey = state.get("survey")
+    return survey if isinstance(survey, dict) else {}
 
 
-def released_sentence(standing: dict[str, Any]) -> str:
-    """Why the report did not ask, in the page's words."""
-    return f"你确认过这个 AI 的 {standing.get('agreed', 0)} 处判断、没改过，这次没再问你，有不对的可以直接改。"
+def choose(job: dict[str, Any], choice: str) -> dict[str, Any]:
+    """The user's answer about the reminders of this task's judge: ``close``
+    them (only when offered), ``keep`` asking, or ``reopen`` them. Returns the
+    judge's standing after it."""
+    if choice not in CHOICES:
+        raise ChoiceError("只能关闭提醒、继续问我或重新打开提醒")
+    survey = _survey_of(job)
+    judge = judge_of(survey.get("judged_by"))
+    if not survey.get("report") or judge is None:
+        raise ChoiceError("看不出这条视频是哪个 AI 判断的，不能关它的提醒")
+    now = _now()
+    if choice == "close":
+        if not standing(judge)["offer"]:
+            raise ChoiceError("这个 AI 现在还不能关闭提醒：要先在 5 条视频里确认它 30 处判断、最近没改过")
+        saved = {"closed_at": now}
+    else:
+        saved = {"kept_at": now}
+    config = local_config.load_config()
+    choices = config.get(CHOICES_KEY) if isinstance(config.get(CHOICES_KEY), dict) else {}
+    local_config.save_section(CHOICES_KEY, {**choices, judge: saved})
+    return standing(judge)
 
 
-ASKED_AGAIN = "你最近改过这个 AI 的判断，这次逐处请你看。"
+def _now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def waiting(survey: dict[str, Any]) -> int:
-    """Places of this report still waiting for the user: none once its judge
-    is released."""
+    """Places of this report still waiting for the user: none once the user
+    closed its judge's reminders."""
     if not isinstance(survey, dict) or not survey.get("report"):
         return 0
     verdicts = survey.get("verdicts") if isinstance(survey.get("verdicts"), dict) else {}
@@ -169,4 +229,4 @@ def waiting(survey: dict[str, Any]) -> int:
     return 0 if left and standing(survey.get("judged_by"))["released"] else left
 
 
-__all__ = ["RELEASE_ANSWERS", "RELEASE_TASKS", "forget", "judge_of", "of_job", "released_sentence", "standing", "waiting"]
+__all__ = ["CHOICES_KEY", "ChoiceError", "OFFER", "RELEASE_ANSWERS", "RELEASE_TASKS", "choose", "closed_sentence", "forget", "judge_of", "of_job", "standing", "waiting"]

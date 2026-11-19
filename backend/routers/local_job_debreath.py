@@ -79,6 +79,18 @@ def cut_report_verdict(
         raise exc.as_http() from exc
 
 
+@router.post("/jobs/{task_id}/cut-report/reminders")
+def cut_report_reminders(
+    request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None),
+) -> dict[str, Any]:
+    """The user closes, keeps or reopens the reminders of this task's judge
+    (``task_actions``)."""
+    try:
+        return task_actions.choose_cut_reminders(task_id, str((payload or {}).get("choice") or ""), local_client_scope(request))
+    except task_actions.Refused as exc:
+        raise exc.as_http() from exc
+
+
 @router.post("/jobs/{task_id}/cut-report/changes/{index}/undo")
 def undo_cut_report_change(
     request: Request, task_id: str, index: int, background_tasks: BackgroundTasks,

@@ -408,7 +408,8 @@ def save_agent_cut(
         "the user changes a cut later. The answer's to_judge is how many places the page asks the user "
         "to judge (yours plus the ones FluentFlow always asks about, such as removed talk): tell the user "
         "that number, not your own count. When the user kept agreeing with your model's cuts, to_judge "
-        "is 0 and not_asked says why: tell the user that sentence instead."),
+        "is 0 and not_asked says why: tell the user that sentence instead. reminder_offer means the page "
+        "offers to close this model's reminders: pass it on; only the user decides, on the page."),
     input_schema={
         "type": "object",
         "properties": {

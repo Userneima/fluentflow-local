@@ -221,7 +221,8 @@ export const CutReport = ({job, embedded = false}) => {
     const [error, setError] = useState('');
     const [saving, setSaving] = useState(false);
     // Whether the report still asks about this judge's places (cut_trust on
-    // the backend): released once the user kept agreeing with it.
+    // the backend): offered once the user kept agreeing with it, released
+    // only after he closes its reminders.
     const [standing, setStanding] = useState(null);
     const rerendering = !!survey?.rerendering;
 
@@ -289,6 +290,19 @@ export const CutReport = ({job, embedded = false}) => {
         }
     };
     const flip = (ref) => rerender(`${base}/${encodeURIComponent(ref)}/flip`);
+    // The user's answer about this judge's reminders: close, keep asking, reopen.
+    const choose = async (choice) => {
+        setSaving(true);
+        setError('');
+        try {
+            const data = await post(`${base}/reminders`, {choice});
+            setStanding(data.standing || null);
+        } catch (exc) {
+            setError(exc.message);
+        } finally {
+            setSaving(false);
+        }
+    };
 
     const report = survey?.report;
     const verdicts = survey?.verdicts || {};
@@ -336,8 +350,19 @@ export const CutReport = ({job, embedded = false}) => {
                                     <div className={`rounded-[12px] border px-2.5 py-2.5 ${waiting.length && !released
                                         ? 'border-[#f5c86b] bg-[#fffaf0] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.06]'
                                         : 'border-[#dedada] bg-white/60 dark:border-white/[0.10] dark:bg-white/[0.02]'}`}>
-                                        {standing?.sentence && waiting.length ? (
-                                            <p className="mb-2 text-[12px] font-semibold leading-5 text-[#57585d] dark:text-white/65">{standing.sentence}</p>
+                                        {standing?.sentence && (waiting.length || standing.offer) ? (
+                                            <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                                                <p className="text-[12px] font-semibold leading-5 text-[#57585d] dark:text-white/65">{standing.sentence}</p>
+                                                {standing.offer ? (
+                                                    <>
+                                                        <button type="button" className={button('secondary', 'sm')} disabled={busy} onClick={() => choose('close')}>关闭提醒</button>
+                                                        <button type="button" className={`text-[12px] ${linkButton('muted')}`} disabled={busy} onClick={() => choose('keep')}>继续问我</button>
+                                                    </>
+                                                ) : null}
+                                                {standing.released ? (
+                                                    <button type="button" className={`text-[12px] ${linkButton('muted')}`} disabled={busy} onClick={() => choose('reopen')}>重新打开提醒</button>
+                                                ) : null}
+                                            </div>
                                         ) : null}
                                         {released ? (
                                             <Section

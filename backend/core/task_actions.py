@@ -169,6 +169,17 @@ def answer_cut_decisions(task_id: str, keys: list[str], verdict: str,
         raise Refused(str(exc), "cut_report") from exc
 
 
+def choose_cut_reminders(task_id: str, choice: str, client_id: Optional[str] = None) -> dict[str, Any]:
+    """The user's answer about the reminders of this task's judge (close,
+    keep asking, reopen; ``cut_trust.choose``). The page only: an agent
+    passes the offer on and never answers it."""
+    job = _job(task_id, client_id, "任务不存在")
+    try:
+        return {"ok": True, "standing": cut_trust.choose(job, choice)}
+    except cut_trust.ChoiceError as exc:
+        raise Refused(str(exc), "cut_reminders") from exc
+
+
 def cut_report(task_id: str, client_id: Optional[str] = None, section: Optional[str] = None) -> dict[str, Any]:
     """The processing report as an agent reads it: every decision with the
     ``ref`` that turns it around and the ``key`` that agrees with it, the
@@ -190,10 +201,11 @@ def cut_report(task_id: str, client_id: Optional[str] = None, section: Optional[
         "ok": True,
         "task_id": task_id,
         "summary": report.get("summary"),
-        # The user agreed with this judge's places often enough that the
-        # report no longer asks (cut_trust); the group is still there to read
-        # and turn around.
-        "judge_released": cut_trust.released_sentence(standing) if released else None,
+        # The user closed this judge's reminders (cut_trust): the report no
+        # longer asks; the group is still there to read and turn around.
+        "judge_released": standing.get("sentence") if released else None,
+        # Closing them is offered on the page; only the user decides.
+        "reminder_offer": standing.get("sentence") if standing.get("offer") else None,
         "sections": [_report_section(part, keep, section, released) for part in report.get("sections") or []],
         "user_changes": [
             {"index": index, **{k: change.get(k) for k in ("kind", "start", "end", "model_said", "user_said", "at", "undone_at")}}
