@@ -622,7 +622,8 @@ def submit_transcript(
         "subscription_calls and cost nothing per call (reported_cost_usd is the command line's "
         "API-price figure for them, not money spent). Calls answered by the fake model of a test "
         "run are counted in fake_calls and cost nothing. A step named unattributed holds calls "
-        "that were not put in a step."),
+        "that were not put in a step. page_url is the task's page in FluentFlow (note and playback): open "
+        "it when the user wants to see the task; never build that address yourself."),
     input_schema={
         "type": "object",
         "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},
@@ -659,7 +660,7 @@ WAIT_MAX_SECONDS = 600
         "then wait again; agent_note (status ready, next) once the cut is decided and rendering and the "
         "note is yours to write: start it now (get_agent_note_material) instead of waiting for the "
         "render; this comes once. With done=true, next asks you to align the sections of a note you wrote "
-        "to playback times when they have none. Otherwise it returns the current state when its time is up. Keep the "
+        "to playback times when they have none, and page_url, the task's page to open for the user. Otherwise it returns the current state when its time is up. Keep the "
         "default timeout on Codex: it stops waiting on one tool call after 300 seconds unless its "
         "tool_timeout_sec is raised."),
     input_schema={

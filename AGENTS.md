@@ -36,6 +36,7 @@ exists and that no other file judges whether a task is still busy.
 - Cutting again or rewriting the note of a finished task on request: `backend/core/task_reruns.py`
 - A note from a transcript file (an uploaded .srt/.vtt/.txt, or a link's captions): `backend/core/transcript_note.py`
 - Storing and reading task records: `backend/core/job_store.py`
+- The address of a task's page (note and playback) given to agents as `page_url`: `backend/routers/local_agent.py` (`_page_url`)
 - What to cut, read from the whole timeline: `backend/core/survey_cut.py`
 - Which model judges the cut: `backend/core/cut_judge.py`; the user's agent judging it: `backend/core/agent_cut.py` (and whether an agent's submission is cut at all, `cut=false`: `cut_declined`)
 - Rendering the cut video: `backend/core/debreath_job.py`

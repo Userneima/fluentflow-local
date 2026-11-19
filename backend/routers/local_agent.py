@@ -19,6 +19,7 @@ import logging
 import math
 import threading
 import time
+from urllib.parse import quote
 from copy import deepcopy
 from typing import Any, Optional
 
@@ -148,6 +149,16 @@ def _task_brief(job: dict[str, Any]) -> dict[str, Any]:
         "activity": task_activity.activity(job).as_dict(),
         "package_url": f"/agent/v1/tasks/{task_id}/package",
     }
+
+
+def _page_url(request: Request, task_id: str) -> str:
+    """The address of the task's page in FluentFlow: its note and playback.
+
+    Agents guessed it from the front end's routes: on 2026-11-19 one opened
+    ``/?task=<id>``, and the root redirect dropped the query, so the owner saw
+    the start page instead of the lesson he asked for.
+    """
+    return f"{str(request.base_url).rstrip('/')}/editor?task={quote(task_id, safe='')}"
 
 
 def _job_for_request(request: Request, task_id: str) -> dict[str, Any]:
@@ -555,6 +566,8 @@ def get_agent_task(request: Request, task_id: str) -> dict[str, Any]:
             "model_usage": model_usage.for_task(task_id),
         },
         "package_url": f"/agent/v1/tasks/{task_id}/package",
+        # Open this to show the owner the task; never build it from routes.
+        "page_url": _page_url(request, task_id),
     }
 
 
@@ -618,6 +631,7 @@ async def wait_agent_task(
                 "done": True,
                 "note_status": brief["note"]["status"],
                 "task": brief,
+                "page_url": _page_url(request, task_id),
             }
             # One step at a time, in the order they build on each other: a
             # note left half written, the transcript corrections, the note,

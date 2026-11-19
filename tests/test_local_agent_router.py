@@ -148,6 +148,11 @@ def test_transcript_task_completes_with_local_package(monkeypatch, agent_stack):
     assert diag.json()["note"]["code"] == "note_completed"
     waited = client.post(f"/agent/v1/tasks/{task_id}/wait", headers=_HEADERS, json={})
     assert waited.json()["done"] is True
+    # Requirement (owner, 2026-11-19): an agent showing him a task opens the
+    # address it is given, and that address lands on the task's own page.
+    page = f"http://testserver/editor?task={task_id}"
+    assert got.json()["page_url"] == page
+    assert waited.json()["page_url"] == page
 
 
 def test_transcript_task_uses_strict_local_keys(monkeypatch, agent_stack):
