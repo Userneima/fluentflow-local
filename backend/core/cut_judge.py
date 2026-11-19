@@ -92,10 +92,10 @@ def _remembered(kind: str, model: str, ask: Ask) -> Ask:
     return remembered
 
 
-def _api_key(api_key: str | None) -> Ask:
+def _api_key(api_key: str | None, model: str | None = None) -> Ask:
     from backend.core import claude_vision
 
-    model = claude_vision.latest_model(api_key)
+    model = model or claude_vision.latest_model(api_key)
 
     def ask(system: str, user: str, images: list[Image]) -> str:
         client = claude_vision.anthropic.Anthropic(api_key=claude_vision.resolve_api_key(api_key))
@@ -170,7 +170,11 @@ def find(api_key: str | None = None) -> Judge | None:
         # not lent to another (cut_trust).
         if channel.name == CHANNEL_SUBSCRIPTION:
             return Judge(f"{channel.name}:{channel.model}", True, _subscription(channel.model))
-        return Judge(f"{channel.name}:{channel.model}", True, _api_key(key))
+        from backend.core import claude_vision
+
+        # The model the call will use, looked up once for both.
+        model = claude_vision.latest_model(key)
+        return Judge(f"{channel.name}:{model}", True, _api_key(key, model))
     endpoint = vision_endpoint()
     if endpoint is not None:
         return Judge(f"vision:{endpoint[2]}", True, _openai_compatible(*endpoint))

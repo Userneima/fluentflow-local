@@ -49,7 +49,7 @@ _MODEL = re.compile(r"claude|gpt|gemini|deepseek|kimi|moonshot|qwen|glm|mimo|dou
 # again after a few minutes in case a task was deleted.
 FRESH_SECONDS = 300
 _lock = threading.Lock()
-_cache: dict[str, Any] = {"db": None, "at": 0.0, "record": {}}
+_cache: dict[str, Any] = {"db": None, "at": 0.0, "record": {}, "generation": 0}
 
 
 def judge_of(judged_by: Any) -> str | None:
@@ -104,7 +104,7 @@ def _tally(surveys: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def forget() -> None:
     """An answer, change or undo was saved: tally again on the next read."""
     with _lock:
-        _cache.update(db=None)
+        _cache.update(db=None, generation=_cache["generation"] + 1)
 
 
 def _record() -> dict[str, dict[str, Any]]:
@@ -112,9 +112,13 @@ def _record() -> dict[str, dict[str, Any]]:
     with _lock:
         if _cache["db"] == db and time.monotonic() - _cache["at"] < FRESH_SECONDS:
             return _cache["record"]
+        generation = _cache["generation"]
     record = _tally(job_store.cut_surveys_with_answers())
     with _lock:
-        _cache.update(db=db, at=time.monotonic(), record=record)
+        # An answer saved while this read ran made it stale: use it once,
+        # keep nothing.
+        if _cache["generation"] == generation:
+            _cache.update(db=db, at=time.monotonic(), record=record)
     return record
 
 
