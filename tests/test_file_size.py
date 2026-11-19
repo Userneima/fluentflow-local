@@ -28,7 +28,6 @@ LIMIT = 800
 # Line counts on 2026-11-19. Only ever lowered.
 LONG_FILES = {
     "backend/core/video_source.py": 2743,
-    "frontend/src/routes/editor.jsx": 2414,
     "backend/core/silence_cuts.py": 2361,
     "backend/core/media_job.py": 1826,
     "backend/core/visual_note_job.py": 1723,

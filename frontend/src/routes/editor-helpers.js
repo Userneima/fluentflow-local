@@ -409,3 +409,19 @@ export const visualNoteStartErrorMessage = (err, lang = 'zh') => {
     }
     return detail || (zh ? '写笔记没能开始' : 'Writing the note did not start');
 };
+
+// The records worth showing: a changed sentence whose current text is still the
+// changed version. Shared by the records dialog and the save payload.
+export const filterVisibleEditRecords = (records, segments) => records.filter((record) => {
+    const before = String(record?.before || '').trim();
+    const after = String(record?.after || '').trim();
+    if (!before && !after) return false;
+    if (before === after) return false;
+    const current = segments[record?.index];
+    if (!current) return false;
+    return String(current.text || '').trim() === after;
+});
+
+// Which result a pending edit belongs to. A result opened while an edit is
+// still waiting to sync must neither inherit the edit nor be overwritten by it.
+export const resultIdentity = (result) => (result ? `${result.task_id || result.filename || 'current_result'}` : 'empty_result');

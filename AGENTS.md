@@ -68,9 +68,19 @@ exists and that no other file judges whether a task is still busy.
 - How an MCP tool reaches the service (the request, access token, edition check), the hold that answers a long call "still working", and the heartbeat for watched tasks: `scripts/fluentflow_mcp/core.py`; tools call these as `core._agent_request(...)`, so tests replace them on `core`
 
 `frontend/src/routes/editor.jsx` is the file most often edited by several
-sessions at once. When a change touches it, first move the part you change into
-its own file, then change it there: its header bar, transcript pane, note pane,
-and playback with note following. Do not split it for its own sake. The routes
+sessions at once. It only calls the page's hooks and lays its parts out; each
+part lives beside it in `frontend/src/routes/` as `editor-<part>.js(x)`, and a change goes
+into the part's file: the header bar `editor-header.jsx`, the transcript pane
+`editor-transcript-pane.jsx` and its rows `editor-transcript-rows.jsx`, the
+transcript's working copy and reading the full result
+`editor-transcript-state.js`, the note pane `editor-note-pane.jsx` and its
+working copy `editor-note-draft.js`, saving both `editor-saves.js`, playback
+and the transcript and note following it `editor-playback.js`, which file plays
+`editor-media.js`, the address `editor-address.js`, the cut report
+`editor-cut-review.js`, rewriting the note `editor-note-regenerate.js`, waiting
+for a note, a carried-on task or a Feishu export `editor-note-polling.js`,
+transcribing again `editor-retranscribe.js`. `editor.jsx` calls the hooks in
+the order their effects must run; keep that order when adding one. The routes
 in `backend/routers/` only turn requests into calls; what they call lives in
 `backend/core`, and the agent routes (`backend/routers/local_agent.py` and
 `backend/routers/agent_v1/`) import nothing from the page's routes (`tests/test_agent_surface.py`).
@@ -93,7 +103,7 @@ Before changing any page, read `docs/06-界面规矩.md`: FluentFlow's words, wh
 
 Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests while working, the full suite once before pushing with `.venv/bin/python -m pytest -n auto` (pytest-xdist, about 40 seconds against 2 minutes one by one on the owner's Mac, 2026-10-24; install it with `.venv/bin/python -m pip install pytest-xdist` if missing; a test that fails only under `-n auto` usually depends on another test having run first; when the machine is busy `-n auto` can be killed by the system, exit code 137, so use `-n 4` then), and `python3 -m ruff check backend/ scripts/` (CI runs it; the test suite does not catch unused imports). Every push to `main` is first reviewed by Codex through the pre-push hook (`~/Projects/yuchao-agent-skills/config/git-hooks/pre-push`, rules in that repository's `config/README.md`): it takes a minute or two, so run `git push` with a 10-minute timeout; when it blocks, fix the P0/P1 findings it prints, commit, and push again, never `--no-verify`. It also prints changes that touch a risky area (permissions, where data is stored or sent, test versus live, secrets, deletion) with a plain-Chinese before and after; these never block, but relay each one to the user in your reply and say whether it was intended. Push finished, checked work to `main` as it is done, without asking; do not deploy, tag, or change a release version unless explicitly requested. Users install the latest release tag, not `main`, with three exceptions that reach every user the moment they are pushed: `install.sh` and `install.ps1` (fetched from `main`, then they download the release) and `backend/core/recommended_models.json` (every installed copy reads it from `main` daily). Changes to these three must work with the latest release.
 
-Keep the code short enough to read (decision 8.23). A source file stays at 800 lines or fewer; the 25 that are longer are listed in `tests/test_file_size.py` and may only shrink, so put new code in a new module (a hook, a component, a helper) the long file calls, and lower a listed number when you shrink that file. `npm run lint:frontend` also runs knip (`knip.json`): delete what it names (an export, a file, a dependency nothing uses); if it is used in a way knip cannot see, say so in `knip.json`. When a button goes, its copy in `shared.jsx` goes too (`tests/test_frontend_copy_used.py`), and a hint that tells someone to click 「X」 names text the page has (`tests/test_hint_buttons_exist.py`).
+Keep the code short enough to read (decision 8.23). A source file stays at 800 lines or fewer; the 24 that are longer are listed in `tests/test_file_size.py` and may only shrink, so put new code in a new module (a hook, a component, a helper) the long file calls, and lower a listed number when you shrink that file. `npm run lint:frontend` also runs knip (`knip.json`): delete what it names (an export, a file, a dependency nothing uses); if it is used in a way knip cannot see, say so in `knip.json`. When a button goes, its copy in `shared.jsx` goes too (`tests/test_frontend_copy_used.py`), and a hint that tells someone to click 「X」 names text the page has (`tests/test_hint_buttons_exist.py`).
 
 The service on port 8000 serves `frontend/dist-local` straight from this checkout, so `npm run build:frontend` replaces the page the owner is using. Several sessions work in this checkout at once: when `git status` shows changes you did not make, check the build into a scratch folder instead (`npx vite build --config vite.local.config.mjs --outDir <scratch folder> --emptyOutDir`) and look at the page through `npm run dev:frontend` (port 5186), so another session's unfinished work does not reach the owner's page (2026-11-19: a check build shipped another session's half-done cut report). To compare against the code before your change, open a clean copy with `git worktree add <scratch folder> HEAD`; never `git stash` here, it puts away the other sessions' changes too.
 
