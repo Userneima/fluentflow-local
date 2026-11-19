@@ -1,6 +1,6 @@
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {Link, useNavigate, useSearchParams} from 'react-router-dom';
-import {XCircle} from 'lucide-react';
+import {Pin, XCircle} from 'lucide-react';
 import {
     createTaskId,
     effectiveSttProvider,
@@ -964,6 +964,9 @@ const MediaText = () => {
                                 return (
                                     <button key={item.taskId || item.id} type="button" onClick={() => openRecentTask(item)} className={tileButton}>
                                         <div className="mb-2 flex items-center justify-between gap-2">
+                                            {item.pinned ? (
+                                                <Pin data-testid="recent-pinned" className="size-3.5 shrink-0 text-[#85868c] dark:text-white/50" strokeWidth={2.15} aria-label={lang === 'zh' ? '已置顶' : 'Pinned'}/>
+                                            ) : null}
                                             <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold" title={item.name}>{item.name}</h3>
                                             {outcome.tone !== 'done' && (
                                                 <span data-testid="recent-badge" className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-bold ${RECENT_BADGE_TONE[outcome.tone]}`}>{outcome.label}</span>

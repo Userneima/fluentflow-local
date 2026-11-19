@@ -176,9 +176,17 @@ export const reconcileTaskList = ({
     return sortJobsForHistoryView(pinned);
 };
 
-// Live tasks first; everything finished — failed or not — by time. Ranking
-// failures above completions buried today's results under month-old failures
-// once the list stopped being cut at thirty.
+// When the user pinned this record to the top of the list (metadata.pinned_at,
+// set by POST /jobs/{id}/pin), or '' when it is not pinned.
+export const pinnedAtOf = (job) => String(job?.metadata?.pinned_at || '').trim();
+export const isPinnedJob = (job) => Boolean(pinnedAtOf(job));
+
+// Live tasks first; then the records the user pinned, the latest pinned first;
+// everything else — failed or not — by time. Ranking failures above completions
+// buried today's results under month-old failures once the list stopped being
+// cut at thirty. Pinned ones sit under live tasks, not above them: a task just
+// submitted has to show up where the user looks for it, and it leaves the top
+// as soon as it finishes (2026-11-19, the pinning proposal in docs/方案).
 export const sortJobsForHistoryView = (jobs=[]) => {
     const priority = {
         [TASK_STATE_UPLOADING]: 0,
@@ -194,6 +202,10 @@ export const sortJobsForHistoryView = (jobs=[]) => {
         .sort((a, b) => {
             const priorityDiff = (priority[normalizeTaskState(a)] ?? 9) - (priority[normalizeTaskState(b)] ?? 9);
             if (priorityDiff !== 0) return priorityDiff;
+            const pinA = pinnedAtOf(a);
+            const pinB = pinnedAtOf(b);
+            if (Boolean(pinA) !== Boolean(pinB)) return pinA ? -1 : 1;
+            if (pinA && pinB && pinA !== pinB) return (Date.parse(pinB) || 0) - (Date.parse(pinA) || 0);
             return (Date.parse(b?.updated_at || b?.created_at || '') || 0) - (Date.parse(a?.updated_at || a?.created_at || '') || 0);
         });
 };
@@ -356,6 +368,7 @@ export const jobToHistoryEntry = (sourceJob) => {
         ...entry,
         status: historyStatusFromJob(job),
         taskState: job.task_state,
+        pinned: isPinnedJob(job),
         taskSnapshot: Object.keys(snapshot).length ? snapshot : null,
         summaryStatus: noteStatusOf(result.summary_status) || noteStatusOf(job.summary_status) || entry.summaryStatus,
         summaryError: result.summary_error || snapshot.failure_reason || job.error_reason || entry.summaryError,

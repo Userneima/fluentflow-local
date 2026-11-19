@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 
 from backend.core import task_actions, task_activity
-from backend.core.job_store import delete_jobs, get_job
+from backend.core.job_store import PINNED_AT_KEY, delete_jobs, get_job, update_job_metadata
 from backend.core.local_request_scope import request_client_id
+from backend.core.local_task_detail import build_task_snapshot
 from backend.core.storage_cleanup import cleanup_task_all_files
 
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
@@ -46,6 +48,36 @@ async def resume_job(request: Request, task_id: str) -> dict[str, Any]:
         return await task_actions.resume_task(task_id, _local_client_scope(request))
     except task_actions.Refused as exc:
         raise exc.as_http() from exc
+
+
+@router.post("/jobs/{task_id}/pin")
+def pin_job(
+    request: Request,
+    task_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+) -> dict[str, Any]:
+    """Pin a record to the top of the list, or unpin it (``{"pinned": false}``).
+
+    Stored as ``metadata.pinned_at`` (when it was pinned, newest first; absent
+    when not pinned). ``updated_at`` is left alone on purpose: pinning is not a
+    change to the task, and unpinning one must put it back where it was. The
+    page applies the returned row itself; other windows see it on their next
+    full read.
+    """
+    client_id = _local_client_scope(request)
+    job = get_job(task_id, client_id=client_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    pinned = payload.get("pinned", True) if isinstance(payload, dict) else True
+    if not isinstance(pinned, bool):
+        raise HTTPException(status_code=422, detail="pinned must be true or false")
+    already = bool((job.get("metadata") or {}).get(PINNED_AT_KEY))
+    if pinned != already:
+        stamp = datetime.now(timezone.utc).isoformat() if pinned else None
+        update_job_metadata(task_id, {PINNED_AT_KEY: stamp})
+        job = get_job(task_id, client_id=client_id) or job
+    # The same shape as GET /jobs/{id}, so the page can drop it into its list.
+    return {**job, "task_snapshot": build_task_snapshot(job), "activity": task_activity.activity(job).as_dict()}
 
 
 def _delete_job_for_request(request: Request, task_id: str) -> dict[str, Any]:

@@ -203,7 +203,7 @@ export const I18nProvider = ({children}) => {
 };
 export const useI18n = () => useContext(I18nCtx);
 
-export { accountJobsCacheKey, readCachedAccountJobs, writeCachedAccountJobs, cacheJobRecord, mergeCachedJobs, sortJobsForHistoryView, hasTranscriptResult, historyStatusFromJob, jobVisibleInHistory, resultDisplayTitle, jobDisplayTitle, resultToHistoryEntry, jobToHistoryEntry, jobToCurrentJob, historyEntryToResult } from '../lib/jobMappers.js';
+export { accountJobsCacheKey, readCachedAccountJobs, writeCachedAccountJobs, cacheJobRecord, mergeCachedJobs, sortJobsForHistoryView, hasTranscriptResult, historyStatusFromJob, jobVisibleInHistory, resultDisplayTitle, jobDisplayTitle, resultToHistoryEntry, jobToHistoryEntry, jobToCurrentJob, historyEntryToResult, isPinnedJob } from '../lib/jobMappers.js';
 
 export { fmtTime, autoSizeTextarea, composeTranscriptText, normalizeTranscriptSegments, normalizeDisplaySegments, pickTranscriptSegments, pickTranscriptBaselineSegments, pickDisplayTranscriptSegments, buildTranscriptEditRecords, fmtElapsed, fmtFileSize, totalFileSizeMb, fmtBytes, fmtDateTime, friendlyTaskError, diagnoseTaskError, taskErrorContextForJob, providerDisplayName, fmtSttRelative, sttStatusLabel, sttProgressFraction, isSttProgressUnmeasured, isDownloadProgressUnmeasured, videoSourceProgressOf, jobProgressLabel, timeAgo, noteGenerationDiagnosis } from '../lib/format.js';
 
@@ -460,6 +460,17 @@ const createApi = () => {
     };
     const stopJobStep = (taskId, options={}) => postTaskAction(taskId, 'stop', options);
     const resumeJob = (taskId, options={}) => postTaskAction(taskId, 'resume', options);
+    // Pin a record to the top of the list, or unpin it; answers the task row.
+    const pinJob = async (taskId, pinned) => {
+        const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/pin`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json", ...localExecutionHeaders({sttProvider: 'local'})},
+            body: JSON.stringify({pinned: Boolean(pinned)}),
+        });
+        const data = await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(apiErrorMessage(data, `HTTP ${r.status}`));
+        return data;
+    };
     // Cancel a record the page is holding, rather than a bare task id.
     const cancelJobRecord = (job={}) => cancelJob(job.taskId, {sttProvider: job.sttProvider});
     const deleteJob = async (taskId, options={}) => {
@@ -832,7 +843,7 @@ const createApi = () => {
         return r.ok && data?.providers ? data.providers : {};
     };
     const checkHealth = async () => { try{ const r = await apiFetch(`${API_BASE}/health`); return r.ok ? await r.json() : false;}catch(_){return false;} };
-    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, getJobActivity, getNoteProgress, stopJobStep, resumeJob, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobMedia, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, openOutputFolder, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getWorkflowStatus, getTextModelInUse, getPreferences, savePreferences, noteStyle, getProviderModels, getModelDefaults, checkHealth};
+    return {processVideoSSE, enqueueProcessFiles, createVideoSourceJob, checkVideoCookies, subscribeJobEvents, summarizeTranscriptFile, recordEvent, getJob, cancelJob, cancelJobRecord, getJobActivity, getNoteProgress, stopJobStep, resumeJob, pinJob, deleteJob, retryJob, getJobs, getInterruptedJobs, acknowledgeInterruptedJobs, fetchJobSourceFile, fetchJobArtifactFile, downloadJobMedia, downloadJobArtifact, startJobDebreath, startJobVisualNote, getVisualNoteAvailability, openOutputFolder, chooseLocalMedia, chooseLocalFolder, locateDroppedFile, processLocalPaths, processLocalFolder, saveTranscriptEdit, saveSummaryEdit, translateJobSegments, getCredentialsStatus, saveCredentials, checkCredential, getSpeakerDiarizationStatus, getWorkflowStatus, getTextModelInUse, getPreferences, savePreferences, noteStyle, getProviderModels, getModelDefaults, checkHealth};
 };
 
 export const useSettings = () => {

@@ -1,6 +1,7 @@
 import {memo,useState,useEffect,useLayoutEffect,useRef,useCallback,useMemo} from 'react';
 import {Link, useSearchParams} from 'react-router-dom';
-import {AlertCircle} from 'lucide-react';
+import {AlertCircle, Pin} from 'lucide-react';
+import {markBackendJob} from '../lib/taskState.js';
 import SvgIcon from '../components/SvgIcon.jsx';
 import EditorSplitHandle from '../components/EditorSplitHandle.jsx';
 import {
@@ -27,6 +28,7 @@ import {
     pickTranscriptSegments,
     resultToHistoryEntry,
     resultDisplayTitle,
+    isPinnedJob,
     simpleMd,
     useApi,
     useI18n,
@@ -304,8 +306,9 @@ const Editor = () => {
         addLarkExport,
         runtimeConfig,
         ingestJobs,
+        tasks,
     } = useApp();
-    const {processVideoSSE, retryJob, resumeJob, getJobActivity, fetchJobArtifactFile, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
+    const {processVideoSSE, retryJob, resumeJob, pinJob, getJobActivity, fetchJobArtifactFile, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
     const {loadSettings} = useSettings();
     const [regenerating, setRegenerating] = useState(false);
     const [retranscribing, setRetranscribing] = useState(false);
@@ -875,6 +878,27 @@ const Editor = () => {
         || t('edit.title');
     const durSec = result?.audio_duration_seconds || 0;
     const activeTaskId = result?.task_id || fallbackTaskIdRef.current;
+    // Pinned or not comes from the shared task list, which the records page
+    // reads too, so both show the same state.
+    const activeTaskPinned = useMemo(
+        () => isPinnedJob((tasks || []).find((job) => String(job?.task_id || '') === String(activeTaskId || ''))),
+        [tasks, activeTaskId],
+    );
+    const [pinBusy, setPinBusy] = useState(false);
+    const [pinError, setPinError] = useState('');
+    const togglePin = async () => {
+        if (!activeTaskId || pinBusy) return;
+        setPinBusy(true);
+        setPinError('');
+        try {
+            const updated = await pinJob(activeTaskId, !activeTaskPinned);
+            if (updated?.task_id) ingestJobs([markBackendJob(updated)]);
+        } catch (err) {
+            setPinError(err?.message || String(err));
+        } finally {
+            setPinBusy(false);
+        }
+    };
     const playbackMemoryKey = result ? `fluentflow_playback_position_${activeTaskId}` : '';
     const summaryFailureHint = summaryFailureNextStep(result, lang);
     const resultTitle = resultDisplayTitle(result, {name: t('edit.title')});
@@ -1907,6 +1931,20 @@ const Editor = () => {
                                     <SvgIcon name="open_in_new" className="text-base"/>
                                 </a>
                             )}
+                            {activeTaskId ? (
+                                <button
+                                    type="button"
+                                    data-testid="editor-pin"
+                                    onClick={togglePin}
+                                    disabled={pinBusy}
+                                    aria-pressed={activeTaskPinned}
+                                    aria-label={activeTaskPinned ? (lang === 'zh' ? '取消置顶' : 'Unpin') : (lang === 'zh' ? '置顶到处理记录最前面' : 'Pin to the top of records')}
+                                    title={pinError || (activeTaskPinned ? (lang === 'zh' ? '已置顶，点一下取消' : 'Pinned. Click to unpin') : (lang === 'zh' ? '置顶到处理记录最前面' : 'Pin to the top of records'))}
+                                    className={iconButton('secondary', 'sm')}
+                                >
+                                    <Pin className={`size-4 ${activeTaskPinned ? 'fill-current' : ''}`} strokeWidth={2.15}/>
+                                </button>
+                            ) : null}
                             <OutputFolderLine taskId={activeTaskId} result={result} lang={lang} compact labelled/>
                         </div>
                     </div>

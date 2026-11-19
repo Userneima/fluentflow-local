@@ -50,6 +50,10 @@ vi.mock('../app/shared.jsx', async () => {
             saveTranscriptEdit: async () => ({}),
             saveSummaryEdit: async () => ({}),
             getCredentialsStatus: async () => null,
+            pinJob: async (taskId, pinned) => {
+                globalThis.__headerPinCalls.push([taskId, pinned]);
+                return {task_id: taskId, status: 'completed', metadata: {pinned_at: pinned ? '2026-11-19T06:00:00Z' : null}};
+            },
         }),
     };
 });
@@ -74,6 +78,8 @@ const Harness = ({initial}) => {
         setCurrentJob: () => {},
         addLarkExport: () => {},
         runtimeConfig,
+        tasks: globalThis.__headerTasks,
+        ingestJobs: (rows) => globalThis.__headerIngested.push(rows),
     };
     return (
         <AppCtx.Provider value={value}>
@@ -143,6 +149,44 @@ afterEach(() => {
 
 
 const withFolder = (extra = {}) => task('t1', {output_folder: {path: '/Users/me/Movies/课程 t1'}, stt_elapsed_seconds: 30, ...extra});
+
+globalThis.__headerTasks = [];
+globalThis.__headerIngested = [];
+globalThis.__headerPinCalls = [];
+
+// Pinning from the note page (2026-11-19): the header has a pin button whose
+// state is the shared task list's; clicking it sends the opposite state and
+// puts the answered row into that list.
+describe('the pin button in the header', () => {
+    afterEach(() => {
+        globalThis.__headerTasks = [];
+        globalThis.__headerIngested = [];
+        globalThis.__headerPinCalls = [];
+    });
+
+    it('pins an unpinned task', async () => {
+        const result = withFolder();
+        jobs.t1 = {task_id: 't1', result};
+        globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {}}];
+        mount('/editor', result);
+        const pin = await screen.findByTestId('editor-pin');
+        expect(pin.getAttribute('aria-pressed')).toBe('false');
+        fireEvent.click(pin);
+        await waitFor(() => expect(globalThis.__headerPinCalls).toEqual([['t1', true]]));
+        await waitFor(() => expect(globalThis.__headerIngested[0][0].metadata.pinned_at).toBeTruthy());
+    });
+
+    it('shows a pinned task as pressed and unpins it', async () => {
+        const result = withFolder();
+        jobs.t1 = {task_id: 't1', result};
+        globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {pinned_at: '2026-11-19T06:00:00Z'}}];
+        mount('/editor', result);
+        const pin = await screen.findByTestId('editor-pin');
+        expect(pin.getAttribute('aria-pressed')).toBe('true');
+        fireEvent.click(pin);
+        await waitFor(() => expect(globalThis.__headerPinCalls).toEqual([['t1', false]]));
+    });
+});
 
 describe('the slim header', () => {
     it('is one row: records / task name and the folder, nothing else', async () => {

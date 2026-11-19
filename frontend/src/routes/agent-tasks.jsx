@@ -1,4 +1,4 @@
-import {memo, useEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, memo, useEffect, useMemo, useRef, useState} from 'react';
 import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {
     AlertCircle,
@@ -6,6 +6,7 @@ import {
     History,
     LoaderCircle,
     MoreHorizontal,
+    Pin,
     Plus,
     Search,
     XCircle,
@@ -29,6 +30,7 @@ import {
     jobDisplayTitle,
     jobToHistoryEntry,
     jobToCurrentJob,
+    isPinnedJob,
     sortJobsForHistoryView,
     useApi,
     useI18n,
@@ -495,7 +497,7 @@ const sizeAndLengthLabel = (job, lang) => {
     return parts.join(' · ');
 };
 
-const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highlighted = false, cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, resumingTaskId, stoppingTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onOpenSteps, onRetry, onResume, onStop}) => {
+const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highlighted = false, cancellingTaskId, deletingTaskId, openingTaskId, retryingTaskId, downloadingTaskId, resumingTaskId, stoppingTaskId, pinningTaskId, onCancel, onDelete, onDownloadCut, onOpenResult, onOpenSteps, onPin, onRetry, onResume, onStop}) => {
     const zh = lang === 'zh';
     const taskId = taskIdForJob(job);
     const highlightRef = useRef(null);
@@ -538,14 +540,17 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
     // A finished transcript whose later steps still run: the step it is on can
     // be stopped and carried on later (a task still transcribing is cancelled).
     const stoppable = completed && taskId && Boolean(job?.activity?.busy);
+    const pinned = isPinnedJob(job);
+    const pinnable = taskId && !job?.metadata?.queue_provisional;
     const menuItems = [
+        pinnable ? {label: pinned ? (zh ? '取消置顶' : 'Unpin') : (zh ? '置顶' : 'Pin to top'), disabled: pinningTaskId === taskId, onClick: () => onPin(job)} : null,
         cancellableLive ? {label: zh ? '取消任务' : 'Cancel task', disabled: cancellingTaskId === taskId, onClick: () => onCancel(job)} : null,
         stoppable ? {label: zh ? '停下这一步' : 'Stop this step', disabled: stoppingTaskId === taskId, onClick: () => onStop(job)} : null,
         // Step-by-step state and the failure diagnosis of this one task.
         taskId ? {label: zh ? '处理过程' : 'Processing steps', onClick: () => onOpenSteps(job)} : null,
         terminal && taskId ? {icon: 'delete', danger: true, label: zh ? '删除记录' : 'Delete record', onClick: () => onDelete(job)} : null,
     ].filter(Boolean);
-    const menuBusy = deletingTaskId === taskId || cancellingTaskId === taskId || stoppingTaskId === taskId;
+    const menuBusy = pinningTaskId === taskId || deletingTaskId === taskId || cancellingTaskId === taskId || stoppingTaskId === taskId;
     const cutText = `${zh ? '去气口' : 'Cut'} ${cutTile.value}${cutTile.hint ? `（${cutTile.hint}）` : ''}`;
     // A failed or cancelled task shows only the steps it got to: its cut and
     // note blocks otherwise read "未剪（旧任务）" and "等处理", which say it is
@@ -562,6 +567,11 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
         >
             <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1.5">
                 <div className="col-start-1 row-start-1 flex min-w-0 items-start gap-2 max-[699px]:col-span-2">
+                    {pinned ? (
+                        <span data-testid="task-pinned" title={zh ? '已置顶' : 'Pinned'} className="mt-[3px] inline-flex shrink-0 text-[#85868c] dark:text-white/50">
+                            <Pin className="size-4" strokeWidth={2.15} aria-label={zh ? '已置顶' : 'Pinned'}/>
+                        </span>
+                    ) : null}
                     {outcome.tone !== 'done' ? (
                         <span data-testid="task-outcome" className={`mt-[1px] shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-extrabold ${OUTCOME_PILL_CLASS[outcome.tone]}`}>
                             {outcome.label}
@@ -720,7 +730,7 @@ const cardRenderKey = (job) => {
         debreath.status, debreath.delivered, debreath.delivery_error, debreath.used_for_transcription,
         debreath.already_cut, debreath.not_worth_rendering, debreath.render_verified, debreath.rendered,
         debreath.plan?.cut_count, debreath.plan?.removed_seconds,
-        meta.display_title, meta.queue_position, meta.queue_total, meta.queue_provisional,
+        meta.display_title, meta.pinned_at, meta.queue_position, meta.queue_total, meta.queue_provisional,
         meta.queue_wait?.waiting_for, meta.queue_wait?.since,
         meta.video_source_progress?.message, meta.video_source_progress?.loaded_bytes,
         meta.video_source_progress?.total_bytes, meta.video_source_progress?.percent,
@@ -732,7 +742,7 @@ const cardRenderKey = (job) => {
     ].join('\u0001');
 };
 // The busy ids are page-wide; a card only cares whether they name it.
-const BUSY_KEYS = ['cancellingTaskId', 'deletingTaskId', 'openingTaskId', 'retryingTaskId', 'downloadingTaskId', 'resumingTaskId', 'stoppingTaskId'];
+const BUSY_KEYS = ['pinningTaskId', 'cancellingTaskId', 'deletingTaskId', 'openingTaskId', 'retryingTaskId', 'downloadingTaskId', 'resumingTaskId', 'stoppingTaskId'];
 const areCardPropsEqual = (prev, next) => {
     if (prev.lang !== next.lang || prev.aheadName !== next.aheadName || prev.retryError !== next.retryError || prev.highlighted !== next.highlighted) return false;
     const taskId = taskIdForJob(next.job);
@@ -791,7 +801,7 @@ const AgentTasks = () => {
     // longer keeps a private jobs state, warm cache, or writes the cache
     // (plan Stage 3b).
     const {currentJob, setCurrentJob, setLastResult, addToHistory, removeFromHistory, tasks: jobs, ingestJobs, markCancelled, revertCancelled, restoreTask, abortPendingUpload, larkExports} = useApp();
-    const {getJob, cancelJob, deleteJob, retryJob, stopJobStep, resumeJob, createVideoSourceJob, downloadJobMedia} = useApi();
+    const {getJob, cancelJob, deleteJob, pinJob, retryJob, stopJobStep, resumeJob, createVideoSourceJob, downloadJobMedia} = useApi();
     const {loadSettings} = useSettings();
     const location = useLocation();
     const navigate = useNavigate();
@@ -802,6 +812,7 @@ const AgentTasks = () => {
     const [retryingTaskId, setRetryingTaskId] = useState('');
     const [resumingTaskId, setResumingTaskId] = useState('');
     const [stoppingTaskId, setStoppingTaskId] = useState('');
+    const [pinningTaskId, setPinningTaskId] = useState('');
     // A refusal to re-run belongs on the card that was refused, not in the page
     // banner: that banner is cleared by every successful poll, and this page polls
     // while any task is live, so the reason a retry did not happen was wiped
@@ -870,6 +881,13 @@ const AgentTasks = () => {
             && (!needle || jobDisplayTitle(job, lang).toLowerCase().includes(needle))
         ));
     }, [displayJobs, filter, query, lang]);
+    // Where the pinned records end: a small label above the first record after
+    // them, so the line between "pinned" and "the rest" is visible.
+    const restStartTaskId = useMemo(() => {
+        const firstRest = visibleJobs.findIndex((job) => !isPinnedJob(job) && taskOutcome(job).kind !== 'live');
+        if (firstRest <= 0 || !isPinnedJob(visibleJobs[firstRest - 1])) return '';
+        return taskIdForJob(visibleJobs[firstRest]);
+    }, [visibleJobs]);
     const queuedCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_QUEUED).length;
     const runningCount = liveJobs.length - queuedCount;
 
@@ -976,6 +994,23 @@ const AgentTasks = () => {
             setRetryError({taskId, message: friendlyTaskError(err.message || String(err), lang)});
         } finally {
             setResumingTaskId('');
+        }
+    };
+
+    // Pin or unpin; the answer is the task row, put straight into the list
+    // (pinning does not move updated_at, so a poll would not bring it).
+    const togglePin = async (job) => {
+        const taskId = taskIdForJob(job);
+        if (!taskId) return;
+        setPinningTaskId(taskId);
+        try {
+            const updated = await pinJob(taskId, !isPinnedJob(job));
+            if (updated?.task_id) ingestJobs([markBackendJob(updated)]);
+            setError(null);
+        } catch (err) {
+            setError(friendlyTaskError(err.message || String(err), lang));
+        } finally {
+            setPinningTaskId('');
         }
     };
 
@@ -1117,13 +1152,14 @@ const AgentTasks = () => {
     // which is what lets a card skip rendering when its row did not change.
     const handlersRef = useRef({});
     const openSteps = (job) => navigate(`/tasks/${encodeURIComponent(taskIdForJob(job))}/agent`);
-    handlersRef.current = {cancelLiveJob, deleteTerminalJob, downloadCutFile, openResult, openSteps, retryTerminalJob, resumeTerminalJob, stopJobStepOf};
+    handlersRef.current = {cancelLiveJob, deleteTerminalJob, downloadCutFile, openResult, openSteps, retryTerminalJob, resumeTerminalJob, stopJobStepOf, togglePin};
     const cardHandlers = useMemo(() => ({
         onCancel: (job) => handlersRef.current.cancelLiveJob(job),
         onDelete: (job) => handlersRef.current.deleteTerminalJob(job),
         onDownloadCut: (job) => handlersRef.current.downloadCutFile(job),
         onOpenResult: (job) => handlersRef.current.openResult(job),
         onOpenSteps: (job) => handlersRef.current.openSteps(job),
+        onPin: (job) => handlersRef.current.togglePin(job),
         onRetry: (job) => handlersRef.current.retryTerminalJob(job),
         onResume: (job) => handlersRef.current.resumeTerminalJob(job),
         onStop: (job) => handlersRef.current.stopJobStepOf(job),
@@ -1232,8 +1268,13 @@ const AgentTasks = () => {
                         </p>
                     )}
                     {visibleJobs.map((job) => (
+                        <Fragment key={taskIdForJob(job)}>
+                        {restStartTaskId && restStartTaskId === taskIdForJob(job) ? (
+                            <p data-testid="records-after-pinned" className="px-1 pt-2 text-[12px] font-bold text-[#85868c] dark:text-white/50">
+                                {lang === 'zh' ? '其余记录' : 'Other records'}
+                            </p>
+                        ) : null}
                         <AgentTaskCard
-                            key={taskIdForJob(job)}
                             job={job}
                             lang={lang}
                             aheadName={queueAheadName(job)}
@@ -1246,8 +1287,10 @@ const AgentTasks = () => {
                             downloadingTaskId={downloadingTaskId}
                             resumingTaskId={resumingTaskId}
                             stoppingTaskId={stoppingTaskId}
+                            pinningTaskId={pinningTaskId}
                             {...cardHandlers}
                         />
+                        </Fragment>
                     ))}
                 </section>
 

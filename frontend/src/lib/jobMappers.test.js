@@ -204,6 +204,22 @@ describe('history order', () => {
         ];
         expect(sortJobsForHistoryView(jobs).map((job) => job.task_id)).toEqual(['running', 'today-done', 'old-failed']);
     });
+
+    // Requirement (2026-11-19): a pinned record stays above every finished
+    // record however many newer ones arrive, under the live tasks; the latest
+    // pinned comes first; unpinned, it goes back to its place by time.
+    it('puts pinned records under live tasks and above the rest', () => {
+        const jobs = [
+            {task_id: 'new-clip', status: 'completed', updated_at: '2026-11-19T10:00:00+08:00'},
+            {task_id: 'long-course', status: 'completed', updated_at: '2026-11-03T10:00:00+08:00', metadata: {pinned_at: '2026-11-19T08:00:00+00:00'}},
+            {task_id: 'old-pinned', status: 'completed', updated_at: '2026-11-17T10:00:00+08:00', metadata: {pinned_at: '2026-11-18T08:00:00+00:00'}},
+            {task_id: 'queued', status: 'queued', updated_at: '2026-11-19T09:00:00+08:00'},
+            {task_id: 'mid-clip', status: 'completed', updated_at: '2026-11-10T10:00:00+08:00', metadata: {pinned_at: null}},
+        ];
+        expect(sortJobsForHistoryView(jobs).map((job) => job.task_id)).toEqual(['queued', 'long-course', 'old-pinned', 'new-clip', 'mid-clip']);
+        expect(jobToHistoryEntry(jobs[1]).pinned).toBe(true);
+        expect(jobToHistoryEntry(jobs[0]).pinned).toBe(false);
+    });
 });
 
 // Requirement: summary_status only ever means the note's state. A link

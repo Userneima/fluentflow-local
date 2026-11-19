@@ -484,6 +484,9 @@ def list_job_summaries(
 
 
 RESTART_INTERRUPTION_KEY = "restart_interruption"
+# Metadata key for a record the user pinned to the top of the list: when it
+# was pinned (ISO time), null or absent when it is not.
+PINNED_AT_KEY = "pinned_at"
 
 
 def list_unacknowledged_restart_interruptions(
