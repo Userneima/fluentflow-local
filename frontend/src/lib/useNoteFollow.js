@@ -110,8 +110,26 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
         return clock.subscribe(update);
     }, [clock, foundRows, rows]);
 
-    const pause = useCallback(() => setFollowing((value) => (value ? false : value)), []);
+    // Set while following is off only because the reader went into the note's
+    // text: leaving it follows again (owner, 2026-11-19).
+    const followingRef = useRef(following);
+    followingRef.current = following;
+    const editPausedRef = useRef(false);
+    const pause = useCallback(() => {
+        editPausedRef.current = false;
+        setFollowing((value) => (value ? false : value));
+    }, []);
+    const pauseForEdit = useCallback(() => {
+        if (followingRef.current) editPausedRef.current = true;
+        setFollowing((value) => (value ? false : value));
+    }, []);
+    const leaveEdit = useCallback(() => {
+        if (!editPausedRef.current) return;
+        editPausedRef.current = false;
+        setFollowing(true);
+    }, []);
     const resume = useCallback(() => {
+        editPausedRef.current = false;
         setFollowing(true);
         setRevealToken((value) => value + 1);
     }, []);
@@ -135,8 +153,8 @@ export const useNoteFollow = ({enabled, taskId, noteReady, markdown, playingCut,
         following,
         activeKey,
         alsoKeys,
-        toggle: () => (following ? setFollowing(false) : resume()),
+        toggle: () => (following ? pause() : resume()),
         resume,
-        editorProps: enabled ? {rows, activeKey, alsoKeys, following, revealToken, progress, onSeek: seekSection, onUserScroll: pause} : null,
+        editorProps: enabled ? {rows, activeKey, alsoKeys, following, revealToken, progress, onSeek: seekSection, onUserScroll: pause, onUserEdit: pauseForEdit, onEditLeave: leaveEdit} : null,
     };
 };

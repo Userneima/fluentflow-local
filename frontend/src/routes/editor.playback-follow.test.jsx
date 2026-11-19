@@ -98,6 +98,8 @@ const task = (id, extra = {}) => ({
 });
 
 beforeEach(() => {
+    // The page has the window's focus, as when he works in it.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     jobs = {};
     getJobCalls = [];
     URL.createObjectURL = () => 'blob:x';
@@ -142,7 +144,8 @@ const openVideoReview = async () => {
     return {...view, player, scrolled};
 };
 
-const followSwitch = () => screen.getByRole('button', {name: 'edit.followPlayback'});
+// Named by what it does now: 转录稿跟随 while following, 回到播放处 once stopped.
+const followSwitch = () => screen.getByTestId('transcript-follow-switch');
 
 describe('the playback speed', () => {
     it('stays open while the sentence playing changes, and sets the speed picked', async () => {
@@ -189,6 +192,7 @@ describe('the transcript following the playback', () => {
         await playAt(player, 49);
         expect(scrolled.length).toBe(before);
         expect(followSwitch().getAttribute('aria-pressed')).toBe('false');
+        expect(followSwitch().textContent).toContain('edit.backToPlayback');
     });
 
     it('also stops following on a touch scroll', async () => {
@@ -236,5 +240,143 @@ describe('the note following the playback', () => {
         jobs.t1 = {result: task('t1', {summary_markdown: '## 一、开场\n\n内容'})};
         mount('/editor?task=t1');
         await waitFor(() => expect(globalThis.fetch.mock.calls.some(([url]) => String(url).includes('/jobs/t1/note/section-times'))).toBe(true));
+    });
+});
+
+// Fixing words while watching (王愉超, 2026-11-19: "修改了转录的原文之后转录稿跟随
+//会断掉"). Written from what he chose (evaluation 2026-11-19, actions 1, 2, 5):
+//   - Putting the caret in a sentence stops the transcript moving, so the
+//     sentence being typed in stays where it is.
+//   - Leaving the sentence (clicking anywhere that is not another sentence)
+//     follows again by itself, if it was following before; going straight to
+//     another sentence keeps it still, and scrolling away by hand while
+//     editing means the reader wants to stay there, so leaving does not pull
+//     the transcript back.
+//   - With the caret in a sentence, Esc plays or pauses and Shift+Esc goes
+//     back 3 seconds and plays, so the hand stays on the keyboard; Esc that
+//     ends a Chinese input method's composition does neither.
+const openTextReview = async () => {
+    jobs.t1 = {result: recording()};
+    const scrolled = [];
+    Element.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.textContent); };
+    const view = mount('/editor', recording());
+    await waitFor(() => expect(screen.getByRole('button', {name: '视频复查'}).disabled).toBe(false));
+    const player = view.container.querySelector('video');
+    await act(async () => { player.dispatchEvent(new Event('play')); });
+    return {...view, player, scrolled};
+};
+const sentence = (n) => screen.getByRole('textbox', {name: `第 ${n + 1} 句`});
+
+describe('following again after fixing a sentence', () => {
+    it('stays still while the caret is in a sentence and follows again once it leaves', async () => {
+        const {player, scrolled} = await openTextReview();
+        await playAt(player, 41);
+        fireEvent.focus(sentence(20));
+        const before = scrolled.length;
+        await playAt(player, 45);
+        expect(scrolled.length).toBe(before);
+        expect(followSwitch().getAttribute('aria-pressed')).toBe('false');
+
+        fireEvent.blur(sentence(20), {relatedTarget: null});
+        expect(followSwitch().getAttribute('aria-pressed')).toBe('true');
+        await playAt(player, 49);
+        expect(scrolled.at(-1)).toBe('第 24 句');
+    });
+
+    it('stays still when the caret goes straight to another sentence', async () => {
+        const {player, scrolled} = await openTextReview();
+        fireEvent.focus(sentence(20));
+        fireEvent.blur(sentence(20), {relatedTarget: sentence(21)});
+        fireEvent.focus(sentence(21));
+        const before = scrolled.length;
+        await playAt(player, 49);
+        expect(scrolled.length).toBe(before);
+        expect(followSwitch().getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('does not pull the reader back after they scrolled away while editing', async () => {
+        const {container, player, scrolled} = await openTextReview();
+        fireEvent.focus(sentence(20));
+        fireEvent.wheel(container.querySelector('[data-testid="transcript-scroll"]'), {deltaY: 400});
+        fireEvent.blur(sentence(20), {relatedTarget: null});
+        const before = scrolled.length;
+        await playAt(player, 49);
+        expect(scrolled.length).toBe(before);
+        expect(followSwitch().getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('keeps still when the caret leaves only because another app was opened', async () => {
+        const {player, scrolled} = await openTextReview();
+        fireEvent.focus(sentence(20));
+        document.hasFocus.mockReturnValue(false);
+        fireEvent.blur(sentence(20), {relatedTarget: null});
+        const before = scrolled.length;
+        await playAt(player, 49);
+        expect(scrolled.length).toBe(before);
+        expect(followSwitch().getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('does not start following when it was switched off before editing', async () => {
+        const {player, scrolled} = await openTextReview();
+        fireEvent.click(followSwitch());
+        expect(followSwitch().getAttribute('aria-pressed')).toBe('false');
+        fireEvent.focus(sentence(20));
+        fireEvent.blur(sentence(20), {relatedTarget: null});
+        const before = scrolled.length;
+        await playAt(player, 49);
+        expect(scrolled.length).toBe(before);
+    });
+
+    it('follows again after leaving a line in video review too', async () => {
+        const {container, player, scrolled} = await openVideoReview();
+        const line = container.querySelectorAll('textarea[data-transcript-segment="true"]')[20];
+        fireEvent.focus(line);
+        expect(followSwitch().getAttribute('aria-pressed')).toBe('false');
+        fireEvent.blur(line, {relatedTarget: null});
+        await playAt(player, 49);
+        expect(followSwitch().getAttribute('aria-pressed')).toBe('true');
+        expect(scrolled.at(-1)).toContain('00:48');
+    });
+});
+
+describe('the keyboard while the caret is in a sentence', () => {
+    const controls = (player, paused) => {
+        Object.defineProperty(player, 'paused', {value: paused, configurable: true});
+        player.play = vi.fn(() => Promise.resolve());
+        player.pause = vi.fn();
+    };
+
+    it('plays and pauses with Esc', async () => {
+        const {player} = await openTextReview();
+        controls(player, false);
+        fireEvent.keyDown(sentence(5), {key: 'Escape'});
+        expect(player.pause).toHaveBeenCalledTimes(1);
+        controls(player, true);
+        fireEvent.keyDown(sentence(5), {key: 'Escape'});
+        expect(player.play).toHaveBeenCalledTimes(1);
+    });
+
+    it('goes back 3 seconds and plays with Shift+Esc', async () => {
+        const {player} = await openTextReview();
+        await playAt(player, 20);
+        controls(player, true);
+        fireEvent.keyDown(sentence(5), {key: 'Escape', shiftKey: true});
+        expect(player.currentTime).toBe(17);
+        expect(player.play).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves Esc to the input method while it is composing', async () => {
+        const {player} = await openTextReview();
+        controls(player, false);
+        fireEvent.keyDown(sentence(5), {key: 'Escape', isComposing: true});
+        expect(player.pause).not.toHaveBeenCalled();
+    });
+
+    it('works in the lines of video review too', async () => {
+        const {container, player} = await openVideoReview();
+        controls(player, false);
+        const line = container.querySelectorAll('textarea[data-transcript-segment="true"]')[3];
+        fireEvent.keyDown(line, {key: 'Escape'});
+        expect(player.pause).toHaveBeenCalledTimes(1);
     });
 });

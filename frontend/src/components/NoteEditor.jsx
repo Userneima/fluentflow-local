@@ -225,20 +225,28 @@ const NoteEditor = ({lang = 'zh', markdown: source = '', onChange, onEditingChan
         const view = new EditorView({parent: hostRef.current, state: createStateRef.current(source)});
         viewRef.current = view;
         pushFollow(view);
-        // Scrolling or typing in the note means the reader is busy here:
-        // the page stops pulling the note along with the playback.
+        // Scrolling the note means the reader is reading elsewhere: the page
+        // stops pulling the note along with the playback until they ask.
+        // Typing or pressing in the text stops it only while they are in it:
+        // leaving the text follows again (owner, 2026-11-19).
         const userScrolled = () => followRef.current?.onUserScroll?.();
+        const userEditing = () => followRef.current?.onUserEdit?.();
+        // Switching to another app is not leaving the note.
+        const userLeft = () => { if (document.hasFocus()) followRef.current?.onEditLeave?.(); };
+        const pressed = (event) => (view.contentDOM.contains(event.target) ? userEditing() : userScrolled());
         if (followOnRef.current) {
             view.scrollDOM.addEventListener('wheel', userScrolled, {passive: true});
             view.scrollDOM.addEventListener('touchmove', userScrolled, {passive: true});
-            view.scrollDOM.addEventListener('pointerdown', userScrolled);
-            view.contentDOM.addEventListener('keydown', userScrolled);
+            view.scrollDOM.addEventListener('pointerdown', pressed);
+            view.contentDOM.addEventListener('keydown', userEditing);
+            view.contentDOM.addEventListener('blur', userLeft);
         }
         return () => {
             view.scrollDOM.removeEventListener('wheel', userScrolled);
             view.scrollDOM.removeEventListener('touchmove', userScrolled);
-            view.scrollDOM.removeEventListener('pointerdown', userScrolled);
-            view.contentDOM.removeEventListener('keydown', userScrolled);
+            view.scrollDOM.removeEventListener('pointerdown', pressed);
+            view.contentDOM.removeEventListener('keydown', userEditing);
+            view.contentDOM.removeEventListener('blur', userLeft);
             if (cellOpenRef.current) onEditingChangeRef.current?.(false);
             view.destroy();
         };

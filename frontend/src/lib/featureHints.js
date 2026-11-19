@@ -14,13 +14,13 @@ export const FEATURE_HINTS = [
     },
     {
         id: 'transcript-follow',
-        zh: '自己滚动转录稿会停下跟随。点这里，或点任意一句的时间，就接着跟。',
-        en: 'Scrolling the transcript stops it following. Click here, or any sentence\'s time, to follow again.',
+        zh: '自己滚动转录稿会停下跟随，点这里回到播放处。点进一句改字时也停下，改完点到别处会自己接着跟。',
+        en: 'Scrolling the transcript stops it following; click here to go back to the playback. It also stops while you fix a sentence, and follows again once you click elsewhere.',
     },
     {
         id: 'transcript-edit',
-        zh: '转录稿可以直接点进去改字，自动保存；改过的句子记在「修改记录」里。',
-        en: 'Click into the transcript to fix words; it saves by itself, and changed sentences are listed under Edit records.',
+        zh: '转录稿可以直接点进去改字，自动保存，改过的句子记在「修改记录」里。改字时按 Esc 播放或暂停，Shift+Esc 往回 3 秒。',
+        en: 'Click into the transcript to fix words; it saves by itself, and changed sentences are listed under Edit records. While typing, Esc plays or pauses and Shift+Esc goes back 3 seconds.',
     },
     {
         id: 'review-note',

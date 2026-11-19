@@ -21,8 +21,9 @@
 //   - Neither the times nor the marking changes the markdown or reports an
 //     edit, so they can never be saved (decisions 6.27, 6.30); a newer note
 //     handed down by the page keeps them.
-//   - Scrolling, typing or pressing in the note (scrollbar, selection) tells
-//     the page to stop following.
+//   - Scrolling the note (wheel, scrollbar) tells the page to stop following;
+//     typing or pressing in the text tells it the reader is in the note, and
+//     leaving the text tells it they left (owner, 2026-11-19).
 //   - A row finds its section by heading text, then by the hash of the
 //     section's own body, the service's rule: a renamed chapter loses only
 //     its own row, and a new heading with an old heading's text does not take
@@ -93,7 +94,7 @@ const followScroller = () => {
 
 const renderNote = (props = {}) => {
     const onChange = vi.fn();
-    const follow = {rows: ROWS, activeKey: null, following: true, revealToken: 0, onSeek: vi.fn(), onUserScroll: vi.fn(), ...props};
+    const follow = {rows: ROWS, activeKey: null, following: true, revealToken: 0, onSeek: vi.fn(), onUserScroll: vi.fn(), onUserEdit: vi.fn(), onEditLeave: vi.fn(), ...props};
     const view = render(<NoteEditor markdown={NOTE} onChange={onChange} follow={follow}/>);
     const rerender = (next) => view.rerender(<NoteEditor markdown={next.markdown || NOTE} onChange={onChange} follow={{...follow, ...next}}/>);
     return {...view, onChange, follow, rerender};
@@ -256,14 +257,30 @@ describe('the note editor following playback', () => {
         expect(onChange).not.toHaveBeenCalled();
     });
 
-    it('tells the page the reader scrolled, typed or pressed in the note', () => {
+    it('tells the page the reader scrolled the note', () => {
         const {container, follow} = renderNote();
         act(() => { fireEvent.wheel(container.querySelector('.cm-scroller')); });
-        act(() => { fireEvent.keyDown(container.querySelector('.cm-content'), {key: 'a'}); });
-        // Dragging the scrollbar or selecting with the mouse starts with a press.
+        // Dragging the scrollbar starts with a press outside the text.
         act(() => { fireEvent.pointerDown(container.querySelector('.cm-scroller')); });
+        expect(follow.onUserScroll).toHaveBeenCalledTimes(2);
+        expect(follow.onUserEdit).not.toHaveBeenCalled();
+    });
+
+    // (owner, 2026-11-19) Typing or pressing in the text stops following
+    // while the caret is in the note; leaving the note follows again.
+    it('tells the page the reader went into the text, and when they left it', () => {
+        const {container, follow} = renderNote();
+        act(() => { fireEvent.keyDown(container.querySelector('.cm-content'), {key: 'a'}); });
         act(() => { fireEvent.pointerDown(lineOf(container, '稳定。')); });
-        expect(follow.onUserScroll).toHaveBeenCalledTimes(4);
+        expect(follow.onUserEdit).toHaveBeenCalledTimes(2);
+        expect(follow.onUserScroll).not.toHaveBeenCalled();
+        const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+        act(() => { fireEvent.blur(container.querySelector('.cm-content')); });
+        expect(follow.onEditLeave).not.toHaveBeenCalled();  // another app opened
+        focused.mockReturnValue(true);
+        act(() => { fireEvent.blur(container.querySelector('.cm-content')); });
+        expect(follow.onEditLeave).toHaveBeenCalledTimes(1);
+        focused.mockRestore();
     });
 
     it('adds nothing when the page does not follow playback', () => {

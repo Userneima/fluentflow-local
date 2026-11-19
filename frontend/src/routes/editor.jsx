@@ -436,6 +436,11 @@ const Editor = () => {
     const [mediaDuration, setMediaDuration] = useState(0);
     const [mediaPlaying, setMediaPlaying] = useState(false);
     const [followPlayback, setFollowPlayback] = useState(true);
+    const followPlaybackRef = useRef(followPlayback);
+    followPlaybackRef.current = followPlayback;
+    // Set while following is off only because the caret went into a sentence:
+    // leaving the sentence then follows again (evaluation 2026-11-19).
+    const editPausedRef = useRef(false);
     const [playbackRate, setPlaybackRate] = useState(1);
     const [transcriptReviewMode, setTranscriptReviewMode] = useState('text');
     const [transcriptSaveStatus, setTranscriptSaveStatus] = useState('idle');
@@ -1026,15 +1031,20 @@ const Editor = () => {
     // turning the switch back on brings the sentence playing into view at
     // once, also while paused. Clicking a sentence's time follows again.
     const revealPendingRef = useRef(false);
-    const pauseFollowing = useCallback(() => setFollowPlayback((value) => (value ? false : value)), []);
+    const pauseFollowing = useCallback(() => {
+        editPausedRef.current = false;
+        setFollowPlayback((value) => (value ? false : value));
+    }, []);
     const resumeFollowing = useCallback(() => {
+        editPausedRef.current = false;
         revealPendingRef.current = true;
         setFollowPlayback(true);
     }, []);
     const followSwitch = (
-        <button type="button" onClick={followPlayback ? pauseFollowing : resumeFollowing} aria-pressed={followPlayback} className={chip(followPlayback)}>
-            {/* The note follows too, so each switch names what it moves. */}
-            {t('edit.followPlayback')}
+        <button type="button" data-testid="transcript-follow-switch" onClick={followPlayback ? pauseFollowing : resumeFollowing} aria-pressed={followPlayback} className={chip(followPlayback)}>
+            {/* The note follows too, so each switch names what it moves; once
+                stopped it says where clicking takes the reader. */}
+            {followPlayback ? t('edit.followPlayback') : t('edit.backToPlayback')}
         </button>
     );
     useEffect(() => {
@@ -1125,11 +1135,17 @@ const Editor = () => {
     rowHandlersRef.current = {seekToSegment: (seg) => seekToSegment(seg), handleSegmentTextChange: (i, text) => handleSegmentTextChange(i, text)};
     const seekRow = useCallback((seg) => rowHandlersRef.current.seekToSegment(seg), []);
     const editRow = useCallback((index, text) => rowHandlersRef.current.handleSegmentTextChange(index, text), []);
-    const stopFollowing = useCallback(() => setFollowPlayback(false), []);
+    // The caret in a sentence keeps the transcript still while it is typed in;
+    // leaving the sentence follows again if it was following (leaveSentence).
+    const pauseForEdit = useCallback(() => {
+        if (followPlaybackRef.current) editPausedRef.current = true;
+        setFollowPlayback(false);
+    }, []);
+    const stopFollowing = pauseForEdit;
     // Putting the caret in a sentence of a paragraph while nothing plays moves
     // the player there, so it can be heard right after.
     rowHandlersRef.current.focusSentence = (index) => {
-        setFollowPlayback(false);
+        pauseForEdit();
         const seg = segments[index];
         if (!mediaPlaying && seg?.start != null) seekMediaTo(Number(seg.start) || 0, {follow: false});
     };
@@ -1325,6 +1341,36 @@ const Editor = () => {
         if (!media) return;
         if (media.paused) media.play().catch((err) => setMediaError(err.message || 'Playback failed'));
         else media.pause();
+    };
+
+    // Fixing words while watching (evaluation 2026-11-19): leaving a sentence
+    // for anything but another sentence follows the playback again, unless
+    // following was off before or the reader scrolled away meanwhile.
+    const inSentence = (node) => !!node?.closest?.('[data-transcript-segment="true"]');
+    const leaveSentence = (e) => {
+        if (!inSentence(e.target) || inSentence(e.relatedTarget) || !editPausedRef.current) return;
+        // Switching to another app (to look a name up) is not leaving: the
+        // caret comes back to the same sentence.
+        if (!document.hasFocus()) return;
+        editPausedRef.current = false;
+        setFollowPlayback(true);
+    };
+    // With the caret in a sentence: Esc plays or pauses, Shift+Esc goes back
+    // 3 seconds and plays. Esc that ends an input method's composition is left
+    // to it.
+    const REWIND_SECONDS = 3;
+    const sentenceKeys = (e) => {
+        if (e.key !== 'Escape' || e.nativeEvent?.isComposing || !inSentence(e.target)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const media = mediaRef.current;
+        if (!media) return;
+        if (!e.shiftKey) {
+            togglePlayback();
+            return;
+        }
+        seekMediaTo((Number(media.currentTime) || 0) - REWIND_SECONDS, {follow: false});
+        media.play()?.catch?.((err) => setMediaError(err.message || 'Playback failed'));
     };
 
     const showToast = useCallback((msg, ok=true) => {
@@ -2077,6 +2123,8 @@ const Editor = () => {
                                 data-testid="transcript-scroll"
                                 onWheel={pauseFollowing}
                                 onTouchMove={pauseFollowing}
+                                onBlur={leaveSentence}
+                                onKeyDown={sentenceKeys}
                                 onCompositionStart={() => { transcriptComposingRef.current = true; }}
                                 onCompositionEnd={() => { transcriptComposingRef.current = false; }}
                                 className={shouldShowVideoReview

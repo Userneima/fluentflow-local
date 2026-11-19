@@ -114,6 +114,33 @@ describe('useNoteFollow', () => {
         expect(result.current.editorProps.revealToken).toBe(token + 1);
     });
 
+    // (owner, 2026-11-19) Fixing words in the note stops it moving; leaving
+    // the note follows again, unless the reader scrolled away meanwhile or
+    // following was off before.
+    it('follows again once the reader leaves the note they were typing in', async () => {
+        const {result} = setup();
+        await settle();
+        act(() => result.current.editorProps.onUserEdit());
+        expect(result.current.following).toBe(false);
+        act(() => result.current.editorProps.onEditLeave());
+        expect(result.current.following).toBe(true);
+    });
+
+    it('stays put after leaving when the reader scrolled away or had switched it off', async () => {
+        const {result} = setup();
+        await settle();
+        act(() => result.current.editorProps.onUserEdit());
+        act(() => result.current.editorProps.onUserScroll());
+        act(() => result.current.editorProps.onEditLeave());
+        expect(result.current.following).toBe(false);
+        act(() => result.current.toggle());
+        act(() => result.current.toggle());
+        expect(result.current.following).toBe(false);
+        act(() => result.current.editorProps.onUserEdit());
+        act(() => result.current.editorProps.onEditLeave());
+        expect(result.current.following).toBe(false);
+    });
+
     it('highlights the section whose time was clicked, even when another starts at the same second', async () => {
         const {result, clock, seek} = setup();
         await settle();
