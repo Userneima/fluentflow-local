@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.core import model_usage, task_steps
-from backend.core import cut_cases, cut_judge, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts, task_stop
+from backend.core import cut_cases, cut_judge, cut_trust, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts, task_stop
 from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT, TRANSCRIPT_MEDIA_SOURCE, resolve_artifact_file
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.core.silence_cuts import CutPlan, TimeRange
@@ -1287,7 +1287,10 @@ def flip(task_id: str, ref: str, client_id: str | None = None, *, claimed: bool 
         "model_reason": item.get("text"), "at": _now(),
         **{key: item.get(key) for key in ("picture", "before", "after", "said") if item.get(key)},
     }
-    return _turn_around(task_id, client_id, before, result, survey, item, change, claimed=claimed)
+    try:
+        return _turn_around(task_id, client_id, before, result, survey, item, change, claimed=claimed)
+    finally:
+        cut_trust.forget()
 
 
 @model_usage.works_for(task_steps.CUT)
@@ -1304,7 +1307,10 @@ def undo_change(task_id: str, index: int, client_id: str | None = None, *, claim
         "kind": change.get("kind"), "start": change["start"], "end": change["end"],
         "action": change.get("user_said"), "reason": change.get("model_reason"),
     }
-    return _turn_around(task_id, client_id, before, result, survey, item, None, undoing=index, claimed=claimed)
+    try:
+        return _turn_around(task_id, client_id, before, result, survey, item, None, undoing=index, claimed=claimed)
+    finally:
+        cut_trust.forget()
 
 
 VERDICTS = {"agree", "pending"}
@@ -1337,6 +1343,7 @@ def verdict(task_id: str, keys: list[str], value: str, client_id: str | None = N
     survey["verdicts"] = verdicts
     result["debreath"] = {**debreath_job.debreath_state(result), "survey": survey}
     _save(task_id, client_id, before, result)
+    cut_trust.forget()
     return {"verdicts": verdicts}
 
 

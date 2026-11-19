@@ -220,6 +220,9 @@ export const CutReport = ({job, embedded = false}) => {
     const [loading, setLoading] = useState(embedded);
     const [error, setError] = useState('');
     const [saving, setSaving] = useState(false);
+    // Whether the report still asks about this judge's places (cut_trust on
+    // the backend): released once the user kept agreeing with it.
+    const [standing, setStanding] = useState(null);
     const rerendering = !!survey?.rerendering;
 
     const load = async () => {
@@ -228,6 +231,7 @@ export const CutReport = ({job, embedded = false}) => {
         const data = await response.json();
         const latest = data?.result?.debreath?.survey || null;
         setSurvey(latest);
+        setStanding(data?.cut_standing || null);
         if (latest?.restore_error) setError(latest.restore_error);
         return latest;
     };
@@ -291,9 +295,10 @@ export const CutReport = ({job, embedded = false}) => {
     const judgeItems = sections.filter((section) => section.judge).flatMap((section) => section.items);
     const waiting = judgeItems.filter((item) => !verdicts[item.key]);
     const answered = judgeItems.filter((item) => verdicts[item.key]);
+    const released = !!standing?.released && waiting.length > 0;
     const busy = rerendering || saving;
     // Before the task is opened, the list row says how many wait.
-    const toJudge = open && report ? waiting.length : Number(surveyOf(job)?.to_judge) || 0;
+    const toJudge = open && report ? (released ? 0 : waiting.length) : Number(surveyOf(job)?.to_judge) || 0;
     return (
         <div className={embedded ? '' : 'mt-3'}>
             {embedded ? null : <button
@@ -326,10 +331,24 @@ export const CutReport = ({job, embedded = false}) => {
                             {error ? <p className="mt-2 text-[12px] font-semibold text-red-700 dark:text-red-300">{error}</p> : null}
                             <div className="mt-3 grid gap-3">
                                 {judgeItems.length ? (
-                                    <div className={`rounded-[12px] border px-2.5 py-2.5 ${waiting.length
+                                    <div className={`rounded-[12px] border px-2.5 py-2.5 ${waiting.length && !released
                                         ? 'border-[#f5c86b] bg-[#fffaf0] dark:border-[#fdb022]/30 dark:bg-[#fdb022]/[0.06]'
                                         : 'border-[#dedada] bg-white/60 dark:border-white/[0.10] dark:bg-white/[0.02]'}`}>
-                                        {waiting.length ? (
+                                        {standing?.sentence && waiting.length ? (
+                                            <p className="mb-2 text-[12px] font-semibold leading-5 text-[#57585d] dark:text-white/65">{standing.sentence}</p>
+                                        ) : null}
+                                        {released ? (
+                                            <Section
+                                                taskId={taskId}
+                                                title="默认照 AI 的判断"
+                                                items={waiting}
+                                                folded={false}
+                                                mode="read"
+                                                busy={busy}
+                                                onAgree={agree}
+                                                onFlip={flip}
+                                            />
+                                        ) : waiting.length ? (
                                             <Section
                                                 taskId={taskId}
                                                 title="需要你判断"

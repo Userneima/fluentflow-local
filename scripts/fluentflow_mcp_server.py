@@ -829,7 +829,8 @@ def cancel_task(task_id: str, api_base: str | None = None, client_id: str | None
     description=("Read a cut task's processing report, the list the page shows under 处理说明: each "
         "decision with what was cut or kept (action removed or kept), why (text), its time span, its "
         "ref (to turn it around with flip_cut_decision) and its key (to agree with it with "
-        "answer_cut_decisions); the section with to_judge=true is what the user should look at; "
+        "answer_cut_decisions); the section with to_judge=true is what the user should look at; when "
+        "judge_released is set the user kept agreeing with this judge and is not asked (say that sentence); "
         "user_changes are the user's earlier turnarounds (undo one with undo_cut_change by its index); "
         "agreed lists the keys already agreed. Sections the page folds away come as folded=true with "
         "item_count only; pass section=<its title> to read that one in full. Refused with code no_report "
@@ -1591,7 +1592,8 @@ def save_agent_cut(
         "unsure with a doubt only where you are not sure). It is shown on the task page and kept when "
         "the user changes a cut later. The answer's to_judge is how many places the page asks the user "
         "to judge (yours plus the ones FluentFlow always asks about, such as removed talk): tell the user "
-        "that number, not your own count."),
+        "that number, not your own count. When the user kept agreeing with your model's cuts, to_judge "
+        "is 0 and not_asked says why: tell the user that sentence instead."),
     input_schema={
         "type": "object",
         "properties": {

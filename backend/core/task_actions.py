@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from backend.core import (
+    cut_trust,
     model_usage,
     debreath_job,
     local_intake_flow,
@@ -183,11 +184,17 @@ def cut_report(task_id: str, client_id: Optional[str] = None, section: Optional[
     if not isinstance(report, dict):
         raise Refused("这个任务没有处理说明", "no_report")
     keep = ("ref", "key", "kind", "action", "text", "start", "end", "said", "unsure", "doubt")
+    standing = cut_trust.of_job(job) or {}
+    released = bool(standing.get("released"))
     return {
         "ok": True,
         "task_id": task_id,
         "summary": report.get("summary"),
-        "sections": [_report_section(part, keep, section) for part in report.get("sections") or []],
+        # The user agreed with this judge's places often enough that the
+        # report no longer asks (cut_trust); the group is still there to read
+        # and turn around.
+        "judge_released": cut_trust.released_sentence(standing) if released else None,
+        "sections": [_report_section(part, keep, section, released) for part in report.get("sections") or []],
         "user_changes": [
             {"index": index, **{k: change.get(k) for k in ("kind", "start", "end", "model_said", "user_said", "at", "undone_at")}}
             for index, change in enumerate(survey.get("user_changes") or [])
@@ -197,9 +204,9 @@ def cut_report(task_id: str, client_id: Optional[str] = None, section: Optional[
     }
 
 
-def _report_section(part: dict[str, Any], keep: tuple[str, ...], wanted: Optional[str]) -> dict[str, Any]:
+def _report_section(part: dict[str, Any], keep: tuple[str, ...], wanted: Optional[str], released: bool = False) -> dict[str, Any]:
     items = part.get("items") or []
-    shown: dict[str, Any] = {"title": part.get("title"), "to_judge": bool(part.get("judge"))}
+    shown: dict[str, Any] = {"title": part.get("title"), "to_judge": bool(part.get("judge")) and not released}
     folded = bool(part.get("folded")) and not part.get("judge")
     if folded and (wanted or "").strip() != str(part.get("title") or ""):
         return {**shown, "folded": True, "item_count": len(items)}

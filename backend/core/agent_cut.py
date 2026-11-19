@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.core import cut_cases, cut_judge, cut_report, debreath_job, job_store, local_intake_flow, silence_cuts, survey_cut
+from backend.core import cut_cases, cut_judge, cut_report, cut_trust, debreath_job, job_store, local_intake_flow, silence_cuts, survey_cut
 from backend.core.silence_cuts import CutPlan, TimeRange
 from backend.core.storage_paths import _artifact_storage_dir
 
@@ -433,6 +433,11 @@ def save_report(task_id: str, client_id: str | None, answer: Any) -> dict[str, A
     # number; it cannot count the rules' items itself.
     shown = cut_report.from_keyed(facts, keyed, str(state.get("judged_by") or "agent"))
     judge = next((section["items"] for section in shown["sections"] if section.get("judge")), [])
+    standing = cut_trust.standing(state.get("judged_by"))
+    if judge and standing["released"]:
+        # The user has kept agreeing with this judge: the page does not ask.
+        return {"task_id": task_id, "saved": True, "to_judge": 0, "to_judge_items": [],
+                "not_asked": cut_trust.released_sentence(standing)}
     return {
         "task_id": task_id, "saved": True, "to_judge": len(judge),
         "to_judge_items": [f"{item.get('text')}（{item.get('doubt')}）" for item in judge],

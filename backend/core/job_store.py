@@ -336,6 +336,25 @@ def get_job(
     return _row_to_dict(row) if row else None
 
 
+def cut_surveys_with_answers(db_path: Path | str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+    """The cut's survey record of every task whose processing report the user
+    has answered (an agreement or a change), without reading the other tasks'
+    results."""
+    ensure_job_db(db_path)
+    with sqlite_connection(Path(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT result_json FROM jobs WHERE result_json LIKE '%\"verdicts\"%' OR result_json LIKE '%\"user_changes\"%'"
+        ).fetchall()
+    surveys = []
+    for (raw,) in rows:
+        result = _json_loads(raw)
+        state = result.get("debreath") if isinstance(result, dict) else None
+        survey = state.get("survey") if isinstance(state, dict) else None
+        if isinstance(survey, dict):
+            surveys.append(survey)
+    return surveys
+
+
 def list_jobs(
     limit: int | None = 50,
     db_path: Path | str = DEFAULT_DB_PATH,
@@ -1357,13 +1376,11 @@ def _step_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _to_judge(survey: dict[str, Any]) -> int:
-    """Items of the report's judgement group the user has not answered."""
-    verdicts = survey.get("verdicts") if isinstance(survey.get("verdicts"), dict) else {}
-    sections = (survey.get("report") or {}).get("sections") or []
-    return sum(
-        1 for section in sections if isinstance(section, dict) and section.get("judge")
-        for item in section.get("items") or [] if isinstance(item, dict) and item.get("key") not in verdicts
-    )
+    """Items of the report's judgement group still waiting for the user
+    (``cut_trust``: none once the judge is released)."""
+    from backend.core import cut_trust  # it reads this store
+
+    return cut_trust.waiting(survey)
 
 
 def _agent_cut_summary(state: Any) -> dict[str, Any] | None:

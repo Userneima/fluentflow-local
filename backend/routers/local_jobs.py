@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from backend.core import note_progress, task_activity, task_steps
+from backend.core import cut_trust, note_progress, task_activity, task_steps
 from backend.core.job_store import (
     RESTART_INTERRUPTION_KEY,
     acknowledge_restart_interruptions,
@@ -117,7 +117,11 @@ def get_job_detail(request: Request, task_id: str) -> dict[str, Any]:
     job = get_job(task_id, client_id=local_client_scope(request))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return {**job, "task_snapshot": build_task_snapshot(job), "activity": task_activity.activity(job).as_dict()}
+    return {
+        **job, "task_snapshot": build_task_snapshot(job), "activity": task_activity.activity(job).as_dict(),
+        # Whether the cut report still asks the user about its judge's places.
+        "cut_standing": cut_trust.of_job(job),
+    }
 
 
 @router.get("/jobs/{task_id}/note-progress")

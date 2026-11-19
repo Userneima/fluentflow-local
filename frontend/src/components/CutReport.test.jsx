@@ -10,6 +10,10 @@
 //   "改成保留" / "改成剪掉" that also asks first. A count over many places has
 //   no buttons at all.
 // - Every change is in the bin at the bottom, undoable after asking.
+// Owner, 2026-11-19 (decision 2.18): once the user kept agreeing with this
+// judge (cut_standing.released from the backend), the group no longer asks:
+// it reads 默认照 AI 的判断 with the backend's sentence on why, nothing is
+// answered for him, and each place can still be turned around.
 
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
@@ -43,6 +47,20 @@ const opened = (survey) => {
 };
 
 describe('CutReport', () => {
+    it('does not ask about a judge the user kept agreeing with, and says why', async () => {
+        const sentence = '你确认过这个 AI 的 84 处判断、没改过，这次没再问你，有不对的可以直接改。';
+        apiFetch.mockImplementationOnce(() => ok({result: {debreath: {survey: {report: REPORT}}}, cut_standing: {released: true, sentence}}));
+        render(<CutReport job={listJob(0)}/>);
+        fireEvent.click(screen.getByText('看看这条视频处理了什么'));
+        await waitFor(() => screen.getByText('默认照 AI 的判断'));
+        expect(screen.getByText(sentence)).toBeTruthy();
+        expect(screen.queryByText('需要你判断')).toBeNull();
+        expect(screen.queryByText('剪得对')).toBeNull();
+        expect(screen.queryByText('剩下的都没问题')).toBeNull();
+        expect(screen.getByText('改成保留')).toBeTruthy();
+        expect(apiFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('offers nothing when the task has no report', () => {
         const {container} = render(<CutReport job={{task_id: 't1', result: {debreath: {}}}}/>);
         expect(container.innerHTML).toBe('');
