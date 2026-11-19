@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from backend.core import job_store, visual_note_job
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import common
 import backend.routers.local_job_visual_note as local_job_visual_note
 from backend.core import task_reruns
 
@@ -36,7 +37,7 @@ TEXT_NOTE = "# 文本模型写的笔记"
 @pytest.fixture()
 def client(monkeypatch):
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", _TOKEN)
-    monkeypatch.setattr(local_agent, "_attach_result_artifacts", lambda _task_id, result: result)
+    monkeypatch.setattr(common, "_attach_result_artifacts", lambda _task_id, result: result)
     monkeypatch.setattr(task_reruns, "queue_is_busy", lambda: False)
     app = FastAPI()
     app.include_router(local_agent.router)
@@ -51,7 +52,7 @@ def text_model(monkeypatch):
         calls.append({"transcript": transcript, **kwargs})
         return SimpleNamespace(markdown=TEXT_NOTE, requested_mode="auto", resolved_mode="direct", chunk_count=1)
 
-    monkeypatch.setattr(local_agent, "summarize_transcript_with_metadata", summarize)
+    monkeypatch.setattr(common, "summarize_transcript_with_metadata", summarize)
     return calls
 
 
@@ -150,7 +151,7 @@ def test_a_failed_rewrite_leaves_the_task_completed_and_its_note_as_it_was(clien
     def broken(_transcript, **_kwargs):
         raise RuntimeError("provider timed out")
 
-    monkeypatch.setattr(local_agent, "summarize_transcript_with_metadata", broken)
+    monkeypatch.setattr(common, "summarize_transcript_with_metadata", broken)
 
     response = client.post("/agent/v1/tasks/regen-fail/note/regenerate", headers=_HEADERS, json={})
 
@@ -165,7 +166,7 @@ def test_a_failed_rewrite_leaves_the_task_completed_and_its_note_as_it_was(clien
 def test_an_empty_answer_is_a_failure_not_an_empty_note(client, monkeypatch):
     _task("regen-empty", note="# 原来的笔记", written_from=None)
     monkeypatch.setattr(
-        local_agent, "summarize_transcript_with_metadata",
+        common, "summarize_transcript_with_metadata",
         lambda _t, **_k: SimpleNamespace(markdown="  ", requested_mode="auto", resolved_mode="direct", chunk_count=1),
     )
 

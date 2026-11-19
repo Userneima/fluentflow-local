@@ -23,7 +23,7 @@ from backend.core import task_flow as tf
 from backend.core.local_entry_guards import friendly_error
 from backend.core.local_error_diagnostics import NO_SPEECH, diagnose_error
 from backend.core.media_job import require_speech
-from backend.routers import local_agent
+from backend.routers.agent_v1 import common
 from tests.test_task_steps import Flow, _ctx, _job, _queued, _steps, _wire
 
 _counter = iter(range(10_000))
@@ -98,7 +98,7 @@ def test_nothing_runs_after_a_transcription_that_heard_no_one(monkeypatch, task_
     job = _job(task_id)
     assert job["status"] == "failed"
     assert not task_activity.activity(job).busy
-    assert local_agent._task_done(job)
+    assert common._task_done(job)
 
 
 def test_another_failed_transcription_still_goes_on(monkeypatch, task_id):

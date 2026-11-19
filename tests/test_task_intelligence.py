@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.core import job_store, media_job, task_intelligence, task_submission
 from backend.routers import local_agent
+from backend.routers.agent_v1 import tasks
 from scripts import fluentflow_mcp_server as mcp
 from scripts.fluentflow_mcp import core
 
@@ -57,7 +58,7 @@ def test_direct_agent_api_also_defaults_to_agent_and_rejects_invalid_executor(mo
         seen.append(kwargs)
         return {"task_id": "agent-default", "status": "queued"}
 
-    monkeypatch.setattr(local_agent, "submit_video_source_job", submit)
+    monkeypatch.setattr(tasks, "submit_video_source_job", submit)
     app = FastAPI()
     app.include_router(local_agent.router)
     client = TestClient(app)

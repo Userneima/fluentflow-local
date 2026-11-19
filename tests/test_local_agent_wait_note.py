@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from backend.core import job_store, task_steps
 from backend.core.local_request_scope import LOCAL_OWNER_ID
-import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import common, tasks
 from backend.routers.local_agent import router as agent_router
 
 _TOKEN = "local-secret-token"
@@ -36,8 +36,8 @@ def jobs_db(monkeypatch, tmp_path):
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", _TOKEN)
     monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path / "data"))
     db = tmp_path / "jobs.sqlite"
-    monkeypatch.setattr(local_agent, "get_job", functools.partial(job_store.get_job, db_path=db))
-    monkeypatch.setattr(local_agent, "_local_client_scope", lambda request: LOCAL_OWNER_ID)
+    monkeypatch.setattr(common, "get_job", functools.partial(job_store.get_job, db_path=db))
+    monkeypatch.setattr(common, "_local_client_scope", lambda request: LOCAL_OWNER_ID)
     return db
 
 
@@ -286,7 +286,7 @@ def test_a_note_left_half_written_is_handed_on_before_alignment(jobs_db, monkeyp
 
     _agent_note_with_sections(jobs_db, "t-half", written_from=NOTE_FROM_AGENT)
     draft = {"total_parts": 5, "saved_parts": [1, 2, 3], "remaining_parts": [4, 5], "next": "hand on 4, 5"}
-    monkeypatch.setattr(local_agent.agent_note, "unfinished_draft", lambda task_id: draft)
+    monkeypatch.setattr(tasks.agent_note, "unfinished_draft", lambda task_id: draft)
     client = _client()
 
     waited = _wait(client, "t-half", timeout_seconds=0)

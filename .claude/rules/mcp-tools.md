@@ -4,6 +4,7 @@ paths:
   - scripts/fluentflow_mcp/**
   - scripts/local_agent_client.py
   - backend/routers/local_agent.py
+  - backend/routers/agent_v1/**
   - tests/test_mcp_*.py
 ---
 

@@ -32,7 +32,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.core import job_store, task_activity, task_steps
-from backend.routers import local_agent
+from backend.routers.agent_v1 import common
 from backend.routers import local_processing as lp
 from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
@@ -73,7 +73,7 @@ def _busy_everywhere(task_id) -> dict[str, bool]:
     return {
         "activity": activity.busy,
         "delete_refused": task_activity.busy_reason(job) is not None,
-        "agent_not_done": not local_agent._task_done(job),
+        "agent_not_done": not common._task_done(job),
         "restart_guard": guard.is_busy({**job, "activity": activity.as_dict()}),
     }
 
@@ -168,12 +168,12 @@ def test_while_the_cut_and_note_are_still_coming_the_task_is_busy_everywhere(mon
         assert _job(task_id)["result"]["transcript_text"] == "大家好"
         assert all(_busy_everywhere(task_id).values()), _busy_everywhere(task_id)
         assert task_activity.activity(_job(task_id)).label == "正在剪辑"
-        assert local_agent._cut_running(_job(task_id))
+        assert common._cut_running(_job(task_id))
 
         flow.render_gate.set()
         assert await _until(lambda: (_steps(task_id).get("note") or {}).get("status") == "running")
         assert all(_busy_everywhere(task_id).values())
-        assert local_agent._note_pending(_job(task_id))
+        assert common._note_pending(_job(task_id))
         assert task_activity.busy_reason(_job(task_id)) == "这个任务的笔记还在写，等写完再删。"
 
         flow.note_gate.set()
@@ -216,7 +216,7 @@ def test_a_failed_note_ends_the_task_and_names_the_failure(monkeypatch, task_id)
     assert not activity.busy
     assert activity.failed_steps == ("note",)
     assert _steps(task_id)["note"]["error_reason"] == "额度用完了"
-    assert local_agent._task_done(_job(task_id))
+    assert common._task_done(_job(task_id))
 
 
 def test_a_cut_that_raises_is_failed_and_the_task_still_ends(monkeypatch, task_id):

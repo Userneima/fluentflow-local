@@ -100,7 +100,7 @@ def test_list_tasks_finds_a_note_by_the_title_shown_in_a_screenshot(monkeypatch)
     """A screenshot shows the note's own heading, which is often not the file name."""
     from types import SimpleNamespace
 
-    import backend.routers.local_agent as la
+    from backend.routers.agent_v1 import common, tasks
 
     jobs = [
         {"task_id": "t1", "status": "completed", "created_at": "2026-09-20", "source_filename": "2.1 什么是科学.mp4",
@@ -108,13 +108,13 @@ def test_list_tasks_finds_a_note_by_the_title_shown_in_a_screenshot(monkeypatch)
         {"task_id": "t2", "status": "completed", "created_at": "2026-09-21", "source_filename": "b.mp4",
          "result": {"display_title": "别的课", "summary_markdown": ""}},
     ]
-    monkeypatch.setattr(la, "list_jobs", lambda **_: jobs)
-    monkeypatch.setattr(la, "_local_client_scope", lambda request: "anonymous")
+    monkeypatch.setattr(tasks, "list_jobs", lambda **_: jobs)
+    monkeypatch.setattr(common, "_local_client_scope", lambda request: "anonymous")
 
-    found = la.list_agent_tasks(SimpleNamespace(), query="科学研究的结构")["tasks"]
+    found = tasks.list_agent_tasks(SimpleNamespace(), query="科学研究的结构")["tasks"]
     assert [t["task_id"] for t in found] == ["t1"]
     assert found[0]["note_title"] == "科学与科学研究的结构：什么是科学"
-    assert len(la.list_agent_tasks(SimpleNamespace(), query="")["tasks"]) == 2
+    assert len(tasks.list_agent_tasks(SimpleNamespace(), query="")["tasks"]) == 2
 
 
 def test_a_draft_part_is_the_same_stretch_as_the_agents_part(job_store, monkeypatch, tmp_path):  # noqa: F811

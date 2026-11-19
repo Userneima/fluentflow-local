@@ -38,7 +38,7 @@ import backend.core.agent_note as an
 import backend.core.visual_note_job as vn
 from backend.core import cut_timeline, debreath_job as dj, job_store as js, survey_cut
 from backend.core.local_request_scope import LOCAL_OWNER_ID
-import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import agent_material, common, tasks
 from backend.routers.local_agent import router as agent_router
 from test_visual_note_job import CUT_LIST, SEGMENTS, TASK, _fake_extractor, job_store, no_ambient_key  # noqa: F401
 
@@ -194,8 +194,8 @@ def jobs_db(monkeypatch, tmp_path):
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", _TOKEN)
     monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path / "data"))
     db = tmp_path / "jobs.sqlite"
-    monkeypatch.setattr(local_agent, "get_job", functools.partial(js.get_job, db_path=db))
-    monkeypatch.setattr(local_agent, "_local_client_scope", lambda request: LOCAL_OWNER_ID)
+    monkeypatch.setattr(common, "get_job", functools.partial(js.get_job, db_path=db))
+    monkeypatch.setattr(common, "_local_client_scope", lambda request: LOCAL_OWNER_ID)
     return db
 
 
@@ -239,7 +239,7 @@ def cut_open(monkeypatch):
             return replace(current, busy=True, open_steps=(*current.open_steps, "cut"))
         return current
 
-    monkeypatch.setattr(local_agent.task_activity, "activity", activity)
+    monkeypatch.setattr(task_activity, "activity", activity)
 
 
 def test_a_wait_returns_at_once_when_the_note_can_start(jobs_db, cut_open):
@@ -307,8 +307,8 @@ def test_a_wait_may_hold_for_ten_minutes_and_no_longer(monkeypatch, jobs_db, cut
     async def fast_sleep(seconds):
         clock["now"] += seconds
 
-    monkeypatch.setattr(local_agent.time, "monotonic", lambda: clock["now"])
-    monkeypatch.setattr(local_agent.asyncio, "sleep", fast_sleep)
+    monkeypatch.setattr(tasks.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(tasks.asyncio, "sleep", fast_sleep)
 
     for asked in (300, 600, 3600):
         clock["now"] = 0.0
@@ -321,8 +321,8 @@ def test_a_wait_may_hold_for_ten_minutes_and_no_longer(monkeypatch, jobs_db, cut
 
 def test_taking_material_during_the_tasks_own_render_is_not_refused_as_a_busy_queue(monkeypatch, jobs_db):
     _store(jobs_db, "t-own", debreath={"status": dj.STATUS_RUNNING, "stage": "rendering", **_DECIDED})
-    monkeypatch.setattr(local_agent, "queue_is_busy", lambda: True)
-    monkeypatch.setattr(local_agent.agent_note, "material", lambda task_id, **kw: {"task_id": task_id})
+    monkeypatch.setattr(agent_material, "queue_is_busy", lambda: True)
+    monkeypatch.setattr(agent_material.agent_note, "material", lambda task_id, **kw: {"task_id": task_id})
 
     response = _client().post("/agent/v1/tasks/t-own/agent-note/material", headers=_HEADERS, json={})
 
@@ -331,7 +331,7 @@ def test_taking_material_during_the_tasks_own_render_is_not_refused_as_a_busy_qu
 
 def test_another_tasks_work_still_keeps_the_material_waiting(monkeypatch, jobs_db):
     _store(jobs_db, "t-other", debreath={"status": dj.STATUS_COMPLETED, "stage": "done"})
-    monkeypatch.setattr(local_agent, "queue_is_busy", lambda: True)
+    monkeypatch.setattr(agent_material, "queue_is_busy", lambda: True)
 
     response = _client().post("/agent/v1/tasks/t-other/agent-note/material", headers=_HEADERS, json={})
 

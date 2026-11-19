@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 
 import backend.core.lark_cli_exporter as cli
 import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import common, regenerate
 from backend.core import feishu_sync, job_store, note_versions, output_folder
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.result_artifacts import _attach_result_artifacts
@@ -164,9 +165,9 @@ def test_an_md_edited_in_obsidian_is_recorded_as_what_replaced_the_task_note(tmp
 
 def test_a_rewrite_through_the_agent_is_recorded(tmp_path, monkeypatch):
     task, md = _task(tmp_path)
-    monkeypatch.setattr(local_agent, "summarize_transcript_with_metadata", lambda transcript, **kwargs: SimpleNamespace(
+    monkeypatch.setattr(common, "summarize_transcript_with_metadata", lambda transcript, **kwargs: SimpleNamespace(
         markdown="# 文本模型重写的笔记\n\n重写的正文。", requested_mode="auto", resolved_mode="direct", chunk_count=1))
-    monkeypatch.setattr(local_agent.visual_note_job, "describe", lambda *a, **k: {"eligible": False, "reason": "测试"})
+    monkeypatch.setattr(regenerate.visual_note_job, "describe", lambda *a, **k: {"eligible": False, "reason": "测试"})
 
     response = _agent().post(f"/agent/v1/tasks/{task}/note/regenerate", headers=AGENT, json={})
     assert response.status_code == 200, response.text
@@ -177,9 +178,9 @@ def test_a_rewrite_through_the_agent_is_recorded(tmp_path, monkeypatch):
 
 def test_putting_the_previous_note_back_is_recorded_as_a_restore(tmp_path, monkeypatch):
     task, md = _task(tmp_path)
-    monkeypatch.setattr(local_agent, "summarize_transcript_with_metadata", lambda transcript, **kwargs: SimpleNamespace(
+    monkeypatch.setattr(common, "summarize_transcript_with_metadata", lambda transcript, **kwargs: SimpleNamespace(
         markdown="# 重写的\n\n正文。", requested_mode="auto", resolved_mode="direct", chunk_count=1))
-    monkeypatch.setattr(local_agent.visual_note_job, "describe", lambda *a, **k: {"eligible": False, "reason": "测试"})
+    monkeypatch.setattr(regenerate.visual_note_job, "describe", lambda *a, **k: {"eligible": False, "reason": "测试"})
     _agent().post(f"/agent/v1/tasks/{task}/note/regenerate", headers=AGENT, json={})
     output_folder.sync(task)
 

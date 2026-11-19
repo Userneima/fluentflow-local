@@ -35,6 +35,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import common, note_edits
 from backend.core import glossary_correction as gc, job_store, subtitle_correction as sc
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.result_artifacts import _attach_result_artifacts
@@ -292,11 +293,11 @@ def test_the_subscription_goes_first_and_the_key_takes_over_when_it_fails(monkey
     def subscribed(system, user):
         raise RuntimeError("usage limit")
 
-    monkeypatch.setattr(local_agent, "local_ai_kwargs", lambda: {"provider": "deepseek"})
+    monkeypatch.setattr(common, "local_ai_kwargs", lambda: {"provider": "deepseek"})
     monkeypatch.setattr(ai_summarizer, "text_model_chat", lambda **kw: keyed)
     monkeypatch.setattr(claude_text, "subscription_chat", lambda runner=None: (subscribed, "subscription"))
 
-    chat, channel = local_agent._glossary_chat()
+    chat, channel = note_edits._glossary_chat()
     outcome = gc.correct(SEGMENTS, GLOSSARY, chat)
 
     assert channel == "subscription"
@@ -418,7 +419,7 @@ def agent(monkeypatch, tmp_path):
     folder.mkdir()
     (folder / "FluentFlow 校正文档.md").write_text(GLOSSARY, encoding="utf-8")
     model = Model()
-    monkeypatch.setattr(local_agent, "_glossary_chat", lambda: (model, "subscription"))
+    monkeypatch.setattr(note_edits, "_glossary_chat", lambda: (model, "subscription"))
     app = FastAPI()
     app.include_router(local_agent.router)
     created: list[str] = []
@@ -737,7 +738,7 @@ def test_the_pipeline_records_what_it_wrote_whether_or_not_the_step_runs(monkeyp
     from backend.core import correction_notes, media_job
 
     monkeypatch.setattr(correction_notes, "for_task", lambda task_id, client_id=None: GLOSSARY)
-    monkeypatch.setattr(local_agent, "_glossary_chat", lambda: (None, None))
+    monkeypatch.setattr(note_edits, "_glossary_chat", lambda: (None, None))
     ctx = SimpleNamespace(task_id_value="t", client_id=None, source_type="local", source_filename="a.mp4",
                           event_route="/x", secret_resolver=None, loop=None)
 

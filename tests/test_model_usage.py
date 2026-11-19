@@ -40,6 +40,7 @@ from backend.core import cut_judge, job_store, media_job, model_usage, note_cove
 from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 from backend.core.local_task_detail import build_task_detail
 import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import common
 
 _counter = iter(range(10_000))
 
@@ -494,7 +495,7 @@ def test_the_processing_record_and_the_agents_task_answers_carry_the_usage(monke
     assert detail["model_usage"]["total"]["calls"] == 1
 
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", "usage-token")
-    monkeypatch.setattr(local_agent, "_local_client_scope", lambda _request: "agent")
+    monkeypatch.setattr(common, "_local_client_scope", lambda _request: "agent")
     app = FastAPI()
     app.include_router(local_agent.router)
     client = TestClient(app)

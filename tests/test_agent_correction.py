@@ -34,6 +34,7 @@ from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.storage_paths import _artifact_storage_dir
 from backend.routers import local_agent
+from backend.routers.agent_v1 import note_edits
 
 TOKEN = "agent-correction-token"
 AGENT = {"x-fluentflow-access-token": TOKEN, "x-fluentflow-client-id": LOCAL_OWNER_ID}
@@ -58,7 +59,7 @@ def _forbid_models(monkeypatch):
     def forbidden(*_a, **_kw):
         pytest.fail("the agent's correction must not call a FluentFlow model")
 
-    monkeypatch.setattr(local_agent, "_glossary_chat", forbidden)
+    monkeypatch.setattr(note_edits, "_glossary_chat", forbidden)
     monkeypatch.setattr(gc, "decide", forbidden)
     monkeypatch.setattr(sc, "decide", forbidden)
 

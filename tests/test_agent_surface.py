@@ -95,12 +95,42 @@ def _router_imports(path: Path) -> list[str]:
     return found
 
 
+_AGENT_ROUTES = "backend.routers.agent_v1"
+
+
+def _agent_route_files() -> list[Path]:
+    package = ROOT / "backend" / "routers" / "agent_v1"
+    return [ROOT / "backend" / "routers" / "local_agent.py", *sorted(package.glob("*.py"))]
+
+
 def test_the_agent_routes_borrow_nothing_from_the_page_routes():
-    borrowed = _router_imports(ROOT / "backend" / "routers" / "local_agent.py")
+    # The agent routes may import each other (backend/routers/agent_v1/), nothing else in backend/routers.
+    borrowed = {
+        path.relative_to(ROOT).as_posix(): found
+        for path in _agent_route_files()
+        if (found := [
+            name for name in _router_imports(path)
+            if name != _AGENT_ROUTES and not name.startswith(_AGENT_ROUTES + ".")
+        ])
+    }
     assert not borrowed, (
-        "backend/routers/local_agent.py imports from the page's routes; move what both need "
-        f"into backend/core (task_actions, task_queue, task_submission ...): {borrowed}"
+        "The agent routes (backend/routers/local_agent.py, backend/routers/agent_v1/) import from the "
+        "page's routes; move what both need into backend/core (task_actions, task_queue, "
+        f"task_submission ...): {borrowed}"
     )
+
+
+def test_the_agent_route_check_reads_every_agent_route_module():
+    # Every module whose routes the mounted router includes is one the import check reads.
+    import sys
+
+    read = {path.resolve() for path in _agent_route_files()}
+    route_modules = {
+        Path(sys.modules[route.endpoint.__module__].__file__).resolve()
+        for route in agent_router.routes
+        if isinstance(route, APIRoute)
+    }
+    assert route_modules and route_modules <= read, sorted(str(path) for path in route_modules - read)
 
 
 def test_nothing_in_core_imports_a_route():

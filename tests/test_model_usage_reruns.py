@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from backend.core import agent_note, debreath_job, job_store, model_usage, survey_cut, tail_trim, visual_note_job
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import common, note_edits
 
 _counter = iter(range(10_000))
 TOKEN = "rerun-token"
@@ -122,7 +123,7 @@ def test_an_agent_rewriting_the_note_with_the_text_model_is_the_note_step(monkey
             pass
         return SimpleNamespace(markdown="# 新笔记", requested_mode="auto", resolved_mode="direct", chunk_count=1)
 
-    monkeypatch.setattr(local_agent, "summarize_transcript_with_metadata", summarize)
+    monkeypatch.setattr(common, "summarize_transcript_with_metadata", summarize)
     agent.post(f"/agent/v1/tasks/{task_id}/note/regenerate", headers=AGENT, json={})
     assert _recorded(task_id) == [("note", task_id)]
 
@@ -133,7 +134,7 @@ def test_running_the_word_list_correction_again_is_the_correction_step(monkeypat
             call.input_tokens, call.output_tokens = 100, 10
         return '{"fixes": []}'
 
-    monkeypatch.setattr(local_agent, "_glossary_chat", lambda: (chat, "text_model:deepseek-flash"))
+    monkeypatch.setattr(note_edits, "_glossary_chat", lambda: (chat, "text_model:deepseek-flash"))
     agent.post(f"/agent/v1/tasks/{task_id}/glossary-corrections/run", headers=AGENT)
     rows = _recorded(task_id)
     assert rows and set(rows) == {("correct", task_id)}

@@ -17,7 +17,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from backend.core import agent_cut, task_actions
-from backend.routers import local_agent
+from backend.routers.agent_v1 import common, note_edits, tasks
 from scripts import fluentflow_mcp_server as mcp
 from scripts.fluentflow_mcp import core
 from scripts.local_agent_client import FluentFlowApiError
@@ -31,14 +31,14 @@ def test_a_corrections_list_shows_what_is_in_force_and_each_word_list_line_once(
         {"id": "c", "from": "性格", "to": "黑客", "entry": line},
         {"id": "d", "from": "Cloud", "to": "Claude", "why": "上下文"},
     ]
-    view = local_agent._corrections_view(records, include_reverted=False)
+    view = note_edits._corrections_view(records, include_reverted=False)
     assert [r["id"] for r in view["corrections"]] == ["b", "c", "d"]
     assert view["reverted_count"] == 1
     assert view["entries"] == [line]
     assert all(r.get("entry_ref") == 0 and "entry" not in r for r in view["corrections"][:2])
     assert "entry_ref" not in view["corrections"][2]
 
-    everything = local_agent._corrections_view(records, include_reverted=True)
+    everything = note_edits._corrections_view(records, include_reverted=True)
     assert [r["id"] for r in everything["corrections"]] == ["a", "b", "c", "d"]
     assert everything["reverted_count"] == 1
 
@@ -100,12 +100,12 @@ def test_answers_name_the_package_tool_not_its_http_path(monkeypatch):
 
 def test_a_list_cut_at_its_limit_says_there_is_more(monkeypatch):
     jobs = [{"task_id": f"t{i}", "result": {"filename": f"f{i}"}} for i in range(5)]
-    monkeypatch.setattr(local_agent, "list_jobs", lambda **kwargs: jobs)
-    monkeypatch.setattr(local_agent, "_local_client_scope", lambda request: None)
+    monkeypatch.setattr(tasks, "list_jobs", lambda **kwargs: jobs)
+    monkeypatch.setattr(common, "_local_client_scope", lambda request: None)
     request = SimpleNamespace()
-    assert local_agent.list_agent_tasks(request, limit=3)["has_more"] is True
-    assert len(local_agent.list_agent_tasks(request, limit=3)["tasks"]) == 3
-    assert local_agent.list_agent_tasks(request, limit=5)["has_more"] is False
+    assert tasks.list_agent_tasks(request, limit=3)["has_more"] is True
+    assert len(tasks.list_agent_tasks(request, limit=3)["tasks"]) == 3
+    assert tasks.list_agent_tasks(request, limit=5)["has_more"] is False
 
 
 def test_an_argument_of_the_wrong_type_is_named(monkeypatch):

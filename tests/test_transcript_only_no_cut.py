@@ -23,6 +23,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import common, tasks
 from backend.core import agent_cut, job_store, task_activity, task_submission
 from backend.core import task_flow as tf
 
@@ -77,7 +78,7 @@ def test_a_task_submitted_with_cut_false_is_not_cut_and_never_waits_for_the_agen
     job = job_store.get_job(task_id)
     assert not agent_cut.is_waiting(job.get("result"))
     assert not task_activity.activity(job).busy
-    assert local_agent._task_done(job)
+    assert common._task_done(job)
     statuses = {name: step["status"] for name, step in _steps(task_id).items()}
     assert statuses["cut"] == "skipped"
     assert statuses["note"] == ("done" if note else "skipped")
@@ -162,10 +163,10 @@ def test_the_submit_routes_record_cut_false(monkeypatch, tmp_path):
         seen["link"] = kwargs
         return {"task_id": "t-link", "status": "queued"}
 
-    monkeypatch.setattr(local_agent, "request_is_localhost", lambda _request: True)
-    monkeypatch.setattr(local_agent.local_folder_intake, "resolve_media_file", lambda raw: media)
-    monkeypatch.setattr(local_agent, "queue_local_media_file", queued)
-    monkeypatch.setattr(local_agent, "submit_video_source_job", submit)
+    monkeypatch.setattr(tasks, "request_is_localhost", lambda _request: True)
+    monkeypatch.setattr(tasks.local_folder_intake, "resolve_media_file", lambda raw: media)
+    monkeypatch.setattr(tasks, "queue_local_media_file", queued)
+    monkeypatch.setattr(tasks, "submit_video_source_job", submit)
     client = TestClient(_app())
 
     for options in ({"cut": False}, {"cut": "false"}):

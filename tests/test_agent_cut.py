@@ -36,6 +36,7 @@ from fastapi.testclient import TestClient
 from backend.core import agent_cut, job_store, silence_cuts, survey_cut, task_steps
 from backend.core.local_request_scope import LOCAL_OWNER_ID
 import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import common
 import backend.routers.local_job_debreath as local_job_debreath
 from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
@@ -81,7 +82,7 @@ def no_pictures(monkeypatch):
 @pytest.fixture
 def api(monkeypatch):
     monkeypatch.setenv("FLUENTFLOW_ACCESS_TOKEN", _TOKEN)
-    monkeypatch.setattr(local_agent, "_local_client_scope", lambda request: LOCAL_OWNER_ID)
+    monkeypatch.setattr(common, "_local_client_scope", lambda request: LOCAL_OWNER_ID)
     monkeypatch.setattr(local_job_debreath, "local_client_scope", lambda request: LOCAL_OWNER_ID)
     app = FastAPI()
     app.include_router(local_agent.router)

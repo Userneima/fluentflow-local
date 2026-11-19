@@ -39,6 +39,7 @@ import backend.core.debreath_job as dj
 import backend.core.visual_note_job as vn
 import backend.routers.local_job_visual_note as jvn
 import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import common
 from backend.core.local_agent_package import build_agent_task_package
 from backend.core.result_artifacts import VISUAL_NOTE_KIND, artifact_target_path
 from scripts import fluentflow_mcp_server as mcp
@@ -121,7 +122,7 @@ def agent_job(monkeypatch):
     monkeypatch.setattr(vn, "get_job", reader)
     monkeypatch.setattr(vn, "update_job_result", writer)
     monkeypatch.setattr(vn, "save_result_changes", lambda task_id, _before, after, **kw: writer(task_id, after, **kw))
-    monkeypatch.setattr(local_agent, "get_job", reader)
+    monkeypatch.setattr(common, "get_job", reader)
     return state
 
 

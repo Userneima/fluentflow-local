@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.routers.local_agent as local_agent
+from backend.routers.agent_v1 import tasks
 from backend.core import speaker_diarization
 from backend.core.task_submission import local_path_options
 
@@ -25,7 +26,7 @@ def _link_options(monkeypatch, options: dict) -> dict:
         seen.update(kwargs["raw_options"])
         return {"task_id": "link-1", "status": "queued"}
 
-    monkeypatch.setattr(local_agent, "submit_video_source_job", submit)
+    monkeypatch.setattr(tasks, "submit_video_source_job", submit)
     app = FastAPI()
     app.include_router(local_agent.router)
     response = TestClient(app).post(
