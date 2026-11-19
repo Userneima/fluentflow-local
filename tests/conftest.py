@@ -155,6 +155,56 @@ def reset_auth_rate_limits():
     auth_rate_limit.reset_rate_limits()
 
 
+_ACCOUNT_PROGRAMS = {"lark-cli", "claude"}
+
+
+@pytest.fixture(autouse=True)
+def no_real_account_programs(monkeypatch):
+    """No test starts the developer's real ``lark-cli`` or ``claude``.
+
+    Both act on the owner's own accounts (his Feishu documents, his Claude
+    subscription). On 2026-11-19 four tests were found reading his Feishu
+    through the installed lark-cli (``auth status``, ``docs +fetch``,
+    ``drive metas batch_query``) because the code they reached asked whether
+    lark-cli was ready. Every way the backend starts a program goes through
+    ``subprocess.Popen`` (``subprocess.run`` builds one), so the check sits
+    there: a program with one of these names that is not a fake under a
+    temporary folder fails the test with a message saying what to patch.
+    """
+    import subprocess
+
+    real_popen = subprocess.Popen
+    temp_roots = tuple(
+        os.path.realpath(p) for p in (tempfile.gettempdir(), str(TEST_RUNTIME_ROOT))
+    )
+
+    class _GuardedPopen(real_popen):
+        def __init__(self, args, *rest, **kwargs):
+            argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args or [])
+            program = os.fsdecode(argv[0]) if argv else ""
+            if kwargs.get("shell") and isinstance(args, str):
+                program = args.split()[0] if args.split() else ""
+            name = os.path.basename(program)
+            if name in _ACCOUNT_PROGRAMS:
+                found = shutil.which(program) or program
+                real = os.path.realpath(found)
+                if not real.startswith(temp_roots):
+                    raise RuntimeError(
+                        f"a test tried to run the real {name} ({found}). Patch "
+                        "lark_cli_run._run / lark_cli_ready (Feishu) or the "
+                        "claude_code_note runner (Claude) instead."
+                    )
+            super().__init__(args, *rest, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", _GuardedPopen)
+    # And by default there is no lark-cli at all, so "is Feishu set up?" checks
+    # (health, settings, workflow status) answer the same on every machine.
+    # Tests about lark-cli give it a fake path themselves.
+    from backend.core import lark_cli_run
+
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: explicit or None)
+
+
 @pytest.fixture(autouse=True)
 def no_real_claude_login_check(monkeypatch, request):
     """Tests never ask the real ``claude`` program whether it is logged in.

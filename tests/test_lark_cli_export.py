@@ -278,7 +278,8 @@ def _status(user: dict, prefix: str = "") -> object:
     return lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, body, "")
 
 
-def test_lark_cli_counts_as_ready_only_with_a_signed_in_user():
+def test_lark_cli_counts_as_ready_only_with_a_signed_in_user(monkeypatch):
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
     assert cli.lark_cli_ready(runner=_status({"available": True, "tokenStatus": "valid"})) is True
     assert cli.lark_cli_ready(runner=_status({"available": False}, prefix="checking...\n")) is False
 
