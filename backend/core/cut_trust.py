@@ -126,15 +126,15 @@ def standing(judged_by: Any) -> dict[str, Any]:
     """Where this judge stands with the user: released or not, on how many
     answers, and whether a recent turnaround is why it is asked again."""
     judge = judge_of(judged_by)
-    entry = _record().get(judge) if judge else None
-    answers = sorted((entry or {}).get("answers") or [])
+    entry: dict[str, Any] = (_record().get(judge) if judge else None) or {"tasks": 0, "answers": []}
+    answers = sorted(entry["answers"])
     latest = answers[-RELEASE_ANSWERS:]
     turned = any(flipped for _, flipped in latest)
     return {
         "judge": judge,
-        "released": bool(entry) and entry["tasks"] >= RELEASE_TASKS and len(latest) >= RELEASE_ANSWERS and not turned,
+        "released": entry["tasks"] >= RELEASE_TASKS and len(latest) >= RELEASE_ANSWERS and not turned,
         "agreed": sum(1 for _, flipped in answers if not flipped),
-        "tasks": (entry or {}).get("tasks", 0),
+        "tasks": entry["tasks"],
         "turned_recently": turned,
     }
 
