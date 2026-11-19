@@ -159,7 +159,7 @@ _ACCOUNT_PROGRAMS = {"lark-cli", "claude"}
 
 
 @pytest.fixture(autouse=True)
-def no_real_account_programs(monkeypatch):
+def no_real_account_programs(monkeypatch, tmp_path_factory):
     """No test starts the developer's real ``lark-cli`` or ``claude``.
 
     Both act on the owner's own accounts (his Feishu documents, his Claude
@@ -175,7 +175,8 @@ def no_real_account_programs(monkeypatch):
 
     real_popen = subprocess.Popen
     temp_roots = tuple(
-        os.path.realpath(p) for p in (tempfile.gettempdir(), str(TEST_RUNTIME_ROOT))
+        os.path.realpath(p)
+        for p in (tempfile.gettempdir(), str(TEST_RUNTIME_ROOT), str(tmp_path_factory.getbasetemp()))
     )
 
     class _GuardedPopen(real_popen):
