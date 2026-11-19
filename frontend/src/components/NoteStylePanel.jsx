@@ -113,4 +113,3 @@ export const NoteStylePanel = () => {
     );
 };
 
-export default NoteStylePanel;

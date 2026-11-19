@@ -1,13 +1,10 @@
 import {
-    normalizeDisplaySegments,
-    normalizeTranscriptSegments,
     pickDisplayTranscriptSegments,
     pickTranscriptSegments,
 } from './format.js';
 import { normalizeTaskState } from './taskState.js';
 
 export const RESULT_SCHEMA_VERSION = '2';
-export const AGENT_TASK_PACKAGE_VERSION = '1';
 
 /**
  * @typedef {Object} ResultPayloadV2
@@ -96,43 +93,5 @@ export const normalizeJobPayload = (value={}) => {
         status: source.status || taskState,
         task_state: taskState,
         result: normalizeResultPayload(source.result || {}),
-    };
-};
-
-export const normalizeAgentTaskPackage = (value={}) => {
-    const source = asObject(value);
-    const task = asObject(source.task);
-    const transcript = asObject(source.transcript);
-    const rawSegments = normalizeTranscriptSegments(transcript.raw_segments);
-    const displaySegments = normalizeDisplaySegments(transcript.display_segments);
-    const note = asObject(source.note);
-
-    return {
-        ...source,
-        agent_task_package_version: text(source.agent_task_package_version).trim() || AGENT_TASK_PACKAGE_VERSION,
-        task: {
-            ...task,
-            task_state: normalizeTaskState(task),
-        },
-        transcript: {
-            ...transcript,
-            raw_segments: rawSegments,
-            display_segments: displaySegments,
-            available: !!(
-                transcript.available
-                || text(transcript.text).trim()
-                || rawSegments.length
-                || displaySegments.length
-            ),
-            raw_segment_count: Number(transcript.raw_segment_count ?? rawSegments.length) || rawSegments.length,
-            display_segment_count: Number(transcript.display_segment_count ?? displaySegments.length) || displaySegments.length,
-        },
-        note: {
-            ...note,
-            status: normalizeSummaryStatus(note.status, {
-                summary_markdown: note.markdown,
-                summary_error: asObject(note.diagnosis).detail,
-            }) || note.status || 'pending',
-        },
     };
 };

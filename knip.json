@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "frontend/src/local-app.jsx!",
+    "scripts/*.{js,mjs}"
+  ],
+  "project": [
+    "frontend/src/**/*.{js,jsx}!"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "ignoreBinaries": [
+    "python3"
+  ],
+  "ignore": [
+    "vite.preview-records.config.mjs"
+  ],
+  "rules": {
+    "duplicates": "off"
+  }
+}

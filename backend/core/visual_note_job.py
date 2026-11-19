@@ -350,21 +350,21 @@ def _cut_media_reason(task_id: str, result: dict[str, Any]) -> str:
     if not state and _cut_declined(task_id):
         return _missing_recording_reason(task_id, "这个任务提交时选了不剪，笔记要读原录音")
     if not state:
-        return "这条录像还没有去气口（剪掉空白）后的版本。让你的 agent 用 debreath_task 剪一次，或在编辑器里点「重新转录」从原片再走一遍（会另起一条记录），笔记会根据剪好的文件来写。"
+        return "这条录像还没有去气口（剪掉空白）后的版本。让你的 agent 用 debreath_task 剪一次，或用 retry_task 从原片再走一遍（会另起一条记录），笔记会根据剪好的文件来写。"
     if status == debreath_job.STATUS_RUNNING:
         return "去气口还在进行，等剪后的文件出来再写笔记。"
     if status == debreath_job.STATUS_FAILED and not _transcript_is_native_to_cut_media(result):
         return _missing_recording_reason(task_id, "剪后视频没有导出成功，笔记要读原片")
     if status == debreath_job.STATUS_FAILED:
         reason = str(state.get("error") or "").strip()
-        return f"上一次去气口没成功{('：' + reason) if reason else ''}。让你的 agent 用 debreath_task 再剪一次，或在编辑器里点「重新转录」从原片再走一遍（会另起一条记录），剪成了再写笔记。"
+        return f"上一次去气口没成功{('：' + reason) if reason else ''}。让你的 agent 用 debreath_task 再剪一次，或用 retry_task 从原片再走一遍（会另起一条记录），剪成了再写笔记。"
     plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
     if state.get("used_for_transcription") is False:
         return _missing_recording_reason(task_id, "这次转写用的是原录音，笔记也要读原录音")
     if not state.get("rendered") and plan.get("cut_count") == 0:
         return _missing_recording_reason(task_id, "去气口没找到可剪的空白，笔记要读原录音")
     if not state.get("rendered"):
-        return "上一次只生成了剪辑表，还没有剪出成品。让你的 agent 用 debreath_task 把成品剪出来，或在编辑器里点「重新转录」从原片再走一遍（会另起一条记录）。"
+        return "上一次只生成了剪辑表，还没有剪出成品。让你的 agent 用 debreath_task 把成品剪出来，或用 retry_task 从原片再走一遍（会另起一条记录）。"
     return "剪后的文件已经不在本机了（可能被删掉了）。在处理说明里点任意一处改判，FluentFlow 会从原片重新导出（你的 agent 用 flip_cut_decision），导出后就能再写笔记；没有处理说明的旧任务，在首页重新提交原片。"
 
 
@@ -447,7 +447,7 @@ def _transcript_for_media(
     payload = _cut_list_payload(task_id, result)
     if payload is None:
         raise VisualNoteError(
-            "找不到这次去气口的剪辑表，没法把字幕时间点对到剪后的文件上。让你的 agent 用 debreath_task 重新剪一次，或在编辑器里点「重新转录」从原片再走一遍（会另起一条记录）。"
+            "找不到这次去气口的剪辑表，没法把字幕时间点对到剪后的文件上。让你的 agent 用 debreath_task 重新剪一次，或用 retry_task 从原片再走一遍（会另起一条记录）。"
         )
     report = cut_timeline.remap_segments(segments, cut_timeline.kept_ranges(payload))
     if not report.segments:

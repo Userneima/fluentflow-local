@@ -5,9 +5,10 @@ one thing that matters to a user: who pays, and therefore what they have to set
 up. The Claude Code login already on this Mac costs nothing to configure and
 spends the subscription's allowance. An Anthropic API key has to be created,
 pasted, and kept, and spends per request. Both send the same transcript and the
-same frames to the same company, and neither is a fallback for a *different*
-provider — a run that cannot reach Claude fails and says so, rather than
-quietly producing a note from DeepSeek or Qwen and calling it the same thing.
+same frames to the same company. When neither reaches Claude, the note is
+written by the text model instead (decisions 5.3, 6.64) and never passed off as
+Claude's: the result records ``note_written_by="text_fallback"`` and the
+reason (``media_job``), and the note's copies say it did not see the picture.
 
 This module picks between them and hands back a small object describing the
 choice, so the page can say which one is about to be spent *before* the button

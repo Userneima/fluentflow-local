@@ -10,9 +10,6 @@ export const SENSITIVE_SETTING_KEYS = ['deepseekApiKey', 'openaiApiKey', 'dashsc
 // left in this browser would still be sent with every note (decision 6.33).
 export const LEGACY_REMOVED_SETTING_KEYS = ['hotwordLibrary', 'hotwordLibraries', 'reviewMode', 'reviewUseAi', 'elevenLabsApiKey', 'skipAiSummary',
     'promptPreset', 'customPromptText', 'defaultPromptOverride', 'hiddenPromptPresets', 'promptOverrides', 'userPromptPresets'];
-// What this build would use if the service could not say; the service's own
-// table (backend model_defaults, GET /models/defaults) is what the page shows.
-export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-flash';
 // Names that were a default at some point, or were retired. A stored one means
 // the user never picked a model (the page used to write the default in) or
 // picked one that no longer exists: either way the setting follows the
@@ -22,8 +19,6 @@ const DEFAULT_OR_RETIRED_MODELS = new Set([
     'deepseek-flash', 'deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
     'gpt-6-luna', 'gpt-5.4-mini', 'qwen-plus', 'kimi-k2.6', 'mimo-v2.6-pro',
 ]);
-export const DEFAULT_OPENAI_MODEL = 'gpt-6-luna';
-export const DEFAULT_QWEN_MODEL = 'qwen-plus';
 export const SUPPORTED_FRONTEND_NOTE_MODES = new Set(['auto', 'direct', 'high_fidelity', 'chapter_coverage']);
 export const NOTE_MODE_OPTIONS = [
     {value: 'auto', labelEn: 'Auto', labelZh: '自动选择'},
@@ -119,11 +114,4 @@ export const DEFAULT_STT_MODEL = 'large-v3';
 // choice to negotiate; the transcription route itself lives in lib/sttPolicy.js.
 export const normalizeSttModel = (_model) => (
     DEFAULT_STT_MODEL
-);
-
-// Whether a new task should ask for speaker separation. A build without the
-// component would only produce a request that is always skipped. An unknown status (not fetched yet, or the service did not answer)
-// leaves the decision to the service.
-export const speakerDiarizationRequested = (settings = {}, diarizationStatus = null) => (
-    !!settings?.speakerDiarization && diarizationStatus?.dependency_installed !== false
 );

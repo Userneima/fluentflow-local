@@ -233,11 +233,6 @@ export const summaryFailureNextStep = (result, lang) => {
 
 export const NOTE_POLL_INTERVAL_MS = 5000;
 
-// Notes Claude wrote from the frames: from the cut file, or from the original
-// recording when the cut was declined. The service also sends a ready answer,
-// `note_from_frames`, which wins when present.
-const VISUAL_NOTE_WRITTEN_FROM = new Set(['debreath_media_note', 'source_media_note']);
-
 // `job` is optional: the editor only holds the result, a poll also has the job
 // row, whose stage is 'note' for exactly this window.
 export const noteIsBeingWritten = (result, job = null) => {
@@ -263,21 +258,6 @@ export const claudeRewriteSettled = (result, {requestedAtMs = 0, sawRunning = fa
     if (sawRunning) return true;
     const startedAt = Date.parse(state.started_at || '');
     return Number.isFinite(startedAt) && startedAt >= Math.floor(requestedAtMs / 1000) * 1000;
-};
-
-// Whether the note on screen was written by Claude from the frames. A text
-// rewrite replaces it with prose only, and its screenshots go with it.
-export const noteCameFromClaude = (result) => {
-    if (!result) return false;
-    if (typeof result.note_from_frames === 'boolean') return result.note_from_frames;
-    // The stamp is set when a Claude note becomes the task's note and cleared
-    // when an older note is put back, so once present it is the answer. Older
-    // results without it fall back to the run record.
-    if (result.summary_written_from !== undefined) {
-        return VISUAL_NOTE_WRITTEN_FROM.has(result.summary_written_from);
-    }
-    const state = result.visual_note || {};
-    return state.status === 'completed' && state.promoted !== false;
 };
 
 // The note's part of a fresh result. The transcript side of the page has its

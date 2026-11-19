@@ -37,8 +37,6 @@ const BUTTON_TONES = {
     destructive: 'bg-[#dc2626] text-white hover:bg-[#b91c1c] dark:bg-[#ef4444] dark:text-white dark:hover:bg-[#dc2626]',
 };
 
-export const BUTTON_TONE_NAMES = Object.keys(BUTTON_TONES);
-export const BUTTON_SIZE_NAMES = Object.keys(BUTTON_SIZES);
 
 const pick = (table, key, fallback) => table[key] || table[fallback];
 
@@ -191,5 +189,4 @@ export const textButton = `text-left transition hover:underline ${focusRing} ${d
 // Cards and blocks. Cards on a page have a border and no shadow; only layers
 // floating above the page (dialogs, menus, toasts) cast one.
 export const surfaceCard = 'rounded-[16px] border border-[#e4e0e0] bg-[#ffffff] dark:border-white/[0.12] dark:bg-white/[0.04]';
-export const insetBlock = 'rounded-[12px] border border-[#ece8e8] bg-[#fbfbfb] dark:border-white/[0.10] dark:bg-white/[0.03]';
 export const floatingLayer = 'rounded-[16px] border border-[#e4e0e0] bg-[#ffffff] shadow-[0_24px_60px_-30px_rgba(17,17,17,0.45)] dark:border-white/[0.12] dark:bg-[#1e2024]';

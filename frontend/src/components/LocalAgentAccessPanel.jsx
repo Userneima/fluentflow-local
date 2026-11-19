@@ -1,10 +1,9 @@
-import {API_BASE, apiFetch, setAccessToken} from '../app/shared.jsx';
+import {ACCESS_TOKEN_KEY, API_BASE, apiFetch, setAccessToken} from '../app/shared.jsx';
 import {useEffect, useMemo, useState} from 'react';
 import {ClipboardCopy, Rocket, Terminal} from 'lucide-react';
 import {useApp} from '../app/AppContext.jsx';
 import {button} from '../lib/ui.js';
 
-const ACCESS_TOKEN_KEY = 'fluentflow_access_token';
 
 const PATH_PLACEHOLDER = '<path-to-fluentflow>';
 

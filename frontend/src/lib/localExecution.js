@@ -36,10 +36,3 @@ export const localExecutionHeaders = (options={}) => (
         ? {[LOCAL_EXECUTION_HEADER]: LOCAL_EXECUTION_TARGET}
         : {}
 );
-
-export const isLocalHistoryResult = (result={}) => (
-    !!result?.imported_from_local_history ||
-    result?.source === 'imported_local_history' ||
-    result?.source === 'browser_local_history' ||
-    String(result?.task_id || '').startsWith('imported_')
-);

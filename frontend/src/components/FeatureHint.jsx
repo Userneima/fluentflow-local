@@ -170,4 +170,3 @@ export const FeatureHintsLine = ({lang}) => {
     );
 };
 
-export default FeatureHint;

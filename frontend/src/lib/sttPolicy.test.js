@@ -4,11 +4,7 @@ import {
     effectiveSttProvider,
     normalizeRuntimeConfig,
     normalizeSttProvider,
-    sttProviderLabel,
-    sttRouteOptions,
 } from './sttPolicy.js';
-
-const t = (key) => key;
 
 describe('local transcription policy', () => {
     it('knows exactly one transcription route', () => {
@@ -34,15 +30,5 @@ describe('local transcription policy', () => {
             expect(normalizeSttProvider(legacy)).toBe('local');
             expect(effectiveSttProvider({sttProvider: legacy}, defaultRuntimeConfig())).toBe('local');
         }
-    });
-
-    it('offers a single local route option and label', () => {
-        const options = sttRouteOptions({lang: 'zh', t, runtimeConfig: defaultRuntimeConfig()});
-        expect(options).toHaveLength(1);
-        expect(options[0].value).toBe('local');
-        expect(options[0].disabled).toBe(false);
-        expect(sttProviderLabel('local', 'zh')).toBe('本机转录');
-        // Unknown providers get no label; pages show their own fallback copy.
-        expect(sttProviderLabel('cloud', 'zh')).toBe(null);
     });
 });

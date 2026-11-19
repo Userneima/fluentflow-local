@@ -1,6 +1,5 @@
 import {describe, expect, it} from 'vitest';
 import {displayTitleForUser, fileNameStem, fmtDuration, jobProgressLabel} from './format.js';
-import {_baseName} from './download.js';
 import {noteTileValue} from '../routes/agent-tasks.jsx';
 
 describe('titles named "number.title"', () => {
@@ -12,11 +11,6 @@ describe('titles named "number.title"', () => {
     it('still removes a real extension', () => {
         expect(fileNameStem('5.投资人视角下的AI浪潮.m4a')).toBe('5.投资人视角下的AI浪潮');
         expect(fileNameStem('lecture.MP4')).toBe('lecture');
-    });
-
-    it('names downloads after the whole title', () => {
-        expect(_baseName('5.投资人视角下的AI浪潮')).toBe('5.投资人视角下的AI浪潮');
-        expect(_baseName('')).toBe('FluentFlow');
     });
 });
 

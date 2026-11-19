@@ -237,4 +237,3 @@ export const NoteKeyOnboarding = ({
     );
 };
 
-export default NoteKeyOnboarding;

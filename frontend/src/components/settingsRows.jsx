@@ -264,13 +264,6 @@ export const ProcessingPresetRow = ({state}) => {
     );
 };
 
-// How much of the processor a cut may take. Kept by the local service, which is
-// what runs ffmpeg (backend/core/device_profile.py). At full use the one thing
-// the user would otherwise blame on the product is said here: a video playing
-// beside the cut can stutter or pop because the machine is busy, not because a
-// file is broken.
-export const CPU_USAGE_OPTIONS = ['light', 'balanced', 'full'];
-
 export const CpuUsageRow = ({state}) => {
     const {lang} = useI18n();
     const {cpuUsage, updateCpuUsage, videoPrefError = ''} = state;

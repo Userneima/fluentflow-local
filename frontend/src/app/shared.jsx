@@ -6,92 +6,16 @@ import {
     sanitizeSettings,
 } from '../lib/settingsModel.js';
 import { _dl } from '../lib/download.js';
-import { currentApiBase } from '../lib/apiBase.js';
+import { API_BASE, getAccessToken, getClientId, apiFetch, apiErrorMessage } from './apiConfig.js';
 
-/** API 根路径。判据见 lib/apiBase.js：默认同源，只有 Vite 开发服务器才跨端口。 */
-export const API_BASE = currentApiBase();
+export { API_BASE, ACCESS_TOKEN_KEY, CLIENT_ID_KEY, LOCAL_SINGLE_USER_CLIENT_ID, getAccessToken, rememberAccessTokenCookie, setAccessToken, createClientId, rememberClientIdCookie, getClientId, apiFetch, apiErrorMessage } from './apiConfig.js';
+export { shouldUseLocalSingleUserClientId } from '../lib/localExecution.js';
 
-export const ACCESS_TOKEN_KEY = 'fluentflow_access_token';
-export const CLIENT_ID_KEY = 'fluentflow_client_id';
-export const LOCAL_SINGLE_USER_CLIENT_ID = 'local-single-user';
-export const getAccessToken = () => (localStorage.getItem(ACCESS_TOKEN_KEY) || '').trim();
-// A cookie copy of the token, for the screenshots in notes: <img> tags cannot
-// send the token header, and from another device in LAN mode every read needs
-// it. The service accepts the cookie for reads only.
-export const rememberAccessTokenCookie = (token) => {
-    try {
-        const value = String(token || '').trim();
-        document.cookie = value
-            ? `${ACCESS_TOKEN_KEY}=${encodeURIComponent(value)}; path=/; SameSite=Strict; max-age=31536000`
-            : `${ACCESS_TOKEN_KEY}=; path=/; SameSite=Strict; max-age=0`;
-    } catch (_) { /* no cookies in this context */ }
-};
-export const setAccessToken = (token) => {
-    const value = String(token || '').trim();
-    if (value) localStorage.setItem(ACCESS_TOKEN_KEY, value);
-    else localStorage.removeItem(ACCESS_TOKEN_KEY);
-    rememberAccessTokenCookie(value);
-};
-export const createClientId = () => (
-    window.crypto?.randomUUID?.()
-    || `client_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
-);
-export const shouldUseLocalSingleUserClientId = () => {
-    const { hostname } = window.location;
-    return hostname === '127.0.0.1' || hostname === 'localhost';
-};
-// Also written as a cookie, not only to localStorage.
-//
-// The browser loads a note's inline frames itself, as <img>, and an <img> cannot
-// carry the client-id header the fetch helper adds — so those requests arrived
-// unidentified and the server answered 404 for a task it holds. The backend has
-// always accepted this cookie as the second place to look for the same value;
-// nothing ever set it. Now that the note's pictures *are* the note, an image that
-// silently fails to load is a broken product feature, not a cosmetic gap.
-export const rememberClientIdCookie = (value) => {
-    const id = String(value || '').trim();
-    if (!id) return;
-    try {
-        document.cookie = `${CLIENT_ID_KEY}=${encodeURIComponent(id)}; path=/; max-age=31536000; samesite=lax`;
-    } catch (_) {
-        // Cookies unavailable: fetches still work through the header, and inline
-        // images stay broken. Not worth failing anything over.
-    }
-};
-export const getClientId = () => {
-    if (shouldUseLocalSingleUserClientId()) {
-        localStorage.setItem(CLIENT_ID_KEY, LOCAL_SINGLE_USER_CLIENT_ID);
-        rememberClientIdCookie(LOCAL_SINGLE_USER_CLIENT_ID);
-        return LOCAL_SINGLE_USER_CLIENT_ID;
-    }
-    const existing = (localStorage.getItem(CLIENT_ID_KEY) || '').trim();
-    if (existing) {
-        rememberClientIdCookie(existing);
-        return existing;
-    }
-    const next = createClientId();
-    localStorage.setItem(CLIENT_ID_KEY, next);
-    rememberClientIdCookie(next);
-    return next;
-};
-let tokenCookieSynced = false;
-export const apiFetch = (input, init={}) => {
-    const token = getAccessToken();
-    if (!tokenCookieSynced) { tokenCookieSynced = true; rememberAccessTokenCookie(token); }
-    const headers = new Headers(init.headers || {});
-    if (!headers.has('X-FluentFlow-Client-Id')) {
-        headers.set('X-FluentFlow-Client-Id', getClientId());
-    }
-    if (token && !headers.has('X-FluentFlow-Access-Token')) {
-        headers.set('X-FluentFlow-Access-Token', token);
-    }
-    return fetch(input, {...init, credentials: init.credentials || 'include', headers});
-};
 // A task's media saved by the browser straight from the service's address
 // (``kind`` is an artifact kind, or 'source' for the recording). One byte is
 // asked for first so a missing file is reported here. Reading it into a Blob
 // first held a recording of several gigabytes in the tab before saving.
-export const downloadJobMedia = async (taskId, kind, filename) => {
+const downloadJobMedia = async (taskId, kind, filename) => {
     const id = encodeURIComponent(taskId);
     const url = kind === 'source'
         ? `${API_BASE}/jobs/${id}/source`
@@ -106,25 +30,12 @@ export const downloadJobMedia = async (taskId, kind, filename) => {
     link.click();
     link.remove();
 };
-export const apiErrorMessage = (payload, fallback='Request failed') => {
-    const detail = payload?.detail;
-    if (typeof detail === 'string') return detail;
-    if (Array.isArray(detail)) return detail.map((item) => item?.msg || item?.message || String(item)).join('; ');
-    if (detail && typeof detail === 'object') {
-        const message = detail.message || detail.detail || fallback;
-        return String(message);
-    }
-    return fallback;
-};
 
-export { fileNameStem, stripGeneratedFilenamePrefix, displayTitleForUser, compactDisplayFilename, videoLinkDisplayTitle } from '../lib/format.js';
+export { fileNameStem, stripGeneratedFilenamePrefix, displayTitleForUser } from '../lib/format.js';
 export {
     normalizeSourceMode,
     SENSITIVE_SETTING_KEYS,
     LEGACY_REMOVED_SETTING_KEYS,
-    DEFAULT_DEEPSEEK_MODEL,
-    DEFAULT_OPENAI_MODEL,
-    DEFAULT_QWEN_MODEL,
     SUPPORTED_FRONTEND_NOTE_MODES,
     NOTE_MODE_OPTIONS,
     LARK_EXPORT_ROUTE_OPENAPI,
@@ -146,8 +57,6 @@ export {
     normalizeRuntimeConfig,
     effectiveSttProvider,
     submittedSttProvider,
-    sttRouteOptions,
-    sttProviderLabel,
 } from '../lib/sttPolicy.js';
 export const createTaskId = () => (
     window.crypto?.randomUUID?.() ||
@@ -173,11 +82,11 @@ export const msgs = {
     'confirm.removeKeyTitle':'Remove the saved {label}?','confirm.removeKeyDesc':'You will need to enter it again to use it.','confirm.removeKeyAction':'Remove',
     'nav.subtitle':'Local video notes','nav.processing':'Processing records','nav.editor':'Editor','nav.settings':'Settings',
     'status.ready':'System ready','status.idle':'Awaiting task','status.queued':'Queued','status.resolving':'Resolving link…','status.downloading':'Downloading video…','status.saving':'Saving video…','status.upload':'Uploading…','status.prepare_media':'Removing breath gaps (takes minutes)…','status.render_video':'Finishing the cut video…','status.audio':'Extracting audio…','status.stt':'Transcribing…','status.subtitle_correction':'Checking names against the on-screen subtitles…','status.glossary_correction':'Correcting misheard names and terms…','status.translation':'Translating subtitles…','status.transcript_ready':'Transcript ready','status.summary':'Writing the note…','status.export':'Exporting to Lark…','status.done':'Done','status.failed':'Failed',
-    'dash.minUnit':'min','dash.docUnit':'docs','dash.linkEmpty':'Paste a share text or video link first.','dash.viewTasks':'View records','dash.done':'Processing complete','dash.viewEditor':'View in Editor','dash.recent':'Recent Activity','dash.viewAll':'View All','dash.fileError':'Unsupported format. Please select a video or audio file.','dash.subtitleFileError':'Unsupported transcript file. Please select SRT, VTT, TXT, or MD.','dash.noActivity':'No activity yet. Completed jobs will appear here.','dash.justNow':'just now','dash.mAgo':'m ago','dash.hAgo':'h ago','dash.dAgo':'d ago',
-    'dash.statusCompleted':'Completed','dash.statusFailed':'Failed','dash.statusProcessing':'Processing','dash.cancel':'Cancel','dash.fileSize':'File Size','dash.waitingSegment':'Waiting for first transcript segment','dash.progressUnknown':'Working','dash.sttStarting':'Starting transcription engine','dash.sttLoadingModel':'Loading local model','dash.sttChunking':'Preparing progress tracking','dash.sttPreparingAudio':'Preparing audio features','dash.sttWaitingFirst':'Waiting for the first transcript segment','dash.sttChunks':'Transcribing audio','dash.sttSegments':'Receiving transcript segments',
-    'edit.title':'Editor','edit.noResult':'No result selected','edit.noResultDesc':'Choose a completed record, then review and edit its transcript and note here.','edit.chooseRecord':'Choose record','edit.summaryPending':'The note is being written; it appears here when done.','edit.summarySkipped':'No note was written this time, as requested. Click Write the note when you want one.','edit.summaryNoKey':'No model key is filled in yet, so this time there is a transcript and no note. Add a key in Settings and click Write the note, or hand the line below to your agent.','edit.summaryFailed':'The transcript is saved, but the note was not written. Click Write the note to try again.','edit.regenerate':'Write the note','edit.regenerating':'Writing…','edit.regenerateConfirmTitle':'Write the note','edit.regenerateConfirmDesc':'FluentFlow writes the note from the current transcript. The audio is not transcribed again.','edit.regenerateConfirmAction':'Start writing','edit.retranscribe':'Retranscribe','edit.retranscribing':'Retranscribing…','edit.retranscribeDone':'Retranscription complete','edit.retranscribeConfirmTitle':'Retranscribe this audio?','edit.retranscribeConfirmDesc':'FluentFlow transcribes the recording again as a new result in the records; this one stays as it is.','edit.retranscribeUnavailableTitle':'Source file is not available','edit.retranscribeUnavailableDesc':'Browsers cannot reopen a local file from history without your permission. Choose the original audio/video file to retranscribe it with current settings.','edit.retranscribeConfirmAction':'Start retranscription','edit.retranscribeChooseAction':'Choose original file','edit.cancel':'Cancel','edit.sttElapsed':'Transcription time','edit.regenDone':'The note is written','edit.transcriptSaving':'Saving…','edit.transcriptSaveFailed':'Save failed','edit.editRecords':'Edit records','edit.editRecordsTitle':'Transcript edit records','edit.editRecordsDesc':'Each record keeps the changed sentence and nearby context. These records are saved locally with the edited transcript.','edit.editRecordsEmpty':'No changed segment has been recorded yet.','edit.before':'Before','edit.after':'After','edit.previousSentence':'Previous sentence','edit.nextSentence':'Next sentence','edit.followPlayback':'Transcript follows','edit.backToPlayback':'Back to playback','edit.audioUnavailable':'Choose the original audio/video to listen while editing.','edit.chooseAudio':'Choose source audio','edit.sourceLoading':'Loading source audio…',
+    'dash.linkEmpty':'Paste a share text or video link first.','dash.done':'Processing complete','dash.viewEditor':'View in Editor','dash.recent':'Recent Activity','dash.viewAll':'View All','dash.fileError':'Unsupported format. Please select a video or audio file.','dash.subtitleFileError':'Unsupported transcript file. Please select SRT, VTT, TXT, or MD.','dash.noActivity':'No activity yet. Completed jobs will appear here.','dash.justNow':'just now','dash.mAgo':'m ago','dash.hAgo':'h ago','dash.dAgo':'d ago',
+    'dash.cancel':'Cancel','dash.fileSize':'File Size','dash.waitingSegment':'Waiting for first transcript segment','dash.progressUnknown':'Working','dash.sttStarting':'Starting transcription engine','dash.sttLoadingModel':'Loading local model','dash.sttChunking':'Preparing progress tracking','dash.sttPreparingAudio':'Preparing audio features','dash.sttWaitingFirst':'Waiting for the first transcript segment','dash.sttChunks':'Transcribing audio','dash.sttSegments':'Receiving transcript segments',
+    'edit.title':'Editor','edit.noResult':'No result selected','edit.noResultDesc':'Choose a completed record, then review and edit its transcript and note here.','edit.chooseRecord':'Choose record','edit.summarySkipped':'No note was written this time, as requested. Click Write the note when you want one.','edit.summaryNoKey':'No model key is filled in yet, so this time there is a transcript and no note. Add a key in Settings and click Write the note, or hand the line below to your agent.','edit.summaryFailed':'The transcript is saved, but the note was not written. Click Write the note to try again.','edit.regenerateConfirmTitle':'Write the note','edit.regenerateConfirmDesc':'FluentFlow writes the note from the current transcript. The audio is not transcribed again.','edit.regenerateConfirmAction':'Start writing','edit.retranscribeDone':'Retranscription complete','edit.retranscribeConfirmTitle':'Retranscribe this audio?','edit.retranscribeConfirmDesc':'FluentFlow transcribes the recording again as a new result in the records; this one stays as it is.','edit.retranscribeUnavailableTitle':'Source file is not available','edit.retranscribeUnavailableDesc':'Browsers cannot reopen a local file from history without your permission. Choose the original audio/video file to retranscribe it with current settings.','edit.retranscribeConfirmAction':'Start retranscription','edit.retranscribeChooseAction':'Choose original file','edit.cancel':'Cancel','edit.regenDone':'The note is written','edit.transcriptSaving':'Saving…','edit.transcriptSaveFailed':'Save failed','edit.editRecords':'Edit records','edit.editRecordsTitle':'Transcript edit records','edit.editRecordsDesc':'Each record keeps the changed sentence and nearby context. These records are saved locally with the edited transcript.','edit.editRecordsEmpty':'No changed segment has been recorded yet.','edit.before':'Before','edit.after':'After','edit.previousSentence':'Previous sentence','edit.nextSentence':'Next sentence','edit.followPlayback':'Transcript follows','edit.backToPlayback':'Back to playback','edit.audioUnavailable':'Choose the original audio/video to listen while editing.','edit.chooseAudio':'Choose source audio','edit.sourceLoading':'Loading source audio…',
     'noteProgress.frames':'Taking the pictures out of the recording','noteProgress.reading':'Reading the transcript for its points: {done} of {total} stretches','noteProgress.planning':'Points found; choosing the chapters','noteProgress.chapters':'Writing the chapters: {done} of {total} done','noteProgress.draft':'Writing the note: {chars} so far','noteProgress.draftWaiting':'Writing the note; waiting for the model\'s first words','noteProgress.claudeOne':'Claude is writing the note from the transcript and the pictures','noteProgress.part':'Writing part {index} of {total}','noteProgress.partsDone':'{done} of {total} parts written','noteProgress.unifying':'All chapters written; making the whole note read as one','noteProgress.checking':'Checking the note against the transcript for anything left out','noteProgress.checkingPart':'Checking part {index} of {total} for anything left out','noteProgress.revising':'Writing what the check found missing back into the note','noteProgress.finishing':'Written; saving the note','noteProgress.elapsed':'{time} so far','noteProgress.remaining':'about {time} to go at this pace','noteProgress.draftTitle':'Written so far','noteProgress.draftHint':'A draft: the finished note replaces it.','noteProgress.shortFrames':'pictures','noteProgress.shortReading':'points {done}/{total}','noteProgress.shortPlanning':'chapters','noteProgress.shortChapters':'chapters {done}/{total}','noteProgress.shortPart':'part {index}/{total}','noteProgress.shortDraft':'{chars}','noteProgress.shortUnifying':'one voice','noteProgress.shortChecking':'checking','noteProgress.shortRevising':'filling gaps','noteProgress.shortFinishing':'saving',
-    'set.title':'Settings','set.autoExport':'Auto-export to Lark after processing','set.larkExportRoute':'Lark export route','set.larkRouteOpenapi':'Feishu app export','set.larkRouteOpenapiHint':'Exports with a Feishu app you created on the open platform. Enter its App ID and App Secret under Accounts and keys.','set.larkRouteLocalCli':'Local identity export','set.larkRouteLocalCliHint':'Uses the Feishu command-line tool lark-cli already signed in on this computer, and writes to My Library as you. No app needed.','set.larkRouteAuto':'Automatic','set.larkRouteAutoHint':'If lark-cli is installed and signed in on this computer, writes to My Library as you; otherwise uses your Feishu app.','set.larkFolder':'Feishu folder (app export)','set.larkFolderHint':'Paste a Feishu folder link. Without one, app exports land in the app\'s own space, which you may not be able to open. Share the folder with your app (can edit) first.','set.larkFolderPh':'https://….feishu.cn/drive/folder/…','set.larkHistory':'Export History','set.providerLocal':'Local transcription','set.provider':'Provider','set.aiModel':'AI Model','set.openaiKey':'OpenAI API Key','set.deepseekKey':'DeepSeek API Key','set.dashscopeKey':'Qwen (Alibaba Cloud Bailian) API Key','set.editCoursePrompt':'Edit “General Study Notes” system prompt','set.editBuiltinTemplate':'Edit this template','set.deleteBuiltinPrompt':'Delete this template category','set.deleteBuiltinPromptConfirm':'Delete this template category (remove it from the UI)?','set.presetNamePh':'Preset name','set.deletePreset':'Delete','set.deletePresetConfirm':'Delete this saved preset?','set.presetSaved':'Preset saved',
+    'set.title':'Settings','set.autoExport':'Auto-export to Lark after processing','set.larkExportRoute':'Lark export route','set.larkRouteOpenapi':'Feishu app export','set.larkRouteOpenapiHint':'Exports with a Feishu app you created on the open platform. Enter its App ID and App Secret under Accounts and keys.','set.larkRouteLocalCli':'Local identity export','set.larkRouteLocalCliHint':'Uses the Feishu command-line tool lark-cli already signed in on this computer, and writes to My Library as you. No app needed.','set.larkRouteAuto':'Automatic','set.larkRouteAutoHint':'If lark-cli is installed and signed in on this computer, writes to My Library as you; otherwise uses your Feishu app.','set.larkFolder':'Feishu folder (app export)','set.larkFolderHint':'Paste a Feishu folder link. Without one, app exports land in the app\'s own space, which you may not be able to open. Share the folder with your app (can edit) first.','set.larkFolderPh':'https://….feishu.cn/drive/folder/…','set.provider':'Provider','set.aiModel':'AI Model','set.dashscopeKey':'Qwen (Alibaba Cloud Bailian) API Key',
   },
   zh:{
     'confirm.cancel':'取消','confirm.deleteRecordTitle':'删除这条处理记录？','confirm.deleteRecordDesc':'会删掉这条记录，和应用里替它存的东西：转录稿、笔记、上传或下载来的视频、留在应用里的剪后文件。删了找不回来。\n你电脑上的原片、点「打开文件夹」看到的文件、已经发到飞书的文档，都不会动。','confirm.deleteRecordAction':'删除记录',
@@ -187,11 +96,11 @@ export const msgs = {
     'confirm.removeKeyTitle':'移除已保存的{label}？','confirm.removeKeyDesc':'移除后要重新填才能用。','confirm.removeKeyAction':'移除',
     'nav.subtitle':'视频转笔记，在本机处理','nav.processing':'处理记录','nav.editor':'编辑器','nav.settings':'设置',
     'status.ready':'系统就绪','status.idle':'等待任务','status.queued':'排队中','status.resolving':'解析链接中…','status.downloading':'下载视频中…','status.saving':'保存视频中…','status.upload':'上传中…','status.prepare_media':'正在剪掉气口，要几分钟…','status.render_video':'转录好了，等剪后视频导出完…','status.audio':'音频提取中…','status.stt':'转录中…','status.subtitle_correction':'正在对照画面上的字幕核对人名和术语…','status.glossary_correction':'正在按词表和上下文改正听错的名字和术语…','status.translation':'正在翻译字幕…','status.transcript_ready':'转录已完成','status.summary':'正在写笔记…','status.export':'导出到飞书…','status.done':'完成','status.failed':'失败',
-    'dash.minUnit':'分钟','dash.docUnit':'份','dash.linkEmpty':'请先粘贴分享文本或视频链接。','dash.viewTasks':'查看记录','dash.done':'处理完成','dash.viewEditor':'在编辑器中查看','dash.recent':'最近活动','dash.viewAll':'查看全部','dash.fileError':'不支持的格式，请选择视频或音频文件。','dash.subtitleFileError':'不支持的字幕/转录文件，请选择 SRT、VTT、TXT 或 MD。','dash.noActivity':'暂无活动记录，完成的任务会显示在这里。','dash.justNow':'刚刚','dash.mAgo':'分钟前','dash.hAgo':'小时前','dash.dAgo':'天前',
-    'dash.statusCompleted':'已完成','dash.statusFailed':'失败','dash.statusProcessing':'处理中','dash.cancel':'取消','dash.fileSize':'文件大小','dash.waitingSegment':'等待第一段转录结果','dash.progressUnknown':'处理中','dash.sttStarting':'正在启动转录引擎','dash.sttLoadingModel':'正在加载本机的转录模型','dash.sttChunking':'正在准备进度追踪','dash.sttPreparingAudio':'正在准备音频特征','dash.sttWaitingFirst':'等待第一段转录结果','dash.sttChunks':'正在转录音频','dash.sttSegments':'正在接收转录片段',
-    'edit.title':'编辑器','edit.noResult':'未选择结果','edit.noResultDesc':'从处理记录选择一条已完成结果后，在这里复查和编辑转录与笔记。','edit.chooseRecord':'选择处理记录','edit.summaryPending':'正在写笔记，写好会自动出现。','edit.summarySkipped':'这次按要求没写笔记，需要时点「写笔记」。','edit.summaryNoKey':'还没有填写模型 Key，这次只出了转录稿。在「设置」里填好 Key 后点「写笔记」，或者把下面这句交给你的 agent 来写。','edit.summaryFailed':'转录已保存，但笔记没写成。可以点「写笔记」再试一次。','edit.regenerate':'写笔记','edit.regenerating':'写笔记中…','edit.regenerateConfirmTitle':'写笔记','edit.regenerateConfirmDesc':'FluentFlow 会按当前转录写笔记；不会重新转录音频。','edit.regenerateConfirmAction':'开始写','edit.retranscribe':'重新转录','edit.retranscribing':'重新转录中…','edit.retranscribeDone':'重新转录完成','edit.retranscribeConfirmTitle':'重新转录当前音频？','edit.retranscribeConfirmDesc':'FluentFlow 会把这段录像重新转录一遍，作为一条新结果出现在处理记录里；这一条保留不动。','edit.retranscribeUnavailableTitle':'当前没有可直接重转的原文件','edit.retranscribeUnavailableDesc':'浏览器不会在历史记录里长期保留本机音视频文件的权限。请选择原始音视频文件，再用当前设置重新转录。','edit.retranscribeConfirmAction':'确认重新转录','edit.retranscribeChooseAction':'选择原始文件','edit.cancel':'取消','edit.sttElapsed':'转录耗时','edit.regenDone':'笔记写好了','edit.transcriptSaving':'保存中…','edit.transcriptSaveFailed':'保存失败','edit.editRecords':'修改记录','edit.editRecordsTitle':'转录稿修改记录','edit.editRecordsDesc':'每条记录会保留修改句子和相邻上下文，并随编辑稿一起保存在这台电脑上。','edit.editRecordsEmpty':'还没有记录到分段修改。','edit.before':'修改前','edit.after':'修改后','edit.previousSentence':'上一句','edit.nextSentence':'下一句','edit.followPlayback':'转录稿跟随','edit.backToPlayback':'回到播放处','edit.audioUnavailable':'选择原始音视频后，可边听边校对。','edit.chooseAudio':'选择原音频','edit.sourceLoading':'正在读取原音频…',
+    'dash.linkEmpty':'请先粘贴分享文本或视频链接。','dash.done':'处理完成','dash.viewEditor':'在编辑器中查看','dash.recent':'最近活动','dash.viewAll':'查看全部','dash.fileError':'不支持的格式，请选择视频或音频文件。','dash.subtitleFileError':'不支持的字幕/转录文件，请选择 SRT、VTT、TXT 或 MD。','dash.noActivity':'暂无活动记录，完成的任务会显示在这里。','dash.justNow':'刚刚','dash.mAgo':'分钟前','dash.hAgo':'小时前','dash.dAgo':'天前',
+    'dash.cancel':'取消','dash.fileSize':'文件大小','dash.waitingSegment':'等待第一段转录结果','dash.progressUnknown':'处理中','dash.sttStarting':'正在启动转录引擎','dash.sttLoadingModel':'正在加载本机的转录模型','dash.sttChunking':'正在准备进度追踪','dash.sttPreparingAudio':'正在准备音频特征','dash.sttWaitingFirst':'等待第一段转录结果','dash.sttChunks':'正在转录音频','dash.sttSegments':'正在接收转录片段',
+    'edit.title':'编辑器','edit.noResult':'未选择结果','edit.noResultDesc':'从处理记录选择一条已完成结果后，在这里复查和编辑转录与笔记。','edit.chooseRecord':'选择处理记录','edit.summarySkipped':'这次按要求没写笔记，需要时点「写笔记」。','edit.summaryNoKey':'还没有填写模型 Key，这次只出了转录稿。在「设置」里填好 Key 后点「写笔记」，或者把下面这句交给你的 agent 来写。','edit.summaryFailed':'转录已保存，但笔记没写成。可以点「写笔记」再试一次。','edit.regenerateConfirmTitle':'写笔记','edit.regenerateConfirmDesc':'FluentFlow 会按当前转录写笔记；不会重新转录音频。','edit.regenerateConfirmAction':'开始写','edit.retranscribeDone':'重新转录完成','edit.retranscribeConfirmTitle':'重新转录当前音频？','edit.retranscribeConfirmDesc':'FluentFlow 会把这段录像重新转录一遍，作为一条新结果出现在处理记录里；这一条保留不动。','edit.retranscribeUnavailableTitle':'当前没有可直接重转的原文件','edit.retranscribeUnavailableDesc':'浏览器不会在历史记录里长期保留本机音视频文件的权限。请选择原始音视频文件，再用当前设置重新转录。','edit.retranscribeConfirmAction':'确认重新转录','edit.retranscribeChooseAction':'选择原始文件','edit.cancel':'取消','edit.regenDone':'笔记写好了','edit.transcriptSaving':'保存中…','edit.transcriptSaveFailed':'保存失败','edit.editRecords':'修改记录','edit.editRecordsTitle':'转录稿修改记录','edit.editRecordsDesc':'每条记录会保留修改句子和相邻上下文，并随编辑稿一起保存在这台电脑上。','edit.editRecordsEmpty':'还没有记录到分段修改。','edit.before':'修改前','edit.after':'修改后','edit.previousSentence':'上一句','edit.nextSentence':'下一句','edit.followPlayback':'转录稿跟随','edit.backToPlayback':'回到播放处','edit.audioUnavailable':'选择原始音视频后，可边听边校对。','edit.chooseAudio':'选择原音频','edit.sourceLoading':'正在读取原音频…',
     'noteProgress.frames':'正在从录像里取画面','noteProgress.reading':'正在读转录稿、提取要点：已读 {done}/{total} 段','noteProgress.planning':'要点提好了，正在定章节','noteProgress.chapters':'正在写各章：已写好 {done}/{total} 章','noteProgress.draft':'正在写笔记：已写 {chars}','noteProgress.draftWaiting':'正在写笔记，等模型返回第一段文字','noteProgress.claudeOne':'Claude 正在结合画面和转录稿写笔记','noteProgress.part':'正在写第 {index} 部分，共 {total} 部分','noteProgress.partsDone':'已写好 {done}/{total} 部分','noteProgress.unifying':'各章写好了，正在统一全文的文风和编号','noteProgress.checking':'正在对照转录稿查有没有漏掉的内容','noteProgress.checkingPart':'正在查第 {index}/{total} 部分有没有漏掉的内容','noteProgress.revising':'正在把漏掉的内容补进笔记','noteProgress.finishing':'写好了，正在保存','noteProgress.elapsed':'已用 {time}','noteProgress.remaining':'按目前的速度大约还要 {time}','noteProgress.draftTitle':'已写好的部分','noteProgress.draftHint':'这是初稿，写完会换成定稿。','noteProgress.shortFrames':'取画面','noteProgress.shortReading':'提要点 {done}/{total}','noteProgress.shortPlanning':'定章节','noteProgress.shortChapters':'写好 {done}/{total} 章','noteProgress.shortPart':'第 {index}/{total} 部分','noteProgress.shortDraft':'已写 {chars}','noteProgress.shortUnifying':'统一文风','noteProgress.shortChecking':'查漏','noteProgress.shortRevising':'补漏','noteProgress.shortFinishing':'保存中',
-    'set.title':'设置','set.autoExport':'处理完成后自动导出到飞书','set.larkExportRoute':'飞书导出路线','set.larkRouteOpenapi':'飞书应用导出','set.larkRouteOpenapiHint':'用你自己在飞书开放平台建的应用导出，App ID 和 App Secret 填在「账号和 Key」里。','set.larkRouteLocalCli':'本机身份导出','set.larkRouteLocalCliHint':'用这台电脑上已登录的飞书命令行工具 lark-cli，以你本人的身份写进「我的文档库」，不用建应用。','set.larkRouteAuto':'自动选择','set.larkRouteAutoHint':'这台电脑装了并登录了 lark-cli，就以你本人的身份写进「我的文档库」；否则用你的飞书应用导出。','set.larkFolder':'飞书文件夹（应用导出用）','set.larkFolderHint':'粘贴一个飞书云空间文件夹的链接。不填的话，用应用导出的文档会建在应用自己的空间里，你可能打不开。先把这个文件夹共享给你的应用（可编辑）。','set.larkFolderPh':'https://….feishu.cn/drive/folder/…','set.larkHistory':'导出记录','set.providerLocal':'本机转录','set.provider':'服务商','set.aiModel':'AI 模型','set.openaiKey':'OpenAI API Key','set.deepseekKey':'DeepSeek API Key','set.dashscopeKey':'通义千问（阿里云百炼）API Key','set.editCoursePrompt':'编辑「通用学习笔记」系统提示词','set.editBuiltinTemplate':'编辑该模板内容','set.deleteBuiltinPrompt':'删除该模板类目','set.deleteBuiltinPromptConfirm':'确定删除该模板类目（从界面移除）？','set.presetNamePh':'预设名称','set.deletePreset':'删除','set.deletePresetConfirm':'确定删除该保存的预设？','set.presetSaved':'已保存预设',
+    'set.title':'设置','set.autoExport':'处理完成后自动导出到飞书','set.larkExportRoute':'飞书导出路线','set.larkRouteOpenapi':'飞书应用导出','set.larkRouteOpenapiHint':'用你自己在飞书开放平台建的应用导出，App ID 和 App Secret 填在「账号和 Key」里。','set.larkRouteLocalCli':'本机身份导出','set.larkRouteLocalCliHint':'用这台电脑上已登录的飞书命令行工具 lark-cli，以你本人的身份写进「我的文档库」，不用建应用。','set.larkRouteAuto':'自动选择','set.larkRouteAutoHint':'这台电脑装了并登录了 lark-cli，就以你本人的身份写进「我的文档库」；否则用你的飞书应用导出。','set.larkFolder':'飞书文件夹（应用导出用）','set.larkFolderHint':'粘贴一个飞书云空间文件夹的链接。不填的话，用应用导出的文档会建在应用自己的空间里，你可能打不开。先把这个文件夹共享给你的应用（可编辑）。','set.larkFolderPh':'https://….feishu.cn/drive/folder/…','set.provider':'服务商','set.aiModel':'AI 模型','set.dashscopeKey':'通义千问（阿里云百炼）API Key',
   },
 };
 export const I18nCtx = createContext();
@@ -203,15 +112,14 @@ export const I18nProvider = ({children}) => {
 };
 export const useI18n = () => useContext(I18nCtx);
 
-export { accountJobsCacheKey, readCachedAccountJobs, writeCachedAccountJobs, cacheJobRecord, mergeCachedJobs, sortJobsForHistoryView, hasTranscriptResult, historyStatusFromJob, jobVisibleInHistory, resultDisplayTitle, jobDisplayTitle, resultToHistoryEntry, jobToHistoryEntry, jobToCurrentJob, historyEntryToResult, isPinnedJob } from '../lib/jobMappers.js';
+export { accountJobsCacheKey, readCachedAccountJobs, writeCachedAccountJobs, mergeCachedJobs, sortJobsForHistoryView, hasTranscriptResult, historyStatusFromJob, jobVisibleInHistory, resultDisplayTitle, jobDisplayTitle, resultToHistoryEntry, jobToHistoryEntry, jobToCurrentJob, historyEntryToResult, isPinnedJob } from '../lib/jobMappers.js';
 
-export { fmtTime, autoSizeTextarea, composeTranscriptText, normalizeTranscriptSegments, normalizeDisplaySegments, pickTranscriptSegments, pickTranscriptBaselineSegments, pickDisplayTranscriptSegments, buildTranscriptEditRecords, fmtElapsed, fmtFileSize, totalFileSizeMb, fmtBytes, fmtDateTime, friendlyTaskError, diagnoseTaskError, taskErrorContextForJob, providerDisplayName, fmtSttRelative, sttStatusLabel, sttProgressFraction, isSttProgressUnmeasured, isDownloadProgressUnmeasured, videoSourceProgressOf, jobProgressLabel, timeAgo, noteGenerationDiagnosis } from '../lib/format.js';
+export { fmtTime, autoSizeTextarea, composeTranscriptText, normalizeTranscriptSegments, normalizeDisplaySegments, pickTranscriptSegments, pickTranscriptBaselineSegments, pickDisplayTranscriptSegments, buildTranscriptEditRecords, fmtElapsed, fmtFileSize, totalFileSizeMb, fmtBytes, friendlyTaskError, diagnoseTaskError, taskErrorContextForJob, providerDisplayName, sttStatusLabel, sttProgressFraction, isSttProgressUnmeasured, isDownloadProgressUnmeasured, videoSourceProgressOf, jobProgressLabel, timeAgo, noteGenerationDiagnosis } from '../lib/format.js';
 
 export { MD_TABLE_ALIGN_RE, splitMdTableRow, isPipeTableRow, looksLikeMdTable, looksLikeLoosePipeTable, renderTableHtml, simpleMd } from '../lib/markdown.js';
 
-export { _dl, _baseName, _fmtSrtTime, _fmtVttTime, dlTranscriptTxt, dlTranscriptSrt, dlTranscriptVtt, dlBilingualTranscriptSrt, dlBilingualTranscriptVtt, dlSummaryTxt, dlSummaryMd, dlSummaryWord, dlSummaryPdf, dlSummaryImage } from '../lib/download.js';
 
-export {DropdownMenu} from './DropdownMenu.jsx';
+export { DropdownMenu } from './DropdownMenu.jsx';
 
 /* ═══════════════ hooks ═══════════════ */
 // The API surface has no inputs, so one object per component is enough. Pages

@@ -33,20 +33,3 @@ export const effectiveSttProvider = () => LOCAL_PROVIDER;
 export const submittedSttProvider = () => LOCAL_PROVIDER;
 export const defaultRuntimeConfig = () => localRuntimeConfig();
 export const normalizeRuntimeConfig = (config = {}) => localRuntimeConfig(config);
-// Options for the settings-page transcription picker: [{value, label,
-// description, disabled}]. ctx is {lang, t, runtimeConfig}.
-export const sttRouteOptions = ({lang, t}) => [{
-    value: LOCAL_PROVIDER,
-    label: t('set.providerLocal'),
-    description: lang === 'zh'
-        ? '转录在本机完成，音频不会离开这台设备。'
-        : 'Transcription runs on this device; audio never leaves it.',
-    disabled: false,
-}];
-// Display label for a stored provider value, or null when unknown (callers
-// show their own fallback copy).
-export const sttProviderLabel = (provider, lang) => (
-    String(provider || '') === LOCAL_PROVIDER
-        ? (lang === 'zh' ? '本机转录' : 'Local STT')
-        : null
-);

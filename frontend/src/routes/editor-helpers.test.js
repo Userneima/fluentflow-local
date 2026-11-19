@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { claudeRewriteSettled, cutFlowSummary, isAutoCutFlow, cutItemsToJudge, findSegmentAt, groupTranscriptParagraphs, sizeTextareas, mergeNoteFields, noteCameFromClaude, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
+import { claudeRewriteSettled, cutFlowSummary, isAutoCutFlow, cutItemsToJudge, findSegmentAt, groupTranscriptParagraphs, sizeTextareas, mergeNoteFields, playbackMediaChoice, shouldKeepVideoReviewMounted } from './editor-helpers.js';
 
 describe('shouldKeepVideoReviewMounted', () => {
     it('keeps the player mounted while playback is between subtitle segments', () => {
@@ -59,21 +59,6 @@ describe('playbackMediaChoice', () => {
     });
 });
 
-describe('the screenshot warning before a text-only rewrite', () => {
-    it('warns for a note Claude wrote from the frames', () => {
-        expect(noteCameFromClaude({summary_written_from: 'debreath_media_note'})).toBe(true);
-        expect(noteCameFromClaude({visual_note: {status: 'completed'}})).toBe(true);
-    });
-
-    it('does not warn once an older note has been put back over it', () => {
-        expect(noteCameFromClaude({summary_written_from: null, visual_note: {status: 'completed'}})).toBe(false);
-    });
-
-    it('does not warn when the Claude note was kept beside the task note', () => {
-        expect(noteCameFromClaude({visual_note: {status: 'completed', promoted: false}})).toBe(false);
-    });
-});
-
 describe('telling a new Claude rewrite from the previous one', () => {
     const requestedAtMs = Date.parse('2026-10-07T10:00:00.400Z');
 
@@ -114,17 +99,6 @@ describe('regenerating while a rewrite is already running', () => {
             expect(copy.alternative).toBe(null);
             expect(copy.desc).toContain('正在写');
         }
-    });
-});
-
-describe('a Claude note written from the original recording still counts as Claude\'s', () => {
-    it('reads the service answer first, then either stamp', async () => {
-        const {noteCameFromClaude} = await import('./editor-helpers.js');
-        expect(noteCameFromClaude({note_from_frames: true, summary_written_from: 'source_media_note'})).toBe(true);
-        expect(noteCameFromClaude({summary_written_from: 'source_media_note'})).toBe(true);
-        expect(noteCameFromClaude({summary_written_from: 'debreath_media_note'})).toBe(true);
-        expect(noteCameFromClaude({summary_written_from: 'text_regeneration'})).toBe(false);
-        expect(noteCameFromClaude({note_from_frames: false, summary_written_from: 'debreath_media_note'})).toBe(false);
     });
 });
 

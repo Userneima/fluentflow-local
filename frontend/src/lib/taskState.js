@@ -175,15 +175,8 @@ export const taskOutcome = (job = {}, lang = 'zh') => {
     return {kind: 'done', tone: 'done', label: zh ? '已完成' : 'Completed'};
 };
 
-export const isCachedOnlyTask =(job={}) => normalizeTaskState(job) === TASK_STATE_CACHED_ONLY;
 export const isLiveTask = (job={}) => [TASK_STATE_UPLOADING, TASK_STATE_QUEUED, TASK_STATE_RUNNING].includes(normalizeTaskState(job));
-export const isTerminalTask = (job={}) => [TASK_STATE_COMPLETED, TASK_STATE_FAILED, TASK_STATE_CANCELLED, TASK_STATE_CACHED_ONLY].includes(normalizeTaskState(job));
 
-export const markCachedOnlyJob = (job) => (
-    job && typeof job === 'object'
-        ? {...job, task_state: TASK_STATE_CACHED_ONLY}
-        : job
-);
 
 export const markBackendJob = (job) => {
     if (!job || typeof job !== 'object') return job;

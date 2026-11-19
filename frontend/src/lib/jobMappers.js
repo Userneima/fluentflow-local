@@ -92,22 +92,6 @@ export const writeCachedAccountJobs = (accountId, jobs) => {
     } catch(_) {}
 };
 
-export const cacheJobRecord = (accountId, job) => {
-    if (!job || typeof job !== 'object' || !job.task_id) return null;
-    const now = new Date().toISOString();
-    const nextJob = {
-        ...job,
-        created_at: job.created_at || now,
-        updated_at: job.updated_at || now,
-    };
-    const current = readCachedAccountJobs(accountId);
-    writeCachedAccountJobs(accountId, [
-        nextJob,
-        ...current.filter((item) => item?.task_id !== nextJob.task_id),
-    ]);
-    return nextJob;
-};
-
 export const mergeCachedJobs = (...groups) => {
     const byKey = new Map();
     const order = [];

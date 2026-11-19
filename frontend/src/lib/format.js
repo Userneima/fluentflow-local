@@ -13,37 +13,6 @@ export const displayTitleForUser = (value, fallback='') => {
     if (clean) return clean;
     return stripGeneratedFilenamePrefix(fileNameStem(fallback)).trim();
 };
-export const videoLinkDisplayTitle = (value, lang='zh') => {
-    const raw = String(value || '').trim();
-    const match = raw.match(/https?:\/\/[^\s，。！？、'"“”‘’）)\]】]+/i);
-    if (!match) return displayTitleForUser(raw, raw) || (lang === 'zh' ? '视频链接' : 'Video link');
-    const url = match[0].replace(/[)）\]】"'“”‘’。，,]+$/g, '');
-    try {
-        const parsed = new URL(url);
-        const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
-        const parts = parsed.pathname.split('/').filter(Boolean);
-        const bv = parts.find((part) => /^BV[a-zA-Z0-9]+$/.test(part));
-        if (host.includes('bilibili.com') || host === 'b23.tv') {
-            return bv
-                ? (lang === 'zh' ? `Bilibili 视频 ${bv}` : `Bilibili video ${bv}`)
-                : (lang === 'zh' ? 'Bilibili 视频' : 'Bilibili video');
-        }
-        if (host.includes('douyin.com')) return lang === 'zh' ? '抖音视频链接' : 'Douyin video link';
-        if (host.includes('youtube.com') || host.includes('youtu.be')) return lang === 'zh' ? 'YouTube 视频' : 'YouTube video';
-        if (host) return lang === 'zh' ? `${host} 视频链接` : `${host} video link`;
-    } catch(_) {}
-    return lang === 'zh' ? '视频链接' : 'Video link';
-};
-export const compactDisplayFilename = (name, maxChars=42) => {
-    const value = displayTitleForUser(name, name) || String(name || '').trim();
-    const chars = Array.from(value);
-    if (chars.length <= maxChars) return value;
-    const extMatch = value.match(/(\.[^./\s]{1,8})$/);
-    const ext = extMatch ? extMatch[1] : '';
-    const extLength = Array.from(ext).length;
-    const keep = Math.max(16, maxChars - extLength - 1);
-    return `${chars.slice(0, keep).join('')}…${ext}`;
-};
 
 export const fmtTime = (sec) => { const m=Math.floor(sec/60); const s=Math.floor(sec%60); return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; };
 export const autoSizeTextarea = (node) => {
@@ -216,20 +185,6 @@ export const fmtBytes = (bytes) => {
     const n = Number(bytes);
     if(!Number.isFinite(n) || n <= 0) return '';
     return fmtFileSize(n / 1024 / 1024);
-};
-export const fmtDateTime = (value, lang='zh') => {
-    const ts = Date.parse(value || '');
-    if(!Number.isFinite(ts)) return '-';
-    try {
-        return new Date(ts).toLocaleString(lang === 'zh' ? 'zh-CN' : 'en-US', {
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-        });
-    } catch(_) {
-        return '-';
-    }
 };
 // `settingsTarget`: where in Settings the fix is, as a path with an anchor
 // ('/settings#<row id>'), when the fix is a setting the person changes.
@@ -1205,14 +1160,6 @@ export const isProgressUnmeasured = (job) => (
 export const jobProgressLabel = (job, t) => isProgressUnmeasured(job)
     ? t('dash.progressUnknown')
     : `${Math.round(Math.max(0, Math.min(100, Number(job?.progress) || 0)))}%`;
-
-export const fmtSttRelative = (factor, lang) => {
-    const n = Number(factor);
-    if(!Number.isFinite(n) || n <= 0) return '';
-    if(n * 100 < 1) return lang === 'zh' ? '低于原时长 1%' : '<1% of media duration';
-    const pct = Math.round(n * 100);
-    return lang === 'zh' ? `约为原时长 ${pct}%` : `${pct}% of media duration`;
-};
 
 export const timeAgo = (ts, t) => {
     const d = Date.now()-ts, m=Math.floor(d/60000), h=Math.floor(d/3600000), dy=Math.floor(d/86400000);

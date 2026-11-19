@@ -1,19 +1,10 @@
 import SvgIcon from './SvgIcon.jsx';
-import {optionCard, button, linkButton, surfaceCard} from '../lib/ui.js';
+import {optionCard, button, linkButton} from '../lib/ui.js';
 import {useI18n} from '../app/shared.jsx';
 import {useConfirm} from './ConfirmDialog.jsx';
 
 // Building blocks for the settings page, used together with the rows in
 // settingsRows.jsx.
-export const Section = ({id, title, description, children}) => (
-    <section id={id} className={`scroll-mt-7 ${surfaceCard}`}>
-        <div className="border-b border-[#ece8e8] px-5 py-4 dark:border-white/[0.1]">
-            <h2 className="font-headline text-base font-extrabold">{title}</h2>
-            {description && <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">{description}</p>}
-        </div>
-        {children}
-    </section>
-);
 
 export const SettingCheckbox = ({id, checked, disabled, onChange}) => (
     <span className="flex justify-end pt-0.5">
