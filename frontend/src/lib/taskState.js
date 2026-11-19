@@ -130,6 +130,16 @@ export const resumeOffer = (job = {}, lang = 'zh') => {
     return null;
 };
 
+// How long the task's note is, in characters; 0 when FluentFlow holds no note
+// (only a transcript, the note skipped, failed or not written yet). The list
+// carries only the note's first characters, so its length comes separately.
+export const noteCharsOf = (job = {}) => {
+    const result = job?.result || {};
+    return Number.isFinite(result.summary_chars)
+        ? result.summary_chars
+        : String(result.summary_markdown || '').trim().length;
+};
+
 export const taskOutcome = (job = {}, lang = 'zh') => {
     const zh = lang === 'zh';
     const state = normalizeTaskState(job);
@@ -145,9 +155,7 @@ export const taskOutcome = (job = {}, lang = 'zh') => {
     if (String(result.debreath?.status || '').toLowerCase() === 'running') {
         return {kind: 'live', tone: 'live', label: zh ? '正在剪气口' : 'Cutting'};
     }
-    const noteChars = Number.isFinite(result.summary_chars)
-        ? result.summary_chars
-        : String(result.summary_markdown || '').trim().length;
+    const noteChars = noteCharsOf(job);
     if (!noteChars && (String(result.summary_status || '').toLowerCase() === 'failed' || result.summary_error)) {
         return {kind: 'no_note', tone: 'warn', label: zh ? '笔记没生成' : 'No note'};
     }

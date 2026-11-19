@@ -50,6 +50,7 @@ import {
     TASK_STATE_CACHED_ONLY,
     taskStatusLabel,
     taskOutcome,
+    noteCharsOf,
     resumeOffer,
     cutsToJudge,
     noteProgressT,
@@ -412,9 +413,7 @@ export const noteTileValue = (job, lang) => {
     const result = job?.result || {};
     // The job list carries only the first 240 characters of the note, so its
     // length is sent separately; the full result has no such field and is counted.
-    const chars = Number.isFinite(result.summary_chars)
-        ? result.summary_chars
-        : String(result.summary_markdown || '').trim().length;
+    const chars = noteCharsOf(job);
     if (chars) {
         const fromCut = result.summary_written_from === 'debreath_media_note';
         const base = fmtCharCount(chars, lang);
@@ -556,7 +555,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
     // note blocks otherwise read "未剪（旧任务）" and "等处理", which say it is
     // an old task and still waiting when it is neither (review 2026-10-23).
     const result = job?.result || {};
-    const noteChars = Number.isFinite(result.summary_chars) ? result.summary_chars : String(result.summary_markdown || '').trim().length;
+    const noteChars = noteCharsOf(job);
     const showCut = !failed || (result.debreath && typeof result.debreath === 'object') || reportAvailable;
     const showNote = !failed || noteChars > 0;
     return (
@@ -786,6 +785,10 @@ export const LarkExportList = ({exports, lang}) => {
 
 const RECORD_FILTERS = [
     {id: 'all', zh: '全部', en: 'All', match: () => true},
+    // Records with a note in FluentFlow. Most records are an agent's batch of
+    // short clips it only wanted the transcript of (the note it wrote lives
+    // elsewhere); this view keeps the ones read here (2026-11-19, decision 6.77).
+    {id: 'notes', zh: '有笔记', en: 'With notes', match: (job) => noteCharsOf(job) > 0},
     // Anything still producing a result: queued or running, and a finished
     // task whose note is being written or whose cut is being redone.
     {id: 'live', zh: '进行中', en: 'In progress', match: (job) => taskOutcome(job).kind === 'live'},
@@ -793,6 +796,23 @@ const RECORD_FILTERS = [
     // Failed, cancelled, or finished without the note or the cut.
     {id: 'problem', zh: '有问题', en: 'Problems', match: (job) => !['live', 'judge', 'done'].includes(taskOutcome(job).kind)},
 ];
+
+// The 全部 / 有笔记 choice is kept in this browser, so the page opens the way it
+// was left; the other filters are a look at something now and are not kept.
+const KEPT_FILTERS = new Set(['all', 'notes']);
+const FILTER_STORAGE_KEY = 'fluentflow_records_filter';
+const readKeptFilter = () => {
+    try {
+        const value = window.localStorage.getItem(FILTER_STORAGE_KEY);
+        return KEPT_FILTERS.has(value) ? value : 'all';
+    } catch {
+        return 'all';
+    }
+};
+const keepFilter = (value) => {
+    if (!KEPT_FILTERS.has(value)) return;
+    try { window.localStorage.setItem(FILTER_STORAGE_KEY, value); } catch { /* not kept; the page still works */ }
+};
 
 const AgentTasks = () => {
     const {lang, t} = useI18n();
@@ -865,7 +885,16 @@ const AgentTasks = () => {
     // Search by title and a few filters over the whole list; which filter a
     // record falls under comes from the same outcome its badge shows.
     const [query, setQuery] = useState('');
-    const [filter, setFilter] = useState('all');
+    // Sent here to look at one task (a link already submitted): show every
+    // record, or the filter could hide the very task pointed at.
+    const [filter, setFilterState] = useState(() => (location.state?.highlightTaskId ? 'all' : readKeptFilter()));
+    const setFilter = (value) => {
+        setFilterState(value);
+        keepFilter(value);
+    };
+    useEffect(() => {
+        if (highlightTaskId) setFilterState('all');
+    }, [highlightTaskId]);
     const filterCounts = useMemo(() => {
         const counts = {all: displayJobs.length};
         RECORD_FILTERS.forEach((item) => {
