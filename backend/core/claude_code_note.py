@@ -120,6 +120,20 @@ _TRANSIENT_MARKERS = (
 )
 TRANSIENT_RETRY_DELAY_SECONDS = 10.0
 
+# Every Claude Code process on the machine shares one stored login. When its
+# access token runs out, the first process to notice refreshes it; another one
+# starting at that moment is refused with "Failed to refresh OAuth token:
+# another Claude Code process is refreshing it or exited mid-refresh. This is
+# usually transient; retry in a minute". Seen 2026-11-19: the two transcript
+# corrections of one task hit it together, were not retried, and the task fell
+# back to the configured key. The CLI itself asks for a minute, so wait that long.
+_REFRESH_RACE_MARKERS = (
+    "another claude code process is refreshing",
+    "exited mid-refresh",
+    "failed to refresh oauth token",
+)
+REFRESH_RACE_RETRY_DELAY_SECONDS = 60.0
+
 # A request that failed on authentication while the program still says it is
 # logged in: what the user saw on 2026-10-17 after closing the laptop and going
 # offline mid-note. Told to log in again, though the login was fine all along.
@@ -523,6 +537,16 @@ def _subprocess_env() -> dict[str, str]:
 class _TransientFailure(ClaudeVisionError):
     """A failure one more attempt is likely to get past."""
 
+    def retry_delay(self) -> float:
+        return TRANSIENT_RETRY_DELAY_SECONDS
+
+
+class _RefreshRaceFailure(_TransientFailure):
+    """Another Claude Code process was refreshing the shared login."""
+
+    def retry_delay(self) -> float:
+        return REFRESH_RACE_RETRY_DELAY_SECONDS
+
 
 def _friendly_failure(text: str) -> ClaudeVisionError:
     error = _classified_failure(text)
@@ -534,6 +558,10 @@ def _friendly_failure(text: str) -> ClaudeVisionError:
 
 def _classified_failure(text: str) -> ClaudeVisionError:
     lowered = (text or "").lower()
+    if any(marker in lowered for marker in _REFRESH_RACE_MARKERS):
+        return _RefreshRaceFailure(
+            "本机 Claude 的登录凭证正被另一个 Claude Code 程序刷新，这一次没能用上。"
+        )
     if any(marker in lowered for marker in _LOGIN_MARKERS):
         # An authentication failure is a login problem only if the program
         # agrees it is logged out. Offline, refreshing the session fails the
@@ -632,7 +660,7 @@ def _run_cli(
         return _run_cli_once(command, prompt, execute)
     except _TransientFailure as exc:
         logger.warning("local Claude failed transiently, trying once more: %s", exc)
-        time.sleep(TRANSIENT_RETRY_DELAY_SECONDS)
+        time.sleep(exc.retry_delay())
     try:
         return _run_cli_once(command, prompt, execute)
     except _TransientFailure as exc:

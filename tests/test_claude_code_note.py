@@ -657,3 +657,42 @@ def test_other_providers_keys_never_reach_the_claude_program(monkeypatch):
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:7890"
     assert env["LC_ALL"] == "zh_CN.UTF-8"
     assert env["CLAUDE_CONFIG_DIR"] == "/tmp/claude-config"
+
+
+# Requirement (2026-11-19): every Claude Code process on the machine shares one
+# login. When another one is refreshing it, the CLI refuses with "another Claude
+# Code process is refreshing it ... retry in a minute". That is not a logged-out
+# machine and not a reason to give up on the subscription: wait about a minute,
+# as the CLI asks, and try once more.
+
+_REFRESH_RACE = json.dumps({
+    "type": "result", "is_error": True,
+    "result": ("Failed to refresh OAuth token: another Claude Code process is refreshing it "
+               "or exited mid-refresh. This is usually transient; retry in a minute, and if "
+               "it persists close other Claude Code processes or run /login."),
+})
+
+
+def test_a_login_refresh_race_waits_about_a_minute_and_tries_again(frames, monkeypatch):
+    waits: list[float] = []
+    monkeypatch.setattr(ccn.time, "sleep", waits.append)
+    run, calls = _sequence(_REFRESH_RACE, _reply())
+
+    draft = ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+
+    assert "最小二乘法" in draft.markdown
+    assert len(calls) == 2
+    assert waits == [ccn.REFRESH_RACE_RETRY_DELAY_SECONDS] and waits[0] >= 60
+
+
+def test_a_login_refresh_race_does_not_send_the_user_to_log_in(frames, monkeypatch):
+    monkeypatch.setattr(ccn.time, "sleep", lambda _s: None)
+    run, calls = _sequence(_REFRESH_RACE, _REFRESH_RACE)
+
+    with pytest.raises(ClaudeVisionError) as caught:
+        ccn.write_visual_note("[00:00] 讲课", frames, runner=run)
+
+    message = str(caught.value)
+    assert "已自动重试一次" in message
+    assert "运行 `claude`" not in message
+    assert len(calls) == 2
