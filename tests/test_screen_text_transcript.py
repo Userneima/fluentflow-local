@@ -172,3 +172,37 @@ def test_the_stored_message_is_diagnosed_the_same_way_again():
         stored = friendly_error(RuntimeError(reason))
         assert diagnose_error(stored)["code"] == diagnose_error(reason)["code"]
         assert reason in stored
+
+
+@needs_ffmpeg
+def test_a_caption_that_changes_only_its_numbers_is_kept_and_a_misread_repeat_is_not(tmp_path, screen):
+    video = tmp_path / "price.mp4"
+    _video(video, audio="sine=frequency=440:duration=7")
+    screen.extend([["本次价格为100元", "游戏科普系列 EP.08"], ["本次价格为200元", "游戏科音系列 EP.08"],
+                   ["本次价格为100元"]])
+
+    segments = stt.transcript_or_refuse(video, duration_seconds=7.0, agent_writes=True, asked=False)
+
+    assert [segment["text"] for segment in segments[1:]] == [
+        "本次价格为100元 游戏科普系列 EP.08", "本次价格为200元",
+    ]
+
+
+@needs_ffmpeg
+def test_a_digitally_silent_video_fails_as_nearly_silent_so_the_picture_note_is_offered(tmp_path):
+    video = tmp_path / "silent.mp4"
+    _video(video, audio="anullsrc=r=44100:cl=mono")
+
+    def rejects():
+        raise RuntimeError(NO_SPEECH)
+
+    with pytest.raises(RuntimeError) as raised:
+        stt.guard_silence(video, rejects)
+    assert str(raised.value) == NO_SPEECH_QUIET
+
+    audio = tmp_path / "silent.m4a"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+                    "-t", "2", "-c:a", "aac", str(audio)], check=True)
+    with pytest.raises(RuntimeError) as raised:
+        stt.guard_silence(audio, rejects)
+    assert str(raised.value) == NO_SPEECH

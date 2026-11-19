@@ -782,11 +782,21 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             playback_audio_path = await loop.run_in_executor(
                 None, lambda: extract_compressed_mp3(in_path, output_path=Path(td) / "playback.mp3")
             )
-            if media_guard_enabled(SILENCE_GUARD_ENV):
+            if media_guard_enabled(SILENCE_GUARD_ENV) and not screen_text_transcript.picture_note_wanted(
+                get_job(task_id_value)
+            ):
                 # Checked on the plain take on purpose. `loudnorm` lifts a near-silent
                 # recording's noise floor into audible range, so the corrected take
-                # would report sound where the recording has none.
-                await loop.run_in_executor(None, lambda: require_audible_audio(playback_audio_path))
+                # would report sound where the recording has none. A video whose
+                # sound is digitally silent fails as nearly silent, so the page offers
+                # 「照画面写笔记」; asked for, the check is skipped and the empty
+                # transcript is read from the screen instead.
+                await loop.run_in_executor(
+                    None,
+                    lambda: screen_text_transcript.guard_silence(
+                        Path(in_path), lambda: require_audible_audio(playback_audio_path)
+                    ),
+                )
 
             audio_elapsed_sec = time.perf_counter() - audio_started_at
             log_event(

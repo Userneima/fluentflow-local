@@ -32,6 +32,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +111,17 @@ def mean_volume_db(media: Path) -> float | None:
     return float(match.group(1)) if match else None
 
 
+def guard_silence(media: Path, check: Any) -> None:
+    """Run the digital-silence check; a video it rejects fails as nearly
+    silent (``NO_SPEECH_QUIET``), which offers the picture note."""
+    try:
+        check()
+    except RuntimeError as exc:
+        if str(exc) == NO_SPEECH and has_video(media):
+            raise RuntimeError(NO_SPEECH_QUIET) from exc
+        raise
+
+
 def refusal(*, mean_db: float | None, duration_seconds: float | None,
             agent_writes: bool, asked: bool) -> str | None:
     """Why this video gets no picture note unasked, or None when it does."""
@@ -136,11 +148,15 @@ def read_screen(video: Path, duration_seconds: float | None) -> list[dict[str, A
              "-vf", f"fps=1/{step:.3f}", "-q:v", "3", str(folder / "f_%05d.jpg")],
             check=True, capture_output=True,
         )
-        seen = frame_text.SeenLines()
         looks: list[tuple[float, list[str]]] = []
+        shown: set[str] = set()
+        previous: list[str] = []
         for index, frame in enumerate(sorted(folder.glob("f_*.jpg"))):
-            lines = frame_text.new_lines(frame_text.read_frame(frame), seen)
-            looks.append((round(index * step, 2), lines))
+            current = [line.strip() for line in frame_text.read_frame(frame).lines if line.strip()]
+            fresh = [line for line in current if not _already_shown(line, shown, previous)]
+            shown.update(_key(line) for line in current)
+            previous = current
+            looks.append((round(index * step, 2), fresh))
     end_of_video = float(duration_seconds or (looks[-1][0] + step if looks else 0.0))
     segments: list[dict[str, Any]] = []
     for position, (start, lines) in enumerate(looks):
@@ -150,6 +166,32 @@ def read_screen(video: Path, duration_seconds: float | None) -> list[dict[str, A
         end = looks[position + 1][0] if position + 1 < len(looks) else max(end_of_video, start + step)
         segments.append({"start": start, "end": round(end, 2), "text": text})
     return segments
+
+
+# Two readings of one line on consecutive looks differ by a misread
+# character or two; a caption that changed only its numbers (100元, then
+# 200元) is new content and is kept.
+SAME_LINE_SIMILARITY = 0.85
+
+
+def _key(line: str) -> str:
+    return re.sub(r"\s+", "", line)
+
+
+def _digits(line: str) -> str:
+    return "".join(ch for ch in line if ch.isdigit())
+
+
+def _already_shown(line: str, shown: set[str], previous: list[str]) -> bool:
+    """A line read before, exactly, anywhere in the video; or the same line as
+    on the look just before, read slightly differently (same numbers)."""
+    key = _key(line)
+    if key in shown:
+        return True
+    for before in previous:
+        if _digits(before) == _digits(line) and SequenceMatcher(None, _key(before), key).ratio() >= SAME_LINE_SIMILARITY:
+            return True
+    return False
 
 
 def transcript_or_refuse(media: Path, *, duration_seconds: float | None,
