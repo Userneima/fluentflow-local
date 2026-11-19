@@ -35,243 +35,71 @@ them, checked 2026-10-21). After the pictures:
 What the document now holds comes back as ``sync``: the document, its
 revision after these writes, the note's digest, and which Feishu file each
 screenshot became. It is what keeping the two copies in step starts from.
+
+The work is split by part, each in its own module beside this one:
+``lark_cli_run`` runs lark-cli and reads its output, ``lark_cli_images``
+handles the screenshots, ``lark_cli_records`` keeps what a task knows about its
+document, ``lark_cli_update`` writes chapters (and rewrites the changed ones),
+``lark_cli_finish`` does what follows the writes. This module keeps the entry
+point and the names other code imports from it.
+
+A name tests replace is replaced where it lives, and every caller looks it up
+there at call time: ``_run`` and ``_resolve_lark_cli_bin`` on ``lark_cli_run``,
+``_insert_images`` on ``lark_cli_images``, ``export_markdown_via_lark_cli``
+here. The ``_run`` and ``_resolve_lark_cli_bin`` below only pass through to
+``lark_cli_run`` for the modules that call them as ``lark_cli_exporter.X``;
+replacing them here would miss every call made inside these modules
+(``tests/test_lark_cli_export.py`` checks no test does).
 """
 
 from __future__ import annotations
 
-import hashlib
-import html
 import json
 import logging
 import os
-import re
-import shutil
 import subprocess
-import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlparse
 
-from backend.core import feishu_note
-from backend.core.lark_exporter import _resolve_markdown_artifact_image
+from backend.core import feishu_note, lark_cli_images, lark_cli_run
+from backend.core.lark_cli_finish import _finish, modified_times
+from backend.core.lark_cli_images import _local_images_in, _prepare_images
+from backend.core.lark_cli_records import (
+    CREATED,
+    INTERRUPTED_IMAGES,
+    PUSHED_NOTE,
+    _created_unrecorded,
+    _forget_created,
+    _remember_created,
+    note_digest,
+    pushed_note_path,
+    reread_sections,
+    save_pushed_note,
+    sections_unread,
+)
+from backend.core.lark_cli_run import (
+    LARK_CLI_NOT_FOUND,
+    LarkCliError,
+    Runner,
+    _tail,
+    lark_cli_ready,
+    parse_lark_cli_output,
+)
+from backend.core.lark_cli_update import UnfinishedUpdate, _feishu_chunk, _response, _update
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_WIKI_SPACE = "my_library"
 
-# Marker the diagnostics layer keys on; keep it stable.
-LARK_CLI_NOT_FOUND = "lark-cli not found"
-
-NOT_UPLOADED = "（截图没有传上去）"
-_RE_MD_IMAGE_LINE = re.compile(r"^\s*!\[(.*?)\]\((.*?)\)\s*$")
-_CAPTION_STRIP = re.compile(r"[\\`*_\[\]$~<>#|]")
-
-Runner = Callable[..., subprocess.CompletedProcess]
-
-
-class LarkCliError(RuntimeError):
-    """A lark-cli command failed; ``str()`` carries what the user should read."""
-
 
 def _resolve_lark_cli_bin(explicit: Optional[str] = None) -> Optional[str]:
-    if explicit and explicit.strip():
-        p = explicit.strip()
-        if os.path.isfile(p):
-            return p
-        return shutil.which(p)
-    env_bin = (os.environ.get("FLUENTFLOW_LARK_CLI_BIN") or "").strip()
-    if env_bin:
-        if os.path.isfile(env_bin):
-            return env_bin
-        return shutil.which(env_bin)
-    return shutil.which("lark-cli")
+    """``lark_cli_run._resolve_lark_cli_bin``, looked up when called."""
+    return lark_cli_run._resolve_lark_cli_bin(explicit)
 
 
-def _cli_env() -> dict[str, str]:
-    env = os.environ.copy()
-    # Keep update / skill notices out of the JSON we parse.
-    env.setdefault("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1")
-    env.setdefault("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1")
-    return env
-
-
-def _first_json_object(text: str) -> Optional[dict[str, Any]]:
-    """The first JSON object in ``text``, skipping progress lines before it."""
-    raw = text or ""
-    decoder = json.JSONDecoder()
-    start = raw.find("{")
-    while start != -1:
-        try:
-            value, _ = decoder.raw_decode(raw[start:])
-        except ValueError:
-            start = raw.find("{", start + 1)
-            continue
-        if isinstance(value, dict):
-            return value
-        start = raw.find("{", start + 1)
-    return None
-
-
-def _tail(text: str, limit: int = 400) -> str:
-    cleaned = (text or "").strip()
-    return cleaned if len(cleaned) <= limit else "…" + cleaned[-limit:]
-
-
-def parse_lark_cli_output(proc: subprocess.CompletedProcess) -> dict[str, Any]:
-    """Return the success envelope's ``data``, or raise :class:`LarkCliError`.
-
-    lark-cli writes the success envelope to stdout and the error envelope to
-    stderr, and may print progress lines before either. Success is decided by
-    the envelope's own ``ok`` (or, without one, the exit code) — never by
-    whether this parser coped with the text around it.
-    """
-    stdout = proc.stdout or ""
-    stderr = proc.stderr or ""
-    payload = _first_json_object(stdout)
-    if payload is None or (payload.get("ok") is not True and proc.returncode != 0):
-        payload = _first_json_object(stderr) or payload
-    if isinstance(payload, dict) and payload.get("ok") is True:
-        data = payload.get("data")
-        return data if isinstance(data, dict) else {}
-    if isinstance(payload, dict) and payload.get("ok") is False:
-        raise LarkCliError(_describe_cli_error(payload.get("error")))
-    raw_tail = _tail(stderr or stdout)
-    if proc.returncode == 0:
-        raise LarkCliError(
-            "lark-cli 执行完成，但返回内容里没有可读的结果"
-            f"（输出末尾：{raw_tail or '空'}）"
-        )
-    raise LarkCliError(f"lark-cli 失败（退出码 {proc.returncode}）：{raw_tail or '没有输出'}")
-
-
-def _describe_cli_error(error: Any) -> str:
-    """One line that keeps lark-cli's own words plus the fields diagnostics need."""
-    if not isinstance(error, dict):
-        return f"lark-cli 失败：{error}"
-    message = str(error.get("message") or "").strip()
-    tags: List[str] = []
-    for key in ("type", "subtype", "code"):
-        value = error.get(key)
-        if value not in (None, ""):
-            tags.append(f"{key}={value}")
-    scopes = error.get("missing_scopes")
-    if isinstance(scopes, list) and scopes:
-        tags.append("missing_scopes=" + ",".join(str(s) for s in scopes))
-    hint = str(error.get("hint") or "").strip()
-    text = f"lark-cli 失败 [{' '.join(tags)}]：{message or '没有说明'}"
-    if hint:
-        text += f"（hint: {hint}）"
-    return text
-
-
-def _run(
-    runner: Runner,
-    cmd: List[str],
-    *,
-    timeout: int,
-    input_text: Optional[str] = None,
-    cwd: Optional[Path] = None,
-) -> dict[str, Any]:
-    try:
-        proc = runner(
-            cmd,
-            input=input_text,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=_cli_env(),
-            cwd=str(cwd) if cwd else None,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise LarkCliError(f"lark-cli 超过 {timeout} 秒没有返回（{' '.join(cmd[1:3])}）") from exc
-    except FileNotFoundError as exc:
-        raise LarkCliError(f"{LARK_CLI_NOT_FOUND}: {exc}") from exc
-    return parse_lark_cli_output(proc)
-
-
-def _caption_text(index: int, alt: str) -> str:
-    label = _CAPTION_STRIP.sub("", alt or "").replace("...", "…")
-    label = re.sub(r"\s+", " ", label).strip()
-    if not label:
-        label = "截图"
-    if len(label) > 60:
-        label = label[:60] + "…"
-    return f"图 {index}：{label}"
-
-
-def _prepare_images(
-    markdown: str,
-    *,
-    task_id: Optional[str],
-    artifact_root: Optional[Path],
-    first_figure: int = 0,
-    push: str = "",
-) -> tuple[str, List[dict[str, Any]], List[dict[str, Any]]]:
-    """Swap each local screenshot for its caption paragraph, the ones to upload
-    led by a marker unique to the picture in this push.
-
-    Returns the markdown to write, the screenshots to insert afterwards, and
-    the local screenshots whose file could not be found (named in the doc as
-    text, counted as failed uploads). Each keeps the note's own image line and
-    its caption, so the way back can put the picture back as it was.
-    """
-    push = push or uuid.uuid4().hex[:8]
-    out: List[str] = []
-    pending: List[dict[str, Any]] = []
-    missing: List[dict[str, Any]] = []
-    in_code = False
-    figure = first_figure
-    for line in markdown.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_code = not in_code
-            out.append(line)
-            continue
-        match = None if in_code else _RE_MD_IMAGE_LINE.match(line)
-        if not match:
-            out.append(line)
-            continue
-        alt, src = match.group(1) or "", (match.group(2) or "").strip()
-        scheme = urlparse(src).scheme.lower()
-        if scheme in ("http", "https"):
-            out.append(line)  # Feishu downloads web images itself.
-            continue
-        figure += 1
-        caption = _caption_text(figure, alt)
-        path = _resolve_markdown_artifact_image(src, task_id=task_id, artifact_root=artifact_root)
-        record = {"src": src, "line": line.strip(), "caption": caption if path else f"{caption}{NOT_UPLOADED}"}
-        if path:
-            marker = f"⟦FFIMG-{push}-{figure}⟧"
-            out.extend(["", marker + caption, ""])
-            pending.append({**record, "path": path, "marker": marker})
-        else:
-            out.extend(["", record["caption"], ""])
-            missing.append(record)
-    return "\n".join(out), pending, missing
-
-
-def lark_cli_ready(lark_cli_bin: Optional[str] = None, *, runner: Runner = subprocess.run) -> bool:
-    """True when lark-cli is installed and has a usable user login."""
-    bin_path = _resolve_lark_cli_bin(lark_cli_bin)
-    if not bin_path:
-        return False
-    try:
-        proc = runner(
-            [bin_path, "auth", "status"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            env=_cli_env(),
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    # ``auth status`` prints its report without the ok/data envelope.
-    status = _first_json_object(proc.stdout or "") or {}
-    if isinstance(status.get("data"), dict):
-        status = status["data"]
-    identities = status.get("identities") if isinstance(status.get("identities"), dict) else {}
-    user = identities.get("user") if isinstance(identities.get("user"), dict) else {}
-    return bool(user.get("available"))
+def _run(runner: Runner, cmd: List[str], **kwargs: Any) -> dict[str, Any]:
+    """``lark_cli_run._run``, looked up when called."""
+    return lark_cli_run._run(runner, cmd, **kwargs)
 
 
 def export_markdown_via_lark_cli(
@@ -302,7 +130,7 @@ def export_markdown_via_lark_cli(
     earlier export recorded (``previous``, the ``sync`` it returned) is updated
     in that document, chapter by chapter (``_update``); ``keep_feishu`` gets the
     document as markdown before anything in it is replaced."""
-    bin_path = _resolve_lark_cli_bin(lark_cli_bin)
+    bin_path = lark_cli_run._resolve_lark_cli_bin(lark_cli_bin)
     if not bin_path:
         raise LarkCliError(
             f"{LARK_CLI_NOT_FOUND}. Install @larksuite/cli globally or set FLUENTFLOW_LARK_CLI_BIN."
@@ -351,7 +179,7 @@ def export_markdown_via_lark_cli(
         "lark-cli export: parent=%s title_len=%d md_len=%d images=%d missing=%d",
         space, len(title), len(export_markdown), len(pending), len(missing),
     )
-    data = _run(
+    data = lark_cli_run._run(
         runner,
         [
             bin_path, "docs", "+create",
@@ -379,7 +207,7 @@ def export_markdown_via_lark_cli(
         save_pushed_note(artifact_root, task_id, markdown, state)
         _remember_created(artifact_root, task_id, {"doc_id": doc_id, "url": doc_url,
                                                    "revision_id": document.get("revision_id")}, state)
-    images, errors = _insert_images(runner, bin_path, doc_id, pending)
+    images, errors = lark_cli_images._insert_images(runner, bin_path, doc_id, pending)
     sync = {
         "doc_id": doc_id or None,
         "url": doc_url,
@@ -397,587 +225,21 @@ def export_markdown_via_lark_cli(
     return _response(sync, pending, missing, images, errors, wiki_space=space)
 
 
-CREATED = "feishu_created.json"
-INTERRUPTED_IMAGES = "上次发到飞书时在传截图前被打断，这篇里的截图没有补上"
-
-
-def _created_path(artifact_root: Optional[Path], task_id: Optional[str], state: str = "") -> Optional[Path]:
-    if artifact_root is None or not task_id:
-        return None
-    return Path(artifact_root) / task_id / f"{state}{CREATED}"
-
-
-def _remember_created(
-    artifact_root: Optional[Path], task_id: Optional[str], document: dict[str, Any], state: str = "",
-) -> None:
-    path = _created_path(artifact_root, task_id, state)
-    if path is None:
-        return
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
-    except OSError as exc:
-        logger.warning("could not note the Feishu document of %s: %s", task_id, exc)
-
-
-def _forget_created(artifact_root: Optional[Path], task_id: Optional[str], state: str = "") -> None:
-    path = _created_path(artifact_root, task_id, state)
-    if path is not None:
-        path.unlink(missing_ok=True)
-
-
-def _created_unrecorded(
-    artifact_root: Optional[Path], task_id: Optional[str], state: str = "",
-) -> Optional[dict[str, Any]]:
-    """The document an export of this task created and never finished, as a
-    ``sync`` whose chapters are read again from it, or None."""
-    path = _created_path(artifact_root, task_id, state)
-    if path is None or not path.is_file():
-        return None
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(document, dict) or not document.get("doc_id"):
-        return None
-    return {"doc_id": str(document["doc_id"]), "url": str(document.get("url") or ""),
-            "revision_id": document.get("revision_id"), "images": [], "headings": {},
-            "sections": None, "link_errors": []}
-
-
-PUSHED_NOTE = "feishu_pushed.md"
-
-
-def pushed_note_path(artifact_root: Optional[Path], task_id: Optional[str], state: str = "") -> Optional[Path]:
-    """The note as last pushed to Feishu: what edits made in Feishu are laid
-    over when they come back, so the chapters not edited there keep the note's
-    own text."""
-    if artifact_root is None or not task_id:
-        return None
-    return Path(artifact_root) / task_id / f"{state}{PUSHED_NOTE}"
-
-
-def sections_unread(sync: Optional[dict[str, Any]]) -> bool:
-    """A document that was pushed but whose chapters could not be read back
-    afterwards (``_finish``). A stopped sync also has no chapters, on purpose:
-    exporting it again makes a new document."""
-    return (
-        isinstance(sync, dict) and bool(sync.get("doc_id")) and not sync.get("stopped")
-        and "sections" in sync and sync["sections"] is None
-    )
-
-
-def reread_sections(
-    sync: dict[str, Any],
-    *,
-    task_id: Optional[str],
-    artifact_root: Optional[Path],
-    bin_path: str,
-    runner: Runner,
-    state: str = "",
-) -> dict[str, Any]:
-    """``sync`` with its chapters read again: the note as last pushed, matched
-    to the document's headings now. Raises when either cannot be read, so the
-    caller writes nothing rather than a second document."""
-    path = pushed_note_path(artifact_root, task_id, state)
-    if path is None or not path.is_file():
-        raise LarkCliError("飞书那份的章节对不上了：找不到上次推送的笔记。")
-    pushed = path.read_text(encoding="utf-8")
-    outline = _run(
-        runner,
-        [bin_path, "docs", "+fetch", "--doc", str(sync["doc_id"]), "--scope", "outline",
-         "--detail", "with-ids", "--as", "user"],
-        timeout=60,
-    )
-    fetched = outline.get("document") if isinstance(outline.get("document"), dict) else outline
-    content = str(fetched.get("content") or "")
-    parts = feishu_note.sections(pushed)
-    return {
-        **sync,
-        "headings": feishu_note.headings(content),
-        "sections": feishu_note.section_records(parts, feishu_note.heading_list(content)),
-    }
-
-
-def save_pushed_note(artifact_root: Optional[Path], task_id: Optional[str], markdown: str, state: str = "") -> None:
-    path = pushed_note_path(artifact_root, task_id, state)
-    if path is None:
-        return
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(markdown or "", encoding="utf-8")
-    except OSError as exc:
-        logger.warning("could not keep the pushed note of %s: %s", task_id, exc)
-
-
-def _feishu_chunk(
-    parts: List[feishu_note.Section], indices: List[int], links: List[feishu_note.HeadingLink], *, body_only: bool = False,
-    tight: bool = False,
-) -> str:
-    """The chapters ``indices`` as written to Feishu, links numbered on from
-    ``links`` (extended). A chapter followed by a ``##`` chapter other than
-    the first one ends with the divider before it, so rewriting either chapter
-    later keeps the divider where it was."""
-    first_h2 = next((i for i, part in enumerate(parts) if part.level == 2), None)
-    pieces: List[str] = []
-    for index in indices:
-        following = parts[index + 1] if index + 1 < len(parts) else None
-        divider = following is not None and following.level == 2 and index + 1 != first_h2
-        gap = tight and following is not None and following.level >= 3
-        text = parts[index].body if body_only else parts[index].text
-        prepared = feishu_note.to_feishu(text, first_link=len(links), divider_after=divider, tight=tight,
-                                         gap_after=gap)
-        links.extend(prepared.links)
-        if prepared.markdown.strip():
-            pieces.append(prepared.markdown.strip("\n"))
-    return "\n\n".join(pieces)
-
-
-def note_digest(markdown: str) -> str:
-    return hashlib.sha256((markdown or "").encode("utf-8")).hexdigest()
-
-
-def _response(
-    sync: dict[str, Any], pending: list, missing: list, images: list, errors: list, **extra: Any,
-) -> Dict[str, Any]:
-    return {
-        "ok": True,
-        "url": sync["url"],
-        "doc_token": sync["doc_id"],
-        "doc_id": sync["doc_id"],
-        "via": "lark_cli",
-        "markdown_format": "feishu_note",
-        **extra,
-        "image_count": len(pending) + len(missing),
-        "image_upload_count": sum(1 for image in images if image.get("file_token") or image.get("block_id")),
-        "image_upload_errors": [item["src"] for item in missing] + errors,
-        "sync": sync,
-    }
-
-
-def _insert_images(
-    runner: Runner, bin_path: str, doc_id: str, pending: List[dict[str, Any]],
-) -> tuple[List[dict[str, Any]], List[str]]:
-    """Each screenshot right above its caption; what each became in Feishu,
-    and the ones that did not make it. The marker goes either way."""
-    images: List[dict[str, Any]] = []
-    errors: List[str] = []
-    for item in pending:
-        if not doc_id:
-            errors.append(item["src"])
-            continue
-        path: Path = item["path"]
-        record = {"src": item["src"], "line": item["line"], "caption": item["caption"], "name": path.name}
-        try:
-            inserted = _run(
-                runner,
-                [
-                    bin_path, "docs", "+media-insert",
-                    "--doc", doc_id,
-                    "--file", path.name,
-                    "--selection-with-ellipsis", item["marker"],
-                    "--before",
-                    "--as", "user",
-                ],
-                timeout=90,
-                cwd=path.parent,
-            )
-            images.append({**record, "file_token": inserted.get("file_token"), "block_id": inserted.get("block_id")})
-        except LarkCliError as exc:
-            logger.warning("lark-cli image insert skipped for %s: %s", path.name, exc)
-            errors.append(item["src"])
-            images.append({**record, "caption": item["caption"], "file_token": None, "block_id": None})
-        try:
-            _run(
-                runner,
-                [bin_path, "docs", "+update", "--doc", doc_id, "--command", "str_replace",
-                 "--doc-format", "markdown", "--pattern", item["marker"], "--content", "", "--as", "user"],
-                timeout=60,
-            )
-        except LarkCliError as exc:
-            logger.warning("lark-cli could not remove image marker %s: %s", item["marker"], exc)
-    return images, errors
-
-
-def _local_images_in(text: str) -> int:
-    count = 0
-    for line in text.split("\n"):
-        match = _RE_MD_IMAGE_LINE.match(line)
-        if match and urlparse((match.group(2) or "").strip()).scheme.lower() not in ("http", "https"):
-            count += 1
-    return count
-
-
-def _write_ops(
-    ops: list,
-    parts: List[feishu_note.Section],
-    figures: List[int],
-    links: List[feishu_note.HeadingLink],
-    pending: List[dict[str, Any]],
-    missing: List[dict[str, Any]],
-    deleted: set[str],
-    *,
-    bin_path: str,
-    doc_id: str,
-    timeout: int,
-    task_id: Optional[str],
-    artifact_root: Optional[Path],
-    runner: Runner,
-    tight: bool = False,
-) -> int:
-    """Run ``plan_update``'s deletes and inserts; returns the chapters written."""
-    rewritten = 0
-    for op in ops:
-        if isinstance(op, feishu_note.Delete):
-            for start in range(0, len(op.block_ids), 50):
-                chunk = op.block_ids[start:start + 50]
-                _run(
-                    runner,
-                    [bin_path, "docs", "+update", "--doc", doc_id, "--command", "block_delete",
-                     "--block-id", ",".join(chunk), "--as", "user"],
-                    timeout=timeout,
-                )
-                deleted.update(chunk)
-            continue
-        written = _feishu_chunk(parts, op.parts, links, body_only=op.body_only, tight=tight)
-        if not written.strip():
-            # Nothing the page shows (a part marker only): the delete was enough.
-            continue
-        content, wanted, gone = _prepare_images(
-            written, task_id=task_id, artifact_root=artifact_root, first_figure=figures[op.parts[0]],
-        )
-        pending.extend(wanted)
-        missing.extend(gone)
-        _run(
-            runner,
-            [bin_path, "docs", "+update", "--doc", doc_id, "--command", "block_insert_after",
-             "--block-id", op.anchor, "--doc-format", "markdown", "--content", "-", "--as", "user"],
-            timeout=timeout,
-            input_text=content,
-        )
-        rewritten += len(op.parts)
-    return rewritten
-
-
-def _occurrence_ids(keys: List[Any]) -> List[tuple[str, int]]:
-    seen: dict[str, int] = {}
-    found: List[tuple[str, int]] = []
-    for key in keys:
-        count = seen.get(str(key), 0)
-        seen[str(key)] = count + 1
-        found.append((str(key), count))
-    return found
-
-
-class UnfinishedUpdate(RuntimeError):
-    """A chapter update that failed after it began writing: the document may
-    hold a chapter half rewritten (its old paragraphs deleted, the new ones
-    not written). The note is what the document should be; the next push
-    finishes the job (feishu_sync), instead of reading the half-written
-    chapter as an edit made in Feishu. ``chapters`` are the chapters it was
-    changing, as (heading words, which occurrence of them)."""
-
-    def __init__(self, message: str, chapters: List[tuple[str, int]]) -> None:
-        super().__init__(message)
-        self.chapters = chapters
-
-
-def _update(
-    markdown: str,
-    previous: dict[str, Any],
-    *,
-    bin_path: str,
-    timeout: int,
-    task_id: Optional[str],
-    artifact_root: Optional[Path],
-    keep_feishu: Optional[Callable[[str], None]],
-    runner: Runner,
-    state: str = "",
-    tight: bool = False,
-) -> Dict[str, Any]:
-    """Rewrite only the chapters that changed since ``previous`` was pushed.
-
-    The document as it is now is read with its block ids; ``plan_update``
-    compares the chapters pushed last time with the note's chapters now and
-    says which blocks to delete and what to write after which block. Before the
-    first write the document is handed to ``keep_feishu`` as markdown, so the
-    version being replaced can be found again; if it cannot be read, nothing
-    is written."""
-    doc_id = str(previous["doc_id"])
-    doc_url = str(previous.get("url") or "")
-    fetched = _run(
-        runner,
-        [bin_path, "docs", "+fetch", "--doc", doc_id, "--detail", "with-ids", "--as", "user"],
-        timeout=timeout,
-    )
-    document = fetched.get("document") if isinstance(fetched.get("document"), dict) else fetched
-    parts = feishu_note.sections(markdown)
-    ops = feishu_note.plan_update(
-        previous["sections"], parts, feishu_note.top_blocks(str(document.get("content") or "")), doc_id,
-    )
-    sync = {**previous, "note_digest": note_digest(markdown), "link_errors": []}
-    if not ops:
-        return {**_response(sync, [], [], [], []), "updated": True, "sections_rewritten": 0}
-
-    if keep_feishu is not None:
-        as_markdown = _run(
-            runner,
-            [bin_path, "docs", "+fetch", "--doc", doc_id, "--doc-format", "markdown", "--as", "user"],
-            timeout=timeout,
-        )
-        shown = as_markdown.get("document") if isinstance(as_markdown.get("document"), dict) else as_markdown
-        keep_feishu(str(shown.get("content") or ""))
-
-    figures: list[int] = []
-    running = 0
-    for part in parts:
-        figures.append(running)
-        running += _local_images_in(part.text)
-
-    links: List[feishu_note.HeadingLink] = []
-    pending: List[dict[str, Any]] = []
-    missing: List[dict[str, Any]] = []
-    deleted: set[str] = set()
-    rewritten = 0
-    try:
-        rewritten = _write_ops(ops, parts, figures, links, pending, missing, deleted,
-                               bin_path=bin_path, doc_id=doc_id, timeout=timeout, task_id=task_id,
-                               artifact_root=artifact_root, runner=runner, tight=tight)
-    except Exception as exc:
-        # Every chapter the push was changing: rewritten, added, removed or
-        # moved (a move is a delete and an insert with nothing else changed).
-        # A chapter is its heading's words and which occurrence of them it
-        # is, so of two chapters with the same heading only the one changed
-        # is listed.
-        old_ids = _occurrence_ids([record.get("key") for record in previous["sections"]])
-        new_ids = _occurrence_ids([part.key for part in parts])
-        before = {(cid, record.get("digest")) for cid, record in zip(old_ids, previous["sections"])}
-        after = {(cid, part.digest) for cid, part in zip(new_ids, parts)}
-        doomed = {block for op in ops if isinstance(op, feishu_note.Delete) for block in op.block_ids}
-        rewriting = sorted(
-            {cid for cid, _ in before ^ after}
-            | {new_ids[j] for op in ops if not isinstance(op, feishu_note.Delete) for j in op.parts}
-            | {cid for cid, record in zip(old_ids, previous["sections"]) if record.get("heading_id") in doomed}
-        )
-        raise UnfinishedUpdate(str(exc), rewriting) from exc
-
-    images, errors = _insert_images(runner, bin_path, doc_id, pending)
-    # A picture whose chapter was rewritten is in the new pictures, if it is
-    # still in the note; one never uploaded is listed again by its chapter.
-    rewritten_lines = {item["line"] for item in pending + missing}
-    sync["images"] = [
-        image for image in previous.get("images") or []
-        if (image.get("block_id") not in deleted if image.get("block_id") else image.get("line") not in rewritten_lines)
-    ] + images + [{**item, "file_token": None, "block_id": None} for item in missing]
-    _finish(runner, bin_path, doc_id, doc_url, links, parts, sync)
-    save_pushed_note(artifact_root, task_id, markdown, state)
-    return {**_response(sync, pending, missing, images, errors), "updated": True, "sections_rewritten": rewritten}
-
-
-def _finish(
-    runner: Runner,
-    bin_path: str,
-    doc_id: str,
-    doc_url: str,
-    links: List[feishu_note.HeadingLink],
-    parts: List[feishu_note.Section],
-    sync: dict[str, Any],
-) -> None:
-    """After the writes: note each chapter's heading block, point each link to
-    a heading at that heading, and note the revision, all on ``sync``. A link
-    that cannot be fixed keeps its words and is listed; the document stands
-    either way."""
-    try:
-        outline = _run(
-            runner,
-            [bin_path, "docs", "+fetch", "--doc", doc_id, "--scope", "outline",
-             "--detail", "with-ids", "--as", "user"],
-            timeout=60,
-        )
-    except LarkCliError as exc:
-        logger.warning("lark-cli outline fetch failed for %s: %s", doc_id, exc)
-        sync["link_errors"] = [link.label for link in links]
-        # The document was written; only its headings' ids are not known. The
-        # next export reads them again (``reread_sections``) before writing,
-        # rather than the note dropping out of sync (owner, 2026-10-24: a
-        # failed read here once left a note unsynced with no error shown).
-        sync["sections"] = None
-        return
-    fetched = outline.get("document") if isinstance(outline.get("document"), dict) else outline
-    content = str(fetched.get("content") or "")
-    sync["headings"] = feishu_note.headings(content)
-    sync["sections"] = feishu_note.section_records(parts, feishu_note.heading_list(content))
-    if fetched.get("revision_id") is not None:
-        sync["revision_id"] = fetched.get("revision_id")
-    base = doc_url.split("#", 1)[0]
-    for link in links:
-        block_id = sync["headings"].get(feishu_note.heading_key(link.heading))
-        # A link in a callout's title is bold with the rest of the title, and
-        # Feishu shows it as [**label**](...).
-        for label in (link.label, f"**{link.label}**"):
-            target = f"[{label}]({base}#{block_id})" if block_id else label
-            try:
-                updated = _run(
-                    runner,
-                    [bin_path, "docs", "+update", "--doc", doc_id, "--command", "str_replace",
-                     "--doc-format", "markdown", "--pattern", f"[{label}]({link.placeholder})",
-                     "--content", target, "--as", "user"],
-                    timeout=60,
-                )
-            except LarkCliError as exc:
-                logger.warning("lark-cli could not link %s in %s: %s", link.label, doc_id, exc)
-                updated = {"result": "failed"}
-            if updated.get("result") in (None, "success"):
-                break
-        if not block_id or updated.get("result") not in (None, "success"):
-            sync["link_errors"].append(link.label)
-        revision = (updated.get("document") or {}).get("revision_id") if isinstance(updated.get("document"), dict) else None
-        if revision is not None:
-            sync["revision_id"] = revision
-    _restore_list_numbers(runner, bin_path, doc_id, parts)
-    _snapshot(runner, bin_path, doc_id, sync)
-
-
-_RE_NOTE_ORDERED = re.compile(r"^\s*(\d+)[.）]\s+(.+)$")
-_RE_FEISHU_LIST_START = re.compile(r'<ol><li id="([^"]+)"[^>]*\bseq="1"[^>]*>(.*?)</li>', re.S)
-
-
-_RE_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>")
-
-
-def _list_item_key(text: str, *, xml: bool = False) -> str:
-    # Both sides can hold tags (<b> in a note); Feishu's XML also escapes the
-    # & < > that the note writes as they are, as in "> 2 且 < 5".
-    plain = _RE_TAG.sub("", text)
-    if xml:
-        plain = html.unescape(plain)
-    plain = re.sub(r"\]\([^)]*\)|[*`_\[\]]", "", plain)
-    return re.sub(r"\s+", "", plain)
-
-
-def _restore_list_numbers(
-    runner: Runner, bin_path: str, doc_id: str, parts: List[feishu_note.Section],
-) -> None:
-    """Give back the number of a list item that Feishu restarted at 1.
-
-    Feishu numbers each run of adjacent list items from 1, and its markdown
-    import keeps no number, so an item cut off from its list by a block between
-    items (a check quote under item 2, say) showed as 1 instead of 3. Each list
-    that starts at 1 in the document while the note numbers that item higher
-    gets its number set (checked against lark-cli 1.0.70, 2026-11-05: an
-    ``<li seq="3">`` written with ``block_replace`` shows as 3). A failure
-    leaves the document as it is."""
-    # Only an item numbered past 1 right after something other than a list
-    # item can have been restarted; a note without one is not read again.
-    # An item is matched by its whole text, and only when no other list item
-    # in the note reads the same, so no other list is ever renumbered.
-    numbers: dict[str, int] = {}
-    seen: dict[str, int] = {}
-    previous = ""
-    for line in "\n".join(part.text for part in parts).split("\n"):
-        if not line.strip():
-            continue
-        match = _RE_NOTE_ORDERED.match(line)
-        if match:
-            key = _list_item_key(match.group(2))
-            seen[key] = seen.get(key, 0) + 1
-            if int(match.group(1)) != 1 and not _RE_NOTE_ORDERED.match(previous):
-                numbers[key] = int(match.group(1))
-        previous = line
-    numbers = {key: number for key, number in numbers.items() if seen[key] == 1}
-    if not numbers:
-        return
-    try:
-        fetched = _run(
-            runner,
-            [bin_path, "docs", "+fetch", "--doc", doc_id, "--detail", "full", "--as", "user"],
-            timeout=60,
-        )
-    except LarkCliError as exc:
-        logger.warning("lark-cli could not read %s to check list numbers: %s", doc_id, exc)
-        return
-    document = fetched.get("document") if isinstance(fetched.get("document"), dict) else fetched
-    for match in _RE_FEISHU_LIST_START.finditer(str(document.get("content") or "")):
-        number = numbers.get(_list_item_key(match.group(2), xml=True))
-        if number is None:
-            continue
-        try:
-            _run(
-                runner,
-                [bin_path, "docs", "+update", "--doc", doc_id, "--command", "block_replace",
-                 "--block-id", match.group(1),
-                 "--content", f'<ol><li seq="{number}">{match.group(2)}</li></ol>', "--as", "user"],
-                timeout=60,
-            )
-        except LarkCliError as exc:
-            logger.warning("lark-cli could not renumber a list item in %s: %s", doc_id, exc)
-
-
-def _snapshot(runner: Runner, bin_path: str, doc_id: str, sync: dict[str, Any]) -> None:
-    """What the document looks like now, chapter by chapter, and when Feishu
-    last saw it change: an edit made in Feishu later is anything newer than
-    this time, in any chapter that no longer looks like this."""
-    try:
-        shown = _run(
-            runner,
-            [bin_path, "docs", "+fetch", "--doc", doc_id, "--doc-format", "markdown", "--as", "user"],
-            timeout=60,
-        )
-        document = shown.get("document") if isinstance(shown.get("document"), dict) else shown
-        sync["feishu_sections"] = feishu_note.feishu_section_records(str(document.get("content") or ""))
-        # ``feishu_sections`` moves on when an edit made in Feishu is pulled
-        # in; this stays as the push left it, for telling whether the document
-        # was edited in Feishu since (``feishu_sync.keeper``).
-        sync["pushed_sections"] = sync["feishu_sections"]
-        if document.get("revision_id") is not None:
-            sync["revision_id"] = document.get("revision_id")
-    except LarkCliError as exc:
-        logger.warning("lark-cli could not read %s back after the push: %s", doc_id, exc)
-        sync["feishu_sections"] = None
-        sync["pushed_sections"] = None
-    modified = modified_times(runner, bin_path, [doc_id]).get(doc_id)
-    if modified is not None:
-        sync["feishu_modified_at"] = modified
-
-
-def modified_times(
-    runner: Runner, bin_path: str, doc_ids: List[str], errors: Optional[List[str]] = None,
-) -> Dict[str, int]:
-    """When Feishu last saw each document change (seconds), for the ones it
-    reports; a document it does not report is left out. A request that
-    failed is added to ``errors`` when given, so a caller can tell "Feishu
-    could not be asked" from "Feishu does not know this document"."""
-    times: Dict[str, int] = {}
-    for start in range(0, len(doc_ids), 50):
-        chunk = doc_ids[start:start + 50]
-        body = {"request_docs": [{"doc_token": doc_id, "doc_type": "docx"} for doc_id in chunk]}
-        try:
-            data = _run(
-                runner,
-                [bin_path, "drive", "metas", "batch_query", "--data", json.dumps(body), "--as", "user"],
-                timeout=60,
-            )
-        except LarkCliError as exc:
-            logger.warning("lark-cli could not read when documents changed: %s", exc)
-            if errors is not None:
-                errors.append(str(exc))
-            continue
-        for meta in data.get("metas") or []:
-            try:
-                times[str(meta.get("doc_token"))] = int(meta.get("latest_modify_time"))
-            except (TypeError, ValueError):
-                continue
-    return times
-
-
 __all__ = [
+    "CREATED",
     "DEFAULT_WIKI_SPACE",
+    "INTERRUPTED_IMAGES",
     "LARK_CLI_NOT_FOUND",
     "LarkCliError",
+    "PUSHED_NOTE",
+    "UnfinishedUpdate",
     "export_markdown_via_lark_cli",
     "lark_cli_ready",
     "modified_times",
     "note_digest",
     "pushed_note_path",
     "parse_lark_cli_output",
+    "reread_sections",
+    "save_pushed_note",
+    "sections_unread",
 ]

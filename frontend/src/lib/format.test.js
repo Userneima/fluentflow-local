@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {displayTitleForUser, fileNameStem, fmtDuration, jobProgressLabel} from './format.js';
-import {noteTileValue} from '../routes/agent-tasks.jsx';
+import {noteTileValue} from '../routes/agent-tasks-labels.js';
 
 describe('titles named "number.title"', () => {
     it('keeps everything after the first dot', () => {

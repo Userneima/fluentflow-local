@@ -7,7 +7,7 @@
 // declined — since three of them look alike and only one of them is good news.
 
 import {describe, expect, it} from 'vitest';
-import {cutFileDelivery, debreathTile} from './agent-tasks.jsx';
+import {cutFileDelivery, debreathTile} from './agent-tasks-labels.js';
 
 const job = (debreath) => ({result: {debreath}});
 

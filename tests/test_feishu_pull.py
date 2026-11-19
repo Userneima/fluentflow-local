@@ -34,6 +34,7 @@ from pathlib import Path
 import pytest
 
 import backend.core.lark_cli_exporter as cli
+import backend.core.lark_cli_run as lark_cli_run
 from backend.core import feishu_sync, job_store, note_versions, output_folder
 from backend.core.storage_paths import _artifact_storage_dir
 from tests.test_feishu_chapter_update import URL, FakeDoc
@@ -61,7 +62,7 @@ NOTE = """# 访谈
 
 @pytest.fixture(autouse=True)
 def _quiet(monkeypatch):
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
     monkeypatch.setattr(feishu_sync, "schedule_push_when_quiet", lambda task_id, delay=None: None)
     # The output folder's own delayed refresh would fire a minute later, in
     # the middle of other tests, and save these notes again.
@@ -371,10 +372,10 @@ def test_a_chapter_moved_by_a_cut_off_push_is_not_lost(doc, tmp_path):
 def test_a_push_cut_off_before_feishu_changed_is_tried_again_by_the_watch(doc, tmp_path, monkeypatch):
     task, _ = _task(doc, tmp_path)
     _edit_note(task, "结尾的话", "本地改的结尾")
-    monkeypatch.setattr(cli, "_run", _cut_before_writing(cli._run))
+    monkeypatch.setattr(lark_cli_run, "_run", _cut_before_writing(lark_cli_run._run))
     feishu_sync.push(task, runner=doc)
     monkeypatch.undo()
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
     ran: list = []
     monkeypatch.setattr(feishu_sync._WORKER, "submit", lambda fn, *a, **k: ran.append(fn(*a, **k)))
 

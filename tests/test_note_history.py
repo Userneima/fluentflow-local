@@ -29,6 +29,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.core.lark_cli_exporter as cli
+import backend.core.lark_cli_run as lark_cli_run
 import backend.routers.local_agent as local_agent
 from backend.routers.agent_v1 import common, regenerate
 from backend.core import feishu_sync, job_store, note_versions, output_folder
@@ -70,7 +71,7 @@ def _quiet(monkeypatch):
     monkeypatch.setattr(output_folder, "schedule_sync_when_quiet", lambda task_id: None)
     monkeypatch.setattr(output_folder, "schedule_sync", lambda task_id: None)
     monkeypatch.setattr(feishu_sync, "schedule_push_when_quiet", lambda task_id, delay=None: pushes.append((task_id, delay)))
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
     yield pushes
     job_store.delete_jobs(_CREATED)
     _CREATED.clear()

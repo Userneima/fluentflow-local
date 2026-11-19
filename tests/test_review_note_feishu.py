@@ -21,6 +21,7 @@ import uuid
 import pytest
 
 import backend.core.lark_cli_exporter as cli
+import backend.core.lark_cli_run as lark_cli_run
 from backend.core import job_store, note_spacing, review_note_feishu as rnf
 from tests.test_feishu_chapter_update import DOC, FakeDoc, _flag, _ok
 
@@ -103,7 +104,7 @@ def subprocess_fail(message: str):
 @pytest.fixture
 def wiki(monkeypatch, tmp_path):
     fake = FakeWiki()
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
     monkeypatch.setattr("backend.core.storage_paths._artifact_storage_dir", lambda: tmp_path / "artifacts")
     return fake
 
@@ -225,7 +226,7 @@ def test_a_move_cut_off_is_done_on_a_later_look(wiki, tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         rnf.push(task_id, runner=wiki)
     monkeypatch.undo()
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
     monkeypatch.setattr("backend.core.storage_paths._artifact_storage_dir", lambda: tmp_path / "artifacts")
 
     assert rnf.pending(job_store.get_job(task_id)["result"])

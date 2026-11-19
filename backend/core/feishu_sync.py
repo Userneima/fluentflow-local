@@ -8,7 +8,7 @@ From then on:
 - When the note changes (edited in FluentFlow, or in Obsidian and taken back
   in), the document is updated once the changes have stopped for
   ``QUIET_SECONDS``. Only the chapters that changed are rewritten
-  (``lark_cli_exporter._update``).
+  (``lark_cli_update._update``).
 - Every ``CHECK_SECONDS`` Feishu is asked, in one request for all such notes,
   when each document last changed. A document changed after the last push,
   and left alone for ``QUIET_SECONDS``, is read back: only the chapters that

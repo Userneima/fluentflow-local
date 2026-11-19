@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 import backend.core.lark_cli_exporter as cli
+import backend.core.lark_cli_run as lark_cli_run
 from backend.core import feishu_note
 from tests.test_lark_cli_export import DOC_URL, TASK, FakeCli, _flag, _frame_src, _frames, _ok
 
@@ -33,7 +34,7 @@ def _cli_on_path(monkeypatch):
     lookup for its own tests; an autouse fixture does not reach the modules
     that import its fakes, so these passed only where lark-cli is installed
     and failed on CI, which has none."""
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
 
 NOTE = """# 访谈
 

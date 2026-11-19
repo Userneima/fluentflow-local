@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 import backend.core.lark_cli_exporter as cli
+import backend.core.lark_cli_run as lark_cli_run
 from backend.core.local_error_diagnostics import diagnose_error
 
 TASK = "task-1"
@@ -83,7 +84,7 @@ def _flag(cmd: list[str], name: str) -> str:
 
 @pytest.fixture(autouse=True)
 def _cli_on_path(monkeypatch):
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
 
 
 def _export(markdown: str, runner: FakeCli, artifact_root: Path | None) -> dict:
@@ -262,7 +263,7 @@ def test_success_without_a_link_says_the_document_may_exist():
 
 
 def test_missing_lark_cli_is_reported_as_not_installed(monkeypatch):
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: None)
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: None)
 
     with pytest.raises(cli.LarkCliError) as caught:
         cli.export_markdown_via_lark_cli("笔记", "内容", runner=FakeCli())
@@ -283,7 +284,7 @@ def test_lark_cli_counts_as_ready_only_with_a_signed_in_user():
 
 
 def test_lark_cli_is_not_ready_when_it_is_not_installed(monkeypatch):
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: None)
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: None)
     assert cli.lark_cli_ready(runner=_status({"available": True})) is False
 
 
@@ -373,3 +374,38 @@ def test_an_item_with_an_inline_tag_in_the_note_still_matches(tmp_path):
 
     replaced = [c["cmd"] for c in runner.of("+update") if _flag(c["cmd"], "--command") == "block_replace"]
     assert [_flag(c, "--block-id") for c in replaced] == ["doxB"]
+
+
+def test_no_test_replaces_a_name_on_the_exporter_that_its_own_module_calls():
+    """A name the exporter's modules call is replaced where it lives
+    (``lark_cli_run._run``, ``lark_cli_images._insert_images``...). The
+    exporter keeps ``_run`` and ``_resolve_lark_cli_bin`` only as pass-throughs
+    for other modules, so replacing them there would leave every call inside
+    the export untouched, and a test could reach the real lark-cli."""
+    import ast
+
+    replaceable_on_exporter = {"export_markdown_via_lark_cli"}
+    stale = []
+    for path in sorted(Path(__file__).parent.glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        aliases = {
+            alias.asname or alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+            if alias.name.endswith("lark_cli_exporter")
+        }
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and node.args):
+                continue
+            target = node.args[0]
+            if isinstance(target, ast.Name) and target.id in aliases and len(node.args) > 1:
+                name = node.args[1].value if isinstance(node.args[1], ast.Constant) else None
+            elif isinstance(target, ast.Constant) and str(target.value).startswith("backend.core.lark_cli_exporter."):
+                name = str(target.value).rsplit(".", 1)[1]
+            else:
+                continue
+            if ast.unparse(node.func).split(".")[-1] in ("setattr", "patch", "object") \
+                    and name not in replaceable_on_exporter:
+                stale.append(f"{path.name}:{node.lineno} {name}")
+    assert not stale, "replace these on the module that owns them: " + ", ".join(stale)

@@ -22,7 +22,7 @@
 // here instead of on a user's screen.
 
 import {describe, expect, it} from 'vitest';
-import {isAudioOnlySource} from './agent-tasks.jsx';
+import {isAudioOnlySource} from './agent-tasks-labels.js';
 
 describe('isAudioOnlySource', () => {
     it('classifies an uploaded .m4a as audio — the exact case the owner reported', () => {

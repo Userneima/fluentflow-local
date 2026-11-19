@@ -29,6 +29,8 @@ import uuid
 import pytest
 
 import backend.core.lark_cli_exporter as cli
+import backend.core.lark_cli_images as lark_cli_images
+import backend.core.lark_cli_run as lark_cli_run
 from backend.core import feishu_sync, job_store, note_versions
 
 DOC = "doxDOC"
@@ -186,7 +188,7 @@ class FakeDoc:
 
 @pytest.fixture(autouse=True)
 def _cli_on_path(monkeypatch):
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
 
 
 NOTE = """# 访谈
@@ -332,7 +334,7 @@ def test_a_note_kept_in_feishu_is_pushed_when_it_changes_and_others_are_not(monk
 def test_a_push_updates_the_document_and_records_it(monkeypatch, tmp_path):
     doc = FakeDoc()
     task_id = _task(_first(doc))
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
     real = cli.export_markdown_via_lark_cli
     monkeypatch.setattr(cli, "export_markdown_via_lark_cli", lambda *a, **k: real(*a, **{**k, "runner": doc}))
     md = tmp_path / "访谈" / "访谈_笔记.md"
@@ -468,11 +470,11 @@ def test_an_export_cut_off_after_creating_its_document_writes_into_it_again(tmp_
     def cut_off(*_args, **_kwargs):
         raise KeyboardInterrupt("the service stopped")
 
-    monkeypatch.setattr(cli, "_insert_images", cut_off)
+    monkeypatch.setattr(lark_cli_images, "_insert_images", cut_off)
     with pytest.raises(KeyboardInterrupt):
         cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t1", artifact_root=tmp_path, runner=doc)
     monkeypatch.undo()
-    monkeypatch.setattr(cli, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
+    monkeypatch.setattr(lark_cli_run, "_resolve_lark_cli_bin", lambda explicit=None: "/usr/local/bin/lark-cli")
     created = doc.writes.count("create")
 
     result = cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t1", artifact_root=tmp_path, runner=doc)
