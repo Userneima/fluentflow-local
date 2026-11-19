@@ -51,7 +51,8 @@ def _routes() -> set[tuple[str, str]]:
 
 
 def _paths_the_tools_call() -> set[str]:
-    source = (ROOT / "scripts" / "fluentflow_mcp_server.py").read_text(encoding="utf-8")
+    files = [ROOT / "scripts" / "fluentflow_mcp_server.py", *sorted((ROOT / "scripts" / "fluentflow_mcp").glob("*.py"))]
+    source = "\n".join(path.read_text(encoding="utf-8") for path in files)
     return {_shape(path) for path in re.findall(r'f?"(/agent/v1/[^"]*|/agent/v1)"', source)}
 
 
@@ -62,7 +63,7 @@ def test_every_agent_route_is_reachable_by_a_tool():
         if path not in called and path not in ROUTES_WITHOUT_A_TOOL
     )
     assert not unreached, (
-        "These agent routes have no MCP tool; add one to scripts/fluentflow_mcp_server.py "
+        "These agent routes have no MCP tool; add one in scripts/fluentflow_mcp/ "
         f"or list the route in ROUTES_WITHOUT_A_TOOL with the reason: {unreached}"
     )
 

@@ -23,6 +23,7 @@ from backend.core.local_request_scope import LOCAL_OWNER_ID
 from backend.core.video_source import normalize_source_link
 import backend.core.link_submission as lvs
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 _TOKEN = "dup-token"
 VIDEO = "https://www.bilibili.com/video/BV1dupTEST01"
@@ -211,7 +212,7 @@ def test_the_agent_api_refuses_a_completed_duplicate_until_confirmed(client, sta
 
 def test_the_mcp_tool_passes_the_users_confirmation_through(monkeypatch):
     sent: list[dict] = []
-    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kwargs: sent.append(kwargs["payload"]) or {})
+    monkeypatch.setattr(core, "_agent_request", lambda method, path, **kwargs: sent.append(kwargs["payload"]) or {})
 
     mcp.submit_video_link(VIDEO)
     mcp.submit_video_link(VIDEO, allow_duplicate=True)

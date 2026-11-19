@@ -621,8 +621,9 @@ def test_the_mcp_export_tool_leaves_the_route_to_the_server(monkeypatch):
     spec = importlib.util.spec_from_file_location("fluentflow_mcp_server_export", path)
     mcp = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mcp)
+    from scripts.fluentflow_mcp import core
     calls: list[dict] = []
-    monkeypatch.setattr(mcp, "_agent_request", lambda method, route, **kw: calls.append(kw) or {"ok": True})
+    monkeypatch.setattr(core, "_agent_request", lambda method, route, **kw: calls.append(kw) or {"ok": True})
 
     mcp.export_result("t1", "lark")
     mcp.export_result("t1", "lark", lark_export_route="local_cli", folder_token="fld")

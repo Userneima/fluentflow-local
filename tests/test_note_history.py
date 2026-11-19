@@ -437,9 +437,10 @@ def test_a_feishu_side_version_is_not_restored(tmp_path, monkeypatch):
 def test_the_mcp_tools_reach_these_routes(monkeypatch):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     import fluentflow_mcp_server as mcp
+    from scripts.fluentflow_mcp import core
 
     calls: list[tuple] = []
-    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
+    monkeypatch.setattr(core, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
     name = "访谈_笔记_本地_20261022-101010_网页编辑.md"
 
     mcp.list_note_versions("t1")
@@ -583,9 +584,10 @@ def test_a_replace_on_a_note_that_moved_on_is_refused_and_changes_nothing(tmp_pa
 def test_the_replace_tool_reaches_its_route(monkeypatch):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     import fluentflow_mcp_server as mcp
+    from scripts.fluentflow_mcp import core
 
     calls: list[tuple] = []
-    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
+    monkeypatch.setattr(core, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
     mcp.replace_note_text("t1", "旧", "新", "abc", reason="why")
     assert calls == [("POST", "/agent/v1/tasks/t1/note/replace",
                       {"old_text": "旧", "new_text": "新", "base_version": "abc", "reason": "why"})]

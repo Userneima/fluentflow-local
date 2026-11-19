@@ -156,13 +156,14 @@ def test_asking_for_it_is_recorded_beside_cut_and_carried_by_a_retry(monkeypatch
 
 def test_the_mcp_retry_tool_passes_picture_note(monkeypatch):
     import scripts.fluentflow_mcp_server as mcp
+    from scripts.fluentflow_mcp import core
 
     sent = []
-    monkeypatch.setattr(mcp, "_agent_request", lambda *_a, **k: sent.append(k["payload"]) or {"ok": True})
+    monkeypatch.setattr(core, "_agent_request", lambda *_a, **k: sent.append(k["payload"]) or {"ok": True})
     mcp.retry_task("t1", picture_note=True)
     mcp.retry_task("t1")
     assert sent == [{"picture_note": True}, None]
-    assert "picture_note" in mcp._TOOLS["retry_task"][1]["inputSchema"]["properties"]
+    assert "picture_note" in core._TOOLS["retry_task"][1]["inputSchema"]["properties"]
 
 
 def test_the_stored_message_is_diagnosed_the_same_way_again():

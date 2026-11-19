@@ -11,6 +11,7 @@ Requirements:
 from __future__ import annotations
 
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 LOCAL_HEALTH = {"status": "ok", "edition": "local", "runtime": {"execution": "local"}}
 
@@ -24,8 +25,8 @@ def _install(monkeypatch, answers=None):
             return LOCAL_HEALTH
         return (answers or {}).get(path, {"ok": True})
 
-    monkeypatch.setattr(mcp, "api_request", fake)
-    monkeypatch.setattr(mcp, "_watched", {})
+    monkeypatch.setattr(core, "api_request", fake)
+    monkeypatch.setattr(core, "_watched", {})
     return calls
 
 
@@ -39,7 +40,7 @@ def test_submission_says_who_judges_the_cut(monkeypatch):
     for name in ("submit_local_media", "submit_video_link"):
         assert schema[name]["inputSchema"]["properties"]["cut_judge"]["enum"] == ["auto", "agent", "fluentflow"]
     # Submitted tasks are reported from now on.
-    assert set(mcp._watched) == {"t1"}
+    assert set(core._watched) == {"t1"}
 
 
 def test_the_agent_fetches_decides_and_reports(monkeypatch):
@@ -59,19 +60,19 @@ def test_the_agent_fetches_decides_and_reports(monkeypatch):
 
 def test_the_heartbeat_drops_tasks_fluentflow_no_longer_waits_on(monkeypatch):
     calls = _install(monkeypatch, {"/agent/v1/agent-cut/heartbeat": {"ok": True, "watching": ["t1"]}})
-    mcp._watch("t1", None, None)
-    mcp._watch("t2", None, None)
-    mcp._heartbeat_once()
+    core._watch("t1", None, None)
+    core._watch("t2", None, None)
+    core._heartbeat_once()
     beats = [payload for _, path, payload in calls if path == "/agent/v1/agent-cut/heartbeat"]
     assert sorted(beats[0]["task_ids"]) == ["t1", "t2"]
-    assert set(mcp._watched) == {"t1"}
+    assert set(core._watched) == {"t1"}
 
 
 def test_an_unanswered_heartbeat_keeps_every_task(monkeypatch):
     _install(monkeypatch, {"/agent/v1/agent-cut/heartbeat": {"ok": False, "error": "down"}})
-    mcp._watch("t1", None, None)
-    mcp._heartbeat_once()
-    assert set(mcp._watched) == {"t1"}
+    core._watch("t1", None, None)
+    core._heartbeat_once()
+    assert set(core._watched) == {"t1"}
 
 
 def test_a_task_watched_as_the_heartbeat_ends_gets_a_new_heartbeat(monkeypatch):
@@ -87,16 +88,16 @@ def test_a_task_watched_as_the_heartbeat_ends_gets_a_new_heartbeat(monkeypatch):
         def start(self):
             pass
 
-    monkeypatch.setattr(mcp, "_heartbeat_enabled", True)
-    monkeypatch.setattr(mcp, "_heart", None)
-    monkeypatch.setattr(mcp.threading, "Thread", FakeThread)
-    monkeypatch.setattr(mcp, "_heartbeat_once", lambda: None)
-    mcp._watch("t1", None, None)
+    monkeypatch.setattr(core, "_heartbeat_enabled", True)
+    monkeypatch.setattr(core, "_heart", None)
+    monkeypatch.setattr(core.threading, "Thread", FakeThread)
+    monkeypatch.setattr(core, "_heartbeat_once", lambda: None)
+    core._watch("t1", None, None)
     assert len(started) == 1
-    mcp._watched.clear()
-    mcp._heartbeat_loop()  # nothing left to report: the loop ends
-    assert mcp._heart is None
-    mcp._watch("t2", None, None)
+    core._watched.clear()
+    core._heartbeat_loop()  # nothing left to report: the loop ends
+    assert core._heart is None
+    core._watch("t2", None, None)
     assert len(started) == 2
 
 
@@ -128,8 +129,8 @@ def test_a_long_wait_does_not_hold_the_conversations_other_calls(monkeypatch):
             fetched.set()
         return {"ok": True}
 
-    monkeypatch.setattr(mcp, "api_request", fake)
-    monkeypatch.setattr(mcp, "_watched", {})
+    monkeypatch.setattr(core, "api_request", fake)
+    monkeypatch.setattr(core, "_watched", {})
     calls = [
         {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
          "params": {"name": "wait_task", "arguments": {"task_id": "t1"}}},
@@ -140,7 +141,7 @@ def test_a_long_wait_does_not_hold_the_conversations_other_calls(monkeypatch):
     pending = mcp.run_stdio(io.StringIO("".join(json.dumps(call) + "\n" for call in calls)), out)
     assert fetched.wait(2), "the material call waited behind wait_task"
     # The wait is reported while it holds, not only once it returns.
-    assert "t1" in mcp._watched
+    assert "t1" in core._watched
     release.set()
     for thread in pending:
         thread.join(5)

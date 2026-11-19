@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from backend.core import agent_cut, task_actions
 from backend.routers import local_agent
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 from scripts.local_agent_client import FluentFlowApiError
 
 
@@ -73,7 +74,7 @@ def _failing(status, payload):
 
 def test_a_mistyped_task_id_says_how_to_find_the_right_one(monkeypatch):
     for wording in ("Job not found", "任务不存在"):
-        monkeypatch.setattr(mcp, "api_request", _failing(404, {"detail": wording}))
+        monkeypatch.setattr(core, "api_request", _failing(404, {"detail": wording}))
         answer = mcp.get_task("0b11a2f9")
         assert answer["ok"] is False and answer["code"] == "task_not_found"
         assert "32" in answer["error"] and "list_tasks" in answer["error"]
@@ -81,7 +82,7 @@ def test_a_mistyped_task_id_says_how_to_find_the_right_one(monkeypatch):
 
 def test_an_error_is_said_once_and_its_code_is_where_the_agent_looks(monkeypatch):
     detail = {"code": "duplicate_link", "message": "这个链接已经处理过", "existing_task_id": "abc"}
-    monkeypatch.setattr(mcp, "api_request", _failing(409, {"detail": detail}))
+    monkeypatch.setattr(core, "api_request", _failing(409, {"detail": detail}))
     answer = mcp.get_task("t" * 32)
     assert answer == {
         "ok": False, "error": "这个链接已经处理过", "status": 409,

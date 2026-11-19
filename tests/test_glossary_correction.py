@@ -517,9 +517,10 @@ def test_an_edit_made_while_it_runs_is_not_overwritten(agent, monkeypatch):
 def test_the_mcp_tools_reach_these_routes(monkeypatch):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     import fluentflow_mcp_server as mcp
+    from scripts.fluentflow_mcp import core
 
     calls: list[tuple] = []
-    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
+    monkeypatch.setattr(core, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
 
     mcp.list_transcript_corrections("t1", "glossary")
     mcp.run_glossary_correction("t1")

@@ -326,9 +326,10 @@ def test_the_agent_undoes_a_correction_and_the_subtitle_files_follow(video, monk
 def test_the_mcp_tools_reach_these_routes(monkeypatch):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     import fluentflow_mcp_server as mcp
+    from scripts.fluentflow_mcp import core
 
     calls: list[tuple] = []
-    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
+    monkeypatch.setattr(core, "_agent_request", lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
 
     mcp.list_transcript_corrections("t1", "subtitles")
     mcp.list_transcript_corrections("t1", "subtitles", include_reverted=True)

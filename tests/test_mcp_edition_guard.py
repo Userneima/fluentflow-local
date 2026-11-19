@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 from scripts.local_agent_client import FluentFlowApiError
 
 LOCAL_HEALTH = {"status": "ok", "edition": "local", "runtime": {"execution": "local"}}
@@ -32,7 +33,7 @@ def _install(monkeypatch, health, *, result=None):
             return health
         return result if result is not None else {"ok": True}
 
-    monkeypatch.setattr(mcp, "api_request", fake_api_request)
+    monkeypatch.setattr(core, "api_request", fake_api_request)
     return calls
 
 
@@ -93,7 +94,7 @@ def test_identity_is_reread_every_time(monkeypatch):
             return health["value"]
         return {"ok": True, "task_id": "t1"}
 
-    monkeypatch.setattr(mcp, "api_request", fake_api_request)
+    monkeypatch.setattr(core, "api_request", fake_api_request)
     assert mcp.submit_local_media("/Users/me/one.mov")["ok"] is False
     health["value"] = LOCAL_HEALTH
     assert mcp.submit_local_media("/Users/me/one.mov") == {"ok": True, "task_id": "t1"}

@@ -3,6 +3,7 @@
 import json
 
 import scripts.fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 
 def _text(name, arguments):
@@ -10,8 +11,8 @@ def _text(name, arguments):
 
 
 def _serve(monkeypatch, answer):
-    monkeypatch.setattr(mcp, "_require_local_edition", lambda base: None)
-    monkeypatch.setattr(mcp, "_agent_request", lambda *a, **k: answer)
+    monkeypatch.setattr(core, "_require_local_edition", lambda base: None)
+    monkeypatch.setattr(core, "_agent_request", lambda *a, **k: answer)
 
 
 def test_material_starts_with_its_whole_length(monkeypatch):

@@ -468,9 +468,10 @@ def test_an_agent_submission_leaves_all_three_to_the_agent(monkeypatch, tmp_path
 
 def test_the_mcp_tools_reach_these_routes(monkeypatch):
     from scripts import fluentflow_mcp_server as mcp
+    from scripts.fluentflow_mcp import core
 
     calls: list[tuple] = []
-    monkeypatch.setattr(mcp, "_agent_request",
+    monkeypatch.setattr(core, "_agent_request",
                         lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
 
     mcp.get_agent_correction_material("t1", "glossary", page=2)

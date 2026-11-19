@@ -191,11 +191,12 @@ def test_the_submit_routes_record_cut_false(monkeypatch, tmp_path):
 
 def test_the_mcp_submit_tools_pass_cut(monkeypatch):
     import scripts.fluentflow_mcp_server as mcp
+    from scripts.fluentflow_mcp import core
 
     sent = []
-    monkeypatch.setattr(mcp, "_require_local_edition", lambda *_a: None)
-    monkeypatch.setattr(mcp, "_agent_request", lambda *_a, **k: sent.append(k["payload"]) or {"ok": True})
-    monkeypatch.setattr(mcp, "_watch", lambda *_a: None)
+    monkeypatch.setattr(core, "_require_local_edition", lambda *_a: None)
+    monkeypatch.setattr(core, "_agent_request", lambda *_a, **k: sent.append(k["payload"]) or {"ok": True})
+    monkeypatch.setattr(core, "_watch", lambda *_a: None)
 
     mcp.submit_local_media("/x/talk.mp4", cut=False)
     mcp.submit_video_link("https://www.bilibili.com/video/BV1xx411c7mD", cut=False)
@@ -204,7 +205,7 @@ def test_the_mcp_submit_tools_pass_cut(monkeypatch):
     assert sent[1]["options"]["cut"] == "false"
     assert "cut" not in sent[2]["options"]
     for name in ("submit_local_media", "submit_video_link"):
-        assert "cut" in mcp._TOOLS[name][1]["inputSchema"]["properties"]
+        assert "cut" in core._TOOLS[name][1]["inputSchema"]["properties"]
 
 
 def test_the_note_of_a_task_not_cut_reads_the_original(monkeypatch, task_id, tmp_path):

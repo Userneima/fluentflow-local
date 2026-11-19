@@ -100,8 +100,10 @@ def test_the_mcp_tool_has_no_switch_and_ignores_an_old_agents_one(monkeypatch):
     assert "allow_miuistore" not in tool["inputSchema"]["properties"]
     assert "allow_miuistore" not in inspect.signature(mcp.submit_video_link).parameters
 
+    from scripts.fluentflow_mcp import core
+
     calls: list[dict] = []
-    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: calls.append(kw) or {"ok": True})
+    monkeypatch.setattr(core, "_agent_request", lambda method, path, **kw: calls.append(kw) or {"ok": True})
     mcp._call_tool("submit_video_link", {"input_text": DOUYIN, "allow_miuistore": False})
 
     assert "allow_miuistore" not in calls[0]["payload"]["options"]

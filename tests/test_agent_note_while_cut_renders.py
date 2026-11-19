@@ -372,10 +372,11 @@ def test_the_mcp_wait_stays_under_codexs_limit_by_default_and_never_past_ten_min
     """Codex gives one tool call 300 seconds unless tool_timeout_sec is raised
     (measured 2026-10-27): the default wait ends, answer included, before that."""
     import scripts.fluentflow_mcp_server as mcp
+    from scripts.fluentflow_mcp import core
 
     calls = []
-    monkeypatch.setattr(mcp, "_agent_request", lambda *a, **kw: calls.append(kw) or {"ok": True})
-    monkeypatch.setattr(mcp, "_watching", lambda answer, *a: answer)
+    monkeypatch.setattr(core, "_agent_request", lambda *a, **kw: calls.append(kw) or {"ok": True})
+    monkeypatch.setattr(core, "_watching", lambda answer, *a: answer)
 
     mcp.wait_task("t")
     mcp.wait_task("t", timeout_seconds=3600)

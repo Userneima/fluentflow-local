@@ -20,6 +20,7 @@ import threading
 import pytest
 
 from scripts import fluentflow_mcp_server as server
+from scripts.fluentflow_mcp import core
 
 
 @pytest.fixture
@@ -34,10 +35,10 @@ def backend(monkeypatch):
         release.wait(5)
         return {"ok": True, "path": path, "written": True}
 
-    monkeypatch.setattr(server, "_agent_request", request)
-    monkeypatch.setattr(server, "_require_local_edition", lambda base: None)
-    monkeypatch.setattr(server, "HOLD_SECONDS", 0.2)
-    monkeypatch.setattr(server, "_runs", {})
+    monkeypatch.setattr(core, "_agent_request", request)
+    monkeypatch.setattr(core, "_require_local_edition", lambda base: None)
+    monkeypatch.setattr(core, "HOLD_SECONDS", 0.2)
+    monkeypatch.setattr(core, "_runs", {})
     return calls, release
 
 
@@ -93,9 +94,9 @@ def test_saving_a_note_without_a_model_check_is_not_held(backend):
     release.set()
     answer = server._call_tool("save_agent_note", {"task_id": "t1", "note_markdown": "# 笔记"})
     assert '"written": true' in answer["content"][0]["text"]
-    assert not server._runs
+    assert not core._runs
 
 
 def test_the_hold_is_inside_codexs_wait():
     # Codex gives up on a tool call at 300 seconds; the answer has to be back first.
-    assert server.HOLD_SECONDS <= 270
+    assert core.HOLD_SECONDS <= 270

@@ -13,6 +13,7 @@ from backend.core.local_agent_package import _local_extra_next_actions
 from backend.core.local_request_scope import LOCAL_OWNER_ID as OWNER
 from backend.routers.local_agent import router
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 
 @pytest.fixture
@@ -211,7 +212,7 @@ def test_mcp_tools_use_authenticated_routes_and_report_stale(task, monkeypatch):
         if response.status_code >= 400:
             return {"http_status": response.status_code, **response.json()}
         return response.json()
-    monkeypatch.setattr(mcp, "_agent_request", bridge)
+    monkeypatch.setattr(core, "_agent_request", bridge)
     packet = mcp.get_agent_alignment_material(task)
     assert packet["ok"]
     assert _local_extra_next_actions(job(task), {})[0]["action"] == "get_agent_alignment_material"
@@ -275,7 +276,7 @@ def test_aligning_again_through_the_mcp_tools(task, monkeypatch):
         sent.append((path, kw.get("payload")))
         return {"ok": True, "material_version": "v", "sections": []}
 
-    monkeypatch.setattr(mcp, "_agent_request", bridge)
+    monkeypatch.setattr(core, "_agent_request", bridge)
     mcp.get_agent_alignment_material(task, again=True)
     mcp.save_agent_alignment(task, "v", [], "m", again=True)
     mcp.get_agent_alignment_material(task)

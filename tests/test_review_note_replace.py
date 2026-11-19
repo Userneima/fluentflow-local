@@ -21,6 +21,7 @@ import pytest
 from backend.core import note_spacing
 from backend.core import job_store, review_note
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 from tests.test_review_note import _HEADERS, ANSWER, STEM, _client, _folder, _task, home, no_browser  # noqa: F401
 
@@ -149,7 +150,7 @@ def test_an_obsidian_save_landing_during_the_write_is_not_overwritten(review, mo
 
 def test_the_tool_reaches_the_review_route_with_note_review(monkeypatch):
     calls: list[tuple] = []
-    monkeypatch.setattr(mcp, "_agent_request",
+    monkeypatch.setattr(core, "_agent_request",
                         lambda method, path, **kw: calls.append((method, path, kw.get("payload"))) or {"ok": True})
 
     mcp.replace_note_text("t1", note="review", replacements=[{"old_text": "a", "new_text": ""}])

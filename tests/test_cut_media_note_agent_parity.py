@@ -42,6 +42,7 @@ import backend.routers.local_agent as local_agent
 from backend.core.local_agent_package import build_agent_task_package
 from backend.core.result_artifacts import VISUAL_NOTE_KIND, artifact_target_path
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 TASK = "task-agent-cut-note"
 _TOKEN = "local-secret-token"
@@ -361,7 +362,7 @@ def local_edition(monkeypatch):
     because the hosted backend has no visual-note route and says so in a way that
     reads like a missing feature rather than the wrong backend.
     """
-    monkeypatch.setattr(mcp, "_require_local_edition", lambda api_base: None)
+    monkeypatch.setattr(core, "_require_local_edition", lambda api_base: None)
 
 
 def test_the_mcp_tool_defaults_to_the_free_call(monkeypatch, local_edition):
@@ -371,7 +372,7 @@ def test_the_mcp_tool_defaults_to_the_free_call(monkeypatch, local_edition):
         seen.update({"method": method, "path": path, **kwargs})
         return {"ok": True}
 
-    monkeypatch.setattr(mcp, "_agent_request", fake_request)
+    monkeypatch.setattr(core, "_agent_request", fake_request)
 
     mcp.write_note_from_cut_media(TASK)
 
@@ -383,7 +384,7 @@ def test_the_mcp_tool_defaults_to_the_free_call(monkeypatch, local_edition):
 def test_the_mcp_tool_can_run_it_and_can_switch_notes(monkeypatch, local_edition):
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        mcp, "_agent_request", lambda method, path, **kwargs: seen.append(kwargs) or {"ok": True}
+        core, "_agent_request", lambda method, path, **kwargs: seen.append(kwargs) or {"ok": True}
     )
 
     mcp.write_note_from_cut_media(TASK, preview=False)

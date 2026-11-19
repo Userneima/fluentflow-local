@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from backend.core import job_store, media_job, task_intelligence, task_submission
 from backend.routers import local_agent
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 
 def test_legacy_client_defaults_do_not_delegate_to_background_models():
@@ -33,9 +34,9 @@ def test_explicit_delegation_keeps_transcript_only_choice():
 ])
 def test_every_mcp_submission_and_schema_default_to_current_agent(monkeypatch, name, value):
     sent = []
-    monkeypatch.setattr(mcp, "_require_local_edition", lambda *_: None)
-    monkeypatch.setattr(mcp, "_agent_request", lambda *_a, **kw: sent.append(kw["payload"]) or {"ok": True})
-    monkeypatch.setattr(mcp, "_watching", lambda answer, *_: answer)
+    monkeypatch.setattr(core, "_require_local_edition", lambda *_: None)
+    monkeypatch.setattr(core, "_agent_request", lambda *_a, **kw: sent.append(kw["payload"]) or {"ok": True})
+    monkeypatch.setattr(core, "_watching", lambda answer, *_: answer)
     submit = getattr(mcp, name)
     submit(value)
     submit(value, intelligence="fluentflow")

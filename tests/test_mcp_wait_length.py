@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from scripts import fluentflow_mcp_server as server
+from scripts.fluentflow_mcp import core, tasks
 
 
 @pytest.fixture
@@ -25,8 +26,8 @@ def sent(monkeypatch):
         payloads.append(payload)
         return {"ok": True, "done": False}
 
-    monkeypatch.setattr(server, "_agent_request", request)
-    monkeypatch.setattr(server, "_watch", lambda *a, **k: None)
+    monkeypatch.setattr(core, "_agent_request", request)
+    monkeypatch.setattr(core, "_watch", lambda *a, **k: None)
     return payloads
 
 
@@ -37,4 +38,4 @@ def test_a_wait_holds_at_least_the_default(sent, asked, held):
 
 
 def test_the_default_is_inside_codexs_wait():
-    assert server.WAIT_DEFAULT_SECONDS <= 270
+    assert tasks.WAIT_DEFAULT_SECONDS <= 270

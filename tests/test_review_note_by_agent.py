@@ -29,6 +29,7 @@ import pytest
 from backend.core import note_spacing
 from backend.core import job_store, review_note
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 from tests.test_review_note import ANSWER, BASE, STEM, FakeChat, _folder, _legacy, _task, home, no_browser  # noqa: F401
 
@@ -144,8 +145,8 @@ def test_through_the_tool_the_agent_writes_by_default_and_fluentflow_only_when_a
         asked.append(path)
         return {"ok": True, "part": 1, "total_parts": 2, "material_version": "v", "text": "写法"}
 
-    monkeypatch.setattr(mcp, "_agent_request", request)
-    monkeypatch.setattr(mcp, "_runs", {})
+    monkeypatch.setattr(core, "_agent_request", request)
+    monkeypatch.setattr(core, "_runs", {})
 
     material = mcp.write_review_note(task_id="t")
     assert asked[-1] == "/agent/v1/review-notes/agent-material"

@@ -9,6 +9,7 @@ a step on an existing task, and re-cutting warns about the timeline.
 from __future__ import annotations
 
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 
 def _description(name: str) -> str:
@@ -50,7 +51,7 @@ def test_the_check_script_expects_every_tool_the_server_lists():
 
 def test_submit_transcript_returns_at_once_and_passes_the_note_settings(monkeypatch):
     sent = {}
-    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: sent.update(kw) or {"ok": True})
+    monkeypatch.setattr(core, "_agent_request", lambda method, path, **kw: sent.update(kw) or {"ok": True})
 
     mcp.submit_transcript("文本", note_mode="direct", prompt_preset="meeting", system_prompt="只列行动项")
 
@@ -77,7 +78,7 @@ def test_retry_task_can_turn_speaker_separation_on(monkeypatch):
     """Requirement (2026-10-15): the agent re-runs a multi-person recording with
     speaker separation through retry_task, and the tool says how."""
     sent: dict = {}
-    monkeypatch.setattr(mcp, "_agent_request", lambda method, path, **kw: sent.update(kw, path=path) or {"ok": True})
+    monkeypatch.setattr(core, "_agent_request", lambda method, path, **kw: sent.update(kw, path=path) or {"ok": True})
 
     mcp.retry_task("t-1", speaker_diarization=True)
     assert sent["path"] == "/agent/v1/tasks/t-1/retry"

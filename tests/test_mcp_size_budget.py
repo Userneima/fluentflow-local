@@ -23,6 +23,7 @@ from backend.core import job_store, note_section_times as times
 from backend.core.local_request_scope import LOCAL_OWNER_ID as OWNER
 from backend.routers.local_agent import router
 from scripts import fluentflow_mcp_server as mcp
+from scripts.fluentflow_mcp import core
 
 # Claude Code keeps a tool result inline up to 50,000 characters and saves a
 # longer one to a file (measured 2026-11-04, decision 8.17). A tool may
@@ -126,7 +127,7 @@ def long_task(monkeypatch):
         assert response.status_code < 400, (path, response.text[:300])
         return response.json()
 
-    monkeypatch.setattr(mcp, "_agent_request", bridge)
+    monkeypatch.setattr(core, "_agent_request", bridge)
     yield task_id
     job_store.delete_jobs([task_id])
 

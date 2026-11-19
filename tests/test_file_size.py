@@ -30,7 +30,6 @@ LONG_FILES = {
     "backend/core/video_source.py": 2743,
     "frontend/src/routes/editor.jsx": 2414,
     "backend/core/silence_cuts.py": 2361,
-    "scripts/fluentflow_mcp_server.py": 2359,
     "backend/routers/local_agent.py": 1889,
     "backend/core/media_job.py": 1826,
     "backend/core/visual_note_job.py": 1723,
