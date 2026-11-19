@@ -271,6 +271,8 @@ export const CutReport = ({job, embedded = false}) => {
         try {
             const data = await post(`${base}/verdict`, {keys, verdict});
             setSurvey((current) => ({...current, verdicts: data.verdicts || {}}));
+            // An answer can release this judge or take its release back.
+            await load().catch(() => {});
         } catch (exc) {
             setError(exc.message);
         } finally {

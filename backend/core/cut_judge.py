@@ -166,9 +166,11 @@ def find(api_key: str | None = None) -> Judge | None:
     key = api_key if api_key is not None else resolve_secret(None, "anthropic_api_key")
     channel = resolve_channel(key)
     if channel.available:
+        # The name carries the model, so the user's record with one model is
+        # not lent to another (cut_trust).
         if channel.name == CHANNEL_SUBSCRIPTION:
-            return Judge(channel.name, True, _subscription(channel.model))
-        return Judge(channel.name, True, _api_key(key))
+            return Judge(f"{channel.name}:{channel.model}", True, _subscription(channel.model))
+        return Judge(f"{channel.name}:{channel.model}", True, _api_key(key))
     endpoint = vision_endpoint()
     if endpoint is not None:
         return Judge(f"vision:{endpoint[2]}", True, _openai_compatible(*endpoint))

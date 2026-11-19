@@ -8,7 +8,9 @@ Requirements (owner, 2026-11-19, decision 2.18):
 3. One turnaround among the latest 30 takes the release back; an undone
    turnaround does not count.
 4. A judge whose name does not say which model judged (the text model, an
-   agent naming its session) is never released.
+   agent naming its session, FluentFlow's Claude channel without its model)
+   is never released; a judge is one exact model, so a record is not lent
+   to another model.
 5. Nothing is answered for the user: a released place is no agreement and no case.
 6. An agreement saved through the report counts at once.
 """
@@ -91,10 +93,12 @@ def test_a_recent_turnaround_takes_the_release_back_and_an_undone_one_does_not()
 
 
 def test_judges_that_do_not_name_a_model_are_never_released():
-    for judge in ("text_model", "agent:codex-current-session-" + uuid.uuid4().hex[:6], "agent"):
+    for judge in ("text_model", "agent:codex-current-session-" + uuid.uuid4().hex[:6], "agent", "claude_code_subscription"):
         assert cut_trust.judge_of(judge) is None
         assert cut_trust.standing(judge)["released"] is False
-    assert cut_trust.judge_of("claude_code_subscription") == "claude_code_subscription"
+    # FluentFlow's own Claude names its model, so changing it starts a new record.
+    assert cut_trust.judge_of("claude_code_subscription:opus") == "claude_code_subscription:opus"
+    assert cut_trust.judge_of("anthropic_api_key:claude-opus-5-5") == "anthropic_api_key:claude-opus-5-5"
     assert cut_trust.judge_of("agent:gpt-6.1-sol") == "agent:gpt-6.1-sol"
 
 

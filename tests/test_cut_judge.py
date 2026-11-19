@@ -36,7 +36,8 @@ def test_claude_comes_first(monkeypatch):
 
     judge = cut_judge.find(api_key="")
 
-    assert judge.name == visual_note_channel.CHANNEL_SUBSCRIPTION and judge.sees_images
+    # The name carries the model, so a record with one model is not lent to another (decision 2.18).
+    assert judge.name == f"{visual_note_channel.CHANNEL_SUBSCRIPTION}:{_channel(True).model}" and judge.sees_images
 
 
 def test_a_named_picture_model_comes_before_the_text_model(monkeypatch):

@@ -37,8 +37,10 @@ from backend.core import job_store
 RELEASE_TASKS = 5
 RELEASE_ANSWERS = 30
 
-# Names that say which model judged. FluentFlow's own Claude channels name it
-# by the channel; an agent and the vision model name it themselves.
+# Names that say which model judged. FluentFlow's own Claude channels add the
+# model after the channel (``claude_code_subscription:opus``; before
+# 2026-11-19 they named only the channel, and those records count for no
+# judge); an agent and the vision model name it themselves.
 _OWN_CLAUDE = {"claude_code_subscription", "anthropic_api_key"}
 _MODEL = re.compile(r"claude|gpt|gemini|deepseek|kimi|moonshot|qwen|glm|mimo|doubao|llama|mistral|grok", re.I)
 
@@ -54,8 +56,9 @@ def judge_of(judged_by: Any) -> str | None:
     """The judge a record can be kept for, or None when the name does not say
     which model judged."""
     name = str(judged_by or "").strip()
-    if name in _OWN_CLAUDE:
-        return name
+    channel, _, model = name.partition(":")
+    if channel in _OWN_CLAUDE:
+        return name if model.strip() else None
     for prefix in ("agent:", "vision:"):
         if name.startswith(prefix) and _MODEL.search(name[len(prefix):]):
             return name
