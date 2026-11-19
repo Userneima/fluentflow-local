@@ -19,6 +19,12 @@ Submission defaults are `intelligence="agent"`, `cut_judge="agent"`, `skip_summa
 When the user only wants the transcript, submit with `cut=false`: nothing is cut and you
 are not asked to judge a cut. Do not send `save_agent_cut` with empty lists for that; empty
 lists mean "cut by the defaults".
+A video in which no one speaks (music and on-screen captions) does not fail: its
+on-screen text, read every two seconds, becomes the transcript under a first line saying
+so, nothing is cut, and you write the note from that text and the frames. Do not sample
+frames yourself. A nearly silent one fails with code `no_speech_quiet` (usually a recorder
+that took no sound); if the user says it really has no sound, `retry_task` with
+`picture_note=true`.
 The last switch leaves note writing to you; it does not mean the user's request ends
 at a transcript. Check the complete transcript and necessary frames yourself, then save.
 `save_agent_note` defaults to `model_check=false`: saving is not a request for a second

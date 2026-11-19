@@ -40,7 +40,7 @@ from backend.core.local_error_diagnostics import NO_SPEECH
 from backend.core.media_probe import media_duration_seconds
 from backend.core.runtime_env import truthy
 from backend.core.ai_client import _chat, _get_client, _normalize_model, _normalize_provider, _provider_api_key
-from backend.core import correction_notes, glossary_correction, model_usage, subtitle_correction, task_intelligence, task_stop
+from backend.core import correction_notes, glossary_correction, model_usage, screen_text_transcript, subtitle_correction, task_intelligence, task_stop
 from backend.core.claude_text import claude_chat, subscription_first
 from backend.core.media_job_stages import (
     clean_transcript,
@@ -68,7 +68,7 @@ from backend.core.job_lifecycle import (
     result_for_summary_success,
     result_for_transcript_only,
 )
-from backend.core.job_store import get_job, progress_message_metadata, upsert_job
+from backend.core.job_store import get_job, progress_message_metadata, update_job_metadata, upsert_job
 from backend.core.task_watch import TaskWatch
 from backend.core.result_artifacts import (
     DEBREATH_MEDIA_KIND,
@@ -1052,7 +1052,23 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 audio_path=out_audio,
             )
             cleanup_payload = _cleanup_payload(cleanup_result)
-            # Before the checkpoint, so the transcription step reads failed.
+            if not screen_text_transcript.has_speech(transcript_text, segments_payload):
+                # No one speaks: a video's on-screen text becomes the transcript,
+                # or the task fails here with why (before the checkpoint, so the
+                # transcription step reads failed).
+                segments_payload = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: screen_text_transcript.transcript_or_refuse(
+                        Path(in_path),
+                        duration_seconds=duration_sec,
+                        agent_writes=bool(ctx.agent_intelligence),
+                        asked=screen_text_transcript.picture_note_wanted(get_job(task_id_value)),
+                    ),
+                )
+                transcript_text = screen_text_transcript.joined(segments_payload)
+                base_result["transcript_source"] = screen_text_transcript.SCREEN_TEXT
+                # Nothing to cut by speech: the rest runs as for cut=false.
+                update_job_metadata(task_id_value, {"cut": False})
             require_speech(transcript_text, segments_payload)
             checkpoint = _transcribed_checkpoint(
                 ctx, base_result=base_result, tr=tr, cleanup_payload=cleanup_payload,
@@ -1080,6 +1096,12 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
         subtitle_fields: dict[str, Any] = dict(checkpoint.get("subtitle_fields") or {})
         if "subtitle_fields" in checkpoint:
             pass
+        elif base_result.get("transcript_source") == screen_text_transcript.SCREEN_TEXT:
+            # The transcript is the on-screen text itself: nothing to correct it against.
+            subtitle_fields = {"subtitle_correction": {
+                "status": "skipped", "reason": "screen_text",
+                "detail": "没有人说话，转录稿就是画面上的文字，不用再拿字幕校正。",
+            }}
         elif ctx.agent_intelligence:
             subtitle_fields = {"subtitle_correction": task_intelligence.deferred_step()}
         elif subtitle_correction.enabled() and segments_payload:

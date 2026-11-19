@@ -233,7 +233,9 @@ export const fmtDateTime = (value, lang='zh') => {
 };
 // `settingsTarget`: where in Settings the fix is, as a path with an anchor
 // ('/settings#<row id>'), when the fix is a setting the person changes.
-const taskErrorDiagnosis = ({code, titleZh, titleEn, detailZh, detailEn, nextZh, nextEn, severity='error', retryable=true, settingsTarget=''}) => ({
+// `pictureNote`: the page offers 「照画面写笔记」, a retry that writes the note
+// from the on-screen text and picture of a video no one speaks in.
+const taskErrorDiagnosis = ({code, titleZh, titleEn, detailZh, detailEn, nextZh, nextEn, severity='error', retryable=true, settingsTarget='', pictureNote=false}) => ({
     code,
     title: {zh: titleZh, en: titleEn},
     detail: {zh: detailZh, en: detailEn},
@@ -241,7 +243,43 @@ const taskErrorDiagnosis = ({code, titleZh, titleEn, detailZh, detailEn, nextZh,
     severity,
     retryable,
     settingsTarget,
+    pictureNote,
 });
+
+// The backend's no-speech failures (local_error_diagnostics.NO_SPEECH and the
+// ways a picture note is not written unasked); the same words, said for the page.
+const NO_SPEECH = '这段录音里没检测到人声';
+const noSpeechDiagnosis = (raw) => {
+    if(!raw.includes(NO_SPEECH)) return null;
+    if(raw.includes('声音也几乎没有')) return taskErrorDiagnosis({
+        code: 'no_speech_quiet', titleZh: '没检测到人声，声音也几乎没有', titleEn: 'No speech and almost no sound',
+        detailZh: '这段录像里没人说话，整段声音也很轻，常见原因是录屏时没采到系统声音或麦克风是静音的。视频本来就没有声音的话，可以照画面写笔记。',
+        detailEn: 'No one speaks and the sound is almost silent; usually the recorder took no system sound or the microphone was muted. If the video really has no sound, write the note from the picture.',
+        nextZh: '检查录屏软件的音频来源后重新录，或点「照画面写笔记」。', nextEn: 'Check the recorder\'s audio source, or click Write from the picture.',
+        retryable: false, pictureNote: true,
+    });
+    if(raw.includes('视频超过 10 分钟')) return taskErrorDiagnosis({
+        code: 'no_speech_long', titleZh: '没检测到人声', titleEn: 'No speech',
+        detailZh: '这段视频里没人说话，只有音乐或环境声。视频超过 10 分钟，照画面写笔记要让模型看很多张图，没有自动写。',
+        detailEn: 'No one speaks, there is only music or background sound. The video is over 10 minutes, so no note was written from the picture unasked.',
+        nextZh: '要笔记的话点「照画面写笔记」。', nextEn: 'Click Write from the picture for a note.',
+        retryable: false, pictureNote: true,
+    });
+    if(raw.includes('画面上也没读到文字')) return taskErrorDiagnosis({
+        code: 'no_speech_no_text', titleZh: '没有人声，画面上也没有文字', titleEn: 'No speech and no text on screen',
+        detailZh: '这段视频里没人说话，画面上也没读到文字，没有可以写笔记的内容。',
+        detailEn: 'No one speaks and no text was found on screen: there is nothing to write a note from.',
+        nextZh: '确定里面有人说话的话，检查录屏的音频来源后重新录。', nextEn: 'If someone does speak in it, check the recorder\'s audio source and record again.',
+        retryable: false,
+    });
+    return taskErrorDiagnosis({
+        code: 'no_speech', titleZh: '没检测到人声', titleEn: 'No speech',
+        detailZh: '这段录音里没检测到人声，转录出来是空的，所以没有剪辑、没写笔记。常见原因是录屏时没采到系统声音，或者麦克风是静音的。',
+        detailEn: 'No speech was detected, so nothing was cut or written. Usually the recorder took no system sound or the microphone was muted.',
+        nextZh: '检查录屏软件的音频来源（系统声音、麦克风）后重新录。', nextEn: 'Check the recorder\'s audio source (system sound, microphone) and record again.',
+        retryable: false,
+    });
+};
 
 const PROVIDER_NAMES = {
     deepseek: {zh: 'DeepSeek', en: 'DeepSeek'},
@@ -459,6 +497,7 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
         nextAction: zh ? diag.nextAction.zh : diag.nextAction.en,
         retryable: diag.retryable !== false,
         settingsTarget: diag.settingsTarget || '',
+        pictureNote: diag.pictureNote === true,
         raw,
     });
     if(!raw) return pick(taskErrorDiagnosis({
@@ -473,6 +512,8 @@ export const diagnoseTaskError = (message, lang='zh', context={}) => {
     const lower = raw.toLowerCase();
     const feishu = feishuTaskDiagnosis(raw, lower);
     if(feishu) return pick(feishu);
+    const noSpeech = noSpeechDiagnosis(raw);
+    if(noSpeech) return pick(noSpeech);
 
     const patterns = [
         // Codes and raw system output that used to show as they are (2026-10-18).

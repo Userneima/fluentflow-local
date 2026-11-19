@@ -687,5 +687,11 @@ async def queue_process_folder(request: Request, payload: dict = Body(...)) -> d
 
 @router.post("/jobs/{task_id}/retry")
 async def retry_job_from_stored_source(request: Request, task_id: str) -> dict:
-    """Re-run a task from its stored source file, on the local hub."""
-    return await retry_for_request(request, task_id)
+    """Re-run a task from its stored source file, on the local hub. A JSON body
+    {"picture_note": true} is 「照画面写笔记」 on a task no one speaks in."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - an empty or non-JSON body is a plain retry
+        body = None
+    picture_note = isinstance(body, dict) and body.get("picture_note") is True
+    return await retry_for_request(request, task_id, picture_note=picture_note)

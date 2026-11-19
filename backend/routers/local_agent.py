@@ -791,7 +791,10 @@ async def retry_agent_task(request: Request, task_id: str) -> dict[str, Any]:
         value = body.get("speaker_diarization")
         on = value if isinstance(value, bool) else str(value).strip().lower() in {"1", "true", "yes", "on"}
         overrides["speaker_diarization"] = "true" if on else "false"
-    retried = await retry_for_request(request, task_id, overrides=overrides or None)
+    # {"picture_note": true}: a video no one speaks in, written up from its
+    # on-screen text and picture even when it is long or nearly silent.
+    picture_note = isinstance(body, dict) and body.get("picture_note") is True
+    retried = await retry_for_request(request, task_id, overrides=overrides or None, picture_note=picture_note)
     next_task_id = str(retried.get("task_id") or "")
     job = retried.get("job") if isinstance(retried.get("job"), dict) else {}
     return {

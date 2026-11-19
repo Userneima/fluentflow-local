@@ -658,7 +658,11 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                             {zh ? '去设置修改' : 'Change it in Settings'}
                         </Link>
                     ) : null}
-                    {!retryUseless ? (
+                    {diagnosis.pictureNote ? (
+                        <button type="button" disabled={retryingTaskId === taskId} onClick={() => onRetry(job, {pictureNote: true})} className={`shrink-0 ${linkButton()}`}>
+                            {retryingTaskId === taskId ? (zh ? '正在入队…' : 'Queuing…') : (zh ? '照画面写笔记' : 'Write from the picture')}
+                        </button>
+                    ) : !retryUseless ? (
                         <button type="button" disabled={retryingTaskId === taskId} onClick={() => onRetry(job)} className={`shrink-0 ${linkButton()}`}>
                             {retryingTaskId === taskId ? (zh ? '正在入队…' : 'Queuing…') : (zh ? '重新提交' : 'Submit again')}
                         </button>
@@ -1070,13 +1074,22 @@ const AgentTasks = () => {
         return await retryJob(taskId, localOptions);
     };
 
-    const retryTerminalJob = async (job) => {
+    const retryTerminalJob = async (job, {pictureNote = false} = {}) => {
         const taskId = taskIdForJob(job);
         if (!taskId || isLiveTask(job)) return;
         setRetryingTaskId(taskId);
         setError(null);
         setRetryError(null);
         try {
+            if (pictureNote) {
+                // 「照画面写笔记」: the backend retries the task itself, a link
+                // task included, so the flag reaches the new one.
+                const localOptions = isLocalJob(job) ? {sttProvider: 'local'} : {};
+                const response = await retryJob(taskId, {...localOptions, pictureNote: true});
+                if (response?.job) rememberRetriedJobs([response.job]);
+                await loadJobs();
+                return;
+            }
             // Today's browser-login choice, not the one stored on the job: the
             // usual fix for a failed link is to pick a browser and try again.
             const options = retryOptionsForJob(job, {cookiesBrowser: loadSettings().videoCookiesBrowser || ''});
@@ -1189,7 +1202,7 @@ const AgentTasks = () => {
         onOpenResult: (job) => handlersRef.current.openResult(job),
         onOpenSteps: (job) => handlersRef.current.openSteps(job),
         onPin: (job) => handlersRef.current.togglePin(job),
-        onRetry: (job) => handlersRef.current.retryTerminalJob(job),
+        onRetry: (job, options) => handlersRef.current.retryTerminalJob(job, options),
         onResume: (job) => handlersRef.current.resumeTerminalJob(job),
         onStop: (job) => handlersRef.current.stopJobStepOf(job),
     }), []);

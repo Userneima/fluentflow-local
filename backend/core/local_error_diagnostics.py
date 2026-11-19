@@ -14,6 +14,7 @@ def _diag(
     next_action: str,
     *,
     retryable: bool = True,
+    picture_note: bool = False,
 ) -> dict[str, Any]:
     return {
         "code": code,
@@ -22,6 +23,8 @@ def _diag(
         "detail": detail,
         "next_action": next_action,
         "retryable": retryable,
+        # The page offers 「照画面写笔记」 (a retry with picture_note).
+        **({"picture_note": True} if picture_note else {}),
     }
 
 
@@ -218,10 +221,51 @@ def _feishu_rule(raw: str, lowered: str, via_cli: bool) -> dict[str, Any]:
 # making a compressed copy of nothing (owner, 2026-11-14). The words start the
 # message stored on the task, which is diagnosed again when it is shown.
 NO_SPEECH = "这段录音里没检测到人声"
+# A video with no speech gets its on-screen text read instead
+# (`screen_text_transcript`, owner 2026-11-19); these are the ways that does not
+# happen. Each starts with NO_SPEECH, so the steps after it are skipped as before.
+NO_SPEECH_QUIET = NO_SPEECH + "，声音也几乎没有"
+NO_SPEECH_LONG = NO_SPEECH + "，视频超过 10 分钟，没有自动照画面写笔记"
+NO_SPEECH_NO_TEXT = NO_SPEECH + "，画面上也没读到文字"
 
 
 def is_no_speech(error: Any) -> bool:
     return NO_SPEECH in str(error or "")
+
+
+def _no_speech_diagnosis(raw: str) -> dict[str, Any]:
+    # Each detail starts with its reason word for word: the detail is what the
+    # task stores (``friendly_error``) and what is diagnosed again when shown.
+    skipped = "所以没有剪辑、没写笔记、也没做压缩副本。"
+    if NO_SPEECH_QUIET in raw:
+        return _diag(
+            "no_speech_quiet", "没检测到人声，声音也几乎没有",
+            f"{NO_SPEECH_QUIET}，{skipped}"
+            "常见原因是录屏时没采到系统声音，或者麦克风是静音的。",
+            "检查录屏软件的音频来源（系统声音、麦克风）后重新录；这段视频本来就没有声音的话，点「照画面写笔记」。",
+            retryable=False, picture_note=True,
+        )
+    if NO_SPEECH_LONG in raw:
+        return _diag(
+            "no_speech_long", "没检测到人声",
+            f"{NO_SPEECH_LONG}：只有音乐或环境声，照画面写笔记要让模型看很多张图。",
+            "要笔记的话点「照画面写笔记」：读出画面上的文字，结合画面写。",
+            retryable=False, picture_note=True,
+        )
+    if NO_SPEECH_NO_TEXT in raw:
+        return _diag(
+            "no_speech_no_text", "没有人声，画面上也没有文字",
+            f"{NO_SPEECH_NO_TEXT}，没有可以写笔记的内容，{skipped}",
+            "确定里面有人说话的话，检查录屏的音频来源后重新录。",
+            retryable=False,
+        )
+    return _diag(
+        "no_speech", "没检测到人声",
+        f"{NO_SPEECH}，转录出来是空的，{skipped}"
+        "常见原因是录屏时没采到系统声音，或者麦克风是静音的。",
+        "检查录屏软件的音频来源（系统声音、麦克风）后重新录；确定里面有人说话的话，把录像发给维护者。",
+        retryable=False,
+    )
 
 
 def diagnose_error(error: Any) -> dict[str, Any]:
@@ -240,13 +284,7 @@ def diagnose_error(error: Any) -> dict[str, Any]:
     if raw == "user_cancelled":
         return _diag("user_cancelled", "已取消", "这个任务是你取消的。", "需要的话点「重新提交」。")
     if is_no_speech(raw):
-        return _diag(
-            "no_speech", "没检测到人声",
-            f"{NO_SPEECH}，转录出来是空的，所以没有剪辑、没写笔记、也没做压缩副本。"
-            "常见原因是录屏时没采到系统声音，或者麦克风是静音的。",
-            "检查录屏软件的音频来源（系统声音、麦克风）后重新录；确定里面有人说话的话，把录像发给维护者。",
-            retryable=False,
-        )
+        return _no_speech_diagnosis(raw)
     if raw == "client_disconnect":
         return _diag(
             "client_disconnect", "上传中断了",

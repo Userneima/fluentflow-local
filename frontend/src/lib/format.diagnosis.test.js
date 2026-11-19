@@ -221,3 +221,17 @@ describe('a permission error', () => {
         }
     });
 });
+
+describe('a video no one speaks in (2026-11-19)', () => {
+    it('offers 照画面写笔记 when it was nearly silent or long, not otherwise', () => {
+        const quiet = diagnoseTaskError('这段录音里没检测到人声，声音也几乎没有', 'zh');
+        expect(quiet.code).toBe('no_speech_quiet');
+        expect(quiet.pictureNote).toBe(true);
+        expect(quiet.retryable).toBe(false);
+        expect(diagnoseTaskError('这段录音里没检测到人声，视频超过 10 分钟，没有自动照画面写笔记', 'zh').pictureNote).toBe(true);
+        const noText = diagnoseTaskError('这段录音里没检测到人声，画面上也没读到文字', 'zh');
+        expect(noText.code).toBe('no_speech_no_text');
+        expect(noText.pictureNote).toBe(false);
+        expect(diagnoseTaskError('这段录音里没检测到人声', 'zh').code).toBe('no_speech');
+    });
+});

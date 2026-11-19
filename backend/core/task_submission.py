@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
-from backend.core import agent_cut, claude_code_note, local_intake_flow, task_flow, task_intelligence, test_copy, visual_note_channel
+from backend.core import agent_cut, claude_code_note, local_intake_flow, screen_text_transcript, task_flow, task_intelligence, test_copy, visual_note_channel
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
@@ -546,13 +546,15 @@ async def _retry_in_place(
     }
 
 
-async def retry_for_request(request: Request, task_id: str, overrides: Optional[dict] = None) -> dict:
+async def retry_for_request(request: Request, task_id: str, overrides: Optional[dict] = None,
+                            *, picture_note: bool = False) -> dict:
     """The retry route's work, with optional queue-option overrides for the Agent API."""
     return await retry_task(
         task_id,
         client_id=local_client_scope(request),
         local_caller=request_is_localhost(request),
         overrides=overrides,
+        picture_note=picture_note,
     )
 
 
@@ -616,6 +618,7 @@ async def retry_task(
     local_caller: bool,
     carry: Optional[dict] = None,
     overrides: Optional[dict] = None,
+    picture_note: bool = False,
 ) -> dict:
     """Queue a fresh task from this one's recording; the old row stays as it was.
 
@@ -642,6 +645,10 @@ async def retry_task(
     # And so does an agent's cut=false (only the transcript wanted).
     if agent_cut.cut_declined(job):
         carry = {"cut": False, **(carry or {})}
+    # 「照画面写笔记」: a video no one speaks in gets its note from the picture
+    # even when it is long or nearly silent (``screen_text_transcript``).
+    if picture_note or screen_text_transcript.picture_note_wanted(job):
+        carry = {"picture_note": True, **(carry or {})}
     in_place = _in_place_origin(job)
     if in_place is not None:
         return await _retry_in_place(

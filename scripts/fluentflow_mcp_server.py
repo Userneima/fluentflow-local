@@ -749,13 +749,16 @@ def diagnose_task(
         "recording FluentFlow kept, or the user's file for a task submitted by path; a link "
         "task whose video is gone downloads the link again, with the current browser-login "
         "setting. speaker_diarization=true re-runs it with speaker separation (who said "
-        "what) switched on; left out, the old task's choice is kept. Follow with wait_task "
-        "on the new task_id."),
+        "what) switched on; left out, the old task's choice is kept. picture_note=true is for a "
+        "video that failed with code no_speech_quiet (no speech, almost no sound) or "
+        "no_speech_long (no speech, over 10 minutes, FluentFlow writing the note): write it up "
+        "from its on-screen text and picture anyway, when the user wants that. Follow with wait_task on the new task_id."),
     input_schema={
         "type": "object",
         "properties": {
             "task_id": {"type": "string"},
             "speaker_diarization": _SPEAKER_DIARIZATION_SCHEMA,
+            "picture_note": {"type": "boolean"},
             "api_base": {"type": "string"},
         },
         "required": ["task_id"],
@@ -764,16 +767,21 @@ def diagnose_task(
 def retry_task(
     task_id: str,
     speaker_diarization: bool | None = None,
+    picture_note: bool | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
-    payload = None if speaker_diarization is None else {"speaker_diarization": bool(speaker_diarization)}
+    payload: dict[str, Any] = {}
+    if speaker_diarization is not None:
+        payload["speaker_diarization"] = bool(speaker_diarization)
+    if picture_note:
+        payload["picture_note"] = True
     return _agent_request(
         "POST",
         f"/agent/v1/tasks/{task_id}/retry",
         api_base=api_base,
         client_id=client_id,
-        payload=payload,
+        payload=payload or None,
         timeout=30,
     )
 

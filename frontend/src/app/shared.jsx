@@ -488,10 +488,14 @@ const createApi = () => {
         }
         return data;
     };
+    // `pictureNote`: 「照画面写笔记」 on a video no one speaks in.
     const retryJob = async (taskId, options={}) => {
         const r = await apiFetch(`${API_BASE}/jobs/${encodeURIComponent(taskId)}/retry`, {
             method: "POST",
-            headers: localExecutionHeaders(options),
+            headers: options.pictureNote
+                ? {...localExecutionHeaders(options), 'Content-Type': 'application/json'}
+                : localExecutionHeaders(options),
+            ...(options.pictureNote ? {body: JSON.stringify({picture_note: true})} : {}),
         });
         const data = await r.json().catch(()=>({}));
         if(!r.ok) {
