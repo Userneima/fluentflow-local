@@ -263,6 +263,8 @@ const createApi = () => {
     const createVideoSourceJob = async (input, options={}, signal) => {
         const payloadOptions = submitOptionFields(options);
         if(options.cookiesFromBrowser) payloadOptions.cookies_from_browser = options.cookiesFromBrowser;
+        // Only the video file: no transcript, cut or note after it.
+        if(options.downloadOnly) payloadOptions.download_only = 'true';
         const r = await apiFetch(`${API_BASE}/video-sources/jobs`, {
             method:"POST",
             headers: {"Content-Type":"application/json", ...localExecutionHeaders(options)},

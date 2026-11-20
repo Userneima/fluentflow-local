@@ -1467,6 +1467,9 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         "summary_status": result.get("summary_status"),
         "summary_error": result.get("summary_error"),
         "summary_skipped": result.get("summary_skipped"),
+        # Only the video was asked for: the card says 已下载, not 笔记没生成.
+        "download_only": bool(result.get("download_only")),
+        "downloaded_file": result.get("downloaded_file"),
         # Why it was skipped (no_model_key): the card says "add a key", not
         # "skipped", for a task that had no model rather than chose none.
         "summary_skipped_reason": result.get("summary_skipped_reason"),

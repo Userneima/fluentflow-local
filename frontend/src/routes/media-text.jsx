@@ -55,6 +55,7 @@ const RECENT_BADGE_TONE = {
     live: 'bg-blue-50 text-blue-700 dark:bg-blue-400/10 dark:text-blue-200',
     warn: 'bg-[#fffaf0] text-[#8a5a00] dark:bg-[#fdb022]/[0.10] dark:text-[#fdb022]',
     failed: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300',
+    done: 'bg-emerald-50 text-emerald-800 dark:bg-emerald-400/10 dark:text-emerald-100',
 };
 
 const ENTRY_TABS = [
@@ -541,7 +542,7 @@ const MediaText = () => {
     // Asked about before anything is downloaded a second time.
     const [duplicateLink, setDuplicateLink] = useState(null);
 
-    const submitVideoLink = async (input, {allowDuplicate = false} = {}) => {
+    const submitVideoLink = async (input, {allowDuplicate = false, downloadOnly = false} = {}) => {
         setUploadError(null);
         setProcessingResult(null);
         setLastResult(null);
@@ -558,6 +559,7 @@ const MediaText = () => {
             const options = {
                 ...buildSubmitOptions(settings),
                 ...(allowDuplicate ? {allowDuplicate: true} : {}),
+                ...(downloadOnly ? {downloadOnly: true} : {}),
             };
             const data = await createVideoSourceJob(input, options, ac.signal);
             const job = data?.job || {};
@@ -592,7 +594,7 @@ const MediaText = () => {
         } catch (err) {
             const duplicate = !allowDuplicate ? finishedDuplicateLink(err) : null;
             if (duplicate) {
-                setDuplicateLink({input, ...duplicate});
+                setDuplicateLink({input, downloadOnly, ...duplicate});
             } else {
                 reportBackendError?.(err);
                 setUploadError(friendlyTaskError(err?.message || 'Video link fetch failed.', lang));
@@ -602,19 +604,19 @@ const MediaText = () => {
         setSubmitting(false);
     };
 
-    const handleVideoLinkSubmit = async () => {
+    const handleVideoLinkSubmit = async ({downloadOnly = false} = {}) => {
         const input = videoLinkInput.trim();
         if (!input) {
             setUploadError(t('dash.linkEmpty'));
             return;
         }
-        await submitVideoLink(input);
+        await submitVideoLink(input, {downloadOnly});
     };
 
     const handleProcessLinkAgain = async () => {
         const pending = duplicateLink;
         setDuplicateLink(null);
-        if (pending) await submitVideoLink(pending.input, {allowDuplicate: true});
+        if (pending) await submitVideoLink(pending.input, {allowDuplicate: true, downloadOnly: pending.downloadOnly});
     };
 
     // Open the earlier result in the editor; if it cannot be read, point at it
@@ -891,7 +893,15 @@ const MediaText = () => {
                                 </button>
                             )}
                             {mode === 'media' && sourceMode === 'link' && (
-                                <button type="button" onClick={handleVideoLinkSubmit} disabled={submitting || backendDown} data-testid="submit-video-link" className={button('primary', 'lg')}>
+                                // Only the video file, into the same output folder:
+                                // for a clip or a sound, when no note is wanted.
+                                <button type="button" onClick={() => handleVideoLinkSubmit({downloadOnly: true})} disabled={submitting || backendDown} data-testid="download-video-link" className={button('secondary', 'lg')}>
+                                    <SvgIcon name="download" className="size-4"/>
+                                    {lang === 'zh' ? '只下载视频' : 'Download only'}
+                                </button>
+                            )}
+                            {mode === 'media' && sourceMode === 'link' && (
+                                <button type="button" onClick={() => handleVideoLinkSubmit()} disabled={submitting || backendDown} data-testid="submit-video-link" className={button('primary', 'lg')}>
                                     {submitting ? <SvgIcon name="sync" className="size-4 animate-spin"/> : <SvgIcon name="arrow-right" className="size-4"/>}
                                     {lang === 'zh' ? '开始生成笔记' : 'Start'}
                                 </button>
@@ -968,7 +978,7 @@ const MediaText = () => {
                                                 <Pin data-testid="recent-pinned" className="size-3.5 shrink-0 text-[#85868c] dark:text-white/50" strokeWidth={2.15} aria-label={lang === 'zh' ? '已置顶' : 'Pinned'}/>
                                             ) : null}
                                             <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold" title={item.name}>{item.name}</h3>
-                                            {outcome.tone !== 'done' && (
+                                            {outcome.kind !== 'done' && (
                                                 <span data-testid="recent-badge" className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-bold ${RECENT_BADGE_TONE[outcome.tone]}`}>{outcome.label}</span>
                                             )}
                                         </div>

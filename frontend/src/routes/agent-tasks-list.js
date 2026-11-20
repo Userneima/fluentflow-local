@@ -15,8 +15,9 @@ export const RECORD_FILTERS = [
     // task whose note is being written or whose cut is being redone.
     {id: 'live', zh: '进行中', en: 'In progress', match: (job) => taskOutcome(job).kind === 'live'},
     {id: 'judge', zh: '待你判断', en: 'To review', match: (job) => taskOutcome(job).kind === 'judge'},
-    // Failed, cancelled, or finished without the note or the cut.
-    {id: 'problem', zh: '有问题', en: 'Problems', match: (job) => !['live', 'judge', 'done'].includes(taskOutcome(job).kind)},
+    // Failed, cancelled, or finished without the note or the cut (a
+    // download-only task has no note by request, so it is not a problem).
+    {id: 'problem', zh: '有问题', en: 'Problems', match: (job) => !['live', 'judge', 'done', 'downloaded'].includes(taskOutcome(job).kind)},
 ];
 
 // The 全部 / 有笔记 choice is kept in this browser, so the page opens the way it

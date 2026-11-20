@@ -315,6 +315,7 @@ async def _download_then_process(
         )
 
     cookies_browser = _video_cookies_browser(options)
+    download_only = download_only_requested(options)
     duration_limit = _effective_duration_limit(options.get("duration_limit_seconds"))
     slot = _download_slot()
     try:
@@ -338,6 +339,7 @@ async def _download_then_process(
                     deliver=lambda downloaded: adopt_source_file(
                         task_id, downloaded.suffix or ".mp4", downloaded
                     ),
+                    video_only=download_only,
                 ),
             )
     except Exception as exc:
@@ -387,6 +389,10 @@ async def _download_then_process(
         source_file_size_mb=source_file_size_mb,
         metadata=metadata,
     )
+    if download_only:
+        await _finish_download_only(task_id, client_id, target_path)
+        return
+
     await JOB_EVENTS.publish(task_id, {"stage": "queued", "progress": 0})
 
     if media_type == "transcript":
@@ -458,16 +464,57 @@ async def _download_then_process(
     await run_pipeline_then_note(done, ctx, start_at=task_steps.TRANSCRIBE)
 
 
+def download_only_requested(options: dict[str, Any] | None) -> bool:
+    """Whether a link task only fetches the video (``download_only``), with no
+    transcription, cut or note after it."""
+    return truthy(str((options or {}).get("download_only") or ""))
+
+
+async def _finish_download_only(task_id: str, client_id: Optional[str], target_path: Path) -> None:
+    """End a download-only task once its video is here: the video goes into the
+    link's output folder (``output_folder.sync``, as for every link), every
+    later step reads skipped, and the task is completed with
+    ``result.download_only``, which the pages show as 已下载.
+
+    It never waits in the transcription queue: there is nothing for it to wait
+    for. No preflight either: the checks there are whether a recording can be
+    transcribed, and a video without speech is still a fine download."""
+    from backend.core import output_folder
+
+    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+    task_steps.skip_open(task_id)
+    upsert_job(task_id=task_id, status="running", client_id=client_id, stage="saving", progress=90,
+               result={"download_only": True, "downloaded_file": str(target_path)})
+    record = await asyncio.to_thread(output_folder.sync, task_id)
+    job = get_job(task_id, client_id=client_id) or {}
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    result = dict(job.get("result") or {}) if isinstance(job.get("result"), dict) else {}
+    kept = str(metadata.get("kept_original_path") or "").strip()
+    if record and record.get("path"):
+        # The folder holds only the video: no empty 过程文件 beside it.
+        try:
+            (Path(record["path"]) / output_folder.PROCESS_DIRNAME).rmdir()
+        except OSError:
+            pass
+    result.update(download_only=True, downloaded_file=kept or str(target_path))
+    upsert_job(task_id=task_id, status="completed", client_id=client_id, stage="done", progress=100, result=result)
+    await JOB_EVENTS.publish(task_id, {"stage": "done", "progress": 100, "result": result})
+
+
 _ACTIVE_STATUSES = frozenset({"queued", "running"})
 DUPLICATE_LINK_MESSAGE = "这个链接已经处理过了。要再处理一次，请确认后重新提交。"
 
 
-def _same_link_task(link: str | None, client_id: Optional[str]) -> dict[str, Any] | None:
+def _same_link_task(
+    link: str | None, client_id: Optional[str], *, download_only: bool = False
+) -> dict[str, Any] | None:
     """The task this link already has: an active one first, else a completed one.
 
     Failed and cancelled tasks never count, so a link that went wrong can always
     be submitted again. Compared on ``normalize_source_link``, so the same video
     shared twice with different tracking parameters is still the same link.
+    A download-only task does not count for a full submission: it holds the
+    video, not the transcript and note asked for now.
     """
     if not link:
         return None
@@ -476,6 +523,9 @@ def _same_link_task(link: str | None, client_id: Optional[str]) -> dict[str, Any
         metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
         stored = str(metadata.get("video_source_url") or "").strip()
         if not stored or normalize_source_link(stored) != link:
+            continue
+        stored_options = metadata.get("queue_options") if isinstance(metadata.get("queue_options"), dict) else {}
+        if not download_only and download_only_requested(stored_options):
             continue
         status = str(job.get("status") or "")
         if status in _ACTIVE_STATUSES:
@@ -486,7 +536,7 @@ def _same_link_task(link: str | None, client_id: Optional[str]) -> dict[str, Any
 
 
 def _refuse_or_reuse_duplicate(
-    input_text: str, client_id: Optional[str], *, allow_duplicate: bool
+    input_text: str, client_id: Optional[str], *, allow_duplicate: bool, download_only: bool = False
 ) -> dict[str, Any] | None:
     """Answer a link FluentFlow already has, before anything is downloaded.
 
@@ -497,7 +547,7 @@ def _refuse_or_reuse_duplicate(
     is refused with 409 ``duplicate_link`` unless the caller confirms with
     ``allow_duplicate``.
     """
-    existing = _same_link_task(normalize_source_link(input_text), client_id)
+    existing = _same_link_task(normalize_source_link(input_text), client_id, download_only=download_only)
     if existing is None:
         return None
     status = str(existing.get("status") or "")
@@ -552,7 +602,10 @@ async def submit_video_source_job(
         # Said at once: an image post has nothing to transcribe, and finding
         # out after the queue and the resolver cost the user minutes.
         raise HTTPException(status_code=400, detail=DOUYIN_IMAGE_POST_MESSAGE)
-    duplicate = _refuse_or_reuse_duplicate(input_text, client_id, allow_duplicate=allow_duplicate)
+    duplicate = _refuse_or_reuse_duplicate(
+        input_text, client_id, allow_duplicate=allow_duplicate,
+        download_only=download_only_requested(raw_options),
+    )
     if duplicate is not None:
         return duplicate
 

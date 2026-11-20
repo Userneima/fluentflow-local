@@ -2599,8 +2599,12 @@ def download_video_source(
     duration_limit_seconds: float | None = None,
     cancellation_event: threading.Event | None = None,
     deliver: Callable[[Path], Path] | None = None,
+    video_only: bool = False,
 ) -> SavedVideoSource:
     """Resolve and fetch a link into ``video_dir``.
+
+    ``video_only`` fetches the video even when the source has captions: a
+    download-only task wants the file itself, not a transcript of it.
 
     ``deliver`` takes the finished file and returns the task's own copy of it
     (see ``media_intake.adopt_source_file``). It runs under the same lock the
@@ -2624,7 +2628,7 @@ def download_video_source(
     )
     cookie_use = CookieUse(unreadable=resolved.cookies_unreadable)
     caption_source = None
-    if resolved.provider == "yt-dlp":
+    if resolved.provider == "yt-dlp" and not video_only:
         caption_source = captions_first_provider(
             resolved.source_url, None if cookie_use.unreadable else cookies_from_browser
         )

@@ -491,6 +491,9 @@ def build_agent_task_package(
             "progress": job.get("progress"),
             "created_at": job.get("created_at"),
             "updated_at": job.get("updated_at"),
+            # Only the video was fetched (download_only): no transcript or note by request.
+            **({"download_only": True, "downloaded_file": result.get("downloaded_file")}
+               if result.get("download_only") else {}),
         },
         "title": title,
         "source": {

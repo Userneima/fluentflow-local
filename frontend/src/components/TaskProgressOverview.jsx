@@ -237,6 +237,7 @@ const outcomeJobFromPage = (pageData) => {
         status: task.status,
         stage: task.stage,
         result: {
+            download_only: Boolean(task.download_only),
             summary_status: note.status || null,
             summary_chars: Number.isFinite(chars) ? chars : String(note.markdown || '').trim().length,
             debreath: prep ? {status: prep.status, survey: prep.survey} : undefined,
@@ -262,6 +263,7 @@ const outcomeHint = (outcome, pageData, isZh) => {
             ? (isZh ? '这条任务取消了。' : 'This task was cancelled.')
             : (isZh ? '这条任务没处理完，可以在处理记录里重新提交。' : 'This task did not finish; submit it again from the records.');
     }
+    if (outcome.kind === 'downloaded') return isZh ? '只下载了视频，没有转录稿和笔记。视频在产出文件夹里。' : 'Only the video was downloaded; no transcript or note. The video is in the output folder.';
     if (outcome.kind === 'transcript_only') return isZh ? '没填模型 Key，这次只有转录稿。' : 'No model key, so this time there is a transcript only.';
     if (outcome.kind === 'judge') return isZh ? '剪辑有几处等你判断，点「查看结果」去处理。' : 'Some cuts wait for your judgement; open the result to review them.';
     if (outcome.kind === 'live') return isZh ? '还在出结果，进度会在这里更新。' : 'Still producing results; progress updates here.';

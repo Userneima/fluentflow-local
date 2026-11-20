@@ -37,6 +37,12 @@ describe('what a record badge says', () => {
         expect(taskOutcome(done({debreath: {status: 'completed'}}), 'zh')).toMatchObject({tone: 'done', label: '已完成'});
     });
 
+    // A link fetched with 只下载视频 has no note by request: 已下载, not a problem.
+    it('names a download-only task 已下载', () => {
+        const outcome = taskOutcome({status: 'completed', result: {download_only: true, downloaded_file: '/x/clip.mp4'}}, 'zh');
+        expect(outcome).toMatchObject({kind: 'downloaded', label: '已下载'});
+    });
+
     it('says the note was not written', () => {
         const outcome = taskOutcome(done({summary_status: 'failed', summary_error: 'timeout', summary_markdown: ''}), 'zh');
         expect(outcome.label).toBe('笔记没生成');

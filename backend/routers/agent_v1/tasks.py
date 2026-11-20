@@ -350,8 +350,12 @@ async def wait_agent_task(
             # One step at a time, in the order they build on each other: a
             # note left half written, the transcript corrections, the note,
             # then its alignment.
-            draft = agent_note.unfinished_draft(task_id)
             result = job.get("result") if isinstance(job.get("result"), dict) else {}
+            if result.get("download_only"):
+                # Only the video was asked for: nothing is left to do.
+                answer["downloaded_file"] = result.get("downloaded_file")
+                return answer
+            draft = agent_note.unfinished_draft(task_id)
             step = (
                 (draft or {}).get("next") or _correction_next(job)
                 or agent_note.write_next(result) or _alignment_next(job)

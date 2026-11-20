@@ -49,6 +49,9 @@ def _local_extra_next_actions(job: dict[str, Any], diagnosis: dict[str, Any]) ->
             "reason": "本机仍保留原始文件，可直接重新处理，不用重新选文件。",
         }]
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if result.get("download_only"):
+        # Only the video was asked for: there is no transcript to correct or note to write.
+        return []
     left = agent_correction.pending(result)
     if job.get("status") == "completed" and task_id and left and not task_activity.activity(job).busy:
         # Before the note: the note reads the transcript these steps correct.

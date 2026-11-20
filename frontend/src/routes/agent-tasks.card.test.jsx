@@ -125,6 +125,17 @@ describe('a finished record', () => {
         expect(downloadJobMedia).toHaveBeenCalledWith('u', 'debreath_media', 'u_debreath.mp4');
     });
 
+    // 只下载视频 (2026-11-20): the task stopped at the video on purpose, so it
+    // says 已下载 and shows no cut or note block that would read as missing.
+    it('names a download-only task 已下载, without cut or note blocks', () => {
+        tasks = [finished('d', {download_only: true, downloaded_file: '/x/d.mp4', summary_status: null, summary_chars: 0, transcript_text: ''})];
+        mount();
+        expect(screen.getByTestId('task-outcome').textContent).toBe('已下载');
+        const card = screen.getByTestId('task-outcome').closest('article');
+        expect(card.textContent).not.toContain('去气口');
+        expect(card.textContent).not.toContain('笔记');
+    });
+
     it('carries no badge when nothing is wrong, the same as the start page', () => {
         tasks = [finished('a', {})];
         mount();

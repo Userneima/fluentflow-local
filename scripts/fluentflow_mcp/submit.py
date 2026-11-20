@@ -134,10 +134,8 @@ def submit_local_media(
     description=("Submit a video URL or copied share text to FluentFlow. "
         + _MEDIA_NOTE_FLOW
         + " The same link is never processed twice by accident (tracking parameters "
-        "such as utm_*, share_source, spm_id_from, vd_source are ignored when "
-        "comparing; Bilibili ?p= still counts): if that link is already queued or "
-        "running, no new task is made and the existing one comes back with "
-        "duplicate_of_active=true; if it was already completed, the call fails with "
+        "are ignored when comparing; Bilibili ?p= still counts): if it is already queued or "
+        "running, that task comes back with duplicate_of_active=true; if it was already completed, the call fails with "
         "HTTP 409, code duplicate_link and existing_task_id — read that task, or ask "
         "the user and resubmit with allow_duplicate=true to process it again. A "
         "failed or cancelled earlier task never blocks a submission."),
@@ -160,8 +158,13 @@ def submit_local_media(
                 "default": False,
                 "description": (
                     "Process this link again although a completed task already has it. "
-                    "Only after the user confirmed they want a second copy."
+                    "Only after the user confirmed."
                 ),
+            },
+            "download_only": {
+                "type": "boolean",
+                "default": False,
+                "description": "Just download the video; no transcript or note.",
             },
             "api_base": {"type": "string"},
         },
@@ -181,6 +184,7 @@ def submit_video_link(
     cut_judge: str | None = None,
     cut: bool | None = None,
     intelligence: str = "agent",
+    download_only: bool = False,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
@@ -204,6 +208,7 @@ def submit_video_link(
                 prompt_preset=prompt_preset,
                 system_prompt=system_prompt,
                 speaker_diarization=None if speaker_diarization is None else ("true" if speaker_diarization else "false"),
+                download_only="true" if download_only else None,
             )),
         },
         timeout=30,

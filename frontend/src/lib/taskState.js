@@ -155,6 +155,8 @@ export const taskOutcome = (job = {}, lang = 'zh') => {
     if (String(result.debreath?.status || '').toLowerCase() === 'running') {
         return {kind: 'live', tone: 'live', label: zh ? '正在剪气口' : 'Cutting'};
     }
+    // Only the video was asked for (download_only): nothing else is missing.
+    if (result.download_only) return {kind: 'downloaded', tone: 'done', label: zh ? '已下载' : 'Downloaded'};
     const noteChars = noteCharsOf(job);
     if (!noteChars && (String(result.summary_status || '').toLowerCase() === 'failed' || result.summary_error)) {
         return {kind: 'no_note', tone: 'warn', label: zh ? '笔记没生成' : 'No note'};

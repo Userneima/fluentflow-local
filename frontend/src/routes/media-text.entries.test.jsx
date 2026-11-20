@@ -153,6 +153,15 @@ describe('every entry sends the same settings', () => {
         vi.restoreAllMocks();
     });
 
+    it('只下载视频 sends the link with download_only and the same settings', async () => {
+        mount();
+        fireEvent.click(screen.getByRole('tab', {name: '视频链接'}));
+        fireEvent.change(screen.getByRole('textbox'), {target: {value: 'https://www.bilibili.com/video/BV1xx411c7mD'}});
+        await act(async () => { fireEvent.click(screen.getByTestId('download-video-link')); });
+        await waitFor(() => expect(sent.link).toBeTruthy());
+        expect(sent.link.download_only).toBe('true');
+    });
+
     it('upload, link, picked files and a folder carry an identical option set', async () => {
         await submitThroughEveryEntry();
         const upload = settingsOnly(sent.upload);

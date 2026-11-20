@@ -117,8 +117,9 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
     // an old task and still waiting when it is neither (review 2026-10-23).
     const result = job?.result || {};
     const noteChars = noteCharsOf(job);
-    const showCut = !failed || (result.debreath && typeof result.debreath === 'object') || reportAvailable;
-    const showNote = !failed || noteChars > 0;
+    // A download-only task (已下载) has no cut or note by request: neither block shows.
+    const showCut = !result.download_only && (!failed || (result.debreath && typeof result.debreath === 'object') || reportAvailable);
+    const showNote = !result.download_only && (!failed || noteChars > 0);
     return (
         <article
             ref={highlightRef}
@@ -132,7 +133,8 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                             <Pin className="size-4" strokeWidth={2.15} aria-label={zh ? '已置顶' : 'Pinned'}/>
                         </span>
                     ) : null}
-                    {outcome.tone !== 'done' ? (
+                    {/* A plain 已完成 needs no badge; 已下载 says the task stopped at the video on purpose. */}
+                    {outcome.kind !== 'done' ? (
                         <span data-testid="task-outcome" className={`mt-[1px] shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-extrabold ${OUTCOME_PILL_CLASS[outcome.tone]}`}>
                             {outcome.label}
                         </span>
