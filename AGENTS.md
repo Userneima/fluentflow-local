@@ -39,7 +39,7 @@ exists and that no other file judges whether a task is still busy.
 - Storing and reading task records: `backend/core/job_store.py`
 - How the page calls the service and who it is to it (client id, access token and their cookies, `apiFetch`): `frontend/src/app/apiConfig.js`; `shared.jsx` re-exports it
 - The address of a task's page (note and playback) given to agents as `page_url`: `backend/routers/agent_v1/common.py` (`_page_url`)
-- The agent routes (`/agent/v1`): `backend/routers/agent_v1/`, one module per group of routes; `backend/routers/local_agent.py` is the router the app mounts and includes them in path-matching order. What the route modules share is in `common.py`, and the names tests replace there (`get_job`, `_local_client_scope`, `summarize_transcript_with_metadata` and the rest its docstring lists) are called as `common.X`, so tests replace them on `common`; a name only one route module uses is replaced on that module
+- The agent routes (`/agent/v1`): `backend/routers/agent_v1/`, one module per group of routes, mounted in path-matching order by `backend/routers/local_agent.py`; what they share, and which names tests replace on `common` rather than on a route module, is in `common.py`'s docstring
 - What to cut, read from the whole timeline: `backend/core/survey_cut.py`
 - Whether the cut report still asks the user about a judge's places (closing its reminders is offered once he kept agreeing with that judge, and done only on his answer, kept in the config as `cut_judge_reminders`), for the list, the page and agents: `backend/core/cut_trust.py`
 - Which model judges the cut: `backend/core/cut_judge.py`; the user's agent judging it: `backend/core/agent_cut.py` (and whether an agent's submission is cut at all, `cut=false`: `cut_declined`)
@@ -61,44 +61,32 @@ exists and that no other file judges whether a task is still busy.
 - A recording in which no one was heard (an empty transcript fails the task and the steps after it are skipped): `backend/core/media_job.py` (`require_speech`), the words and diagnosis in `backend/core/local_error_diagnostics.py` (`NO_SPEECH` and its variants); a video with sound but no speech gets its on-screen text as the transcript instead, and whether it does (loudness, length, `picture_note`): `backend/core/screen_text_transcript.py`; whether a file has a picture to read text from at all (an audio file's cover art does not count), for it and for correcting from on-screen subtitles: `backend/core/frame_text.py` (`has_picture`)
 - Saving a correction of a task's transcript and then its txt/srt/vtt files, so a refused save leaves the files alone: `backend/core/transcript_files.py`
 - The output folder beside a recording, or where a `FluentFlow 产出位置.md` above it says (`output_parent`), and finding it after it moved: `backend/core/output_folder.py`; following a moved recording: `backend/core/original_locator.py`; keeping a note in step with Feishu: `backend/core/feishu_sync.py`; putting a review note in Feishu above its follow-along note: `backend/core/review_note_feishu.py`; blank lines in a review note (where the owner wants them, and back for the PDF and Feishu; `joins` is asked by the md and by the Feishu layout alike) and which lines are inside a code block (`in_code`, for the md, the PDF and Feishu): `backend/core/note_spacing.py`
-- Writing a note into Feishu through lark-cli: `backend/core/lark_cli_exporter.py` (the entry point, `export_markdown_via_lark_cli`), with its parts beside it: running lark-cli and reading its output `lark_cli_run.py`, screenshots `lark_cli_images.py`, what a task keeps about its document `lark_cli_records.py`, writing and rewriting chapters `lark_cli_update.py`, what follows the writes (heading links, list numbers, the snapshot) `lark_cli_finish.py`. They call `lark_cli_run._run`, `lark_cli_run._resolve_lark_cli_bin` and `lark_cli_images._insert_images` at call time, so tests replace those there, never on `lark_cli_exporter` (`tests/test_lark_cli_export.py` checks)
+- Writing a note into Feishu through lark-cli: `backend/core/lark_cli_exporter.py` and the `lark_cli_*.py` parts beside it; its docstring names each part and where tests replace what
 - Matching note sections to playback times: `backend/core/note_section_times.py`; the current agent reading material and returning its table: `backend/core/agent_alignment.py`
 - What each processing step currently uses, for the settings page and agents: `backend/core/workflow_status.py`
 - Where runtime data lives: `backend/core/runtime_paths.py`; which edition answers: `backend/core/edition_identity.py`
 - Button and card styles: `frontend/src/lib/ui.js`; a task's status as the pages show it: `frontend/src/lib/taskState.js`
 - What an agent is told: the MCP tools in `scripts/fluentflow_mcp/`, one module per group of tools (each tool described once, in the `tool()` decorator on its function; `scripts/fluentflow_mcp_server.py` is the entry point and loads them in the order `tools/list` gives), and `agent/skills/fluentflow/SKILL.md` (workflow)
-- How an MCP tool reaches the service (the request, access token, edition check), the hold that answers a long call "still working", and the heartbeat for watched tasks: `scripts/fluentflow_mcp/core.py`; tools call these as `core._agent_request(...)`, so tests replace them on `core`
+- How an MCP tool reaches the service (the request, access token, edition check), the hold that answers a long call "still working", and the heartbeat for watched tasks: `scripts/fluentflow_mcp/core.py` (tests replace them on `core`)
 
-`frontend/src/routes/editor.jsx` is the file most often edited by several
-sessions at once. It only calls the page's hooks and lays its parts out; each
-part lives beside it in `frontend/src/routes/` as `editor-<part>.js(x)`, and a change goes
-into the part's file: the header bar `editor-header.jsx`, the transcript pane
-`editor-transcript-pane.jsx` and its rows `editor-transcript-rows.jsx`, the
-transcript's working copy and reading the full result
-`editor-transcript-state.js`, the note pane `editor-note-pane.jsx` and its
-working copy `editor-note-draft.js`, saving both `editor-saves.js`, playback
-and the transcript and note following it `editor-playback.js`, which file plays
-`editor-media.js`, the address `editor-address.js`, the cut report
-`editor-cut-review.js`, rewriting the note `editor-note-regenerate.js`, waiting
-for a note, a carried-on task or a Feishu export `editor-note-polling.js`,
-transcribing again `editor-retranscribe.js`. `editor.jsx` calls the hooks in
-the order their effects must run; keep that order when adding one. The records
-page `frontend/src/routes/agent-tasks.jsx` is split the same way into
-`agent-tasks-<part>.js(x)` (the card, its words, the list and filters, the
-buttons' actions); its header comment names each part's file. The routes
+`frontend/src/routes/editor.jsx` and the records page `agent-tasks.jsx` are the
+files most often edited by several sessions at once. Each only calls its hooks
+and lays its parts out; the parts live beside it as `editor-<part>.js(x)` and
+`agent-tasks-<part>.js(x)`, named in the page file's header comment, and a
+change goes into the part's file. The routes
 in `backend/routers/` only turn requests into calls; what they call lives in
 `backend/core`, and the agent routes (`backend/routers/local_agent.py` and
 `backend/routers/agent_v1/`) import nothing from the page's routes (`tests/test_agent_surface.py`).
 
 Before adding or changing an MCP tool, read `.claude/rules/mcp-tools.md` (Claude Code loads it on its own when it opens the tool files).
 
-## Open problems
+## Open problems and decisions
 
-Open work, including known problems not yet fixed, is in `docs/01-待办.md`. Its order is the owner's priority rule written at its top (quality, reliability, less for the user to do, speed, cost, install; owner 2026-10-18); within each, batches that can be done together. When you add an entry, place it by that rule, and for a result-changing item say whether redoing it needs the original recording or only the cut video and output folder, since the owner decides from that whether to keep his originals (decision 8.3). Read it before working in an area it covers; remove an entry when you fix, drop or park it.
+Open work and known problems are in `docs/01-待办.md`, ordered by the rule at its top; read it before working in an area it covers, add an entry by that rule (a result-changing item says whether redoing it needs the original recording, decision 8.3), and remove an entry when you fix, drop or park it.
 
-Why things are the way they are is in `docs/决策记录/`, one file per product part (1 submission, 2 where to cut, 3 exporting the cut video, 4 transcription, 5 notes, 6 outputs and task state, 7 install, 8 ways of working); `docs/02-决策记录.md` is the index and says how to read and write them. Before changing something already decided, read the 现状 at the top of the part it touches: it states what holds now, with the numbers of the deciding entries; read an entry only when you need its why. Decision numbers cited elsewhere ("decision 6.42") are found by their first digit. When you fix, drop, park or narrow an item, or when the owner settles a decision, sets a rule or a way of working, or something is verified by measurement or reading the code, add an entry at the end of its part in the same turn (next number after that file's last one), even with no code change; if it changes what the step does, update that part's 现状 in the same commit; if users notice the change, add a line in `docs/03-更新记录.md`. Never delete a decision entry: write a new one that supersedes it, and move an entry nothing of which still holds to the same-named file under `docs/决策记录/已取代/`.
+Why things are the way they are is in `docs/决策记录/`, one file per product part; `docs/02-决策记录.md` is the index and says how to read and write entries. Before changing something already decided, read the 现状 at the top of its part. When you fix, drop, park or narrow an item, when the owner settles something, or when something is verified by measurement or reading the code, add an entry in the same turn, as that index says.
 
-A change is finished when every document it affects says what is true now, in the same push, without being asked: besides the to-do, the decision log and the changelog, `README.md` (what a user does and gets: where outputs land, what to click, what to expect), `AGENT_INSTALL.md`, `agent/skills/fluentflow/SKILL.md` and the MCP tool descriptions in `scripts/fluentflow_mcp/` (what an agent is told), and `docs/04-维护手册.md` (settings, environment variables, checks). Before pushing, search these for the feature or behaviour you changed and fix what no longer holds (2026-10-19: the output folder and Obsidian editing shipped with the decision log updated and the README silent).
+A change is finished when every document it affects says what is true now, in the same push, without being asked: the to-do, the decision log, `docs/03-更新记录.md` (what users notice), `README.md` (what a user does and gets), `AGENT_INSTALL.md`, `agent/skills/fluentflow/SKILL.md` and the MCP tool descriptions (what an agent is told), and `docs/04-维护手册.md` (settings, environment variables, checks). Before pushing, search these for the behaviour you changed.
 
 ## Interface rules
 
@@ -106,71 +94,23 @@ Before changing any page, read `docs/06-界面规矩.md`: FluentFlow's words, wh
 
 ## Validation
 
-Before a local checkpoint commit run `git diff --check`. For frontend changes run `npm run lint:frontend`, `npm run build:frontend`, and `npm run test:frontend`. For backend changes run the relevant `pytest` tests while working, the full suite once before pushing with `.venv/bin/python -m pytest -n auto` (pytest-xdist, about 40 seconds against 2 minutes one by one on the owner's Mac, 2026-10-24; install it with `.venv/bin/python -m pip install pytest-xdist` if missing; a test that fails only under `-n auto` usually depends on another test having run first; when the machine is busy `-n auto` can be killed by the system, exit code 137, so use `-n 4` then), and `python3 -m ruff check backend/ scripts/` (CI runs it; the test suite does not catch unused imports). Every push to `main` is first reviewed by Codex through the pre-push hook (`~/Projects/yuchao-agent-skills/config/git-hooks/pre-push`, rules in that repository's `config/README.md`): it takes a minute or two, so run `git push` with a 10-minute timeout; when it blocks, fix the P0/P1 findings it prints, commit, and push again, never `--no-verify`. It also prints changes that touch a risky area (permissions, where data is stored or sent, test versus live, secrets, deletion) with a plain-Chinese before and after; these never block, but relay each one to the user in your reply and say whether it was intended. Push finished, checked work to `main` as it is done, without asking; do not deploy, tag, or change a release version unless explicitly requested. Users install the latest release tag, not `main`, with three exceptions that reach every user the moment they are pushed: `install.sh` and `install.ps1` (fetched from `main`, then they download the release) and `backend/core/recommended_models.json` (every installed copy reads it from `main` daily). Changes to these three must work with the latest release.
+- Before a local commit: `git diff --check`. Frontend changes: `npm run lint:frontend` (it runs knip too: delete what it names, or say in `knip.json` how it is used), `npm run build:frontend` (see below where it builds to), `npm run test:frontend`. Backend changes: the relevant `pytest` tests while working; before pushing, the full suite with `.venv/bin/python -m pytest -n auto` (when the machine is busy and it is killed, exit 137, use `-n 4`; a test failing only under `-n` usually depends on another having run first) and `.venv/bin/python -m ruff check backend/ scripts/`.
+- Every push to `main` is reviewed by Codex in the pre-push hook: run `git push` with a 10-minute timeout; when it blocks, fix the P0/P1 findings, commit, push again, never `--no-verify`. Relay each risky-area change it prints to the user and say whether it was intended.
+- Push finished, checked work to `main` without asking; never deploy, tag or change a release version unless asked. Users install the latest release tag, except `install.sh`, `install.ps1` and `backend/core/recommended_models.json`, which reach every user from `main` the moment they are pushed and must work with the latest release.
+- Keep a change readable (decisions 8.23, 8.24): split out the part you change only when understanding it means reading unrelated logic around it. When a button goes, its copy in `shared.jsx` goes too (`tests/test_frontend_copy_used.py`); a hint saying to click 「X」 names text the page has (`tests/test_hint_buttons_exist.py`).
 
-Keep a change readable (decisions 8.23, 8.24). What costs an agent is how much it must read to change one place correctly; length is only a rough stand-in. When a file is long and keeps growing, the global `structure-check` hook reminds you as you write: move the part you are changing into its own module only when understanding it means reading unrelated logic around it (state crammed into one big function, as the editor page was); a long file whose parts are independent and easy to find can stay. Which files agents actually re-read most is counted from session records in the weekly code cleanup. `npm run lint:frontend` also runs knip (`knip.json`): delete what it names (an export, a file, a dependency nothing uses); if it is used in a way knip cannot see, say so in `knip.json`. When a button goes, its copy in `shared.jsx` goes too (`tests/test_frontend_copy_used.py`), and a hint that tells someone to click 「X」 names text the page has (`tests/test_hint_buttons_exist.py`).
-
-The service on port 8000 serves `frontend/dist-local` straight from this checkout, so `npm run build:frontend` replaces the page the owner is using. Several sessions work in this checkout at once: when `git status` shows changes you did not make, check the build into a scratch folder instead (`npx vite build --config vite.local.config.mjs --outDir <scratch folder> --emptyOutDir`) and look at the page through `npm run dev:frontend` (port 5186), so another session's unfinished work does not reach the owner's page (2026-11-19: a check build shipped another session's half-done cut report). To compare against the code before your change, open a clean copy with `git worktree add <scratch folder> HEAD`; never `git stash` here, it puts away the other sessions' changes too.
+The service on port 8000 serves `frontend/dist-local` straight from this checkout, so `npm run build:frontend` replaces the page the owner is using. When `git status` shows changes you did not make, build into a scratch folder instead (`npx vite build --config vite.local.config.mjs --outDir <scratch folder> --emptyOutDir`) and look at the page through `npm run dev:frontend` (port 5186), so another session's unfinished work does not reach the owner's page. To compare against the code before your change, open a clean copy with `git worktree add <scratch folder> HEAD`; never `git stash` here, it puts away the other sessions' changes too.
 
 ## Where files go
 
 Owner, 2026-10-28 (decision 8.15). The repository root holds code, configuration and the entry documents (`README.md`, `AGENTS.md`, `CLAUDE.md`, `AGENT_INSTALL.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, `VERSION`), nothing else; a script that writes output defaults to a folder under `private/`.
 
 - `docs/`: the numbered documents are the living ones; `docs/方案/` dated proposals, `docs/评测/` dated evaluations, `docs/交付记录/` one record per delivered sub-session, `docs/handoffs/` handoffs, deleted when the task is done.
-- `private/` (git-ignored, only in the main checkout): `测试记录/` real-run records (next section), `报告/` output of the evaluation scripts and review reports, `promo/` the promo film project and its cuts, `笔记考题/` note quizzes, `旧工作副本/` uncommitted files saved before a worktree was removed.
+- `private/` (git-ignored, only in the main checkout): `测试记录/` real-run records (`docs/04-维护手册.md`「在真实数据的副本上实测」), `报告/` output of the evaluation scripts and review reports, `promo/` the promo film project and its cuts, `笔记考题/` note quizzes, `旧工作副本/` uncommitted files saved before a worktree was removed.
 - `.claude/worktrees/`: sub-session worktrees. Remove one once its branch is in `main`; a prototype kept for later stays as a branch, not a worktree.
 
-## Test records
+## Real-run tests, delivery records, restarting
 
-When a real-run test needs a written record of the process (timings, models
-used, what was checked, problems found), save it under
-`private/测试记录/<YYYY-MM-DD-HHMMSS>-<topic>/` in the main checkout
-(`/Users/yuchao/Developer/fluentflow-local`; `private/` is git-ignored, so a
-worktree does not have it). Owner, 2026-10-16; moved here 2026-10-27 under
-the file-placement rule in `~/Documents/整理规则.md`: these records are the
-evidence the decision log cites. Keep the text, data and frames;
-leave out copies of the source video or audio, which can be cut again. FluentFlow's own outputs stay where the product puts them: the
-folder beside a recording from the user's disk, with the transcript and
-subtitles in its `过程文件`. Link the record and that output folder in the
-reply.
-
-Real-run tests on the owner's data run on a copy prepared by
-`scripts/prepare_test_copy.py`, on a port of their own (decision 8.11, owner
-2026-10-26; how, in `docs/04-维护手册.md`「在真实数据的副本上实测」). A test of the
-flow (restart, stop, carry on, export) starts it with `--fake`: the fake model
-calls nothing and costs nothing. A test of what a model produces keeps the
-budget the script sets; before running it, say in the reply whether it goes
-through the Claude subscription or a key billed per call and what it should
-cost from earlier measurements, and wait for 王愉超's go-ahead when it is billed
-per call. Afterwards report what the usage record shows.
-
-## Delivery records
-
-A block of work handed to a separate session (one lane of a plan, one
-sub-session task) leaves a record in `docs/交付记录/YYYY-MM-DD-<topic>.md`,
-following the `subsession-acceptance` skill (owner, 2026-10-22): the session's delivery
-note, the acceptance section the main session adds after an independent review,
-and the file name of the archived conversation (a readable Markdown record). Before/after screenshots go in
-`docs/images/` and are linked from the record. The plan document links each
-lane to its record. Follow-up work after acceptance gets its own record,
-linked from the original. Records are kept, not deleted. Archived conversations live
-outside the repository in `~/9.归档/对话存档/fluentflow-local/`.
-
-## Restarting the backend
-
-Queued and running tasks live in the backend process. A restart carries each
-task it cut off on in place, from the step it was on (decision 6.42), but the
-step that was running is done again (a transcription from the start, a note in
-full), a task cut off more than twice in a row is left failed, and in practice
-every "服务重启中断了这个任务" failure on record came from an agent restarting
-the service to load new code while its own batch was still queued. Before
-stopping or restarting the backend on port 8000,
-run `python3 launchers/macos/count_active_jobs.py http://127.0.0.1:8000`; restart
-only when it prints `0`, and when `git status` in this checkout shows no other session's uncommitted changes under `backend/` or `scripts/`: the service on 8000 runs this working tree, so a restart would load their unfinished code. It counts every task with a step still to come (cut,
-note, compressed copy, Feishu export), though the task itself already reads
-completed; the service answers that per task from its steps (`activity.busy`).
-Stopping the service stops the encodes its tasks started and leaves their step
-records as they were (`task_stop.shutdown`), so the restart carries those steps
-on; work a step runs on its own thread pool (correcting the transcript from
-on-screen subtitles) still finishes its round first.
-Otherwise wait for the queue to drain, or test the new code on another port.
+- Real-run tests on the owner's data run on a copy prepared by `scripts/prepare_test_copy.py`, on a port of their own, `--fake` for a test of the flow; before a test of what a model produces, say whether it goes through the Claude subscription or a key billed per call and what it should cost, and wait for 王愉超's go-ahead when it is billed per call (decision 8.11). How, and where the written record goes: `docs/04-维护手册.md`「在真实数据的副本上实测」.
+- A block of work done in a separate session leaves a record in `docs/交付记录/`, as the `subsession-acceptance` skill says.
+- Before stopping or restarting the backend on port 8000, run `python3 launchers/macos/count_active_jobs.py http://127.0.0.1:8000` and restart only when it prints `0` and `git status` shows no other session's uncommitted changes under `backend/` or `scripts/`; otherwise wait or test on another port. Why: `docs/04-维护手册.md`「重启服务」.

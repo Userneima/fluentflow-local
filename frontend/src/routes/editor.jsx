@@ -1,3 +1,16 @@
+// The editor page (note and playback). It only calls the page's hooks and
+// lays its parts out; each part lives beside it as editor-<part>.js(x), and a
+// change goes into the part's file: the header bar editor-header.jsx, the
+// transcript pane editor-transcript-pane.jsx and its rows
+// editor-transcript-rows.jsx, the transcript's working copy and reading the
+// full result editor-transcript-state.js, the note pane editor-note-pane.jsx
+// and its working copy editor-note-draft.js, saving both editor-saves.js,
+// playback and the transcript and note following it editor-playback.js, which
+// file plays editor-media.js, the address editor-address.js, the cut report
+// editor-cut-review.js, rewriting the note editor-note-regenerate.js, waiting
+// for a note, a carried-on task or a Feishu export editor-note-polling.js,
+// transcribing again editor-retranscribe.js. The hooks are called below in the
+// order their effects must run; keep that order when adding one.
 import {useState, useRef, useMemo} from 'react';
 import {Link} from 'react-router-dom';
 import SvgIcon from '../components/SvgIcon.jsx';

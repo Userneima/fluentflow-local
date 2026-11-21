@@ -1,5 +1,15 @@
 """Export Markdown to Feishu via local ``lark-cli`` (user identity).
 
+This module is the entry point (``export_markdown_via_lark_cli``); its parts
+sit beside it: running lark-cli and reading its output ``lark_cli_run``,
+screenshots ``lark_cli_images``, what a task keeps about its document
+``lark_cli_records``, writing and rewriting chapters ``lark_cli_update``, what
+follows the writes (heading links, list numbers, the snapshot)
+``lark_cli_finish``. They call ``lark_cli_run._run``,
+``lark_cli_run._resolve_lark_cli_bin`` and ``lark_cli_images._insert_images``
+at call time, so tests replace those there, never on this module
+(``tests/test_lark_cli_export.py`` checks).
+
 Requires ``lark-cli`` on PATH or ``FLUENTFLOW_LARK_CLI_BIN``. The document is
 created in the user's own 「我的文档库」 (``--parent-position my_library``),
 overridable via ``FLUENTFLOW_LARK_CLI_WIKI_SPACE``.
