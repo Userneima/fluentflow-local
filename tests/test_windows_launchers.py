@@ -57,7 +57,12 @@ def test_setup_downloads_ffmpeg_from_the_mirror_before_trying_winget():
     text = (ROOT / "setup-local.ps1").read_text(encoding="utf-8-sig")
     assert "registry.npmmirror.com/-/binary/ffmpeg-static/" in text
     assert text.index("Install-FfmpegFromMirror\n") < text.index('"Gyan.FFmpeg"')
-    assert 'Join-Path $FfmpegDataDir "bin"' in text
+    assert 'Join-Path (Get-DataDir) "bin"' in text
+    # Checked against pinned hashes before anything is run or moved into bin.
+    start = text.index("function Install-FfmpegFromMirror")
+    install = text[start : text.index("if (-not (Test-Ffmpeg))", start)]
+    assert install.index("Get-FileHash") < install.index("Move-Item")
+    assert "-version" not in install
 
 
 def test_the_uninstaller_reads_the_fields_health_has():

@@ -109,9 +109,27 @@ function Test-NvidiaAdapter {
 # fetches Gyan.FFmpeg from GitHub, which can crawl for many minutes in China
 # with nothing on screen (a user's friend, 2026-11-21); it stays as the fallback
 # when the mirror cannot be reached.
-$FfmpegDataDir = if ($env:FLUENTFLOW_DATA_DIR) { $env:FLUENTFLOW_DATA_DIR } else { Join-Path $env:APPDATA "FluentFlow" }
-$FfmpegBin = Join-Path $FfmpegDataDir "bin"
+function Get-DataDir {
+    if ($env:FLUENTFLOW_DATA_DIR) { return $env:FLUENTFLOW_DATA_DIR }
+    # The service reads the repository .env too, so a data folder set only
+    # there must be the one the tools land in.
+    $EnvFile = Join-Path $Repo ".env"
+    if (Test-Path $EnvFile) {
+        foreach ($Line in Get-Content $EnvFile -Encoding UTF8) {
+            if ($Line -match '^\s*FLUENTFLOW_DATA_DIR\s*=\s*"?([^"]+?)"?\s*$') { return $Matches[1] }
+        }
+    }
+    return (Join-Path $env:APPDATA "FluentFlow")
+}
+$FfmpegBin = Join-Path (Get-DataDir) "bin"
 $FfmpegMirror = "https://registry.npmmirror.com/-/binary/ffmpeg-static/b6.1.1"
+# SHA-256 of the unpacked programs, checked before either is run or put on PATH.
+# Taken 2026-11-21; the mirror's ffmpeg .gz was byte-identical to the one on the
+# ffmpeg-static GitHub release b6.1.1.
+$FfmpegSha256 = @{
+    "ffmpeg"  = "04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00"
+    "ffprobe" = "3a7e2dc003dc2cd1472827e4c7c4f056ae1ae0ae7c5bbc580c99b49827351ba4"
+}
 if (Test-Path (Join-Path $FfmpegBin "ffmpeg.exe")) { $env:Path = "$FfmpegBin;$env:Path" }
 
 function Test-Ffmpeg {
@@ -120,7 +138,12 @@ function Test-Ffmpeg {
 }
 
 function Install-FfmpegFromMirror {
-    New-Item -ItemType Directory -Force -Path $FfmpegBin | Out-Null
+    # Both programs are unpacked and checked in a staging folder and moved into
+    # bin only once both pass, so a broken download never sits where the
+    # service looks first.
+    $Staging = Join-Path (Split-Path -Parent $FfmpegBin) "bin-download"
+    Remove-Item -Recurse -Force $Staging -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $Staging | Out-Null
     $Saved = $ProgressPreference
     # Windows PowerShell 5.1 redraws its progress bar for every block it reads,
     # which makes a 30 MB download take minutes; the size is printed instead.
@@ -128,9 +151,9 @@ function Install-FfmpegFromMirror {
     try {
         foreach ($Tool in @("ffmpeg", "ffprobe")) {
             Write-Host "  下载 $Tool（约 30 MB）…"
-            $Gz = Join-Path $FfmpegBin "$Tool.exe.gz"
+            $Gz = Join-Path $Staging "$Tool.exe.gz"
             Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 -Uri "$FfmpegMirror/$Tool-win32-x64.gz" -OutFile $Gz
-            $Exe = Join-Path $FfmpegBin "$Tool.exe"
+            $Exe = Join-Path $Staging "$Tool.exe"
             $In = [System.IO.File]::OpenRead($Gz)
             try {
                 $Unzip = New-Object System.IO.Compression.GZipStream($In, [System.IO.Compression.CompressionMode]::Decompress)
@@ -138,11 +161,16 @@ function Install-FfmpegFromMirror {
                 try { $Unzip.CopyTo($Out) } finally { $Out.Close(); $Unzip.Close() }
             } finally { $In.Close() }
             Remove-Item $Gz
-            & $Exe -version *> $null
-            if ($LASTEXITCODE -ne 0) { throw "下载的 $Tool 运行不了。" }
+            $Hash = (Get-FileHash -Algorithm SHA256 -Path $Exe).Hash.ToLower()
+            if ($Hash -ne $FfmpegSha256[$Tool]) { throw "下载的 $Tool 校验不对（$Hash）。" }
+        }
+        New-Item -ItemType Directory -Force -Path $FfmpegBin | Out-Null
+        foreach ($Tool in @("ffmpeg", "ffprobe")) {
+            Move-Item -Force (Join-Path $Staging "$Tool.exe") (Join-Path $FfmpegBin "$Tool.exe")
         }
     } finally {
         $ProgressPreference = $Saved
+        Remove-Item -Recurse -Force $Staging -ErrorAction SilentlyContinue
     }
     $env:Path = "$FfmpegBin;$env:Path"
 }
