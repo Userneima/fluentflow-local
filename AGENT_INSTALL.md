@@ -7,7 +7,23 @@ in a system dialog, or an account; the cases that need a person are listed at th
 end, and only those go to the user.
 
 Tell the user once, before you start, that the install downloads about 8 GB and takes
-15 to 30 minutes, then work without further questions.
+15 to 30 minutes. On Windows, ask one question first (below, which drive); then work
+without further questions.
+
+## Windows: ask which drive
+
+The whole product (code, Python environment, data, FFmpeg, transcription models)
+goes into one folder, `FluentFlow`, on one drive. List the drives and their free space:
+
+```powershell
+Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { "{0} {1} GB free" -f $_.DeviceID, [math]::Floor($_.FreeSpace / 1GB) }
+```
+
+When there is more than one drive, ask the user which to install to, recommending the
+one other than C: with the most free space (it needs about 10 GB). Pass the answer as
+the folder: `D:\FluentFlow` for drive D, `%USERPROFILE%\FluentFlow` for drive C. With only
+drive C, do not ask. The script never asks anything itself when an agent runs it: without
+`FLUENTFLOW_INSTALL_DIR` it picks that same recommended drive and prints where it went.
 
 ## Run one command
 
@@ -17,20 +33,25 @@ macOS:
 curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.sh | bash
 ```
 
-Windows (PowerShell):
+Windows (PowerShell), with the folder from the question above:
 
 ```powershell
+$env:FLUENTFLOW_INSTALL_DIR = "D:\FluentFlow"
 powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.ps1 | iex"
 ```
 
 Run it in the background and wait; it prints a `== step ==` line before each step.
-It downloads the latest release into `~/fluentflow-local` (Windows:
-`%USERPROFILE%\fluentflow-local`), installs whatever is missing into the app's own data
-folder, builds the interface, downloads the transcription model, generates the agent
-access token into `.env`, starts the app at `http://127.0.0.1:8000`, registers the MCP
-server `fluentflow-local` with Claude Code and Codex when their command line tools are
-on this machine, and checks that server. Failed downloads are retried from mirrors in
-China automatically.
+macOS: it downloads the latest release into `~/fluentflow-local` and installs whatever
+is missing into the app's data folder. Windows: it puts everything in the chosen folder
+(`app` the code, `data` the tasks and downloaded tools, `models` the transcription
+models, `downloads` videos fetched from links, `cache` download caches) and writes those
+locations into `app\.env`; only Python, when the machine has none, is installed for the
+user on drive C. Then it builds the interface, downloads the transcription model,
+generates the agent access token into `.env`, starts the app at `http://127.0.0.1:8000`,
+registers the MCP server `fluentflow-local` with Claude Code and Codex when their command
+line tools are on this machine, and checks that server. Every download has a source in
+China: the script tries the original host for a few seconds and switches to the mirror
+when it is unreachable or slow; downloaded programs are checked against fixed checksums.
 
 Success is exit code 0 and a last line starting with `✓` (Windows: "FluentFlow Local
 is installed"). On failure the last lines say what went wrong and what to do; fix that
@@ -120,13 +141,47 @@ the section rows and your actual model. No Claude installation, login or model k
 needed. Stale material must be read again. Only the table changes, not the note or files.
 Agent-written notes and tasks handed to an agent do not trigger background Claude alignment.
 
+## Uninstalling
+
+When the user asks you to remove FluentFlow, run the uninstaller inside the install
+(macOS `~/fluentflow-local`; Windows `<folder>\app`, for example `D:\FluentFlow\app`).
+Look first, then delete:
+
+macOS:
+
+```bash
+bash ~/fluentflow-local/launchers/macos/uninstall-local.sh --all --dry-run
+```
+
+Windows:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\FluentFlow\app\launchers\windows\uninstall-local.ps1 -All -DryRun
+```
+
+The dry run lists what would go, with sizes, and deletes nothing. Show the user that
+list and ask one thing: whether their task data (history, transcripts, notes, media, and
+on Windows the videos downloaded from links) goes too. It cannot be recovered. Then run
+the same command without `--dry-run` / `-DryRun`, adding `--yes` / `-Yes`:
+
+- keep the data: `--models --yes` (Windows `-Models -Yes`)
+- remove everything: `--all --yes` (Windows `-All -Yes`)
+
+It stops the running service, removes the program (for an install from these
+instructions, the code folder itself), the downloaded FFmpeg and Node.js, the Desktop
+icon, the logs and the agent skill, and unregisters `fluentflow-local` from Claude Code
+and Codex (only an entry that points at this install). On Windows with `-All`, the
+`FluentFlow` folder is gone afterwards. It leaves Python and anything that was on the
+machine before. Tell the user what was removed and what is left (the last lines say).
+The MCP tools disappear from your next conversation.
+
 ## Only these need the user
 
 - **Not enough disk space** (a step fails with "No space left on device"; the install
   needs about 8 GB free): ask the user to free space, then run the command again.
 - **No network access to GitHub, PyPI, npm and their mirrors**: ask the user to connect
   a network or a proxy, then run the command again.
-- **Windows without winget**: ask the user to install "App Installer" from the
-  Microsoft Store.
+- **Windows without winget, when Python or FFmpeg could not be downloaded** (the script
+  says so): ask the user to install "App Installer" from the Microsoft Store.
 - **Videos that need a login** (some Bilibili and YouTube links): the user chooses a
   browser in the app's settings whose login FluentFlow may reuse.

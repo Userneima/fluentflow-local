@@ -36,8 +36,9 @@ agent 会先确认适用范围，再修改你的个人写法；只影响之后�
 
 - **macOS**：Apple 芯片（M 系列）转录走 GPU 加速。Intel Mac 也能装，转录走 CPU，会慢不少。
   不需要先装别的东西，FFmpeg、Node.js 和 Python 由安装脚本装进 FluentFlow 自己的数据文件夹。
-- **Windows 10 / 11**：有 NVIDIA 显卡时走 GPU，没有就走 CPU。FFmpeg 从国内镜像下载到 FluentFlow 自己的
-  数据文件夹（镜像连不上时改用系统自带的 winget），缺 Python 时用 winget 补上。
+- **Windows 10 / 11**：有 NVIDIA 显卡时走 GPU，没有就走 CPU。一条命令安装（`install.ps1`）把整个产品
+  （代码、Python 环境、数据、FFmpeg、转录模型）放进你选的盘上的一个 `FluentFlow` 文件夹，默认推荐 C 盘以外
+  剩余空间最大的盘；缺 Python 时给当前用户装一个（装在 C 盘，和普通装 Python 一样）。
 
 磁盘预留约 8 GB，明细见下文「需要多少磁盘空间」。
 
@@ -54,14 +55,10 @@ cd fluentflow-local
 最新版本的 Source code (zip)，解压后在终端里进入解压出来的文件夹。在一台全新的 Mac 上第一次
 运行 `git`，系统会弹窗要求安装命令行开发者工具，点「安装」等它装完再重跑即可。
 
-在国内网络下 pip 和 npm 下载慢时，先在同一个终端里设置镜像再运行安装脚本，脚本不会自己切换：
-
-```bash
-export PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-npm config set registry https://registry.npmmirror.com
-```
-
-Windows 的 PowerShell 里第一行写成 `$env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"`。
+国内网络不用另外设置：每样要下载的东西（Python 安装包、pip、npm、Node.js、说话人模型、转录模型，
+Windows 上还有 FFmpeg）都有国内来源，安装脚本先试原站几秒，连不上或明显慢就改从镜像下载
+（清华源、npmmirror、ModelScope、hf-mirror）；下载的程序按固定的校验值核对。你自己设了
+`PIP_INDEX_URL` 或 npm 的 registry 时按你设的来。
 
 ### macOS
 
@@ -87,7 +84,9 @@ Apple 芯片的 Mac 上，Python 依赖按 `requirements-local.lock.macos-arm64.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\setup-local.ps1
 ```
 
-同样是一次装完，同样不问问题。缺 FFmpeg 时从国内镜像下载（连不上再用 winget），缺 Python 时用 winget 装上，Node.js 下载免安装版。
+同样是一次装完，同样不问问题。缺 FFmpeg 时从国内镜像下载（连不上再用 winget），缺 Python 时下载官方安装包给当前用户装上（原站和国内镜像挑快的），Node.js 下载免安装版。
+数据、FFmpeg、转录模型的位置按代码目录里 `.env` 写的来（`FLUENTFLOW_DATA_DIR`、`HF_HOME`）；一条命令安装会替你写好，
+指向它的 `FluentFlow` 文件夹，单独运行这个脚本、`.env` 里没写时，数据在 `%APPDATA%\FluentFlow`，模型在用户目录的 Hugging Face 缓存。
 检测到 NVIDIA 显卡时，它会把 CUDA 12 与 cuDNN 9 运行库装进这个虚拟环境；不需要装机器级
 CUDA Toolkit，但显卡驱动要在。`-SkipModel` 不下转录模型。装完双击桌面上的
 「FluentFlow Local」启动。
@@ -334,6 +333,9 @@ Windows 同样是 `git pull` 后重新运行 `setup-local.ps1`。安装脚本可
 文件夹（里面的 `.venv` 和 `node_modules` 占着几 GB，而你的任务记录不在那里）。旧文件夹里有 `.env` 的，
 先把它复制到新文件夹。
 
+Windows 上用一条命令装进 `FluentFlow` 文件夹的：先关掉 FluentFlow，把里面的 `app` 改名成 `app-old`，再运行一次那条
+安装命令，它会把最新版放进新的 `app`，数据、模型照旧在原处。确认新版本能正常处理一个任务之后删掉 `app-old`。
+
 ## 出问题时
 
 先跑一遍启动前检查，它会逐项说明缺什么、转录会走哪条路：
@@ -385,12 +387,17 @@ bash launchers/macos/uninstall-local.sh --all --dry-run   # 先看看要删什�
 Windows 用 `launchers\windows\uninstall-local.ps1`，开关是 `-Models`、`-Data`、
 `-All`、`-DryRun`。
 
-默认只删虚拟环境、前端依赖、桌面启动器和日志，这些重装就回来。转录模型和任务
-数据各自需要显式开口：模型住在 Hugging Face 的公共缓存里，脚本只删本产品下载过
-的那几个目录；任务数据删掉无法恢复，所以会再确认一次。
+默认只删程序：用一条命令（发布包）装的，整个代码目录连同虚拟环境一起删；用 git 检出的，只删虚拟环境、
+前端依赖和构建产物，代码留着（里面可能有你的改动）。另外删安装时下载的 FFmpeg、Node.js，桌面启动器、日志、
+给 agent 的 skill，并注销 Claude Code、Codex 里的 `fluentflow-local` 工具（只在它指向这份安装时）。这些重装就回来。
+转录模型和任务数据各自需要显式开口：模型在 Hugging Face 的公共缓存里时，脚本只删本产品下载过的那几个目录；
+任务数据删掉无法恢复，所以会再确认一次。
 
-FFmpeg、Node.js、Homebrew 和 Python 不会被动，它们是系统工具。代码目录留给你自己
-删——卸载脚本就在里面。
+Windows 上用一条命令装进 `FluentFlow` 文件夹的，`-All` 删完后这个文件夹也不在了。也可以让你的 agent 替你卸载，
+做法写在 [AGENT_INSTALL.md](AGENT_INSTALL.md) 的「Uninstalling」。
+
+机器上原本就有的 FFmpeg、Node.js、Homebrew 和 Python 不会被动；Windows 上安装脚本替你装的 Python 也留着，
+在「设置 → 应用」里可以自己卸载。
 
 ## Development
 

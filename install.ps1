@@ -70,9 +70,26 @@ function Test-CanAsk {
     try { return [Environment]::UserInteractive -and -not [Console]::IsInputRedirected } catch { return $false }
 }
 
+# An earlier one-folder install: its code, or its data when the code folder was
+# set aside to upgrade (README, Updating). Reused rather than picking a drive
+# again, which could land on another drive and leave the data behind.
+function Find-ExistingRoot {
+    $Candidates = @(Join-Path $env:USERPROFILE "FluentFlow") + @(Get-FixedDrives | ForEach-Object { "$($_.Name)\FluentFlow" })
+    foreach ($Candidate in $Candidates) {
+        if ((Test-Path (Join-Path $Candidate "app\backend\local_main.py")) -or (Test-Path (Join-Path $Candidate "data\fluentflow_jobs.sqlite"))) {
+            return $Candidate
+        }
+    }
+    return $null
+}
+
 $LegacyDir = Join-Path $env:USERPROFILE "fluentflow-local"
+$Existing = $null
+if (-not $env:FLUENTFLOW_INSTALL_DIR) { $Existing = Find-ExistingRoot }
 if ($env:FLUENTFLOW_INSTALL_DIR) {
     $Root = $env:FLUENTFLOW_INSTALL_DIR
+} elseif ($Existing) {
+    $Root = $Existing
 } elseif (Test-Path (Join-Path $LegacyDir "backend\local_main.py")) {
     $Root = $LegacyDir
 } else {
