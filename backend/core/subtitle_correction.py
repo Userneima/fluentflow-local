@@ -200,23 +200,6 @@ def _loose(text: str) -> str:
     return re.sub(r"\s+", "", text or "").lower().translate(_LOOKALIKE)
 
 
-def _has_video(path: Path) -> bool:
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        return False
-    try:
-        out = subprocess.run(
-            [ffprobe, "-v", "error", "-select_streams", "v", "-show_entries", "stream=codec_name,disposition",
-             "-of", "json", str(path)],
-            check=True, capture_output=True, text=True, timeout=15,
-        )
-        streams = json.loads(out.stdout or "{}").get("streams") or []
-    except (subprocess.SubprocessError, ValueError, OSError):
-        return False
-    # Cover art in an audio file is a video stream too.
-    return any(not (s.get("disposition") or {}).get("attached_pic") for s in streams)
-
-
 def _text(segment: dict[str, Any]) -> str:
     return str(segment.get("text") or "").strip()
 
@@ -686,7 +669,7 @@ def correct_from_subtitles(
     *,
     probe: Callable = read_band,
     track_reader: Callable = read_track,
-    video_check: Callable[[Path], bool] = _has_video,
+    video_check: Callable[[Path], bool] = frame_text.has_picture,
     ocr_available: Callable[[], bool] = frame_text.available,
     stop: threading.Event | None = None,
 ) -> SubtitleCorrectionResult:

@@ -225,7 +225,7 @@ def _video_key(video: Path) -> str:
 def read_picture(
     video: Path | None, segments: list[dict[str, Any]], *,
     probe: Callable = sc.read_band, track_reader: Callable = sc.read_track,
-    video_check: Callable[[Path], bool] = sc._has_video, ocr_available: Callable[[], bool] = frame_text.available,
+    video_check: Callable[[Path], bool] = frame_text.has_picture, ocr_available: Callable[[], bool] = frame_text.available,
 ) -> dict[str, Any]:
     """The subtitle track of ``video`` as cues, or why there is none. The
     same reading the background step makes, without its model."""

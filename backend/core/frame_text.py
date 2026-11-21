@@ -30,8 +30,11 @@ Three rules, because this is the kind of helper that quietly becomes a censor:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import shutil
+import subprocess
 import threading
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -139,6 +142,29 @@ def _vision():
                 NSURL.fileURLWithPath_
                 _resolved = True
     return Vision, Quartz, NSURL
+
+
+def has_picture(path: Path) -> bool:
+    """Whether the file has a picture to read text from: a video stream that
+    is not an audio file's cover art. Correcting from on-screen subtitles and
+    reading a speechless video's on-screen text both ask this."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return False
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v", "-show_entries",
+             # stream=disposition alone comes back empty on ffprobe 8.1; the
+             # flag has to be asked for by name (measured 2026-11-21).
+             "stream=codec_name:stream_disposition=attached_pic",
+             "-of", "json", str(path)],
+            check=True, capture_output=True, text=True, timeout=15,
+        )
+        streams = json.loads(out.stdout or "{}").get("streams") or []
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return False
+    # Cover art in an audio file is a video stream too.
+    return any(not (s.get("disposition") or {}).get("attached_pic") for s in streams)
 
 
 def available() -> bool:

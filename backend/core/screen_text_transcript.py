@@ -36,7 +36,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-from backend.core import frame_text
+from backend.core import frame_text, silence_cuts
 from backend.core.local_error_diagnostics import (
     NO_SPEECH,
     NO_SPEECH_LONG,
@@ -87,37 +87,13 @@ def _ffmpeg() -> str:
     return found
 
 
-def has_video(media: Path) -> bool:
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        return False
-    completed = subprocess.run(
-        [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_type",
-         "-of", "csv=p=0", str(media)],
-        capture_output=True, text=True, check=False,
-    )
-    return "video" in completed.stdout
-
-
-def mean_volume_db(media: Path) -> float | None:
-    """The average loudness of the recording's sound; None when it has none
-    or it cannot be measured."""
-    completed = subprocess.run(
-        [_ffmpeg(), "-hide_banner", "-nostdin", "-i", str(media), "-vn", "-af", "volumedetect",
-         "-f", "null", "-"],
-        capture_output=True, text=True, check=False,
-    )
-    match = re.search(r"mean_volume:\s*(-?(?:\d+(?:\.\d+)?|inf))\s*dB", completed.stderr)
-    return float(match.group(1)) if match else None
-
-
 def guard_silence(media: Path, check: Any) -> None:
     """Run the digital-silence check; a video it rejects fails as nearly
     silent (``NO_SPEECH_QUIET``), which offers the picture note."""
     try:
         check()
     except RuntimeError as exc:
-        if str(exc) == NO_SPEECH and has_video(media):
+        if str(exc) == NO_SPEECH and frame_text.has_picture(media):
             raise RuntimeError(NO_SPEECH_QUIET) from exc
         raise
 
@@ -198,9 +174,9 @@ def transcript_or_refuse(media: Path, *, duration_seconds: float | None,
                          agent_writes: bool, asked: bool) -> list[dict[str, Any]]:
     """The on-screen text of a video no one speaks in, as segments; raises
     with the reason (each starting with ``NO_SPEECH``) when it gets none."""
-    if not has_video(media) or not frame_text.available():
+    if not frame_text.has_picture(media) or not frame_text.available():
         raise RuntimeError(NO_SPEECH)
-    reason = refusal(mean_db=mean_volume_db(media), duration_seconds=duration_seconds,
+    reason = refusal(mean_db=silence_cuts.overall_mean_volume_db(media), duration_seconds=duration_seconds,
                      agent_writes=agent_writes, asked=asked)
     if reason:
         raise RuntimeError(reason)
