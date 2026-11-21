@@ -144,6 +144,15 @@ function Test-InRepo([string]$Path) {
     return [System.IO.Path]::GetFullPath($Path).StartsWith($Repo.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
 }
 $KeepsUserFiles = (Test-InRepo $DataRoot) -or (Test-InRepo $LinkRoot) -or (Test-InRepo $ModelHome)
+# Each part of the data can be moved on its own (task database, sources, notes,
+# edits, settings...): any of them inside the code folder keeps it too.
+$PartNames = @(Get-ChildItem Env: | Where-Object { $_.Name -match '^FLUENTFLOW_\w*(DIR|PATH|CACHE)$' } | ForEach-Object { $_.Name })
+if (Test-Path (Join-Path $Repo ".env")) {
+    $PartNames += @(Get-Content (Join-Path $Repo ".env") | ForEach-Object { if ($_ -match '^\s*(export\s+)?(FLUENTFLOW_\w*(DIR|PATH|CACHE))\s*=') { $Matches[2] } })
+}
+foreach ($Name in ($PartNames | Sort-Object -Unique)) {
+    if (Test-InRepo (Get-FluentFlowSetting $Repo $Name)) { $KeepsUserFiles = $true }
+}
 
 $ModelDirs = @()
 if ($Models -and (Test-InHome $ModelHome)) {

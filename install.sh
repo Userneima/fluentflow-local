@@ -108,6 +108,7 @@ elif [[ -n "$LOCAL_SOURCE" ]]; then
 		echo "把 FluentFlow Local 从 ${CURRENT} 更新到 ${LATEST}（来自 ${LOCAL_SOURCE}）。"
 	elif [[ "$HAVE_CODE" -eq 1 ]]; then
 		echo "${DIR} 里的 ${CURRENT} 不比 ${LOCAL_SOURCE} 里的 ${LATEST} 旧。"
+		[[ -n "${SRC_TMP:-}" ]] && rm -rf "$SRC_TMP"
 	fi
 	if [[ "$HAVE_CODE" -eq 0 || "$UPDATING" -eq 1 ]]; then
 		TARGET="$DIR"
@@ -120,6 +121,7 @@ elif [[ -n "$LOCAL_SOURCE" ]]; then
 		cp -R "$LOCAL_SOURCE" "$TARGET"
 		rm -rf "${TARGET}/.git" "${TARGET}/.venv" "${TARGET}/.env"
 		echo "made by a FluentFlow Local install or update" >"${TARGET}/${UPDATE_MARKER}"
+		[[ -n "${SRC_TMP:-}" ]] && rm -rf "$SRC_TMP"
 		echo "已放到 ${TARGET}"
 	fi
 else
@@ -223,7 +225,10 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	assert_own_leftover "${DIR}.old"
 	assert_own_leftover "${DIR}.failed"
 	# 数据、链接下载、模型若设在代码目录里面，会随旧代码一起被删：先挪出去再更新。
-	for name in FLUENTFLOW_DATA_DIR FLUENTFLOW_LINK_OUTPUT_DIR HF_HOME; do
+	# 数据目录的每一部分（任务库、原片、笔记、改过的转录稿、设置……）都能单独设位置。
+	names="HF_HOME $(env | sed -n -E 's/^(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))=.*/\1/p')"
+	[[ -f "${DIR}/.env" ]] && names="$names $(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))[[:space:]]*=.*/\2/p' "${DIR}/.env")"
+	for name in $(printf '%s\n' $names | sort -u); do
 		where="${!name:-}"
 		if [[ -z "$where" && -f "${DIR}/.env" ]]; then
 			where="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${name}[[:space:]]*=" "${DIR}/.env" | tail -n 1 |
@@ -241,11 +246,19 @@ if [[ "$UPDATING" -eq 1 ]]; then
 			sed -E "s/^[^=]*=[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//" || true)"
 		[[ "$env_port" =~ ^[0-9]+$ ]] && PORT="$env_port"
 	fi
+	OLD_PY="${DIR}/.venv/bin/python"
+	[[ -x "${DIR}/venv/bin/python" ]] && OLD_PY="${DIR}/venv/bin/python"
 	health="$(curl -s --max-time 2 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
+	if [[ "$health" != *'"edition":"local"'* && -n "$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null || true)" &&
+		"${FLUENTFLOW_UPDATE_FORCE:-}" != "1" ]]; then
+		rm -rf "${DIR}.new"
+		fail_plain "端口 ${PORT} 上的程序没有像 FluentFlow 那样应答（忙，或是别的程序）。稍后再运行一次；确认可以停掉时设 FLUENTFLOW_UPDATE_FORCE=1。什么都没改。"
+	fi
+	STOPPED_OLD=0
 	if [[ "$health" == *'"edition":"local"'* ]]; then
 		# 每个任务的 activity.busy 算（剪辑、写笔记时任务主状态已经是完成），和启动器的重启
 		# 检查同一份脚本；-1 是问不到。
-		busy="$("${DIR}/.venv/bin/python" "${DIR}.new/launchers/macos/count_active_jobs.py" "http://127.0.0.1:${PORT}" 2>/dev/null || echo -1)"
+		busy="$("$OLD_PY" "${DIR}.new/launchers/macos/count_active_jobs.py" "http://127.0.0.1:${PORT}" 2>/dev/null || echo -1)"
 		[[ "$busy" =~ ^-?[0-9]+$ ]] || busy=-1
 		if [[ "$busy" -ne 0 && "${FLUENTFLOW_UPDATE_FORCE:-}" != "1" ]]; then
 			rm -rf "${DIR}.new"
@@ -255,6 +268,7 @@ if [[ "$UPDATING" -eq 1 ]]; then
 			fail "还有 ${busy} 个任务在处理，等它们做完再运行一次（或设 FLUENTFLOW_UPDATE_FORCE=1 先停掉，重启后接着做）。什么都没改。"
 		fi
 		echo "停止正在运行的 FluentFlow Local…"
+		STOPPED_OLD=1
 		pids="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null || true)"
 		# shellcheck disable=SC2086
 		[[ -n "$pids" ]] && kill $pids 2>/dev/null || true
@@ -262,11 +276,15 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	stop_folder_programs "$DIR"
 	# 可选的 pyannote 讲话人引擎不在标准依赖里；装过的，更新后照样装上。
 	HAD_PYANNOTE=0
-	compgen -G "${DIR}/.venv/lib/python3*/site-packages/pyannote" >/dev/null && HAD_PYANNOTE=1
+	compgen -G "$(dirname "$(dirname "$OLD_PY")")/lib/python3*/site-packages/pyannote" >/dev/null && HAD_PYANNOTE=1
 	[[ -f "${DIR}/.env" ]] && cp -p "${DIR}/.env" "${DIR}.new/.env"
 	rm -rf "${DIR}.old"
 	cd "$(dirname "$DIR")"
-	mv "$DIR" "${DIR}.old"
+	if ! mv "$DIR" "${DIR}.old"; then
+		rm -rf "${DIR}.new"
+		[[ "$STOPPED_OLD" -eq 1 && -d "${HOME}/Desktop/FluentFlow Local.app" ]] && open "${HOME}/Desktop/FluentFlow Local.app"
+		fail_plain "没能把 ${DIR} 挪开（有程序在用它）。关掉它再运行一次。什么都没改。"
+	fi
 	SWAPPED=1
 	# set -e 停下的那些步骤也要先换回旧版本，包括下一步的 mv。
 	trap 'fail "安装中途出错（install.sh 第 ${LINENO} 行）。"' ERR

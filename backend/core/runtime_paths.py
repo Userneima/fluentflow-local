@@ -94,10 +94,22 @@ def read_env_file(path: Path) -> dict[str, str]:
     except OSError:
         return {}
     values: dict[str, str] = {}
-    for line in text.splitlines():
-        match = _ENV_LINE.match(line)
-        if match:
-            values[match.group(1)] = _env_value(match.group(2), values)
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        match = _ENV_LINE.match(lines[index])
+        index += 1
+        if not match:
+            continue
+        raw = match.group(2)
+        # A quoted value may run over several lines, as python-dotenv reads it.
+        stripped = raw.strip()
+        if stripped[:1] in ("'", '"'):
+            while _quoted(stripped) is None and index < len(lines):
+                raw += "\n" + lines[index]
+                stripped = raw.strip()
+                index += 1
+        values[match.group(1)] = _env_value(raw, values)
     return values
 
 

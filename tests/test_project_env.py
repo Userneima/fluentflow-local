@@ -50,6 +50,9 @@ def test_reader_agrees_with_python_dotenv(tmp_path):
             "DEFAULTED=${FLUENTFLOW_SURELY_UNSET:-fallback}",
             "ESCAPED_SINGLE='it\\'s here'",
             'ESCAPED_DOUBLE="say \\"hi\\" \\\\ done"',
+            'MULTILINE="first line',
+            'second line"',
+            "AFTER_MULTILINE=yes",
             "",
         ]),
         encoding="utf-8",
@@ -255,9 +258,13 @@ def test_update_and_uninstall_leave_what_is_not_theirs():
     macos = (ROOT / "install.sh").read_text(encoding="utf-8")
     for text in (windows, macos):
         assert ".fluentflow-update" in text
-        assert "FLUENTFLOW_LINK_OUTPUT_DIR" in text and "HF_HOME" in text
+        # Every setting that can place the user's files, not a fixed few.
+        assert ("FLUENTFLOW_\\w*(DIR|PATH|CACHE)" in text or "FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE)" in text) and "HF_HOME" in text
     assert "Assert-OwnLeftover" in windows and "assert_own_leftover" in macos
     assert "WindowsIdentity]::GetCurrent().User.Value" in windows
+    assert "another Windows account's FluentFlow" in windows and "icacls" in windows
+    # A release older than this installer is installed by its own installer.
+    assert "predates this installer" in windows
     assert "KeepsUserFiles" in (ROOT / "launchers" / "windows" / "uninstall-local.ps1").read_text(encoding="utf-8-sig")
     assert "KEEPS_USER_FILES" in (ROOT / "launchers" / "macos" / "uninstall-local.sh").read_text(encoding="utf-8")
     assert '"release-check"' in (ROOT / "backend" / "core" / "local_http_boundary.py").read_text(encoding="utf-8")

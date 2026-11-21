@@ -226,15 +226,19 @@ function Start-FluentFlowService([string]$Repo, [string]$Python, [string]$Port, 
     [System.IO.File]::WriteAllText($EnvFile, ($Snapshot | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding $false))
     $Runner = Join-Path $Repo "scripts\run_service.py"
     $Command = "cmd.exe /d /s /c `"set PYTHONUTF8=1&& `"$Python`" `"$Runner`" --env-file `"$EnvFile`" --port $Port >> `"$LogFile`" 2>&1`""
-    $Startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
-    $Result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-        CommandLine = $Command; CurrentDirectory = $Repo; ProcessStartupInformation = $Startup
-    }
-    if ($Result.ReturnValue -ne 0) {
+    try {
+        $Startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+        $Result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+            CommandLine = $Command; CurrentDirectory = $Repo; ProcessStartupInformation = $Startup
+        }
+        if ($Result.ReturnValue -ne 0) { throw "Windows 没能启动服务（Win32_Process.Create 返回 $($Result.ReturnValue)）" }
+        # The service deletes the file once it has read it; one still there
+        # after half a minute was never read, and it holds this window's keys.
+        for ($i = 0; $i -lt 60 -and (Test-Path $EnvFile); $i++) { Start-Sleep -Milliseconds 500 }
+        return $Result.ProcessId
+    } finally {
         Remove-Item -Force $EnvFile -ErrorAction SilentlyContinue
-        throw "Windows 没能启动服务（Win32_Process.Create 返回 $($Result.ReturnValue)）"
     }
-    return $Result.ProcessId
 }
 
 function Test-FluentFlowHealthy([string]$Port) {

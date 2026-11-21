@@ -132,10 +132,22 @@ if (Test-Path (Join-Path $Root "backend\local_main.py")) {
     # it; so it must be new, empty, or one this installer made (the marker).
     $Marker = Join-Path $Root ".fluentflow-home"
     $HasApp = Test-Path (Join-Path $Dir "backend\local_main.py")
+    if ((Test-Path $Marker) -and -not ((Get-Content -Raw $Marker) -match [regex]::Escape($CurrentSid))) {
+        throw "$Root is another Windows account's FluentFlow (its tasks and access token). Install into a folder of your own (FLUENTFLOW_INSTALL_DIR)."
+    }
     if ((Test-Path $Root) -and -not (Test-Path $Marker) -and -not $HasApp -and (Get-ChildItem -Force -LiteralPath $Root | Select-Object -First 1)) {
         throw "$Root already holds other files. Choose a new or empty folder for FluentFlow (FLUENTFLOW_INSTALL_DIR), for example $Root\FluentFlow."
     }
+    $NewRoot = -not (Test-Path $Root)
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
+    if ($NewRoot) {
+        # A drive's root lets every account on the computer read what is
+        # created there; tasks, transcripts, the access token and saved keys
+        # are this user's. Only this account, SYSTEM and Administrators get in,
+        # as in the user's own profile folder.
+        & icacls.exe $Root /inheritance:r /grant:r "*${CurrentSid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-Host "Could not make $Root private to this account; other accounts on this computer may read it." }
+    }
     if (-not (Test-Path $Marker)) { Set-Content -Path $Marker -Value "FluentFlow Local lives here; uninstalling removes this folder. Installed by $CurrentSid" -Encoding ASCII }
 }
 Write-Host "Installing into $Root"
@@ -177,6 +189,7 @@ if ($IsGit) {
 } else {
     if (-not $HaveCode -and (Test-Path $Dir)) { throw "$Dir exists but is not a FluentFlow Local folder. Set FLUENTFLOW_INSTALL_DIR to another place." }
   $LocalSource = $env:FLUENTFLOW_INSTALL_SOURCE
+  $Unzipped = $null
   if ($LocalSource) {
     if ($LocalSource -like "*.zip") {
         $Unzipped = Join-Path ([System.IO.Path]::GetTempPath()) ("fluentflow-src-" + [guid]::NewGuid())
@@ -188,7 +201,10 @@ if ($IsGit) {
     $Latest = (Get-Content -Raw (Join-Path $LocalSource "VERSION")).Trim()
     if ($HaveCode) {
         if ([version]$Latest -gt [version]$Current) { $Updating = $true; Write-Host "Updating FluentFlow Local $Current to $Latest from $LocalSource." }
-        else { Write-Host "FluentFlow Local $Current in $Dir is not older than $Latest in $LocalSource." }
+        else {
+            Write-Host "FluentFlow Local $Current in $Dir is not older than $Latest in $LocalSource."
+            if ($Unzipped) { Remove-Item -Recurse -Force -LiteralPath $Unzipped -ErrorAction SilentlyContinue }
+        }
     }
     if (-not $HaveCode -or $Updating) {
         $Target = if ($Updating) { "$Dir.new" } else { $Dir }
@@ -197,6 +213,7 @@ if ($IsGit) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Target) | Out-Null
         Copy-Item -Recurse -LiteralPath $LocalSource -Destination $Target
         Remove-Item -Recurse -Force -LiteralPath (Join-Path $Target ".git"), (Join-Path $Target ".venv"), (Join-Path $Target ".env") -ErrorAction SilentlyContinue
+        if ($Unzipped) { Remove-Item -Recurse -Force -LiteralPath $Unzipped -ErrorAction SilentlyContinue }
         Set-Content -Path (Join-Path $Target $UpdateMarker) -Value "made by a FluentFlow Local install or update" -Encoding ASCII
         Write-Host "Placed in $Target"
     }
@@ -362,10 +379,18 @@ function Get-BusyTaskCount([string]$Port) {
     return ($Counts | Measure-Object -Maximum).Maximum
 }
 
+$StoppedOld = $false
 if ($Updating) {
   try {
     foreach ($Leftover in @("$Dir.old", "$Dir.failed")) { Assert-OwnLeftover $Leftover }
-    foreach ($Name in @("FLUENTFLOW_DATA_DIR", "FLUENTFLOW_LINK_OUTPUT_DIR", "HF_HOME")) {
+    # Every place a setting can put the user's files: the data folder and each
+    # of its parts (task database, sources, notes, edits...), link downloads,
+    # the models.
+    $Names = @("HF_HOME") + @(Get-ChildItem Env: | Where-Object { $_.Name -match '^FLUENTFLOW_\w*(DIR|PATH|CACHE)$' } | ForEach-Object { $_.Name })
+    if (Test-Path (Join-Path $Dir ".env")) {
+        $Names += @(Get-Content (Join-Path $Dir ".env") | ForEach-Object { if ($_ -match '^\s*(export\s+)?(FLUENTFLOW_\w*(DIR|PATH|CACHE))\s*=') { $Matches[2] } })
+    }
+    foreach ($Name in ($Names | Sort-Object -Unique)) {
         $Where = Get-InstalledSetting $Dir $Name
         if ($Where -and [System.IO.Path]::IsPathRooted($Where) -and
             [System.IO.Path]::GetFullPath($Where).StartsWith($Dir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
@@ -373,6 +398,10 @@ if ($Updating) {
         }
     }
     $OldPort = Get-InstalledPort $Dir
+    $Listening = @(Get-NetTCPConnection -LocalPort ([int]$OldPort) -State Listen -ErrorAction SilentlyContinue).Count -gt 0
+    if ($Listening -and -not (Test-ServiceUp $OldPort) -and $env:FLUENTFLOW_UPDATE_FORCE -ne "1") {
+        throw "Something on port $OldPort is not answering like FluentFlow (busy, or another program); run this again later, or set FLUENTFLOW_UPDATE_FORCE=1 once you know it may be stopped"
+    }
     if (Test-ServiceUp $OldPort) {
         $Busy = Get-BusyTaskCount $OldPort
         if ($Busy -ne 0 -and $env:FLUENTFLOW_UPDATE_FORCE -ne "1") {
@@ -380,6 +409,7 @@ if ($Updating) {
             throw "$What; run this again when they finish (or set FLUENTFLOW_UPDATE_FORCE=1 to stop them; they carry on after the restart)"
         }
         Write-Host "Stopping the running FluentFlow Local..."
+        $StoppedOld = $true
         Get-NetTCPConnection -LocalPort ([int]$OldPort) -State Listen -ErrorAction SilentlyContinue |
             ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
     }
@@ -396,8 +426,14 @@ if ($Updating) {
         throw "Could not move $Dir aside ($($_.Exception.Message)). A window or program is using it; close it (or run this from another folder) and run this again"
     }
   } catch {
+    $Why = $_.Exception.Message
     Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
-    throw "$($_.Exception.Message). Nothing was changed; FluentFlow Local $Current is still in $Dir."
+    if ($StoppedOld) {
+        # It was stopped for the swap that did not happen: start it again.
+        $Launcher = Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd"
+        if (Test-Path $Launcher) { Start-Process $Launcher }
+    }
+    throw "$Why. Nothing was changed; FluentFlow Local $Current is still in $Dir."
   }
     try {
         Move-Item -LiteralPath "$Dir.new" -Destination $Dir -ErrorAction Stop
@@ -407,113 +443,123 @@ if ($Updating) {
     }
 }
 
-. (Join-Path $Dir "launchers\windows\fluentflow-env.ps1")
-if ($OneFolder) {
-    # Written before the setup script runs, which reads them (as does the
-    # service) to put FFmpeg, Node.js, the models and the caches in this folder.
-    # A line already in .env (set by the user, or an earlier run) is kept.
-    Add-FluentFlowEnvLine $Dir "FLUENTFLOW_HOME" $Root
-    Add-FluentFlowEnvLine $Dir "FLUENTFLOW_DATA_DIR" (Join-Path $Root "data")
-    Add-FluentFlowEnvLine $Dir "HF_HOME" (Join-Path $Root "models")
-    Add-FluentFlowEnvLine $Dir "FLUENTFLOW_LINK_OUTPUT_DIR" (Join-Path $Root "downloads")
-    Add-FluentFlowEnvLine $Dir "PIP_CACHE_DIR" (Join-Path $Root "cache\pip")
-    Add-FluentFlowEnvLine $Dir "UV_CACHE_DIR" (Join-Path $Root "cache\uv")
-    Add-FluentFlowEnvLine $Dir "npm_config_cache" (Join-Path $Root "cache\npm")
-}
-$Port = Get-FluentFlowPort $Dir
-
+$Port = "8000"
 try {
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $Dir "launchers\windows\setup-local.ps1") @args
-    if ($LASTEXITCODE -ne 0) { throw "The setup script failed; see the lines above." }
-    if ($Updating -and $HadPyannote) {
-        Write-Host "Reinstalling the optional pyannote speaker engine you had..."
-        & (Join-Path $Dir ".venv\Scripts\python.exe") -m pip install -q --disable-pip-version-check -r (Join-Path $Dir "requirements-speaker.txt")
-        if ($LASTEXITCODE -ne 0) { throw "Reinstalling pyannote failed." }
-    }
-
-    $Python = Join-Path $Dir ".venv\Scripts\python.exe"
-    $McpScript = Join-Path $Dir "scripts\fluentflow_mcp_server.py"
-
-    Write-Host "== Starting FluentFlow Local =="
-    function Test-Healthy {
-        try { return (Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "http://127.0.0.1:$Port/health").Content -match '"edition":"local"' } catch { return $false }
-    }
-    if (-not (Test-Healthy)) {
-        $Launcher = Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd"
-        if (Test-Path $Launcher) {
-            Start-Process $Launcher
-        } else {
-            $LogDir = Join-Path $env:LOCALAPPDATA "FluentFlow\Logs"
-            New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-            Start-FluentFlowService $Dir $Python $Port (Join-Path $LogDir "local.log") | Out-Null
+    # A release from before this installer (v0.11.0 and older) has neither its
+    # scripts nor its layout: it is installed by the installer it came with.
+    if (-not (Test-Path (Join-Path $Dir "launchers\windows\fluentflow-env.ps1"))) {
+        Write-Host "FluentFlow Local $((Get-Content -Raw (Join-Path $Dir 'VERSION')).Trim()) predates this installer; running the installer that came with it."
+        $env:FLUENTFLOW_INSTALL_DIR = $Dir
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Dir "install.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "Its installer failed; see the lines above." }
+        $Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } else { "8000" }
+    } else {
+        . (Join-Path $Dir "launchers\windows\fluentflow-env.ps1")
+        if ($OneFolder) {
+            # Written before the setup script runs, which reads them (as does the
+            # service) to put FFmpeg, Node.js, the models and the caches in this folder.
+            # A line already in .env (set by the user, or an earlier run) is kept.
+            Add-FluentFlowEnvLine $Dir "FLUENTFLOW_HOME" $Root
+            Add-FluentFlowEnvLine $Dir "FLUENTFLOW_DATA_DIR" (Join-Path $Root "data")
+            Add-FluentFlowEnvLine $Dir "HF_HOME" (Join-Path $Root "models")
+            Add-FluentFlowEnvLine $Dir "FLUENTFLOW_LINK_OUTPUT_DIR" (Join-Path $Root "downloads")
+            Add-FluentFlowEnvLine $Dir "PIP_CACHE_DIR" (Join-Path $Root "cache\pip")
+            Add-FluentFlowEnvLine $Dir "UV_CACHE_DIR" (Join-Path $Root "cache\uv")
+            Add-FluentFlowEnvLine $Dir "npm_config_cache" (Join-Path $Root "cache\npm")
         }
-        for ($i = 0; $i -lt 90 -and -not (Test-Healthy); $i++) { Start-Sleep -Seconds 1 }
-        if (-not (Test-Healthy)) { throw "The service did not start within 90 seconds." }
-    }
-    Write-Host "Running at http://127.0.0.1:$Port"
-
-    # The MCP server reads the access token from the repository .env, so registering
-    # it carries no secret.
-    Write-Host "== Registering the MCP tools =="
-    $CodexToml = "[mcp_servers.fluentflow-local]`ncommand = '$Python'`nargs = ['$McpScript']"
-    # The MCP server reaches 8000 by itself; another port has to be told.
-    $ClaudeEnv = @()
-    $CodexEnv = @()
-    if ($Port -ne "8000") {
-        $ClaudeEnv = @("-e", "FLUENTFLOW_API_BASE=http://127.0.0.1:$Port")
-        $CodexEnv = @("--env", "FLUENTFLOW_API_BASE=http://127.0.0.1:$Port")
-        $CodexToml += "`nenv = { FLUENTFLOW_API_BASE = 'http://127.0.0.1:$Port' }"
-    }
-    $Registered = $false
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        if ((Invoke-FluentFlowTool claude @("mcp", "get", "fluentflow-local")).Code -eq 0) { Write-Host "Claude Code: fluentflow-local is already registered." }
-        else {
-            $Added = Invoke-FluentFlowTool claude (@("mcp", "add", "--scope", "user", "fluentflow-local") + $ClaudeEnv + @("--", $Python, $McpScript))
-            if ($Added.Code -eq 0) { Write-Host "Claude Code: registered fluentflow-local." }
-            else { Write-Host "Claude Code: registration failed ($($Added.Output.Trim())); run: claude mcp add --scope user fluentflow-local -- `"$Python`" `"$McpScript`"" }
+        $Port = Get-FluentFlowPort $Dir
+        & powershell -ExecutionPolicy Bypass -File (Join-Path $Dir "launchers\windows\setup-local.ps1") @args
+        if ($LASTEXITCODE -ne 0) { throw "The setup script failed; see the lines above." }
+        if ($Updating -and $HadPyannote) {
+            Write-Host "Reinstalling the optional pyannote speaker engine you had..."
+            & (Join-Path $Dir ".venv\Scripts\python.exe") -m pip install -q --disable-pip-version-check -r (Join-Path $Dir "requirements-speaker.txt")
+            if ($LASTEXITCODE -ne 0) { throw "Reinstalling pyannote failed." }
         }
-        $Registered = $true
-    }
-    if (Get-Command codex -ErrorAction SilentlyContinue) {
-        $CodexConfig = Join-Path $env:USERPROFILE ".codex\config.toml"
-        if ((Test-Path $CodexConfig) -and (Select-String -Path $CodexConfig -Pattern '^\[mcp_servers\.fluentflow-local\]' -Quiet)) {
-            Write-Host "Codex: fluentflow-local is already registered."
-        } else {
-            $Added = Invoke-FluentFlowTool codex (@("mcp", "add", "fluentflow-local") + $CodexEnv + @("--", $Python, $McpScript))
-            if ($Added.Code -eq 0) { Write-Host "Codex: registered fluentflow-local." }
-            else {
-                Write-Host "Codex: could not register automatically ($($Added.Output.Trim())); add these lines to $CodexConfig :"
-                Write-Host $CodexToml
+
+        $Python = Join-Path $Dir ".venv\Scripts\python.exe"
+        $McpScript = Join-Path $Dir "scripts\fluentflow_mcp_server.py"
+
+        Write-Host "== Starting FluentFlow Local =="
+        function Test-Healthy {
+            try { return (Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "http://127.0.0.1:$Port/health").Content -match '"edition":"local"' } catch { return $false }
+        }
+        if (-not (Test-Healthy)) {
+            $Launcher = Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd"
+            if (Test-Path $Launcher) {
+                Start-Process $Launcher
+            } else {
+                $LogDir = Join-Path $env:LOCALAPPDATA "FluentFlow\Logs"
+                New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+                Start-FluentFlowService $Dir $Python $Port (Join-Path $LogDir "local.log") | Out-Null
             }
+            for ($i = 0; $i -lt 90 -and -not (Test-Healthy); $i++) { Start-Sleep -Seconds 1 }
+            if (-not (Test-Healthy)) { throw "The service did not start within 90 seconds." }
         }
-        $Registered = $true
-    }
-    if (-not $Registered) {
-        Write-Host "Neither claude nor codex was found. Register this command as an MCP server in your AI tool:"
-        Write-Host "  `"$Python`" `"$McpScript`""
-        Write-Host $CodexToml
-    }
+        Write-Host "Running at http://127.0.0.1:$Port"
 
-    # The skill tells the agent how to make a note and how to verify a rule before
-    # changing how notes are written. Copied (links need administrator rights on
-    # Windows); rerunning this script refreshes it. A folder of the same name that
-    # this script did not write is left alone.
-    Write-Host "== Installing the agent skill =="
-    $SkillSrc = Join-Path $Dir "agent\skills\fluentflow"
-    foreach ($ToolDir in @((Join-Path $env:USERPROFILE ".claude"), (Join-Path $env:USERPROFILE ".codex"))) {
-        if (-not (Test-Path $ToolDir)) { continue }
-        $Target = Join-Path $ToolDir "skills\fluentflow"
-        $Marker = Join-Path $Target ".installed-by-fluentflow"
-        if ((Test-Path $Target) -and -not (Test-Path $Marker)) { Write-Host "$Target exists and was not installed by FluentFlow; left alone."; continue }
-        New-Item -ItemType Directory -Force -Path $Target | Out-Null
-        Copy-Item -Force -Recurse (Join-Path $SkillSrc "*") $Target
-        Set-Content -Path $Marker -Value "" -Encoding UTF8
-        Write-Host "Installed $Target"
-    }
+        # The MCP server reads the access token from the repository .env, so registering
+        # it carries no secret.
+        Write-Host "== Registering the MCP tools =="
+        $CodexToml = "[mcp_servers.fluentflow-local]`ncommand = '$Python'`nargs = ['$McpScript']"
+        # The MCP server reaches 8000 by itself; another port has to be told.
+        $ClaudeEnv = @()
+        $CodexEnv = @()
+        if ($Port -ne "8000") {
+            $ClaudeEnv = @("-e", "FLUENTFLOW_API_BASE=http://127.0.0.1:$Port")
+            $CodexEnv = @("--env", "FLUENTFLOW_API_BASE=http://127.0.0.1:$Port")
+            $CodexToml += "`nenv = { FLUENTFLOW_API_BASE = 'http://127.0.0.1:$Port' }"
+        }
+        $Registered = $false
+        if (Get-Command claude -ErrorAction SilentlyContinue) {
+            if ((Invoke-FluentFlowTool claude @("mcp", "get", "fluentflow-local")).Code -eq 0) { Write-Host "Claude Code: fluentflow-local is already registered." }
+            else {
+                $Added = Invoke-FluentFlowTool claude (@("mcp", "add", "--scope", "user", "fluentflow-local") + $ClaudeEnv + @("--", $Python, $McpScript))
+                if ($Added.Code -eq 0) { Write-Host "Claude Code: registered fluentflow-local." }
+                else { Write-Host "Claude Code: registration failed ($($Added.Output.Trim())); run: claude mcp add --scope user fluentflow-local -- `"$Python`" `"$McpScript`"" }
+            }
+            $Registered = $true
+        }
+        if (Get-Command codex -ErrorAction SilentlyContinue) {
+            $CodexConfig = Join-Path $env:USERPROFILE ".codex\config.toml"
+            if ((Test-Path $CodexConfig) -and (Select-String -Path $CodexConfig -Pattern '^\[mcp_servers\.fluentflow-local\]' -Quiet)) {
+                Write-Host "Codex: fluentflow-local is already registered."
+            } else {
+                $Added = Invoke-FluentFlowTool codex (@("mcp", "add", "fluentflow-local") + $CodexEnv + @("--", $Python, $McpScript))
+                if ($Added.Code -eq 0) { Write-Host "Codex: registered fluentflow-local." }
+                else {
+                    Write-Host "Codex: could not register automatically ($($Added.Output.Trim())); add these lines to $CodexConfig :"
+                    Write-Host $CodexToml
+                }
+            }
+            $Registered = $true
+        }
+        if (-not $Registered) {
+            Write-Host "Neither claude nor codex was found. Register this command as an MCP server in your AI tool:"
+            Write-Host "  `"$Python`" `"$McpScript`""
+            Write-Host $CodexToml
+        }
 
-    Write-Host "== Checking the MCP server =="
-    & $Python (Join-Path $Dir "scripts\check_mcp_server.py") | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "The MCP server check failed; run $Python scripts\check_mcp_server.py for details." }
+        # The skill tells the agent how to make a note and how to verify a rule before
+        # changing how notes are written. Copied (links need administrator rights on
+        # Windows); rerunning this script refreshes it. A folder of the same name that
+        # this script did not write is left alone.
+        Write-Host "== Installing the agent skill =="
+        $SkillSrc = Join-Path $Dir "agent\skills\fluentflow"
+        foreach ($ToolDir in @((Join-Path $env:USERPROFILE ".claude"), (Join-Path $env:USERPROFILE ".codex"))) {
+            if (-not (Test-Path $ToolDir)) { continue }
+            $Target = Join-Path $ToolDir "skills\fluentflow"
+            $Marker = Join-Path $Target ".installed-by-fluentflow"
+            if ((Test-Path $Target) -and -not (Test-Path $Marker)) { Write-Host "$Target exists and was not installed by FluentFlow; left alone."; continue }
+            New-Item -ItemType Directory -Force -Path $Target | Out-Null
+            Copy-Item -Force -Recurse (Join-Path $SkillSrc "*") $Target
+            Set-Content -Path $Marker -Value "" -Encoding UTF8
+            Write-Host "Installed $Target"
+        }
+
+        Write-Host "== Checking the MCP server =="
+        & $Python (Join-Path $Dir "scripts\check_mcp_server.py") | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "The MCP server check failed; run $Python scripts\check_mcp_server.py for details." }
+    }
 } catch {
     if (-not $Updating) { throw }
     $Reason = $_.Exception.Message

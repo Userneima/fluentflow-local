@@ -130,7 +130,11 @@ IS_GIT_CHECKOUT=0
 [[ -e "${REPO}/.git" ]] && IS_GIT_CHECKOUT=1
 # 数据、链接下载或模型设在代码目录里面时，代码目录不整个删，只删程序自己的部分（同 git 检出）。
 KEEPS_USER_FILES=0
-for where in "$DATA_ROOT" "$(ff_setting "$REPO" FLUENTFLOW_LINK_OUTPUT_DIR)" "$(ff_setting "$REPO" HF_HOME)"; do
+part_names="FLUENTFLOW_LINK_OUTPUT_DIR HF_HOME $(env | sed -n -E 's/^(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))=.*/\1/p')"
+[[ -f "${REPO}/.env" ]] && part_names="$part_names $(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))[[:space:]]*=.*/\2/p' "${REPO}/.env")"
+[[ "$DATA_ROOT" == "${REPO}/"* ]] && KEEPS_USER_FILES=1
+for name in $part_names; do
+	where="$(ff_setting "$REPO" "$name")"
 	[[ -n "$where" && "$where" == "${REPO}/"* ]] && KEEPS_USER_FILES=1
 done
 
