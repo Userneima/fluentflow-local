@@ -356,11 +356,11 @@ export const CutReport = ({job, embedded = false}) => {
                                                 {standing.offer ? (
                                                     <>
                                                         <button type="button" className={button('secondary', 'sm')} disabled={busy} onClick={() => choose('close')}>关闭提醒</button>
-                                                        <button type="button" className={`text-[12px] ${linkButton('muted')}`} disabled={busy} onClick={() => choose('keep')}>继续问我</button>
+                                                        <button type="button" className={linkButton('muted', 'sm')} disabled={busy} onClick={() => choose('keep')}>继续问我</button>
                                                     </>
                                                 ) : null}
                                                 {standing.released ? (
-                                                    <button type="button" className={`text-[12px] ${linkButton('muted')}`} disabled={busy} onClick={() => choose('reopen')}>重新打开提醒</button>
+                                                    <button type="button" className={linkButton('muted', 'sm')} disabled={busy} onClick={() => choose('reopen')}>重新打开提醒</button>
                                                 ) : null}
                                             </div>
                                         ) : null}
