@@ -24,6 +24,7 @@ configure_windows_gpu_runtime()
 from faster_whisper import WhisperModel  # noqa: E402 - must follow the DLL registration
 
 from backend.core import local_stt_mlx  # noqa: E402
+from backend.core import whisper_stock_lines  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -554,13 +555,6 @@ def _looks_like_low_confidence_hallucination(seg: Any, *, use_no_speech_prob: bo
     return False
 
 
-# Those credits as whole lines, after _normalize_for_repeat_filter: a speaker
-# who mentions Amara or subtitle volunteers keeps the sentence (push review).
-_CREDIT_LINE_RE = re.compile(
-    r"(请不吝点赞订阅转发打赏支持明镜与点点栏目|(中文)?字幕志愿者[\u4e00-\u9fff]{0,4}|字幕由amaraorg社区提供)"
-)
-
-
 def _normalize_for_repeat_filter(text: str) -> str:
     return _SEGMENT_NORM_RE.sub("", text or "").lower()
 
@@ -659,11 +653,9 @@ def _drop_prompt_echoes(
 def _drop_credit_lines(
     segments: tuple[TranscriptSegment, ...],
 ) -> tuple[TranscriptSegment, ...]:
-    """Drop the channel credits Whisper learnt from subtitled videos and writes
-    over silence or music in any language: 「请不吝点赞 订阅 转发 打赏支持明镜与点点栏目」,
-    「中文字幕志愿者 杨栋梁」. No speaker says these, so a line holding one is
-    dropped; seen twice in one Chinese lecture (张和 Week 2, 2026-11-17)."""
-    kept = tuple(s for s in segments if not _CREDIT_LINE_RE.fullmatch(_normalize_for_repeat_filter(s.text)))
+    """Drop the lines that are only a channel credit Whisper wrote over
+    silence or music, in any language (``whisper_stock_lines``)."""
+    kept = tuple(s for s in segments if not whisper_stock_lines.is_credit_line(_normalize_for_repeat_filter(s.text)))
     if len(kept) != len(segments):
         logger.info("Dropped %s Whisper credit line(s)", len(segments) - len(kept))
     return kept

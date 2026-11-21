@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from backend.core import whisper_stock_lines
+
 logger = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16000
@@ -92,19 +94,6 @@ class RawSegment:
     words: tuple[dict[str, Any], ...] | None = None
 
 
-# Whisper's stock lines for audio with no words in it: a jingle, applause, room
-# noise. Dropped only from a run whose detected language is not the recording's,
-# so a speaker who really says "thank you" in their own language keeps it. Seen
-# as a "Thank you." opening a Chinese lecture over its intro music.
-_STOCK_OUTROS = frozenset({
-    "thank you", "thank you.", "thanks for watching", "thanks for watching!",
-    "thank you for watching", "thank you for watching.", "you",
-    "谢谢观看",
-})
-# Channel credits (明镜与点点栏目, amara.org) are dropped in any language by
-# local_stt._drop_credit_lines.
-
-
 def _without_stray_outros(
     segments: list[RawSegment],
     segment_runs: list[int],
@@ -117,7 +106,7 @@ def _without_stray_outros(
     for segment, run in zip(segments, segment_runs):
         run_language = run_languages[run] if run < len(run_languages) else None
         stray = run_language and run_language != recording_language
-        if stray and segment.text.strip().lower() in _STOCK_OUTROS:
+        if stray and whisper_stock_lines.is_stock_outro(segment.text):
             continue
         kept.append(segment)
     return kept
