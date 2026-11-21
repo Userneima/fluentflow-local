@@ -30,6 +30,9 @@
 # Optional environment variables:
 #   FLUENTFLOW_INSTALL_DIR   the folder to install into (for example D:\FluentFlow)
 #   FLUENTFLOW_INSTALL_REF   which release tag (for example v0.7.0), default the latest
+#   FLUENTFLOW_INSTALL_SOURCE a release already on this machine (an unpacked
+#                            folder or a .zip) to install or update from, with
+#                            no download
 $ErrorActionPreference = "Stop"
 
 # Python's UTF-8 mode for every Python this starts (the setup script, the
@@ -139,6 +142,29 @@ if ($IsGit) {
     Write-Host "Using the git checkout in $Dir as it is (update it with git pull, then run this again)."
 } else {
     if (-not $HaveCode -and (Test-Path $Dir)) { throw "$Dir exists but is not a FluentFlow Local folder. Set FLUENTFLOW_INSTALL_DIR to another place." }
+  $LocalSource = $env:FLUENTFLOW_INSTALL_SOURCE
+  if ($LocalSource) {
+    if ($LocalSource -like "*.zip") {
+        $Unzipped = Join-Path ([System.IO.Path]::GetTempPath()) ("fluentflow-src-" + [guid]::NewGuid())
+        Expand-Archive -Path $LocalSource -DestinationPath $Unzipped
+        $Inner = Get-ChildItem $Unzipped -Directory | Where-Object { Test-Path (Join-Path $_.FullName "backend\local_main.py") } | Select-Object -First 1
+        $LocalSource = if (Test-Path (Join-Path $Unzipped "backend\local_main.py")) { $Unzipped } else { $Inner.FullName }
+    }
+    if (-not $LocalSource -or -not (Test-Path (Join-Path $LocalSource "backend\local_main.py"))) { throw "FLUENTFLOW_INSTALL_SOURCE is not a FluentFlow Local release: $($env:FLUENTFLOW_INSTALL_SOURCE)" }
+    $Latest = (Get-Content -Raw (Join-Path $LocalSource "VERSION")).Trim()
+    if ($HaveCode) {
+        if ([version]$Latest -gt [version]$Current) { $Updating = $true; Write-Host "Updating FluentFlow Local $Current to $Latest from $LocalSource." }
+        else { Write-Host "FluentFlow Local $Current in $Dir is not older than $Latest in $LocalSource." }
+    }
+    if (-not $HaveCode -or $Updating) {
+        $Target = if ($Updating) { "$Dir.new" } else { $Dir }
+        if (Test-Path $Target) { Remove-Item -Recurse -Force -LiteralPath $Target }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Target) | Out-Null
+        Copy-Item -Recurse -LiteralPath $LocalSource -Destination $Target
+        Remove-Item -Recurse -Force -LiteralPath (Join-Path $Target ".git"), (Join-Path $Target ".venv"), (Join-Path $Target ".env") -ErrorAction SilentlyContinue
+        Write-Host "Placed in $Target"
+    }
+  } else {
     # Two hosts of the release: GitHub, and the npm package fluentflow-local on
     # npmmirror (scripts/stage_npm_package.py), which is reachable in China.
     # GitHub is probed for a few seconds, the same rule as every other download
@@ -249,6 +275,7 @@ if ($IsGit) {
     }
     Write-Host "Placed in $Target"
   }
+  }
 }
 
 # Programs still running from a folder hold its files: the service, the
@@ -260,10 +287,25 @@ function Stop-FolderPrograms([string]$Folder) {
     Start-Sleep -Milliseconds 500
 }
 
+# Until the folders are swapped nothing here may rely on either copy's scripts:
+# the old one may predate them, the new one is not in place yet.
+function Get-InstalledPort([string]$Folder) {
+    if ($env:FLUENTFLOW_LOCAL_PORT) { return $env:FLUENTFLOW_LOCAL_PORT }
+    $EnvFile = Join-Path $Folder ".env"
+    if (Test-Path $EnvFile) {
+        $Line = Get-Content $EnvFile | Where-Object { $_ -match '^\s*(export\s+)?FLUENTFLOW_LOCAL_PORT\s*=\s*[''"]?(\d+)' } | Select-Object -Last 1
+        if ($Line -and $Line -match '=\s*[''"]?(\d+)') { return $Matches[1] }
+    }
+    return "8000"
+}
+function Test-ServiceUp([string]$ProbePort) {
+    try { return (Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "http://127.0.0.1:$ProbePort/health").Content -match '"execution":"local"|"edition":"local"' } catch { return $false }
+}
+
 if ($Updating) {
-    . (Join-Path "$Dir.new" "launchers\windows\fluentflow-env.ps1")
-    $OldPort = Get-FluentFlowPort $Dir
-    if (Test-FluentFlowHealthy $OldPort) {
+  try {
+    $OldPort = Get-InstalledPort $Dir
+    if (Test-ServiceUp $OldPort) {
         try {
             $Jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$OldPort/jobs?limit=100" -TimeoutSec 3
             $Busy = @($Jobs.jobs | Where-Object { $_.status -in @("queued", "processing", "running", "pending") }).Count
@@ -273,6 +315,8 @@ if ($Updating) {
             throw "$Busy task(s) are still being processed; run this again when they finish (or set FLUENTFLOW_UPDATE_FORCE=1 to stop them; they carry on after the restart)."
         }
         Write-Host "Stopping the running FluentFlow Local..."
+        Get-NetTCPConnection -LocalPort ([int]$OldPort) -State Listen -ErrorAction SilentlyContinue |
+            ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
     }
     Stop-FolderPrograms $Dir
     if (Test-Path (Join-Path $Dir ".env")) { Copy-Item -Force (Join-Path $Dir ".env") (Join-Path "$Dir.new" ".env") }
@@ -281,9 +325,12 @@ if ($Updating) {
     try {
         Move-Item -LiteralPath $Dir -Destination "$Dir.old" -ErrorAction Stop
     } catch {
-        Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
-        throw "Could not move $Dir aside ($($_.Exception.Message)). A window or program is using it; close it (or run this from another folder) and run this again. Nothing was changed."
+        throw "Could not move $Dir aside ($($_.Exception.Message)). A window or program is using it; close it (or run this from another folder) and run this again"
     }
+  } catch {
+    Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
+    throw "$($_.Exception.Message). Nothing was changed; FluentFlow Local $Current is still in $Dir."
+  }
     Move-Item -LiteralPath "$Dir.new" -Destination $Dir
 }
 

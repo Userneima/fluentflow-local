@@ -13,6 +13,7 @@
 # 可选环境变量：
 #   FLUENTFLOW_INSTALL_DIR   装到哪里，默认 ~/fluentflow-local
 #   FLUENTFLOW_INSTALL_REF   装哪个版本的标签（如 v0.7.0），默认最新发布版
+#   FLUENTFLOW_INSTALL_SOURCE 已经在本机的发布版（解压好的文件夹或 .zip），从它安装或更新，不下载
 # 其余参数原样交给 launchers/macos/setup-local.sh（如 --skip-model）。
 set -euo pipefail
 
@@ -78,8 +79,34 @@ if [[ -f "${DIR}/backend/local_main.py" ]]; then
 	CURRENT="$(tr -d '[:space:]' <"${DIR}/VERSION" 2>/dev/null || true)"
 	[[ -e "${DIR}/.git" ]] && IS_GIT=1
 fi
+LOCAL_SOURCE="${FLUENTFLOW_INSTALL_SOURCE:-}"
 if [[ "$IS_GIT" -eq 1 ]]; then
 	echo "沿用 git 检出的代码：${DIR}（更新请 git pull，再运行一次本命令）"
+elif [[ -n "$LOCAL_SOURCE" ]]; then
+	if [[ "$LOCAL_SOURCE" == *.zip ]]; then
+		SRC_TMP="$(mktemp -d)"
+		unzip -q "$LOCAL_SOURCE" -d "$SRC_TMP" || fail "解不开 ${LOCAL_SOURCE}。"
+		LOCAL_SOURCE="$SRC_TMP"
+		[[ -f "${LOCAL_SOURCE}/backend/local_main.py" ]] || LOCAL_SOURCE="$(find "$SRC_TMP" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+	fi
+	[[ -f "${LOCAL_SOURCE}/backend/local_main.py" ]] || fail "FLUENTFLOW_INSTALL_SOURCE 不是 FluentFlow Local 的发布版：${FLUENTFLOW_INSTALL_SOURCE}"
+	LATEST="$(tr -d '[:space:]' <"${LOCAL_SOURCE}/VERSION")"
+	if [[ "$HAVE_CODE" -eq 1 && "$LATEST" != "$CURRENT" &&
+		"$(printf '%s\n%s\n' "$CURRENT" "$LATEST" | sort -V | tail -n 1)" == "$LATEST" ]]; then
+		UPDATING=1
+		echo "把 FluentFlow Local 从 ${CURRENT} 更新到 ${LATEST}（来自 ${LOCAL_SOURCE}）。"
+	elif [[ "$HAVE_CODE" -eq 1 ]]; then
+		echo "${DIR} 里的 ${CURRENT} 不比 ${LOCAL_SOURCE} 里的 ${LATEST} 旧。"
+	fi
+	if [[ "$HAVE_CODE" -eq 0 || "$UPDATING" -eq 1 ]]; then
+		TARGET="$DIR"
+		[[ "$UPDATING" -eq 1 ]] && TARGET="${DIR}.new"
+		rm -rf "$TARGET"
+		mkdir -p "$(dirname "$TARGET")"
+		cp -R "$LOCAL_SOURCE" "$TARGET"
+		rm -rf "${TARGET}/.git" "${TARGET}/.venv" "${TARGET}/.env"
+		echo "已放到 ${TARGET}"
+	fi
 else
 	[[ "$HAVE_CODE" -eq 0 && -e "$DIR" ]] && fail "${DIR} 已存在但不是 FluentFlow Local 的代码目录。请换一个位置（FLUENTFLOW_INSTALL_DIR）。"
 	# 发布版有两个来源：GitHub，和 npmmirror 上的 npm 包 fluentflow-local（见
@@ -115,7 +142,7 @@ else
 		fail "连不上 github.com，也连不上 registry.npmmirror.com，请检查网络或代理。"
 	fi
 fi
-if [[ "$IS_GIT" -eq 0 && ( "$HAVE_CODE" -eq 0 || "$UPDATING" -eq 1 ) ]]; then
+if [[ "$IS_GIT" -eq 0 && -z "$LOCAL_SOURCE" && ( "$HAVE_CODE" -eq 0 || "$UPDATING" -eq 1 ) ]]; then
 	TARGET="$DIR"
 	[[ "$UPDATING" -eq 1 ]] && TARGET="${DIR}.new" && rm -rf "$TARGET"
 	order="npm github"

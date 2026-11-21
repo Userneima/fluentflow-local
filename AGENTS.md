@@ -64,7 +64,9 @@ exists and that no other file judges whether a task is still busy.
 - Writing a note into Feishu through lark-cli: `backend/core/lark_cli_exporter.py` and the `lark_cli_*.py` parts beside it; its docstring names each part and where tests replace what
 - Matching note sections to playback times: `backend/core/note_section_times.py`; the current agent reading material and returning its table: `backend/core/agent_alignment.py`
 - What each processing step currently uses, for the settings page and agents: `backend/core/workflow_status.py`
-- Where runtime data lives: `backend/core/runtime_paths.py`; which edition answers: `backend/core/edition_identity.py`
+- Where runtime data lives, and reading the repository `.env` before any path is asked (`load_project_env`; the shell scripts' copy of that rule: `launchers/windows/fluentflow-env.ps1`, `launchers/macos/fluentflow-env.sh`): `backend/core/runtime_paths.py`; which edition answers: `backend/core/edition_identity.py`
+- Which host a download comes from first (the original, or its mirror in China when the original is unreachable or slow): `backend/core/download_source.py`, and the same rule in the two shell files above
+- Whether a newer release is out, for the page: `backend/core/release_check.py`
 - Button and card styles: `frontend/src/lib/ui.js`; a task's status as the pages show it: `frontend/src/lib/taskState.js`
 - What an agent is told: the MCP tools in `scripts/fluentflow_mcp/`, one module per group of tools (each tool described once, in the `tool()` decorator on its function; `scripts/fluentflow_mcp_server.py` is the entry point and loads them in the order `tools/list` gives), and `agent/skills/fluentflow/SKILL.md` (workflow)
 - How an MCP tool reaches the service (the request, access token, edition check), the hold that answers a long call "still working", and the heartbeat for watched tasks: `scripts/fluentflow_mcp/core.py` (tests replace them on `core`)
