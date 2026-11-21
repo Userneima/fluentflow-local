@@ -9,13 +9,7 @@ from pathlib import Path
 
 from backend.core.local_error_diagnostics import NO_SPEECH
 
-AUDIO_SUFFIXES = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".webm"}
-VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".ts", ".m4v"}
 SILENCE_PEAK_THRESHOLD_DB = -80.0
-
-
-def _is_audio_file(path: Path) -> bool:
-    return path.suffix.lower() in AUDIO_SUFFIXES
 
 
 def _require_ffmpeg() -> str:

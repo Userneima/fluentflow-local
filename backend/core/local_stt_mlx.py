@@ -143,10 +143,6 @@ def unavailable_reason() -> str | None:
     return None
 
 
-def is_available() -> bool:
-    return unavailable_reason() is None
-
-
 def supported_sizes() -> tuple[str, ...]:
     """The sizes this lane has weights for, in the product's own vocabulary."""
     return tuple(_MLX_REPOS)

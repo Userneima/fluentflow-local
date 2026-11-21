@@ -64,7 +64,6 @@ DEFAULT_MODEL_SIZE = DEFAULT_LOCAL_STT_MODEL
 # and faster-whisper everywhere else; the explicit values exist so a support
 # question ("is it actually using the GPU?") can be answered by forcing one lane
 # and comparing, and so a bad MLX release can be switched off without a deploy.
-LOCAL_STT_ENGINES = ("auto", "mlx", "faster_whisper")
 DEFAULT_LOCAL_STT_ENGINE = "auto"
 _ENGINE_ALIASES: dict[str, str] = {
     "": "auto",
@@ -396,14 +395,6 @@ def get_or_load_model_with_stats(
             "cpu_threads": cpu_threads,
             "num_workers": num_workers,
         }
-
-
-def get_or_load_model(
-    model_size: str = DEFAULT_MODEL_SIZE, compute_type: str | None = None
-) -> WhisperModel:
-    """Return a cached WhisperModel, loading it once on first call."""
-    model, _ = get_or_load_model_with_stats(model_size, compute_type)
-    return model
 
 
 @dataclass(frozen=True)
