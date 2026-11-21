@@ -153,6 +153,25 @@ the section rows and your actual model. No Claude installation, login or model k
 needed. Stale material must be read again. Only the table changes, not the note or files.
 Agent-written notes and tasks handed to an agent do not trigger background Claude alignment.
 
+## Starting, checking and stopping the service
+
+The service runs in the background and does not belong to any window or shell, yours
+included, so it keeps running after your command ends. To check it, ask
+`http://127.0.0.1:8000/health` (a JSON answer with `"edition":"local"` means it is up);
+the MCP tools answer only while it runs. When it is down, start it the way the
+Desktop icon does and wait for that answer:
+
+- macOS: `open ~/Desktop/"FluentFlow Local.app"`
+- Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File <folder>\app\launchers\windows\FluentFlowLocal.ps1`
+  (it checks the environment, rebuilds a broken Python environment by itself, starts
+  the service in the background, opens the page and exits)
+
+Do not start uvicorn yourself in a shell of yours: when that shell is closed or
+reclaimed, the service goes with it. To stop it: Windows
+`launchers\windows\stop-local.ps1 -Yes`; macOS double-click the Desktop icon and choose
+to stop, or `lsof -ti:8000 | xargs kill`. Logs: macOS `~/Library/Logs/FluentFlow/local.log`,
+Windows `%LOCALAPPDATA%\FluentFlow\Logs\local.log`.
+
 ## Uninstalling
 
 When the user asks you to remove FluentFlow, run the uninstaller inside the install
@@ -171,7 +190,9 @@ Windows:
 powershell -NoProfile -ExecutionPolicy Bypass -File D:\FluentFlow\app\launchers\windows\uninstall-local.ps1 -All -DryRun
 ```
 
-The dry run lists what would go, with sizes, and deletes nothing. Show the user that
+Run it from a directory outside the install (your home folder, for example): Windows
+cannot remove a folder a shell is standing in. The dry run lists what would go, with
+sizes, and deletes nothing. Show the user that
 list and ask one thing: whether their task data (history, transcripts, notes, media, and
 on Windows the videos downloaded from links) goes too. It cannot be recovered. Then run
 the same command without `--dry-run` / `-DryRun`, adding `--yes` / `-Yes`:

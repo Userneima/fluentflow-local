@@ -255,7 +255,9 @@ if (-not (Test-Healthy)) {
     if (Test-Path $Launcher) {
         Start-Process $Launcher
     } else {
-        Start-Process -WindowStyle Hidden -WorkingDirectory $Dir $Python @("-m", "uvicorn", "backend.local_main:app", "--host", "127.0.0.1", "--port", $Port)
+        $LogDir = Join-Path $env:LOCALAPPDATA "FluentFlow\Logs"
+        New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+        Start-FluentFlowService $Dir $Python $Port (Join-Path $LogDir "local.log") | Out-Null
     }
     for ($i = 0; $i -lt 90 -and -not (Test-Healthy); $i++) { Start-Sleep -Seconds 1 }
     if (-not (Test-Healthy)) { throw "The service did not start within 90 seconds." }

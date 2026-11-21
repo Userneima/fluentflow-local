@@ -179,6 +179,7 @@ if ($IsGitCheckout) {
     Add-Target $Repo "程序（代码、Python 虚拟环境、前端）"
 }
 Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd") "桌面启动器"
+Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "停止 FluentFlow Local.cmd") "桌面上的停止图标"
 Add-Target (Join-Path $env:LOCALAPPDATA "FluentFlow\Logs") "日志"
 Add-Target (Join-Path $DataRoot "bin") "安装时下载的 FFmpeg"
 Add-Target (Join-Path $DataRoot "tools") "安装时下载的 Node.js"
@@ -258,12 +259,32 @@ foreach ($Tool in $McpRemovals) {
         else { Write-Host "Codex 没能自动注销，请删掉 $CodexConfig 里 [mcp_servers.fluentflow-local] 那一节。" }
     }
 }
-# The code folder may be the current directory, and Windows will not remove a
-# folder a process is standing in. This script is already in memory.
+# Programs still running from the code folder hold their files: the background
+# model download, the daily yt-dlp update, a service on another port.
+Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -and $_.Path.StartsWith($Repo + '\', [StringComparison]::OrdinalIgnoreCase)
+} | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Milliseconds 500
+# Windows will not remove a folder a process is standing in, and the window that
+# runs this script may be standing in the code folder. This script is already in
+# memory; what cannot go is emptied and named at the end.
 Set-Location $env:USERPROFILE
+$Stuck = New-Object System.Collections.ArrayList
 foreach ($Target in $Targets) {
-    Remove-Item -Recurse -Force -LiteralPath $Target.Path
-    Write-Host "已删除：$($Target.Path)"
+    try {
+        Remove-Item -Recurse -Force -LiteralPath $Target.Path -ErrorAction Stop
+        Write-Host "已删除：$($Target.Path)"
+    } catch {
+        if (Test-Path -PathType Container -LiteralPath $Target.Path) {
+            Get-ChildItem -Force -LiteralPath $Target.Path | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if (Get-ChildItem -Force -LiteralPath $Target.Path -ErrorAction SilentlyContinue) {
+            Write-Host "删不掉：$($Target.Path)（$($_.Exception.Message)）" -ForegroundColor Yellow
+        } else {
+            Write-Host "已清空：$($Target.Path)（文件夹本身还在用）"
+        }
+        [void]$Stuck.Add($Target.Path)
+    }
 }
 if ($HomeDir -and (Test-Path $HomeDir) -and -not (Get-ChildItem -Force -LiteralPath $HomeDir | Select-Object -First 1)) {
     Remove-Item -Force -LiteralPath $HomeDir
@@ -294,6 +315,10 @@ if ($Models) {
 if ($IsGitCheckout) {
     Write-Host "  代码目录：${Repo}"
     Write-Host "    这是 git 检出，里面可能有你的改动，留给你自己删。"
+}
+foreach ($Path in $Stuck) {
+    Write-Host "  ${Path}：有窗口或程序正在这个文件夹里（比如运行本脚本的命令行），"
+    Write-Host "    关掉它之后再删掉这个文件夹。"
 }
 Write-Host ""
 Write-Host "  Python 没有动：它装在系统里（「设置 → 应用」里能看到），别的程序可能也在用；"

@@ -193,3 +193,26 @@ function Save-FluentFlowVerifiedDownload([string[]]$Urls, [string]$OutFile, [str
     }
     throw ($Errors -join "；")
 }
+
+# Starts the service in the background and returns its process id. The process
+# is created by Windows' own process service (WMI), not as a child of this
+# script: closing the launcher window does not stop it, and neither does an
+# agent's shell ending (a friend's agent started the service in a temporary
+# window, the window was reclaimed, and the agent took FluentFlow for broken,
+# 2026-11). Output goes to the log; stop it with stop-local.ps1.
+function Start-FluentFlowService([string]$Repo, [string]$Python, [string]$Port, [string]$LogFile) {
+    $Command = "cmd.exe /d /s /c `"set PYTHONUTF8=1&& `"$Python`" -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port >> `"$LogFile`" 2>&1`""
+    $Startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+    $Result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+        CommandLine = $Command; CurrentDirectory = $Repo; ProcessStartupInformation = $Startup
+    }
+    if ($Result.ReturnValue -ne 0) { throw "Windows 没能启动服务（Win32_Process.Create 返回 $($Result.ReturnValue)）" }
+    return $Result.ProcessId
+}
+
+function Test-FluentFlowHealthy([string]$Port) {
+    try {
+        $Health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
+        return ($Health.edition -eq "local" -or $Health.runtime.execution -eq "local")
+    } catch { return $false }
+}
