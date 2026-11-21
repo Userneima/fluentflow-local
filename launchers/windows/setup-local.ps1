@@ -109,19 +109,9 @@ function Test-NvidiaAdapter {
 # fetches Gyan.FFmpeg from GitHub, which can crawl for many minutes in China
 # with nothing on screen (a user's friend, 2026-11-21); it stays as the fallback
 # when the mirror cannot be reached.
-function Get-DataDir {
-    if ($env:FLUENTFLOW_DATA_DIR) { return $env:FLUENTFLOW_DATA_DIR }
-    # The service reads the repository .env too, so a data folder set only
-    # there must be the one the tools land in.
-    $EnvFile = Join-Path $Repo ".env"
-    if (Test-Path $EnvFile) {
-        foreach ($Line in Get-Content $EnvFile -Encoding UTF8) {
-            if ($Line -match '^\s*FLUENTFLOW_DATA_DIR\s*=\s*"?([^"]+?)"?\s*$') { return $Matches[1] }
-        }
-    }
-    return (Join-Path $env:APPDATA "FluentFlow")
-}
-$FfmpegBin = Join-Path (Get-DataDir) "bin"
+# Same data folder rule as the Node.js step below and the uninstaller.
+$FfmpegDataDir = if ($env:FLUENTFLOW_DATA_DIR) { $env:FLUENTFLOW_DATA_DIR } else { Join-Path $env:APPDATA "FluentFlow" }
+$FfmpegBin = Join-Path $FfmpegDataDir "bin"
 $FfmpegMirror = "https://registry.npmmirror.com/-/binary/ffmpeg-static/b6.1.1"
 # SHA-256 of the unpacked programs, checked before either is run or put on PATH.
 # Taken 2026-11-21; the mirror's ffmpeg .gz was byte-identical to the one on the
@@ -141,9 +131,8 @@ function Install-FfmpegFromMirror {
     # Both programs are unpacked and checked in a staging folder and moved into
     # bin only once both pass, so a broken download never sits where the
     # service looks first.
-    $Staging = Join-Path (Split-Path -Parent $FfmpegBin) "bin-download"
-    Remove-Item -Recurse -Force $Staging -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path $Staging | Out-Null
+    $Staging = Join-Path ([System.IO.Path]::GetTempPath()) ("fluentflow-ffmpeg-" + [guid]::NewGuid())
+    New-Item -ItemType Directory -Path $Staging | Out-Null
     $Saved = $ProgressPreference
     # Windows PowerShell 5.1 redraws its progress bar for every block it reads,
     # which makes a 30 MB download take minutes; the size is printed instead.
