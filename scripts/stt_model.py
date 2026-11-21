@@ -37,6 +37,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # constant at import time. That is why the heavy imports below live inside the
 # handlers instead of at the top of the file.
 from backend.core import hf_endpoint  # noqa: E402
+from backend.core.runtime_paths import load_project_env  # noqa: E402
+
+# HF_HOME (where the models live) and HF_ENDPOINT may be set only in .env, and
+# `huggingface_hub` reads both once, when it is first imported.
+load_project_env()
 from backend.core.local_stt_policy import DEFAULT_LOCAL_STT_MODEL  # noqa: E402
 
 

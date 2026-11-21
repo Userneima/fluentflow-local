@@ -18,8 +18,10 @@
 # 器，以及数据目录下的 bin/（FFmpeg、uv）和 tools/（构建界面用的 Node.js、uv 装的
 # Python）。
 #
-# 下载失败时自动换国内镜像重试一次：pip 换清华源，npm 换 npmmirror，转录模型换
-# hf-mirror。一开始就设了 PIP_INDEX_URL 或 npm registry 的，按你设的来。
+# pip、npm、Node.js、讲话人模型和转录模型都有国内来源：先探原站几秒，连不上或明显
+# 慢就先走镜像（清华源、npmmirror、ModelScope、hf-mirror），失败了再换另一个；
+# Node.js 按固定的校验值核对。一开始就设了 PIP_INDEX_URL 或 npm registry 的，按你
+# 设的来。
 #
 # 用法：
 #   bash launchers/macos/setup-local.sh
@@ -59,9 +61,12 @@ fail() {
 [[ -f "${REPO}/backend/local_main.py" ]] ||
 	fail "在 ${REPO} 下找不到 backend/local_main.py，这不像 FluentFlow Local 代码目录。"
 
-# 和 backend/core/runtime_paths.py 的 app_data_root 一致：后端启动时会把这里的 bin/
-# 放到 PATH 最前面，所以装在这里的 FFmpeg 后端找得到。
-DATA_DIR="${FLUENTFLOW_DATA_DIR:-${HOME}/Library/Application Support/FluentFlow}"
+# 和 backend/core/runtime_paths.py 的 app_data_root 一致（先环境变量，再 .env）：
+# 后端启动时会把这里的 bin/ 放到 PATH 最前面，所以装在这里的 FFmpeg 后端找得到。
+# shellcheck source=fluentflow-env.sh
+source "${SCRIPT_DIR}/fluentflow-env.sh"
+ff_import_env "$REPO"
+DATA_DIR="$(ff_data_dir "$REPO")"
 TOOLS_BIN="${DATA_DIR}/bin"
 TOOLS_DIR="${DATA_DIR}/tools"
 mkdir -p "$TOOLS_BIN" "$TOOLS_DIR"
@@ -228,12 +233,30 @@ echo "虚拟环境：${VENV}（$("$VENV_PY" -V 2>&1)）"
 
 # --- 3. Python 依赖 --------------------------------------------------------
 step "安装 Python 依赖（体积较大，首次约需十几分钟）"
-# 失败一次就换清华源再试：国内网络下 pypi.org 常常慢到超时。
+# 先探 PyPI：连不上或明显慢就先用清华源；失败一次就换另一个再试。用户自己设了
+# PIP_INDEX_URL 的按他的来。
+PYPI_INDEX="https://pypi.org/simple"
+TUNA_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
+PIP_INDEX=""
+if [[ -z "${PIP_INDEX_URL:-}" ]]; then
+	# 一个 2 MB 的包，两边路径相同。
+	wheel="packages/8a/6a/19e9fe04fca059ccf770861c7d5721ab4c2aebc539889e97c7977528a53b/pip-24.0-py3-none-any.whl"
+	PIP_INDEX="$PYPI_INDEX"
+	if [[ "$(ff_order "https://files.pythonhosted.org/${wheel}" "https://pypi.tuna.tsinghua.edu.cn/${wheel}" | head -n 1)" == *tuna* ]]; then
+		PIP_INDEX="$TUNA_INDEX"
+		echo "PyPI 连不上或太慢，Python 依赖从国内镜像（清华源）下载。"
+	fi
+fi
 pip_install() {
-	"$VENV_PY" -m pip install "$@" && return 0
-	[[ -n "${PIP_INDEX_URL:-}" ]] && return 1
-	echo "下载失败，换国内镜像（清华源）重试…"
-	PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple "$VENV_PY" -m pip install "$@"
+	if [[ -z "$PIP_INDEX" ]]; then
+		"$VENV_PY" -m pip install "$@"
+		return
+	fi
+	"$VENV_PY" -m pip install "$@" --index-url "$PIP_INDEX" && return 0
+	local other="$TUNA_INDEX"
+	[[ "$PIP_INDEX" == "$TUNA_INDEX" ]] && other="$PYPI_INDEX"
+	echo "下载失败，换 $(ff_host "$other") 重试…"
+	"$VENV_PY" -m pip install "$@" --index-url "$other"
 }
 # 先升 pip：老 pip 拿不到 pyobjc 的预编译包，会转去编译源码然后失败。
 pip_install --quiet --upgrade pip || fail "升级 pip 失败。"
@@ -275,13 +298,19 @@ fi
 step "安装前端依赖并构建"
 # 只有构建界面要用 Node.js。机器上没有就下载官方的免安装包放进数据目录，只给这一步用。
 NODE_VERSION="v24.20.0"
+# 取自这个版本官方的 SHASUMS256.txt；npmmirror 上的是同一个文件。
+case "$ARCH_NODE" in
+arm64) NODE_SHA256="40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8" ;;
+*) NODE_SHA256="9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4" ;;
+esac
 if ! command -v npm >/dev/null 2>&1; then
 	NODE_HOME="${TOOLS_DIR}/node-${NODE_VERSION}-darwin-${ARCH_NODE}"
 	if [[ ! -x "${NODE_HOME}/bin/npm" ]]; then
 		echo "未找到 Node.js（构建界面要用它），正在下载免安装版到 ${TOOLS_DIR}…"
 		archive="node-${NODE_VERSION}-darwin-${ARCH_NODE}.tar.gz"
-		download "https://nodejs.org/dist/${NODE_VERSION}/${archive}" "${TOOLS_DIR}/${archive}" ||
-			download "https://npmmirror.com/mirrors/node/${NODE_VERSION}/${archive}" "${TOOLS_DIR}/${archive}" ||
+		ff_verified_download "${TOOLS_DIR}/${archive}" "$NODE_SHA256" \
+			"https://nodejs.org/dist/${NODE_VERSION}/${archive}" \
+			"https://registry.npmmirror.com/-/binary/node/${NODE_VERSION}/${archive}" ||
 			fail "Node.js 下载失败，请检查网络后重新运行本脚本。"
 		tar -xzf "${TOOLS_DIR}/${archive}" -C "$TOOLS_DIR" || fail "Node.js 解压失败。"
 		rm -f "${TOOLS_DIR}/${archive}"
@@ -289,12 +318,30 @@ if ! command -v npm >/dev/null 2>&1; then
 	export PATH="${NODE_HOME}/bin:${PATH}"
 fi
 
-# 失败一次就换 npmmirror 再试。
+# 先探 npmjs：连不上或明显慢就先用 npmmirror；失败一次就换另一个再试。用户自己配了
+# registry 的按他的来。
+NPMJS_REGISTRY="https://registry.npmjs.org"
+NPMMIRROR_REGISTRY="https://registry.npmmirror.com"
+NPM_REGISTRY=""
+if [[ -z "$(npm config get registry 2>/dev/null | grep -v registry.npmjs.org)" ]]; then
+	NPM_REGISTRY="$NPMJS_REGISTRY"
+	# 一个 5 MB 的包，两边路径相同。
+	tarball="typescript/-/typescript-5.4.5.tgz"
+	if [[ "$(ff_order "${NPMJS_REGISTRY}/${tarball}" "${NPMMIRROR_REGISTRY}/${tarball}" | head -n 1)" == "$NPMMIRROR_REGISTRY"* ]]; then
+		NPM_REGISTRY="$NPMMIRROR_REGISTRY"
+		echo "npmjs 连不上或太慢，前端依赖从国内镜像（npmmirror）下载。"
+	fi
+fi
 npm_retry() {
-	npm "$@" && return 0
-	[[ -n "$(npm config get registry 2>/dev/null | grep -v registry.npmjs.org)" ]] && return 1
-	echo "下载失败，换国内镜像（npmmirror）重试…"
-	npm "$@" --registry=https://registry.npmmirror.com
+	if [[ -z "$NPM_REGISTRY" ]]; then
+		npm "$@"
+		return
+	fi
+	npm "$@" --registry="$NPM_REGISTRY" && return 0
+	local other="$NPMMIRROR_REGISTRY"
+	[[ "$NPM_REGISTRY" == "$NPMMIRROR_REGISTRY" ]] && other="$NPMJS_REGISTRY"
+	echo "下载失败，换 $(ff_host "$other") 重试…"
+	npm "$@" --registry="$other"
 }
 
 cd "$REPO"
@@ -320,11 +367,11 @@ echo "构建：npm run ${BUILD_SCRIPT}"
 npm run "$BUILD_SCRIPT" || fail "前端构建失败。"
 
 # --- 4b. 讲话人区分模型 ---------------------------------------------------
-# 两个小模型（约 47MB），装好后设置里的「区分不同讲话人」直接能用。它们只在 GitHub
-# 上有，没有镜像；下载失败不影响转录和笔记，所以只提示、不中断安装。
+# 两个小模型（约 47MB），装好后设置里的「区分不同讲话人」直接能用。GitHub 和国内
+# 镜像由脚本自己挑；下载失败不影响转录和笔记，所以只提示、不中断安装。
 step "准备讲话人区分模型"
 if ! "$VENV_PY" "${REPO}/scripts/fetch_diarization_models.py"; then
-	echo "提示：讲话人区分模型没有下载成功，其余功能不受影响。网络能打开 github.com 后运行这一句补上："
+	echo "提示：讲话人区分模型没有下载成功，其余功能不受影响。网络恢复后运行这一句补上："
 	echo "  \"${VENV_PY}\" \"${REPO}/scripts/fetch_diarization_models.py\""
 fi
 

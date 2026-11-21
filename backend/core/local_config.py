@@ -7,8 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
+from backend.core import runtime_paths
 from backend.core.runtime_paths import default_config_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -70,8 +69,8 @@ ENV_ALIAS_FALLBACKS = {
 
 
 def load_project_env() -> None:
-    if DEFAULT_ENV_PATH.exists():
-        load_dotenv(DEFAULT_ENV_PATH, override=False)
+    # One rule for every entry point: runtime_paths.load_project_env.
+    runtime_paths.load_project_env(DEFAULT_ENV_PATH)
 
 
 def config_path() -> Path:

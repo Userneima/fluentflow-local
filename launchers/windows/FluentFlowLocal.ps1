@@ -7,20 +7,11 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = if ($env:FLUENTFLOW_REPO) { $env:FLUENTFLOW_REPO } else { Split-Path -Parent (Split-Path -Parent $ScriptDir) }
-# Port: the FLUENTFLOW_LOCAL_PORT environment variable first, then the same line
-# in the repository's .env, else 8000 -- the order the macOS launcher and the
-# backend use, so the launcher probes the port the service actually listens on.
-function Get-EnvFilePort([string]$RepoDir) {
-    $EnvFile = Join-Path $RepoDir ".env"
-    if (-not (Test-Path $EnvFile)) { return $null }
-    $Line = Get-Content $EnvFile -ErrorAction SilentlyContinue |
-        Where-Object { $_ -match '^\s*(export\s+)?FLUENTFLOW_LOCAL_PORT\s*=' } | Select-Object -Last 1
-    if (-not $Line) { return $null }
-    $Value = (($Line -split '=', 2)[1] -split '\s#')[0].Trim().Trim('"').Trim("'")
-    if ($Value -match '^\d+$') { return $Value }
-    return $null
-}
-$Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } elseif (Get-EnvFilePort $Repo) { Get-EnvFilePort $Repo } else { "8000" }
+# The port follows the environment, then the repository's .env, else 8000:
+# the rule the backend uses (fluentflow-env.ps1), so the launcher probes the
+# port the service actually listens on.
+. (Join-Path $ScriptDir "fluentflow-env.ps1")
+$Port = Get-FluentFlowPort $Repo
 $AppUrl = "http://127.0.0.1:$Port/"
 $LocalAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
 $LogDir = Join-Path $LocalAppData "FluentFlow\Logs"

@@ -2,8 +2,10 @@
 # FluentFlow Local 的 macOS 卸载脚本。
 #
 # 分三层，因为「卸载」对三种东西意味着完全不同的后果：
-#   程序（默认删）：虚拟环境、前端依赖和构建产物、桌面启动器、日志。删了重装
-#                   就回来，没有任何损失。
+#   程序（默认删）：代码目录（从发布包装的才删，git 检出只删虚拟环境、前端依赖
+#                   和构建产物，代码留着）、桌面启动器、日志、给 agent 的 skill，
+#                   以及注册在 Claude Code、Codex 里的 fluentflow-local 工具（只在
+#                   它指向本目录时注销）。删了重装就回来，没有任何损失。
 #   模型（--models）：几 GB 的转录模型。它们住在 Hugging Face 的公共缓存里，
 #                   那个目录别的工具也在用，所以这里只删本产品自己下载的那几个
 #                   目录，而且目录清单是问代码要的，不是按名字猜的。
@@ -24,18 +26,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-# 端口和启动器一样：环境变量优先，其次是仓库 .env 里的同名行，都没有就是 8000。
-env_port() {
-	local env_file="${REPO}/.env" line
-	[[ -f "$env_file" ]] || return 0
-	line="$(grep -E '^[[:space:]]*(export[[:space:]]+)?FLUENTFLOW_LOCAL_PORT[[:space:]]*=' "$env_file" 2>/dev/null | tail -n 1 || true)"
-	[[ -n "$line" ]] || return 0
-	line="${line#*=}"
-	line="$(printf '%s' "$line" | sed -E "s/^[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//")"
-	[[ "$line" =~ ^[0-9]+$ ]] && printf '%s' "$line"
-}
-PORT="${FLUENTFLOW_LOCAL_PORT:-$(env_port)}"
-PORT="${PORT:-8000}"
+# 端口和各个位置都按环境变量、再 .env 的顺序读，和服务一致。
+# shellcheck source=fluentflow-env.sh
+source "${SCRIPT_DIR}/fluentflow-env.sh"
+PORT="$(ff_setting "$REPO" FLUENTFLOW_LOCAL_PORT)"
+[[ "$PORT" =~ ^[0-9]+$ ]] || PORT=8000
 
 REMOVE_MODELS=0
 REMOVE_DATA=0
@@ -119,7 +114,7 @@ data_root_from_code() {
 	[[ -x "$py" ]] || py="${REPO}/venv/bin/python"
 	[[ -x "$py" ]] || return 1
 	local out
-	out="$("$py" -c 'from backend.core.runtime_paths import app_data_root; print(app_data_root())' 2>/dev/null)" || return 1
+	out="$(cd "$REPO" && "$py" -c 'from backend.core.runtime_paths import load_project_env, app_data_root; load_project_env(); print(app_data_root())' 2>/dev/null)" || return 1
 	out="$(printf '%s\n' "$out" | tail -n 1)"
 	[[ "$out" == /* ]] || return 1
 	printf '%s\n' "$out"
@@ -127,10 +122,12 @@ data_root_from_code() {
 
 DATA_ROOT="$(data_root_from_code || true)"
 if [[ -z "$DATA_ROOT" ]]; then
-	DATA_ROOT="${FLUENTFLOW_DATA_DIR:-${HOME}/Library/Application Support/FluentFlow}"
+	DATA_ROOT="$(ff_data_dir "$REPO")"
 	echo ""
-	echo "（问不到代码里的数据目录，按默认位置处理：${DATA_ROOT}）"
+	echo "（问不到代码里的数据目录，按 .env 和默认位置处理：${DATA_ROOT}）"
 fi
+IS_GIT_CHECKOUT=0
+[[ -e "${REPO}/.git" ]] && IS_GIT_CHECKOUT=1
 
 # 模型目录同理：交给 scripts/stt_model.py 列，它知道产品下过哪些 repo。
 model_dirs=()
@@ -140,7 +137,7 @@ if [[ "$REMOVE_MODELS" -eq 1 ]]; then
 	if [[ -x "$py" ]]; then
 		while IFS= read -r line; do
 			[[ "$line" == /* && -d "$line" ]] && model_dirs+=("$line")
-		done < <("$py" "${REPO}/scripts/stt_model.py" cache-paths 2>/dev/null || true)
+		done < <(ff_import_env "$REPO" && "$py" "${REPO}/scripts/stt_model.py" cache-paths 2>/dev/null || true)
 	fi
 	if [[ ${#model_dirs[@]} -eq 0 ]]; then
 		echo ""
@@ -162,15 +159,51 @@ add_target() {
 	sensitive+=("${3:-0}")
 }
 
-add_target "${REPO}/.venv" "Python 虚拟环境"
-add_target "${REPO}/venv" "Python 虚拟环境（旧位置）"
-add_target "${REPO}/node_modules" "前端依赖"
-add_target "${REPO}/frontend/dist-local" "前端构建产物"
+if [[ "$IS_GIT_CHECKOUT" -eq 1 ]]; then
+	add_target "${REPO}/.venv" "Python 虚拟环境"
+	add_target "${REPO}/venv" "Python 虚拟环境（旧位置）"
+	add_target "${REPO}/node_modules" "前端依赖"
+	add_target "${REPO}/frontend/dist-local" "前端构建产物"
+else
+	# 从发布包装的：目录里只有程序（和 .env，重装时会重新生成访问令牌）。
+	add_target "$REPO" "程序（代码、Python 虚拟环境、前端）"
+fi
 add_target "${HOME}/Desktop/FluentFlow Local.app" "桌面启动器"
 add_target "${HOME}/Desktop/FluentFlow Local.command" "桌面启动器（旧版）"
 add_target "${HOME}/Library/Logs/FluentFlow" "日志"
 add_target "${DATA_ROOT}/bin" "安装时下载的 FFmpeg 和 uv"
 add_target "${DATA_ROOT}/tools" "安装时下载的 Node.js 和 Python"
+# install.sh 装的 skill 是链到本目录的链接；用户自己的同名目录不动。
+for skill in "${HOME}/.claude/skills/fluentflow" "${HOME}/.codex/skills/fluentflow"; do
+	if [[ -L "$skill" && "$(readlink "$skill")" == "${REPO}/"* ]]; then
+		add_target "$skill" "给 agent 的 skill（链接）"
+	fi
+done
+
+# 装时注册的 MCP 工具，只在它启动的是本目录的服务时注销：指向别处的是另一份安装的。
+mcp_removals=()
+if command -v claude >/dev/null 2>&1; then
+	if described="$(claude mcp get fluentflow-local 2>/dev/null)"; then
+		if [[ "$described" == *"${REPO}/"* ]]; then
+			mcp_removals+=("Claude Code")
+		else
+			echo ""
+			echo "Claude Code 里的 fluentflow-local 指向别的位置，不动它。"
+		fi
+	fi
+fi
+CODEX_CONFIG="${HOME}/.codex/config.toml"
+if [[ -f "$CODEX_CONFIG" ]]; then
+	section="$(awk '/^\[mcp_servers\.fluentflow-local\][[:space:]]*$/ { on = 1; next } /^\[/ { on = 0 } on' "$CODEX_CONFIG")"
+	if grep -q '^\[mcp_servers\.fluentflow-local\]' "$CODEX_CONFIG"; then
+		if [[ "$section" == *"${REPO}/"* ]]; then
+			mcp_removals+=("Codex")
+		else
+			echo ""
+			echo "Codex 里的 fluentflow-local 指向别的位置，不动它。"
+		fi
+	fi
+fi
 
 for dir in "${model_dirs[@]:-}"; do
 	[[ -n "$dir" ]] && add_target "$dir" "转录模型"
@@ -180,7 +213,7 @@ if [[ "$REMOVE_DATA" -eq 1 ]]; then
 	add_target "$DATA_ROOT" "任务历史、转录稿、笔记、媒体文件" 1
 fi
 
-if [[ ${#targets[@]} -eq 0 ]]; then
+if [[ ${#targets[@]} -eq 0 && ${#mcp_removals[@]} -eq 0 ]]; then
 	echo ""
 	echo "✓ 没有找到需要删除的东西。"
 	exit 0
@@ -193,6 +226,9 @@ for i in "${!targets[@]}"; do
 	printf '  %-8s %s\n' "$size" "${targets[$i]}"
 	printf '           %s\n' "${labels[$i]}"
 	[[ "${sensitive[$i]}" -eq 1 ]] && has_sensitive=1
+done
+for tool in "${mcp_removals[@]:-}"; do
+	[[ -n "$tool" ]] && echo "  注销 ${tool} 里的 fluentflow-local 工具"
 done
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -217,6 +253,26 @@ elif [[ "$ASSUME_YES" -ne 1 ]]; then
 fi
 
 step "删除"
+for tool in "${mcp_removals[@]:-}"; do
+	case "$tool" in
+	"Claude Code")
+		if claude mcp remove --scope user fluentflow-local >/dev/null 2>&1; then
+			echo "已注销：Claude Code 里的 fluentflow-local"
+		else
+			echo "Claude Code 注销失败，请手动运行：claude mcp remove --scope user fluentflow-local"
+		fi
+		;;
+	Codex)
+		if command -v codex >/dev/null 2>&1 && codex mcp remove fluentflow-local >/dev/null 2>&1; then
+			echo "已注销：Codex 里的 fluentflow-local"
+		else
+			echo "Codex 没能自动注销，请删掉 ${CODEX_CONFIG} 里 [mcp_servers.fluentflow-local] 那一节。"
+		fi
+		;;
+	esac
+done
+# 代码目录可能就是当前目录；bash 已经打开了本脚本，删掉文件也能读完。
+cd "$HOME"
 for i in "${!targets[@]}"; do
 	rm -rf "${targets[$i]}" || fail "删不掉 ${targets[$i]}，请检查权限后重试。"
 	echo "已删除：${targets[$i]}"
@@ -226,16 +282,27 @@ step "还剩下"
 if [[ "$REMOVE_DATA" -ne 1 && -e "$DATA_ROOT" ]]; then
 	size="$(du -sh "$DATA_ROOT" 2>/dev/null | cut -f1 || echo "?")"
 	echo "  你的任务数据（${size}）：${DATA_ROOT}"
-	echo "    要一并删除：bash ${BASH_SOURCE[0]} --data"
+	if [[ "$IS_GIT_CHECKOUT" -eq 1 ]]; then
+		echo "    要一并删除：bash ${BASH_SOURCE[0]} --data"
+	else
+		echo "    确定不要了，直接删掉这个文件夹。"
+	fi
 fi
 if [[ "$REMOVE_MODELS" -ne 1 ]]; then
 	echo "  转录模型（通常几 GB）：在 Hugging Face 缓存里"
-	echo "    要一并删除：bash ${BASH_SOURCE[0]} --models"
+	if [[ "$IS_GIT_CHECKOUT" -eq 1 ]]; then
+		echo "    要一并删除：bash ${BASH_SOURCE[0]} --models"
+	else
+		echo "    在 ~/.cache/huggingface/hub/ 下以 models--mlx-community--whisper- 和"
+		echo "    models--Systran--faster-whisper- 开头的目录里，可自行确认后删除。"
+	fi
 fi
-echo "  代码目录：${REPO}"
-echo "    本脚本就在里面，所以留给你自己删：rm -rf ${REPO}"
+if [[ "$IS_GIT_CHECKOUT" -eq 1 ]]; then
+	echo "  代码目录：${REPO}"
+	echo "    这是 git 检出，里面可能有你的改动，留给你自己删。"
+fi
 echo ""
-echo "  没有动 FFmpeg、Node.js、Homebrew 和 Python，它们是系统工具，"
+echo "  机器上原本就有的 FFmpeg、Node.js、Homebrew 和 Python 没有动，"
 echo "  这台机器上别的程序可能也在用。"
 echo ""
 echo "✓ 卸载完成。"

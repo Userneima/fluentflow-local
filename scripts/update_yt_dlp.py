@@ -52,8 +52,9 @@ MIRROR_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
 
 def stamp_path() -> Path:
-    from backend.core.runtime_paths import app_data_root
+    from backend.core.runtime_paths import app_data_root, load_project_env
 
+    load_project_env()
     return app_data_root() / STAMP_NAME
 
 

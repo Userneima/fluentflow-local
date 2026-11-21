@@ -1,17 +1,25 @@
 ﻿# Uninstall FluentFlow Local from this Windows machine.
 #
 # Three layers, because "uninstall" means three very different things here:
-#   Program (always): virtual environment, frontend dependencies and build,
-#       the Desktop launcher, logs. Reinstalling brings all of it back.
-#   Models (-Models): several gigabytes of transcription weights. They live in
-#       the shared Hugging Face cache, so only the directories this product
-#       downloads are removed, and that list comes from the code rather than
-#       from a name pattern.
-#   Data (-Data): task history, transcripts, notes, media. Not recoverable,
-#       so it takes its own switch and a second confirmation.
+#   Program (always): the code folder (when it was installed from a release
+#       zip; a git checkout keeps its code), its virtual environment, frontend
+#       dependencies and build, the FFmpeg and Node.js the installer downloaded,
+#       the pip and npm caches, the Desktop launcher, logs, the agent skill, and
+#       the fluentflow-local MCP tools in Claude Code and Codex (only when they
+#       point at this folder). Reinstalling brings all of it back.
+#   Models (-Models): several gigabytes of transcription weights. In a
+#       one-folder install they have their own folder, removed whole; otherwise
+#       they live in the shared Hugging Face cache, so only the directories this
+#       product downloads are removed, and that list comes from the code rather
+#       than from a name pattern.
+#   Data (-Data): task history, transcripts, notes, media, videos downloaded
+#       from links. Not recoverable, so it takes its own switch and a second
+#       confirmation.
+# A one-folder install (install.ps1, FLUENTFLOW_HOME in .env) removed with -All
+# leaves nothing: the folder itself goes once it is empty.
 #
-# FFmpeg, Node.js and Python are left alone: they are machine-wide tools other
-# programs are likely to be using.
+# A Python, FFmpeg or Node.js that was on the machine already is left alone:
+# other programs are likely to be using it.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\uninstall-local.ps1
 #   ... -Models      also remove the transcription models
@@ -31,21 +39,11 @@ $ErrorActionPreference = "Stop"
 if ($All) { $Models = $true; $Data = $true }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Repo = Split-Path -Parent (Split-Path -Parent $ScriptDir)
-# Port: the FLUENTFLOW_LOCAL_PORT environment variable first, then the same line
-# in the repository's .env, else 8000 -- the order the macOS launcher and the
-# backend use, so the launcher probes the port the service actually listens on.
-function Get-EnvFilePort([string]$RepoDir) {
-    $EnvFile = Join-Path $RepoDir ".env"
-    if (-not (Test-Path $EnvFile)) { return $null }
-    $Line = Get-Content $EnvFile -ErrorAction SilentlyContinue |
-        Where-Object { $_ -match '^\s*(export\s+)?FLUENTFLOW_LOCAL_PORT\s*=' } | Select-Object -Last 1
-    if (-not $Line) { return $null }
-    $Value = (($Line -split '=', 2)[1] -split '\s#')[0].Trim().Trim('"').Trim("'")
-    if ($Value -match '^\d+$') { return $Value }
-    return $null
-}
-$Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } elseif (Get-EnvFilePort $Repo) { Get-EnvFilePort $Repo } else { "8000" }
+$Repo = (Resolve-Path (Split-Path -Parent (Split-Path -Parent $ScriptDir))).Path
+. (Join-Path $ScriptDir "fluentflow-env.ps1")
+# The port and every location below follow the environment, then .env, like
+# the service.
+$Port = Get-FluentFlowPort $Repo
 
 if (-not (Test-Path (Join-Path $Repo "backend\local_main.py"))) {
     throw "在 ${Repo} 下找不到 backend\local_main.py，这不像 FluentFlow Local 代码目录。"
@@ -108,29 +106,48 @@ if ($Health -and ($Health.edition -eq "local" -or $Health.runtime.execution -eq 
     Write-Host "服务没有在运行。"
 }
 
-# Ask the code where the data lives: FLUENTFLOW_DATA_DIR can move it.
+# Ask the code where the data lives: FLUENTFLOW_DATA_DIR (environment or .env)
+# can move it.
 $Python = Join-Path $Repo ".venv\Scripts\python.exe"
 if (-not (Test-Path $Python)) { $Python = Join-Path $Repo "venv\Scripts\python.exe" }
 
 $DataRoot = $null
 if (Test-Path $Python) {
+    Push-Location $Repo
     try {
-        $Output = & $Python -c "from backend.core.runtime_paths import app_data_root; print(app_data_root())" 2>$null
+        $Output = & $Python -c "from backend.core.runtime_paths import load_project_env, app_data_root; load_project_env(); print(app_data_root())" 2>$null
         $Candidate = ($Output | Select-Object -Last 1)
         if ($Candidate -and (Split-Path -IsAbsolute $Candidate)) { $DataRoot = $Candidate.Trim() }
     } catch {
         $DataRoot = $null
+    } finally {
+        Pop-Location
     }
 }
 if (-not $DataRoot) {
-    $DataRoot = if ($env:FLUENTFLOW_DATA_DIR) { $env:FLUENTFLOW_DATA_DIR } else { Join-Path $env:APPDATA "FluentFlow" }
-    Write-Host "`n（问不到代码里的数据目录，按默认位置处理：${DataRoot}）"
+    $DataRoot = Get-FluentFlowDataDir $Repo
+    Write-Host "`n（问不到代码里的数据目录，按 .env 和默认位置处理：${DataRoot}）"
 }
 
+# A one-folder install: everything below this folder is FluentFlow's.
+$HomeDir = Get-FluentFlowSetting $Repo "FLUENTFLOW_HOME"
+function Test-InHome([string]$Path) {
+    if (-not $HomeDir -or -not $Path) { return $false }
+    $Base = [System.IO.Path]::GetFullPath($HomeDir).TrimEnd('\') + '\'
+    return [System.IO.Path]::GetFullPath($Path).StartsWith($Base, [StringComparison]::OrdinalIgnoreCase)
+}
+if ($HomeDir -and -not (Test-InHome $Repo)) { $HomeDir = $null }
+$ModelHome = Get-FluentFlowSetting $Repo "HF_HOME"
+$LinkRoot = Get-FluentFlowSetting $Repo "FLUENTFLOW_LINK_OUTPUT_DIR"
+$IsGitCheckout = Test-Path (Join-Path $Repo ".git")
+
 $ModelDirs = @()
-if ($Models) {
+if ($Models -and (Test-InHome $ModelHome)) {
+    $ModelDirs = @($ModelHome)
+} elseif ($Models) {
     if (Test-Path $Python) {
         try {
+            Import-FluentFlowEnv $Repo
             $ModelDirs = @(& $Python (Join-Path $Repo "scripts\stt_model.py") "cache-paths" 2>$null |
                 Where-Object { $_ -and (Test-Path $_) })
         } catch {
@@ -151,16 +168,54 @@ function Add-Target([string]$Path, [string]$Label, [bool]$Sensitive = $false) {
     }
 }
 
-Add-Target (Join-Path $Repo ".venv") "Python 虚拟环境"
-Add-Target (Join-Path $Repo "venv") "Python 虚拟环境（旧位置）"
-Add-Target (Join-Path $Repo "node_modules") "前端依赖"
-Add-Target (Join-Path $Repo "frontend\dist-local") "前端构建产物"
+if ($IsGitCheckout) {
+    Add-Target (Join-Path $Repo ".venv") "Python 虚拟环境"
+    Add-Target (Join-Path $Repo "venv") "Python 虚拟环境（旧位置）"
+    Add-Target (Join-Path $Repo "node_modules") "前端依赖"
+    Add-Target (Join-Path $Repo "frontend\dist-local") "前端构建产物"
+} else {
+    # Installed from a release zip: the folder holds nothing but the program
+    # (and .env, whose access token is regenerated on reinstall).
+    Add-Target $Repo "程序（代码、Python 虚拟环境、前端）"
+}
 Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd") "桌面启动器"
 Add-Target (Join-Path $env:LOCALAPPDATA "FluentFlow\Logs") "日志"
+Add-Target (Join-Path $DataRoot "bin") "安装时下载的 FFmpeg"
+Add-Target (Join-Path $DataRoot "tools") "安装时下载的 Node.js"
+if ($HomeDir) { Add-Target (Join-Path $HomeDir "cache") "pip 和 npm 的下载缓存" }
+foreach ($ToolDir in @((Join-Path $env:USERPROFILE ".claude"), (Join-Path $env:USERPROFILE ".codex"))) {
+    $Skill = Join-Path $ToolDir "skills\fluentflow"
+    if (Test-Path (Join-Path $Skill ".installed-by-fluentflow")) { Add-Target $Skill "给 agent 的 skill" }
+}
 foreach ($Dir in $ModelDirs) { Add-Target $Dir "转录模型" }
-if ($Data) { Add-Target $DataRoot "任务历史、转录稿、笔记、媒体文件" $true }
+if ($Data) {
+    Add-Target $DataRoot "任务历史、转录稿、笔记、媒体文件" $true
+    if (Test-InHome $LinkRoot) { Add-Target $LinkRoot "从链接下载的视频和它们的笔记" $true }
+}
 
-if ($Targets.Count -eq 0) {
+# The MCP tools registered at install, removed only when they start this
+# folder's server: an entry pointing at another copy is someone else's.
+function Test-MentionsRepo([string]$Text) {
+    if (-not $Text) { return $false }
+    return $Text.Replace('\\', '\').IndexOf($Repo, [StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+$McpRemovals = New-Object System.Collections.ArrayList
+if (Get-Command claude -ErrorAction SilentlyContinue) {
+    try {
+        $Described = (& claude mcp get fluentflow-local 2>$null | Out-String)
+        if ($LASTEXITCODE -eq 0 -and (Test-MentionsRepo $Described)) { [void]$McpRemovals.Add("Claude Code") }
+        elseif ($LASTEXITCODE -eq 0) { Write-Host "`nClaude Code 里的 fluentflow-local 指向别的位置，不动它。" }
+    } catch {}
+}
+$CodexConfig = Join-Path $env:USERPROFILE ".codex\config.toml"
+if (Test-Path $CodexConfig) {
+    $Toml = [System.IO.File]::ReadAllText($CodexConfig)
+    $Section = [regex]::Match($Toml, '(?ms)^\[mcp_servers\.fluentflow-local\]\s*$.*?(?=^\[|\z)')
+    if ($Section.Success -and (Test-MentionsRepo $Section.Value)) { [void]$McpRemovals.Add("Codex") }
+    elseif ($Section.Success) { Write-Host "`nCodex 里的 fluentflow-local 指向别的位置，不动它。" }
+}
+
+if ($Targets.Count -eq 0 -and $McpRemovals.Count -eq 0) {
     Write-Host "`n✓ 没有找到需要删除的东西。"
     exit 0
 }
@@ -172,6 +227,7 @@ foreach ($Target in $Targets) {
     Write-Host ("             {0}" -f $Target.Label)
     if ($Target.Sensitive) { $HasSensitive = $true }
 }
+foreach ($Tool in $McpRemovals) { Write-Host "  注销 $Tool 里的 fluentflow-local 工具" }
 
 if ($DryRun) {
     Write-Host "`n（-DryRun：以上都没有真的删除。）"
@@ -191,23 +247,59 @@ if ($HasSensitive) {
 }
 
 Write-Host "`n== 删除 =="
+foreach ($Tool in $McpRemovals) {
+    if ($Tool -eq "Claude Code") {
+        & claude mcp remove --scope user fluentflow-local *> $null
+        if ($LASTEXITCODE -eq 0) { Write-Host "已注销：Claude Code 里的 fluentflow-local" }
+        else { Write-Host "Claude Code 注销失败，请手动运行：claude mcp remove --scope user fluentflow-local" }
+    } else {
+        $Removed = $false
+        if (Get-Command codex -ErrorAction SilentlyContinue) {
+            & codex mcp remove fluentflow-local *> $null
+            $Removed = ($LASTEXITCODE -eq 0)
+        }
+        if ($Removed) { Write-Host "已注销：Codex 里的 fluentflow-local" }
+        else { Write-Host "Codex 没能自动注销，请删掉 $CodexConfig 里 [mcp_servers.fluentflow-local] 那一节。" }
+    }
+}
+# The code folder may be the current directory, and Windows will not remove a
+# folder a process is standing in. This script is already in memory.
+Set-Location $env:USERPROFILE
 foreach ($Target in $Targets) {
     Remove-Item -Recurse -Force -LiteralPath $Target.Path
     Write-Host "已删除：$($Target.Path)"
 }
+if ($HomeDir -and (Test-Path $HomeDir) -and -not (Get-ChildItem -Force -LiteralPath $HomeDir | Select-Object -First 1)) {
+    Remove-Item -Force -LiteralPath $HomeDir
+    Write-Host "已删除：$HomeDir（已经空了）"
+}
 
 Write-Host "`n== 还剩下 =="
+# A zip install's code folder, and this script with it, is gone by now, so
+# what is left is removed by deleting its folder.
 if ((-not $Data) -and (Test-Path $DataRoot)) {
     Write-Host "  你的任务数据（$(Format-Size (Get-FolderSize $DataRoot))）：${DataRoot}"
-    Write-Host "    要一并删除：.\launchers\windows\uninstall-local.ps1 -Data"
+    if ($IsGitCheckout) { Write-Host "    要一并删除：.\launchers\windows\uninstall-local.ps1 -Data" }
+    else { Write-Host "    确定不要了，直接删掉这个文件夹。" }
 }
-if (-not $Models) {
+if ((-not $Data) -and (Test-InHome $LinkRoot) -and (Test-Path $LinkRoot)) {
+    Write-Host "  从链接下载的视频和笔记：${LinkRoot}"
+}
+if ($Models) {
+} elseif (Test-InHome $ModelHome) {
+    if (Test-Path $ModelHome) { Write-Host "  转录模型（通常几 GB）：${ModelHome}，不要了直接删掉这个文件夹。" }
+} elseif ($IsGitCheckout) {
     Write-Host "  转录模型（通常几 GB）：在 Hugging Face 缓存里"
     Write-Host "    要一并删除：.\launchers\windows\uninstall-local.ps1 -Models"
+} else {
+    Write-Host "  转录模型（通常几 GB）：在 %USERPROFILE%\.cache\huggingface\hub\ 下以"
+    Write-Host "    models--Systran--faster-whisper- 开头的目录里，可自行确认后删除。"
 }
-Write-Host "  代码目录：${Repo}"
-Write-Host "    本脚本就在里面，所以留给你自己删。"
+if ($IsGitCheckout) {
+    Write-Host "  代码目录：${Repo}"
+    Write-Host "    这是 git 检出，里面可能有你的改动，留给你自己删。"
+}
 Write-Host ""
-Write-Host "  没有动 FFmpeg、Node.js 和 Python，它们是系统工具，"
-Write-Host "  这台机器上别的程序可能也在用。"
+Write-Host "  Python 没有动：它装在系统里（「设置 → 应用」里能看到），别的程序可能也在用；"
+Write-Host "  确定不需要，可以在那里卸载。机器上原本就有的 FFmpeg、Node.js 也没有动。"
 Write-Host "`n✓ 卸载完成。"

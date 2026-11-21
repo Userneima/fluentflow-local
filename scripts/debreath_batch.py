@@ -56,6 +56,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.core.runtime_paths import load_project_env  # noqa: E402
+
+# HF_HOME and the data folder may be set only in .env.
+load_project_env()
+
 from backend.core.silence_cuts import (  # noqa: E402
     SilenceCutError,
     carries_cut_mark,

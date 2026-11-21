@@ -2,16 +2,73 @@
 
 Code lives in the repository. Runtime data belongs in a user/system data
 directory unless an explicit environment variable says otherwise.
+
+Where such a variable comes from is decided here too: the process environment
+first, then the repository's ``.env``. Every Python entry point (the service,
+the readiness check, the model fetchers, the uninstaller's question) calls
+:func:`load_project_env` before it asks for a path, so they all agree on the
+data folder and on ``HF_HOME`` (the transcription models). The installer writes
+both into ``.env`` when it puts the whole product in one folder. The shell
+scripts read the same lines with the same rule:
+``launchers/windows/fluentflow-env.ps1`` and ``launchers/macos/fluentflow-env.sh``.
+
+Standard library only: the speaker-model fetcher runs this before anything
+else is importable.
 """
 
 from __future__ import annotations
 
 import os
 import platform
+import re
 from pathlib import Path
 
 
 APP_NAME = "FluentFlow"
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+_ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+
+
+def project_env_file() -> Path:
+    return PROJECT_ROOT / ".env"
+
+
+def _env_value(raw: str) -> str:
+    value = raw.strip()
+    if value[:1] in ("'", '"'):
+        quote = value[0]
+        end = value.find(quote, 1)
+        if end > 0:
+            inner = value[1:end]
+            # Double quotes take the escapes python-dotenv takes; single quotes
+            # are literal.
+            if quote == '"':
+                inner = inner.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
+            return inner
+    # An unquoted value ends at a " #" comment, as in python-dotenv.
+    return re.split(r"\s+#", value, maxsplit=1)[0].strip()
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """The ``KEY=value`` lines of a dotenv file; the last one of a key wins."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return {}
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        match = _ENV_LINE.match(line)
+        if match:
+            values[match.group(1)] = _env_value(match.group(2))
+    return values
+
+
+def load_project_env(path: Path | None = None) -> None:
+    """Put the repository ``.env`` into the environment; set variables win."""
+    for key, value in read_env_file(path or project_env_file()).items():
+        os.environ.setdefault(key, value)
 
 
 def app_data_root() -> Path:

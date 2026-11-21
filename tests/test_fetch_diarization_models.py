@@ -4,13 +4,17 @@
 - Writes under a temporary name and renames only when complete: a failed or
   short download leaves nothing under the final name.
 - Skips files already present.
-- A failed download from GitHub ends with a plain Chinese message saying there
-  is no mirror, and a non-zero exit.
+- Each file is checked against its pinned SHA-256; a file that does not match
+  is not kept, and the next host is tried.
+- Each file has a host in China beside GitHub; whichever the probe puts first
+  is tried first, and the other when it fails.
+- When every host fails, a plain Chinese message and a non-zero exit.
 - Runs with the standard library only.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import subprocess
@@ -26,10 +30,18 @@ SCRIPT = ROOT / "scripts" / "fetch_diarization_models.py"
 
 
 @pytest.fixture()
-def fetch():
+def fetch(monkeypatch):
     spec = importlib.util.spec_from_file_location("fetch_diarization_models_under_test", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # The fake bodies below stand in for the real models, so their digests are
+    # the pinned ones; the probe keeps the order given (GitHub first) unless a
+    # test says otherwise.
+    monkeypatch.setattr(module, "SHA256", {
+        "segmentation.onnx": hashlib.sha256(b"SEGMENTATION").hexdigest(),
+        "embedding.onnx": hashlib.sha256(b"EMBEDDING").hexdigest(),
+    })
+    monkeypatch.setattr(module.download_source, "order", lambda urls: list(urls))
     return module
 
 
@@ -101,6 +113,7 @@ def test_a_short_download_leaves_nothing_under_the_final_name(monkeypatch, fetch
     _serve(monkeypatch, fetch, {
         fetch.SEGMENTATION_URL: _Response(_segmentation_archive()),
         fetch.EMBEDDING_URL: _Response(b"EMBE", declared=9),
+        fetch.EMBEDDING_MIRROR_URL: urllib.error.URLError("timed out"),
     })
 
     assert fetch.main(["--target", str(tmp_path)]) == 1
@@ -109,17 +122,58 @@ def test_a_short_download_leaves_nothing_under_the_final_name(monkeypatch, fetch
     assert sorted(p.name for p in tmp_path.iterdir()) == ["segmentation.onnx"]
 
 
-def test_a_failed_github_download_says_there_is_no_mirror(monkeypatch, fetch, tmp_path, capsys):
+def test_a_failed_github_download_falls_back_to_the_mirror(monkeypatch, fetch, tmp_path):
+    calls = _serve(monkeypatch, fetch, {
+        fetch.SEGMENTATION_URL: urllib.error.URLError("timed out"),
+        fetch.SEGMENTATION_MIRROR_URL: _Response(b"SEGMENTATION"),
+        fetch.EMBEDDING_URL: urllib.error.URLError("timed out"),
+        fetch.EMBEDDING_MIRROR_URL: _Response(b"EMBEDDING"),
+    })
+
+    assert fetch.main(["--target", str(tmp_path)]) == 0
+
+    assert calls == [fetch.SEGMENTATION_URL, fetch.SEGMENTATION_MIRROR_URL, fetch.EMBEDDING_URL, fetch.EMBEDDING_MIRROR_URL]
+    assert (tmp_path / "segmentation.onnx").read_bytes() == b"SEGMENTATION"
+    assert (tmp_path / "embedding.onnx").read_bytes() == b"EMBEDDING"
+
+
+def test_the_mirror_goes_first_when_the_probe_says_so(monkeypatch, fetch, tmp_path):
+    monkeypatch.setattr(fetch.download_source, "order", lambda urls: list(reversed(urls)))
+    calls = _serve(monkeypatch, fetch, {
+        fetch.SEGMENTATION_MIRROR_URL: _Response(b"SEGMENTATION"),
+        fetch.EMBEDDING_MIRROR_URL: _Response(b"EMBEDDING"),
+    })
+
+    assert fetch.main(["--target", str(tmp_path)]) == 0
+
+    assert calls == [fetch.SEGMENTATION_MIRROR_URL, fetch.EMBEDDING_MIRROR_URL]
+
+
+def test_a_file_that_does_not_match_its_checksum_is_not_kept(monkeypatch, fetch, tmp_path):
+    calls = _serve(monkeypatch, fetch, {
+        fetch.SEGMENTATION_URL: _Response(_segmentation_archive()),
+        fetch.EMBEDDING_URL: _Response(b"TAMPERED"),
+        fetch.EMBEDDING_MIRROR_URL: _Response(b"EMBEDDING"),
+    })
+
+    assert fetch.main(["--target", str(tmp_path)]) == 0
+
+    assert fetch.EMBEDDING_MIRROR_URL in calls
+    assert (tmp_path / "embedding.onnx").read_bytes() == b"EMBEDDING"
+
+
+def test_every_host_failing_ends_with_a_message(monkeypatch, fetch, tmp_path, capsys):
     _serve(monkeypatch, fetch, {
         fetch.SEGMENTATION_URL: urllib.error.URLError("timed out"),
+        fetch.SEGMENTATION_MIRROR_URL: urllib.error.URLError("timed out"),
         fetch.EMBEDDING_URL: urllib.error.URLError("timed out"),
+        fetch.EMBEDDING_MIRROR_URL: _Response(b"WRONG"),
     })
 
     assert fetch.main(["--target", str(tmp_path)]) == 1
 
     out = capsys.readouterr().out
-    assert "GitHub" in out
-    assert "没有国内镜像" in out
+    assert "国内镜像都试过了" in out
     assert "fetch_diarization_models.py" in out
     assert not any(p.suffix == ".onnx" for p in tmp_path.iterdir())
 

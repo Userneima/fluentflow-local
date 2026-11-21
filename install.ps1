@@ -2,13 +2,30 @@
 #
 #   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.ps1 | iex"
 #
-# Downloads the latest release to %USERPROFILE%\fluentflow-local, runs the setup
-# script, starts FluentFlow, registers its MCP tools with Claude Code and Codex when
-# they are installed, and checks the MCP server. Nothing asks for administrator
-# rights. An existing folder keeps its code; only the later steps run again.
+# The whole product goes into one folder, FluentFlow, on the drive chosen:
+#   app\        the code and its Python environment
+#   data\       task history, notes, media, the downloaded FFmpeg and Node.js
+#   models\     the transcription models (the Hugging Face cache, HF_HOME)
+#   downloads\  videos fetched from links, with their notes
+#   cache\      pip and npm download caches
+# Where each one is goes into app\.env, which the service and every script read,
+# so nothing large lands on drive C and uninstalling can remove one folder.
+# Python itself, when the machine has none, is a per-user install on drive C.
+#
+# Which drive: run by a person in a console, it lists the drives and asks, with
+# the drive that has the most free space as the default. Run by an agent (no
+# console to answer), it never asks: it takes FLUENTFLOW_INSTALL_DIR, or else
+# that same default. Drive C goes to %USERPROFILE%\FluentFlow, another drive to
+# X:\FluentFlow.
+#
+# Then it runs the setup script, starts FluentFlow, registers its MCP tools with
+# Claude Code and Codex when they are installed, and checks the MCP server.
+# Nothing asks for administrator rights. An existing install keeps its code
+# (including one from before the one-folder layout, %USERPROFILE%\fluentflow-local);
+# only the later steps run again.
 #
 # Optional environment variables:
-#   FLUENTFLOW_INSTALL_DIR   where to install, default %USERPROFILE%\fluentflow-local
+#   FLUENTFLOW_INSTALL_DIR   the folder to install into (for example D:\FluentFlow)
 #   FLUENTFLOW_INSTALL_REF   which release tag (for example v0.7.0), default the latest
 $ErrorActionPreference = "Stop"
 
@@ -20,8 +37,70 @@ $env:PYTHONUTF8 = "1"
 try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
 
 $RepoSlug = "Userneima/fluentflow-local"
-$Dir = if ($env:FLUENTFLOW_INSTALL_DIR) { $env:FLUENTFLOW_INSTALL_DIR } else { Join-Path $env:USERPROFILE "fluentflow-local" }
-$Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } else { "8000" }
+
+function Get-FixedDrives {
+    $SystemDrive = $env:SystemDrive.TrimEnd('\')
+    @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FreeSpace -gt 0 } |
+        ForEach-Object {
+            [pscustomobject]@{
+                Name = $_.DeviceID
+                FreeGB = [math]::Floor($_.FreeSpace / 1GB)
+                IsSystem = ($_.DeviceID -eq $SystemDrive)
+            }
+        })
+}
+
+function Get-InstallRoot([string]$Drive) {
+    if ($Drive -eq $env:SystemDrive.TrimEnd('\')) { return Join-Path $env:USERPROFILE "FluentFlow" }
+    return "$Drive\FluentFlow"
+}
+
+# Most free space wins; drive C only when no other drive has room (about 10 GB
+# for the environment, the models and the interface build).
+function Select-DefaultDrive($Drives) {
+    $Other = @($Drives | Where-Object { -not $_.IsSystem -and $_.FreeGB -ge 10 } | Sort-Object FreeGB -Descending)
+    if ($Other.Count -gt 0) { return $Other[0].Name }
+    return $env:SystemDrive.TrimEnd('\')
+}
+
+# A person at a console can answer; an agent's shell cannot, and a prompt there
+# would hang the install.
+function Test-CanAsk {
+    try { return [Environment]::UserInteractive -and -not [Console]::IsInputRedirected } catch { return $false }
+}
+
+$LegacyDir = Join-Path $env:USERPROFILE "fluentflow-local"
+if ($env:FLUENTFLOW_INSTALL_DIR) {
+    $Root = $env:FLUENTFLOW_INSTALL_DIR
+} elseif (Test-Path (Join-Path $LegacyDir "backend\local_main.py")) {
+    $Root = $LegacyDir
+} else {
+    $Drives = Get-FixedDrives
+    $Default = Select-DefaultDrive $Drives
+    if ($Drives.Count -gt 1 -and (Test-CanAsk)) {
+        Write-Host "FluentFlow needs about 10 GB. Drives on this computer:"
+        foreach ($Drive in $Drives) { Write-Host ("  {0}  {1} GB free" -f $Drive.Name, $Drive.FreeGB) }
+        $Answer = (Read-Host "Install to which drive? Press Enter for $Default").Trim().TrimEnd(':', '\')
+        if ($Answer) {
+            $Picked = @($Drives | Where-Object { $_.Name -eq "$($Answer.ToUpper()):" })
+            if ($Picked.Count -eq 0) { throw "There is no drive $Answer on this computer." }
+            $Default = $Picked[0].Name
+        }
+    }
+    $Root = Get-InstallRoot $Default
+}
+
+# An install from before the one-folder layout has the code directly in the
+# folder; it keeps its layout and its data where it is.
+if (Test-Path (Join-Path $Root "backend\local_main.py")) {
+    $Dir = $Root
+    $OneFolder = $false
+} else {
+    $Dir = Join-Path $Root "app"
+    $OneFolder = $true
+}
+Write-Host "Installing into $Root"
 
 Write-Host "== Getting the code =="
 if (Test-Path (Join-Path $Dir "backend\local_main.py")) {
@@ -52,6 +131,20 @@ if (Test-Path (Join-Path $Dir "backend\local_main.py")) {
     }
     Write-Host "Placed in $Dir"
 }
+
+. (Join-Path $Dir "launchers\windows\fluentflow-env.ps1")
+if ($OneFolder) {
+    # Written before the setup script runs, which reads them (as does the
+    # service) to put FFmpeg, Node.js, the models and the caches in this folder.
+    # A line already in .env (set by the user, or an earlier run) is kept.
+    Add-FluentFlowEnvLine $Dir "FLUENTFLOW_HOME" $Root
+    Add-FluentFlowEnvLine $Dir "FLUENTFLOW_DATA_DIR" (Join-Path $Root "data")
+    Add-FluentFlowEnvLine $Dir "HF_HOME" (Join-Path $Root "models")
+    Add-FluentFlowEnvLine $Dir "FLUENTFLOW_LINK_OUTPUT_DIR" (Join-Path $Root "downloads")
+    Add-FluentFlowEnvLine $Dir "PIP_CACHE_DIR" (Join-Path $Root "cache\pip")
+    Add-FluentFlowEnvLine $Dir "npm_config_cache" (Join-Path $Root "cache\npm")
+}
+$Port = Get-FluentFlowPort $Dir
 
 & powershell -ExecutionPolicy Bypass -File (Join-Path $Dir "launchers\windows\setup-local.ps1") @args
 if ($LASTEXITCODE -ne 0) { throw "The setup script failed; see the lines above." }
