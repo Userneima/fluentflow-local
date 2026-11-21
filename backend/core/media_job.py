@@ -118,7 +118,7 @@ def require_speech(transcript_text: Any, segments: Any) -> None:
     no system sound, a muted microphone): nothing after it has anything to
     work on, so the task fails here and says why, and ``task_flow`` skips the
     rest."""
-    if not str(transcript_text or "").strip() and not segments:
+    if not screen_text_transcript.has_speech(transcript_text, segments):
         raise RuntimeError(NO_SPEECH)
 
 
@@ -1079,7 +1079,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 base_result["transcript_source"] = screen_text_transcript.SCREEN_TEXT
                 # Nothing to cut by speech: the rest runs as for cut=false.
                 update_job_metadata(task_id_value, {"cut": False})
-            require_speech(transcript_text, segments_payload)
             checkpoint = _transcribed_checkpoint(
                 ctx, base_result=base_result, tr=tr, cleanup_payload=cleanup_payload,
                 raw_segments_payload=raw_segments_payload, segments_payload=segments_payload,
