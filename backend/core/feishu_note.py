@@ -221,16 +221,17 @@ def _blocks(lines: list[str]) -> list[list[str]]:
     belongs to that item's block."""
     blocks: list[list[str]] = []
     current: list[str] = []
-    code = note_spacing.in_code(lines)
+    code = note_spacing.code_blocks(lines)
     index = 0
     while index < len(lines):
         line = lines[index]
-        if code[index] or _CALLOUT_OPEN.match(line):
-            is_code = code[index]
+        if code[index] is not None or _CALLOUT_OPEN.match(line):
+            block_number = code[index]
+            is_code = block_number is not None
             group = [line]
             index += 1
             while index < len(lines):
-                if is_code and not code[index]:
+                if is_code and code[index] != block_number:
                     break  # the code block ended on the line before
                 group.append(lines[index])
                 index += 1

@@ -129,9 +129,13 @@ def _insert_images(
 
 
 def _local_images_in(text: str) -> int:
+    """The screenshots ``_prepare_images`` numbers in ``text`` (not the image
+    lines inside code), so a chapter written on its own keeps the figure
+    numbers of the whole note."""
     count = 0
-    for line in text.split("\n"):
-        match = _RE_MD_IMAGE_LINE.match(line)
+    lines = text.split("\n")
+    for line, in_code in zip(lines, note_spacing.in_code(lines)):
+        match = None if in_code else _RE_MD_IMAGE_LINE.match(line)
         if match and urlparse((match.group(2) or "").strip()).scheme.lower() not in ("http", "https"):
             count += 1
     return count

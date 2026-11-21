@@ -33,26 +33,33 @@ def is_fence(line: str) -> bool:
     return bool(_FENCE.match(line))
 
 
-def in_code(lines: list[str]) -> list[bool]:
-    """For each line, whether it sits inside a fenced code block (fence lines
-    count as inside). Only a bare fence of the same kind, at least as long as
-    the one that opened the block, closes it. The md, the PDF and Feishu all
-    read code blocks through this."""
-    out: list[bool] = []
+def code_blocks(lines: list[str]) -> list[int | None]:
+    """For each line, the number of the fenced code block it sits in (fence
+    lines count as inside), or None outside code. Only a bare fence of the
+    same kind, at least as long as the one that opened the block, closes it.
+    The md, the PDF and Feishu all read code blocks through this."""
+    out: list[int | None] = []
     opener = ""  # the fence that opened the block we are in
+    count = 0
     for line in lines:
         fence = _FENCE.match(line)
         if fence and not opener:
             opener = fence.group(1)
-            out.append(True)
+            count += 1
+            out.append(count)
             continue
         if fence and opener and fence.group(1)[0] == opener[0] and len(fence.group(1)) >= len(opener) \
                 and not line.strip()[len(fence.group(1)):].strip():
             opener = ""
-            out.append(True)
+            out.append(count)
             continue
-        out.append(bool(opener))
+        out.append(count if opener else None)
     return out
+
+
+def in_code(lines: list[str]) -> list[bool]:
+    """For each line, whether it sits inside a fenced code block (``code_blocks``)."""
+    return [block is not None for block in code_blocks(lines)]
 
 
 def _blocks(text: str) -> list[tuple[bool, str]]:
@@ -146,4 +153,4 @@ def for_renderers(text: str) -> str:
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
-__all__ = ["for_renderers", "in_code", "is_fence", "joins", "kind", "tidy"]
+__all__ = ["code_blocks", "for_renderers", "in_code", "is_fence", "joins", "kind", "tidy"]

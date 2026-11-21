@@ -351,3 +351,18 @@ def test_an_image_line_inside_a_tilde_fence_is_not_taken_for_a_screenshot(tmp_pa
     md = "~~~md\n![例子](/jobs/t/artifacts/frame?file=a.jpg)\n~~~\n"
     written, pending, missing = lark_cli_images._prepare_images(md, task_id="t", artifact_root=tmp_path)
     assert written == md and pending == [] and missing == []
+
+
+def test_two_code_blocks_next_to_each_other_stay_two_blocks_in_feishu():
+    from backend.core import feishu_note
+
+    laid = feishu_note.to_feishu("```python\nprint(1)\n```\n```js\nlog(2)\n```\n").markdown
+    assert "```\n\n<p></p>\n\n```js" in laid, laid
+
+
+def test_a_chapter_written_alone_keeps_the_whole_note_figure_numbers(tmp_path):
+    from backend.core import lark_cli_images
+
+    first = "## 一\n~~~md\n![例子](/jobs/t/artifacts/frame?file=a.jpg)\n~~~\n"
+    assert lark_cli_images._local_images_in(first) == 0
+    assert lark_cli_images._local_images_in("## 二\n![画面](/jobs/t/artifacts/frame?file=b.jpg)\n") == 1
