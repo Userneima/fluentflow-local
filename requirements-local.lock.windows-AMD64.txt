@@ -1,0 +1,126 @@
+# Resolved on 2026-11-21 with uv 0.13.7 from requirements-local.txt:
+#   uv pip compile requirements-local.txt --universal --python-version 3.10 \
+#     --no-emit-package yt-dlp --no-annotate --no-header
+# One file for every Python the Windows installer may use (3.10 to 3.14): the
+# markers pick the line for the running Python. setup-local.ps1 installs this
+# file on Windows and falls back to requirements-local.txt only when it is
+# missing. Lines marked sys_platform == 'darwin' are skipped on Windows.
+# Tested on GitHub's windows-latest runner (installed, full test suite run)
+# before it was committed. Re-resolve after a deliberate dependency upgrade,
+# test it on Windows, and commit; do not edit by hand. Without it a new
+# release of a dependency broke every Windows transcription (av 19, 2026-11).
+# yt-dlp is deliberately absent, as in the macOS lock: setup-local.ps1
+# installs it unpinned and the launcher keeps it current.
+annotated-doc==0.0.6 ; python_full_version < '3.11'
+annotated-doc==0.0.7 ; python_full_version >= '3.11'
+annotated-types==0.8.0
+anthropic==2.12.0
+anyio==4.16.0
+av==17.1.0 ; python_full_version < '3.11'
+av==18.1.1 ; python_full_version >= '3.11'
+certifi==2026.11.20
+charset-normalizer==3.5.2
+click==8.5.1
+colorama==0.4.6 ; sys_platform == 'win32'
+coloredlogs==15.0.1 ; python_full_version < '3.11'
+ctranslate2==4.9.0
+decorator==5.3.2
+docstring-parser==0.18.0
+exceptiongroup==1.3.2 ; python_full_version < '3.11'
+fastapi==0.129.2
+faster-whisper==1.2.1
+filelock==4.1.0 ; python_full_version < '3.11'
+filelock==4.2.12 ; python_full_version >= '3.11'
+flatbuffers==25.12.19
+fsspec==2026.9.0
+h11==0.16.0
+hf-xet==1.8.0 ; platform_machine == 'AMD64' or platform_machine == 'ARM64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'
+httpcore==1.0.9
+httpcore2==2.14.0 ; python_full_version < '3.11' and sys_platform != 'emscripten'
+httpcore2==2.16.2 ; python_full_version >= '3.11' and sys_platform != 'emscripten'
+httptools==0.9.0
+httpx==0.28.1
+httpx2==2.14.0 ; python_full_version < '3.11'
+httpx2==2.16.2 ; python_full_version >= '3.11'
+httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten'
+huggingface-hub==2.4.0
+humanfriendly==10.0 ; python_full_version < '3.11'
+idna==3.20
+imageio==2.38.0 ; python_full_version < '3.11'
+imageio==2.38.2 ; python_full_version >= '3.11'
+imageio-ffmpeg==0.8.1
+jinja2==3.1.6 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+jiter==0.18.0 ; python_full_version < '3.11'
+jiter==0.19.0 ; python_full_version >= '3.11'
+lark-oapi==1.8.0
+llvmlite==0.50.0 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+markdown==3.10.3 ; python_full_version < '3.11'
+markdown==3.11.3 ; python_full_version >= '3.11'
+markupsafe==3.0.4 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+mlx==0.32.4 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+mlx-metal==0.32.4 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+mlx-whisper==0.4.3 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+more-itertools==11.1.0 ; python_full_version < '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin'
+more-itertools==11.2.1 ; python_full_version >= '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin'
+moviepy==2.2.1
+mpmath==1.3.0 ; python_full_version < '3.11' or (platform_machine == 'arm64' and sys_platform == 'darwin')
+networkx==3.4.2 ; python_full_version < '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin'
+networkx==3.6.1 ; python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin'
+networkx==3.7 ; python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin'
+numba==0.68.1 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+numpy==2.2.6 ; python_full_version < '3.11'
+numpy==2.4.6 ; python_full_version == '3.11.*'
+numpy==2.5.5 ; python_full_version >= '3.12'
+onnxruntime==1.23.2 ; python_full_version < '3.11'
+onnxruntime==1.32.0 ; python_full_version >= '3.11'
+openai==3.57.0
+opencc-python-reimplemented==0.1.7
+opentelemetry-api==1.45.2
+packaging==26.3
+pillow==11.3.0
+proglog==0.1.12
+protobuf==7.36.2
+pycryptodome==4.5.0
+pydantic==2.14.4
+pydantic-core==2.50.5
+pyobjc-core==12.2.2 ; python_full_version < '3.11' and sys_platform == 'darwin'
+pyobjc-core==13.0 ; python_full_version >= '3.11' and sys_platform == 'darwin'
+pyobjc-framework-cocoa==12.2.2 ; python_full_version < '3.11' and sys_platform == 'darwin'
+pyobjc-framework-cocoa==13.0 ; python_full_version >= '3.11' and sys_platform == 'darwin'
+pyobjc-framework-coreml==12.2.2 ; python_full_version < '3.11' and sys_platform == 'darwin'
+pyobjc-framework-coreml==13.0 ; python_full_version >= '3.11' and sys_platform == 'darwin'
+pyobjc-framework-quartz==12.2.2 ; python_full_version < '3.11' and sys_platform == 'darwin'
+pyobjc-framework-quartz==13.0 ; python_full_version >= '3.11' and sys_platform == 'darwin'
+pyobjc-framework-vision==12.2.2 ; python_full_version < '3.11' and sys_platform == 'darwin'
+pyobjc-framework-vision==13.0 ; python_full_version >= '3.11' and sys_platform == 'darwin'
+pyreadline3==3.5.6 ; python_full_version < '3.11' and sys_platform == 'win32'
+python-dotenv==1.2.4
+python-multipart==0.0.32 ; python_full_version < '3.11'
+python-multipart==0.0.34 ; python_full_version >= '3.11'
+pyyaml==6.0.4
+regex==2026.9.29 ; python_full_version < '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin'
+regex==2026.11.19 ; python_full_version >= '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin'
+requests==2.34.2
+requests-toolbelt==1.0.0
+scipy==1.15.3 ; python_full_version < '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin'
+scipy==1.17.1 ; python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin'
+scipy==1.18.1 ; python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin'
+setuptools==84.2.1 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+sherpa-onnx==1.13.8
+sniffio==1.3.1
+starlette==0.52.1
+sympy==1.14.0 ; python_full_version < '3.11' or (platform_machine == 'arm64' and sys_platform == 'darwin')
+tiktoken==0.14.0 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+tokenizers==0.23.3
+tomli==2.5.0 ; python_full_version < '3.11'
+torch==2.14.1 ; python_full_version < '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin'
+torch==2.15.0 ; python_full_version >= '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin'
+tqdm==4.70.1
+truststore==0.10.5 ; sys_platform != 'emscripten'
+typing-extensions==4.16.0
+typing-inspection==0.4.5
+urllib3==2.8.0
+uvicorn==0.54.0
+uvloop==0.23.0 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
+watchfiles==1.3.0
+websockets==15.0.1

@@ -2,7 +2,7 @@
 # install on macOS arm64 (Apple Silicon, Python 3.14.6).
 # These are the exact versions the test suite and the desktop launcher were run against.
 # setup-local.sh installs this file on macOS arm64 and falls back to requirements-local.txt
-# on every other platform (no lock exists for Windows or Linux yet).
+# on Intel Macs and Linux (Windows has requirements-local.lock.windows-AMD64.txt).
 # Development-only tools (pytest, pylint and what only they pull in) are left out.
 # Platform-specific wheels (mlx, pyobjc) are listed: never install this file on another OS.
 # Re-freeze after a deliberate dependency upgrade; do not edit by hand.

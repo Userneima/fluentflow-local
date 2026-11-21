@@ -182,3 +182,14 @@ def test_the_settings_file_follows_a_data_folder_set_after_import(tmp_path, monk
     monkeypatch.delenv("FLUENTFLOW_CONFIG_PATH", raising=False)
     monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path / "FluentFlow" / "data"))
     assert local_config.config_path() == tmp_path / "FluentFlow" / "data" / "fluentflow_config.json"
+
+
+def test_windows_installs_its_tested_lock():
+    lock = ROOT / "requirements-local.lock.windows-AMD64.txt"
+    text = lock.read_text(encoding="utf-8")
+    pins = [line for line in text.splitlines() if line and not line.startswith("#")]
+    assert pins and all("==" in line for line in pins)
+    assert not any(line.lower().startswith("yt-dlp") for line in pins)
+    assert any(line.startswith("av==") for line in pins)
+    setup = (ROOT / "launchers" / "windows" / "setup-local.ps1").read_text(encoding="utf-8-sig")
+    assert "requirements-local.lock.windows-AMD64.txt" in setup

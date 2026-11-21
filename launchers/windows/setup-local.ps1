@@ -27,10 +27,11 @@
 # one-folder install (install.ps1) writes the data folder, the model cache and
 # the pip and npm caches there, so nothing large lands on drive C.
 #
-# Python dependencies are installed from requirements-local.txt (lower bounds,
-# newest matching versions). There is no tested lock file for Windows yet; the
-# only lock in the repository, requirements-local.lock.macos-arm64.txt, is for
-# Apple Silicon and must not be used here.
+# Python dependencies are installed from requirements-local.lock.windows-AMD64.txt,
+# exact versions resolved for Python 3.10 to 3.14 and tested on GitHub's
+# Windows runner; requirements-local.txt (lower bounds) only when that file is
+# missing. Unpinned installs broke every Windows transcription once already
+# (av 19, 2026-11).
 #
 #   ... -SkipModel   do not download the transcription model
 param([switch]$SkipModel)
@@ -350,7 +351,10 @@ if (-not (Test-Path $Python)) {
 }
 
 Write-Host "安装 Python 依赖（体积较大，首次约需十几分钟）…"
-Invoke-Pip @("install", "-r", (Join-Path $Repo "requirements-local.txt"))
+$Requirements = Join-Path $Repo "requirements-local.lock.windows-AMD64.txt"
+if (Test-Path $Requirements) { Write-Host "按锁定文件安装：$(Split-Path -Leaf $Requirements)" }
+else { $Requirements = Join-Path $Repo "requirements-local.txt" }
+Invoke-Pip @("install", "-r", $Requirements)
 
 # yt-dlp is kept at its newest release: Douyin, Bilibili and YouTube change their
 # pages often and an old copy fails a whole platform. Not fatal: it only affects

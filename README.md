@@ -80,7 +80,7 @@ bash launchers/macos/setup-local.sh
 不生成桌面图标，`--skip-model` 不下转录模型（留到第一次转录时再下）。
 
 Apple 芯片的 Mac 上，Python 依赖按 `requirements-local.lock.macos-arm64.txt` 安装，那是一份
-实际测过的版本组合；其他平台按 `requirements-local.txt` 的版本下限装最新的。
+实际测过的版本组合；Windows 按 `requirements-local.lock.windows-AMD64.txt`；Intel Mac 和 Linux 按 `requirements-local.txt` 的版本下限装最新的。依赖用 uv 装（比 pip 快得多），装不上 uv 时退回 pip。
 
 转录模型（1.5 到 3 GB）在后台下载，安装不等它：装完就能打开页面，下完之前提交的录像在任务里显示
 「正在下载转录模型」，下完自动接着转。进度写在数据目录的 `logs/model-download.log`；没下成时第一次转录会再下，
@@ -100,7 +100,7 @@ CUDA Toolkit，但显卡驱动要在。`-SkipModel` 不下转录模型。装完�
 「FluentFlow Local」启动。
 
 如果脚本装完 Python 或 Node.js 后提示找不到它们，关掉这个 PowerShell 窗口，开一个新的再运行一次。
-Windows 和 Linux 还没有经过测试的依赖锁定文件，Python 依赖按 `requirements-local.txt` 的版本下限装最新的。
+Python 依赖按 `requirements-local.lock.windows-AMD64.txt` 装：在 GitHub 的 Windows 机器上装过、跑过全套测试的确切版本，覆盖 Python 3.10 到 3.14。
 
 已经装好、只想补 GPU 运行库：
 
