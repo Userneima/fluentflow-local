@@ -9,6 +9,9 @@ From the requirement (2026-10-14):
   5.1 turns the first stderr line of a piped native command into a terminating
   error, and uvicorn logs to stderr.
 - The uninstaller recognises a running local service by the fields /health has.
+- The launcher re-reads PATH from the registry before its startup check (2026-11-21):
+  the installer starts it right after winget may have installed FFmpeg, and the
+  PATH it inherits predates that, so the check failed on every fresh machine.
 """
 
 from __future__ import annotations
@@ -34,6 +37,14 @@ def test_uvicorn_does_not_run_under_stop():
     text = (ROOT / "FluentFlowLocal.ps1").read_text(encoding="utf-8-sig")
     before = text[: text.index("-m uvicorn")]
     assert before.rfind('$ErrorActionPreference = "Continue"') > before.rfind('$ErrorActionPreference = "Stop"')
+
+
+def test_the_launcher_rereads_path_before_the_startup_check():
+    text = (ROOT / "FluentFlowLocal.ps1").read_text(encoding="utf-8-sig")
+    check = text.index("check_local_readiness.py")
+    before = text[:check]
+    assert 'GetEnvironmentVariable("Path", "Machine")' in before
+    assert 'GetEnvironmentVariable("Path", "User")' in before
 
 
 def test_the_uninstaller_reads_the_fields_health_has():

@@ -146,6 +146,17 @@ if (-not $Python) {
     Fail "没找到 Python 虚拟环境。先在 PowerShell 里运行安装脚本：`npowershell -ExecutionPolicy Bypass -File `"$Repo\launchers\windows\setup-local.ps1`""
 }
 
+# Read PATH again from the registry, keeping what this process already had. The
+# installer starts this launcher right after setup may have installed FFmpeg or
+# Python with winget; this process inherits the installer's PATH from before
+# that, so without this the startup check reports FFmpeg missing on every fresh
+# Windows machine and the window waits on "press Enter".
+$env:Path = @(
+    [Environment]::GetEnvironmentVariable("Path", "Machine"),
+    [Environment]::GetEnvironmentVariable("Path", "User"),
+    $env:Path
+) -join ";"
+
 Write-Host "== FluentFlow Local startup check =="
 # Python's UTF-8 mode, for everything started from here. Without it every text
 # read that names no encoding uses the code page, GBK on a Chinese Windows:
