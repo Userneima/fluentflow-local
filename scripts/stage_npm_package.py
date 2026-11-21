@@ -13,10 +13,10 @@ tree at that tag, exactly as ``git archive`` gives it, under ``source/``. The re
 own package.json stays inside ``source/`` (it builds the interface), so the
 package's metadata is a separate package.json written here.
 
-    python scripts/stage_npm_package.py v0.12.0 build/npm
+    python scripts/stage_npm_package.py v0.12.0 build/npm [built-frontend-dir]
     npm publish build/npm --access public
 
-Run by `.github/workflows/publish-npm.yml` when a release is published.
+Run by `.github/workflows/release.yml` when a release is published.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def version_of(tag: str) -> str:
     return version
 
 
-def stage(tag: str, out: Path) -> Path:
+def stage(tag: str, out: Path, frontend: Path | None = None) -> Path:
     version = version_of(tag)
     if out.exists():
         shutil.rmtree(out)
@@ -63,6 +63,10 @@ def stage(tag: str, out: Path) -> Path:
     # what to leave out; the installed code does not need them.
     for ignore in [*source.rglob(".gitignore"), *source.rglob(".npmignore")]:
         ignore.unlink()
+    if frontend is not None:
+        # The interface built for this release (release.yml), so an install
+        # from npm needs no Node.js or build either.
+        shutil.copytree(frontend, source / "frontend" / "dist-local")
     for script in ("install.ps1", "install.sh"):
         shutil.copy2(source / script, out / script)
     (out / "README.md").write_text(
@@ -92,10 +96,11 @@ def stage(tag: str, out: Path) -> Path:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
+    if len(argv) not in (2, 3):
         print(__doc__)
         return 2
-    print(stage(argv[0], Path(argv[1]).resolve()))
+    frontend = Path(argv[2]).resolve() if len(argv) == 3 else None
+    print(stage(argv[0], Path(argv[1]).resolve(), frontend))
     return 0
 
 

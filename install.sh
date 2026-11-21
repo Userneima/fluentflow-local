@@ -67,6 +67,14 @@ else
 			if curl -fL --retry 2 --connect-timeout 20 -sS -o "${WORK}/src.zip" "$GITHUB_ZIP" &&
 				unzip -q "${WORK}/src.zip" -d "${WORK}/src"; then
 				unpacked="$(find "${WORK}/src" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+				# 这一版发版时构建好的界面（release.yml），安装脚本就不用装 Node.js、不用构建。
+				# 旧版本没有这个附件，安装脚本照旧在本机构建。
+				if curl -fL --retry 2 --connect-timeout 20 -sS -o "${WORK}/ui.zip" \
+					"https://github.com/${REPO_SLUG}/releases/download/${TAG}/frontend-dist-local.zip" 2>/dev/null; then
+					mkdir -p "${unpacked}/frontend/dist-local" && unzip -oq "${WORK}/ui.zip" -d "${unpacked}/frontend/dist-local"
+				else
+					echo "  （${TAG} 没有附带构建好的界面，安装时在本机构建）"
+				fi
 			fi
 		elif [[ "$source" == npm && -n "$NPM_META" ]]; then
 			echo "从 registry.npmmirror.com 下载 $(npm_field version)…"

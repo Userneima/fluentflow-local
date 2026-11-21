@@ -54,7 +54,7 @@ def test_a_tag_that_is_not_the_version_is_refused(stage_module, tmp_path):
 
 
 def test_the_workflow_skips_without_a_token():
-    text = (ROOT / ".github" / "workflows" / "publish-npm.yml").read_text(encoding="utf-8")
+    text = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert "secrets.NPM_TOKEN != ''" in text
     assert text.count("if: env.HAS_TOKEN == 'true'") >= 3
 
@@ -64,3 +64,25 @@ def test_both_installers_can_fetch_from_npmmirror_and_check_it():
         text = (ROOT / name).read_text(encoding="utf-8")
         assert "registry.npmmirror.com/fluentflow-local/" in text, name
         assert "sha512-" in text and "integrity" in text, name
+
+
+def test_a_release_carries_the_built_interface_and_installs_skip_the_build():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "npm run build:frontend" in workflow
+    assert "cp VERSION frontend/dist-local/.release-version" in workflow
+    assert "gh release upload" in workflow and "frontend-dist-local.zip" in workflow
+    assert 'stage_npm_package.py "$TAG" build/npm build/frontend' in workflow
+    for name in ("install.ps1", "install.sh"):
+        assert "releases/download/" in (ROOT / name).read_text(encoding="utf-8"), name
+    for setup in ("launchers/windows/setup-local.ps1", "launchers/macos/setup-local.sh"):
+        assert ".release-version" in (ROOT / setup).read_text(encoding="utf-8-sig"), setup
+
+
+def test_the_built_interface_goes_into_the_npm_package(stage_module, tmp_path):
+    built = tmp_path / "built"
+    built.mkdir()
+    (built / "local.html").write_text("<html></html>", encoding="utf-8")
+    (built / ".release-version").write_text("0.11.0\n", encoding="utf-8")
+    out = stage_module.stage("v0.11.0", tmp_path / "npm", built)
+    assert (out / "source" / "frontend" / "dist-local" / "local.html").is_file()
+    assert (out / "source" / "frontend" / "dist-local" / ".release-version").read_text(encoding="utf-8").strip() == "0.11.0"

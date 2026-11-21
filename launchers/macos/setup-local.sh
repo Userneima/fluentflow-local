@@ -295,76 +295,85 @@ else
 fi
 
 # --- 4. 前端 ---------------------------------------------------------------
-step "安装前端依赖并构建"
-# 只有构建界面要用 Node.js。机器上没有就下载官方的免安装包放进数据目录，只给这一步用。
-NODE_VERSION="v24.20.0"
-# 取自这个版本官方的 SHASUMS256.txt；npmmirror 上的是同一个文件。
-case "$ARCH_NODE" in
-arm64) NODE_SHA256="40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8" ;;
-*) NODE_SHA256="9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4" ;;
-esac
-if ! command -v npm >/dev/null 2>&1; then
-	NODE_HOME="${TOOLS_DIR}/node-${NODE_VERSION}-darwin-${ARCH_NODE}"
-	if [[ ! -x "${NODE_HOME}/bin/npm" ]]; then
-		echo "未找到 Node.js（构建界面要用它），正在下载免安装版到 ${TOOLS_DIR}…"
-		archive="node-${NODE_VERSION}-darwin-${ARCH_NODE}.tar.gz"
-		ff_verified_download "${TOOLS_DIR}/${archive}" "$NODE_SHA256" \
-			"https://nodejs.org/dist/${NODE_VERSION}/${archive}" \
-			"https://registry.npmmirror.com/-/binary/node/${NODE_VERSION}/${archive}" ||
-			fail "Node.js 下载失败，请检查网络后重新运行本脚本。"
-		tar -xzf "${TOOLS_DIR}/${archive}" -C "$TOOLS_DIR" || fail "Node.js 解压失败。"
-		rm -f "${TOOLS_DIR}/${archive}"
-	fi
-	export PATH="${NODE_HOME}/bin:${PATH}"
-fi
-
-# 先探 npmjs：连不上或明显慢就先用 npmmirror；失败一次就换另一个再试。用户自己配了
-# registry 的按他的来。
-NPMJS_REGISTRY="https://registry.npmjs.org"
-NPMMIRROR_REGISTRY="https://registry.npmmirror.com"
-NPM_REGISTRY=""
-if [[ -z "$(npm config get registry 2>/dev/null | grep -v registry.npmjs.org)" ]]; then
-	NPM_REGISTRY="$NPMJS_REGISTRY"
-	# 一个 5 MB 的包，两边路径相同。
-	tarball="typescript/-/typescript-5.4.5.tgz"
-	if [[ "$(ff_order "${NPMJS_REGISTRY}/${tarball}" "${NPMMIRROR_REGISTRY}/${tarball}" | head -n 1)" == "$NPMMIRROR_REGISTRY"* ]]; then
-		NPM_REGISTRY="$NPMMIRROR_REGISTRY"
-		echo "npmjs 连不上或太慢，前端依赖从国内镜像（npmmirror）下载。"
-	fi
-fi
-npm_retry() {
-	if [[ -z "$NPM_REGISTRY" ]]; then
-		npm "$@"
-		return
-	fi
-	npm "$@" --registry="$NPM_REGISTRY" && return 0
-	local other="$NPMMIRROR_REGISTRY"
-	[[ "$NPM_REGISTRY" == "$NPMMIRROR_REGISTRY" ]] && other="$NPMJS_REGISTRY"
-	echo "下载失败，换 $(ff_host "$other") 重试…"
-	npm "$@" --registry="$other"
-}
-
-cd "$REPO"
-if [[ -f package-lock.json ]]; then
-	npm_retry ci || fail "npm ci 失败。"
+# 用发布包装的，带着这一版发版时构建好的界面（release.yml，
+# frontend/dist-local/.release-version 和 VERSION 一致），跳过 Node.js、npm 和构建。
+# git 检出的、或这之前的版本，照旧在本机构建。
+if [[ -f "${REPO}/frontend/dist-local/local.html" && -f "${REPO}/frontend/dist-local/.release-version" &&
+	"$(tr -d '[:space:]' <"${REPO}/frontend/dist-local/.release-version")" == "$(tr -d '[:space:]' <"${REPO}/VERSION")" ]]; then
+	step "界面"
+	echo "用这一版发布时构建好的界面，不用装 Node.js，也不用构建。"
 else
-	npm_retry install || fail "npm install 失败。"
-fi
+	step "安装前端依赖并构建"
+	# 只有构建界面要用 Node.js。机器上没有就下载官方的免安装包放进数据目录，只给这一步用。
+	NODE_VERSION="v24.20.0"
+	# 取自这个版本官方的 SHASUMS256.txt；npmmirror 上的是同一个文件。
+	case "$ARCH_NODE" in
+	arm64) NODE_SHA256="40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8" ;;
+	*) NODE_SHA256="9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4" ;;
+	esac
+	if ! command -v npm >/dev/null 2>&1; then
+		NODE_HOME="${TOOLS_DIR}/node-${NODE_VERSION}-darwin-${ARCH_NODE}"
+		if [[ ! -x "${NODE_HOME}/bin/npm" ]]; then
+			echo "未找到 Node.js（构建界面要用它），正在下载免安装版到 ${TOOLS_DIR}…"
+			archive="node-${NODE_VERSION}-darwin-${ARCH_NODE}.tar.gz"
+			ff_verified_download "${TOOLS_DIR}/${archive}" "$NODE_SHA256" \
+				"https://nodejs.org/dist/${NODE_VERSION}/${archive}" \
+				"https://registry.npmmirror.com/-/binary/node/${NODE_VERSION}/${archive}" ||
+				fail "Node.js 下载失败，请检查网络后重新运行本脚本。"
+			tar -xzf "${TOOLS_DIR}/${archive}" -C "$TOOLS_DIR" || fail "Node.js 解压失败。"
+			rm -f "${TOOLS_DIR}/${archive}"
+		fi
+		export PATH="${NODE_HOME}/bin:${PATH}"
+	fi
 
-# 构建脚本的名字在两套前端里不一样，按 package.json 实际声明的来，避免静默构建
-# 错目标。
-BUILD_SCRIPT="build:frontend"
-if "$VENV_PY" - "$REPO/package.json" <<'PY' 2>/dev/null; then
-import json
-import sys
+	# 先探 npmjs：连不上或明显慢就先用 npmmirror；失败一次就换另一个再试。用户自己配了
+	# registry 的按他的来。
+	NPMJS_REGISTRY="https://registry.npmjs.org"
+	NPMMIRROR_REGISTRY="https://registry.npmmirror.com"
+	NPM_REGISTRY=""
+	if [[ -z "$(npm config get registry 2>/dev/null | grep -v registry.npmjs.org)" ]]; then
+		NPM_REGISTRY="$NPMJS_REGISTRY"
+		# 一个 5 MB 的包，两边路径相同。
+		tarball="typescript/-/typescript-5.4.5.tgz"
+		if [[ "$(ff_order "${NPMJS_REGISTRY}/${tarball}" "${NPMMIRROR_REGISTRY}/${tarball}" | head -n 1)" == "$NPMMIRROR_REGISTRY"* ]]; then
+			NPM_REGISTRY="$NPMMIRROR_REGISTRY"
+			echo "npmjs 连不上或太慢，前端依赖从国内镜像（npmmirror）下载。"
+		fi
+	fi
+	npm_retry() {
+		if [[ -z "$NPM_REGISTRY" ]]; then
+			npm "$@"
+			return
+		fi
+		npm "$@" --registry="$NPM_REGISTRY" && return 0
+		local other="$NPMMIRROR_REGISTRY"
+		[[ "$NPM_REGISTRY" == "$NPMMIRROR_REGISTRY" ]] && other="$NPMJS_REGISTRY"
+		echo "下载失败，换 $(ff_host "$other") 重试…"
+		npm "$@" --registry="$other"
+	}
 
-scripts = json.load(open(sys.argv[1], encoding="utf-8")).get("scripts", {})
-sys.exit(0 if "build:frontend:local" in scripts else 1)
-PY
-	BUILD_SCRIPT="build:frontend:local"
+	cd "$REPO"
+	if [[ -f package-lock.json ]]; then
+		npm_retry ci || fail "npm ci 失败。"
+	else
+		npm_retry install || fail "npm install 失败。"
+	fi
+
+	# 构建脚本的名字在两套前端里不一样，按 package.json 实际声明的来，避免静默构建
+	# 错目标。
+	BUILD_SCRIPT="build:frontend"
+	if "$VENV_PY" - "$REPO/package.json" <<-'PY' 2>/dev/null; then
+	import json
+	import sys
+
+	scripts = json.load(open(sys.argv[1], encoding="utf-8")).get("scripts", {})
+	sys.exit(0 if "build:frontend:local" in scripts else 1)
+	PY
+		BUILD_SCRIPT="build:frontend:local"
+	fi
+	echo "构建：npm run ${BUILD_SCRIPT}"
+	npm run "$BUILD_SCRIPT" || fail "前端构建失败。"
 fi
-echo "构建：npm run ${BUILD_SCRIPT}"
-npm run "$BUILD_SCRIPT" || fail "前端构建失败。"
 
 # --- 4b. 讲话人区分模型 ---------------------------------------------------
 # 两个小模型（约 47MB），装好后设置里的「区分不同讲话人」直接能用。GitHub 和国内

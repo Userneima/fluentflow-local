@@ -342,87 +342,97 @@ if (Test-NvidiaAdapter) {
     Write-Host "没有检测到 NVIDIA 显卡，FluentFlow 将用 CPU 转录。"
 }
 
-# Only building the interface needs Node.js. Without one on the machine, a
-# portable copy goes into the data folder for this step alone: the winget
-# package is a machine-wide installer that asks for administrator rights.
-$NodeVersion = "v24.20.0"
-# From the official SHASUMS256.txt of this release; npmmirror's copy is the same file.
-$NodeZipSha256 = "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba"
-$Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-if (-not $Npm) {
-    $ToolsDir = Join-Path (Get-FluentFlowDataDir $Repo) "tools"
-    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-    $NodeName = "node-$NodeVersion-win-x64"
-    $NodeHome = Join-Path $ToolsDir $NodeName
-    if (-not (Test-Path (Join-Path $NodeHome "npm.cmd"))) {
-        Write-Host "未找到 Node.js（构建界面要用它），正在下载免安装版…"
-        $Zip = Join-Path $ToolsDir "$NodeName.zip"
-        Save-FluentFlowVerifiedDownload @(
-            "https://nodejs.org/dist/$NodeVersion/$NodeName.zip",
-            "https://registry.npmmirror.com/-/binary/node/$NodeVersion/$NodeName.zip"
-        ) $Zip $NodeZipSha256
-        Expand-Archive -Force -Path $Zip -DestinationPath $ToolsDir
-        Remove-Item $Zip
-    }
-    $env:Path = "$NodeHome;$env:Path"
+# A release install carries the interface already built for its version
+# (release.yml, frontend/dist-local/.release-version), so Node.js, npm and the
+# build are skipped. A git checkout, or a release from before this, builds here.
+$ReleaseStamp = Join-Path $Repo "frontend\dist-local\.release-version"
+$PrebuiltUi = (Test-Path (Join-Path $Repo "frontend\dist-local\local.html")) -and (Test-Path $ReleaseStamp) -and
+    ((Get-Content -Raw $ReleaseStamp).Trim() -eq (Get-Content -Raw (Join-Path $Repo "VERSION")).Trim())
+if ($PrebuiltUi) {
+    Write-Host "界面用这一版发布时构建好的，不用装 Node.js，也不用构建。"
+} else {
+    # Only building the interface needs Node.js. Without one on the machine, a
+    # portable copy goes into the data folder for this step alone: the winget
+    # package is a machine-wide installer that asks for administrator rights.
+    $NodeVersion = "v24.20.0"
+    # From the official SHASUMS256.txt of this release; npmmirror's copy is the same file.
+    $NodeZipSha256 = "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba"
     $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if (-not $Npm) {
-        throw "Node.js 已下载，但运行不了 ${NodeHome} 里的 npm.cmd。"
+        $ToolsDir = Join-Path (Get-FluentFlowDataDir $Repo) "tools"
+        New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+        $NodeName = "node-$NodeVersion-win-x64"
+        $NodeHome = Join-Path $ToolsDir $NodeName
+        if (-not (Test-Path (Join-Path $NodeHome "npm.cmd"))) {
+            Write-Host "未找到 Node.js（构建界面要用它），正在下载免安装版…"
+            $Zip = Join-Path $ToolsDir "$NodeName.zip"
+            Save-FluentFlowVerifiedDownload @(
+                "https://nodejs.org/dist/$NodeVersion/$NodeName.zip",
+                "https://registry.npmmirror.com/-/binary/node/$NodeVersion/$NodeName.zip"
+            ) $Zip $NodeZipSha256
+            Expand-Archive -Force -Path $Zip -DestinationPath $ToolsDir
+            Remove-Item $Zip
+        }
+        $env:Path = "$NodeHome;$env:Path"
+        $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+        if (-not $Npm) {
+            throw "Node.js 已下载，但运行不了 ${NodeHome} 里的 npm.cmd。"
+        }
     }
-}
 
-# The npm registry: npmjs, or npmmirror when npmjs is unreachable or slow; a
-# failed run is retried once from the other. A registry the user configured
-# (npm config or npm_config_registry) is used as it is.
-$NpmjsRegistry = "https://registry.npmjs.org"
-$NpmmirrorRegistry = "https://registry.npmmirror.com"
-$UserNpmRegistry = $null
-try {
-    $Configured = (& $Npm.Source config get registry 2>$null | Select-Object -First 1)
-    if ($Configured -and ($Configured.TrimEnd('/') -ne $NpmjsRegistry)) { $UserNpmRegistry = $Configured }
-} catch {}
-$NpmRegistry = $NpmjsRegistry
-if (-not $UserNpmRegistry) {
-    # A 5 MB package, at the same path on both registries.
-    $Tarball = "typescript/-/typescript-5.4.5.tgz"
-    $First = (Get-FluentFlowSourceOrder @("$NpmjsRegistry/$Tarball", "$NpmmirrorRegistry/$Tarball"))[0]
-    if ($First -like "$NpmmirrorRegistry*") {
-        $NpmRegistry = $NpmmirrorRegistry
-        Write-Host "npmjs 连不上或太慢，前端依赖从国内镜像（npmmirror）下载。"
+    # The npm registry: npmjs, or npmmirror when npmjs is unreachable or slow; a
+    # failed run is retried once from the other. A registry the user configured
+    # (npm config or npm_config_registry) is used as it is.
+    $NpmjsRegistry = "https://registry.npmjs.org"
+    $NpmmirrorRegistry = "https://registry.npmmirror.com"
+    $UserNpmRegistry = $null
+    try {
+        $Configured = (& $Npm.Source config get registry 2>$null | Select-Object -First 1)
+        if ($Configured -and ($Configured.TrimEnd('/') -ne $NpmjsRegistry)) { $UserNpmRegistry = $Configured }
+    } catch {}
+    $NpmRegistry = $NpmjsRegistry
+    if (-not $UserNpmRegistry) {
+        # A 5 MB package, at the same path on both registries.
+        $Tarball = "typescript/-/typescript-5.4.5.tgz"
+        $First = (Get-FluentFlowSourceOrder @("$NpmjsRegistry/$Tarball", "$NpmmirrorRegistry/$Tarball"))[0]
+        if ($First -like "$NpmmirrorRegistry*") {
+            $NpmRegistry = $NpmmirrorRegistry
+            Write-Host "npmjs 连不上或太慢，前端依赖从国内镜像（npmmirror）下载。"
+        }
     }
-}
 
-function Invoke-Npm([string[]]$Arguments) {
-    if ($UserNpmRegistry) {
-        Invoke-Checked $Npm.Source $Arguments
-        return
+    function Invoke-Npm([string[]]$Arguments) {
+        if ($UserNpmRegistry) {
+            Invoke-Checked $Npm.Source $Arguments
+            return
+        }
+        & $Npm.Source @Arguments "--registry=$NpmRegistry"
+        if ($LASTEXITCODE -eq 0) { return }
+        $Other = if ($NpmRegistry -eq $NpmmirrorRegistry) { $NpmjsRegistry } else { $NpmmirrorRegistry }
+        Write-Host "下载失败，换 $(Get-FluentFlowHost $Other) 重试…"
+        Invoke-Checked $Npm.Source ($Arguments + @("--registry=$Other"))
     }
-    & $Npm.Source @Arguments "--registry=$NpmRegistry"
-    if ($LASTEXITCODE -eq 0) { return }
-    $Other = if ($NpmRegistry -eq $NpmmirrorRegistry) { $NpmjsRegistry } else { $NpmmirrorRegistry }
-    Write-Host "下载失败，换 $(Get-FluentFlowHost $Other) 重试…"
-    Invoke-Checked $Npm.Source ($Arguments + @("--registry=$Other"))
-}
 
-# Picked by what package.json declares rather than hard-coded, so a renamed
-# build script fails loudly here instead of silently building nothing.
-$BuildScript = "build:frontend"
-$PackageJson = Join-Path $Repo "package.json"
-if (Test-Path $PackageJson) {
-    $Scripts = (Get-Content $PackageJson -Raw | ConvertFrom-Json).scripts
-    if ($Scripts.PSObject.Properties.Name -contains "build:frontend:local") {
-        $BuildScript = "build:frontend:local"
+    # Picked by what package.json declares rather than hard-coded, so a renamed
+    # build script fails loudly here instead of silently building nothing.
+    $BuildScript = "build:frontend"
+    $PackageJson = Join-Path $Repo "package.json"
+    if (Test-Path $PackageJson) {
+        $Scripts = (Get-Content $PackageJson -Raw | ConvertFrom-Json).scripts
+        if ($Scripts.PSObject.Properties.Name -contains "build:frontend:local") {
+            $BuildScript = "build:frontend:local"
+        }
     }
-}
 
-Push-Location $Repo
-try {
-    Write-Host "安装前端依赖…"
-    Invoke-Npm @("ci")
-    Write-Host "构建前端：npm run ${BuildScript}"
-    Invoke-Checked $Npm.Source @("run", $BuildScript)
-} finally {
-    Pop-Location
+    Push-Location $Repo
+    try {
+        Write-Host "安装前端依赖…"
+        Invoke-Npm @("ci")
+        Write-Host "构建前端：npm run ${BuildScript}"
+        Invoke-Checked $Npm.Source @("run", $BuildScript)
+    } finally {
+        Pop-Location
+    }
 }
 
 # Two small speaker-diarization models (about 47 MB), so the speaker separation

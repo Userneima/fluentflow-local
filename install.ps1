@@ -189,6 +189,13 @@ if (Test-Path (Join-Path $Dir "backend\local_main.py")) {
                     Invoke-WebRequest -UseBasicParsing -TimeoutSec 600 -Uri $GithubZip -OutFile (Join-Path $Work "src.zip")
                     Expand-Archive -Path (Join-Path $Work "src.zip") -DestinationPath (Join-Path $Work "src")
                     $Unpacked = (Get-ChildItem (Join-Path $Work "src") -Directory | Select-Object -First 1).FullName
+                    # The interface built for this release (release.yml), so the
+                    # setup script skips Node.js and the build. Older releases
+                    # have none; the setup script then builds it.
+                    try {
+                        Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 -Uri "https://github.com/$RepoSlug/releases/download/$Tag/frontend-dist-local.zip" -OutFile (Join-Path $Work "ui.zip")
+                        Expand-Archive -Path (Join-Path $Work "ui.zip") -DestinationPath (Join-Path $Unpacked "frontend\dist-local")
+                    } catch { Write-Host "  (no prebuilt interface attached to $Tag; it will be built here)" }
                 } elseif ($Source -eq "npm" -and $NpmMeta) {
                     Write-Host "Downloading $($NpmMeta.version) from registry.npmmirror.com..."
                     $Tgz = Join-Path $Work "src.tgz"

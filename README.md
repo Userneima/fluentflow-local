@@ -92,7 +92,7 @@ Apple 芯片的 Mac 上，Python 依赖按 `requirements-local.lock.macos-arm64.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\setup-local.ps1
 ```
 
-同样是一次装完，同样不问问题。缺 FFmpeg 时从国内镜像下载（连不上再用 winget），缺 Python 时下载官方安装包给当前用户装上（原站和国内镜像挑快的），Node.js 下载免安装版。
+同样是一次装完，同样不问问题。缺 FFmpeg 时从国内镜像下载（连不上再用 winget），缺 Python 时下载官方安装包给当前用户装上（原站和国内镜像挑快的）。用一条命令（发布包）装的，界面是发版时构建好的，不装 Node.js、不构建；git 检出的才下载 Node.js 免安装版在本机构建。
 数据、FFmpeg、转录模型的位置按代码目录里 `.env` 写的来（`FLUENTFLOW_DATA_DIR`、`HF_HOME`）；一条命令安装会替你写好，
 指向它的 `FluentFlow` 文件夹，单独运行这个脚本、`.env` 里没写时，数据在 `%APPDATA%\FluentFlow`，模型在用户目录的 Hugging Face 缓存。
 检测到 NVIDIA 显卡时，它会把 CUDA 12 与 cuDNN 9 运行库装进这个虚拟环境；不需要装机器级
