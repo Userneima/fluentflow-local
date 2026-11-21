@@ -40,6 +40,8 @@ import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
+from backend.core import note_spacing
+
 # kind -> (emoji, background, border). The emoji is what the way back reads.
 CALLOUT_STYLES: dict[str, tuple[str, str, str]] = {
     "question": ("❓", "light-yellow", "yellow"),
@@ -55,7 +57,6 @@ DEFAULT_CALLOUT_STYLE = ("💡", "gray", "gray")
 
 PLACEHOLDER_PREFIX = "https://fluentflow.invalid/link/"
 
-_FENCE = re.compile(r"^\s*```")
 _CALLOUT_START = re.compile(r"^(\s*)>\s*\[!(\w+)\][+-]?\s*(.*)$")
 _HEADING_LINK = re.compile(r"\[\[#([^\]|]+)(?:\|([^\]]+))?\]\]")
 _PART_MARKER = re.compile(r"^\s*<!--.*-->\s*$")
@@ -154,13 +155,11 @@ def to_feishu(
         links.append(HeadingLink(placeholder=placeholder, label=label, heading=heading))
         return f"[{label}]({placeholder})"
 
-    fenced = False
+    code = note_spacing.in_code(lines)
     index = 0
     while index < len(lines):
         line = lines[index]
-        if _FENCE.match(line):
-            fenced = not fenced
-        if fenced or _FENCE.match(line):
+        if code[index]:
             out.append(line)
             index += 1
             continue
@@ -199,7 +198,7 @@ _PROSE_MIN_CHARS = 20
 
 def _block_kind(block: list[str]) -> str:
     first = block[0]
-    if _FENCE.match(first):
+    if note_spacing.is_fence(first):
         return "code"
     if first.lstrip().startswith("<callout"):
         return "callout"
@@ -222,18 +221,20 @@ def _blocks(lines: list[str]) -> list[list[str]]:
     belongs to that item's block."""
     blocks: list[list[str]] = []
     current: list[str] = []
+    code = note_spacing.in_code(lines)
     index = 0
     while index < len(lines):
         line = lines[index]
-        enclosing = _FENCE.match(line) or _CALLOUT_OPEN.match(line)
-        if enclosing:
-            closing = _FENCE if _FENCE.match(line) else _CALLOUT_CLOSE
+        if code[index] or _CALLOUT_OPEN.match(line):
+            is_code = code[index]
             group = [line]
             index += 1
             while index < len(lines):
+                if is_code and not code[index]:
+                    break  # the code block ended on the line before
                 group.append(lines[index])
                 index += 1
-                if closing.match(group[-1]):
+                if not is_code and _CALLOUT_CLOSE.match(group[-1]):
                     break
             if line.startswith(" ") and current:
                 current.extend(group)
@@ -309,16 +310,21 @@ def _ends_with_colon(block: list[str]) -> bool:
     return bool(re.search(r"[：:]\s*$", block[-1]))
 
 
-def _is_quote(block: list[str]) -> bool:
-    return block[0].lstrip().startswith((">", "<callout"))
+def _spacing_kind(kind: str, block: list[str]) -> str:
+    """A block as ``note_spacing.kind`` names it (a Feishu callout is the
+    md's quote)."""
+    if block[0].lstrip().startswith((">", "<callout")):
+        return "quote"
+    return kind if kind in ("heading", "table", "list") else "text"
 
 
 def _layout(lines: list[str], *, tight: bool = False) -> list[str]:
     """Blocks with an empty paragraph between them, as the owner's Feishu
-    notes look. ``tight`` (the review note, decision 6.75): no empty paragraph
-    under a line ending with a colon, nor between a list and a quote next to
-    it, and one above a third-level heading or below, as the review note
-    reads in Obsidian (a second-level heading has the divider above it)."""
+    notes look. ``tight`` (the review note, decision 6.75): where the review
+    note's md has no blank line (``note_spacing.joins``) there is no empty
+    paragraph either, and there is one above a third-level heading or below,
+    as the review note reads in Obsidian (a second-level heading has the
+    divider above it)."""
     out: list[str] = []
     previous = ""
     previous_block: list[str] = []
@@ -331,10 +337,9 @@ def _layout(lines: list[str], *, tight: bool = False) -> list[str]:
         if out:
             spaced = (previous not in ("heading", "hr") and kind not in ("heading", "hr")
                       and not (previous == "list" and kind == "list"))
-            if spaced and tight and (
-                _ends_with_colon(previous_block)
-                or (previous == "list" and _is_quote(block))
-                or (_is_quote(previous_block) and kind == "list")
+            if spaced and tight and note_spacing.joins(
+                _spacing_kind(previous, previous_block), _spacing_kind(kind, block),
+                before_colon=_ends_with_colon(previous_block),
             ):
                 spaced = False
             if tight and kind == "heading" and previous not in ("heading", "hr") and block[0].startswith("###"):
@@ -411,11 +416,9 @@ class Section:
 def sections(markdown: str) -> list[Section]:
     found: list[Section] = []
     level, heading, body = 0, "", []
-    fenced = False
     boxed = False
-    for line in (markdown or "").replace("\r\n", "\n").split("\n"):
-        if _FENCE.match(line):
-            fenced = not fenced
+    lines = (markdown or "").replace("\r\n", "\n").split("\n")
+    for line, fenced in zip(lines, note_spacing.in_code(lines)):
         # A heading inside a Feishu callout is the callout's title, not a chapter.
         if not fenced and _CALLOUT_OPEN.match(line):
             boxed = True
@@ -665,15 +668,10 @@ def from_feishu(feishu_markdown: str, way: Way) -> str:
     lines = without_title(feishu_markdown).split("\n")
     out: list[str] = []
     index = 0
-    fenced = False
+    code = note_spacing.in_code(lines)
     while index < len(lines):
         line = lines[index]
-        if _FENCE.match(line):
-            fenced = not fenced
-            out.append(line)
-            index += 1
-            continue
-        if fenced:
+        if code[index]:
             out.append(line)
             index += 1
             continue

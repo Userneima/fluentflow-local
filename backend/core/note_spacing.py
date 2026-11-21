@@ -29,25 +29,64 @@ _FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 _TABLE = re.compile(r"^\s*\|")
 
 
-def _blocks(text: str) -> list[tuple[bool, str]]:
-    """Each line with whether it sits inside a fenced code block (fence
-    lines count as inside)."""
-    out: list[tuple[bool, str]] = []
+def is_fence(line: str) -> bool:
+    return bool(_FENCE.match(line))
+
+
+def in_code(lines: list[str]) -> list[bool]:
+    """For each line, whether it sits inside a fenced code block (fence lines
+    count as inside). Only a bare fence of the same kind, at least as long as
+    the one that opened the block, closes it. The md, the PDF and Feishu all
+    read code blocks through this."""
+    out: list[bool] = []
     opener = ""  # the fence that opened the block we are in
-    for line in text.splitlines():
+    for line in lines:
         fence = _FENCE.match(line)
         if fence and not opener:
             opener = fence.group(1)
-            out.append((True, line))
+            out.append(True)
             continue
         if fence and opener and fence.group(1)[0] == opener[0] and len(fence.group(1)) >= len(opener) \
                 and not line.strip()[len(fence.group(1)):].strip():
-            # Only a bare fence of the same kind, at least as long, closes it.
             opener = ""
-            out.append((True, line))
+            out.append(True)
             continue
-        out.append((bool(opener), line))
+        out.append(bool(opener))
     return out
+
+
+def _blocks(text: str) -> list[tuple[bool, str]]:
+    lines = text.splitlines()
+    return list(zip(in_code(lines), lines))
+
+
+def kind(line: str) -> str:
+    """What a line of the note is, for where blank lines go."""
+    if _HEADING.match(line):
+        return "heading"
+    if _TABLE.match(line):
+        return "table"
+    if _QUOTE.match(line):
+        return "quote"
+    if _LIST_ITEM.match(line):
+        return "list"
+    return "text"
+
+
+def joins(before: str, after: str, *, before_colon: bool = False) -> bool:
+    """Whether two neighbouring blocks of a review note, outside code, sit
+    with no blank line between them (decision 6.75): none after a heading or
+    a line ending with a colon (unless the colon line is a quote), none
+    between a list and a quote next to it; a heading or a table always gets
+    its blank line above. ``before`` and ``after`` are ``kind`` values. The md
+    (``tidy``) and the Feishu layout (``feishu_note._layout``) both ask this."""
+    if after in ("heading", "table"):
+        return False  # a table needs a blank line above it to show as one
+    if before == "heading":
+        return True
+    if before_colon and before != "quote":
+        return True
+    return {before, after} == {"list", "quote"}
 
 
 def tidy(text: str) -> str:
@@ -70,19 +109,8 @@ def tidy(text: str) -> str:
             continue
         before_code, before = out[-1]
         after_code, after = lines[j]
-        keep = True
-        if after_code:
-            keep = True
-        elif _HEADING.match(after) or _TABLE.match(after):
-            keep = True  # a table needs a blank line above it to show as one
-        elif not before_code and _HEADING.match(before):
-            keep = False
-        elif not before_code and _COLON_END.search(before) and not _QUOTE.match(before):
-            keep = False
-        elif _QUOTE.match(after) and not before_code and _LIST_ITEM.match(before):
-            keep = False
-        elif not before_code and _QUOTE.match(before) and _LIST_ITEM.match(after):
-            keep = False
+        keep = after_code or before_code or not joins(
+            kind(before), kind(after), before_colon=bool(_COLON_END.search(before)))
         if keep:
             out.append((False, ""))
         i = j
@@ -118,4 +146,4 @@ def for_renderers(text: str) -> str:
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
-__all__ = ["for_renderers", "tidy"]
+__all__ = ["for_renderers", "in_code", "is_fence", "joins", "kind", "tidy"]

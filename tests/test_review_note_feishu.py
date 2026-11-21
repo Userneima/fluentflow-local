@@ -317,3 +317,27 @@ def test_between_chapters_a_third_level_heading_has_a_line_above_it(wiki, tmp_pa
 
     at = next(i for i, b in enumerate(wiki.blocks) if b["tag"] == "h3" and "乙" in b["text"])
     assert wiki.blocks[at - 1]["tag"] == "p" and not wiki.blocks[at - 1]["text"], [b["text"] for b in wiki.blocks[at - 3:at + 1]]
+
+
+def test_feishu_keeps_the_md_spacing_after_a_quoted_colon_line_and_before_a_table():
+    """The md (note_spacing.tidy) and Feishu answer the same question,
+    note_spacing.joins: a colon line that is itself a quote keeps its blank
+    line, and a table always has one above it."""
+    from backend.core import feishu_note, note_spacing
+
+    md = "**依据**：\n\n| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n\n> 老师说的原话是这样：\n\n下一段正文。\n"
+    assert note_spacing.tidy(md) == md
+    laid = feishu_note.to_feishu(note_spacing.for_renderers(md), tight=True).markdown
+    assert "**依据**：\n\n<p></p>\n\n<table>" in laid
+    assert "</callout>\n\n<p></p>\n\n下一段正文。" in laid or "这样：\n\n<p></p>\n\n下一段正文。" in laid, laid
+
+
+def test_a_fence_inside_a_longer_fence_stays_code_in_feishu():
+    """The same fence rule as the md and PDF (note_spacing.in_code): a ```
+    inside a ```` block does not close it."""
+    from backend.core import feishu_note
+
+    md = "````md\n```python\n# 不是标题\nprint(1)\n```\n````\n\n## 真标题\n"
+    laid = feishu_note.to_feishu(md).markdown
+    assert "````md\n```python\n# 不是标题\nprint(1)\n```\n````" in laid, laid
+    assert [s.heading for s in feishu_note.sections(md) if s.heading] == ["真标题"]
