@@ -150,3 +150,15 @@ def test_a_slow_or_failed_original_puts_the_faster_host_first(monkeypatch):
     speeds["https://mirror"] = 0
     # Neither answers: the original stays first, so its own error is reported.
     assert download_source.order(["https://origin", "https://mirror"]) == ["https://origin", "https://mirror"]
+
+
+def test_windows_scripts_call_agent_tools_through_the_safe_wrapper():
+    """npm installs claude and codex on Windows as PowerShell shims; called
+    directly under ErrorActionPreference=Stop, their stderr stopped the
+    installer at its last step (found on GitHub's Windows runner, 2026-11-21)."""
+    pattern = re.compile(r"&\s*(claude|codex)\b")
+    offenders = []
+    for script in [ROOT / "install.ps1", *sorted((ROOT / "launchers" / "windows").glob("*.ps1"))]:
+        if pattern.search(script.read_text(encoding="utf-8-sig")):
+            offenders.append(script.name)
+    assert offenders == []

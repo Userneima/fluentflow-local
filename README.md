@@ -12,6 +12,12 @@
 curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.sh | bash
 ```
 
+国内打不开 GitHub 时，用 npmmirror 上随每个发布版发的同一份（代码也会从那里下载）：
+
+```bash
+curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest/files/install.sh | bash
+```
+
 下面是分步安装的说明，一条命令装不上时再看。
 
 ![主界面](docs/images/home.png)

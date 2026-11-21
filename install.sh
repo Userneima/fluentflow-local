@@ -3,6 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.sh | bash
 #
+# 国内用 npmmirror 上随每个发布版发的同一份：
+#   curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest/files/install.sh | bash
+#
 # 依次做完：下载最新发布版到 ~/fluentflow-local、运行安装脚本、启动 FluentFlow、
 # 把它的 MCP 工具注册到本机的 Claude Code 和 Codex、自检。全程不要密码，不弹系统窗口，
 # 不调用 git。目录已经存在时沿用里面的代码，只把后面几步重做一遍。
@@ -32,21 +35,57 @@ if [[ -f "${DIR}/backend/local_main.py" ]]; then
 	echo "沿用已有的代码：${DIR}（要升级到新版本，按其中 README 的「更新到新版本」操作）"
 else
 	[[ -e "$DIR" ]] && fail "${DIR} 已存在但不是 FluentFlow Local 的代码目录。请换一个位置（FLUENTFLOW_INSTALL_DIR）。"
+	# 发布版有两个来源：GitHub，和 npmmirror 上的 npm 包 fluentflow-local（见
+	# scripts/stage_npm_package.py），后者在国内打得开。先探 GitHub 几秒，连不上或明显
+	# 慢就先走 npmmirror，和其余下载同一条规则（launchers/macos/fluentflow-env.sh，这时
+	# 还不在这台机器上）。
 	TAG="${FLUENTFLOW_INSTALL_REF:-}"
 	if [[ -z "$TAG" ]]; then
 		# 读 releases/latest 的跳转地址，不走 GitHub API：API 对未登录请求有次数限制。
-		TAG="$(curl -fsSI --connect-timeout 20 "https://github.com/${REPO_SLUG}/releases/latest" |
-			tr -d '\r' | sed -n 's#^[Ll]ocation: .*/tag/##p' | tail -1)"
-		[[ -n "$TAG" ]] || fail "查不到最新版本，请检查能否打开 github.com。"
+		TAG="$(curl -fsSI --connect-timeout 10 --max-time 15 "https://github.com/${REPO_SLUG}/releases/latest" 2>/dev/null |
+			tr -d '\r' | sed -n 's#^[Ll]ocation: .*/tag/##p' | tail -1 || true)"
+		[[ "$TAG" == v[0-9]* ]] || TAG=""
 	fi
-	echo "下载 ${TAG}…"
+	GITHUB_ZIP=""
+	[[ -n "$TAG" ]] && GITHUB_ZIP="https://github.com/${REPO_SLUG}/archive/refs/tags/${TAG}.zip"
+	NPM_VERSION="${TAG#v}"
+	NPM_META="$(curl -fsS --max-time 15 "https://registry.npmmirror.com/fluentflow-local/${NPM_VERSION:-latest}" 2>/dev/null || true)"
+	# plutil 读 JSON：系统自带，不像 /usr/bin/python3 那样在没装开发者工具时弹窗。
+	npm_field() { printf '%s' "$NPM_META" | plutil -extract "$1" raw -o - - 2>/dev/null; }
+	[[ -n "$GITHUB_ZIP" || -n "$NPM_META" ]] || fail "连不上 github.com，也连不上 registry.npmmirror.com，请检查网络或代理。"
+	order="npm github"
+	if [[ -n "$GITHUB_ZIP" ]]; then
+		got="$(curl -sL -r 0-1048575 --max-time 5 -o /dev/null -w '%{size_download}' "$GITHUB_ZIP" 2>/dev/null || true)"
+		[[ -z "$NPM_META" || "${got:-0}" -ge 1048576 ]] && order="github npm"
+	fi
 	WORK="$(mktemp -d)"
 	trap 'rm -rf "$WORK"' EXIT
-	curl -fL --retry 2 --connect-timeout 20 -sS -o "${WORK}/src.zip" \
-		"https://github.com/${REPO_SLUG}/archive/refs/tags/${TAG}.zip" || fail "代码下载失败，请检查能否打开 github.com。"
-	unzip -q "${WORK}/src.zip" -d "${WORK}/src" || fail "代码解压失败。"
+	unpacked=""
+	for source in $order; do
+		if [[ "$source" == github && -n "$GITHUB_ZIP" ]]; then
+			echo "从 github.com 下载 ${TAG}…"
+			if curl -fL --retry 2 --connect-timeout 20 -sS -o "${WORK}/src.zip" "$GITHUB_ZIP" &&
+				unzip -q "${WORK}/src.zip" -d "${WORK}/src"; then
+				unpacked="$(find "${WORK}/src" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+			fi
+		elif [[ "$source" == npm && -n "$NPM_META" ]]; then
+			echo "从 registry.npmmirror.com 下载 $(npm_field version)…"
+			if curl -fL --retry 2 --connect-timeout 20 -sS -o "${WORK}/src.tgz" "$(npm_field dist.tarball)"; then
+				digest="sha512-$(openssl dgst -sha512 -binary "${WORK}/src.tgz" | base64 | tr -d '\n')"
+				if [[ "$digest" == "$(npm_field dist.integrity)" ]]; then
+					mkdir -p "${WORK}/npm" && tar -xzf "${WORK}/src.tgz" -C "${WORK}/npm" && unpacked="${WORK}/npm/package/source"
+				else
+					echo "  下载的文件和校验值对不上。"
+				fi
+			fi
+		fi
+		[[ -n "$unpacked" && -f "${unpacked}/backend/local_main.py" ]] && break
+		unpacked=""
+		echo "  ${source} 没下成，换另一个来源。"
+	done
+	[[ -n "$unpacked" ]] || fail "代码从 github.com 和 registry.npmmirror.com 都没下成，请检查网络或代理。"
 	mkdir -p "$(dirname "$DIR")"
-	mv "${WORK}"/src/*/ "$DIR"
+	mv "$unpacked" "$DIR"
 	echo "已放到 ${DIR}"
 fi
 

@@ -1,0 +1,56 @@
+# Publishes each release to npm as `fluentflow-local`, so it can be installed
+# from npmmirror in China (scripts/stage_npm_package.py says why and how).
+# Two ways to authenticate (docs/04-维护手册.md, "发到 npm"): the NPM_TOKEN
+# repository secret, needed for the very first publish, then npm trusted
+# publishing (this workflow proves itself to npm, no stored token), switched on
+# by the repository variable NPM_TRUSTED_PUBLISHING=true. With neither it skips
+# the publish and stays green.
+name: publish-npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, for example v0.12.0"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' || vars.NPM_TRUSTED_PUBLISHING == 'true' }}
+    steps:
+      - name: Skip without a token
+        if: env.HAS_TOKEN != 'true'
+        run: echo "::notice::Neither NPM_TOKEN nor NPM_TRUSTED_PUBLISHING is set, so $TAG is not published to npm. See docs/04-维护手册.md, 发到 npm."
+      # The default branch's scripts, with every tag: the staging script
+      # archives the release's own tree.
+      - uses: actions/checkout@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Stage and publish
+        if: env.HAS_TOKEN == 'true'
+        env:
+          # Empty under trusted publishing, where npm uses this run's identity.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          python3 scripts/stage_npm_package.py "$TAG" build/npm
+          npm --version
+          npm publish build/npm --access public --provenance
+      - name: Ask npmmirror to copy it now
+        if: env.HAS_TOKEN == 'true'
+        # npmmirror also copies on its own within minutes; this only shortens the wait.
+        run: curl -fsS -X PUT https://registry-direct.npmmirror.com/-/package/fluentflow-local/syncs || true

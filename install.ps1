@@ -2,6 +2,9 @@
 #
 #   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.ps1 | iex"
 #
+# In China, the same script from npmmirror (published with each release):
+#   powershell -ExecutionPolicy Bypass -Command "irm https://registry.npmmirror.com/fluentflow-local/latest/files/install.ps1 | iex"
+#
 # The whole product goes into one folder, FluentFlow, on the drive chosen:
 #   app\        the code and its Python environment
 #   data\       task history, notes, media, the downloaded FFmpeg and Node.js
@@ -35,6 +38,8 @@ $ErrorActionPreference = "Stop"
 # raises UnicodeEncodeError.
 $env:PYTHONUTF8 = "1"
 try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
+# Windows PowerShell 5.1 on an older .NET offers only TLS 1.0/1.1 by default.
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $RepoSlug = "Userneima/fluentflow-local"
 
@@ -124,26 +129,90 @@ if (Test-Path (Join-Path $Dir "backend\local_main.py")) {
     Write-Host "Using the existing code in $Dir (to upgrade, follow 'Updating' in its README)."
 } else {
     if (Test-Path $Dir) { throw "$Dir exists but is not a FluentFlow Local folder. Set FLUENTFLOW_INSTALL_DIR to another place." }
+    # Two hosts of the release: GitHub, and the npm package fluentflow-local on
+    # npmmirror (scripts/stage_npm_package.py), which is reachable in China.
+    # GitHub is probed for a few seconds, the same rule as every other download
+    # (launchers/windows/fluentflow-env.ps1, which is not on this machine yet):
+    # when it is unreachable or plainly slow, npmmirror goes first.
     $Tag = $env:FLUENTFLOW_INSTALL_REF
-    if (-not $Tag) {
-        # The releases/latest redirect, not the GitHub API, which limits anonymous calls.
-        $Request = [System.Net.WebRequest]::Create("https://github.com/$RepoSlug/releases/latest")
-        $Request.AllowAutoRedirect = $false
-        $Response = $Request.GetResponse()
-        $Tag = ($Response.Headers["Location"] -split "/tag/")[-1]
-        $Response.Close()
-        if (-not $Tag) { throw "Could not find the latest release; check that github.com is reachable." }
+    $GithubZip = $null
+    try {
+        if (-not $Tag) {
+            # The releases/latest redirect, not the GitHub API, which limits anonymous calls.
+            $Request = [System.Net.WebRequest]::Create("https://github.com/$RepoSlug/releases/latest")
+            $Request.AllowAutoRedirect = $false
+            $Request.Timeout = 10000
+            $Response = $Request.GetResponse()
+            $Latest = ($Response.Headers["Location"] -split "/tag/")[-1]
+            $Response.Close()
+            if ($Latest -match '^v\d') { $Tag = $Latest }
+        }
+        if ($Tag) { $GithubZip = "https://github.com/$RepoSlug/archive/refs/tags/$Tag.zip" }
+    } catch {}
+    $NpmVersion = if ($Tag) { $Tag.TrimStart('v') } else { "latest" }
+    $NpmMeta = $null
+    try { $NpmMeta = Invoke-RestMethod -UseBasicParsing -TimeoutSec 15 "https://registry.npmmirror.com/fluentflow-local/$NpmVersion" } catch {}
+    if (-not $GithubZip -and -not $NpmMeta) { throw "Could not reach github.com or registry.npmmirror.com to download FluentFlow; check the network or proxy." }
+
+    function Measure-Url([string]$Url) {
+        $Got = 0
+        $Watch = [Diagnostics.Stopwatch]::StartNew()
+        $Response = $null
+        try {
+            $Request = [System.Net.HttpWebRequest]::Create($Url)
+            $Request.Timeout = 5000
+            $Request.ReadWriteTimeout = 5000
+            $Response = $Request.GetResponse()
+            $Stream = $Response.GetResponseStream()
+            $Buffer = New-Object byte[] 65536
+            while ($Got -lt 1MB -and $Watch.Elapsed.TotalSeconds -lt 5) {
+                $Read = $Stream.Read($Buffer, 0, $Buffer.Length)
+                if ($Read -le 0) { if ($Got -gt 0) { $Got = 1MB }; break }
+                $Got += $Read
+            }
+        } catch {} finally { if ($Response) { $Response.Close() } }
+        return $Got
     }
-    Write-Host "Downloading $Tag..."
+    $Order = @()
+    if ($GithubZip -and (-not $NpmMeta -or (Measure-Url $GithubZip) -ge 1MB)) { $Order = @("github", "npm") } else { $Order = @("npm", "github") }
+
     $Work = Join-Path ([System.IO.Path]::GetTempPath()) ("fluentflow-" + [guid]::NewGuid())
     New-Item -ItemType Directory -Path $Work | Out-Null
+    $SavedProgress = $ProgressPreference
+    $ProgressPreference = "SilentlyContinue"
+    $Unpacked = $null
     try {
-        Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$RepoSlug/archive/refs/tags/$Tag.zip" -OutFile (Join-Path $Work "src.zip")
-        Expand-Archive -Path (Join-Path $Work "src.zip") -DestinationPath (Join-Path $Work "src")
-        $Unpacked = Get-ChildItem (Join-Path $Work "src") -Directory | Select-Object -First 1
+        foreach ($Source in $Order) {
+            try {
+                if ($Source -eq "github" -and $GithubZip) {
+                    Write-Host "Downloading $Tag from github.com..."
+                    Invoke-WebRequest -UseBasicParsing -TimeoutSec 600 -Uri $GithubZip -OutFile (Join-Path $Work "src.zip")
+                    Expand-Archive -Path (Join-Path $Work "src.zip") -DestinationPath (Join-Path $Work "src")
+                    $Unpacked = (Get-ChildItem (Join-Path $Work "src") -Directory | Select-Object -First 1).FullName
+                } elseif ($Source -eq "npm" -and $NpmMeta) {
+                    Write-Host "Downloading $($NpmMeta.version) from registry.npmmirror.com..."
+                    $Tgz = Join-Path $Work "src.tgz"
+                    Invoke-WebRequest -UseBasicParsing -TimeoutSec 600 -Uri $NpmMeta.dist.tarball -OutFile $Tgz
+                    $Stream = [System.IO.File]::OpenRead($Tgz)
+                    try { $Digest = [Convert]::ToBase64String([System.Security.Cryptography.SHA512]::Create().ComputeHash($Stream)) } finally { $Stream.Close() }
+                    if ("sha512-$Digest" -ne $NpmMeta.dist.integrity) { throw "the download does not match its checksum" }
+                    New-Item -ItemType Directory -Path (Join-Path $Work "npm") | Out-Null
+                    & tar.exe -xzf $Tgz -C (Join-Path $Work "npm")
+                    if ($LASTEXITCODE -ne 0) { throw "tar could not unpack it" }
+                    $Unpacked = Join-Path $Work "npm\package\source"
+                }
+                if ($Unpacked -and (Test-Path (Join-Path $Unpacked "backend\local_main.py"))) { break }
+                $Unpacked = $null
+            } catch {
+                Write-Host "  $Source failed: $($_.Exception.Message)"
+                $Unpacked = $null
+            }
+        }
+        if (-not $Unpacked) { throw "The code could not be downloaded from github.com or registry.npmmirror.com; check the network or proxy." }
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Dir) | Out-Null
-        Move-Item $Unpacked.FullName $Dir
+        Move-Item $Unpacked $Dir
     } finally {
+        $ProgressPreference = $SavedProgress
         Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
     }
     Write-Host "Placed in $Dir"
@@ -191,23 +260,19 @@ Write-Host "== Registering the MCP tools =="
 $CodexToml = "[mcp_servers.fluentflow-local]`ncommand = '$Python'`nargs = ['$McpScript']"
 $Registered = $false
 if (Get-Command claude -ErrorAction SilentlyContinue) {
-    & claude mcp get fluentflow-local *> $null
-    if ($LASTEXITCODE -eq 0) { Write-Host "Claude Code: fluentflow-local is already registered." }
-    else {
-        & claude mcp add --scope user fluentflow-local -- $Python $McpScript | Out-Null
-        if ($LASTEXITCODE -eq 0) { Write-Host "Claude Code: registered fluentflow-local." }
-        else { Write-Host "Claude Code: registration failed; run: claude mcp add --scope user fluentflow-local -- `"$Python`" `"$McpScript`"" }
-    }
+    if ((Invoke-FluentFlowTool claude @("mcp", "get", "fluentflow-local")).Code -eq 0) { Write-Host "Claude Code: fluentflow-local is already registered." }
+    elseif ((Invoke-FluentFlowTool claude @("mcp", "add", "--scope", "user", "fluentflow-local", "--", $Python, $McpScript)).Code -eq 0) { Write-Host "Claude Code: registered fluentflow-local." }
+    else { Write-Host "Claude Code: registration failed; run: claude mcp add --scope user fluentflow-local -- `"$Python`" `"$McpScript`"" }
     $Registered = $true
 }
 if (Get-Command codex -ErrorAction SilentlyContinue) {
     $CodexConfig = Join-Path $env:USERPROFILE ".codex\config.toml"
     if ((Test-Path $CodexConfig) -and (Select-String -Path $CodexConfig -Pattern '^\[mcp_servers\.fluentflow-local\]' -Quiet)) {
         Write-Host "Codex: fluentflow-local is already registered."
+    } elseif ((Invoke-FluentFlowTool codex @("mcp", "add", "fluentflow-local", "--", $Python, $McpScript)).Code -eq 0) {
+        Write-Host "Codex: registered fluentflow-local."
     } else {
-        & codex mcp add fluentflow-local -- $Python $McpScript *> $null
-        if ($LASTEXITCODE -eq 0) { Write-Host "Codex: registered fluentflow-local." }
-        else { Write-Host "Codex: could not register automatically; add these lines to $CodexConfig :"; Write-Host $CodexToml }
+        Write-Host "Codex: could not register automatically; add these lines to $CodexConfig :"; Write-Host $CodexToml
     }
     $Registered = $true
 }

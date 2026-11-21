@@ -22,6 +22,30 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch {}
 
+# Runs an agent's command line tool (claude, codex) and returns its exit code
+# and everything it printed. npm installs them on Windows as PowerShell shims,
+# and under ErrorActionPreference=Stop a line such a shim writes to stderr
+# ("No MCP server named ...", the normal answer before registering) becomes a
+# terminating error: the installer stopped at its last step, and the
+# uninstaller took a registered tool for an absent one.
+function Invoke-FluentFlowTool([string]$Name, [string[]]$Arguments) {
+    $Saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        # The program (claude.cmd, codex.exe), not the .ps1 shim PowerShell
+        # prefers: a script's caller swallows the "--" that separates the MCP
+        # server's command from the tool's own options.
+        $Program = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $Target = if ($Program) { $Program.Source } else { $Name }
+        $Output = & $Target @Arguments 2>&1 | ForEach-Object { "$_" }
+        return [pscustomobject]@{ Code = $LASTEXITCODE; Output = ($Output -join "`n") }
+    } catch {
+        return [pscustomobject]@{ Code = 1; Output = $_.Exception.Message }
+    } finally {
+        $ErrorActionPreference = $Saved
+    }
+}
+
 function ConvertFrom-FluentFlowEnvValue([string]$Raw) {
     $Value = $Raw.Trim()
     if ($Value.Length -ge 1 -and ($Value[0] -eq '"' -or $Value[0] -eq "'")) {

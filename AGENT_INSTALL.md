@@ -40,6 +40,17 @@ $env:FLUENTFLOW_INSTALL_DIR = "D:\FluentFlow"
 powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.ps1 | iex"
 ```
 
+When the user is in mainland China, or GitHub does not open, take the same scripts from
+npmmirror, published with every release:
+
+```bash
+curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest/files/install.sh | bash
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://registry.npmmirror.com/fluentflow-local/latest/files/install.ps1 | iex"
+```
+
 Run it in the background and wait; it prints a `== step ==` line before each step.
 macOS: it downloads the latest release into `~/fluentflow-local` and installs whatever
 is missing into the app's data folder. Windows: it puts everything in the chosen folder

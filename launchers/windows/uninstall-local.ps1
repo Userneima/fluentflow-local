@@ -201,11 +201,9 @@ function Test-MentionsRepo([string]$Text) {
 }
 $McpRemovals = New-Object System.Collections.ArrayList
 if (Get-Command claude -ErrorAction SilentlyContinue) {
-    try {
-        $Described = (& claude mcp get fluentflow-local 2>$null | Out-String)
-        if ($LASTEXITCODE -eq 0 -and (Test-MentionsRepo $Described)) { [void]$McpRemovals.Add("Claude Code") }
-        elseif ($LASTEXITCODE -eq 0) { Write-Host "`nClaude Code 里的 fluentflow-local 指向别的位置，不动它。" }
-    } catch {}
+    $Described = Invoke-FluentFlowTool claude @("mcp", "get", "fluentflow-local")
+    if ($Described.Code -eq 0 -and (Test-MentionsRepo $Described.Output)) { [void]$McpRemovals.Add("Claude Code") }
+    elseif ($Described.Code -eq 0) { Write-Host "`nClaude Code 里的 fluentflow-local 指向别的位置，不动它。" }
 }
 $CodexConfig = Join-Path $env:USERPROFILE ".codex\config.toml"
 if (Test-Path $CodexConfig) {
@@ -249,14 +247,12 @@ if ($HasSensitive) {
 Write-Host "`n== 删除 =="
 foreach ($Tool in $McpRemovals) {
     if ($Tool -eq "Claude Code") {
-        & claude mcp remove --scope user fluentflow-local *> $null
-        if ($LASTEXITCODE -eq 0) { Write-Host "已注销：Claude Code 里的 fluentflow-local" }
+        if ((Invoke-FluentFlowTool claude @("mcp", "remove", "--scope", "user", "fluentflow-local")).Code -eq 0) { Write-Host "已注销：Claude Code 里的 fluentflow-local" }
         else { Write-Host "Claude Code 注销失败，请手动运行：claude mcp remove --scope user fluentflow-local" }
     } else {
         $Removed = $false
         if (Get-Command codex -ErrorAction SilentlyContinue) {
-            & codex mcp remove fluentflow-local *> $null
-            $Removed = ($LASTEXITCODE -eq 0)
+            $Removed = ((Invoke-FluentFlowTool codex @("mcp", "remove", "fluentflow-local")).Code -eq 0)
         }
         if ($Removed) { Write-Host "已注销：Codex 里的 fluentflow-local" }
         else { Write-Host "Codex 没能自动注销，请删掉 $CodexConfig 里 [mcp_servers.fluentflow-local] 那一节。" }
