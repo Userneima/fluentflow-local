@@ -14,7 +14,8 @@
 # 明显慢，就把快的那个排前面（和 backend/core/download_source.py 同一条规则）；第
 # 一个失败了仍然试另一个。
 
-# .env 里某个名字的值，不看环境变量。
+# .env 里某个名字的值，不看环境变量。引用前面行的值（${BASE}/data）时，照服务那边
+# 读前面那一行；FF_ENV_DEPTH 防止互相引用转圈。
 ff_env_file_value() {
 	local repo="$1" name="$2" line value
 	[[ -f "${repo}/.env" ]] || return 0
@@ -39,7 +40,11 @@ ff_env_file_value() {
 	local ref name default found
 	while [[ "$value" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\} ]]; do
 		ref="${BASH_REMATCH[0]}" name="${BASH_REMATCH[1]}" default="${BASH_REMATCH[3]}"
-		found="${!name:-$default}"
+		found="${!name:-}"
+		if [[ -z "$found" && "${FF_ENV_DEPTH:-0}" -lt 5 ]]; then
+			found="$(FF_ENV_DEPTH=$(( ${FF_ENV_DEPTH:-0} + 1 )) ff_env_file_value "$repo" "$name")"
+		fi
+		found="${found:-$default}"
 		value="${value/"$ref"/$found}"
 	done
 	printf '%s' "$value"

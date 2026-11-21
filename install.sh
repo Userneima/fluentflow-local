@@ -43,7 +43,8 @@ fail() {
 		echo "更新失败，换回 ${CURRENT}…" >&2
 		stop_folder_programs "$DIR"
 		rm -rf "${DIR}.failed"
-		mv "$DIR" "${DIR}.failed" && mv "${DIR}.old" "$DIR"
+		[[ -e "$DIR" ]] && mv "$DIR" "${DIR}.failed"
+		mv "${DIR}.old" "$DIR"
 		[[ -d "${HOME}/Desktop/FluentFlow Local.app" ]] && open "${HOME}/Desktop/FluentFlow Local.app"
 		fail_plain "$1
 更新到 ${LATEST} 没有成功，已换回 ${CURRENT}（失败的那份在 ${DIR}.failed）。"
@@ -64,6 +65,15 @@ if [[ -z "${HTTPS_PROXY:-}${HTTP_PROXY:-}${https_proxy:-}${http_proxy:-}" ]]; th
 fi
 
 # --- 1. 代码 ----------------------------------------------------------------
+# 更新用到的旁边几个文件夹（.new .old .failed）：已经存在的，只有带着本脚本留下的标记
+# （之前某次更新建的）才删；用户自己叫这个名字的备份不动。
+UPDATE_MARKER=".fluentflow-update"
+assert_own_leftover() {
+	[[ -e "$1" && ! -e "$1/${UPDATE_MARKER}" ]] &&
+		fail_plain "$1 已存在，不是 FluentFlow 的更新留下的。请先把它移走或改名。什么都没改。"
+	return 0
+}
+
 step "获取代码"
 # 已经装过、又有新发布版时原地更新：新代码先放在旁边，带上原来的 .env，停掉服务后才换
 # 进去；接着的安装步骤补齐新版本要的依赖、讲话人模型和转录模型；安装或重启失败就把旧版本
@@ -90,6 +100,7 @@ elif [[ -n "$LOCAL_SOURCE" ]]; then
 		[[ -f "${LOCAL_SOURCE}/backend/local_main.py" ]] || LOCAL_SOURCE="$(find "$SRC_TMP" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 	fi
 	[[ -f "${LOCAL_SOURCE}/backend/local_main.py" ]] || fail "FLUENTFLOW_INSTALL_SOURCE 不是 FluentFlow Local 的发布版：${FLUENTFLOW_INSTALL_SOURCE}"
+	[[ "$HAVE_CODE" -eq 0 && -e "$DIR" ]] && fail "${DIR} 已存在但不是 FluentFlow Local 的代码目录。请换一个位置（FLUENTFLOW_INSTALL_DIR）。"
 	LATEST="$(tr -d '[:space:]' <"${LOCAL_SOURCE}/VERSION")"
 	if [[ "$HAVE_CODE" -eq 1 && "$LATEST" != "$CURRENT" &&
 		"$(printf '%s\n%s\n' "$CURRENT" "$LATEST" | sort -V | tail -n 1)" == "$LATEST" ]]; then
@@ -100,11 +111,15 @@ elif [[ -n "$LOCAL_SOURCE" ]]; then
 	fi
 	if [[ "$HAVE_CODE" -eq 0 || "$UPDATING" -eq 1 ]]; then
 		TARGET="$DIR"
-		[[ "$UPDATING" -eq 1 ]] && TARGET="${DIR}.new"
-		rm -rf "$TARGET"
+		if [[ "$UPDATING" -eq 1 ]]; then
+			TARGET="${DIR}.new"
+			assert_own_leftover "$TARGET"
+			rm -rf "$TARGET"
+		fi
 		mkdir -p "$(dirname "$TARGET")"
 		cp -R "$LOCAL_SOURCE" "$TARGET"
 		rm -rf "${TARGET}/.git" "${TARGET}/.venv" "${TARGET}/.env"
+		echo "made by a FluentFlow Local install or update" >"${TARGET}/${UPDATE_MARKER}"
 		echo "已放到 ${TARGET}"
 	fi
 else
@@ -144,7 +159,11 @@ else
 fi
 if [[ "$IS_GIT" -eq 0 && -z "$LOCAL_SOURCE" && ( "$HAVE_CODE" -eq 0 || "$UPDATING" -eq 1 ) ]]; then
 	TARGET="$DIR"
-	[[ "$UPDATING" -eq 1 ]] && TARGET="${DIR}.new" && rm -rf "$TARGET"
+	if [[ "$UPDATING" -eq 1 ]]; then
+		TARGET="${DIR}.new"
+		assert_own_leftover "$TARGET"
+		rm -rf "$TARGET"
+	fi
 	order="npm github"
 	if [[ -n "$GITHUB_ZIP" ]]; then
 		got="$(curl -sL -r 0-1048575 --max-time 5 -o /dev/null -w '%{size_download}' "$GITHUB_ZIP" 2>/dev/null || true)"
@@ -186,6 +205,7 @@ if [[ "$IS_GIT" -eq 0 && -z "$LOCAL_SOURCE" && ( "$HAVE_CODE" -eq 0 || "$UPDATIN
 	[[ -n "$unpacked" ]] || fail "代码从 github.com 和 registry.npmmirror.com 都没下成，请检查网络或代理。"
 	mkdir -p "$(dirname "$DIR")"
 	mv "$unpacked" "$TARGET"
+	echo "made by a FluentFlow Local install or update" >"${TARGET}/${UPDATE_MARKER}"
 	echo "已放到 ${TARGET}"
 fi
 
@@ -200,6 +220,21 @@ stop_folder_programs() {
 }
 
 if [[ "$UPDATING" -eq 1 ]]; then
+	assert_own_leftover "${DIR}.old"
+	assert_own_leftover "${DIR}.failed"
+	# 数据、链接下载、模型若设在代码目录里面，会随旧代码一起被删：先挪出去再更新。
+	for name in FLUENTFLOW_DATA_DIR FLUENTFLOW_LINK_OUTPUT_DIR HF_HOME; do
+		where="${!name:-}"
+		if [[ -z "$where" && -f "${DIR}/.env" ]]; then
+			where="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${name}[[:space:]]*=" "${DIR}/.env" | tail -n 1 |
+				sed -E "s/^[^=]*=[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//" || true)"
+		fi
+		where="${where/#\~/$HOME}"
+		if [[ "$where" == "${DIR}/"* ]]; then
+			rm -rf "${DIR}.new"
+			fail_plain "${name}（${where}）在代码目录里面，更新会换掉这个目录。请先把它挪到 ${DIR} 外面。什么都没改。"
+		fi
+	done
 	# 端口和桌面启动器一样：环境变量优先，其次是 .env 里的同名行（新旧两份 .env 一样）。
 	if [[ -z "${FLUENTFLOW_LOCAL_PORT:-}" && -f "${DIR}/.env" ]]; then
 		env_port="$(grep -E '^[[:space:]]*(export[[:space:]]+)?FLUENTFLOW_LOCAL_PORT[[:space:]]*=' "${DIR}/.env" | tail -n 1 |
@@ -232,10 +267,10 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	rm -rf "${DIR}.old"
 	cd "$(dirname "$DIR")"
 	mv "$DIR" "${DIR}.old"
-	mv "${DIR}.new" "$DIR"
 	SWAPPED=1
-	# set -e 停下的那些步骤也要先换回旧版本。
+	# set -e 停下的那些步骤也要先换回旧版本，包括下一步的 mv。
 	trap 'fail "安装中途出错（install.sh 第 ${LINENO} 行）。"' ERR
+	mv "${DIR}.new" "$DIR"
 fi
 
 # --- 2. 安装 ----------------------------------------------------------------

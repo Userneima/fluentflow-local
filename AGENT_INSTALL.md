@@ -182,7 +182,7 @@ Desktop icon does and wait for that answer:
 Do not start uvicorn yourself in a shell of yours: when that shell is closed or
 reclaimed, the service goes with it. To stop it: Windows
 `launchers\windows\stop-local.ps1 -Yes`; macOS double-click the Desktop icon and choose
-to stop, or `lsof -ti:8000 | xargs kill`. Logs: macOS `~/Library/Logs/FluentFlow/local.log`,
+to stop, or `kill $(lsof -nP -iTCP:8000 -sTCP:LISTEN -t)` (only the process listening on FluentFlow's port; use the port from `.env` if it was changed). Logs: macOS `~/Library/Logs/FluentFlow/local.log`,
 Windows `%LOCALAPPDATA%\FluentFlow\Logs\local.log`.
 
 ## Uninstalling

@@ -67,8 +67,11 @@ def stage(tag: str, out: Path, frontend: Path | None = None) -> Path:
         # The interface built for this release (release.yml), so an install
         # from npm needs no Node.js or build either.
         shutil.copytree(frontend, source / "frontend" / "dist-local")
+    # The install commands at the package's top are this checkout's (the
+    # default branch's), not the tag's: they install and update any release,
+    # and an older tag's copy (v0.11.0) cannot download from npmmirror at all.
     for script in ("install.ps1", "install.sh"):
-        shutil.copy2(source / script, out / script)
+        shutil.copy2(ROOT / script, out / script)
     (out / "README.md").write_text(
         "# fluentflow-local\n\n"
         "The release of [FluentFlow Local](https://github.com/Userneima/fluentflow-local), "

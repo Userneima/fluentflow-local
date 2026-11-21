@@ -46,18 +46,20 @@ function Invoke-FluentFlowTool([string]$Name, [string[]]$Arguments) {
     }
 }
 
-# ${NAME} and ${NAME:-default}, expanded from the environment as the service's
-# reader (python-dotenv's rule) does.
-function Expand-FluentFlowReferences([string]$Value) {
+# ${NAME} and ${NAME:-default}, from the environment or an earlier line of
+# the same .env, as the service's reader (python-dotenv's rule) does.
+function Expand-FluentFlowReferences([string]$Value, [hashtable]$Earlier) {
     return [regex]::Replace($Value, '\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}', {
         param($Match)
-        $Found = [Environment]::GetEnvironmentVariable($Match.Groups[1].Value)
+        $Name = $Match.Groups[1].Value
+        $Found = [Environment]::GetEnvironmentVariable($Name)
+        if (-not $Found -and $Earlier -and $Earlier.ContainsKey($Name)) { $Found = $Earlier[$Name] }
         if ($Found) { return $Found }
         return $Match.Groups[2].Value
     })
 }
 
-function ConvertFrom-FluentFlowEnvValue([string]$Raw) {
+function ConvertFrom-FluentFlowEnvValue([string]$Raw, [hashtable]$Earlier) {
     $Value = $Raw.Trim()
     if ($Value.Length -ge 1 -and ($Value[0] -eq '"' -or $Value[0] -eq "'")) {
         $Quote = $Value[0]
@@ -65,22 +67,24 @@ function ConvertFrom-FluentFlowEnvValue([string]$Raw) {
         if ($End -gt 0) {
             $Inner = $Value.Substring(1, $End - 1)
             if ($Quote -eq '"') { $Inner = $Inner.Replace('\n', "`n").Replace('\"', '"').Replace('\\', '\') }
-            return Expand-FluentFlowReferences $Inner
+            return Expand-FluentFlowReferences $Inner $Earlier
         }
     }
-    return Expand-FluentFlowReferences (([regex]::Split($Value, '\s+#', 2)[0]).Trim())
+    return Expand-FluentFlowReferences (([regex]::Split($Value, '\s+#', 2)[0]).Trim()) $Earlier
 }
 
 # The value of a line in the repository's .env, ignoring the environment.
 function Get-FluentFlowEnvFileValue([string]$Repo, [string]$Name) {
     $EnvFile = Join-Path $Repo ".env"
     if (-not (Test-Path -LiteralPath $EnvFile)) { return $null }
-    $Found = $null
-    $Pattern = '^\s*(export\s+)?' + [regex]::Escape($Name) + '\s*=(.*)$'
+    # Every line in order, so a value can use an earlier one.
+    $Values = @{}
     foreach ($Line in [System.IO.File]::ReadAllLines($EnvFile, [System.Text.Encoding]::UTF8)) {
-        if ($Line -match $Pattern) { $Found = ConvertFrom-FluentFlowEnvValue $Matches[2] }
+        if ($Line -match '^\s*(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$') {
+            $Values[$Matches[2]] = ConvertFrom-FluentFlowEnvValue $Matches[3] $Values
+        }
     }
-    if ($Found) { return $Found }
+    if ($Values[$Name]) { return $Values[$Name] }
     return $null
 }
 
@@ -210,21 +214,26 @@ function Save-FluentFlowVerifiedDownload([string[]]$Urls, [string]$OutFile, [str
 # script: closing the launcher window does not stop it, and neither does an
 # agent's shell ending (a friend's agent started the service in a temporary
 # window, the window was reclaimed, and the agent took FluentFlow for broken,
-# 2026-11). Output goes to the log; stop it with stop-local.ps1.
+# 2026-11). Such a process gets the user's saved environment, so this window's
+# (keys set in it, a PATH with FFmpeg, a data folder, a test copy) goes over in
+# a file in the user's own temp folder that scripts/run_service.py reads and
+# deletes; on the command line, keys would show in any process listing.
+# Output goes to the log; stop it with stop-local.ps1.
 function Start-FluentFlowService([string]$Repo, [string]$Python, [string]$Port, [string]$LogFile) {
-    # Windows gives the new process the user's saved environment, not this
-    # window's, so what was set here for FluentFlow (a data folder, a test
-    # copy, the fake model, a proxy) is handed over explicitly.
-    $Sets = @("set PYTHONUTF8=1")
-    Get-ChildItem Env: | Where-Object {
-        $_.Name -match '^(FLUENTFLOW_|HF_|HTTPS?_PROXY$|NO_PROXY$)' -and $_.Value -notmatch '"'
-    } | ForEach-Object { $Sets += "set `"$($_.Name)=$($_.Value)`"" }
-    $Command = "cmd.exe /d /s /c `"$($Sets -join '&& ')&& `"$Python`" -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port >> `"$LogFile`" 2>&1`""
+    $EnvFile = Join-Path ([System.IO.Path]::GetTempPath()) ("fluentflow-env-" + [guid]::NewGuid() + ".json")
+    $Snapshot = @{}
+    Get-ChildItem Env: | ForEach-Object { $Snapshot[$_.Name] = $_.Value }
+    [System.IO.File]::WriteAllText($EnvFile, ($Snapshot | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding $false))
+    $Runner = Join-Path $Repo "scripts\run_service.py"
+    $Command = "cmd.exe /d /s /c `"set PYTHONUTF8=1&& `"$Python`" `"$Runner`" --env-file `"$EnvFile`" --port $Port >> `"$LogFile`" 2>&1`""
     $Startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
     $Result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
         CommandLine = $Command; CurrentDirectory = $Repo; ProcessStartupInformation = $Startup
     }
-    if ($Result.ReturnValue -ne 0) { throw "Windows 没能启动服务（Win32_Process.Create 返回 $($Result.ReturnValue)）" }
+    if ($Result.ReturnValue -ne 0) {
+        Remove-Item -Force $EnvFile -ErrorAction SilentlyContinue
+        throw "Windows 没能启动服务（Win32_Process.Create 返回 $($Result.ReturnValue)）"
+    }
     return $Result.ProcessId
 }
 

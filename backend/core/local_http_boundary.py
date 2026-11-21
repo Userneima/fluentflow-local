@@ -58,6 +58,7 @@ LOCAL_API_PREFIXES = frozenset(
         "process",
         "queue",
         "regenerate-summary",
+        "release-check",
         "runtime-config",
         "speaker-diarization",
         "summarize-transcript-file",

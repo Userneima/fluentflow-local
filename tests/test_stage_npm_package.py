@@ -41,7 +41,9 @@ def test_the_package_holds_the_installers_and_the_source(stage_module, tmp_path)
     meta = json.loads((out / "package.json").read_text(encoding="utf-8"))
     assert meta["name"] == "fluentflow-local"
     assert meta["version"] == version
-    assert (out / "install.ps1").read_bytes() == (out / "source" / "install.ps1").read_bytes()
+    # The installers on top are the current ones, which know npmmirror.
+    assert (out / "install.ps1").read_bytes() == (ROOT / "install.ps1").read_bytes()
+    assert "registry.npmmirror.com" in (out / "install.sh").read_text(encoding="utf-8")
     assert (out / "source" / "VERSION").read_text(encoding="utf-8").strip() == version
     assert (out / "source" / "backend" / "local_main.py").is_file()
     assert "scripts" in json.loads((out / "source" / "package.json").read_text(encoding="utf-8"))

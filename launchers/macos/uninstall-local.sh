@@ -128,6 +128,11 @@ if [[ -z "$DATA_ROOT" ]]; then
 fi
 IS_GIT_CHECKOUT=0
 [[ -e "${REPO}/.git" ]] && IS_GIT_CHECKOUT=1
+# 数据、链接下载或模型设在代码目录里面时，代码目录不整个删，只删程序自己的部分（同 git 检出）。
+KEEPS_USER_FILES=0
+for where in "$DATA_ROOT" "$(ff_setting "$REPO" FLUENTFLOW_LINK_OUTPUT_DIR)" "$(ff_setting "$REPO" HF_HOME)"; do
+	[[ -n "$where" && "$where" == "${REPO}/"* ]] && KEEPS_USER_FILES=1
+done
 
 # 模型目录同理：交给 scripts/stt_model.py 列，它知道产品下过哪些 repo。
 model_dirs=()
@@ -159,7 +164,7 @@ add_target() {
 	sensitive+=("${3:-0}")
 }
 
-if [[ "$IS_GIT_CHECKOUT" -eq 1 ]]; then
+if [[ "$IS_GIT_CHECKOUT" -eq 1 || "$KEEPS_USER_FILES" -eq 1 ]]; then
 	add_target "${REPO}/.venv" "Python 虚拟环境"
 	add_target "${REPO}/venv" "Python 虚拟环境（旧位置）"
 	add_target "${REPO}/node_modules" "前端依赖"

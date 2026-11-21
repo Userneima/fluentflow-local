@@ -132,6 +132,21 @@ def _fetch(args: argparse.Namespace) -> int:
     try:
         path = ensure_downloaded(plan)
     except Exception as exc:  # noqa: BLE001 - a download failure is the user's to read
+        # A probe file can come through while the weights do not (the main
+        # host's CDN stalling): one more go from the mirror, in a fresh process
+        # because huggingface_hub has fixed its host for this one. The
+        # installers run this in the background and no longer retry it
+        # themselves.
+        if not args.mirror and not args.no_mirror and os.environ.get(hf_endpoint.ENDPOINT_ENV) != hf_endpoint.MIRROR_ENDPOINT:
+            import subprocess
+
+            print(f"\n下载失败（{exc}），换镜像源 {hf_endpoint.MIRROR_ENDPOINT} 再试…", file=sys.stderr)
+            again = [sys.executable, str(Path(__file__).resolve()), "fetch", "--mirror"]
+            if args.size:
+                again += ["--size", args.size]
+            if args.engine:
+                again += ["--engine", args.engine]
+            return subprocess.call(again)  # noqa: S603 - our own script
         print(f"\n✗ 下载失败：{exc}", file=sys.stderr)
         print(
             "  可以稍后重试；第一次转录时也会自动下载。"

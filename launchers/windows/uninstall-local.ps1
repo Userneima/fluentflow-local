@@ -136,6 +136,14 @@ if ($HomeDir -and (-not (Test-InHome $Repo) -or -not (Test-Path (Join-Path $Home
 $ModelHome = Get-FluentFlowSetting $Repo "HF_HOME"
 $LinkRoot = Get-FluentFlowSetting $Repo "FLUENTFLOW_LINK_OUTPUT_DIR"
 $IsGitCheckout = Test-Path (Join-Path $Repo ".git")
+# The code folder goes whole only when nothing the user keeps lives in it: a
+# data, download or model folder set inside it is left, and only the program's
+# own parts are removed (as for a git checkout).
+function Test-InRepo([string]$Path) {
+    if (-not $Path -or -not [System.IO.Path]::IsPathRooted($Path)) { return $false }
+    return [System.IO.Path]::GetFullPath($Path).StartsWith($Repo.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+$KeepsUserFiles = (Test-InRepo $DataRoot) -or (Test-InRepo $LinkRoot) -or (Test-InRepo $ModelHome)
 
 $ModelDirs = @()
 if ($Models -and (Test-InHome $ModelHome)) {
@@ -164,7 +172,7 @@ function Add-Target([string]$Path, [string]$Label, [bool]$Sensitive = $false) {
     }
 }
 
-if ($IsGitCheckout) {
+if ($IsGitCheckout -or $KeepsUserFiles) {
     Add-Target (Join-Path $Repo ".venv") "Python 虚拟环境"
     Add-Target (Join-Path $Repo "venv") "Python 虚拟环境（旧位置）"
     Add-Target (Join-Path $Repo "node_modules") "前端依赖"

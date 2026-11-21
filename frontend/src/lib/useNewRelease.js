@@ -20,7 +20,9 @@ export const useNewRelease = () => {
                 .then((response) => (response.ok ? response.json() : null))
                 .then((body) => {
                     if (cancelled) return;
-                    if (body?.update_available) setLatest(body.latest);
+                    // A known answer replaces the notice either way: after an update
+                    // the page left open stops offering the version just installed.
+                    if (body?.latest) setLatest(body.update_available ? body.latest : null);
                     const unknown = body && !body.latest;
                     const wait = unknown && retries < RETRIES ? RETRY_MS : RECHECK_MS;
                     if (unknown) retries += 1;

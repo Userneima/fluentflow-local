@@ -82,15 +82,19 @@ function Test-CanAsk {
 # set aside to upgrade (README, Updating). Reused rather than picking a drive
 # again, which could land on another drive and leave the data behind.
 function Find-ExistingRoot {
-    $Candidates = @(Join-Path $env:USERPROFILE "FluentFlow") + @(Get-FixedDrives | ForEach-Object { "$($_.Name)\FluentFlow" })
-    foreach ($Candidate in $Candidates) {
-        if ((Test-Path (Join-Path $Candidate "app\backend\local_main.py")) -or (Test-Path (Join-Path $Candidate "data\fluentflow_jobs.sqlite"))) {
-            return $Candidate
-        }
+    $Own = Join-Path $env:USERPROFILE "FluentFlow"
+    if ((Test-Path (Join-Path $Own "app\backend\local_main.py")) -or (Test-Path (Join-Path $Own "data\fluentflow_jobs.sqlite"))) { return $Own }
+    # On another drive, only a folder this Windows account made (its marker
+    # names the account): on a shared computer another user's install, with
+    # their tasks and access token, is not this user's to take over.
+    foreach ($Candidate in @(Get-FixedDrives | ForEach-Object { "$($_.Name)\FluentFlow" })) {
+        $Marker = Join-Path $Candidate ".fluentflow-home"
+        if ((Test-Path $Marker) -and ((Get-Content -Raw $Marker) -match [regex]::Escape($CurrentSid))) { return $Candidate }
     }
     return $null
 }
 
+$CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $LegacyDir = Join-Path $env:USERPROFILE "fluentflow-local"
 $Existing = $null
 if (-not $env:FLUENTFLOW_INSTALL_DIR) { $Existing = Find-ExistingRoot }
@@ -132,9 +136,30 @@ if (Test-Path (Join-Path $Root "backend\local_main.py")) {
         throw "$Root already holds other files. Choose a new or empty folder for FluentFlow (FLUENTFLOW_INSTALL_DIR), for example $Root\FluentFlow."
     }
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
-    if (-not (Test-Path $Marker)) { Set-Content -Path $Marker -Value "FluentFlow Local lives here; uninstalling removes this folder." -Encoding ASCII }
+    if (-not (Test-Path $Marker)) { Set-Content -Path $Marker -Value "FluentFlow Local lives here; uninstalling removes this folder. Installed by $CurrentSid" -Encoding ASCII }
 }
 Write-Host "Installing into $Root"
+
+# The update's working folders beside the install. One already there is
+# removed only when an earlier update made it (its .fluentflow-update marker):
+# a folder the user named app.old is theirs.
+$UpdateMarker = ".fluentflow-update"
+function Assert-OwnLeftover([string]$Path) {
+    if ((Test-Path $Path) -and -not (Test-Path (Join-Path $Path $UpdateMarker))) {
+        throw "$Path exists and was not made by a FluentFlow update; move or rename it first"
+    }
+}
+# Where the old .env (or this window) puts data; inside the code folder it would
+# go away with the old code.
+function Get-InstalledSetting([string]$Folder, [string]$Name) {
+    $FromEnv = [Environment]::GetEnvironmentVariable($Name)
+    if ($FromEnv) { return $FromEnv }
+    $EnvFile = Join-Path $Folder ".env"
+    if (-not (Test-Path $EnvFile)) { return $null }
+    $Line = Get-Content $EnvFile | Where-Object { $_ -match ('^\s*(export\s+)?' + $Name + '\s*=') } | Select-Object -Last 1
+    if (-not $Line) { return $null }
+    return (($Line -split '=', 2)[1] -split '\s#')[0].Trim().Trim('"').Trim("'")
+}
 
 Write-Host "== Getting the code =="
 # An install already here is updated in place when a newer release is out: the
@@ -167,10 +192,12 @@ if ($IsGit) {
     }
     if (-not $HaveCode -or $Updating) {
         $Target = if ($Updating) { "$Dir.new" } else { $Dir }
+        if ($Updating) { Assert-OwnLeftover $Target }
         if (Test-Path $Target) { Remove-Item -Recurse -Force -LiteralPath $Target }
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Target) | Out-Null
         Copy-Item -Recurse -LiteralPath $LocalSource -Destination $Target
         Remove-Item -Recurse -Force -LiteralPath (Join-Path $Target ".git"), (Join-Path $Target ".venv"), (Join-Path $Target ".env") -ErrorAction SilentlyContinue
+        Set-Content -Path (Join-Path $Target $UpdateMarker) -Value "made by a FluentFlow Local install or update" -Encoding ASCII
         Write-Host "Placed in $Target"
     }
   } else {
@@ -212,7 +239,7 @@ if ($IsGit) {
     }
   if (-not $HaveCode -or $Updating) {
     $Target = if ($Updating) { "$Dir.new" } else { $Dir }
-    if ($Updating -and (Test-Path $Target)) { Remove-Item -Recurse -Force -LiteralPath $Target }
+    if ($Updating) { Assert-OwnLeftover $Target; if (Test-Path $Target) { Remove-Item -Recurse -Force -LiteralPath $Target } }
 
     function Measure-Url([string]$Url) {
         $Got = 0
@@ -282,6 +309,7 @@ if ($IsGit) {
         $ProgressPreference = $SavedProgress
         Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
     }
+    Set-Content -Path (Join-Path $Target $UpdateMarker) -Value "made by a FluentFlow Local install or update" -Encoding ASCII
     Write-Host "Placed in $Target"
   }
   }
@@ -336,6 +364,14 @@ function Get-BusyTaskCount([string]$Port) {
 
 if ($Updating) {
   try {
+    foreach ($Leftover in @("$Dir.old", "$Dir.failed")) { Assert-OwnLeftover $Leftover }
+    foreach ($Name in @("FLUENTFLOW_DATA_DIR", "FLUENTFLOW_LINK_OUTPUT_DIR", "HF_HOME")) {
+        $Where = Get-InstalledSetting $Dir $Name
+        if ($Where -and [System.IO.Path]::IsPathRooted($Where) -and
+            [System.IO.Path]::GetFullPath($Where).StartsWith($Dir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Name ($Where) is inside the code folder, which an update replaces; move it out of $Dir first"
+        }
+    }
     $OldPort = Get-InstalledPort $Dir
     if (Test-ServiceUp $OldPort) {
         $Busy = Get-BusyTaskCount $OldPort
@@ -363,7 +399,12 @@ if ($Updating) {
     Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
     throw "$($_.Exception.Message). Nothing was changed; FluentFlow Local $Current is still in $Dir."
   }
-    Move-Item -LiteralPath "$Dir.new" -Destination $Dir
+    try {
+        Move-Item -LiteralPath "$Dir.new" -Destination $Dir -ErrorAction Stop
+    } catch {
+        Move-Item -LiteralPath "$Dir.old" -Destination $Dir -ErrorAction SilentlyContinue
+        throw "Could not put the new version in place ($($_.Exception.Message)); FluentFlow Local $Current is back in $Dir."
+    }
 }
 
 . (Join-Path $Dir "launchers\windows\fluentflow-env.ps1")

@@ -24,4 +24,15 @@ describe('the new-version notice', () => {
         await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
         expect(result.current).toBe('0.12.0');
     });
+
+    it('drops the notice once the service says the installed version is the latest', async () => {
+        vi.useFakeTimers();
+        answers.push({current: '0.11.0', latest: '0.12.0', update_available: true});
+        answers.push({current: '0.12.0', latest: '0.12.0', update_available: false});
+        const {result} = renderHook(() => useNewRelease());
+        await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+        expect(result.current).toBe('0.12.0');
+        await act(async () => { await vi.advanceTimersByTimeAsync(6 * 3600 * 1000); });
+        expect(result.current).toBe(null);
+    });
 });

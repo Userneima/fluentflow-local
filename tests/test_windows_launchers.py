@@ -98,7 +98,8 @@ def test_the_service_starts_in_python_utf8_mode():
     service gets a fresh environment from Windows, so its command sets it."""
     helper = (ROOT / "fluentflow-env.ps1").read_text(encoding="utf-8-sig")
     command = helper[helper.index("function Start-FluentFlowService"):]
-    assert command.index("set PYTHONUTF8=1") < command.index("backend.local_main:app")
+    line = next(text for text in command.splitlines() if "$Command =" in text)
+    assert line.index("set PYTHONUTF8=1") < line.index("$Runner")
     launcher = (ROOT / "FluentFlowLocal.ps1").read_text(encoding="utf-8-sig")
     assert '$env:PYTHONUTF8 = "1"' in launcher[: launcher.index("check_local_readiness.py")]
 
@@ -121,3 +122,12 @@ def test_every_powershell_script_parses():
             env={**os.environ, "FFPARSE_SCRIPT": str(script)},
         )
         assert done.returncode == 0 and not done.stdout.strip(), f"{script.name}: {done.stdout or done.stderr}"
+
+
+def test_the_background_service_gets_the_window_environment_without_a_command_line_secret():
+    """Keys on a command line show in any process listing; the window's
+    environment goes over in a temp file the service reads and deletes."""
+    helper = (ROOT / "fluentflow-env.ps1").read_text(encoding="utf-8-sig")
+    command = helper[helper.index("function Start-FluentFlowService"):helper.index("function Test-FluentFlowHealthy")]
+    assert "Get-ChildItem Env:" in command and "--env-file" in command
+    assert "set `\"$($_.Name)" not in command

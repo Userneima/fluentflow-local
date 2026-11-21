@@ -48,6 +48,8 @@ def test_reader_agrees_with_python_dotenv(tmp_path):
             'QUOTED_REF="${PLAIN}/x"',
             "LITERAL_REF='${PLAIN}/x'",
             "DEFAULTED=${FLUENTFLOW_SURELY_UNSET:-fallback}",
+            "ESCAPED_SINGLE='it\\'s here'",
+            'ESCAPED_DOUBLE="say \\"hi\\" \\\\ done"',
             "",
         ]),
         encoding="utf-8",
@@ -244,3 +246,18 @@ def test_a_data_folder_set_in_the_environment_takes_no_old_settings(tmp_path, mo
 
     assert local_config.load_config() == {}
     assert not (tmp_path / "isolated" / "fluentflow_config.json").exists()
+
+
+def test_update_and_uninstall_leave_what_is_not_theirs():
+    """A folder the user named app.old, data kept inside the code folder, and
+    another Windows account's install are not the scripts' to delete or take."""
+    windows = (ROOT / "install.ps1").read_text(encoding="utf-8")
+    macos = (ROOT / "install.sh").read_text(encoding="utf-8")
+    for text in (windows, macos):
+        assert ".fluentflow-update" in text
+        assert "FLUENTFLOW_LINK_OUTPUT_DIR" in text and "HF_HOME" in text
+    assert "Assert-OwnLeftover" in windows and "assert_own_leftover" in macos
+    assert "WindowsIdentity]::GetCurrent().User.Value" in windows
+    assert "KeepsUserFiles" in (ROOT / "launchers" / "windows" / "uninstall-local.ps1").read_text(encoding="utf-8-sig")
+    assert "KEEPS_USER_FILES" in (ROOT / "launchers" / "macos" / "uninstall-local.sh").read_text(encoding="utf-8")
+    assert '"release-check"' in (ROOT / "backend" / "core" / "local_http_boundary.py").read_text(encoding="utf-8")

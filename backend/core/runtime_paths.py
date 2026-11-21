@@ -47,18 +47,41 @@ def _expand(value: str, known: dict[str, str]) -> str:
     return _REFERENCE.sub(lookup, value)
 
 
+_DOUBLE_ESCAPES = {"n": "\n", "r": "\r", "t": "\t", "a": "\a", "b": "\b", "f": "\f", "v": "\v",
+                   "\\": "\\", "'": "'", '"': '"'}
+
+
+def _quoted(value: str) -> str | None:
+    """The text inside a leading quoted string, escapes decoded as
+    python-dotenv decodes them: \\ and \' in single quotes, the usual
+    backslash escapes in double quotes. None when the quote is not closed."""
+    quote, out, i = value[0], [], 1
+    while i < len(value):
+        char = value[i]
+        if char == "\\" and i + 1 < len(value):
+            nxt = value[i + 1]
+            if quote == "'" and nxt in ("\\", "'"):
+                out.append(nxt)
+                i += 2
+                continue
+            if quote == '"' and nxt in _DOUBLE_ESCAPES:
+                out.append(_DOUBLE_ESCAPES[nxt])
+                i += 2
+                continue
+        if char == quote:
+            return "".join(out)
+        out.append(char)
+        i += 1
+    return None
+
+
 def _env_value(raw: str, known: dict[str, str]) -> str:
     value = raw.strip()
     if value[:1] in ("'", '"'):
-        quote = value[0]
-        end = value.find(quote, 1)
-        if end > 0:
-            inner = value[1:end]
-            # Double quotes take python-dotenv's escapes; both kinds have their
-            # references expanded, as python-dotenv does (checked by a test).
-            if quote == "'":
-                return _expand(inner, known)
-            inner = inner.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
+        inner = _quoted(value)
+        if inner is not None:
+            # References are expanded in both kinds, as python-dotenv does
+            # (checked by a test).
             return _expand(inner, known)
     # An unquoted value ends at a " #" comment, as in python-dotenv.
     return _expand(re.split(r"\s+#", value, maxsplit=1)[0].strip(), known)
