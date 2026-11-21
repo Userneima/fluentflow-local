@@ -77,6 +77,14 @@ def version() -> dict[str, Any]:
     }
 
 
+@router.get("/release-check")
+def release_check() -> dict[str, Any]:
+    """Whether a newer release is out (``release_check``): the page offers it."""
+    from backend.core import release_check as check
+
+    return check.status()
+
+
 @router.get("/credentials/status")
 def get_credentials_status() -> dict[str, Any]:
     # Whether the visual note can run is not the same as whether its key is

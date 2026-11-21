@@ -153,6 +153,19 @@ the section rows and your actual model. No Claude installation, login or model k
 needed. Stale material must be read again. Only the table changes, not the note or files.
 Agent-written notes and tasks handed to an agent do not trigger background Claude alignment.
 
+## Updating
+
+When the user asks you to update FluentFlow, or the page says a new version is out
+(`http://127.0.0.1:8000/release-check` answers `"update_available": true`), run the same
+install command again (with the same `FLUENTFLOW_INSTALL_DIR` on Windows), from a directory
+outside the install. It sees the install, downloads the newest release beside it, keeps
+`.env`, the tasks, settings and models, stops the service, swaps the code in, adds what the
+new version needs (packages, speaker models, the transcription model) and starts it again.
+If any of that fails, it puts the previous version back and says so. It refuses while tasks
+are being processed: wait for them, or set `FLUENTFLOW_UPDATE_FORCE=1` after the user agrees
+(interrupted tasks carry on after the restart). A git checkout is not updated by it; there,
+`git pull` and run the setup script.
+
 ## Starting, checking and stopping the service
 
 The service runs in the background and does not belong to any window or shell, yours
