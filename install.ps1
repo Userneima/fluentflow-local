@@ -268,18 +268,24 @@ $CodexToml = "[mcp_servers.fluentflow-local]`ncommand = '$Python'`nargs = ['$Mcp
 $Registered = $false
 if (Get-Command claude -ErrorAction SilentlyContinue) {
     if ((Invoke-FluentFlowTool claude @("mcp", "get", "fluentflow-local")).Code -eq 0) { Write-Host "Claude Code: fluentflow-local is already registered." }
-    elseif ((Invoke-FluentFlowTool claude @("mcp", "add", "--scope", "user", "fluentflow-local", "--", $Python, $McpScript)).Code -eq 0) { Write-Host "Claude Code: registered fluentflow-local." }
-    else { Write-Host "Claude Code: registration failed; run: claude mcp add --scope user fluentflow-local -- `"$Python`" `"$McpScript`"" }
+    else {
+        $Added = Invoke-FluentFlowTool claude @("mcp", "add", "--scope", "user", "fluentflow-local", "--", $Python, $McpScript)
+        if ($Added.Code -eq 0) { Write-Host "Claude Code: registered fluentflow-local." }
+        else { Write-Host "Claude Code: registration failed ($($Added.Output.Trim())); run: claude mcp add --scope user fluentflow-local -- `"$Python`" `"$McpScript`"" }
+    }
     $Registered = $true
 }
 if (Get-Command codex -ErrorAction SilentlyContinue) {
     $CodexConfig = Join-Path $env:USERPROFILE ".codex\config.toml"
     if ((Test-Path $CodexConfig) -and (Select-String -Path $CodexConfig -Pattern '^\[mcp_servers\.fluentflow-local\]' -Quiet)) {
         Write-Host "Codex: fluentflow-local is already registered."
-    } elseif ((Invoke-FluentFlowTool codex @("mcp", "add", "fluentflow-local", "--", $Python, $McpScript)).Code -eq 0) {
-        Write-Host "Codex: registered fluentflow-local."
     } else {
-        Write-Host "Codex: could not register automatically; add these lines to $CodexConfig :"; Write-Host $CodexToml
+        $Added = Invoke-FluentFlowTool codex @("mcp", "add", "fluentflow-local", "--", $Python, $McpScript)
+        if ($Added.Code -eq 0) { Write-Host "Codex: registered fluentflow-local." }
+        else {
+            Write-Host "Codex: could not register automatically ($($Added.Output.Trim())); add these lines to $CodexConfig :"
+            Write-Host $CodexToml
+        }
     }
     $Registered = $true
 }
