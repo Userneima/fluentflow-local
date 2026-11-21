@@ -11,7 +11,6 @@ from backend.core import runtime_paths
 from backend.core.runtime_paths import default_config_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG_PATH = default_config_path()
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
 
 LOCAL_SENSITIVE_FIELDS = {
@@ -74,8 +73,11 @@ def load_project_env() -> None:
 
 
 def config_path() -> Path:
-    override = os.environ.get("FLUENTFLOW_CONFIG_PATH")
-    return Path(override).expanduser() if override else DEFAULT_CONFIG_PATH
+    # Resolved on every call, never at import: the service imports this module
+    # before it reads .env, and a path frozen then put the user's saved keys in
+    # the default data folder while everything else followed FLUENTFLOW_DATA_DIR
+    # from .env (found on GitHub's Windows runner, 2026-11-21).
+    return default_config_path()
 
 
 def load_config(path: Path | str | None = None) -> dict[str, Any]:

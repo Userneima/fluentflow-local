@@ -172,3 +172,13 @@ def test_both_setup_scripts_install_packages_with_a_pinned_uv_and_pass_the_index
     for text in (windows, macos):
         assert '"-m", "uv", "pip"' in text or "-m uv pip install" in text
         assert "--index-url" in text
+
+
+def test_the_settings_file_follows_a_data_folder_set_after_import(tmp_path, monkeypatch):
+    """local_main imports local_config before it reads .env; the settings file
+    (the user's keys) must still land in the data folder .env names."""
+    from backend.core import local_config
+
+    monkeypatch.delenv("FLUENTFLOW_CONFIG_PATH", raising=False)
+    monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path / "FluentFlow" / "data"))
+    assert local_config.config_path() == tmp_path / "FluentFlow" / "data" / "fluentflow_config.json"
