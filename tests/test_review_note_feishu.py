@@ -341,3 +341,13 @@ def test_a_fence_inside_a_longer_fence_stays_code_in_feishu():
     laid = feishu_note.to_feishu(md).markdown
     assert "````md\n```python\n# 不是标题\nprint(1)\n```\n````" in laid, laid
     assert [s.heading for s in feishu_note.sections(md) if s.heading] == ["真标题"]
+
+
+def test_an_image_line_inside_a_tilde_fence_is_not_taken_for_a_screenshot(tmp_path):
+    """Code blocks fenced with ~~~ are code for the screenshot upload too
+    (note_spacing.in_code): an example image line inside one stays text."""
+    from backend.core import lark_cli_images
+
+    md = "~~~md\n![例子](/jobs/t/artifacts/frame?file=a.jpg)\n~~~\n"
+    written, pending, missing = lark_cli_images._prepare_images(md, task_id="t", artifact_root=tmp_path)
+    assert written == md and pending == [] and missing == []

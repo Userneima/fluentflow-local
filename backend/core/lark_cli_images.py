@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 from urllib.parse import urlparse
 
-from backend.core import lark_cli_run
+from backend.core import lark_cli_run, note_spacing
 from backend.core.lark_cli_run import LarkCliError, Runner
 from backend.core.lark_exporter import _resolve_markdown_artifact_image
 
@@ -58,14 +58,9 @@ def _prepare_images(
     out: List[str] = []
     pending: List[dict[str, Any]] = []
     missing: List[dict[str, Any]] = []
-    in_code = False
     figure = first_figure
-    for line in markdown.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_code = not in_code
-            out.append(line)
-            continue
+    lines = markdown.split("\n")
+    for line, in_code in zip(lines, note_spacing.in_code(lines)):
         match = None if in_code else _RE_MD_IMAGE_LINE.match(line)
         if not match:
             out.append(line)

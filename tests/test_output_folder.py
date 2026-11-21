@@ -148,23 +148,38 @@ def test_a_failed_pdf_export_is_retried_and_the_old_pdf_is_not_listed_as_current
     assert record["pdf_path"] == str(source.parent / "week-8" / "week-8_笔记.pdf")
 
 
-def test_a_record_from_before_pdf_digest_exports_its_pdf_once(tmp_path, pdfs):
-    """A folder whose PDF failed before 2026-11-14 may hold the old PDF with no
-    record of which note it came from: it is exported once more, whatever the
-    file times, and then carries ``pdf_digest`` like any other."""
+def test_a_stale_pdf_recorded_before_the_fix_is_exported_again(tmp_path, pdfs):
+    """A folder whose PDF failed before 2026-11-14 holds the old PDF under the
+    new note's digest, with no record of which note the PDF came from: a PDF
+    no newer than the md is exported again; one made after it is left alone."""
+    import os
+
     source = _recording(tmp_path)
     task = _task(source, note="# 第八周\n\n第一版。\n")
     output_folder.sync(task)
+    folder = source.parent / "week-8"
+    pdf, md = folder / "week-8_笔记.pdf", folder / "week-8_笔记.md"
 
-    result = job_store.get_job(task)["result"]
-    record = {k: v for k, v in result["output_folder"].items() if k != "pdf_digest"}
-    job_store.update_job_result(task, {**result, "output_folder": record})
+    def as_before_the_fix() -> None:
+        result = job_store.get_job(task)["result"]
+        record = {k: v for k, v in result["output_folder"].items() if k != "pdf_digest"}
+        job_store.update_job_result(task, {**result, "output_folder": record})
+
+    as_before_the_fix()
     exports = len(pdfs)
     output_folder.sync(task)
-    assert len(pdfs) == exports + 1, "a PDF with no record of its note is exported again"
-    assert job_store.get_job(task)["result"]["output_folder"]["pdf_digest"]
+    assert len(pdfs) == exports, "a PDF made after the md is current"
+
+    as_before_the_fix()
+    os.utime(pdf, (md.stat().st_mtime - 60, md.stat().st_mtime - 60))
     output_folder.sync(task)
-    assert len(pdfs) == exports + 1, "once"
+    assert len(pdfs) == exports + 1, "a PDF older than the md is exported again"
+
+    # A disk that keeps coarse times can give the stale PDF the md's time.
+    as_before_the_fix()
+    os.utime(pdf, (md.stat().st_mtime, md.stat().st_mtime))
+    output_folder.sync(task)
+    assert len(pdfs) == exports + 2, "a PDF no newer than the md is exported again"
 
 
 def test_a_note_saved_later_schedules_a_refresh(tmp_path, pdfs, monkeypatch):

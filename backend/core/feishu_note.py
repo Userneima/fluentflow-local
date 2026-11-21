@@ -105,7 +105,7 @@ def _quoted_body(line: str, indent: str) -> str | None:
 
 def _breaks_out(body: str) -> bool:
     stripped = body.lstrip()
-    return stripped.startswith("|") or stripped.startswith("```")
+    return stripped.startswith("|") or note_spacing.is_fence(stripped)
 
 
 def _callout(lines: list[str], start: int) -> tuple[list[str], int]:
