@@ -140,7 +140,7 @@ def prepare(source: Path, into: Path) -> dict[str, object]:
 
 
 def start_command(into: Path, *, port: int, fake: bool, max_calls: int | None, max_usd: float | None,
-                  max_cny: float | None, repo: Path) -> str:
+                  max_cny: float | None, repo: Path, frontend_dir: Path | None = None) -> str:
     env = {
         "FLUENTFLOW_DATA_DIR": str(into),
         "FLUENTFLOW_CONFIG_PATH": str(into / "fluentflow_config.json"),
@@ -149,6 +149,8 @@ def start_command(into: Path, *, port: int, fake: bool, max_calls: int | None, m
     }
     if fake:
         env["FLUENTFLOW_FAKE_MODEL"] = "1"
+    if frontend_dir is not None:
+        env["FLUENTFLOW_FRONTEND_DIST_DIR"] = str(frontend_dir.expanduser().resolve())
     for name, value in (("FLUENTFLOW_TEST_MAX_CALLS", max_calls), ("FLUENTFLOW_TEST_MAX_USD", max_usd),
                         ("FLUENTFLOW_TEST_MAX_CNY", max_cny)):
         if value is not None:
@@ -168,6 +170,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-calls", type=int, default=DEFAULT_MAX_CALLS)
     parser.add_argument("--max-usd", type=float, default=DEFAULT_MAX_USD)
     parser.add_argument("--max-cny", type=float, default=DEFAULT_MAX_CNY)
+    parser.add_argument("--frontend-dir", type=Path, help="serve the page from this build folder instead of "
+                        "frontend/dist-local (build it with vite --outDir <folder>)")
     parser.add_argument("--no-limit", action="store_true", help="no budget (only with the owner's go-ahead)")
     args = parser.parse_args(argv)
     done = prepare(args.source, args.into)
@@ -177,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
           f"closed in the copy: {done['closed_steps']} steps, {done['closed_tasks']} tasks)")
     print("start the test service with:")
     print(start_command(done["into"], port=args.port, fake=args.fake, max_calls=limits[0], max_usd=limits[1],
-                        max_cny=limits[2], repo=repo))
+                        max_cny=limits[2], repo=repo, frontend_dir=args.frontend_dir))
     return 0
 
 
