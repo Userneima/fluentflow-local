@@ -101,11 +101,62 @@ function Test-NvidiaAdapter {
 # Checked before anything downloads. FFmpeg is required, and the pip install
 # below takes a long time: finding out at the readiness check means the user
 # waited through the whole install to be told one thing was missing.
-if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
-    -not (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
-    $Winget = Get-Command winget.exe -ErrorAction SilentlyContinue
-    if ($Winget) {
-        Write-Host "未找到 FFmpeg（转码和抽帧都要用它），正在安装…"
+#
+# A missing FFmpeg is downloaded from npmmirror (Alibaba's mirror of the
+# ffmpeg-static binaries, which are gyan.dev's essentials build, the same
+# builder as winget's Gyan.FFmpeg) into the data folder's bin, the folder the
+# service puts first on PATH (runtime_paths.put_bundled_tools_on_path). winget
+# fetches Gyan.FFmpeg from GitHub, which can crawl for many minutes in China
+# with nothing on screen (a user's friend, 2026-11-21); it stays as the fallback
+# when the mirror cannot be reached.
+$FfmpegDataDir = if ($env:FLUENTFLOW_DATA_DIR) { $env:FLUENTFLOW_DATA_DIR } else { Join-Path $env:APPDATA "FluentFlow" }
+$FfmpegBin = Join-Path $FfmpegDataDir "bin"
+$FfmpegMirror = "https://registry.npmmirror.com/-/binary/ffmpeg-static/b6.1.1"
+if (Test-Path (Join-Path $FfmpegBin "ffmpeg.exe")) { $env:Path = "$FfmpegBin;$env:Path" }
+
+function Test-Ffmpeg {
+    return (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -and
+        (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)
+}
+
+function Install-FfmpegFromMirror {
+    New-Item -ItemType Directory -Force -Path $FfmpegBin | Out-Null
+    $Saved = $ProgressPreference
+    # Windows PowerShell 5.1 redraws its progress bar for every block it reads,
+    # which makes a 30 MB download take minutes; the size is printed instead.
+    $ProgressPreference = "SilentlyContinue"
+    try {
+        foreach ($Tool in @("ffmpeg", "ffprobe")) {
+            Write-Host "  下载 $Tool（约 30 MB）…"
+            $Gz = Join-Path $FfmpegBin "$Tool.exe.gz"
+            Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 -Uri "$FfmpegMirror/$Tool-win32-x64.gz" -OutFile $Gz
+            $Exe = Join-Path $FfmpegBin "$Tool.exe"
+            $In = [System.IO.File]::OpenRead($Gz)
+            try {
+                $Unzip = New-Object System.IO.Compression.GZipStream($In, [System.IO.Compression.CompressionMode]::Decompress)
+                $Out = [System.IO.File]::Create($Exe)
+                try { $Unzip.CopyTo($Out) } finally { $Out.Close(); $Unzip.Close() }
+            } finally { $In.Close() }
+            Remove-Item $Gz
+            & $Exe -version *> $null
+            if ($LASTEXITCODE -ne 0) { throw "下载的 $Tool 运行不了。" }
+        }
+    } finally {
+        $ProgressPreference = $Saved
+    }
+    $env:Path = "$FfmpegBin;$env:Path"
+}
+
+if (-not (Test-Ffmpeg)) {
+    Write-Host "未找到 FFmpeg（转码和抽帧都要用它），正在从国内镜像下载到 $FfmpegBin…"
+    try {
+        Install-FfmpegFromMirror
+    } catch {
+        Write-Host "国内镜像下载失败（$($_.Exception.Message)），改用 winget 安装…" -ForegroundColor Yellow
+        $Winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+        if (-not $Winget) {
+            throw "FFmpeg 下载失败，这台电脑也没有 winget。请检查网络后重新运行本脚本，或自己装好 FFmpeg（确认 ffmpeg.exe 和 ffprobe.exe 在 PATH 里）再运行。"
+        }
         # The agreement switches are what make this unattended: without them
         # winget stops on a prompt the user did not ask to be shown.
         Invoke-Checked $Winget.Source @(
@@ -116,14 +167,11 @@ if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
         # install. Without this the script ran for twenty minutes and then
         # failed at the readiness check over the thing it had itself installed.
         Update-SessionPath
-        if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -or
-            -not (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
-            throw "winget 已装好 FFmpeg，但 PATH 里还找不到 ffmpeg.exe 或 ffprobe.exe。请关掉这个 PowerShell 窗口，开一个新窗口，重新运行本脚本。还是找不到的话，把 FFmpeg 的 bin 目录手动加进 PATH。"
-        }
-        Write-Host "已安装 FFmpeg：$((Get-Command ffmpeg.exe).Source)"
-    } else {
-        throw "未找到 FFmpeg。请先安装（winget install Gyan.FFmpeg），确认 ffmpeg.exe 和 ffprobe.exe 在 PATH 里，再重新运行本脚本。"
     }
+    if (-not (Test-Ffmpeg)) {
+        throw "FFmpeg 装好了，但 PATH 里还找不到 ffmpeg.exe 或 ffprobe.exe。请关掉这个 PowerShell 窗口，开一个新窗口，重新运行本脚本。"
+    }
+    Write-Host "已安装 FFmpeg：$((Get-Command ffmpeg.exe).Source)"
 }
 
 # The dependencies have prebuilt packages for Python 3.10 to 3.14 only. A newer

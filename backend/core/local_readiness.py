@@ -76,7 +76,7 @@ def _data_dir_writable() -> tuple[bool, str]:
 
 def _ffmpeg_install_hint() -> str:
     if sys.platform.startswith("win"):
-        return "未找到 ffmpeg：请安装 FFmpeg（例如执行 winget install Gyan.FFmpeg），然后重新打开启动器。"
+        return "未找到 ffmpeg：重新运行安装脚本（launchers\\windows\\setup-local.ps1）会自动下载；也可以自己安装（例如 winget install Gyan.FFmpeg），然后重新打开启动器。"
     return "未找到 ffmpeg：请先安装（macOS 执行 brew install ffmpeg）。"
 
 

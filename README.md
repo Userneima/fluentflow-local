@@ -36,8 +36,8 @@ agent 会先确认适用范围，再修改你的个人写法；只影响之后�
 
 - **macOS**：Apple 芯片（M 系列）转录走 GPU 加速。Intel Mac 也能装，转录走 CPU，会慢不少。
   不需要先装别的东西，FFmpeg、Node.js 和 Python 由安装脚本装进 FluentFlow 自己的数据文件夹。
-- **Windows 10 / 11**：有 NVIDIA 显卡时走 GPU，没有就走 CPU。系统自带的 winget 会被用来补
-  Python、Node.js 和 FFmpeg。
+- **Windows 10 / 11**：有 NVIDIA 显卡时走 GPU，没有就走 CPU。FFmpeg 从国内镜像下载到 FluentFlow 自己的
+  数据文件夹（镜像连不上时改用系统自带的 winget），缺 Python 时用 winget 补上。
 
 磁盘预留约 8 GB，明细见下文「需要多少磁盘空间」。
 
@@ -87,7 +87,7 @@ Apple 芯片的 Mac 上，Python 依赖按 `requirements-local.lock.macos-arm64.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\setup-local.ps1
 ```
 
-同样是一次装完，同样不问问题。Python、Node.js、FFmpeg 缺失时会用 winget 直接装上。
+同样是一次装完，同样不问问题。缺 FFmpeg 时从国内镜像下载（连不上再用 winget），缺 Python 时用 winget 装上，Node.js 下载免安装版。
 检测到 NVIDIA 显卡时，它会把 CUDA 12 与 cuDNN 9 运行库装进这个虚拟环境；不需要装机器级
 CUDA Toolkit，但显卡驱动要在。`-SkipModel` 不下转录模型。装完双击桌面上的
 「FluentFlow Local」启动。

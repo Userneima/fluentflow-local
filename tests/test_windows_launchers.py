@@ -50,6 +50,16 @@ def test_the_launcher_rereads_path_before_the_startup_check():
     assert block.index("$env:Path,") < block.index('GetEnvironmentVariable("Path", "Machine")')
 
 
+def test_setup_downloads_ffmpeg_from_the_mirror_before_trying_winget():
+    # 2026-11-21: winget fetches FFmpeg from GitHub, which can stall for many
+    # minutes in China; the mirror comes first and lands in the data folder's
+    # bin, which the service puts first on PATH.
+    text = (ROOT / "setup-local.ps1").read_text(encoding="utf-8-sig")
+    assert "registry.npmmirror.com/-/binary/ffmpeg-static/" in text
+    assert text.index("Install-FfmpegFromMirror\n") < text.index('"Gyan.FFmpeg"')
+    assert 'Join-Path $FfmpegDataDir "bin"' in text
+
+
 def test_the_uninstaller_reads_the_fields_health_has():
     text = (ROOT / "uninstall-local.ps1").read_text(encoding="utf-8-sig")
     assert "$Health.runtime.execution" in text or "$Health.edition" in text
