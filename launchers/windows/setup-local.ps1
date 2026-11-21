@@ -435,21 +435,19 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "提示：讲话人区分模型没有下载成功，其余功能不受影响。网络恢复后运行这一句补上：.\.venv\Scripts\python.exe scripts\fetch_diarization_models.py"
 }
 
-# Downloaded here rather than inside the user's first transcription, where the
-# wait has no progress and no explanation. A failure is not fatal: the model can
-# be fetched later, and the first run falls back to downloading it itself.
+# The transcription model (1.5 to 3 GB) downloads in the background, so the
+# install finishes and the app opens without waiting for it (王愉超, 2026-11-21:
+# on a real connection in China it was the longest step). A recording
+# submitted before it is done shows 「正在下载转录模型」 and carries on once it
+# is (local_stt._download_model_if_missing); the download picks the faster of
+# huggingface.co and hf-mirror.com itself. Its output goes to the data folder.
 if ($SkipModel) {
     Write-Host "按要求跳过转录模型，第一次转录时会自动下载。"
 } else {
-    Write-Host "准备转录模型…"
-    & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "下载失败，换镜像源（hf-mirror.com）重试…"
-        & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch" "--mirror"
-    }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "转录模型没有下载成功。第一次转录时会自动下载（连不上 huggingface.co 时换 hf-mirror.com 镜像），也可以现在运行：.\.venv\Scripts\python.exe scripts\stt_model.py fetch --mirror"
-    }
+    $ModelLog = Join-Path (Get-FluentFlowDataDir $Repo) "logs\model-download.log"
+    & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch" "--background" $ModelLog
+    if ($LASTEXITCODE -ne 0) { Write-Host "转录模型没能开始后台下载，第一次转录时会自动下载。" }
+    Write-Host "转录模型（1.5 到 3 GB）不用等它：装完就能打开页面，下完之前提交的录像会等它下完再转。"
 }
 
 # The user's agent reaches this app through the MCP tools, and that interface

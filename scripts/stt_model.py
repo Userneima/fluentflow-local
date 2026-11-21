@@ -20,6 +20,7 @@ large-v3 and then never open it.
     python scripts/stt_model.py fetch --size medium
     python scripts/stt_model.py fetch --engine faster_whisper
     python scripts/stt_model.py fetch --mirror        # 直接用镜像源
+    python scripts/stt_model.py fetch --background <日志文件>  # 放到后台下载，立即返回
     python scripts/stt_model.py cache-paths
 """
 
@@ -65,7 +66,44 @@ def _choose_endpoint(args: argparse.Namespace) -> None:
     print(explanation)
 
 
+def _detach(args: argparse.Namespace) -> int:
+    """Start this fetch again as a process of its own and return at once.
+
+    The installers use it so the install does not wait for gigabytes. A new
+    session (POSIX) or a detached process group (Windows) keeps the download
+    alive after the installer, and the agent shell that ran it, have exited.
+    """
+    import subprocess
+
+    log = Path(args.background).expanduser()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    command = [sys.executable, str(Path(__file__).resolve()), "fetch"]
+    for flag in ("mirror", "no_mirror"):
+        if getattr(args, flag):
+            command.append("--" + flag.replace("_", "-"))
+    if args.size:
+        command += ["--size", args.size]
+    if args.engine:
+        command += ["--engine", args.engine]
+    options: dict = {"start_new_session": True}
+    if sys.platform == "win32":
+        options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+    with log.open("ab") as handle:
+        process = subprocess.Popen(  # noqa: S603 - our own script
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            **options,
+        )
+    print(f"转录模型在后台下载（进程 {process.pid}），进度写在 {log}")
+    return 0
+
+
 def _fetch(args: argparse.Namespace) -> int:
+    if args.background:
+        return _detach(args)
     _choose_endpoint(args)
 
     from backend.core.local_stt_assets import (
@@ -138,6 +176,12 @@ def main() -> int:
         "--no-mirror",
         action="store_true",
         help="只用主站，连不上就报错",
+    )
+    fetch.add_argument(
+        "--background",
+        metavar="LOG",
+        default=None,
+        help="在后台下载、立即返回，输出写进这个日志文件",
     )
     fetch.set_defaults(handler=_fetch)
 

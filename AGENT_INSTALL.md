@@ -57,8 +57,9 @@ is missing into the app's data folder. Windows: it puts everything in the chosen
 (`app` the code, `data` the tasks and downloaded tools, `models` the transcription
 models, `downloads` videos fetched from links, `cache` download caches) and writes those
 locations into `app\.env`; only Python, when the machine has none, is installed for the
-user on drive C. Then it builds the interface, downloads the transcription model,
-generates the agent access token into `.env`, starts the app at `http://127.0.0.1:8000`,
+user on drive C. Then it builds the interface, starts the transcription model (1.5 to
+3 GB) downloading in the background (the install does not wait for it; a recording
+submitted before it is done shows "正在下载转录模型" and carries on once it is), generates the agent access token into `.env`, starts the app at `http://127.0.0.1:8000`,
 registers the MCP server `fluentflow-local` with Claude Code and Codex when their command
 line tools are on this machine, and checks that server. Every download has a source in
 China: the script tries the original host for a few seconds and switches to the mirror

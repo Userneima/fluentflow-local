@@ -2,7 +2,7 @@
 # FluentFlow Local 的 macOS 一次性安装脚本。
 #
 # 和 Windows 的 setup-local.ps1 对等：建项目虚拟环境、装 Python 依赖、装前端
-# 依赖并构建、下好转录模型、跑就绪检查，最后在桌面生成「FluentFlow Local.app」。
+# 依赖并构建、在后台下载转录模型、跑就绪检查，最后在桌面生成「FluentFlow Local.app」。
 # 装完双击桌面图标即可使用，不需要再开终端。
 #
 # 中途不问问题。跑这个脚本就是要用这个产品，而它问得出口的每一样东西（FFmpeg、
@@ -376,19 +376,17 @@ if ! "$VENV_PY" "${REPO}/scripts/fetch_diarization_models.py"; then
 fi
 
 # --- 5. 转录模型 -----------------------------------------------------------
-# 「安装完成」要名副其实：用户双击图标、丢进第一个视频，才开始等几 GB 的模型，
-# 而那个等待没有任何进度可看。所以下载失败就算安装没完成，脚本以非零退出；
-# 已经装好的环境不必重装，补一次模型就行。
+# 模型（1.5 到 3 GB）在后台下载，安装不用等它，装完就能打开页面（王愉超 2026-11-21：
+# 国内真实网络下这是最慢的一步）。下完之前提交的录像在任务里显示「正在下载转录模型」，
+# 下完接着转（local_stt._download_model_if_missing）；下载源由脚本自己在 huggingface.co
+# 和 hf-mirror.com 之间挑。输出写进数据目录的 logs。
 step "准备转录模型"
 if [[ "$SKIP_MODEL" -eq 1 ]]; then
 	echo "按要求跳过。第一次转录时会自动下载。"
 else
-	if ! "$VENV_PY" "${REPO}/scripts/stt_model.py" fetch; then
-		echo "下载失败，换镜像源（hf-mirror.com）重试…"
-		"$VENV_PY" "${REPO}/scripts/stt_model.py" fetch --mirror ||
-			fail "转录模型没有下载成功，安装还没有完成。
-环境和界面都已经装好，只差模型。检查网络或代理后重新运行本脚本即可，已装好的部分不会重装。"
-	fi
+	"$VENV_PY" "${REPO}/scripts/stt_model.py" fetch --background "${DATA_DIR}/logs/model-download.log" ||
+		echo "转录模型没能开始后台下载，第一次转录时会自动下载。"
+	echo "转录模型（1.5 到 3 GB）不用等它：装完就能打开页面，下完之前提交的录像会等它下完再转。"
 fi
 
 # --- 6. Agent 接口的访问令牌 -----------------------------------------------

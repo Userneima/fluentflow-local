@@ -72,7 +72,7 @@ Windows 上还有 FFmpeg）都有国内来源，安装脚本先试原站几秒�
 bash launchers/macos/setup-local.sh
 ```
 
-它会建虚拟环境、装 Python 和前端依赖、构建前端、下载转录模型，最后在桌面生成
+它会建虚拟环境、装 Python 和前端依赖、构建前端、在后台开始下载转录模型，最后在桌面生成
 「FluentFlow Local.app」。装完双击桌面图标即可使用，不需要再开终端。
 
 整个过程不需要你回答任何问题，也不要密码。缺的 FFmpeg、Node.js 和 Python 装进 FluentFlow 自己的
@@ -80,9 +80,11 @@ bash launchers/macos/setup-local.sh
 不生成桌面图标，`--skip-model` 不下转录模型（留到第一次转录时再下）。
 
 Apple 芯片的 Mac 上，Python 依赖按 `requirements-local.lock.macos-arm64.txt` 安装，那是一份
-实际测过的版本组合；其他平台按 `requirements-local.txt` 的版本下限装最新的。转录模型下载失败时
-脚本会停下来说明：环境已装好，按它给的命令 `scripts/stt_model.py fetch --mirror` 从镜像补下模型，
-再运行一次脚本把剩下的步骤做完。
+实际测过的版本组合；其他平台按 `requirements-local.txt` 的版本下限装最新的。
+
+转录模型（1.5 到 3 GB）在后台下载，安装不等它：装完就能打开页面，下完之前提交的录像在任务里显示
+「正在下载转录模型」，下完自动接着转。进度写在数据目录的 `logs/model-download.log`；没下成时第一次转录会再下，
+也可以手动运行 `scripts/stt_model.py fetch --mirror` 从镜像补下。
 
 ### Windows
 

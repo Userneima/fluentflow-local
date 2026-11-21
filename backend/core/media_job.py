@@ -843,6 +843,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                     raise RuntimeError(duration_error)
             status_progress_floor = {
                 "starting": 22.0,
+                "downloading_model": 22.0,
                 "loading_model": 23.0,
                 "chunking_audio": 24.0,
                 "preparing_audio": 24.0,

@@ -1107,6 +1107,7 @@ export const noteGenerationDiagnosis = (result={}, lang='zh') => {
 export const sttStatusLabel = (status, t) => {
     const key = {
         starting: 'dash.sttStarting',
+        downloading_model: 'dash.sttDownloadingModel',
         loading_model: 'dash.sttLoadingModel',
         chunking_audio: 'dash.sttChunking',
         preparing_audio: 'dash.sttPreparingAudio',
