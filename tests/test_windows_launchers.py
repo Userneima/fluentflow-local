@@ -76,7 +76,19 @@ def test_setup_downloads_ffmpeg_from_the_mirror_before_trying_winget():
 def test_the_uninstaller_reads_the_fields_health_has():
     text = (ROOT / "uninstall-local.ps1").read_text(encoding="utf-8-sig")
     assert "$Health.runtime.execution" in text or "$Health.edition" in text
-    assert "$Jobs.jobs" in text
+    # Busy tasks are counted from each task's activity (Get-FluentFlowBusyCount).
+    assert "Get-FluentFlowBusyCount" in text
+
+
+def test_busy_tasks_are_counted_from_each_tasks_activity():
+    """A task reads "completed" once its transcript is stored while its cut and
+    note still run; the update and the stop icon must see that work."""
+    helper = (ROOT / "fluentflow-env.ps1").read_text(encoding="utf-8-sig")
+    installer = (ROOT.parents[1] / "install.ps1").read_text(encoding="utf-8")
+    for text in (helper, installer):
+        assert "activity.busy" in text and "local-single-user" in text
+    assert "Get-FluentFlowBusyCount" in (ROOT / "stop-local.ps1").read_text(encoding="utf-8-sig")
+    assert "count_active_jobs.py" in (ROOT.parents[1] / "install.sh").read_text(encoding="utf-8")
 
 
 def test_the_service_starts_in_python_utf8_mode():

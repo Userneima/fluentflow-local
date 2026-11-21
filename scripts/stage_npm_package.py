@@ -14,7 +14,7 @@ own package.json stays inside ``source/`` (it builds the interface), so the
 package's metadata is a separate package.json written here.
 
     python scripts/stage_npm_package.py v0.12.0 build/npm [built-frontend-dir]
-    npm publish build/npm --access public
+    npm publish ./build/npm --access public
 
 Run by `.github/workflows/release.yml` when a release is published.
 """

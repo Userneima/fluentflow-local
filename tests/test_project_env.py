@@ -44,6 +44,10 @@ def test_reader_agrees_with_python_dotenv(tmp_path):
             "EMPTY=",
             "REPEATED=first",
             "REPEATED=second",
+            "HOMEDATA=${HOME}/FluentFlow",
+            'QUOTED_REF="${PLAIN}/x"',
+            "LITERAL_REF='${PLAIN}/x'",
+            "DEFAULTED=${FLUENTFLOW_SURELY_UNSET:-fallback}",
             "",
         ]),
         encoding="utf-8",
@@ -202,3 +206,41 @@ def test_installers_take_the_system_proxy_when_none_is_set():
     assert "scutil --proxy" in (ROOT / "install.sh").read_text(encoding="utf-8")
     helper = (ROOT / "launchers" / "windows" / "fluentflow-env.ps1").read_text(encoding="utf-8-sig")
     assert "Internet Settings" in helper and "NO_PROXY" in helper
+
+
+def test_settings_saved_by_the_old_path_come_along(tmp_path, monkeypatch):
+    """Before the fix a data folder set only in .env still had its settings in
+    the platform folder; updating must not lose the user's keys."""
+    from backend.core import local_config
+
+    legacy_root = tmp_path / "platform"
+    legacy_root.mkdir()
+    (legacy_root / "fluentflow_config.json").write_text('{"secrets": {"deepseek_api_key": "k"}}', encoding="utf-8")
+    monkeypatch.setattr(runtime_paths, "default_app_data_root", lambda: legacy_root)
+    monkeypatch.delenv("FLUENTFLOW_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("FLUENTFLOW_DATA_DIR", raising=False)
+    env = tmp_path / ".env"
+    env.write_text(f"FLUENTFLOW_DATA_DIR={tmp_path / 'FluentFlow' / 'data'}\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_paths, "FROM_ENV_FILE", set())
+    runtime_paths.load_project_env(env)
+    monkeypatch.setenv("FLUENTFLOW_DATA_DIR", os.environ["FLUENTFLOW_DATA_DIR"])  # undone after the test
+
+    assert local_config.load_config()["secrets"]["deepseek_api_key"] == "k"
+    assert (tmp_path / "FluentFlow" / "data" / "fluentflow_config.json").is_file()
+
+
+def test_a_data_folder_set_in_the_environment_takes_no_old_settings(tmp_path, monkeypatch):
+    """A test run or a test copy sets the data folder itself: the maintainer's
+    real settings (keys) must not be copied into it."""
+    from backend.core import local_config
+
+    legacy_root = tmp_path / "platform"
+    legacy_root.mkdir()
+    (legacy_root / "fluentflow_config.json").write_text('{"secrets": {"deepseek_api_key": "real"}}', encoding="utf-8")
+    monkeypatch.setattr(runtime_paths, "default_app_data_root", lambda: legacy_root)
+    monkeypatch.setattr(runtime_paths, "FROM_ENV_FILE", set())
+    monkeypatch.delenv("FLUENTFLOW_CONFIG_PATH", raising=False)
+    monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path / "isolated"))
+
+    assert local_config.load_config() == {}
+    assert not (tmp_path / "isolated" / "fluentflow_config.json").exists()

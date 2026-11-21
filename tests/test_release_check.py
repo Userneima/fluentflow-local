@@ -33,3 +33,20 @@ def test_the_call_does_not_wait_and_checks_once_a_day(monkeypatch):
     assert started == [1]
     release_check.status(now=1_000_000.0 + release_check.REFRESH_SECONDS)
     assert started == [1, 1]
+
+
+def test_the_newer_of_the_mirror_and_github_wins(monkeypatch):
+    class Answer:
+        def __init__(self, status=200, body=None, headers=None):
+            self.status_code, self._body, self.headers = status, body or {}, headers or {}
+
+        def json(self):
+            return self._body
+
+    def get(url, **kwargs):
+        if "npmmirror" in url:
+            return Answer(body={"version": "0.11.0"})
+        return Answer(302, headers={"location": "https://github.com/x/y/releases/tag/v0.12.0"})
+
+    monkeypatch.setattr(release_check.httpx, "get", get)
+    assert release_check._fetch_latest() == "0.12.0"

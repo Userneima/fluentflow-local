@@ -39,26 +39,29 @@ def is_newer(latest: str | None, current: str | None) -> bool:
 
 
 def _fetch_latest() -> str | None:
+    """The newer of npmmirror's and GitHub's answers: the mirror can lag (a
+    release published while npm publishing was off), GitHub can be unreachable."""
     from backend.core import fake_model
 
     if fake_model.enabled():
         return None
+    found: list[str] = []
     try:
         response = httpx.get(NPM_URL, timeout=TIMEOUT)
         if response.status_code == 200:
             version = str(response.json().get("version") or "")
             if _parse(version):
-                return version
+                found.append(version)
     except (httpx.HTTPError, ValueError):
         pass
     try:
         response = httpx.get(GITHUB_URL, timeout=TIMEOUT, follow_redirects=False)
         tag = response.headers.get("location", "").rsplit("/tag/", 1)[-1]
         if _parse(tag):
-            return tag.lstrip("v")
+            found.append(tag.lstrip("v"))
     except httpx.HTTPError:
         pass
-    return None
+    return max(found, key=lambda version: _parse(version)) if found else None
 
 
 def _refresh() -> None:

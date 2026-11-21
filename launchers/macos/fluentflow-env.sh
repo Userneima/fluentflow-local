@@ -35,6 +35,13 @@ ff_env_file_value() {
 		value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')"
 		;;
 	esac
+	# ${NAME} 和 ${NAME:-默认值}，照服务那边（python-dotenv 的规则）从环境变量展开。
+	local ref name default found
+	while [[ "$value" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\} ]]; do
+		ref="${BASH_REMATCH[0]}" name="${BASH_REMATCH[1]}" default="${BASH_REMATCH[3]}"
+		found="${!name:-$default}"
+		value="${value/"$ref"/$found}"
+	done
 	printf '%s' "$value"
 }
 

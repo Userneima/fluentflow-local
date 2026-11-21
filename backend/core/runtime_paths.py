@@ -29,26 +29,39 @@ APP_NAME = "FluentFlow"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+# ${NAME} or ${NAME:-default}, which python-dotenv expands in every value
+# (a data folder written as ${HOME}/FluentFlow).
+_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 def project_env_file() -> Path:
     return PROJECT_ROOT / ".env"
 
 
-def _env_value(raw: str) -> str:
+def _expand(value: str, known: dict[str, str]) -> str:
+    def lookup(match: re.Match) -> str:
+        name, default = match.group(1), match.group(2)
+        found = os.environ.get(name) or known.get(name)
+        return found if found else (default or "")
+
+    return _REFERENCE.sub(lookup, value)
+
+
+def _env_value(raw: str, known: dict[str, str]) -> str:
     value = raw.strip()
     if value[:1] in ("'", '"'):
         quote = value[0]
         end = value.find(quote, 1)
         if end > 0:
             inner = value[1:end]
-            # Double quotes take the escapes python-dotenv takes; single quotes
-            # are literal.
-            if quote == '"':
-                inner = inner.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
-            return inner
+            # Double quotes take python-dotenv's escapes; both kinds have their
+            # references expanded, as python-dotenv does (checked by a test).
+            if quote == "'":
+                return _expand(inner, known)
+            inner = inner.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
+            return _expand(inner, known)
     # An unquoted value ends at a " #" comment, as in python-dotenv.
-    return re.split(r"\s+#", value, maxsplit=1)[0].strip()
+    return _expand(re.split(r"\s+#", value, maxsplit=1)[0].strip(), known)
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -61,21 +74,32 @@ def read_env_file(path: Path) -> dict[str, str]:
     for line in text.splitlines():
         match = _ENV_LINE.match(line)
         if match:
-            values[match.group(1)] = _env_value(match.group(2))
+            values[match.group(1)] = _env_value(match.group(2), values)
     return values
+
+
+# The names whose value this process took from .env (not from its own
+# environment): local_config carries old settings over only for those.
+FROM_ENV_FILE: set[str] = set()
 
 
 def load_project_env(path: Path | None = None) -> None:
     """Put the repository ``.env`` into the environment; set variables win."""
     for key, value in read_env_file(path or project_env_file()).items():
-        os.environ.setdefault(key, value)
+        if key not in os.environ:
+            os.environ[key] = value
+            FROM_ENV_FILE.add(key)
 
 
 def app_data_root() -> Path:
     override = (os.environ.get("FLUENTFLOW_DATA_DIR") or "").strip()
     if override:
         return Path(override).expanduser()
+    return default_app_data_root()
 
+
+def default_app_data_root() -> Path:
+    """The platform's own data folder, whatever FLUENTFLOW_DATA_DIR says."""
     system = platform.system().lower()
     if system == "darwin":
         return Path.home() / "Library" / "Application Support" / APP_NAME

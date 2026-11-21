@@ -136,7 +136,9 @@ def _from_sources(target: Path, timeout: float, sources: dict[str, object]) -> N
             try:
                 sources[url](url, Path(scratch), partial, timeout)  # type: ignore[operator]
                 _check(partial, target.name)
-            except DownloadError as exc:
+            except (DownloadError, tarfile.TarError, OSError) as exc:
+                # A host that answered with an error page or a broken archive
+                # is skipped like one that did not answer.
                 errors.append(f"{url.split('/')[2]}: {exc}")
                 continue
             partial.replace(target)

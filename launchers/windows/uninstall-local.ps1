@@ -81,15 +81,9 @@ try {
 # unnoticed and its environment was deleted under it.
 if ($Health -and ($Health.edition -eq "local" -or $Health.runtime.execution -eq "local")) {
     Write-Host "FluentFlow Local 正在端口 ${Port} 上运行。"
-    try {
-        $Jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?limit=100" -TimeoutSec 3
-        $Busy = @($Jobs.jobs | Where-Object { $_.status -in @("queued", "processing", "running", "pending") }).Count
-        if ($Busy -gt 0) {
-            Write-Host "注意：后台还有 ${Busy} 个任务在进行中，停止会让它们中断。"
-        }
-    } catch {
-        # A service that cannot answer its own job list is not worth protecting.
-    }
+    $Busy = Get-FluentFlowBusyCount $Port
+    if ($Busy -gt 0) { Write-Host "注意：后台还有 ${Busy} 个任务在进行中，停止会让它们中断。" }
+    elseif ($Busy -lt 0) { Write-Host "注意：问不到后台有没有任务在进行，停止可能让它们中断。" }
     if ($DryRun) {
         Write-Host "（-DryRun：不会真的停止它）"
     } else {
@@ -136,7 +130,9 @@ function Test-InHome([string]$Path) {
     $Base = [System.IO.Path]::GetFullPath($HomeDir).TrimEnd('\') + '\'
     return [System.IO.Path]::GetFullPath($Path).StartsWith($Base, [StringComparison]::OrdinalIgnoreCase)
 }
-if ($HomeDir -and -not (Test-InHome $Repo)) { $HomeDir = $null }
+# Only a folder the installer made (it leaves .fluentflow-home in it) is
+# FluentFlow's to empty; a folder the user already had keeps what was there.
+if ($HomeDir -and (-not (Test-InHome $Repo) -or -not (Test-Path (Join-Path $HomeDir ".fluentflow-home")))) { $HomeDir = $null }
 $ModelHome = Get-FluentFlowSetting $Repo "HF_HOME"
 $LinkRoot = Get-FluentFlowSetting $Repo "FLUENTFLOW_LINK_OUTPUT_DIR"
 $IsGitCheckout = Test-Path (Join-Path $Repo ".git")
@@ -198,7 +194,8 @@ if ($Data) {
 # folder's server: an entry pointing at another copy is someone else's.
 function Test-MentionsRepo([string]$Text) {
     if (-not $Text) { return $false }
-    return $Text.Replace('\\', '\').IndexOf($Repo, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    # The folder followed by a separator: C:\app must not claim C:\app-backup.
+    return $Text.Replace('\\', '\').IndexOf($Repo.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 $McpRemovals = New-Object System.Collections.ArrayList
 if (Get-Command claude -ErrorAction SilentlyContinue) {
@@ -286,7 +283,8 @@ foreach ($Target in $Targets) {
         [void]$Stuck.Add($Target.Path)
     }
 }
-if ($HomeDir -and (Test-Path $HomeDir) -and -not (Get-ChildItem -Force -LiteralPath $HomeDir | Select-Object -First 1)) {
+if ($HomeDir -and (Test-Path $HomeDir) -and -not (Get-ChildItem -Force -LiteralPath $HomeDir | Where-Object { $_.Name -ne ".fluentflow-home" } | Select-Object -First 1)) {
+    Remove-Item -Force -LiteralPath (Join-Path $HomeDir ".fluentflow-home") -ErrorAction SilentlyContinue
     Remove-Item -Force -LiteralPath $HomeDir
     Write-Host "已删除：$HomeDir（已经空了）"
 }

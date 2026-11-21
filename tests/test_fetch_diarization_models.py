@@ -137,6 +137,17 @@ def test_a_failed_github_download_falls_back_to_the_mirror(monkeypatch, fetch, t
     assert (tmp_path / "embedding.onnx").read_bytes() == b"EMBEDDING"
 
 
+def test_a_broken_archive_from_github_falls_back_to_the_mirror(monkeypatch, fetch, tmp_path):
+    _serve(monkeypatch, fetch, {
+        fetch.SEGMENTATION_URL: _Response(b"<html>rate limited</html>"),
+        fetch.SEGMENTATION_MIRROR_URL: _Response(b"SEGMENTATION"),
+        fetch.EMBEDDING_URL: _Response(b"EMBEDDING"),
+    })
+
+    assert fetch.main(["--target", str(tmp_path)]) == 0
+    assert (tmp_path / "segmentation.onnx").read_bytes() == b"SEGMENTATION"
+
+
 def test_the_mirror_goes_first_when_the_probe_says_so(monkeypatch, fetch, tmp_path):
     monkeypatch.setattr(fetch.download_source, "order", lambda urls: list(reversed(urls)))
     calls = _serve(monkeypatch, fetch, {

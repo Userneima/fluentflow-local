@@ -124,6 +124,14 @@ if (Test-Path (Join-Path $Root "backend\local_main.py")) {
 } else {
     $Dir = Join-Path $Root "app"
     $OneFolder = $true
+    # Everything in this folder becomes FluentFlow's, and uninstalling empties
+    # it; so it must be new, empty, or one this installer made (the marker).
+    $Marker = Join-Path $Root ".fluentflow-home"
+    if ((Test-Path $Root) -and -not (Test-Path $Marker) -and (Get-ChildItem -Force -LiteralPath $Root | Select-Object -First 1)) {
+        throw "$Root already holds other files. Choose a new or empty folder for FluentFlow (FLUENTFLOW_INSTALL_DIR), for example $Root\FluentFlow."
+    }
+    New-Item -ItemType Directory -Force -Path $Root | Out-Null
+    if (-not (Test-Path $Marker)) { Set-Content -Path $Marker -Value "FluentFlow Local lives here; uninstalling removes this folder." -Encoding ASCII }
 }
 Write-Host "Installing into $Root"
 
@@ -302,23 +310,46 @@ function Test-ServiceUp([string]$ProbePort) {
     try { return (Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "http://127.0.0.1:$ProbePort/health").Content -match '"execution":"local"|"edition":"local"' } catch { return $false }
 }
 
+# How many tasks are still working (the same count as Get-FluentFlowBusyCount
+# in launchers/windows/fluentflow-env.ps1 and launchers/macos/count_active_jobs.py,
+# repeated here because neither copy's scripts can be relied on yet):
+# counts them: each task's activity.busy (a task is "completed" once its
+# transcript is stored while its cut and note may run for many minutes), asked
+# under both scopes the local edition uses. -1 when the service cannot say.
+function Get-BusyTaskCount([string]$Port) {
+    $Counts = @()
+    foreach ($Scope in @($null, "local-single-user")) {
+        try {
+            $Headers = @{}
+            if ($Scope) { $Headers["X-FluentFlow-Client-Id"] = $Scope }
+            $Jobs = (Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs" -Headers $Headers -TimeoutSec 10).jobs
+            $Counts += @($Jobs | Where-Object {
+                if ($_.activity -and ($_.activity.busy -is [bool])) { $_.activity.busy }
+                else { ($_.status -in @("queued", "processing", "running", "pending")) -or ($_.summary_status -eq "pending") -or ($_.result.debreath.status -eq "running") }
+            }).Count
+        } catch {}
+    }
+    if ($Counts.Count -eq 0) { return -1 }
+    return ($Counts | Measure-Object -Maximum).Maximum
+}
+
 if ($Updating) {
   try {
     $OldPort = Get-InstalledPort $Dir
     if (Test-ServiceUp $OldPort) {
-        try {
-            $Jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$OldPort/jobs?limit=100" -TimeoutSec 3
-            $Busy = @($Jobs.jobs | Where-Object { $_.status -in @("queued", "processing", "running", "pending") }).Count
-        } catch { $Busy = 0 }
-        if ($Busy -gt 0 -and $env:FLUENTFLOW_UPDATE_FORCE -ne "1") {
-            Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
-            throw "$Busy task(s) are still being processed; run this again when they finish (or set FLUENTFLOW_UPDATE_FORCE=1 to stop them; they carry on after the restart)."
+        $Busy = Get-BusyTaskCount $OldPort
+        if ($Busy -ne 0 -and $env:FLUENTFLOW_UPDATE_FORCE -ne "1") {
+            $What = if ($Busy -lt 0) { "The running FluentFlow could not say whether tasks are being processed" } else { "$Busy task(s) are still being processed" }
+            throw "$What; run this again when they finish (or set FLUENTFLOW_UPDATE_FORCE=1 to stop them; they carry on after the restart)"
         }
         Write-Host "Stopping the running FluentFlow Local..."
         Get-NetTCPConnection -LocalPort ([int]$OldPort) -State Listen -ErrorAction SilentlyContinue |
             ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
     }
     Stop-FolderPrograms $Dir
+    # The optional pyannote speaker engine is not in the standard packages; a
+    # user who installed it keeps it after the update.
+    $HadPyannote = Test-Path (Join-Path $Dir ".venv\Lib\site-packages\pyannote")
     if (Test-Path (Join-Path $Dir ".env")) { Copy-Item -Force (Join-Path $Dir ".env") (Join-Path "$Dir.new" ".env") }
     if (Test-Path "$Dir.old") { Remove-Item -Recurse -Force -LiteralPath "$Dir.old" }
     Set-Location (Split-Path -Parent $Dir)
@@ -352,6 +383,11 @@ $Port = Get-FluentFlowPort $Dir
 try {
     & powershell -ExecutionPolicy Bypass -File (Join-Path $Dir "launchers\windows\setup-local.ps1") @args
     if ($LASTEXITCODE -ne 0) { throw "The setup script failed; see the lines above." }
+    if ($Updating -and $HadPyannote) {
+        Write-Host "Reinstalling the optional pyannote speaker engine you had..."
+        & (Join-Path $Dir ".venv\Scripts\python.exe") -m pip install -q --disable-pip-version-check -r (Join-Path $Dir "requirements-speaker.txt")
+        if ($LASTEXITCODE -ne 0) { throw "Reinstalling pyannote failed." }
+    }
 
     $Python = Join-Path $Dir ".venv\Scripts\python.exe"
     $McpScript = Join-Path $Dir "scripts\fluentflow_mcp_server.py"
@@ -378,11 +414,19 @@ try {
     # it carries no secret.
     Write-Host "== Registering the MCP tools =="
     $CodexToml = "[mcp_servers.fluentflow-local]`ncommand = '$Python'`nargs = ['$McpScript']"
+    # The MCP server reaches 8000 by itself; another port has to be told.
+    $ClaudeEnv = @()
+    $CodexEnv = @()
+    if ($Port -ne "8000") {
+        $ClaudeEnv = @("-e", "FLUENTFLOW_API_BASE=http://127.0.0.1:$Port")
+        $CodexEnv = @("--env", "FLUENTFLOW_API_BASE=http://127.0.0.1:$Port")
+        $CodexToml += "`nenv = { FLUENTFLOW_API_BASE = 'http://127.0.0.1:$Port' }"
+    }
     $Registered = $false
     if (Get-Command claude -ErrorAction SilentlyContinue) {
         if ((Invoke-FluentFlowTool claude @("mcp", "get", "fluentflow-local")).Code -eq 0) { Write-Host "Claude Code: fluentflow-local is already registered." }
         else {
-            $Added = Invoke-FluentFlowTool claude @("mcp", "add", "--scope", "user", "fluentflow-local", "--", $Python, $McpScript)
+            $Added = Invoke-FluentFlowTool claude (@("mcp", "add", "--scope", "user", "fluentflow-local") + $ClaudeEnv + @("--", $Python, $McpScript))
             if ($Added.Code -eq 0) { Write-Host "Claude Code: registered fluentflow-local." }
             else { Write-Host "Claude Code: registration failed ($($Added.Output.Trim())); run: claude mcp add --scope user fluentflow-local -- `"$Python`" `"$McpScript`"" }
         }
@@ -393,7 +437,7 @@ try {
         if ((Test-Path $CodexConfig) -and (Select-String -Path $CodexConfig -Pattern '^\[mcp_servers\.fluentflow-local\]' -Quiet)) {
             Write-Host "Codex: fluentflow-local is already registered."
         } else {
-            $Added = Invoke-FluentFlowTool codex @("mcp", "add", "fluentflow-local", "--", $Python, $McpScript)
+            $Added = Invoke-FluentFlowTool codex (@("mcp", "add", "fluentflow-local") + $CodexEnv + @("--", $Python, $McpScript))
             if ($Added.Code -eq 0) { Write-Host "Codex: registered fluentflow-local." }
             else {
                 Write-Host "Codex: could not register automatically ($($Added.Output.Trim())); add these lines to $CodexConfig :"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -77,7 +78,27 @@ def config_path() -> Path:
     # before it reads .env, and a path frozen then put the user's saved keys in
     # the default data folder while everything else followed FLUENTFLOW_DATA_DIR
     # from .env (found on GitHub's Windows runner, 2026-11-21).
-    return default_config_path()
+    target = default_config_path()
+    _carry_over_settings_saved_by_the_old_path(target)
+    return target
+
+
+def _carry_over_settings_saved_by_the_old_path(target: Path) -> None:
+    """Before that fix, a data folder set only in .env still had its settings
+    file in the platform's default folder. On the first read after updating,
+    that file is copied to where it belongs, so the user's keys stay."""
+    # Only a data folder that came from .env had the old behaviour; one set in
+    # the environment (a test run, a test copy) never shared the default file.
+    if target.exists() or os.environ.get("FLUENTFLOW_CONFIG_PATH") or "FLUENTFLOW_DATA_DIR" not in runtime_paths.FROM_ENV_FILE:
+        return
+    legacy = runtime_paths.default_app_data_root() / target.name
+    if legacy == target or not legacy.is_file():
+        return
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy, target)
+    except OSError:
+        pass
 
 
 def load_config(path: Path | str | None = None) -> dict[str, Any]:

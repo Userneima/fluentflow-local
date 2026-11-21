@@ -91,7 +91,8 @@ jobs:
           mkdir -p build/frontend && unzip -q frontend-dist-local.zip -d build/frontend
           python3 scripts/stage_npm_package.py "$TAG" build/npm build/frontend
           npm --version
-          npm publish build/npm --access public --provenance
+          # ./ makes it a local folder; a bare build/npm is read as a GitHub repository.
+          npm publish ./build/npm --access public --provenance
       - name: Ask npmmirror to copy it now
         if: env.HAS_TOKEN == 'true'
         # npmmirror also copies on its own within minutes; this only shortens the wait.

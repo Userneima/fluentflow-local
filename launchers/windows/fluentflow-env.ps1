@@ -46,6 +46,17 @@ function Invoke-FluentFlowTool([string]$Name, [string[]]$Arguments) {
     }
 }
 
+# ${NAME} and ${NAME:-default}, expanded from the environment as the service's
+# reader (python-dotenv's rule) does.
+function Expand-FluentFlowReferences([string]$Value) {
+    return [regex]::Replace($Value, '\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}', {
+        param($Match)
+        $Found = [Environment]::GetEnvironmentVariable($Match.Groups[1].Value)
+        if ($Found) { return $Found }
+        return $Match.Groups[2].Value
+    })
+}
+
 function ConvertFrom-FluentFlowEnvValue([string]$Raw) {
     $Value = $Raw.Trim()
     if ($Value.Length -ge 1 -and ($Value[0] -eq '"' -or $Value[0] -eq "'")) {
@@ -54,10 +65,10 @@ function ConvertFrom-FluentFlowEnvValue([string]$Raw) {
         if ($End -gt 0) {
             $Inner = $Value.Substring(1, $End - 1)
             if ($Quote -eq '"') { $Inner = $Inner.Replace('\n', "`n").Replace('\"', '"').Replace('\\', '\') }
-            return $Inner
+            return Expand-FluentFlowReferences $Inner
         }
     }
-    return ([regex]::Split($Value, '\s+#', 2)[0]).Trim()
+    return Expand-FluentFlowReferences (([regex]::Split($Value, '\s+#', 2)[0]).Trim())
 }
 
 # The value of a line in the repository's .env, ignoring the environment.
@@ -201,7 +212,14 @@ function Save-FluentFlowVerifiedDownload([string[]]$Urls, [string]$OutFile, [str
 # window, the window was reclaimed, and the agent took FluentFlow for broken,
 # 2026-11). Output goes to the log; stop it with stop-local.ps1.
 function Start-FluentFlowService([string]$Repo, [string]$Python, [string]$Port, [string]$LogFile) {
-    $Command = "cmd.exe /d /s /c `"set PYTHONUTF8=1&& `"$Python`" -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port >> `"$LogFile`" 2>&1`""
+    # Windows gives the new process the user's saved environment, not this
+    # window's, so what was set here for FluentFlow (a data folder, a test
+    # copy, the fake model, a proxy) is handed over explicitly.
+    $Sets = @("set PYTHONUTF8=1")
+    Get-ChildItem Env: | Where-Object {
+        $_.Name -match '^(FLUENTFLOW_|HF_|HTTPS?_PROXY$|NO_PROXY$)' -and $_.Value -notmatch '"'
+    } | ForEach-Object { $Sets += "set `"$($_.Name)=$($_.Value)`"" }
+    $Command = "cmd.exe /d /s /c `"$($Sets -join '&& ')&& `"$Python`" -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port >> `"$LogFile`" 2>&1`""
     $Startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
     $Result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
         CommandLine = $Command; CurrentDirectory = $Repo; ProcessStartupInformation = $Startup
@@ -241,4 +259,25 @@ function Use-FluentFlowSystemProxy {
     $env:HTTPS_PROXY = $Server
     $env:NO_PROXY = "127.0.0.1,localhost,::1"
     Write-Host "用系统设置里的代理：$Server"
+}
+
+# How many tasks are still working, as launchers/macos/count_active_jobs.py
+# counts them: each task's activity.busy (a task is "completed" once its
+# transcript is stored while its cut and note may run for many minutes), asked
+# under both scopes the local edition uses. -1 when the service cannot say.
+function Get-FluentFlowBusyCount([string]$Port) {
+    $Counts = @()
+    foreach ($Scope in @($null, "local-single-user")) {
+        try {
+            $Headers = @{}
+            if ($Scope) { $Headers["X-FluentFlow-Client-Id"] = $Scope }
+            $Jobs = (Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs" -Headers $Headers -TimeoutSec 10).jobs
+            $Counts += @($Jobs | Where-Object {
+                if ($_.activity -and ($_.activity.busy -is [bool])) { $_.activity.busy }
+                else { ($_.status -in @("queued", "processing", "running", "pending")) -or ($_.summary_status -eq "pending") -or ($_.result.debreath.status -eq "running") }
+            }).Count
+        } catch {}
+    }
+    if ($Counts.Count -eq 0) { return -1 }
+    return ($Counts | Measure-Object -Maximum).Maximum
 }

@@ -200,13 +200,24 @@ stop_folder_programs() {
 }
 
 if [[ "$UPDATING" -eq 1 ]]; then
+	# 端口和桌面启动器一样：环境变量优先，其次是 .env 里的同名行（新旧两份 .env 一样）。
+	if [[ -z "${FLUENTFLOW_LOCAL_PORT:-}" && -f "${DIR}/.env" ]]; then
+		env_port="$(grep -E '^[[:space:]]*(export[[:space:]]+)?FLUENTFLOW_LOCAL_PORT[[:space:]]*=' "${DIR}/.env" | tail -n 1 |
+			sed -E "s/^[^=]*=[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//" || true)"
+		[[ "$env_port" =~ ^[0-9]+$ ]] && PORT="$env_port"
+	fi
 	health="$(curl -s --max-time 2 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
 	if [[ "$health" == *'"edition":"local"'* ]]; then
-		busy="$(curl -s --max-time 3 "http://127.0.0.1:${PORT}/jobs?limit=100" 2>/dev/null |
-			grep -o '"status":"\(queued\|processing\|running\|pending\)"' | wc -l | tr -d ' ' || true)"
-		if [[ "${busy:-0}" -gt 0 && "${FLUENTFLOW_UPDATE_FORCE:-}" != "1" ]]; then
+		# 每个任务的 activity.busy 算（剪辑、写笔记时任务主状态已经是完成），和启动器的重启
+		# 检查同一份脚本；-1 是问不到。
+		busy="$("${DIR}/.venv/bin/python" "${DIR}.new/launchers/macos/count_active_jobs.py" "http://127.0.0.1:${PORT}" 2>/dev/null || echo -1)"
+		[[ "$busy" =~ ^-?[0-9]+$ ]] || busy=-1
+		if [[ "$busy" -ne 0 && "${FLUENTFLOW_UPDATE_FORCE:-}" != "1" ]]; then
 			rm -rf "${DIR}.new"
-			fail "还有 ${busy} 个任务在处理，等它们做完再运行一次（或设 FLUENTFLOW_UPDATE_FORCE=1 先停掉，重启后接着做）。"
+			if [[ "$busy" -lt 0 ]]; then
+				fail "问不到正在运行的 FluentFlow 有没有任务在处理。确认没有之后设 FLUENTFLOW_UPDATE_FORCE=1 再运行一次。什么都没改。"
+			fi
+			fail "还有 ${busy} 个任务在处理，等它们做完再运行一次（或设 FLUENTFLOW_UPDATE_FORCE=1 先停掉，重启后接着做）。什么都没改。"
 		fi
 		echo "停止正在运行的 FluentFlow Local…"
 		pids="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null || true)"
@@ -214,6 +225,9 @@ if [[ "$UPDATING" -eq 1 ]]; then
 		[[ -n "$pids" ]] && kill $pids 2>/dev/null || true
 	fi
 	stop_folder_programs "$DIR"
+	# 可选的 pyannote 讲话人引擎不在标准依赖里；装过的，更新后照样装上。
+	HAD_PYANNOTE=0
+	compgen -G "${DIR}/.venv/lib/python3*/site-packages/pyannote" >/dev/null && HAD_PYANNOTE=1
 	[[ -f "${DIR}/.env" ]] && cp -p "${DIR}/.env" "${DIR}.new/.env"
 	rm -rf "${DIR}.old"
 	cd "$(dirname "$DIR")"
@@ -226,6 +240,11 @@ fi
 
 # --- 2. 安装 ----------------------------------------------------------------
 bash "${DIR}/launchers/macos/setup-local.sh" "$@" || fail "安装步骤没有完成，请看上面的报错。"
+if [[ "$UPDATING" -eq 1 && "${HAD_PYANNOTE:-0}" -eq 1 ]]; then
+	echo "重新装上你装过的 pyannote 讲话人引擎…"
+	"${DIR}/.venv/bin/python" -m pip install -q --disable-pip-version-check -r "${DIR}/requirements-speaker.txt" ||
+		fail "重新装 pyannote 没有成功。"
+fi
 
 VENV_PY="${DIR}/.venv/bin/python"
 [[ -x "${DIR}/venv/bin/python" ]] && VENV_PY="${DIR}/venv/bin/python"

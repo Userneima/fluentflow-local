@@ -16,12 +16,10 @@ if (-not (Test-FluentFlowHealthy $Port)) {
     Write-Host "FluentFlow Local 没有在运行（端口 $Port）。"
     exit 0
 }
-try {
-    $Jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?limit=100" -TimeoutSec 3
-    $Busy = @($Jobs.jobs | Where-Object { $_.status -in @("queued", "processing", "running", "pending") }).Count
-} catch { $Busy = 0 }
-if ($Busy -gt 0 -and -not $Yes) {
-    $Reply = Read-Host "还有 $Busy 个任务在处理，停止会让它们中断（下次启动时接着做）。仍然停止？[y/N]"
+$Busy = Get-FluentFlowBusyCount $Port
+if ($Busy -ne 0 -and -not $Yes) {
+    $What = if ($Busy -lt 0) { "问不到有没有任务在处理" } else { "还有 $Busy 个任务在处理" }
+    $Reply = Read-Host "${What}，停止会让它们中断（下次启动时接着做）。仍然停止？[y/N]"
     if ($Reply -notmatch '^[Yy]') { Write-Host "没有停止。"; exit 0 }
 }
 Get-NetTCPConnection -LocalPort ([int]$Port) -State Listen -ErrorAction SilentlyContinue |
