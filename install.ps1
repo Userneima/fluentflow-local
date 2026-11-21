@@ -127,7 +127,8 @@ if (Test-Path (Join-Path $Root "backend\local_main.py")) {
     # Everything in this folder becomes FluentFlow's, and uninstalling empties
     # it; so it must be new, empty, or one this installer made (the marker).
     $Marker = Join-Path $Root ".fluentflow-home"
-    if ((Test-Path $Root) -and -not (Test-Path $Marker) -and (Get-ChildItem -Force -LiteralPath $Root | Select-Object -First 1)) {
+    $HasApp = Test-Path (Join-Path $Dir "backend\local_main.py")
+    if ((Test-Path $Root) -and -not (Test-Path $Marker) -and -not $HasApp -and (Get-ChildItem -Force -LiteralPath $Root | Select-Object -First 1)) {
         throw "$Root already holds other files. Choose a new or empty folder for FluentFlow (FLUENTFLOW_INSTALL_DIR), for example $Root\FluentFlow."
     }
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
