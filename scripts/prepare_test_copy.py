@@ -170,10 +170,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-calls", type=int, default=DEFAULT_MAX_CALLS)
     parser.add_argument("--max-usd", type=float, default=DEFAULT_MAX_USD)
     parser.add_argument("--max-cny", type=float, default=DEFAULT_MAX_CNY)
-    parser.add_argument("--frontend-dir", type=Path, help="serve the page from this build folder instead of "
-                        "frontend/dist-local (build it with vite --outDir <folder>)")
+    parser.add_argument("--frontend-dir", type=Path, help="serve the page from this build folder (an absolute path) instead of "
+                        "frontend/dist-local; build it as docs/04-维护手册.md says")
     parser.add_argument("--no-limit", action="store_true", help="no budget (only with the owner's go-ahead)")
     args = parser.parse_args(argv)
+    if args.frontend_dir is not None and not (args.frontend_dir.expanduser().resolve() / "local.html").is_file():
+        parser.error(f"--frontend-dir {args.frontend_dir} has no local.html; build the page there first "
+                     "(docs/04-维护手册.md「在真实数据的副本上实测」)")
     done = prepare(args.source, args.into)
     limits = (None, None, None) if args.no_limit else (args.max_calls, args.max_usd, args.max_cny)
     repo = Path(__file__).resolve().parents[1]

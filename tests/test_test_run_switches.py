@@ -636,12 +636,22 @@ def test_the_test_copy_can_serve_a_page_built_elsewhere(tmp_path, monkeypatch):
     assert f"FLUENTFLOW_FRONTEND_DIST_DIR={build.resolve()}" in command
     assert "FLUENTFLOW_FRONTEND_DIST_DIR" not in prepare_test_copy.start_command(
         tmp_path / "copy", port=8013, fake=True, max_calls=None, max_usd=None, max_cny=None, repo=tmp_path)
+    with pytest.raises(SystemExit):  # a folder with no built page is refused before anything is copied
+        prepare_test_copy.main(["--source", str(tmp_path / "real"), "--into", str(tmp_path / "copy"),
+                                "--frontend-dir", str(build)])
+    assert not (tmp_path / "copy").exists()
 
+    default = frontend_paths.FRONTEND_ROOT / "dist-local"
     monkeypatch.setenv("FLUENTFLOW_FRONTEND_DIST_DIR", str(build))
+    monkeypatch.delenv("FLUENTFLOW_TEST_COPY", raising=False)
     try:
+        # The owner's own service ignores it; only a test-copy service reads it.
+        assert importlib.reload(frontend_paths).FRONTEND_LOCAL_DIST_DIR == default
+        monkeypatch.setenv("FLUENTFLOW_TEST_COPY", "1")
         assert importlib.reload(frontend_paths).local_frontend_index_path() == build.resolve() / "local.html"
     finally:
         monkeypatch.delenv("FLUENTFLOW_FRONTEND_DIST_DIR")
+        monkeypatch.delenv("FLUENTFLOW_TEST_COPY")
         importlib.reload(frontend_paths)
     assert frontend_paths.FRONTEND_LOCAL_DIST_DIR == frontend_paths.FRONTEND_ROOT / "dist-local"
 
