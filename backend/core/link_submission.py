@@ -23,6 +23,7 @@ import asyncio
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -221,6 +222,34 @@ def _progress_throttle() -> Any:
     return should_publish
 
 
+@dataclass(frozen=True)
+class _LinkTask:
+    """What every step of one link download needs to know about its task."""
+
+    task_id: str
+    input_text: str
+    title: str | None
+    options: dict[str, str]
+    client_id: Optional[str]
+    gate: CancellationGate
+    route: str
+
+
+@dataclass(frozen=True)
+class _Downloaded:
+    """The downloaded file, already the task's own copy, and what the task
+    records about it."""
+
+    saved: SavedVideoSource
+    target_path: Path
+    suffix: str
+    source_file_size_mb: float | None
+    media_type: str
+    source_type: str
+    raw_title: str
+    display_title: str
+
+
 async def _download_then_process(
     *,
     task_id: str,
@@ -233,33 +262,64 @@ async def _download_then_process(
     previous: Any,
     done: asyncio.Event,
 ) -> None:
-    loop = asyncio.get_running_loop()
-    should_publish = _progress_throttle()
+    """Fetch the link, record the file, then end the task one of three ways:
+    download only, a note from captions, or the transcription pipeline."""
+    job = _LinkTask(task_id, input_text, title, options, client_id, gate, route)
     if not task_steps.steps_of([task_id]).get(task_id):
         task_steps.plan(task_id)
     task_steps.start(task_id, task_steps.FETCH)
+
+    download_only = download_only_requested(options)
+    try:
+        saved = await _fetch_link(job, download_only=download_only)
+    except Exception as exc:
+        resolution_trace = getattr(exc, "resolution_trace", None)
+        await _record_fetch_failure(
+            job,
+            "video_source",
+            exc,
+            video_source={"resolution_trace": resolution_trace} if resolution_trace else None,
+        )
+        return
+
+    downloaded = _record_downloaded(job, saved)
+    if download_only:
+        await _finish_download_only(task_id, client_id, downloaded.target_path)
+        return
+
+    await JOB_EVENTS.publish(task_id, {"stage": "queued", "progress": 0})
+    if downloaded.media_type == "transcript":
+        await _note_from_captions(job, downloaded)
+        return
+    await _hand_to_pipeline(job, downloaded, previous=previous, done=done)
+
+
+def _download_progress_reporter(job: _LinkTask, loop: asyncio.AbstractEventLoop) -> Any:
+    """The ``on_progress`` callback for one download: throttled reports are
+    persisted on the task and published on the hub."""
+    should_publish = _progress_throttle()
 
     def on_progress(progress: VideoSourceProgress) -> None:
         # Runs in the executor thread: persist, then publish thread-safely.
         # After cancellation the download thread cannot be killed and keeps
         # calling this; the gate keeps it from resurrecting the job state.
-        if gate.closed:
+        if job.gate.closed:
             return
         if not should_publish(progress):
             return
         progress_value = _video_source_progress_value(progress)
         upsert_job(
-            task_id=task_id,
+            task_id=job.task_id,
             status="running",
-            client_id=client_id,
+            client_id=job.client_id,
             stage=progress.stage,
             progress=progress_value,
             # Download text is progress, not the note's state: summary_status
             # carries only note statuses, and readers get this line as the
             # job's top-level progress_message while this stage lasts.
             metadata=event_metadata(
-                route=route,
-                queue_options=options,
+                route=job.route,
+                queue_options=job.options,
                 **progress_message_metadata(progress.message, progress.stage),
                 video_source_progress={
                     "message": progress.message,
@@ -271,7 +331,7 @@ async def _download_then_process(
         )
         asyncio.run_coroutine_threadsafe(
             JOB_EVENTS.publish(
-                task_id,
+                job.task_id,
                 {
                     "stage": progress.stage,
                     "progress": progress_value,
@@ -284,153 +344,170 @@ async def _download_then_process(
             loop,
         )
 
-    async def fail(stage: str, error: Exception | str, **extra_metadata: Any) -> None:
-        friendly_error = _friendly_error(error)
-        task_steps.finish(task_id, task_steps.FETCH, task_steps.FAILED, friendly_error)
-        log_event(
-            task_id=task_id,
-            event_name="task_failed",
-            source_type="video",
-            source_filename=title or (input_text[:80] if input_text else "video link"),
-            stage=stage,
-            success=False,
-            error_reason=friendly_error,
-            metadata=event_metadata(
-                route=route,
-                queue_options=options,
-                raw_error=str(error),
-                **extra_metadata,
+    return on_progress
+
+
+async def _fetch_link(job: _LinkTask, *, download_only: bool) -> SavedVideoSource:
+    """Download the link in the link-download pool, at most
+    ``_MAX_CONCURRENT_LINK_DOWNLOADS`` at once, reporting progress. The file is
+    handed straight to the task (``adopt_source_file``). Raises what the
+    download raises."""
+    loop = asyncio.get_running_loop()
+    on_progress = _download_progress_reporter(job, loop)
+    cookies_browser = _video_cookies_browser(job.options)
+    duration_limit = _effective_duration_limit(job.options.get("duration_limit_seconds"))
+    slot = _download_slot()
+    if slot.locked():
+        on_progress(VideoSourceProgress(
+            stage="resolving", message="等待前面的链接下载完成", percent=2,
+        ))
+    async with slot:
+        return await loop.run_in_executor(
+            _DOWNLOAD_EXECUTOR,
+            lambda: download_video_source(
+                job.input_text,
+                title=job.title,
+                video_dir=_video_source_storage_dir(),
+                on_progress=on_progress,
+                cookies_from_browser=cookies_browser,
+                duration_limit_seconds=duration_limit,
+                cancellation_event=job.gate.cancellation_event,
+                deliver=lambda downloaded: adopt_source_file(
+                    job.task_id, downloaded.suffix or ".mp4", downloaded
+                ),
+                video_only=download_only,
             ),
         )
-        upsert_job(
-            task_id=task_id,
-            status="failed",
-            client_id=client_id,
-            stage=stage,
-            progress=100,
-            error_reason=friendly_error,
-        )
-        await JOB_EVENTS.publish(
-            task_id, {"stage": "error", "progress": 100, "error": friendly_error}
-        )
 
-    cookies_browser = _video_cookies_browser(options)
-    download_only = download_only_requested(options)
-    duration_limit = _effective_duration_limit(options.get("duration_limit_seconds"))
-    slot = _download_slot()
-    try:
-        if slot.locked():
-            on_progress(VideoSourceProgress(
-                stage="resolving", message="等待前面的链接下载完成", percent=2,
-            ))
-        async with slot:
-            saved = await loop.run_in_executor(
-                _DOWNLOAD_EXECUTOR,
-                lambda: download_video_source(
-                    input_text,
-                    title=title,
-                    video_dir=_video_source_storage_dir(),
-                    on_progress=on_progress,
-                    cookies_from_browser=cookies_browser,
-                    # The Douyin third-party fallback runs only when this
-                    # request or the remembered setting allows it.
-                            duration_limit_seconds=duration_limit,
-                    cancellation_event=gate.cancellation_event,
-                    deliver=lambda downloaded: adopt_source_file(
-                        task_id, downloaded.suffix or ".mp4", downloaded
-                    ),
-                    video_only=download_only,
-                ),
-            )
-    except Exception as exc:
-        resolution_trace = getattr(exc, "resolution_trace", None)
-        await fail(
-            "video_source",
-            exc,
-            video_source={"resolution_trace": resolution_trace} if resolution_trace else None,
-        )
-        return
 
+async def _record_fetch_failure(
+    job: _LinkTask, stage: str, error: Exception | str, **extra_metadata: Any
+) -> None:
+    """End the task as failed at ``stage``: the fetch step, the event log, the
+    task record and the hub all get the same friendly reason."""
+    friendly_error = _friendly_error(error)
+    task_steps.finish(job.task_id, task_steps.FETCH, task_steps.FAILED, friendly_error)
+    log_event(
+        task_id=job.task_id,
+        event_name="task_failed",
+        source_type="video",
+        source_filename=job.title or (job.input_text[:80] if job.input_text else "video link"),
+        stage=stage,
+        success=False,
+        error_reason=friendly_error,
+        metadata=event_metadata(
+            route=job.route,
+            queue_options=job.options,
+            raw_error=str(error),
+            **extra_metadata,
+        ),
+    )
+    upsert_job(
+        task_id=job.task_id,
+        status="failed",
+        client_id=job.client_id,
+        stage=stage,
+        progress=100,
+        error_reason=friendly_error,
+    )
+    await JOB_EVENTS.publish(
+        job.task_id, {"stage": "error", "progress": 100, "error": friendly_error}
+    )
+
+
+def _record_downloaded(job: _LinkTask, saved: SavedVideoSource) -> _Downloaded:
+    """Log the download and mark the task queued with the file's details."""
     # Already the task's own copy: the downloader handed it over.
     target_path = Path(saved.file_path)
-    suffix = target_path.suffix or Path(saved.filename).suffix or ".mp4"
-    source_file_size_mb = path_size_mb(target_path)
     media_type = saved.media_type or "video"
-    source_type = "transcript_file" if media_type == "transcript" else "video"
-    raw_title = saved.raw_title or saved.title
-    display_title = saved.display_title or display_title_for_user(saved.title, saved.filename)
+    downloaded = _Downloaded(
+        saved=saved,
+        target_path=target_path,
+        suffix=target_path.suffix or Path(saved.filename).suffix or ".mp4",
+        source_file_size_mb=path_size_mb(target_path),
+        media_type=media_type,
+        source_type="transcript_file" if media_type == "transcript" else "video",
+        raw_title=saved.raw_title or saved.title,
+        display_title=saved.display_title or display_title_for_user(saved.title, saved.filename),
+    )
     metadata = event_metadata(
-        route=route,
-        queue_options=options,
+        route=job.route,
+        queue_options=job.options,
         source_path=str(target_path),
-        raw_title=raw_title,
-        display_title=display_title,
+        raw_title=downloaded.raw_title,
+        display_title=downloaded.display_title,
         video_source=_public_video_source_metadata(saved),
         asset_strategy=saved.asset_strategy,
     )
     log_event(
-        task_id=task_id,
+        task_id=job.task_id,
         event_name="video_source_downloaded",
-        source_type=source_type,
+        source_type=downloaded.source_type,
         source_filename=saved.filename,
-        source_file_size_mb=source_file_size_mb,
+        source_file_size_mb=downloaded.source_file_size_mb,
         stage="queued",
         success=True,
         metadata=metadata,
     )
     upsert_job(
-        task_id=task_id,
+        task_id=job.task_id,
         status="queued",
-        client_id=client_id,
+        client_id=job.client_id,
         stage="queued",
         progress=0,
-        source_type=source_type,
+        source_type=downloaded.source_type,
         source_filename=saved.filename,
-        source_file_size_mb=source_file_size_mb,
+        source_file_size_mb=downloaded.source_file_size_mb,
         metadata=metadata,
     )
-    if download_only:
-        await _finish_download_only(task_id, client_id, target_path)
+    return downloaded
+
+
+async def _note_from_captions(job: _LinkTask, downloaded: _Downloaded) -> None:
+    """A caption track is summarised like an uploaded transcript; nothing is
+    transcribed, corrected, cut, compressed or exported."""
+    task_id, client_id, options = job.task_id, job.client_id, job.options
+    try:
+        raw = await asyncio.to_thread(downloaded.target_path.read_bytes)
+        result = await summarize_transcript_source(
+            raw=raw,
+            filename=downloaded.saved.filename,
+            client_id=client_id,
+            task_id=task_id,
+            ai_provider=options.get("ai_provider"),
+            ai_model=options.get("ai_model"),
+            note_mode=options.get("note_mode"),
+            skip_summary=options.get("skip_summary"),
+            system_prompt=options.get("system_prompt"),
+            prompt_preset=options.get("prompt_preset"),
+            prompt_preset_label=options.get("prompt_preset_label"),
+            route=job.route,
+        )
+    except HTTPException as exc:
+        await _record_fetch_failure(job, "transcript_parse", str(exc.detail))
         return
-
-    await JOB_EVENTS.publish(task_id, {"stage": "queued", "progress": 0})
-
-    if media_type == "transcript":
-        try:
-            # A caption track is summarised like an uploaded transcript.
-            raw = await asyncio.to_thread(target_path.read_bytes)
-            result = await summarize_transcript_source(
-                raw=raw,
-                filename=saved.filename,
-                client_id=client_id,
-                task_id=task_id,
-                ai_provider=options.get("ai_provider"),
-                ai_model=options.get("ai_model"),
-                note_mode=options.get("note_mode"),
-                skip_summary=options.get("skip_summary"),
-                system_prompt=options.get("system_prompt"),
-                prompt_preset=options.get("prompt_preset"),
-                prompt_preset_label=options.get("prompt_preset_label"),
-                route=route,
-            )
-        except HTTPException as exc:
-            await fail("transcript_parse", str(exc.detail))
-            return
-        except Exception as exc:
-            await fail("summary", exc)
-            return
-        task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
-        task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
-        # Captions: nothing to transcribe, correct, cut, compress or export.
-        task_steps.skip_open(task_id)
-        await JOB_EVENTS.publish(task_id, {"stage": "done", "progress": 100, "result": result})
+    except Exception as exc:
+        await _record_fetch_failure(job, "summary", exc)
         return
+    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+    task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
+    task_steps.skip_open(task_id)
+    await JOB_EVENTS.publish(task_id, {"stage": "done", "progress": 100, "result": result})
 
+
+async def _hand_to_pipeline(
+    job: _LinkTask, downloaded: _Downloaded, *, previous: Any, done: asyncio.Event
+) -> None:
+    """Check the file can be transcribed, build the task's context, then wait
+    for the queue and run the pipeline from transcription."""
+    task_id, client_id, options = job.task_id, job.client_id, job.options
+    target_path = downloaded.target_path
     try:
         media_preflight = await asyncio.to_thread(preflight_media_file, target_path)
     except MediaPreflightError as exc:
-        error, code = await asyncio.to_thread(downloaded_file_refusal, exc, input_text, target_path)
-        await fail(
+        error, code = await asyncio.to_thread(downloaded_file_refusal, exc, job.input_text, target_path)
+        await _record_fetch_failure(
+            job,
             "import",
             error,
             media_preflight={"status": "rejected", "code": code, **exc.metadata},
@@ -440,24 +517,24 @@ async def _download_then_process(
     effective_duration_limit = _effective_duration_limit(options.get("duration_limit_seconds"))
     if effective_duration_limit is not None:
         options["duration_limit_seconds"] = str(effective_duration_limit)
-    options.setdefault("title", raw_title)
+    options.setdefault("title", downloaded.raw_title)
     ctx = _local_media_job_context(
         task_id=task_id,
         client_id=client_id,
-        source_type=source_type,
-        source_filename=saved.filename,
-        raw_title=raw_title,
-        display_title=display_title,
-        suffix=suffix,
+        source_type=downloaded.source_type,
+        source_filename=downloaded.saved.filename,
+        raw_title=downloaded.raw_title,
+        display_title=downloaded.display_title,
+        suffix=downloaded.suffix,
         td=tempfile.mkdtemp(),
         in_path=target_path,
         content=b"",
-        source_file_size_mb=source_file_size_mb,
+        source_file_size_mb=downloaded.source_file_size_mb,
         duration_preflight_sec=media_preflight.duration_seconds,
         options=options,
         duration_limit_seconds=effective_duration_limit,
     )
-    ctx.event_route = route
+    ctx.event_route = job.route
     task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
     # The expensive part waits its turn; the download above did not have to.
     await wait_for_queue_turn(previous, task_id, client_id)
