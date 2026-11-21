@@ -45,6 +45,9 @@ def test_the_launcher_rereads_path_before_the_startup_check():
     before = text[:check]
     assert 'GetEnvironmentVariable("Path", "Machine")' in before
     assert 'GetEnvironmentVariable("Path", "User")' in before
+    # What the user's session had stays first: an FFmpeg chosen there wins.
+    block = before[before.rindex("$env:Path = @("):]
+    assert block.index("$env:Path,") < block.index('GetEnvironmentVariable("Path", "Machine")')
 
 
 def test_the_uninstaller_reads_the_fields_health_has():

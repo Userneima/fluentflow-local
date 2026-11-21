@@ -146,15 +146,16 @@ if (-not $Python) {
     Fail "没找到 Python 虚拟环境。先在 PowerShell 里运行安装脚本：`npowershell -ExecutionPolicy Bypass -File `"$Repo\launchers\windows\setup-local.ps1`""
 }
 
-# Read PATH again from the registry, keeping what this process already had. The
+# Add PATH as the registry has it now after what this process already had. The
 # installer starts this launcher right after setup may have installed FFmpeg or
 # Python with winget; this process inherits the installer's PATH from before
 # that, so without this the startup check reports FFmpeg missing on every fresh
-# Windows machine and the window waits on "press Enter".
+# Windows machine and the window waits on "press Enter". The inherited entries
+# stay first, so an FFmpeg the user put ahead on PATH is still the one used.
 $env:Path = @(
+    $env:Path,
     [Environment]::GetEnvironmentVariable("Path", "Machine"),
-    [Environment]::GetEnvironmentVariable("Path", "User"),
-    $env:Path
+    [Environment]::GetEnvironmentVariable("Path", "User")
 ) -join ";"
 
 Write-Host "== FluentFlow Local startup check =="
