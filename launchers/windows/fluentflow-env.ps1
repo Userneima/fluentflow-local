@@ -216,3 +216,29 @@ function Test-FluentFlowHealthy([string]$Port) {
         return ($Health.edition -eq "local" -or $Health.runtime.execution -eq "local")
     } catch { return $false }
 }
+
+# The proxy set in Windows' Internet settings, for the tools this process starts
+# when no HTTP(S)_PROXY is set. Downloads made by PowerShell itself already use
+# it; npm, uv and git do not, and a friend behind a local proxy
+# (127.0.0.1:7897) had to add it to every command by hand (2026-11). Local
+# addresses stay direct.
+function Use-FluentFlowSystemProxy {
+    if ($env:HTTPS_PROXY -or $env:HTTP_PROXY -or $env:https_proxy -or $env:http_proxy) { return }
+    try {
+        $Settings = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction Stop
+    } catch { return }
+    if (-not $Settings.ProxyEnable -or -not $Settings.ProxyServer) { return }
+    # "host:port" for every scheme, or "http=host:port;https=host:port;...".
+    $Server = $Settings.ProxyServer
+    if ($Server -match '=') {
+        $Parts = @{}
+        foreach ($Part in $Server -split ';') { $Pair = $Part -split '=', 2; if ($Pair.Count -eq 2) { $Parts[$Pair[0].Trim().ToLower()] = $Pair[1].Trim() } }
+        $Server = if ($Parts["https"]) { $Parts["https"] } elseif ($Parts["http"]) { $Parts["http"] } else { $null }
+    }
+    if (-not $Server) { return }
+    if ($Server -notmatch '://') { $Server = "http://$Server" }
+    $env:HTTP_PROXY = $Server
+    $env:HTTPS_PROXY = $Server
+    $env:NO_PROXY = "127.0.0.1,localhost,::1"
+    Write-Host "用系统设置里的代理：$Server"
+}

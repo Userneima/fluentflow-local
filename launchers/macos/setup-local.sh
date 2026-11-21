@@ -66,6 +66,7 @@ fail() {
 # shellcheck source=fluentflow-env.sh
 source "${SCRIPT_DIR}/fluentflow-env.sh"
 ff_import_env "$REPO"
+ff_use_system_proxy
 DATA_DIR="$(ff_data_dir "$REPO")"
 TOOLS_BIN="${DATA_DIR}/bin"
 TOOLS_DIR="${DATA_DIR}/tools"

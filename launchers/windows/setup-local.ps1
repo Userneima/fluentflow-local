@@ -53,6 +53,7 @@ $Python = Join-Path $Venv "Scripts\python.exe"
 
 . (Join-Path $ScriptDir "fluentflow-env.ps1")
 Import-FluentFlowEnv $Repo
+Use-FluentFlowSystemProxy
 
 function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
     & $FilePath @Arguments

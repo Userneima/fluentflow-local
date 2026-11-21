@@ -130,3 +130,22 @@ ff_verified_download() {
 	done < <(ff_order "$@")
 	return 1
 }
+
+# 系统设置里的代理（scutil --proxy），没设 HTTP(S)_PROXY 时给这个脚本启动的程序用。
+# curl、pip、uv、npm 都不看系统设置；他朋友开着本机代理，每条命令都要手动加（2026-11）。
+# 本机地址不走代理。
+ff_use_system_proxy() {
+	[[ -n "${HTTPS_PROXY:-}${HTTP_PROXY:-}${https_proxy:-}${http_proxy:-}" ]] && return 0
+	local info host port
+	info="$(scutil --proxy 2>/dev/null)" || return 0
+	if [[ "$(printf '%s\n' "$info" | awk '/ HTTPSEnable :/ {print $3}')" == 1 ]]; then
+		host="$(printf '%s\n' "$info" | awk '/ HTTPSProxy :/ {print $3}')"
+		port="$(printf '%s\n' "$info" | awk '/ HTTPSPort :/ {print $3}')"
+	elif [[ "$(printf '%s\n' "$info" | awk '/ HTTPEnable :/ {print $3}')" == 1 ]]; then
+		host="$(printf '%s\n' "$info" | awk '/ HTTPProxy :/ {print $3}')"
+		port="$(printf '%s\n' "$info" | awk '/ HTTPPort :/ {print $3}')"
+	fi
+	[[ -n "$host" && -n "$port" ]] || return 0
+	export HTTP_PROXY="http://${host}:${port}" HTTPS_PROXY="http://${host}:${port}" NO_PROXY="127.0.0.1,localhost,::1"
+	echo "用系统设置里的代理：${HTTPS_PROXY}"
+}

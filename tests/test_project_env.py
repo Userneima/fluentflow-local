@@ -193,3 +193,12 @@ def test_windows_installs_its_tested_lock():
     assert any(line.startswith("av==") for line in pins)
     setup = (ROOT / "launchers" / "windows" / "setup-local.ps1").read_text(encoding="utf-8-sig")
     assert "requirements-local.lock.windows-AMD64.txt" in setup
+
+
+def test_installers_take_the_system_proxy_when_none_is_set():
+    """A friend behind a local proxy added it to every command by hand (2026-11)."""
+    assert "Use-FluentFlowSystemProxy" in (ROOT / "launchers" / "windows" / "setup-local.ps1").read_text(encoding="utf-8-sig")
+    assert "ff_use_system_proxy" in (ROOT / "launchers" / "macos" / "setup-local.sh").read_text(encoding="utf-8")
+    assert "scutil --proxy" in (ROOT / "install.sh").read_text(encoding="utf-8")
+    helper = (ROOT / "launchers" / "windows" / "fluentflow-env.ps1").read_text(encoding="utf-8-sig")
+    assert "Internet Settings" in helper and "NO_PROXY" in helper

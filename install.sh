@@ -29,6 +29,18 @@ fail() {
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "这个脚本只用于 macOS。Windows 请运行 install.ps1。"
 
+# 系统设置里的代理：curl 不看它。和 launchers/macos/fluentflow-env.sh 的
+# ff_use_system_proxy 同一条规则（那份这时还不在这台机器上）。
+if [[ -z "${HTTPS_PROXY:-}${HTTP_PROXY:-}${https_proxy:-}${http_proxy:-}" ]]; then
+	_proxy="$(scutil --proxy 2>/dev/null || true)"
+	_host="$(printf '%s\n' "$_proxy" | awk '/ HTTPSEnable : 1/ {on=1} on && / HTTPSProxy :/ {print $3}')"
+	_port="$(printf '%s\n' "$_proxy" | awk '/ HTTPSEnable : 1/ {on=1} on && / HTTPSPort :/ {print $3}')"
+	if [[ -n "$_host" && -n "$_port" ]]; then
+		export HTTP_PROXY="http://${_host}:${_port}" HTTPS_PROXY="http://${_host}:${_port}" NO_PROXY="127.0.0.1,localhost,::1"
+		echo "用系统设置里的代理：${HTTPS_PROXY}"
+	fi
+fi
+
 # --- 1. 代码 ----------------------------------------------------------------
 step "获取代码"
 if [[ -f "${DIR}/backend/local_main.py" ]]; then
