@@ -56,7 +56,7 @@ ff_data_dir() {
 # 把 .env 里会影响下载和存放位置的几项放进环境，给这个脚本启动的程序用。
 ff_import_env() {
 	local name value
-	for name in FLUENTFLOW_DATA_DIR HF_HOME PIP_CACHE_DIR npm_config_cache; do
+	for name in FLUENTFLOW_DATA_DIR HF_HOME PIP_CACHE_DIR UV_CACHE_DIR npm_config_cache; do
 		value="$(ff_setting "$1" "$name")"
 		[[ -n "$value" ]] && export "${name}=${value}"
 	done

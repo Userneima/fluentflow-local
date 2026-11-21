@@ -85,9 +85,9 @@ function Install-WithWinget([string]$Id, [string]$What, [string[]]$Extra = @()) 
     Update-SessionPath
 }
 
-# pip's index: PyPI, or Tsinghua's mirror when PyPI is unreachable or slow
-# (decided once, before the first pip run); a failed run is retried once from
-# the other. An index the user set is used as it is.
+# The package index: PyPI, or Tsinghua's mirror when PyPI is unreachable or
+# slow (decided once, before the first install); a failed run is retried once
+# from the other. An index the user set (PIP_INDEX_URL) is used as it is.
 $PypiIndex = "https://pypi.org/simple"
 $TunaIndex = "https://pypi.tuna.tsinghua.edu.cn/simple"
 $UserPipIndex = [bool]$env:PIP_INDEX_URL
@@ -102,17 +102,48 @@ function Select-PipIndex {
     if ($script:PipIndex -eq $TunaIndex) { Write-Host "PyPI 连不上或太慢，Python 依赖从国内镜像（清华源）下载。" }
 }
 
-function Invoke-Pip([string[]]$Arguments) {
-    if ($UserPipIndex) {
-        Invoke-Checked $Python (@("-m", "pip") + $Arguments)
-        return
-    }
+# Packages go in with uv (pinned, itself installed by pip from the same index):
+# it downloads in parallel and resolves in seconds where pip took minutes
+# (王愉超, 2026-11-21). uv does not read PIP_INDEX_URL, so the index is always
+# passed. When uv cannot be installed, pip does the work as before.
+$UvVersion = "0.13.7"
+$UseUv = $null
+
+function Get-PipIndex {
+    if ($UserPipIndex) { return $env:PIP_INDEX_URL }
     if (-not $script:PipIndex) { Select-PipIndex }
-    & $Python -m pip @Arguments --index-url $script:PipIndex
+    return $script:PipIndex
+}
+
+function Invoke-PipTool([string[]]$Arguments, [string]$Index) {
+    if ($script:UseUv) {
+        $UvArguments = @("-m", "uv", "pip") + @($Arguments | Where-Object { $_ -ne "--disable-pip-version-check" }) + @("--python", $Python, "--index-url", $Index)
+        & $Python @UvArguments
+    } else {
+        & $Python -m pip @Arguments --index-url $Index
+    }
+}
+
+function Enable-Uv {
+    if ($null -ne $script:UseUv) { return }
+    $script:UseUv = $false
+    try {
+        & $Python -m pip install --disable-pip-version-check -q "uv==$UvVersion" --index-url (Get-PipIndex)
+        if ($LASTEXITCODE -eq 0) { & $Python -m uv --version | Out-Null; $script:UseUv = ($LASTEXITCODE -eq 0) }
+    } catch {}
+    if (-not $script:UseUv) { Write-Host "uv 没装上，改用 pip 安装依赖（慢一些）。" -ForegroundColor Yellow }
+}
+
+function Invoke-Pip([string[]]$Arguments) {
+    Enable-Uv
+    $Index = Get-PipIndex
+    Invoke-PipTool $Arguments $Index
     if ($LASTEXITCODE -eq 0) { return }
-    $Other = if ($script:PipIndex -eq $TunaIndex) { $PypiIndex } else { $TunaIndex }
+    if ($UserPipIndex) { throw "安装失败：$($Arguments -join ' ')" }
+    $Other = if ($Index -eq $TunaIndex) { $PypiIndex } else { $TunaIndex }
     Write-Host "下载失败，换 $(Get-FluentFlowHost $Other) 重试…"
-    Invoke-Checked $Python (@("-m", "pip") + $Arguments + @("--index-url", $Other))
+    Invoke-PipTool $Arguments $Other
+    if ($LASTEXITCODE -ne 0) { throw "安装失败（退出码 ${LASTEXITCODE}）：$($Arguments -join ' ')" }
 }
 
 function Test-NvidiaAdapter {

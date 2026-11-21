@@ -95,7 +95,7 @@ function Get-FluentFlowPort([string]$Repo) {
 # process starts read from the environment: the data folder, the model cache,
 # and the pip and npm caches (kept in the install folder, not on drive C).
 function Import-FluentFlowEnv([string]$Repo) {
-    foreach ($Name in @("FLUENTFLOW_DATA_DIR", "HF_HOME", "PIP_CACHE_DIR", "npm_config_cache")) {
+    foreach ($Name in @("FLUENTFLOW_DATA_DIR", "HF_HOME", "PIP_CACHE_DIR", "UV_CACHE_DIR", "npm_config_cache")) {
         $Value = Get-FluentFlowSetting $Repo $Name
         if ($Value) { [Environment]::SetEnvironmentVariable($Name, $Value, "Process") }
     }

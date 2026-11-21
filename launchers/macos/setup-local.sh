@@ -247,19 +247,37 @@ if [[ -z "${PIP_INDEX_URL:-}" ]]; then
 		echo "PyPI 连不上或太慢，Python 依赖从国内镜像（清华源）下载。"
 	fi
 fi
-pip_install() {
-	if [[ -z "$PIP_INDEX" ]]; then
-		"$VENV_PY" -m pip install "$@"
-		return
+# 依赖用 uv 装（固定版本，自己用 pip 从同一个源装上）：并行下载、几秒解出版本，比 pip
+# 快得多（王愉超 2026-11-21）。uv 不读 PIP_INDEX_URL，所以源总是显式传。uv 装不上时照旧用 pip。
+UV_VERSION="0.13.7"
+USE_UV=0
+pip_tool() {
+	local index="$1" arg
+	shift
+	if [[ "$USE_UV" -eq 1 ]]; then
+		local args=()
+		for arg in "$@"; do [[ "$arg" == "--disable-pip-version-check" ]] || args+=("$arg"); done
+		"$VENV_PY" -m uv pip install "${args[@]}" --python "$VENV_PY" ${index:+--index-url "$index"}
+	else
+		"$VENV_PY" -m pip install "$@" ${index:+--index-url "$index"}
 	fi
-	"$VENV_PY" -m pip install "$@" --index-url "$PIP_INDEX" && return 0
+}
+pip_install() {
+	local index="${PIP_INDEX:-${PIP_INDEX_URL:-}}"
+	pip_tool "$index" "$@" && return 0
+	[[ -n "$PIP_INDEX" ]] || return 1
 	local other="$TUNA_INDEX"
 	[[ "$PIP_INDEX" == "$TUNA_INDEX" ]] && other="$PYPI_INDEX"
 	echo "下载失败，换 $(ff_host "$other") 重试…"
-	"$VENV_PY" -m pip install "$@" --index-url "$other"
+	pip_tool "$other" "$@"
 }
-# 先升 pip：老 pip 拿不到 pyobjc 的预编译包，会转去编译源码然后失败。
+# 先升 pip：老 pip 拿不到 pyobjc 的预编译包，会转去编译源码然后失败（uv 装不上时还要靠它）。
 pip_install --quiet --upgrade pip || fail "升级 pip 失败。"
+if pip_install --quiet "uv==${UV_VERSION}" && "$VENV_PY" -m uv --version >/dev/null 2>&1; then
+	USE_UV=1
+else
+	echo "uv 没装上，改用 pip 安装依赖（慢一些）。"
+fi
 # 有本平台的锁定文件时按它装：那是一份实际测过的版本组合，requirements-local.txt
 # 只写下限，隔几周装出来的就是另一套版本。目前只冻结了 macOS arm64 的；别的平台
 # 落回 requirements-local.txt。

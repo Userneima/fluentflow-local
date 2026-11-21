@@ -162,3 +162,13 @@ def test_windows_scripts_call_agent_tools_through_the_safe_wrapper():
         if pattern.search(script.read_text(encoding="utf-8-sig")):
             offenders.append(script.name)
     assert offenders == []
+
+
+def test_both_setup_scripts_install_packages_with_a_pinned_uv_and_pass_the_index():
+    windows = (ROOT / "launchers" / "windows" / "setup-local.ps1").read_text(encoding="utf-8-sig")
+    macos = (ROOT / "launchers" / "macos" / "setup-local.sh").read_text(encoding="utf-8")
+    pins = {re.search(r'UvVersion = "([\d.]+)"', windows).group(1), re.search(r'UV_VERSION="([\d.]+)"', macos).group(1)}
+    assert len(pins) == 1
+    for text in (windows, macos):
+        assert '"-m", "uv", "pip"' in text or "-m uv pip install" in text
+        assert "--index-url" in text

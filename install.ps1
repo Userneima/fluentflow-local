@@ -10,7 +10,7 @@
 #   data\       task history, notes, media, the downloaded FFmpeg and Node.js
 #   models\     the transcription models (the Hugging Face cache, HF_HOME)
 #   downloads\  videos fetched from links, with their notes
-#   cache\      pip and npm download caches
+#   cache\      pip, uv and npm download caches
 # Where each one is goes into app\.env, which the service and every script read,
 # so nothing large lands on drive C and uninstalling can remove one folder.
 # Python itself, when the machine has none, is a per-user install on drive C.
@@ -235,6 +235,7 @@ if ($OneFolder) {
     Add-FluentFlowEnvLine $Dir "HF_HOME" (Join-Path $Root "models")
     Add-FluentFlowEnvLine $Dir "FLUENTFLOW_LINK_OUTPUT_DIR" (Join-Path $Root "downloads")
     Add-FluentFlowEnvLine $Dir "PIP_CACHE_DIR" (Join-Path $Root "cache\pip")
+    Add-FluentFlowEnvLine $Dir "UV_CACHE_DIR" (Join-Path $Root "cache\uv")
     Add-FluentFlowEnvLine $Dir "npm_config_cache" (Join-Path $Root "cache\npm")
 }
 $Port = Get-FluentFlowPort $Dir
