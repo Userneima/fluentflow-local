@@ -164,7 +164,13 @@ def export_markdown_via_lark_cli(
     A note with no document yet gets a new one. A note whose document an
     earlier export recorded (``previous``, the ``sync`` it returned) is updated
     in that document, chapter by chapter (``_update``); ``keep_feishu`` gets the
-    document as markdown before anything in it is replaced."""
+    document as markdown before anything in it is replaced.
+
+    Refused on a test copy, whoever asks (``test_copy``)."""
+    from backend.core import test_copy
+
+    if test_copy.enabled():
+        raise LarkCliError(test_copy.NO_FEISHU)
     bin_path = lark_cli_run._resolve_lark_cli_bin(lark_cli_bin)
     if not bin_path:
         raise LarkCliError(

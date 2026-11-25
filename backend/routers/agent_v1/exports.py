@@ -17,7 +17,7 @@ from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_config import get_preference, resolve_secret
 from backend.core.local_entry_guards import friendly_error
 from backend.core import note_prompt
-from backend.core import note_pdf, note_versions
+from backend.core import note_pdf, note_versions, test_copy
 from backend.core.local_request_scope import require_local_agent_access
 from backend.core.note_title import resolve_lark_doc_title
 from backend.core.storage_paths import _artifact_storage_dir
@@ -43,9 +43,16 @@ async def export_agent_task(
         raise HTTPException(status_code=400, detail="No markdown note available to export")
     target = str(payload.get("target") or "lark").strip().lower()
     if target == "pdf":
+        output_dir = payload.get("output_dir")
+        if test_copy.enabled():
+            # The default folder and any other one are the owner's real ones.
+            try:
+                output_dir = str(test_copy.export_dir(output_dir))
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
             exported = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: note_pdf.export_pdf(task_id, client_id=client_id, output_dir=payload.get("output_dir")),
+                None, lambda: note_pdf.export_pdf(task_id, client_id=client_id, output_dir=output_dir),
             )
         except note_pdf.NotePdfError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

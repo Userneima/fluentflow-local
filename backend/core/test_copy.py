@@ -9,10 +9,19 @@ them, so with this switch on:
 
 - startup carries on and re-queues nothing (``local_main.lifespan``);
 - a request that would change a copied task is refused (``refusal``,
-  checked once for every request in ``local_main``): only new tasks made in
-  this copy can be worked on;
-- the output folder of a copied task is never written (``output_folder.sync``);
-- nothing is pushed to or pulled from Feishu, and nothing is exported there;
+  checked once for every request in ``local_main``), whether it names the
+  task in its address, a JSON body or a form: only new tasks made in this
+  copy can be worked on; the one lookup of an existing task a form names
+  (``local_entry_guards.require_owned_task_id``) refuses it too, for a form
+  too large to read here;
+- nothing a saved change sets off writes beside a copied task's note or
+  calls a model for it (every ``job_store`` result listener asks ``writable``
+  or ``enabled``), and its output folder is never written
+  (``output_folder.sync``);
+- nothing is pushed to or pulled from Feishu, and nothing is exported there,
+  for a copied task or a new one: the agent's export is refused unless it is
+  a PDF, and both Feishu exporters refuse on their own; a PDF is written only
+  inside the copy (``export_dir``);
 - the page it serves sends every request back to this service
   (``page_config``), whatever its build or its port says;
 - the page may come from a build of its own (``FRONTEND_ENV``), to look at a
@@ -45,6 +54,8 @@ PAGE_CONFIG_PATH = "/assets/config.js"
 TASKS_FILE = "test_copy_tasks.json"
 READ_ONLY = "这是测试副本里的旧任务，只能看。"
 NO_FEISHU = "测试副本不往飞书写东西。"
+OUTSIDE_COPY = "测试副本只把导出的文件写进副本自己的文件夹。"
+PDF_DIRNAME = "exports"
 
 _lock = threading.Lock()
 _copied: frozenset[str] | None = None
@@ -61,6 +72,19 @@ def frontend_dir() -> Path | None:
     return Path(named).expanduser() if named and enabled() else None
 
 
+def export_dir(asked: str | None) -> Path:
+    """Where a PDF export on a test copy goes: the folder asked for when it
+    is inside the copy, else the copy's own ``exports`` folder. The default
+    (``~/Documents/FluentFlow 笔记``) is the owner's real folder."""
+    root = app_data_root().expanduser().resolve()
+    if not asked:
+        return root / PDF_DIRNAME
+    folder = Path(asked).expanduser().resolve()
+    if folder != root and root not in folder.parents:
+        raise ValueError(OUTSIDE_COPY)
+    return folder
+
+
 # The page reads its request address from window.FLUENTFLOW_CONFIG.apiBase
 # before anything else (frontend/src/lib/apiBase.js); without one it guesses
 # from its port, and on 4173, 5173 or 5186 guesses 8000. A build made with
@@ -68,14 +92,18 @@ def frontend_dir() -> Path | None:
 # Either way a delete on the copy's page would land on the owner's real tasks
 # (decision 8.25), so the copy answers with the build's config and then its
 # own origin as the address. The build's config runs inside try, through
-# Function, so a broken or cut-off file cannot stop the line after it; and
-# the copy's pages may only connect to the copy (``PAGE_POLICY``), so even a
-# page that never ran this script sends nothing elsewhere.
+# Function, against a stand-in for window: a broken or cut-off file cannot
+# stop the line after it, and one that makes window.FLUENTFLOW_CONFIG
+# read-only cannot keep 8000 (video and audio sources and links take the
+# address too). The copy's pages may only connect to, and play media from,
+# the copy (``PAGE_POLICY``), so even a page that never ran this script
+# sends nothing elsewhere.
 _SEND_BACK_HERE = (
     "\n// FluentFlow test copy: this page's requests go back to the service that served it.\n"
-    "window.FLUENTFLOW_CONFIG = Object.assign({}, window.FLUENTFLOW_CONFIG, {apiBase: window.location.origin});\n"
+    "window.FLUENTFLOW_CONFIG = Object.assign({}, built.FLUENTFLOW_CONFIG, {apiBase: window.location.origin});\n"
+    "})();\n"
 )
-PAGE_POLICY = "connect-src 'self'"
+PAGE_POLICY = "connect-src 'self'; media-src 'self' blob: data:"
 
 
 def page_config(*, served: bool) -> str:
@@ -90,7 +118,9 @@ def page_config(*, served: bool) -> str:
             built = (local_frontend_dist_dir() / "assets" / "config.js").read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             built = ""
-    return f"try {{ new Function({json.dumps(built)})(); }} catch (_) {{ /* the build's config is broken */ }}" + _SEND_BACK_HERE
+    return ("(function () {\nvar built = {};\n"
+            f"try {{ new Function('window', {json.dumps(built)})(built); }} catch (_) {{ /* the build's config is broken */ }}"
+            + _SEND_BACK_HERE)
 
 
 def _read_copied() -> frozenset[str]:
@@ -137,16 +167,31 @@ def reset() -> None:
 _TASK_IN_PATH = re.compile(r"/(?:jobs|tasks)/([0-9A-Za-z_-]+)")
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _FEISHU_PATHS = ("/export-lark",)
+_EXPORT_PATH = re.compile(r"/tasks/[^/]+/exports$")
+# The fields of a body or form that name a task (a write route taking a task
+# under another name fails tests/test_test_copy_writes.py).
+TASK_FIELDS = ("task_id", "job_id", "task_ids", "job_ids")
+# A form larger than this is an upload: read here it would sit in memory
+# whole. Every route taking one claims a fresh task, and the lookup of an
+# existing one refuses a copied task (``require_owned_task_id``).
+_FORM_READ_LIMIT = 16 * 1024 * 1024
 
 
 def _named_tasks(body: Any) -> list[str]:
     if not isinstance(body, dict):
         return []
-    found = [body.get(name) for name in ("task_id", "job_id")]
-    for name in ("task_ids", "job_ids"):
-        if isinstance(body.get(name), list):
-            found += body[name]
-    return [str(task_id) for task_id in found if task_id]
+    found = []
+    for name in TASK_FIELDS:
+        value = body.get(name)
+        found += value if isinstance(value, list) else [value]
+    return [str(task_id) for task_id in found if task_id and isinstance(task_id, (str, int))]
+
+
+def _exports_to_feishu(path: str, body: Any) -> bool:
+    """The agent's export (``POST /agent/v1/tasks/{id}/exports``) goes to
+    Feishu unless its body asks for a PDF."""
+    target = body.get("target") if isinstance(body, dict) else None
+    return bool(_EXPORT_PATH.search(path)) and str(target or "lark").strip().lower() != "pdf"
 
 
 def refusal(method: str, path: str, body: Any = None) -> str | None:
@@ -155,7 +200,7 @@ def refusal(method: str, path: str, body: Any = None) -> str | None:
     body), and any export to Feishu. Reading is always allowed."""
     if not enabled() or method.upper() in _SAFE_METHODS:
         return None
-    if any(path.endswith(feishu) for feishu in _FEISHU_PATHS):
+    if any(path.endswith(feishu) for feishu in _FEISHU_PATHS) or _exports_to_feishu(path, body):
         return NO_FEISHU
     named = _TASK_IN_PATH.findall(path) + _named_tasks(body)
     if any(is_copied(task_id) for task_id in named):
@@ -163,18 +208,37 @@ def refusal(method: str, path: str, body: Any = None) -> str | None:
     return None
 
 
+async def _body(request: Any) -> Any:
+    """The request's JSON body, or the task fields of its form; None when
+    there is neither (or the form is too large to read here). What is read is
+    kept on the request, so the route reads the same body."""
+    kind = (request.headers.get("content-type") or "").lower()
+    if "json" in kind:
+        try:
+            return json.loads(await request.body() or b"null")
+        except ValueError:
+            return None
+    if not kind.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+        return None
+    try:
+        if int(request.headers.get("content-length") or "") > _FORM_READ_LIMIT:
+            return None
+    except ValueError:
+        return None
+    await request.body()
+    try:
+        async with request.form(max_part_size=_FORM_READ_LIMIT) as form:
+            return {name: [v for v in form.getlist(name) if isinstance(v, str)] for name in TASK_FIELDS}
+    except Exception:  # noqa: BLE001 - a form the route cannot read either
+        return None
+
+
 async def middleware(request: Any, call_next: Any) -> Any:
     """Refuse what ``refusal`` names, for the page and agents alike; answer
     the page's config with ``page_config`` and let the pages connect only
     here (``PAGE_POLICY``)."""
     if enabled() and request.method.upper() not in _SAFE_METHODS:
-        body: Any = None
-        if "json" in (request.headers.get("content-type") or ""):
-            try:
-                body = json.loads(await request.body() or b"null")
-            except ValueError:
-                body = None
-        reason = refusal(request.method, request.url.path, body)
+        reason = refusal(request.method, request.url.path, await _body(request))
         if reason:
             from fastapi.responses import JSONResponse
 
@@ -195,6 +259,6 @@ async def middleware(request: Any, call_next: Any) -> Any:
     return response
 
 
-__all__ = ["ENV", "FRONTEND_ENV", "NO_FEISHU", "PAGE_CONFIG_PATH", "PAGE_POLICY", "READ_ONLY", "TASKS_FILE",
-           "copied_tasks", "enabled", "frontend_dir", "is_copied", "middleware", "page_config", "refusal", "reset",
-           "writable"]
+__all__ = ["ENV", "FRONTEND_ENV", "NO_FEISHU", "OUTSIDE_COPY", "PAGE_CONFIG_PATH", "PAGE_POLICY", "PDF_DIRNAME",
+           "READ_ONLY", "TASKS_FILE", "TASK_FIELDS", "copied_tasks", "enabled", "export_dir", "frontend_dir",
+           "is_copied", "middleware", "page_config", "refusal", "reset", "writable"]

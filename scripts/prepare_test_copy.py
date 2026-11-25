@@ -9,6 +9,9 @@ What it does, reading the real data directory and writing only the copy:
 - ``fluentflow_config.json`` and ``recommended_models.json`` copied, with
   automatic export to Feishu turned off in the copy;
 - ``models`` linked, not copied (the transcription and speaker models);
+- every runtime path and the link tasks' folder set inside the copy in the
+  printed command (``PINNED_PATHS``), so a ``.env`` cannot send them back to
+  the real ones;
 - every step in the copy that has not reached its end closed as skipped, and
   every task in the copy still queued or running marked failed: otherwise
   the test service carries on (or queues again from the original) the tasks
@@ -93,6 +96,27 @@ def close_open_steps(database: Path) -> int:
 
 
 UNFINISHED_REASON = "test_copy_unfinished"
+# Every path the service takes from its own variable before the data
+# directory (``runtime_paths.runtime_path``), and the folder of link tasks,
+# set inside the copy: the service loads a ``.env`` above the code it runs
+# (the main checkout's, from a worktree), and one naming a real path there
+# would win over FLUENTFLOW_DATA_DIR. tests/test_test_copy_writes.py finds
+# every such variable in the code.
+PINNED_PATHS = {
+    "FLUENTFLOW_CONFIG_PATH": "fluentflow_config.json",
+    "FLUENTFLOW_JOB_DB_PATH": "fluentflow_jobs.sqlite",
+    "FLUENTFLOW_EVENT_DB_PATH": "fluentflow_events.sqlite",
+    "FLUENTFLOW_SOURCE_DIR": "sources",
+    "FLUENTFLOW_ARTIFACT_DIR": "artifacts",
+    "FLUENTFLOW_EDITED_TRANSCRIPT_DIR": "edited_transcripts",
+    "FLUENTFLOW_TRANSCRIPT_EDIT_RECORDS_DIR": "transcript_edit_records",
+    "FLUENTFLOW_VIDEO_SOURCE_DIR": "video_sources",
+    "FLUENTFLOW_DIARIZATION_MODEL_DIR": "models/speaker",
+    "FLUENTFLOW_PYANNOTE_MODEL_DIR": "models/pyannote",
+    "FLUENTFLOW_MODEL_TABLE_CACHE": "recommended_models.json",
+    "FLUENTFLOW_NOTE_SKILL_DIR": "note_skills/mine",
+    "FLUENTFLOW_LINK_OUTPUT_DIR": "links",
+}
 
 
 def close_open_tasks(database: Path) -> int:
@@ -196,7 +220,7 @@ def start_command(into: Path, *, port: int, fake: bool, max_calls: int | None, m
     """The command that starts the test service: PowerShell on Windows, a POSIX shell elsewhere."""
     env = {
         "FLUENTFLOW_DATA_DIR": str(into),
-        "FLUENTFLOW_CONFIG_PATH": str(into / "fluentflow_config.json"),
+        **{name: str(into / relative) for name, relative in PINNED_PATHS.items()},
         "FLUENTFLOW_LOCAL_PORT": str(port),
         "FLUENTFLOW_TEST_COPY": "1",
         # The Agent API is closed without one, and a worktree has no .env.
