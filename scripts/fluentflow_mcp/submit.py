@@ -65,13 +65,16 @@ _TEXT_MODEL_ONLY = "Only used when a text model writes the note (not Claude's fr
 
 
 @tool(
-    description=("Submit one audio or video file that stays where it is, by absolute path "
-        "on this machine. One file per call; loop for a folder. "
-        + _MEDIA_NOTE_FLOW),
+    description=("Submit one audio, video or subtitle (.srt/.vtt) file that stays where it is, by "
+        "absolute path on this machine. One file per call; loop for a folder. Its outputs (note md "
+        "and PDF, transcript) go in a folder beside it, kept in step with later edits. "
+        + _MEDIA_NOTE_FLOW
+        + " A subtitle file is not transcribed or cut (cut, cut_judge, stt_model and "
+        "speaker_diarization do not apply): wait_task comes back with the note to write."),
     input_schema={
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Absolute path to the recording."},
+            "path": {"type": "string", "description": "Absolute path to the recording or subtitle file."},
             "title": {"type": "string"},
             "skip_summary": {"type": "boolean", "default": True},
             "intelligence": _INTELLIGENCE_SCHEMA,
@@ -216,7 +219,8 @@ def submit_video_link(
 
 
 @tool(
-    description=("Store transcript text for the current agent to write its note. "
+    description=("Store transcript text for the current agent to write its note. A subtitle file "
+        "on this machine goes to submit_local_media by path instead, so its note lands beside it. "
         "Defaults to intelligence=agent and skip_summary=true; follow with wait_task, "
         "get_agent_note_material and save_agent_note. Only delegate with intelligence=fluentflow "
         "when the agent cannot do it, failed, or the user asked; that uses configured models. "

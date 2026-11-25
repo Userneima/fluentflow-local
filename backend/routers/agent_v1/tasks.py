@@ -14,7 +14,7 @@ from backend.core.job_store import list_jobs
 from backend.core import agent_correction, note_section_times, task_intelligence
 from backend.core.local_entry_guards import claim_task_id
 from backend.core import model_usage, task_activity
-from backend.core import agent_cut, agent_note, local_folder_intake
+from backend.core import agent_cut, agent_note, local_folder_intake, transcript_note
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_request_scope import (
     request_is_localhost,
@@ -76,6 +76,38 @@ async def create_agent_task(
     # Recorded beside cut_judge, not as a queue option (the page has no such
     # option); left out or true records nothing.
     no_cut = {} if agent_cut.cut_wanted_option(options.pop("cut", None)) else {"cut": False}
+
+    if local_path and input_type in {"", "local_path", "local_file", "local_media"} \
+            and local_folder_intake.is_subtitle_file(local_path):
+        # A subtitle file with no recording: its note goes beside it, as a
+        # recording's does (transcript_note.queue_subtitle_in_place). Nothing
+        # to transcribe or cut, so the cut and transcription options do not apply.
+        if not request_is_localhost(request):
+            raise HTTPException(status_code=403, detail="只有本机能按路径处理文件。")
+        try:
+            source = local_folder_intake.resolve_subtitle_file(local_path)
+        except local_folder_intake.FolderIntakeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        options_for_path, _limit = local_path_options(options)
+        title = str(payload.get("title") or "").strip()
+        if title:
+            options_for_path = {**options_for_path, "title": title}
+        queued = transcript_note.queue_subtitle_in_place(
+            source, client_id=client_id, options=options_for_path, route=_ROUTE,
+            origin={"chosen_with": "agent_api", "folder": str(source.parent)},
+        )
+        task_id_value = queued["task_id"]
+        background_tasks.add_task(
+            transcript_note.run_subtitle_in_place, task_id_value, source,
+            client_id=client_id, options=options_for_path, title=queued["title"], route=_ROUTE,
+        )
+        return {
+            "ok": True,
+            "task_id": task_id_value,
+            "status": "queued",
+            "package_url": f"/agent/v1/tasks/{task_id_value}/package",
+            "job": queued,
+        }
 
     if local_path and input_type in {"", "local_path", "local_file", "local_media"}:
         # A recording that stays where it is. This exists because every other entry

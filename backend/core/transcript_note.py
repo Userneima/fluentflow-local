@@ -1,7 +1,8 @@
 """A note from a transcript file (a .srt, .vtt, .txt or .md): the file is
 parsed, cleaned and, unless only the transcript was asked for, summarised by
-the text model. The transcript-file route and a link whose captions were
-downloaded (``link_submission``) both call ``summarize_transcript_source``."""
+the text model. The transcript-file route, a link whose captions were
+downloaded (``link_submission``) and a subtitle file on this machine submitted
+by path (``submit_subtitle_in_place``) all call ``summarize_transcript_source``."""
 
 from __future__ import annotations
 
@@ -22,8 +23,9 @@ from backend.core.job_lifecycle import (
     result_for_summary_success,
     result_for_transcript_only,
 )
-from backend.core.job_store import upsert_job
+from backend.core.job_store import get_job, upsert_job
 from backend.core.local_entry_guards import (
+    claim_task_id,
     local_ai_kwargs,
     require_owned_task_id,
 )
@@ -107,6 +109,7 @@ async def summarize_transcript_source(
     prompt_preset: Optional[str] = None,
     prompt_preset_label: Optional[str] = None,
     route: str = "/summarize-transcript-file",
+    result_fields: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Parse a .srt/.vtt/.txt/.md transcript source, optionally summarizing it.
 
@@ -264,6 +267,9 @@ async def summarize_transcript_source(
         "status": "transcript_ready",
         "source": "transcript_file",
         "summary_skipped": summary_disabled,
+        # Who writes the note and what the task is called, from an entry
+        # that knows (a subtitle file by path: ``submit_subtitle_in_place``).
+        **(result_fields or {}),
     }
     note_transcript_text = transcript_text
     if not summary_disabled:
@@ -415,3 +421,89 @@ async def summarize_transcript_source(
         summary_status="completed",
     )
     return result
+
+
+# ── a subtitle file on this machine, by path ────────────────────────────────
+#
+# Requirement (owner, 2026-11-25; found 2026-10-29 sorting 「1.短视频」): a
+# subtitle file with no video beside it gets its note where it is, as a
+# recording by path does: an output folder beside it, the marker, the md kept
+# in step with Obsidian. Before this it could only be sent as transcript text,
+# and the task did not know which folder the file was in.
+
+
+def queue_subtitle_in_place(
+    source: Path, *, client_id: Optional[str], options: dict[str, Any], route: str, origin: dict[str, Any],
+) -> dict[str, Any]:
+    """Record the task for a subtitle file read where it is; ``run_subtitle_in_place``
+    does the work. The path goes under ``output_folder.SUBTITLE_INTAKE_KEY``,
+    which only the output folder reads: under ``folder_intake`` the flows
+    that play, cut and re-queue a recording would take the subtitles for one."""
+    from backend.core.output_folder import SUBTITLE_INTAKE_KEY
+
+    task_id_value = claim_task_id(None, client_id=client_id)
+    title = str(options.get("title") or "").strip() or source.stem
+    metadata = event_metadata(
+        route=route,
+        raw_title=title,
+        display_title=title,
+        queue_options=options,
+        agent_input_type="subtitle_file",
+        **{SUBTITLE_INTAKE_KEY: {**origin, "original_path": str(source)}},
+    )
+    upsert_job(
+        task_id=task_id_value,
+        status="queued",
+        client_id=client_id,
+        stage="queued",
+        progress=0,
+        source_type="transcript_file",
+        source_filename=source.name,
+        source_file_size_mb=file_size_mb(source.stat().st_size),
+        metadata=metadata,
+    )
+    task_steps.plan(task_id_value)
+    return {"task_id": task_id_value, "status": "queued", "filename": source.name, "title": title}
+
+
+async def run_subtitle_in_place(
+    task_id: str, source: Path, *, client_id: Optional[str], options: dict[str, Any], title: str, route: str,
+) -> None:
+    """Read the subtitle file, store its transcript (and the note, when
+    FluentFlow's text model writes it), and fill the folder beside it. The
+    agent's note, saved later, refreshes that folder as any note does.
+    Never raises: a failure is recorded on the task for ``wait_task``."""
+    from backend.core import output_folder, task_flow
+
+    task_steps.start(task_id, task_steps.FETCH)
+    try:
+        raw = await asyncio.to_thread(source.read_bytes)
+        task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+        await summarize_transcript_source(
+            raw=raw,
+            filename=source.name,
+            client_id=client_id,
+            task_id=task_id,
+            ai_provider=options.get("ai_provider"),
+            ai_model=options.get("ai_model"),
+            note_mode=options.get("note_mode"),
+            skip_summary=options.get("skip_summary"),
+            system_prompt=options.get("system_prompt"),
+            prompt_preset=options.get("prompt_preset"),
+            prompt_preset_label=options.get("prompt_preset_label"),
+            route=route,
+            result_fields={"display_title": title, "intelligence": options.get("intelligence")},
+        )
+    except Exception as exc:  # noqa: BLE001 - recorded on the task, never left running
+        if str((get_job(task_id) or {}).get("status") or "") != "failed":
+            detail = str(exc.detail) if isinstance(exc, HTTPException) else _friendly_error(exc)
+            upsert_job(task_id=task_id, status="failed", client_id=client_id, stage="import",
+                       error_reason=detail or "读取字幕文件时出错。")
+        task_steps.close_open(task_id)
+        return
+    task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
+    task_steps.skip_open(task_id)
+    output_folder.schedule_sync(task_id)
+    # FluentFlow's model wrote the note: sent to Feishu when the user turned
+    # on the automatic export, as the agent's note is once it saves it.
+    task_flow.export_agent_note_if_asked(task_id, client_id)

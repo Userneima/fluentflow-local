@@ -81,14 +81,27 @@ class OutputFolderError(RuntimeError):
 
 # ── which folder ────────────────────────────────────────────────────────────
 
+# Where a subtitle file submitted by path was read from (``transcript_note``).
+# Not under ``folder_intake``: everything that reads that one takes the file
+# for a recording to play, cut, read frames from or queue again.
+# shortcut: a subtitle file that moved is not followed by name (original_locator
+# checks a recording by its duration), its folder is still found by its marker;
+# follow it once a moved subtitle file leaves its folder reported missing.
+SUBTITLE_INTAKE_KEY = "subtitle_intake"
+
+
 def original_path(job: dict[str, Any] | None) -> Path | None:
-    """The recording a by-path task was read from, whether or not it still exists."""
+    """The recording, or the subtitle file, a by-path task was read from,
+    whether or not it still exists. The folder sits beside either the same way."""
     metadata = (job or {}).get("metadata")
-    origin = metadata.get("folder_intake") if isinstance(metadata, dict) else None
-    if not isinstance(origin, dict):
+    if not isinstance(metadata, dict):
         return None
-    recorded = str(origin.get("original_path") or "").strip()
-    return Path(recorded).expanduser() if recorded else None
+    for key in ("folder_intake", SUBTITLE_INTAKE_KEY):
+        origin = metadata.get(key)
+        recorded = str(origin.get("original_path") or "").strip() if isinstance(origin, dict) else ""
+        if recorded:
+            return Path(recorded).expanduser()
+    return None
 
 
 def windows_videos_folder() -> Path | None:
@@ -1018,6 +1031,7 @@ __all__ = [
     "MARKER_NAME",
     "OutputFolderError",
     "PROCESS_DIRNAME",
+    "SUBTITLE_INTAKE_KEY",
     "claim",
     "file_name",
     "place",

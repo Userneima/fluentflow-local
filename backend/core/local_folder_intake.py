@@ -41,6 +41,10 @@ from backend.core.storage_cleanup import is_managed_path
 # out on purpose: this entry exists for recordings, and a folder of notes would
 # queue a pile of tasks nobody asked for.
 INTAKE_SUFFIXES = frozenset(VIDEO_SUFFIXES | AUDIO_SUFFIXES)
+# A subtitle file submitted on its own by path (an agent's submit_local_media):
+# timed, so the note keeps the subtitles' clock. Plain .txt and .md are not
+# taken by path: beside a recording they are usually notes, not transcripts.
+SUBTITLE_SUFFIXES = frozenset({".srt", ".vtt"})
 
 # Everything this flow produces beside an original carries this marker, so a
 # second pass over the same folder skips it instead of cutting a cut file. Shared
@@ -152,6 +156,43 @@ def resolve_media_file(raw: str | None) -> Path:
     — where "beside the original" would mean inside the store, and where its own
     outputs would be re-ingested.
     """
+    resolved = _readable_file(raw)
+    if resolved.suffix.lower() not in INTAKE_SUFFIXES:
+        raise FolderIntakeError(
+            f"不支持这种文件（{resolved.suffix or '无扩展名'}），这里只处理音视频。"
+        )
+    if is_output_file(resolved):
+        raise FolderIntakeError(
+            f"这看起来是之前剪好的文件（{resolved.name}），选原片就行，不用再剪一遍。"
+        )
+    _refuse_managed(resolved)
+    return resolved
+
+
+def is_subtitle_file(raw: str | None) -> bool:
+    """Whether a path names a subtitle file, which a by-path submission takes
+    instead of a recording (``transcript_note.submit_subtitle_in_place``)."""
+    return Path(str(raw or "").strip().strip('"').strip("'")).suffix.lower() in SUBTITLE_SUFFIXES
+
+
+def resolve_subtitle_file(raw: str | None) -> Path:
+    """One subtitle file this machine will read, or a refusal naming what is
+    wrong: the same rules as a recording, and not one of the subtitle copies
+    FluentFlow itself put in an output folder's 过程文件."""
+    resolved = _readable_file(raw)
+    if resolved.suffix.lower() not in SUBTITLE_SUFFIXES:
+        raise FolderIntakeError(f"不支持这种字幕文件（{resolved.suffix or '无扩展名'}），只收 .srt 和 .vtt。")
+    from backend.core.output_folder import MARKER_NAME, PROCESS_DIRNAME
+
+    if resolved.parent.name == PROCESS_DIRNAME and (resolved.parent.parent / MARKER_NAME).is_file():
+        raise FolderIntakeError(
+            f"这是 FluentFlow 放进产出文件夹的字幕副本（{resolved.name}），这条已经处理过了。"
+        )
+    _refuse_managed(resolved)
+    return resolved
+
+
+def _readable_file(raw: str | None) -> Path:
     text = str(raw or "").strip().strip('"').strip("'")
     if not text:
         raise FolderIntakeError("没有拿到文件路径。")
@@ -168,17 +209,12 @@ def resolve_media_file(raw: str | None) -> Path:
         raise FolderIntakeError(f"找不到这个文件：{resolved}")
     if not os.access(resolved, os.R_OK):
         raise FolderIntakeError(f"没有读取这个文件的权限：{resolved}")
-    if resolved.suffix.lower() not in INTAKE_SUFFIXES:
-        raise FolderIntakeError(
-            f"不支持这种文件（{resolved.suffix or '无扩展名'}），这里只处理音视频。"
-        )
-    if is_output_file(resolved):
-        raise FolderIntakeError(
-            f"这看起来是之前剪好的文件（{resolved.name}），选原片就行，不用再剪一遍。"
-        )
+    return resolved
+
+
+def _refuse_managed(resolved: Path) -> None:
     if is_managed_path(resolved) or _is_storage_root(resolved):
         raise FolderIntakeError("这是 FluentFlow 自己存文件的目录里的文件，选你自己的原片。")
-    return resolved
 
 
 # How far apart two timestamps may be and still be the same file. The browser
@@ -280,6 +316,7 @@ __all__ = [
     "cut_file_target",
     "describe",
     "resolve_media_file",
+    "resolve_subtitle_file",
     "list_media",
     "resolve_folder",
 ]
