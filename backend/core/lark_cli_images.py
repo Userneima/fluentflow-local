@@ -17,12 +17,13 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, List, Optional
 from urllib.parse import urlparse
 
-from backend.core import lark_cli_run, note_spacing
+from backend.core import feishu_note, lark_cli_run, note_spacing
 from backend.core.lark_cli_run import LarkCliError, Runner
 from backend.core.lark_exporter import _resolve_markdown_artifact_image
 
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 NOT_UPLOADED = "（截图没有传上去）"
 _RE_MD_IMAGE_LINE = re.compile(r"^\s*!\[(.*?)\]\((.*?)\)\s*$")
 _CAPTION_STRIP = re.compile(r"[\\`*_\[\]$~<>#|]")
-_MARKER = re.compile(r"⟦FFIMG-[0-9a-f]+-\d+⟧")
+_MARKER = re.compile(r"⟦FFIMG-([0-9a-f]+)-(\d+)⟧")
 _FIGURE_NUMBER = re.compile(r"^图 \d+：")
 
 
@@ -148,49 +149,104 @@ def _local_images_in(text: str) -> int:
     return count
 
 
-class _Paragraphs(HTMLParser):
-    """The pictures and paragraphs of a with-ids fetch, in document order:
-    ``("img", attrs)`` and ``("p", text)``."""
+def first_push(
+    push: Optional[str], pending: List[dict[str, Any]], links: List[feishu_note.HeadingLink],
+) -> dict[str, Any]:
+    """What the export that makes a document wrote into it, kept beside the
+    task until that export is finished (``feishu_created.json``): each
+    marker's picture by its figure number, and each chapter link's
+    placeholder. A resume reads the markers and placeholders left in the
+    document against this, not against the note as it is by then: the note
+    may have been edited and its figures numbered again. ``push`` None (a
+    record from a version that kept only the document) takes a marker of any
+    push."""
+    return {
+        "push": push,
+        "pictures": [
+            {"figure": int(_MARKER.match(item["marker"]).group(2)), "src": item["src"], "line": item["line"],
+             "caption": item["caption"], "name": item["path"].name}
+            for item in pending
+        ],
+        "links": [{"placeholder": link.placeholder, "label": link.label, "heading": link.heading} for link in links],
+    }
+
+
+_VOID = {"img", "br", "hr", "input", "col", "area", "embed", "source", "track", "wbr"}
+
+
+class _Blocks(HTMLParser):
+    """Every top-level block of a with-ids fetch, in document order, with its
+    words and, for a block that is a picture (an ``<img>``, or a block holding
+    only one), that picture's attributes. Every block counts, so "the block
+    right above" a caption is the one Feishu shows there, not the last picture
+    or paragraph before it."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.items: list[tuple[str, Any]] = []
-        self._text: list[str] | None = None
+        self.blocks: list[dict[str, Any]] = []
+        self._depth = 0
+
+    def _open(self, tag: str, attrs: list[tuple[str, Optional[str]]], closes: bool) -> None:
+        if self._depth == 0:
+            self.blocks.append({"tag": tag, "id": dict(attrs).get("id"), "text": [], "imgs": []})
+        if tag == "img" and self.blocks:
+            self.blocks[-1]["imgs"].append(dict(attrs))
+        if not closes and tag not in _VOID:
+            self._depth += 1
 
     def handle_starttag(self, tag, attrs):  # noqa: D102
-        if tag == "img":
-            self.items.append(("img", dict(attrs)))
-        elif tag == "p":
-            self._text = []
+        self._open(tag, attrs, closes=False)
 
     def handle_startendtag(self, tag, attrs):  # noqa: D102
-        self.handle_starttag(tag, attrs)
-
-    def handle_data(self, data):  # noqa: D102
-        if self._text is not None:
-            self._text.append(data)
+        self._open(tag, attrs, closes=True)
 
     def handle_endtag(self, tag):  # noqa: D102
-        if tag == "p" and self._text is not None:
-            self.items.append(("p", "".join(self._text).strip()))
-            self._text = None
+        if tag not in _VOID and self._depth:
+            self._depth -= 1
+
+    def handle_data(self, data):  # noqa: D102
+        if self._depth and self.blocks:
+            self.blocks[-1]["text"].append(data)
+
+
+def _blocks(content: str) -> list[dict[str, Any]]:
+    parser = _Blocks()
+    parser.feed(content)
+    blocks = []
+    for block in parser.blocks:
+        if block["tag"] == "title":
+            continue
+        text = "".join(block["text"]).strip()
+        picture = block["imgs"][0] if len(block["imgs"]) == 1 and not text else None
+        blocks.append({"tag": block["tag"], "id": block["id"], "text": text, "picture": picture})
+    return blocks
 
 
 def resume_pictures(
-    runner: Runner, bin_path: str, doc_id: str, written: str, *,
+    runner: Runner, bin_path: str, doc_id: str, written: str, first: dict[str, Any], known: List[dict[str, Any]], *,
     task_id: Optional[str], artifact_root: Optional[Path],
-) -> tuple[List[dict[str, Any]], List[str], List[dict[str, Any]], List[dict[str, Any]]]:
+) -> tuple[List[dict[str, Any]], List[str], List[dict[str, Any]], List[dict[str, Any]], str]:
     """Finish the pictures of a document an export made and was cut off in.
 
-    ``written`` is the note as that export wrote it (``_feishu_chunk``), so
-    its captions are numbered as the document's are. Each caption is looked
-    for in the document: a picture already right above it (the one this note
-    names) is kept and its marker, if still there, removed; a caption still
-    led by its marker gets its picture now (``_insert_images``, which takes
-    the marker out). A marker whose picture the note no longer has is taken
-    out and its caption left as words. Returns what each screenshot became in
-    Feishu, the ones that did not make it, and the note's screenshots
-    (``_prepare_images``'s to-upload and not-found lists) for the counts.
+    ``first`` is what that export wrote (``first_push``); ``known`` what the
+    chapters this resume rewrote became (``_update``'s pictures: they are
+    already in). ``written`` is the note as it is now (``_feishu_chunk``), for
+    the counts.
+
+    A paragraph led by a marker is the caption of the picture that marker
+    was made for: a picture right above it (this one's, or one Feishu shows
+    without a name) means it is in and only the marker goes; otherwise the
+    picture goes in at the marker now (``_insert_images``, which takes the
+    marker out). A marker no picture was made for is taken out and its caption
+    left as words. A caption paragraph whose marker is already gone is that
+    export's picture only when it reads exactly as that export numbered it and
+    a picture not rewritten in this resume is right above it. Every picture of
+    the note that ends up in none of these is listed as not in Feishu.
+
+    Returns what each screenshot became in Feishu, the ones that are not in,
+    the note's screenshots (to-upload and not-found, a picture already in
+    Feishu counted as uploaded even if its file is gone since) and the
+    document as fetched (for its placeholders).
 
     Checked on a document made for the test in the owner's Feishu
     (2026-11-25): a picture inserted just before the cut-off sits right above
@@ -200,57 +256,60 @@ def resume_pictures(
         runner, [bin_path, "docs", "+fetch", "--doc", doc_id, "--detail", "with-ids", "--as", "user"], timeout=60,
     )
     document = fetched.get("document") if isinstance(fetched.get("document"), dict) else fetched
-    parser = _Paragraphs()
-    parser.feed(str(document.get("content") or ""))
+    content = str(document.get("content") or "")
+    blocks = _blocks(content)
     _markdown, pending, missing = _prepare_images(written, task_id=task_id, artifact_root=artifact_root)
-    left = list(pending)
-    images: List[dict[str, Any]] = []
-    errors: List[str] = []
+    push = first.get("push")
+    figures = {int(picture["figure"]): picture for picture in first.get("pictures") or []}
+    rewritten = {image.get("block_id") for image in known if image.get("block_id")}
+    done: set[int] = set()
+    found: List[dict[str, Any]] = []
     insert: List[dict[str, Any]] = []
     stray: List[str] = []
 
-    def take(caption: str) -> Optional[dict[str, Any]]:
-        for item in left:
-            if item["caption"] == caption:
-                left.remove(item)
-                return item
-        # The note changed since and the figures were numbered again: the
-        # caption's words, when only one picture has them.
-        words = _FIGURE_NUMBER.sub("", caption)
-        same = [item for item in left if _FIGURE_NUMBER.sub("", item["caption"]) == words]
-        if len(same) == 1:
-            left.remove(same[0])
-            return same[0]
-        return None
+    def picture_above(position: int) -> Optional[dict[str, Any]]:
+        above = blocks[position - 1] if position else None
+        picture = above["picture"] if above else None
+        if picture is None or above["id"] in rewritten or picture.get("id") in rewritten:
+            return None
+        return {**picture, "block_id": picture.get("id") or above["id"]}
 
-    for position, (kind, value) in enumerate(parser.items):
-        if kind != "p":
-            continue
-        marker = _MARKER.match(value)
-        item = take(value[marker.end():] if marker else value)
-        if item is None:
-            if marker:
+    for position, block in enumerate(blocks):
+        text = block["text"]
+        marker = _MARKER.match(text) if block["tag"] == "p" else None
+        if marker:
+            figure = int(marker.group(2))
+            picture = figures.get(figure) if push in (None, marker.group(1)) and figure not in done else None
+            if picture is None:
                 stray.append(marker.group(0))
-            continue
-        record = {"src": item["src"], "line": item["line"], "caption": item["caption"], "name": item["path"].name}
-        above = parser.items[position - 1] if position else None
+                continue
+        else:
+            figure = next((n for n, p in figures.items() if n not in done and p["caption"] == text), -1)
+            if block["tag"] != "p" or not _FIGURE_NUMBER.match(text) or figure < 0:
+                continue
+            picture = figures[figure]
+        record = {key: picture[key] for key in ("src", "line", "caption", "name")}
+        above = picture_above(position)
         # The picture Feishu shows right above the caption is this one's when
         # it carries this file name, or no name at all: only one document was
         # checked to carry it, and a picture inserted just before the cut-off
         # must not go in twice. One named after another file is not this one.
-        if above and above[0] == "img" and above[1].get("name") in (item["path"].name, "", None):
-            images.append({**record, "file_token": above[1].get("src"), "block_id": above[1].get("id")})
+        if above is not None and above.get("name") in (picture["name"], "", None):
+            done.add(figure)
+            found.append({**record, "file_token": above.get("src") or above.get("token"),
+                          "block_id": above["block_id"]})
             if marker:
                 stray.append(marker.group(0))
         elif marker:
-            insert.append({**item, "marker": marker.group(0)})
-        else:
-            # Its upload failed in that export and its marker went with it.
-            images.append({**record, "file_token": None, "block_id": None})
-            errors.append(item["src"])
-    inserted, failed = _insert_images(runner, bin_path, doc_id, insert)
-    images.extend(inserted)
-    errors.extend(failed)
+            done.add(figure)
+            path = _resolve_markdown_artifact_image(picture["src"], task_id=task_id, artifact_root=artifact_root)
+            if path:
+                insert.append({**record, "path": path, "marker": marker.group(0)})
+            else:
+                # Its file is gone since: the caption stays as words.
+                found.append({**record, "file_token": None, "block_id": None})
+                stray.append(marker.group(0))
+    inserted, _failed = _insert_images(runner, bin_path, doc_id, insert)
     for marker_text in stray:
         try:
             lark_cli_run._run(
@@ -261,10 +320,32 @@ def resume_pictures(
             )
         except LarkCliError as exc:
             logger.warning("lark-cli could not remove image marker %s: %s", marker_text, exc)
-    for item in left:
-        # Its caption is not in the document: the chapter was not written.
-        images.append({"src": item["src"], "line": item["line"], "caption": item["caption"],
-                       "name": item["path"].name, "file_token": None, "block_id": None})
-        errors.append(item["src"])
-    images.extend({**item, "file_token": None, "block_id": None} for item in missing)
-    return images, errors, pending, missing
+    images = list(known) + found + inserted
+    # Every screenshot of the note is accounted for once, by its image line.
+    accounted = Counter(image["line"] for image in images)
+    in_feishu = Counter(image["line"] for image in images if image.get("file_token") or image.get("block_id"))
+    for item in pending + missing:
+        if accounted[item["line"]]:
+            accounted[item["line"]] -= 1
+        else:
+            images.append({"src": item["src"], "line": item["line"], "caption": item["caption"],
+                           "name": item["path"].name if item.get("path") else None,
+                           "file_token": None, "block_id": None})
+    not_found = []
+    for item in missing:
+        if in_feishu[item["line"]]:
+            # In Feishu already; only its local file is gone since.
+            in_feishu[item["line"]] -= 1
+            pending.append(item)
+        else:
+            not_found.append(item)
+    unreported = Counter(item["line"] for item in not_found)
+    errors = []
+    for image in images:
+        if image.get("file_token") or image.get("block_id"):
+            continue
+        if unreported[image["line"]]:
+            unreported[image["line"]] -= 1  # listed as not found
+            continue
+        errors.append(image["src"])
+    return images, errors, pending, not_found, content

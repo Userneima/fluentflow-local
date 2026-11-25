@@ -601,3 +601,233 @@ def test_a_picture_feishu_shows_without_its_name_is_not_put_in_twice(tmp_path):
     assert [image["file_token"] for image in result["sync"]["images"]] == [
         b["token"] for b in doc.blocks if b["tag"] == "img"
     ]
+
+
+# Independent review of the resume, 2026-11-25: every picture goes in once, at
+# its own caption, also when the note was edited between the cut-off and the
+# resume; nothing else in the document is taken for a screenshot; a resume can
+# run again; what each screenshot became is never recorded wrong.
+
+
+def _frames(tmp_path, names) -> None:
+    frames = tmp_path / "t1" / "frames"
+    frames.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (frames / name).write_bytes(b"\xff\xd8 jpeg")
+
+
+def _pic(name: str, alt: str = "") -> str:
+    return f"![{alt}](/jobs/t1/artifacts/frame?file={name})"
+
+
+def _cut_before_pictures(doc: FakeDoc, note: str, tmp_path) -> None:
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", note, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, lambda c: c[2] == "+media-insert"))
+
+
+def _pictures(doc: FakeDoc) -> list[tuple[str, str]]:
+    """Each picture in the document with the paragraph right below it."""
+    return [(b.get("name"), doc.blocks[i + 1]["text"]) for i, b in enumerate(doc.blocks) if b["tag"] == "img"]
+
+
+def _shown(doc: FakeDoc) -> list:
+    """The document's pictures and words, without dividers and empty paragraphs."""
+    return [("img", b.get("name")) if b["tag"] == "img" else b["text"] for b in doc.blocks
+            if b["tag"] == "img" or b.get("text")]
+
+
+def _recorded_as_shown(doc: FakeDoc, result: dict, names: list[str] | None = None) -> None:
+    """Each screenshot recorded as the picture the document shows above its
+    caption (``names``: the screenshots in document order, when Feishu does
+    not name its pictures)."""
+    shown = [b for b in doc.blocks if b["tag"] == "img"]
+    names = names or [b["name"] for b in shown]
+    recorded = {image["name"]: (image["file_token"], image["block_id"]) for image in result["sync"]["images"]}
+    assert recorded == {name: (b["token"], b["id"]) for name, b in zip(names, shown)}, \
+        "what each screenshot became is what the document shows"
+
+
+EDITED = f"""# 访谈
+
+## 一、开场
+
+开场的话。
+
+## 二、框架
+
+{_pic('a.jpg')}
+
+中间一句。
+
+{_pic('b.jpg')}
+"""
+
+
+def test_a_note_edited_before_the_resume_gets_each_picture_at_its_own_caption(tmp_path):
+    """Pictures without words get the same caption (``图 N：截图``), and a
+    picture added to an earlier chapter numbers the later ones again: neither
+    may put a picture at another one's caption."""
+    _frames(tmp_path, ["a.jpg", "b.jpg", "x.jpg"])
+    doc = FakeDoc()
+    _cut_before_pictures(doc, EDITED, tmp_path)
+    edited = EDITED.replace("开场的话。", f"开场的话。\n\n{_pic('x.jpg')}")
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert _shown(doc) == [
+        "访谈", "一、开场", "开场的话。", ("img", "x.jpg"), "图 1：截图",
+        "二、框架", ("img", "a.jpg"), "图 1：截图", "中间一句。", ("img", "b.jpg"), "图 2：截图",
+    ], "each picture right above its own caption (the chapter left alone keeps its numbers)"
+    assert not any("FFIMG" in b.get("text", "") for b in doc.blocks)
+    assert result["image_count"] == 3 and result["image_upload_count"] == 3 and result["image_upload_errors"] == []
+    _recorded_as_shown(doc, result)
+
+
+@pytest.mark.parametrize("nameless", [False, True])
+def test_a_resume_cut_off_in_turn_finishes_on_the_next_and_then_writes_nothing(tmp_path, nameless):
+    """The note edited, the resume cut off after it rewrote a chapter and put
+    one picture in: the next export finishes the rest, each picture once, and
+    one more export writes nothing. Also when Feishu shows the pictures
+    without their names."""
+    _frames(tmp_path, ["a.jpg", "b.jpg", "x.jpg"])
+    doc = FakeDoc()
+    doc.nameless_pictures = nameless
+    order = ["x.jpg", "a.jpg", "b.jpg"]
+    _cut_before_pictures(doc, EDITED, tmp_path)
+    edited = EDITED.replace("开场的话。", f"开场的话。\n\n{_pic('x.jpg')}")
+    inserted: list[str] = []
+
+    def stop(cmd: list[str]) -> bool:
+        if cmd[2] == "+media-insert":
+            inserted.append(_flag(cmd, "--file"))
+        return cmd[2] == "+update" and inserted == ["x.jpg", "a.jpg"] and "FFIMG" in _flag(cmd, "--pattern")
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, stop))
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert [name for name, _below in _pictures(doc)] == ([""] * 3 if nameless else order)
+    assert not any("FFIMG" in b.get("text", "") for b in doc.blocks)
+    assert result["image_upload_count"] == 3 and result["image_upload_errors"] == []
+    _recorded_as_shown(doc, result, order)
+    assert not (tmp_path / "t1" / cli.CREATED).exists()
+
+    calls = len(doc.calls)
+    again = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path,
+                                             previous=result["sync"], runner=doc)
+    assert not any(c[2] == "+media-insert" or (c[2] == "+update" and _flag(c, "--command") != "str_replace")
+                   for c in doc.calls[calls:])
+    assert [name for name, _below in _pictures(doc)] == ([""] * 3 if nameless else order)
+    _recorded_as_shown(doc, again, order)
+
+
+def test_a_paragraph_reading_like_a_caption_is_not_taken_for_one(tmp_path):
+    """A body paragraph whose words are a screenshot's description is not
+    that screenshot's caption."""
+    _frames(tmp_path, ["a.jpg"])
+    note = f"# 访谈\n\n## 一、开场\n\n保存后的结果\n\n图 1：保存后的结果\n\n{_pic('a.jpg', '保存后的结果')}\n"
+    doc = FakeDoc()
+    _cut_before_pictures(doc, note, tmp_path)
+
+    result = cli.export_markdown_via_lark_cli("访谈", note, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert _shown(doc) == ["访谈", "一、开场", "保存后的结果", "图 1：保存后的结果", ("img", "a.jpg"), "图 1：保存后的结果"]
+    assert result["image_upload_count"] == 1 and result["image_upload_errors"] == []
+    _recorded_as_shown(doc, result)
+
+
+def test_a_picture_that_is_not_the_screenshot_is_not_taken_for_it(tmp_path):
+    """A picture without a name (the note's web image, or one pasted in
+    Feishu) followed by a divider and a heading, then a screenshot's
+    caption: the block right above the caption is the heading, so the
+    screenshot goes in and the other picture is not recorded as it."""
+    _frames(tmp_path, ["a.jpg"])
+    note = f"# 访谈\n\n## 一、开场\n\n开场的话。\n\nWEBIMG\n\n## 二、框架\n\n{_pic('a.jpg', '设置页')}\n"
+    doc = FakeDoc()
+    _cut_before_pictures(doc, note, tmp_path)
+    for block in doc.blocks:
+        if block["text"] == "WEBIMG":
+            block.update({"tag": "img", "name": "", "token": "webtok", "text": ""})
+
+    result = cli.export_markdown_via_lark_cli("访谈", note, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert ("a.jpg", "图 1：设置页") in _pictures(doc)
+    assert [image["file_token"] for image in result["sync"]["images"]] != ["webtok"]
+    assert result["image_upload_count"] == 1 and result["image_upload_errors"] == []
+    (image,) = result["sync"]["images"]
+    block = next(b for b in doc.blocks if b.get("name") == "a.jpg")
+    assert (image["file_token"], image["block_id"]) == (block["token"], block["id"])
+
+
+def test_a_screenshot_whose_file_is_gone_since_is_told_apart_from_one_in_feishu(tmp_path):
+    """Cut off with picture 2 in and its marker still there; then the files
+    of pictures 2 and 3 are deleted. Picture 2 is in Feishu: recorded with
+    what it became, not as an error. Picture 3 cannot go in: listed as not
+    uploaded, its marker taken out, its caption kept."""
+    _frames(tmp_path, ["a.jpg", "b.jpg", "c.jpg"])
+    doc = FakeDoc()
+    inserted: list[str] = []
+
+    def stop(cmd: list[str]) -> bool:
+        if cmd[2] == "+media-insert":
+            inserted.append(_flag(cmd, "--file"))
+        return cmd[2] == "+update" and inserted == ["a.jpg", "b.jpg"]
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, stop))
+    (tmp_path / "t1" / "frames" / "b.jpg").unlink()
+    (tmp_path / "t1" / "frames" / "c.jpg").unlink()
+
+    result = cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert [name for name, _below in _pictures(doc)] == ["a.jpg", "b.jpg"]
+    assert "图 3：保存后的结果" in doc.texts()
+    assert not any("FFIMG" in b.get("text", "") for b in doc.blocks)
+    assert result["image_count"] == 3 and result["image_upload_count"] == 2
+    assert result["image_upload_errors"] == ["/jobs/t1/artifacts/frame?file=c.jpg"]
+    by_name = {image["name"]: image for image in result["sync"]["images"]}
+    assert by_name["c.jpg"]["file_token"] is None
+    b = next(blk for blk in doc.blocks if blk.get("name") == "b.jpg")
+    assert (by_name["b.jpg"]["file_token"], by_name["b.jpg"]["block_id"]) == (b["token"], b["id"])
+
+
+def test_a_cut_off_recorded_by_an_older_version_still_gets_its_pictures(tmp_path):
+    """A document recorded before the record kept what the export wrote: the
+    note as pushed (saved before the record) says which picture each marker
+    was made for, also when the note was edited since."""
+    _frames(tmp_path, ["a.jpg", "b.jpg", "x.jpg"])
+    doc = FakeDoc()
+    _cut_before_pictures(doc, EDITED, tmp_path)
+    record = tmp_path / "t1" / cli.CREATED
+    older = json.loads(record.read_text(encoding="utf-8"))
+    older.pop("first_push")
+    record.write_text(json.dumps(older), encoding="utf-8")
+    edited = EDITED.replace("开场的话。", f"开场的话。\n\n{_pic('x.jpg')}")
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert [name for name, _below in _pictures(doc)] == ["x.jpg", "a.jpg", "b.jpg"]
+    assert not any("FFIMG" in b.get("text", "") for b in doc.blocks)
+    _recorded_as_shown(doc, result)
+
+
+def test_links_in_chapters_a_resume_leaves_alone_point_at_their_chapters(tmp_path):
+    """Cut off before the chapter links were pointed, then the first chapter
+    edited: the resume rewrites that chapter only, and the link the cut-off
+    export left in the second points at its chapter, not at a placeholder."""
+    doc = FakeDoc()
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, lambda c: "--scope" in c))
+    edited = NOTE.replace("开场的话。", "开场改过的话。")
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert result["sections_rewritten"] == 1
+    framework = next(t for t in doc.texts() if "框架的话" in t)
+    assert f"[第三章]({URL}#{_ids(doc)['三、结尾']})" in framework
+    assert not any("fluentflow.invalid" in t for t in doc.texts())
+    assert result["sync"]["link_errors"] == []
