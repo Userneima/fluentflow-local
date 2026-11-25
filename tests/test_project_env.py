@@ -124,7 +124,9 @@ def test_hf_home_in_env_moves_the_transcription_models(tmp_path):
 def test_data_dir_in_env_reaches_the_readiness_check_and_the_uninstaller(tmp_path):
     copy = _copy_of_the_code(tmp_path)
     data = tmp_path / "FluentFlow" / "data"
-    (copy / ".env").write_text(f'FLUENTFLOW_DATA_DIR="{data}"\n', encoding="utf-8")
+    # Single quotes, as the installers write it: in double quotes dotenv reads
+    # the backslashes of a Windows path (C:\Users\runneradmin) as escapes.
+    (copy / ".env").write_text(f"FLUENTFLOW_DATA_DIR='{data}'\n", encoding="utf-8")
     # The uninstallers ask exactly this.
     question = (
         "from backend.core.runtime_paths import load_project_env, app_data_root; "
