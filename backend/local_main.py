@@ -253,6 +253,7 @@ def _log_restart_interruption(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task_stop.service_started()
+    task_stop.stop_on_signals()
     # Readiness is advisory at startup: the server still boots (the SPA
     # router and diagnostics give readable errors), but failures are logged
     # up front so they are visible before the first task fails mid-way.

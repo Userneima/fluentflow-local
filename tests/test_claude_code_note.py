@@ -696,3 +696,16 @@ def test_a_login_refresh_race_does_not_send_the_user_to_log_in(frames, monkeypat
     assert "已自动重试一次" in message
     assert "运行 `claude`" not in message
     assert len(calls) == 2
+
+
+def test_a_command_line_killed_by_a_stopping_service_is_not_a_failed_note(frames, monkeypatch):
+    # Review 2026-11-25: the service's stop kills the CLI; that read as a
+    # failed note (and a coverage check that found nothing), so the restart
+    # did not carry the step on as it does for a stop.
+    from backend.core import model_usage, task_stop
+
+    run, _calls = _recorder("", returncode=-9, stderr="")
+    monkeypatch.setattr(task_stop, "shutting_down", lambda: True)
+
+    with pytest.raises(model_usage.ServiceStopping):
+        ccn.write_visual_note("[00:12] 今天讲最小二乘法", frames, runner=run)

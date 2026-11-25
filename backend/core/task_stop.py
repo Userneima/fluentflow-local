@@ -160,6 +160,35 @@ def shutdown() -> int:
     return sum(request(task_id) for task_id in task_ids)
 
 
+def stop_on_signals() -> None:
+    """Count the service as stopping the moment it is told to stop.
+
+    The server waits for running requests (an agent's note written in a
+    request's background task, a rewrite awaited in the request) before it
+    runs the app's shutdown, and skips that shutdown on a second Ctrl+C; a
+    model request waiting on ``shutting_down`` would hold the exit for the
+    whole note (found in a review, 2026-11-25). So the signal handlers the
+    server installed are wrapped to raise the flag first. Called from the
+    app's startup, on the main thread, after the server installed them; the
+    server puts back its own originals when it ends.
+    """
+    import signal
+
+    if threading.current_thread() is not threading.main_thread():
+        return
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        previous = signal.getsignal(sig) if sig is not None else None
+        if not callable(previous):
+            continue
+
+        def handler(signum: int, frame: Any, previous: Any = previous) -> None:
+            _shutting_down.set()
+            previous(signum, frame)
+
+        signal.signal(sig, handler)
+
+
 def service_started() -> None:
     """A new start of the service: step records are written again."""
     _shutting_down.clear()
@@ -169,4 +198,4 @@ def shutting_down() -> bool:
     return _shutting_down.is_set()
 
 
-__all__ = ["Either", "either", "begin", "bound", "bound_runner", "current", "event", "request", "requested", "service_started", "shutdown", "shutting_down", "track", "untrack"]
+__all__ = ["Either", "either", "begin", "bound", "bound_runner", "current", "event", "request", "requested", "service_started", "shutdown", "shutting_down", "stop_on_signals", "track", "untrack"]

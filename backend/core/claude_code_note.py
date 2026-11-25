@@ -713,6 +713,11 @@ def _cli_pass(
             raise ClaudeVisionError(f"启动本机 Claude 失败：{exc}") from exc
 
     stdout = (completed.stdout or "").strip()
+    if completed.returncode != 0 and task_stop.shutting_down():
+        # Killed because the service is stopping (``task_stop.shutdown``):
+        # not a failure of the note or the check; the step stays open for
+        # the restart (review of the 2026-11-25 stop change).
+        raise model_usage.ServiceStopping("服务正在停止，本机 Claude 被停下，这一步重启后接着做。")
     if not stdout:
         raise _friendly_failure(completed.stderr or "本机 Claude 没有任何输出")
     payload, opened = _read_stream(stdout)
