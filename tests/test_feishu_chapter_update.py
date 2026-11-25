@@ -27,6 +27,7 @@ import subprocess
 import uuid
 
 import pytest
+from typing import Callable
 
 import backend.core.lark_cli_exporter as cli
 import backend.core.lark_cli_images as lark_cli_images
@@ -119,7 +120,7 @@ class FakeDoc:
 
     def _xml(self) -> str:
         return f'<title id="{DOC}">t</title>' + "".join(
-            f'<img id="{b["id"]}" src="{b["token"]}"/>' if b["tag"] == "img"
+            f'<img id="{b["id"]}" name="{b.get("name", "")}" src="{b["token"]}"/>' if b["tag"] == "img"
             else f'<hr id="{b["id"]}"/>' if b["tag"] == "hr"
             else f'<{b["tag"]} id="{b["id"]}">{html.escape(b["text"])}</{b["tag"]}>'
             for b in self.blocks
@@ -135,7 +136,7 @@ class FakeDoc:
         if verb == "+media-insert":
             marker = _flag(cmd, "--selection-with-ellipsis")
             at = next(i for i, b in enumerate(self.blocks) if marker in b.get("text", ""))
-            block = {"tag": "img", "id": self._id(), "token": f"tok{self._next}"}
+            block = {"tag": "img", "id": self._id(), "token": f"tok{self._next}", "name": _flag(cmd, "--file")}
             self.blocks.insert(at, block)
             self.modified += 1
             return _ok({"block_id": block["id"], "file_token": block["token"], "document_id": DOC})
@@ -487,3 +488,78 @@ def test_an_export_cut_off_after_creating_its_document_writes_into_it_again(tmp_
     assert not (tmp_path / "t1" / cli.CREATED).exists()
     cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t2", artifact_root=tmp_path, runner=doc)
     assert doc.writes.count("create") == 2, "another task still gets its own document"
+
+
+PICTURED = """# 访谈
+
+## 一、开场
+
+开场的话。
+
+![讲者打开设置页](/jobs/t1/artifacts/frame?file=a.jpg)
+
+## 二、框架
+
+框架的话。
+
+![点开模型菜单](/jobs/t1/artifacts/frame?file=b.jpg)
+
+中间一句。
+
+![保存后的结果](/jobs/t1/artifacts/frame?file=c.jpg)
+"""
+
+
+def _cut_off_at(doc: FakeDoc, stop: "Callable[[list[str]], bool]"):
+    """``doc``, except that the first command ``stop`` picks never runs: the
+    service stopped there."""
+    def runner(cmd, **kwargs):
+        if stop(list(cmd)):
+            raise KeyboardInterrupt("the service stopped")
+        return doc(cmd, **kwargs)
+    return runner
+
+
+@pytest.mark.parametrize("cut_at", ["before_any_picture", "between_a_picture_and_its_marker"])
+def test_screenshots_an_export_was_cut_off_before_go_in_when_it_is_carried_on(tmp_path, cut_at):
+    """(owner, 2026-11-25) Carrying on an export cut off before its
+    screenshots were all in puts each missing one right above its caption,
+    none twice, leaves no marker in the document, and the task knows what
+    every screenshot became in Feishu. The document's layout around a picture
+    (``<img name=…>`` right above the marker paragraph) is as measured on a
+    test document in the owner's Feishu."""
+    frames = tmp_path / "t1" / "frames"
+    frames.mkdir(parents=True)
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        (frames / name).write_bytes(b"\xff\xd8 jpeg")
+    doc = FakeDoc()
+    inserted: list[str] = []
+
+    def stop(cmd: list[str]) -> bool:
+        if cmd[2] == "+media-insert":
+            if cut_at == "before_any_picture":
+                return True
+            inserted.append(_flag(cmd, "--file"))
+        # Picture 2 is in; the service stops before its marker is removed.
+        return cut_at != "before_any_picture" and cmd[2] == "+update" and inserted == ["a.jpg", "b.jpg"]
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, stop))
+
+    result = cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert doc.writes.count("create") == 1
+    shown = [(b["tag"], b.get("name") or b["text"]) for b in doc.blocks if b["tag"] == "img" or "图 " in b["text"]]
+    assert shown == [
+        ("img", "a.jpg"), ("p", "图 1：讲者打开设置页"),
+        ("img", "b.jpg"), ("p", "图 2：点开模型菜单"),
+        ("img", "c.jpg"), ("p", "图 3：保存后的结果"),
+    ], "each picture once, right above its caption"
+    assert not any("FFIMG" in b.get("text", "") for b in doc.blocks), "no marker left in the document"
+    assert result["image_count"] == 3 and result["image_upload_count"] == 3 and result["image_upload_errors"] == []
+    by_name = {image["name"]: image for image in result["sync"]["images"]}
+    tokens = {b["name"]: b["token"] for b in doc.blocks if b["tag"] == "img"}
+    assert {name: image["file_token"] for name, image in by_name.items()} == tokens
+    assert by_name["b.jpg"]["line"] == "![点开模型菜单](/jobs/t1/artifacts/frame?file=b.jpg)"
+    assert not (tmp_path / "t1" / cli.CREATED).exists()

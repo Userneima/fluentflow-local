@@ -22,7 +22,6 @@ from backend.core.lark_cli_run import LarkCliError, Runner
 logger = logging.getLogger(__name__)
 
 CREATED = "feishu_created.json"
-INTERRUPTED_IMAGES = "上次发到飞书时在传截图前被打断，这篇里的截图没有补上"
 PUSHED_NOTE = "feishu_pushed.md"
 
 

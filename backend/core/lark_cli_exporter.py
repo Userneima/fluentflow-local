@@ -72,11 +72,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from backend.core import feishu_note, lark_cli_images, lark_cli_run
-from backend.core.lark_cli_finish import _finish, modified_times
-from backend.core.lark_cli_images import _local_images_in, _prepare_images
+from backend.core.lark_cli_finish import _finish, _snapshot, modified_times
+from backend.core.lark_cli_images import _prepare_images
 from backend.core.lark_cli_records import (
     CREATED,
-    INTERRUPTED_IMAGES,
     PUSHED_NOTE,
     _created_unrecorded,
     _forget_created,
@@ -161,18 +160,28 @@ def export_markdown_via_lark_cli(
             artifact_root=artifact_root, keep_feishu=keep_feishu, runner=runner, state=state, tight=tight,
         )
         if resumed is not None:
+            # The export that made the document may have been cut off before
+            # every screenshot was in: the ones still missing go in at the
+            # markers it left, and the task learns what each became.
+            doc_id = str(previous["doc_id"])
+            parts = feishu_note.sections(markdown)
+            links: List[feishu_note.HeadingLink] = []
+            written = _feishu_chunk(parts, list(range(len(parts))), links, tight=tight)
+            sync = updated["sync"]
+            images, errors, pending, missing = lark_cli_images.resume_pictures(
+                runner, bin_path, doc_id, written, task_id=task_id, artifact_root=artifact_root,
+            )
+            sync["images"] = images
             if not updated.get("sections_rewritten"):
                 # Nothing to rewrite: the document already holds this note,
                 # but the export was cut off before its chapter links were
                 # pointed at their chapters (``_finish``).
-                parts = feishu_note.sections(markdown)
-                links: List[feishu_note.HeadingLink] = []
-                _feishu_chunk(parts, list(range(len(parts))), links, tight=tight)
-                _finish(runner, bin_path, str(previous["doc_id"]), str(previous.get("url") or ""), links, parts,
-                        updated["sync"])
+                _finish(runner, bin_path, doc_id, str(previous.get("url") or ""), links, parts, sync)
+            else:
+                # ``_update`` read the document back before the pictures went in.
+                _snapshot(runner, bin_path, doc_id, sync)
             _forget_created(artifact_root, task_id, state)
-            if _local_images_in(markdown):
-                updated["image_upload_errors"] = [*updated.get("image_upload_errors", []), INTERRUPTED_IMAGES]
+            updated = {**updated, **_response(sync, pending, missing, images, errors)}
         return updated
 
     space = (wiki_space or os.environ.get("FLUENTFLOW_LARK_CLI_WIKI_SPACE") or "").strip() or DEFAULT_WIKI_SPACE
@@ -238,7 +247,6 @@ def export_markdown_via_lark_cli(
 __all__ = [
     "CREATED",
     "DEFAULT_WIKI_SPACE",
-    "INTERRUPTED_IMAGES",
     "LARK_CLI_NOT_FOUND",
     "LarkCliError",
     "PUSHED_NOTE",
