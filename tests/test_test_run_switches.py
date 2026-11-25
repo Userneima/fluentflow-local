@@ -692,10 +692,14 @@ def test_the_test_copy_runs_from_a_worktree_without_a_venv(tmp_path, monkeypatch
     # A copy reused for another run keeps its tasks when the build is wrong.
     (tmp_path / "copy").mkdir()
     (tmp_path / "copy" / "fluentflow_jobs.sqlite").write_bytes(b"tasks made in the copy")
-    with pytest.raises(SystemExit, match="no local.html"):
-        prepare_test_copy.main(["--source", str(real), "--into", str(tmp_path / "copy"), "--frontend-dir", str(build)])
-    assert (tmp_path / "copy" / "fluentflow_jobs.sqlite").read_bytes() == b"tasks made in the copy"
-    (build / "local.html").write_text("", encoding="utf-8")
+    source = Path(prepare_test_copy.__file__).resolve().parents[1] / "frontend"
+    for wrong in (build, source):  # nothing built there; the source folder (push review, 2026-11-25)
+        with pytest.raises(SystemExit, match="not a page build"):
+            prepare_test_copy.main(["--source", str(real), "--into", str(tmp_path / "copy"),
+                                    "--frontend-dir", str(wrong)])
+        assert (tmp_path / "copy" / "fluentflow_jobs.sqlite").read_bytes() == b"tasks made in the copy"
+    (build / "assets").mkdir()
+    (build / "local.html").write_text('<script type="module" src="/assets/local-x.js"></script>', encoding="utf-8")
     assert prepare_test_copy.main(["--source", str(real), "--into", str(tmp_path / "copy"), "--port", "8013",
                                    "--frontend-dir", str(build)]) == 0
     lines = capsys.readouterr().out.splitlines()

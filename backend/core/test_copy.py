@@ -78,14 +78,18 @@ _SEND_BACK_HERE = (
 PAGE_POLICY = "connect-src 'self'"
 
 
-def page_config() -> str:
-    """The page's config script on a test copy."""
+def page_config(*, served: bool) -> str:
+    """The page's config script on a test copy. ``served``: the static files
+    handed out the build's own config, so it is a file inside the build
+    (not, say, a link out of it) and may be read here."""
     from backend.core.frontend_paths import local_frontend_dist_dir
 
-    try:
-        built = (local_frontend_dist_dir() / "assets" / "config.js").read_text(encoding="utf-8")
-    except OSError:
-        built = ""
+    built = ""
+    if served:
+        try:
+            built = (local_frontend_dist_dir() / "assets" / "config.js").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            built = ""
     return f"try {{ new Function({json.dumps(built)})(); }} catch (_) {{ /* the build's config is broken */ }}" + _SEND_BACK_HERE
 
 
@@ -184,7 +188,8 @@ async def middleware(request: Any, call_next: Any) -> Any:
             and response.status_code in {200, 304, 404}):
         from fastapi.responses import Response
 
-        return Response(page_config(), media_type="text/javascript", headers={"Cache-Control": "no-store"})
+        return Response(page_config(served=response.status_code != 404), media_type="text/javascript",
+                        headers={"Cache-Control": "no-store"})
     if (response.headers.get("content-type") or "").startswith("text/html"):
         response.headers["Content-Security-Policy"] = PAGE_POLICY
     return response

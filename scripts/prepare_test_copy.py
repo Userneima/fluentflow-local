@@ -242,6 +242,16 @@ def _run_in(repo: Path, env: dict[str, str], python: Path, arguments: str, windo
     return f"cd {shlex.quote(str(repo))} && {assignments} {shlex.quote(str(python))} {arguments}"
 
 
+def is_page_build(folder: Path) -> bool:
+    """A built page (vite build), not the source folder: its local.html
+    loads compiled files from /assets, never /src."""
+    try:
+        page = (folder / "local.html").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return (folder / "assets").is_dir() and '"/assets/' in page and '"/src/' not in page
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--into", required=True, type=Path, help="where the copy goes (a scratch directory)")
@@ -257,8 +267,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     # Before anything is written: a copy reused for another run keeps its tasks.
     frontend_dir = args.frontend_dir.expanduser().resolve() if args.frontend_dir else None
-    if frontend_dir is not None and not (frontend_dir / "local.html").is_file():
-        raise SystemExit(f"no local.html in {frontend_dir}: build into it with node scripts/write_frontend_config.js "
+    if frontend_dir is not None and not is_page_build(frontend_dir):
+        raise SystemExit(f"{frontend_dir} is not a page build: build into it with node scripts/write_frontend_config.js "
                          f"&& npx vite build --config vite.local.config.mjs --outDir {frontend_dir}")
     done = prepare(args.source, args.into)
     limits = (None, None, None) if args.no_limit else (args.max_calls, args.max_usd, args.max_cny)

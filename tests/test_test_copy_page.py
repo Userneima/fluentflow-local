@@ -113,6 +113,28 @@ def test_a_broken_build_config_still_leaves_the_page_on_the_copy(monkeypatch, ow
     assert _page_api_base(config, "http://127.0.0.1:5173/agent") == "http://127.0.0.1:5173"
 
 
+def test_the_copy_config_reads_nothing_outside_the_build(monkeypatch, own_build, tmp_path):
+    """(push review, 2026-11-25) A config.js linking out of the build is not
+    served by the static files; the copy must not read it either."""
+    secret = tmp_path / "secret.txt"
+    secret.write_text("the owner's data", encoding="utf-8")
+    (own_build / "assets" / "config.js").unlink()
+    (own_build / "assets" / "config.js").symlink_to(secret)
+    monkeypatch.setenv(test_copy.ENV, "1")
+    monkeypatch.setenv(test_copy.FRONTEND_ENV, str(own_build))
+    config = TestClient(_app()).get("/assets/config.js")
+    assert config.status_code == 200 and "the owner's data" not in config.text
+    assert "window.location.origin" in config.text
+
+
+def test_a_config_cut_inside_a_character_still_answers(monkeypatch, own_build):
+    (own_build / "assets" / "config.js").write_bytes("window.X = '版本".encode("utf-8")[:-1])
+    monkeypatch.setenv(test_copy.ENV, "1")
+    monkeypatch.setenv(test_copy.FRONTEND_ENV, str(own_build))
+    config = TestClient(_app()).get("/assets/config.js")
+    assert config.status_code == 200 and "window.location.origin" in config.text
+
+
 def test_the_copy_pages_may_connect_only_to_the_copy(monkeypatch, own_build):
     monkeypatch.setenv(test_copy.ENV, "1")
     monkeypatch.setenv(test_copy.FRONTEND_ENV, str(own_build))
