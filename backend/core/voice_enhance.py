@@ -41,6 +41,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from backend.core import ffmpeg_cmd
+
 # Voice-clarity correction, validated by ear on the 2026-08 training-camp corpus
 # and applied to all ten recordings: drop the table rumble, pull down the boxy
 # 180/320 Hz region, lift the 2.6/4.5 kHz consonant range, then level the result.
@@ -112,7 +114,7 @@ def _require(binary: str) -> str:
 
 def _media_duration_seconds(path: Path) -> float | None:
     try:
-        completed = subprocess.run(
+        completed = ffmpeg_cmd.run(
             [
                 _require("ffprobe"),
                 "-v", "error",
@@ -144,7 +146,7 @@ def _band_rms_dbfs(
         chain.append(bandpass)
     chain.append("astats=metadata=1:reset=0")
 
-    completed = subprocess.run(
+    completed = ffmpeg_cmd.run(
         [
             ffmpeg, "-hide_banner", "-nostdin",
             "-ss", f"{offset_seconds:.3f}",
@@ -264,7 +266,7 @@ def enhance_voice(
         raise ValueError("enhance_voice refuses to overwrite its own source file")
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    subprocess.run(
+    ffmpeg_cmd.run(
         [
             _require("ffmpeg"), "-y", "-nostdin",
             "-i", str(src),

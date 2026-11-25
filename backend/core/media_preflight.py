@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from backend.core import ffmpeg_cmd
 from backend.core.runtime_env import env_truthy
 
 
@@ -101,7 +102,7 @@ def _require_binary(name: str) -> str:
 def _probe_media(path: Path) -> dict[str, Any]:
     ffprobe = _require_binary("ffprobe")
     try:
-        completed = subprocess.run(
+        completed = ffmpeg_cmd.run(
             [
                 ffprobe,
                 "-v",
@@ -146,7 +147,7 @@ def _matches_file_extension(path: Path, format_name: str | None) -> bool:
 def _verify_first_audio_segment(path: Path) -> None:
     ffmpeg = _require_binary("ffmpeg")
     try:
-        completed = subprocess.run(
+        completed = ffmpeg_cmd.run(
             [
                 ffmpeg,
                 "-hide_banner",
@@ -187,7 +188,7 @@ def video_undecodable(path: str | Path) -> bool:
     it decodes, when there is no video, or when the check could not run."""
     try:
         ffmpeg = _require_binary("ffmpeg")
-        completed = subprocess.run(
+        completed = ffmpeg_cmd.run(
             [ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-xerror", "-t", "1",
              "-i", str(path), "-map", "0:v:0", "-f", "null", "-"],
             capture_output=True, timeout=20,

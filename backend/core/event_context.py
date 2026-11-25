@@ -6,12 +6,12 @@ import importlib.metadata
 import os
 import platform
 import shutil
-import subprocess
 import sys
 import uuid
 from functools import lru_cache
 from typing import Any
 
+from backend.core import ffmpeg_cmd
 from backend.core.schema_versions import EVENT_SCHEMA_VERSION
 from backend.core.versioning import get_app_version
 
@@ -44,7 +44,7 @@ def _ffmpeg_version() -> str | None:
     if not ffmpeg:
         return None
     try:
-        completed = subprocess.run(
+        completed = ffmpeg_cmd.run(
             [ffmpeg, "-version"],
             check=False,
             capture_output=True,

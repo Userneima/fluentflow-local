@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -15,6 +14,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.core import ffmpeg_cmd  # noqa: E402
 from backend.core.local_keyframe_provider import extract_keyframes  # noqa: E402
 from backend.core.visual_evidence import build_visual_evidence_from_note_images, rewrite_note_image_references  # noqa: E402
 
@@ -39,7 +39,7 @@ def _make_test_video(path: Path) -> None:
         "yuv420p",
         str(path),
     ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    ffmpeg_cmd.run(cmd, check=True, capture_output=True, text=True)
 
 
 def run_smoke(output_dir: Path) -> dict:

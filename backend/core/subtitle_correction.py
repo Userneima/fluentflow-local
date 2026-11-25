@@ -61,7 +61,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import frame_text, model_usage, task_steps
+from backend.core import ffmpeg_cmd, frame_text, model_usage, task_steps
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +234,7 @@ def read_band(video: Path, at: float, workdir: Path) -> list[frame_text.TextBox]
         return []
     out = workdir / f"band_{uuid.uuid4().hex}.png"
     try:
-        subprocess.run(
+        ffmpeg_cmd.run(
             [ffmpeg, "-v", "error", "-y", "-ss", f"{max(at, 0):.3f}", "-i", str(video), "-frames:v", "1",
              "-vf", f"crop=iw:ih*{SUBTITLE_BAND}:0:ih*{1 - SUBTITLE_BAND}", str(out)],
             check=True, capture_output=True, timeout=FRAME_TIMEOUT_SECONDS,
@@ -310,7 +310,7 @@ def _duration(video: Path) -> float | None:
     if not ffprobe:
         return None
     try:
-        out = subprocess.run(
+        out = ffmpeg_cmd.run(
             [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(video)],
             check=True, capture_output=True, text=True, timeout=15,
         )
@@ -330,7 +330,7 @@ def read_track(
     height = max(24, math.ceil(LINE_PIXELS * band.height / max(band.line, 1e-3)))
     pattern = workdir / "strip_%05d.png"
     duration = _duration(video) or 0.0
-    process = subprocess.Popen(
+    process = ffmpeg_cmd.popen(
         [ffmpeg, "-v", "error", "-y", "-i", str(video), "-vf",
          f"fps=1,crop=iw:ih*{band.height:.4f}:0:ih*{band.top:.4f},scale=-2:{height},tile=1x{STACK}",
          str(pattern)],

@@ -17,10 +17,10 @@ from __future__ import annotations
 import importlib.util
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from backend.core import ffmpeg_cmd
 from backend.core import speaker_diarization_pyannote as pyannote_backend
 from backend.core.runtime_paths import default_diarization_model_dir
 from backend.core.speaker_turns import SpeakerTurn
@@ -149,7 +149,7 @@ def decode_audio(audio_path: str | Path) -> Any:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found on PATH; it is required for speaker diarization")
-    completed = subprocess.run(
+    completed = ffmpeg_cmd.run(
         [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
             "-i", str(audio_path),

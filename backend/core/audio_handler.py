@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from backend.core import ffmpeg_cmd
 from backend.core.local_error_diagnostics import NO_SPEECH
 
 SILENCE_PEAK_THRESHOLD_DB = -80.0
@@ -27,7 +28,7 @@ def require_audible_audio(audio_path: str | Path) -> float:
 
     ffmpeg = _require_ffmpeg()
     # ``-vn``: a video's picture is not decoded only to be thrown away.
-    completed = subprocess.run(
+    completed = ffmpeg_cmd.run(
         [ffmpeg, "-hide_banner", "-nostdin", "-i", str(path), "-vn", "-af", "volumedetect", "-f", "null", "-"],
         check=True,
         capture_output=True,
@@ -62,7 +63,7 @@ class CompressedMp3InBackground:
         self._out.parent.mkdir(parents=True, exist_ok=True)
         self._args = [_require_ffmpeg(), "-y", "-nostdin", "-v", "error", "-i", str(src), "-vn",
                       "-codec:a", "libmp3lame", "-b:a", bitrate, str(self._out)]
-        self._process = subprocess.Popen(self._args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self._process = ffmpeg_cmd.popen(self._args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     def path(self) -> Path:
         _, stderr = self._process.communicate()
@@ -102,7 +103,7 @@ def extract_stt_wav(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     ffmpeg = _require_ffmpeg()
-    subprocess.run(
+    ffmpeg_cmd.run(
         [
             ffmpeg,
             "-y",
@@ -120,9 +121,5 @@ def extract_stt_wav(
         ],
         check=True,
         capture_output=True,
-        # Without -nostdin ffmpeg polls stdin for keystrokes; when the service was
-        # started from a terminal it inherits that tty and can spin there after the
-        # input ends, never exiting (2026-11-25: a 68-minute recording sat at 18%).
-        stdin=subprocess.DEVNULL,
     )
     return out

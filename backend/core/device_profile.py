@@ -34,6 +34,8 @@ from functools import lru_cache
 from pathlib import PureWindowsPath
 from typing import Any, Iterator, Sequence
 
+from backend.core import ffmpeg_cmd
+
 PRESET_QUALITY = "quality"
 PRESET_SIZE = "size"
 PRESETS = (PRESET_QUALITY, PRESET_SIZE)
@@ -83,7 +85,7 @@ def _has_hardware_video_encoder() -> bool:
     if not ffmpeg:
         return False
     try:
-        listed = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=20)
+        listed = ffmpeg_cmd.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         return False
     return "hevc_videotoolbox" in (listed.stdout or "")

@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from backend.core import ffmpeg_cmd
+
 logger = logging.getLogger(__name__)
 
 # Chinese first: the corpus is Chinese lectures with English code and interface
@@ -152,7 +154,7 @@ def has_picture(path: Path) -> bool:
     if not ffprobe:
         return False
     try:
-        out = subprocess.run(
+        out = ffmpeg_cmd.run(
             [ffprobe, "-v", "error", "-select_streams", "v", "-show_entries",
              # stream=disposition alone comes back empty on ffprobe 8.1; the
              # flag has to be asked for by name (measured 2026-11-21).

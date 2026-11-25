@@ -25,7 +25,7 @@ def test_falls_back_to_ffprobe_when_the_file_is_not_a_wav(tmp_path, monkeypatch)
     class _Result:
         stdout = "12.5\n"
 
-    monkeypatch.setattr(media_probe.subprocess, "run", lambda *a, **k: _Result())
+    monkeypatch.setattr(media_probe.ffmpeg_cmd.subprocess, "run", lambda *a, **k: _Result())
     assert media_probe.media_duration_seconds(path) == 12.5
 
 
@@ -43,7 +43,7 @@ def test_ffprobe_call_is_bounded_by_a_timeout(tmp_path, monkeypatch):
         seen.update(kwargs)
         return _Result()
 
-    monkeypatch.setattr(media_probe.subprocess, "run", _run)
+    monkeypatch.setattr(media_probe.ffmpeg_cmd.subprocess, "run", _run)
     media_probe.media_duration_seconds(path)
     assert seen.get("timeout") == media_probe.FFPROBE_TIMEOUT_SECONDS
 
@@ -63,7 +63,7 @@ def test_returns_none_when_ffprobe_prints_something_unparseable(tmp_path, monkey
     class _Result:
         stdout = "N/A"
 
-    monkeypatch.setattr(media_probe.subprocess, "run", lambda *a, **k: _Result())
+    monkeypatch.setattr(media_probe.ffmpeg_cmd.subprocess, "run", lambda *a, **k: _Result())
     assert media_probe.media_duration_seconds(path) is None
 
 

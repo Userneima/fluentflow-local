@@ -33,11 +33,10 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import job_store, model_usage, silence_cuts, task_steps
+from backend.core import ffmpeg_cmd, job_store, model_usage, silence_cuts, task_steps
 from backend.core.storage_paths import _artifact_storage_dir
 
 logger = logging.getLogger(__name__)
@@ -136,7 +135,7 @@ def _cut_at(segments: list[dict[str, Any]], ends_at: float) -> float:
 def _shorten(media: Path, seconds: float) -> None:
     """``media`` ending at ``seconds``, by stream copy, replaced in place."""
     temp = media.with_name(f".{media.stem}.tail{media.suffix}")
-    completed = subprocess.run(
+    completed = ffmpeg_cmd.run(
         [silence_cuts._ffmpeg_path(), "-v", "error", "-y", "-i", str(media), "-t", f"{seconds:.3f}",
          "-map", "0", "-c", "copy", "-movflags", "+faststart", str(temp)],
         capture_output=True, text=True, timeout=1800,

@@ -30,7 +30,7 @@ import time
 from contextlib import contextmanager
 from typing import Callable, Iterator, Sequence
 
-from backend.core import device_profile
+from backend.core import device_profile, ffmpeg_cmd
 
 ProgressCallback = Callable[[str, "float | None"], None]
 
@@ -111,7 +111,7 @@ class TaskWatch:
         if reports:
             argv = [argv[0], "-progress", "pipe:1", "-nostats", *argv[1:]]
         key = next(_COMMAND_IDS)
-        process = subprocess.Popen(
+        process = ffmpeg_cmd.popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **device_profile.COMMAND_TEXT,
         )
         device_profile.lower_priority(process.pid)
