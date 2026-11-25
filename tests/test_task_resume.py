@@ -427,6 +427,51 @@ def test_a_stopped_transcription_is_carried_on_from_the_transcription(monkeypatc
     assert _statuses(task_id)[task_steps.TRANSCRIBE] == task_steps.DONE
 
 
+def _cut_off_with_audio_kept(task_id, tmp_path, *, status):
+    """A task whose transcription was cut off, its audio kept for carrying on."""
+    _in_place_task(task_id, tmp_path, status=status, result={})
+    kept = tmp_path / task_id / tf.RESUME_DIRNAME
+    kept.mkdir(parents=True)
+    (kept / "stt.wav").write_bytes(b"wav")
+    return kept
+
+
+def _retry_of(source_id, retry_id, tmp_path):
+    _in_place_task(retry_id, tmp_path, status="queued", result={})
+    job_store.update_job_metadata(retry_id, {"retry_source_task_id": source_id})
+
+
+def test_running_a_retry_drops_what_the_old_task_kept_for_carrying_on(monkeypatch, task_id, tmp_path):
+    # A retry starts over as a new task; the old one's kept audio (about 115 MB
+    # an hour) would otherwise stay until history retention (review, 2026-11-26).
+    monkeypatch.setattr(tf, "_artifact_storage_dir", lambda: tmp_path)
+    kept = _cut_off_with_audio_kept(task_id, tmp_path, status="failed")
+    retry_id = f"{task_id}-retry"
+    _retry_of(task_id, retry_id, tmp_path)
+    edges = Edges(retry_id)
+    _wire(monkeypatch, edges)
+
+    async def scenario():
+        await task_actions._carry_on(job_store.get_job(retry_id), task_steps.FETCH, route="/test")
+        assert await _until(lambda: _ended(retry_id) and not task_actions.JOB_EVENTS.is_running(retry_id))
+
+    asyncio.run(scenario())
+    assert edges.ran[0] == "pipeline"
+    assert not kept.exists()
+
+
+def test_a_retry_leaves_the_old_task_alone_while_that_one_runs_again(monkeypatch, task_id, tmp_path):
+    monkeypatch.setattr(tf, "_artifact_storage_dir", lambda: tmp_path)
+    kept = _cut_off_with_audio_kept(task_id, tmp_path, status="running")
+    retry_id = f"{task_id}-retry"
+    _retry_of(task_id, retry_id, tmp_path)
+    tf._drop_checkpoint_of_retried(retry_id, None)
+    assert (kept / "stt.wav").is_file()
+    job_store.upsert_job(task_id=task_id, status="failed", stage="stt", progress=100)
+    tf._drop_checkpoint_of_retried(retry_id, None)
+    assert not kept.exists()
+
+
 def test_stopping_kills_what_the_step_started():
     task = f"kill-{next(_counter)}"
     task_stop.begin(task)
