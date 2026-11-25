@@ -386,12 +386,16 @@ def test_a_stop_signal_counts_as_stopping_before_the_server_waits_for_requests()
     import signal
 
     seen = []
-    original = signal.signal(signal.SIGTERM, lambda signum, frame: seen.append(task_stop.shutting_down()))
+    stopped = threading.Event()
+    originals = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    signal.signal(signal.SIGTERM, lambda signum, frame: seen.append(task_stop.shutting_down()))
     try:
         task_stop.service_started()
-        task_stop.stop_on_signals()
+        task_stop.stop_on_signals(then=stopped.set)
         signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
         assert seen == [True], "the server's own handler still runs, after the flag is up"
+        assert stopped.wait(2), "the running work is stopped at the signal, not after requests finish"
     finally:
-        signal.signal(signal.SIGTERM, original)
+        for sig, handler in originals.items():
+            signal.signal(sig, handler)
         task_stop.service_started()

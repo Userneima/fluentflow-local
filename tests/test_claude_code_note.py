@@ -709,3 +709,13 @@ def test_a_command_line_killed_by_a_stopping_service_is_not_a_failed_note(frames
 
     with pytest.raises(model_usage.ServiceStopping):
         ccn.write_visual_note("[00:12] 今天讲最小二乘法", frames, runner=run)
+
+
+def test_a_command_line_that_caught_the_stop_and_exited_cleanly_is_not_a_failed_note(frames, monkeypatch):
+    from backend.core import model_usage, task_stop
+
+    run, _calls = _recorder(json.dumps({"type": "system", "subtype": "init"}), returncode=0)
+    monkeypatch.setattr(task_stop, "shutting_down", lambda: True)
+
+    with pytest.raises(model_usage.ServiceStopping):
+        ccn.write_visual_note("[00:12] 今天讲最小二乘法", frames, runner=run)

@@ -160,7 +160,7 @@ def shutdown() -> int:
     return sum(request(task_id) for task_id in task_ids)
 
 
-def stop_on_signals() -> None:
+def stop_on_signals(then: Any = None) -> None:
     """Count the service as stopping the moment it is told to stop.
 
     The server waits for running requests (an agent's note written in a
@@ -171,6 +171,12 @@ def stop_on_signals() -> None:
     server installed are wrapped to raise the flag first. Called from the
     app's startup, on the main thread, after the server installed them; the
     server puts back its own originals when it ends.
+
+    ``then`` (stopping the running work: command lines, note writers) runs
+    right after, on a thread of its own: a note written by the Claude command
+    line is waited for by the server too, and is stopped only by killing it
+    (found in the second review, 2026-11-25). Not in the handler itself: the
+    locks it takes may be held by the code the signal interrupted.
     """
     import signal
 
@@ -183,7 +189,10 @@ def stop_on_signals() -> None:
             continue
 
         def handler(signum: int, frame: Any, previous: Any = previous) -> None:
-            _shutting_down.set()
+            if not _shutting_down.is_set():
+                _shutting_down.set()
+                if then is not None:
+                    threading.Thread(target=then, name="stop-on-signal", daemon=True).start()
             previous(signum, frame)
 
         signal.signal(sig, handler)
