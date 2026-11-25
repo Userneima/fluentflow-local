@@ -29,7 +29,11 @@ _NO_SPACE_AFTER_RE = re.compile(r"[(（【《「『“‘]$")
 
 
 def _decode_text(raw: bytes) -> str:
-    for encoding in ("utf-8-sig", "utf-16", "gb18030"):
+    # UTF-16 only with its byte-order mark: without one, almost any even
+    # number of bytes decodes, and a GB18030 subtitle file came out as
+    # garbage with no timed line in it (push review, 2026-11-25).
+    utf16 = ("utf-16",) if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ()
+    for encoding in ("utf-8-sig", *utf16, "gb18030"):
         try:
             return raw.decode(encoding)
         except UnicodeDecodeError:
