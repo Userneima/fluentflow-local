@@ -41,7 +41,8 @@ def client(monkeypatch):
     monkeypatch.setattr(tasks, "request_is_localhost", lambda _request: True)
     app = FastAPI()
     app.include_router(agent_router)
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 @pytest.fixture
@@ -70,8 +71,12 @@ def _submit(client: TestClient, path: Path, **extra) -> str:
     r = client.post("/agent/v1/tasks", headers=_HEADERS,
                     json={"path": str(path), "input_type": "local_path", **extra})
     assert r.status_code == 200, r.text
+    task_id = r.json()["task_id"]
+    # The task runs on the service's own loop: wait_task is how an agent sees it end.
+    waited = client.post(f"/agent/v1/tasks/{task_id}/wait", headers=_HEADERS, json={"timeout_seconds": 10}).json()
+    assert waited["done"] is True, waited
     _settle()
-    return r.json()["task_id"]
+    return task_id
 
 
 def test_the_agent_writes_the_note_and_it_lands_beside_the_subtitles(client, pdfs, tmp_path):
@@ -174,12 +179,73 @@ def test_a_subtitle_path_is_refused_when_the_request_is_not_from_this_machine(cl
     assert r.status_code == 403
 
 
-def test_an_empty_subtitle_file_fails_the_task_with_its_steps_closed(client, tmp_path):
-    empty = tmp_path / "空.srt"
-    empty.write_text("", encoding="utf-8")
+@pytest.mark.parametrize("text", ["", "WEBVTT\n\n"])
+def test_a_subtitle_file_with_no_timed_line_fails_the_task(client, tmp_path, text):
+    """A bare header would otherwise be read as plain text and handed to the
+    note writer as the transcript."""
+    empty = tmp_path / "空.vtt"
+    empty.write_text(text, encoding="utf-8")
     task_id = _submit(client, empty)
 
     job = job_store.get_job(task_id)
     assert job["status"] == "failed" and job["error_reason"]
-    waited = client.post(f"/agent/v1/tasks/{task_id}/wait", headers=_HEADERS, json={"timeout_seconds": 0}).json()
-    assert waited["done"] is True
+    assert not (tmp_path / "空").exists()
+
+
+def test_a_subtitle_file_over_the_limit_is_refused_before_a_task_exists(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript_note, "max_transcript_upload_mb", lambda: 1.0)
+    big = _srt(tmp_path)
+    big.write_text(SRT * 20000, encoding="utf-8")
+    before = len(job_store.list_jobs(limit=1000))
+
+    r = client.post("/agent/v1/tasks", headers=_HEADERS, json={"path": str(big), "input_type": "local_path"})
+
+    assert r.status_code == 413
+    assert len(job_store.list_jobs(limit=1000)) == before
+
+
+def test_a_cancelled_task_stays_cancelled_when_the_model_answers_later(client, tmp_path, monkeypatch):
+    """Cancelled (and maybe deleted) while FluentFlow's model writes the note:
+    the answer coming back afterwards must not complete the task again."""
+    import threading
+
+    release = threading.Event()
+
+    def slow(text, **kw):
+        assert release.wait(10)
+        return SimpleNamespace(markdown="# 晚到的笔记", requested_mode="auto", resolved_mode="direct", chunk_count=1)
+
+    monkeypatch.setattr(transcript_note, "summarize_transcript_with_metadata", slow)
+    r = client.post("/agent/v1/tasks", headers=_HEADERS, json={
+        "path": str(_srt(tmp_path)), "input_type": "local_path",
+        "options": {"intelligence": "fluentflow", "skip_summary": "false"},
+    })
+    task_id = r.json()["task_id"]
+    import time
+
+    deadline = time.monotonic() + 10
+    while job_store.get_job(task_id)["status"] != "running" and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert client.post(f"/agent/v1/tasks/{task_id}/cancel", headers=_HEADERS).status_code == 200
+    release.set()
+    time.sleep(0.5)
+
+    job = job_store.get_job(task_id)
+    assert job["status"] == "cancelled"
+    assert not str((job.get("result") or {}).get("summary_markdown") or "")
+
+
+def test_a_folder_holding_a_hand_sorted_subtitle_copy_is_not_written_over(client, pdfs, tmp_path):
+    """The subtitle sits in its own folder, whose 过程文件 already holds a file
+    under the name this task would write: the task takes the next name."""
+    folder = tmp_path / "课程"
+    (folder / "过程文件").mkdir(parents=True)
+    srt = folder / "课程.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    kept = folder / "过程文件" / "课程.txt"
+    kept.write_text("我自己整理的", encoding="utf-8")
+
+    _submit(client, srt)
+
+    assert kept.read_text(encoding="utf-8") == "我自己整理的"
+    assert (folder / "过程文件" / "课程 (2).txt").is_file()

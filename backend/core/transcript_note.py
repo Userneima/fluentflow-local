@@ -432,25 +432,28 @@ async def summarize_transcript_source(
 # and the task did not know which folder the file was in.
 
 
-def queue_subtitle_in_place(
+async def submit_subtitle_in_place(
     source: Path, *, client_id: Optional[str], options: dict[str, Any], route: str, origin: dict[str, Any],
 ) -> dict[str, Any]:
-    """Record the task for a subtitle file read where it is; ``run_subtitle_in_place``
-    does the work. The path goes under ``output_folder.SUBTITLE_INTAKE_KEY``,
-    which only the output folder reads: under ``folder_intake`` the flows
-    that play, cut and re-queue a recording would take the subtitles for one."""
-    from backend.core.output_folder import SUBTITLE_INTAKE_KEY
+    """Record the task for a subtitle file read where it is and start it.
 
+    The path goes under ``output_folder.SUBTITLE_INTAKE_KEY``, which only the
+    output folder reads: under ``folder_intake`` the flows that play, cut and
+    re-queue a recording would take the subtitles for one. Started through the
+    queue's runner, so ``cancel_task`` stops it and nothing it does afterwards
+    brings a cancelled or deleted task back; like a link's captions it does
+    not wait its turn, as there is nothing to transcribe."""
+    from backend.core.output_folder import SUBTITLE_INTAKE_KEY
+    from backend.core.task_queue import _start_behind_queue
+
+    # Read before the task exists: a file gone since it was checked, or one
+    # too large to read, leaves no queued task behind.
+    size_mb = file_size_mb(source.stat().st_size)
+    limit_mb = max_transcript_upload_mb()
+    if size_mb is not None and size_mb > limit_mb:
+        raise HTTPException(status_code=413, detail=f"字幕文件太大：{size_mb} MB，上限是 {limit_mb:g} MB。")
     task_id_value = claim_task_id(None, client_id=client_id)
     title = str(options.get("title") or "").strip() or source.stem
-    metadata = event_metadata(
-        route=route,
-        raw_title=title,
-        display_title=title,
-        queue_options=options,
-        agent_input_type="subtitle_file",
-        **{SUBTITLE_INTAKE_KEY: {**origin, "original_path": str(source)}},
-    )
     upsert_job(
         task_id=task_id_value,
         status="queued",
@@ -459,26 +462,54 @@ def queue_subtitle_in_place(
         progress=0,
         source_type="transcript_file",
         source_filename=source.name,
-        source_file_size_mb=file_size_mb(source.stat().st_size),
-        metadata=metadata,
+        source_file_size_mb=size_mb,
+        metadata=event_metadata(
+            route=route,
+            raw_title=title,
+            display_title=title,
+            queue_options=options,
+            agent_input_type="subtitle_file",
+            **{SUBTITLE_INTAKE_KEY: {**origin, "original_path": str(source)}},
+        ),
     )
-    task_steps.plan(task_id_value)
+
+    async def worker(_previous: Any, done: asyncio.Event) -> None:
+        stopped = False
+        try:
+            await _run_subtitle_in_place(task_id_value, source, client_id=client_id, options=options,
+                                         title=title, route=route)
+        except asyncio.CancelledError:
+            stopped = True
+            raise
+        finally:
+            done.set()
+            task_steps.close_open(task_id_value, stopped=stopped)
+
+    await _start_behind_queue(task_id=task_id_value, client_id=client_id, route=route,
+                              stage="transcript_file", chained_worker=worker)
     return {"task_id": task_id_value, "status": "queued", "filename": source.name, "title": title}
 
 
-async def run_subtitle_in_place(
+async def _run_subtitle_in_place(
     task_id: str, source: Path, *, client_id: Optional[str], options: dict[str, Any], title: str, route: str,
 ) -> None:
     """Read the subtitle file, store its transcript (and the note, when
     FluentFlow's text model writes it), and fill the folder beside it. The
     agent's note, saved later, refreshes that folder as any note does.
-    Never raises: a failure is recorded on the task for ``wait_task``."""
+    A failure is recorded on the task for ``wait_task``."""
     from backend.core import output_folder, task_flow
 
     task_steps.start(task_id, task_steps.FETCH)
     try:
         raw = await asyncio.to_thread(source.read_bytes)
+        # A file named .srt/.vtt with no timed line in it (a bare WEBVTT
+        # header, another format) would otherwise be read as plain text and
+        # handed to the note writer.
+        if not parse_transcript_file(raw, source.name).segments:
+            raise HTTPException(status_code=400, detail=f"{source.name} 里没有读出带时间的字幕。")
         task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+        if not truthy(options.get("skip_summary")):
+            task_steps.start(task_id, task_steps.NOTE)
         await summarize_transcript_source(
             raw=raw,
             filename=source.name,
@@ -499,7 +530,6 @@ async def run_subtitle_in_place(
             detail = str(exc.detail) if isinstance(exc, HTTPException) else _friendly_error(exc)
             upsert_job(task_id=task_id, status="failed", client_id=client_id, stage="import",
                        error_reason=detail or "读取字幕文件时出错。")
-        task_steps.close_open(task_id)
         return
     task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
     task_steps.skip_open(task_id)

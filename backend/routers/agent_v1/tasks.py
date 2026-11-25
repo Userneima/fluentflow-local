@@ -80,7 +80,7 @@ async def create_agent_task(
     if local_path and input_type in {"", "local_path", "local_file", "local_media"} \
             and local_folder_intake.is_subtitle_file(local_path):
         # A subtitle file with no recording: its note goes beside it, as a
-        # recording's does (transcript_note.queue_subtitle_in_place). Nothing
+        # recording's does (transcript_note.submit_subtitle_in_place). Nothing
         # to transcribe or cut, so the cut and transcription options do not apply.
         if not request_is_localhost(request):
             raise HTTPException(status_code=403, detail="只有本机能按路径处理文件。")
@@ -92,15 +92,14 @@ async def create_agent_task(
         title = str(payload.get("title") or "").strip()
         if title:
             options_for_path = {**options_for_path, "title": title}
-        queued = transcript_note.queue_subtitle_in_place(
-            source, client_id=client_id, options=options_for_path, route=_ROUTE,
-            origin={"chosen_with": "agent_api", "folder": str(source.parent)},
-        )
+        try:
+            queued = await transcript_note.submit_subtitle_in_place(
+                source, client_id=client_id, options=options_for_path, route=_ROUTE,
+                origin={"chosen_with": "agent_api", "folder": str(source.parent)},
+            )
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"这个文件读不了：{exc}") from exc
         task_id_value = queued["task_id"]
-        background_tasks.add_task(
-            transcript_note.run_subtitle_in_place, task_id_value, source,
-            client_id=client_id, options=options_for_path, title=queued["title"], route=_ROUTE,
-        )
         return {
             "ok": True,
             "task_id": task_id_value,

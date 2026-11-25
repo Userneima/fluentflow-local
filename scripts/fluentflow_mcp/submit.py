@@ -219,8 +219,8 @@ def submit_video_link(
 
 
 @tool(
-    description=("Store transcript text for the current agent to write its note. A subtitle file "
-        "on this machine goes to submit_local_media by path instead, so its note lands beside it. "
+    description=("Store transcript text for the current agent to write its note. A .srt/.vtt "
+        "file on this machine goes to submit_local_media by path instead, so its note lands beside it. "
         "Defaults to intelligence=agent and skip_summary=true; follow with wait_task, "
         "get_agent_note_material and save_agent_note. Only delegate with intelligence=fluentflow "
         "when the agent cannot do it, failed, or the user asked; that uses configured models. "

@@ -338,8 +338,16 @@ def _lives_in_its_own_folder(source: Path) -> bool:
 
 
 def _taken(folder: Path, stem: str, suffix: str) -> bool:
+    """Whether a file this suffix would write is already there, outside or in
+    过程文件: the copies in 过程文件 are replaced without a backup when a task
+    first fills a folder, so one already there (a subtitle file sorted in by
+    hand beside its note, say) must not be its name (push review, 2026-11-25)."""
     names = [f"{stem}_{label}{suffix}" for label in (CUT_LABEL, COMPRESSED_LABEL, NOTE_LABEL)]
-    return any(path.stem in names for path in folder.iterdir() if path.is_file())
+    if any(path.stem in names for path in folder.iterdir() if path.is_file()):
+        return True
+    process = folder / PROCESS_DIRNAME
+    inside = [f"{stem}{suffix}.txt", f"{stem}{suffix}.srt", f"{stem}_{CUT_LIST_LABEL}{suffix}.json"]
+    return any((process / name).exists() for name in inside)
 
 
 def place(task_id: str, source: Path) -> tuple[Path, str]:
