@@ -6,6 +6,9 @@ What should happen:
   whatever the build wrote there and whatever port the copy runs on, so the
   page asks the copy for everything, deletes included;
 - a test copy started with a build of its own serves that build's page;
+- a broken config in the build does not stop that, and the copy's pages
+  may connect only to the copy, whatever their script says;
+- the service's own checks (host, origin) still come first;
 - the owner's service (no test copy) ignores that setting and its config
   script is the build's, untouched.
 """
@@ -85,7 +88,7 @@ def test_a_test_copy_serves_its_own_build_and_sends_the_page_back_to_itself(monk
     assert client.get("/assets/page.js").text == "// page code"
     config = client.get("/assets/config.js")
     assert config.status_code == 200 and config.headers["cache-control"] == "no-store"
-    assert config.text.startswith(BUILT_FOR_8000)
+    assert json.dumps(BUILT_FOR_8000) in config.text
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node to run the page's address code")
@@ -102,6 +105,31 @@ def test_the_copy_page_sends_no_request_to_8000_on_any_port(monkeypatch, own_bui
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node to run the page's address code")
+def test_a_broken_build_config_still_leaves_the_page_on_the_copy(monkeypatch, own_build):
+    (own_build / "assets" / "config.js").write_text(BUILT_FOR_8000[:40], encoding="utf-8")
+    monkeypatch.setenv(test_copy.ENV, "1")
+    monkeypatch.setenv(test_copy.FRONTEND_ENV, str(own_build))
+    config = TestClient(_app()).get("/assets/config.js").text
+    assert _page_api_base(config, "http://127.0.0.1:5173/agent") == "http://127.0.0.1:5173"
+
+
+def test_the_copy_pages_may_connect_only_to_the_copy(monkeypatch, own_build):
+    monkeypatch.setenv(test_copy.ENV, "1")
+    monkeypatch.setenv(test_copy.FRONTEND_ENV, str(own_build))
+    client = TestClient(_app())
+    for page in ("/", "/agent", "/editor"):
+        assert client.get(page).headers["content-security-policy"] == "connect-src 'self'"
+
+
+def test_the_copy_config_still_passes_the_service_checks(monkeypatch, own_build):
+    monkeypatch.setenv(test_copy.ENV, "1")
+    monkeypatch.setenv(test_copy.FRONTEND_ENV, str(own_build))
+    client = TestClient(_app())
+    assert client.get("/assets/config.js", headers={"host": "evil.example"}).status_code == 403
+    assert client.get("/assets/config.js", headers={"origin": "https://evil.example"}).status_code == 403
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node to run the page's address code")
 def test_the_copy_page_stays_on_the_copy_with_the_default_build(monkeypatch):
     """No --frontend-dir: dist-local's config (or none, in a fresh checkout)."""
     monkeypatch.setenv(test_copy.ENV, "1")
@@ -115,5 +143,6 @@ def test_the_owners_service_ignores_another_build(monkeypatch, own_build):
     monkeypatch.setenv(test_copy.FRONTEND_ENV, str(own_build))
     client = TestClient(_app())
 
-    assert "the build under test" not in client.get("/").text
+    page = client.get("/")
+    assert "the build under test" not in page.text and "content-security-policy" not in page.headers
     assert "FluentFlow test copy" not in client.get("/assets/config.js").text

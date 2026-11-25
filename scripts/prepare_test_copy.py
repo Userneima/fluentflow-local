@@ -28,11 +28,11 @@ none, the main checkout's; and gives it a throwaway access token, printed with
 a line that calls the MCP tool functions in ``scripts/fluentflow_mcp`` against
 the copy: the MCP tools a conversation is connected to reach port 8000 and the
 main checkout's code, not this one. ``--frontend-dir`` serves the page from a
-build of its own (``npx vite build --config vite.local.config.mjs --outDir
-<dir>``); the copy's page always sends its requests back to the copy
+build of its own (``node scripts/write_frontend_config.js && npx vite build
+--config vite.local.config.mjs --outDir <dir>``); the copy's page always sends its requests back to the copy
 (``backend/core/test_copy.py``, decision 8.29).
 
-    .venv/bin/python scripts/prepare_test_copy.py --into <scratch dir> --fake --port 8013
+    python3 scripts/prepare_test_copy.py --into <scratch dir> --fake --port 8013
 
 On Windows the printed command is for PowerShell, and takes the variables it
 sets out of the window again when the service ends.
@@ -229,13 +229,15 @@ def _run_in(repo: Path, env: dict[str, str], python: Path, arguments: str, windo
         def quote(value) -> str:
             return "'" + str(value).replace("'", "''") + "'"
 
+        # $env: is set for the whole PowerShell window; put back as it was when
+        # the command ends (finally runs on Ctrl+C too; $null removes one that
+        # was not set), so a later command there neither reads the copy as the
+        # real data nor loses the address or token the window had before.
+        kept = "; ".join(f"$ff_{name} = $env:{name}" for name in env)
         assignments = "; ".join(f"$env:{name}={quote(value)}" for name, value in env.items())
-        # $env: is set for the whole PowerShell window; taken out again when
-        # the command ends (finally runs on Ctrl+C too), so a later command
-        # there does not read the copy as the real data.
-        cleared = ", ".join(f"Env:{name}" for name in env)
-        return (f"Set-Location {quote(repo)}; try {{ {assignments}; & {quote(python)} {arguments} }} "
-                f"finally {{ Remove-Item {cleared} -ErrorAction SilentlyContinue }}")
+        restored = "; ".join(f"$env:{name} = $ff_{name}" for name in env)
+        return (f"Set-Location {quote(repo)}; {kept}; try {{ {assignments}; & {quote(python)} {arguments} }} "
+                f"finally {{ {restored} }}")
     assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in env.items())
     return f"cd {shlex.quote(str(repo))} && {assignments} {shlex.quote(str(python))} {arguments}"
 
@@ -253,13 +255,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--frontend-dir", type=Path,
                         help="serve the page from this build (vite build --outDir), not frontend/dist-local")
     args = parser.parse_args(argv)
+    # Before anything is written: a copy reused for another run keeps its tasks.
+    frontend_dir = args.frontend_dir.expanduser().resolve() if args.frontend_dir else None
+    if frontend_dir is not None and not (frontend_dir / "local.html").is_file():
+        raise SystemExit(f"no local.html in {frontend_dir}: build into it with node scripts/write_frontend_config.js "
+                         f"&& npx vite build --config vite.local.config.mjs --outDir {frontend_dir}")
     done = prepare(args.source, args.into)
     limits = (None, None, None) if args.no_limit else (args.max_calls, args.max_usd, args.max_cny)
     repo = Path(__file__).resolve().parents[1]
-    frontend_dir = args.frontend_dir.expanduser().resolve() if args.frontend_dir else None
-    if frontend_dir is not None and not (frontend_dir / "local.html").is_file():
-        raise SystemExit(f"no local.html in {frontend_dir}: build into it with "
-                         f"npx vite build --config vite.local.config.mjs --outDir {frontend_dir}")
     python = interpreter(repo)
     token = secrets.token_urlsafe(18)
     print(f"copy: {done['into']}  ({done['copied_tasks']} tasks copied, read-only in the test service; "

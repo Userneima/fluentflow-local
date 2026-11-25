@@ -67,11 +67,15 @@ def frontend_dir() -> Path | None:
 # FLUENTFLOW_API_BASE set (the MCP server's variable too) writes 8000 there.
 # Either way a delete on the copy's page would land on the owner's real tasks
 # (decision 8.25), so the copy answers with the build's config and then its
-# own origin as the address.
+# own origin as the address. The build's config runs inside try, through
+# Function, so a broken or cut-off file cannot stop the line after it; and
+# the copy's pages may only connect to the copy (``PAGE_POLICY``), so even a
+# page that never ran this script sends nothing elsewhere.
 _SEND_BACK_HERE = (
     "\n// FluentFlow test copy: this page's requests go back to the service that served it.\n"
     "window.FLUENTFLOW_CONFIG = Object.assign({}, window.FLUENTFLOW_CONFIG, {apiBase: window.location.origin});\n"
 )
+PAGE_POLICY = "connect-src 'self'"
 
 
 def page_config() -> str:
@@ -82,7 +86,7 @@ def page_config() -> str:
         built = (local_frontend_dist_dir() / "assets" / "config.js").read_text(encoding="utf-8")
     except OSError:
         built = ""
-    return built + _SEND_BACK_HERE
+    return f"try {{ new Function({json.dumps(built)})(); }} catch (_) {{ /* the build's config is broken */ }}" + _SEND_BACK_HERE
 
 
 def _read_copied() -> frozenset[str]:
@@ -157,11 +161,8 @@ def refusal(method: str, path: str, body: Any = None) -> str | None:
 
 async def middleware(request: Any, call_next: Any) -> Any:
     """Refuse what ``refusal`` names, for the page and agents alike; answer
-    the page's config with ``page_config``."""
-    if enabled() and request.method.upper() in {"GET", "HEAD"} and request.url.path == PAGE_CONFIG_PATH:
-        from fastapi.responses import Response
-
-        return Response(page_config(), media_type="text/javascript", headers={"Cache-Control": "no-store"})
+    the page's config with ``page_config`` and let the pages connect only
+    here (``PAGE_POLICY``)."""
     if enabled() and request.method.upper() not in _SAFE_METHODS:
         body: Any = None
         if "json" in (request.headers.get("content-type") or ""):
@@ -174,8 +175,21 @@ async def middleware(request: Any, call_next: Any) -> Any:
             from fastapi.responses import JSONResponse
 
             return JSONResponse(status_code=409, content={"detail": reason, "code": "test_copy"})
-    return await call_next(request)
+    response = await call_next(request)
+    if not enabled():
+        return response
+    # After the service's own checks (host, origin, peer): what they refuse
+    # stays refused. 404 is a build without a config of its own.
+    if (request.method.upper() in {"GET", "HEAD"} and request.url.path == PAGE_CONFIG_PATH
+            and response.status_code in {200, 304, 404}):
+        from fastapi.responses import Response
+
+        return Response(page_config(), media_type="text/javascript", headers={"Cache-Control": "no-store"})
+    if (response.headers.get("content-type") or "").startswith("text/html"):
+        response.headers["Content-Security-Policy"] = PAGE_POLICY
+    return response
 
 
-__all__ = ["ENV", "FRONTEND_ENV", "NO_FEISHU", "PAGE_CONFIG_PATH", "READ_ONLY", "TASKS_FILE", "copied_tasks", "enabled", "frontend_dir", "is_copied",
-           "middleware", "page_config", "refusal", "reset", "writable"]
+__all__ = ["ENV", "FRONTEND_ENV", "NO_FEISHU", "PAGE_CONFIG_PATH", "PAGE_POLICY", "READ_ONLY", "TASKS_FILE",
+           "copied_tasks", "enabled", "frontend_dir", "is_copied", "middleware", "page_config", "refusal", "reset",
+           "writable"]
