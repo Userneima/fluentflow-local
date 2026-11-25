@@ -106,6 +106,7 @@ def extract_stt_wav(
         [
             ffmpeg,
             "-y",
+            "-nostdin",
             "-i",
             str(src),
             "-vn",
@@ -119,5 +120,9 @@ def extract_stt_wav(
         ],
         check=True,
         capture_output=True,
+        # Without -nostdin ffmpeg polls stdin for keystrokes; when the service was
+        # started from a terminal it inherits that tty and can spin there after the
+        # input ends, never exiting (2026-11-25: a 68-minute recording sat at 18%).
+        stdin=subprocess.DEVNULL,
     )
     return out
