@@ -806,8 +806,9 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 (out_audio, playback_audio_path, enhanced_playback_audio_path,
                  voice_presence, stt_audio_take) = kept_audio
                 if playback_audio_path is None:
-                    # Cut off before its playback take was done: made again
-                    # beside this run's transcription, as in the first run.
+                    # The audio is kept for resuming before the playback MP3 is
+                    # waited for, so a resumed run encodes it again beside its
+                    # transcription, as the first run did (decision 4.23).
                     pending_playback = CompressedMp3InBackground(in_path, output_path=Path(td) / "playback.mp3")
             else:
                 # The plain take is always kept: it is what the editor falls back to
