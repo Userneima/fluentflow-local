@@ -161,7 +161,7 @@ install command again (with the same `FLUENTFLOW_INSTALL_DIR` on Windows), from 
 outside the install. It sees the install, downloads the newest release beside it, keeps
 `.env`, the tasks, settings and models, stops the service, swaps the code in, adds what the
 new version needs (packages, speaker models, the transcription model) and starts it again.
-If any of that fails, it puts the previous version back and says so. It refuses while tasks
+If any of that fails, it puts the previous version back, starts it again and says so. It refuses while tasks
 are being processed: wait for them, or set `FLUENTFLOW_UPDATE_FORCE=1` after the user agrees
 (interrupted tasks carry on after the restart). A git checkout is not updated by it; there,
 `git pull` and run the setup script.
@@ -216,7 +216,7 @@ the same command without `--dry-run` / `-DryRun`, adding `--yes` / `-Yes`:
 - remove everything: `--all --yes` (Windows `-All -Yes`)
 
 It stops the running service, removes the program (for an install from these
-instructions, the code folder itself), the downloaded FFmpeg and Node.js, the Desktop
+instructions, the code folder itself, and the copy a failed update kept beside it), the downloaded FFmpeg and Node.js, the Desktop
 icon, the logs and the agent skill, and unregisters `fluentflow-local` from Claude Code
 and Codex (only an entry that points at this install). On Windows with `-All`, the
 `FluentFlow` folder is gone afterwards. It leaves Python and anything that was on the
