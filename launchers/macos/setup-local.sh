@@ -441,7 +441,8 @@ step "启动前检查"
 if [[ "$SKIP_DESKTOP" -eq 1 ]]; then
 	echo ""
 	echo "✓ 安装完成（按要求跳过了桌面启动器）。"
-	echo "  手动启动：${VENV_PY} -m uvicorn backend.local_main:app --host 127.0.0.1 --port 8000"
+	port="$(ff_setting "$REPO" FLUENTFLOW_LOCAL_PORT)"
+	echo "  手动启动：${VENV_PY} -m uvicorn backend.local_main:app --host 127.0.0.1 --port ${port:-8000}"
 	exit 0
 fi
 

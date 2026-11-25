@@ -190,6 +190,11 @@ if ($IsGitCheckout -or $KeepsUserFiles) {
     # Installed from a release zip: the folder holds nothing but the program
     # (and .env, whose access token is regenerated on reinstall).
     Add-Target $Repo "程序（代码、Python 虚拟环境、前端）"
+    # An update's copies beside the program (install.ps1): the one that failed,
+    # or one an interrupted update left. Only those carrying its marker.
+    foreach ($Side in @("$Repo.new", "$Repo.old", "$Repo.failed")) {
+        if (Test-Path (Join-Path $Side ".fluentflow-update")) { Add-Target $Side "更新时留下的另一份程序" }
+    }
 }
 Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd") "桌面启动器"
 Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "停止 FluentFlow Local.cmd") "桌面上的停止图标"

@@ -176,6 +176,10 @@ if [[ "$IS_GIT_CHECKOUT" -eq 1 || "$KEEPS_USER_FILES" -eq 1 ]]; then
 else
 	# 从发布包装的：目录里只有程序（和 .env，重装时会重新生成访问令牌）。
 	add_target "$REPO" "程序（代码、Python 虚拟环境、前端）"
+	# 更新时放在旁边的另一份（install.sh）：失败的那份，或更新被打断时留下的。只认带着它标记的。
+	for side in "${REPO}.new" "${REPO}.old" "${REPO}.failed"; do
+		if [[ -e "${side}/.fluentflow-update" ]]; then add_target "$side" "更新时留下的另一份程序"; fi
+	done
 fi
 add_target "${HOME}/Desktop/FluentFlow Local.app" "桌面启动器"
 add_target "${HOME}/Desktop/FluentFlow Local.command" "桌面启动器（旧版）"

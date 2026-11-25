@@ -30,6 +30,19 @@ fail() {
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "这个脚本只用于 macOS。Windows 请运行 install.ps1。"
 
+# 起这个目录里的服务：有桌面启动器就打开它，按要求没生成时直接在后台起。
+start_service() {
+	if [[ -d "${HOME}/Desktop/FluentFlow Local.app" ]]; then
+		open "${HOME}/Desktop/FluentFlow Local.app"
+		return 0
+	fi
+	local py="${DIR}/.venv/bin/python"
+	[[ -x "${DIR}/venv/bin/python" ]] && py="${DIR}/venv/bin/python"
+	mkdir -p "${HOME}/Library/Logs/FluentFlow"
+	(cd "$DIR" && nohup "$py" -m uvicorn backend.local_main:app --host 127.0.0.1 --port "$PORT" \
+		>>"${HOME}/Library/Logs/FluentFlow/local.log" 2>&1 &)
+}
+
 # 更新到一半失败时把旧版本换回来，再照常报错退出。
 SWAPPED=0
 fail_plain() {
@@ -45,7 +58,8 @@ fail() {
 		rm -rf "${DIR}.failed"
 		[[ -e "$DIR" ]] && mv "$DIR" "${DIR}.failed"
 		mv "${DIR}.old" "$DIR"
-		[[ -d "${HOME}/Desktop/FluentFlow Local.app" ]] && open "${HOME}/Desktop/FluentFlow Local.app"
+		# 更新前在跑的服务换回后接着跑（没有桌面启动器的安装也一样）。
+		if [[ "${STOPPED_OLD:-0}" -eq 1 || -d "${HOME}/Desktop/FluentFlow Local.app" ]]; then start_service; fi
 		fail_plain "$1
 更新到 ${LATEST} 没有成功，已换回 ${CURRENT}（失败的那份在 ${DIR}.failed）。"
 	fi
@@ -282,7 +296,7 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	cd "$(dirname "$DIR")"
 	if ! mv "$DIR" "${DIR}.old"; then
 		rm -rf "${DIR}.new"
-		[[ "$STOPPED_OLD" -eq 1 && -d "${HOME}/Desktop/FluentFlow Local.app" ]] && open "${HOME}/Desktop/FluentFlow Local.app"
+		[[ "$STOPPED_OLD" -eq 1 ]] && start_service
 		fail_plain "没能把 ${DIR} 挪开（有程序在用它）。关掉它再运行一次。什么都没改。"
 	fi
 	SWAPPED=1
@@ -309,15 +323,7 @@ healthy() { curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/health" 2>/dev/null
 if healthy; then
 	echo "已经在运行。"
 else
-	APP="${HOME}/Desktop/FluentFlow Local.app"
-	if [[ -d "$APP" ]]; then
-		open "$APP"
-	else
-		# 按要求没生成桌面图标时，直接在后台起服务。
-		mkdir -p "${HOME}/Library/Logs/FluentFlow"
-		(cd "$DIR" && nohup "$VENV_PY" -m uvicorn backend.local_main:app --host 127.0.0.1 --port "$PORT" \
-			>>"${HOME}/Library/Logs/FluentFlow/local.log" 2>&1 &)
-	fi
+	start_service
 	for _ in $(seq 1 90); do
 		healthy && break
 		sleep 1
