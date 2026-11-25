@@ -350,8 +350,8 @@ async def lifespan(app: FastAPI):
         resume = asyncio.create_task(_resume())
     # An md note edited in Obsidian comes back into its task; a note kept in
     # Feishu follows it there; each change of a note is written in its change
-    # log (each import registers its listener).
-    from backend.core import feishu_sync, note_changes, note_section_times, output_folder  # noqa: F401
+    # log; the note as written is kept for 学完了 (each import registers its listener).
+    from backend.core import feishu_sync, note_changes, note_section_times, output_folder, study_record  # noqa: F401
 
     # A service started on a copy of the task database for a test run
     # (scripts/prepare_test_copy.py) leaves the user's real notes and Feishu

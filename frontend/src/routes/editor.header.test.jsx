@@ -54,6 +54,10 @@ vi.mock('../app/shared.jsx', async () => {
                 globalThis.__headerPinCalls.push([taskId, pinned]);
                 return {task_id: taskId, status: 'completed', metadata: {pinned_at: pinned ? '2026-11-19T06:00:00Z' : null}};
             },
+            markStudied: async (taskId, studied, verdict) => {
+                globalThis.__headerStudyCalls.push([taskId, studied, verdict]);
+                return {task_id: taskId, status: 'completed', metadata: {pinned_at: null, studied: studied ? {at: '2026-11-25T06:00:00Z', verdict, course: '实战 1'} : null}};
+            },
         }),
     };
 });
@@ -153,6 +157,7 @@ const withFolder = (extra = {}) => task('t1', {output_folder: {path: '/Users/me/
 globalThis.__headerTasks = [];
 globalThis.__headerIngested = [];
 globalThis.__headerPinCalls = [];
+globalThis.__headerStudyCalls = [];
 
 // Pinning from the note page (2026-11-19): the header has a pin button whose
 // state is the shared task list's; clicking it sends the opposite state and
@@ -185,6 +190,53 @@ describe('the pin button in the header', () => {
         expect(pin.getAttribute('aria-pressed')).toBe('true');
         fireEvent.click(pin);
         await waitFor(() => expect(globalThis.__headerPinCalls).toEqual([['t1', false]]));
+    });
+});
+
+// 学完了 (2026-11-25): one click marks the note studied and unpins it; once
+// studied the button asks 这篇怎么样 and its menu offers 好用 / 有错 / 有漏
+// and taking the mark back. No note, no button.
+describe('the studied button in the header', () => {
+    afterEach(() => {
+        globalThis.__headerTasks = [];
+        globalThis.__headerIngested = [];
+        globalThis.__headerStudyCalls = [];
+    });
+
+    it('marks a note studied and puts the answered row into the list', async () => {
+        const result = withFolder();
+        jobs.t1 = {task_id: 't1', result};
+        globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {pinned_at: '2026-11-19T06:00:00Z'}}];
+        mount('/editor', result);
+        const studied = await screen.findByTestId('editor-studied');
+        expect(studied.textContent).toContain('学完了');
+        fireEvent.click(studied);
+        await waitFor(() => expect(globalThis.__headerStudyCalls).toEqual([['t1', true, null]]));
+        await waitFor(() => expect(globalThis.__headerIngested[0][0].metadata.studied.at).toBeTruthy());
+    });
+
+    it('asks how the note was once studied, and sends the answer or takes the mark back', async () => {
+        const result = withFolder();
+        jobs.t1 = {task_id: 't1', result};
+        globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {studied: {at: '2026-11-25T06:00:00Z', verdict: null}}}];
+        mount('/editor', result);
+        const studied = await screen.findByTestId('editor-studied');
+        expect(studied.textContent).toContain('已学完 · 这篇怎么样');
+        fireEvent.click(studied);
+        fireEvent.click(await screen.findByRole('menuitem', {name: '有漏'}));
+        await waitFor(() => expect(globalThis.__headerStudyCalls).toEqual([['t1', true, 'missing']]));
+        fireEvent.click(studied);
+        fireEvent.click(await screen.findByRole('menuitem', {name: '取消学完'}));
+        await waitFor(() => expect(globalThis.__headerStudyCalls[1]).toEqual(['t1', false, null]));
+    });
+
+    it('is not offered without a note', async () => {
+        const result = withFolder({summary_markdown: '', summary_status: 'skipped', summary_skipped: true});
+        jobs.t1 = {task_id: 't1', result};
+        globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {}}];
+        mount('/editor', result);
+        await screen.findByTestId('editor-pin');
+        expect(screen.queryByTestId('editor-studied')).toBeNull();
     });
 });
 

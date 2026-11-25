@@ -17,6 +17,13 @@ Two records live beside the user's skill:
   came from and how it was verified, so the settings page can say where each
   rule came from and the skill version to go back to.
 
+Besides problems, two kinds say a note was fine or how it was used: ``fine``
+(the user said a note needed nothing, or the agent went through a study
+record and found no problem with how notes are written) and ``studied``,
+written only by ``study_record`` when the user clicks 学完了, carrying the
+changes he made to the note. A study record is ``reviewed`` once a later
+record names it in ``study_id``.
+
 Whether a new report is "the same problem" as an old one is a judgement about
 meaning, so it is left to the agent reading ``list_feedback``; nothing here
 matches text.
@@ -36,7 +43,10 @@ from backend.core import model_usage, note_skills, task_steps
 
 FEEDBACK_FILE = "feedback.json"
 RULES_LOG_FILE = "rules_log.json"
-KINDS = ("one_off", "pattern")
+KINDS = ("one_off", "pattern", "fine")
+STUDIED = "studied"
+# Changes of a study record shown inline; the rest are in its file.
+STUDY_CHANGES_SHOWN = 5
 
 
 class NoteFeedbackError(ValueError):
@@ -86,9 +96,25 @@ def _excerpt_path(item_id: str) -> Path:
     return _path(EXCERPT_DIR) / f"{item_id}.txt"
 
 
-def public_view(item: dict[str, Any]) -> dict[str, Any]:
-    """A case as an answer shows it: the transcript by its file, not inline."""
-    view = {key: value for key, value in item.items() if key != "transcript_excerpt"}
+def _changes_path(item_id: str) -> Path:
+    return _path(EXCERPT_DIR) / f"{item_id}.changes.json"
+
+
+def public_view(item: dict[str, Any], reviewed: set[str] | None = None) -> dict[str, Any]:
+    """A case as an answer shows it: the transcript by its file, not inline;
+    a study record with its first changes and the file holding all of them."""
+    view = {key: value for key, value in item.items() if key not in ("transcript_excerpt", "changes")}
+    if item.get("kind") == STUDIED:
+        changes = item.get("changes") or []
+        view["changes_shown"] = changes[:STUDY_CHANGES_SHOWN]
+        if changes and item.get("id"):
+            path = _changes_path(str(item["id"]))
+            if not path.is_file():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(changes, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            view["changes_file"] = str(path)
+        if reviewed is not None:
+            view["reviewed"] = item.get("id") in reviewed
     excerpt = _text(item.get("transcript_excerpt"))
     view["transcript_excerpt_chars"] = len(excerpt)
     if excerpt and item.get("id"):
@@ -110,15 +136,19 @@ def record_feedback(
     part: int | None = None,
     transcript_excerpt: str = "",
     title: str = "",
+    study_id: str = "",
 ) -> dict[str, Any]:
-    """Keep one reported problem as a test case."""
+    """Keep one reported problem as a test case, or a note said to be fine.
+    ``study_id`` names the study record it was found in."""
     if not _text(problem):
-        raise NoteFeedbackError("要写明用户指出的问题（problem）")
+        raise NoteFeedbackError("要写明用户说的话（problem）：指出的问题，或者说这篇没问题")
     if kind not in KINDS:
-        raise NoteFeedbackError("kind 只能是 one_off（一次性的错）或 pattern（会反复出现的写法问题）")
+        raise NoteFeedbackError("kind 只能是 one_off（一次性的错或漏）、pattern（会反复出现的写法问题）或 fine（这篇没问题）")
+    if study_id and study_id not in {item.get("id") for item in _read(FEEDBACK_FILE) if item.get("kind") == STUDIED}:
+        raise NoteFeedbackError(f"找不到学完记录 {study_id}，用 list_note_feedback 里 kind=studied 那条的 id")
     if kind == "pattern" and not _text(criterion):
         raise NoteFeedbackError("写法问题要写明怎么算改好（criterion），检查者按它判断")
-    if not _text(transcript_excerpt) and _text(task_id):
+    if not _text(transcript_excerpt) and _text(task_id) and kind != "fine":
         transcript_excerpt = part_transcript(task_id, part or 1)
     item = {
         "id": uuid.uuid4().hex[:12],
@@ -135,6 +165,7 @@ def record_feedback(
         # test whose input moves is not the same test.
         "transcript_excerpt": _text(transcript_excerpt),
         "rule_id": None,
+        **({"study_id": study_id} if study_id else {}),
     }
     with _LOCK:
         items = _read(FEEDBACK_FILE)
@@ -228,8 +259,69 @@ def _draft_part_with_text_model(task_id: str, result: dict[str, Any], *, rules: 
             "markdown": str(markdown or "").strip(), "model": text_model_name(**kwargs)}
 
 
+def record_study(*, task_id: str, title: str, verdict: str | None, edits: dict[str, Any],
+                 replace_id: str = "") -> dict[str, Any]:
+    """The study record ``study_record.mark`` keeps when the user clicks 学完了.
+    ``replace_id`` is the task's earlier record, made again under the same id
+    so records that name it still do."""
+    from backend.core.study_record import VERDICT_LABELS
+
+    total = int(edits.get("total") or 0)
+    said = f"标了{VERDICT_LABELS[verdict]}" if verdict else "没标好不好用"
+    changed = f"学的时候改了 {total} 处" if total else "没改过笔记"
+    if not edits.get("baseline_kept", True):
+        changed = "改过笔记，但改之前的版本没留下，看不出改了什么"
+    item = {
+        "id": "",
+        "created_at": _now(),
+        "task_id": _text(task_id),
+        "title": _text(title),
+        "kind": STUDIED,
+        "verdict": verdict,
+        "problem": f"学完了，{said}；{changed}。",
+        "changes_total": total,
+        "edited_by": edits.get("edited_by") or {},
+        "changes": edits.get("changes") or [],
+        "rule_id": None,
+    }
+    with _LOCK:
+        items = _read(FEEDBACK_FILE)
+        at = next((i for i, old in enumerate(items) if replace_id and old.get("id") == replace_id
+                   and old.get("kind") == STUDIED), None)
+        if at is None:
+            item["id"] = uuid.uuid4().hex[:12]
+            items.append(item)
+        else:
+            item["id"] = replace_id
+            items[at] = item
+        _write(FEEDBACK_FILE, items)
+    try:
+        _changes_path(item["id"]).unlink()  # written again from the new changes when next shown
+    except OSError:
+        pass
+    return item
+
+
+def remove_study(record_id: str) -> None:
+    """Drop a study record (the mark was taken back or made again)."""
+    with _LOCK:
+        items = _read(FEEDBACK_FILE)
+        kept = [item for item in items if not (item.get("id") == record_id and item.get("kind") == STUDIED)]
+        if len(kept) != len(items):
+            _write(FEEDBACK_FILE, kept)
+    try:
+        _changes_path(record_id).unlink()
+    except OSError:
+        pass
+
+
+def reviewed_studies() -> set[str]:
+    """Study records a later record names: the agent has been through them."""
+    return {str(item["study_id"]) for item in _read(FEEDBACK_FILE) if item.get("study_id")}
+
+
 def list_feedback() -> list[dict[str, Any]]:
-    """Every reported problem, newest first."""
+    """Every reported problem and study record, newest first."""
     return list(reversed(_read(FEEDBACK_FILE)))
 
 
@@ -320,5 +412,8 @@ __all__ = [
     "list_feedback",
     "part_transcript",
     "record_feedback",
+    "record_study",
+    "remove_study",
+    "reviewed_studies",
     "rules_log",
 ]

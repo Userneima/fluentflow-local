@@ -3,7 +3,7 @@
 // shows, so a 5-second poll that did not change a row does not render it.
 import {memo, useEffect, useRef, useState} from 'react';
 import {Link} from 'react-router-dom';
-import {AlertCircle, ChevronDown, LoaderCircle, MoreHorizontal, Pin} from 'lucide-react';
+import {AlertCircle, CheckCheck, ChevronDown, LoaderCircle, MoreHorizontal, Pin} from 'lucide-react';
 import {CutReport, hasReport} from '../components/CutReport.jsx';
 import AgentCutWait from '../components/AgentCutWait.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
@@ -18,6 +18,7 @@ import {
     jobDisplayTitle,
     jobToCurrentJob,
     isPinnedJob,
+    isStudiedJob,
 } from '../app/shared.jsx';
 import {
     isLiveTask,
@@ -131,6 +132,11 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                     {pinned ? (
                         <span data-testid="task-pinned" title={zh ? '已置顶' : 'Pinned'} className="mt-[3px] inline-flex shrink-0 text-[#85868c] dark:text-white/50">
                             <Pin className="size-4" strokeWidth={2.15} aria-label={zh ? '已置顶' : 'Pinned'}/>
+                        </span>
+                    ) : null}
+                    {isStudiedJob(job) ? (
+                        <span data-testid="task-studied" title={zh ? '已学完' : 'Studied'} className="mt-[3px] inline-flex shrink-0 text-[#85868c] dark:text-white/50">
+                            <CheckCheck className="size-4" strokeWidth={2.15} aria-label={zh ? '已学完' : 'Studied'}/>
                         </span>
                     ) : null}
                     {/* A plain 已完成 needs no badge; 已下载 says the task stopped at the video on purpose. */}
@@ -302,7 +308,7 @@ const cardRenderKey = (job) => {
         debreath.status, debreath.delivered, debreath.delivery_error, debreath.used_for_transcription,
         debreath.already_cut, debreath.not_worth_rendering, debreath.render_verified, debreath.rendered,
         debreath.plan?.cut_count, debreath.plan?.removed_seconds,
-        meta.display_title, meta.pinned_at, meta.queue_position, meta.queue_total, meta.queue_provisional,
+        meta.display_title, meta.pinned_at, meta.studied?.at, meta.queue_position, meta.queue_total, meta.queue_provisional,
         meta.queue_wait?.waiting_for, meta.queue_wait?.since,
         meta.video_source_progress?.message, meta.video_source_progress?.loaded_bytes,
         meta.video_source_progress?.total_bytes, meta.video_source_progress?.percent,

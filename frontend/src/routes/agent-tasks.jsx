@@ -40,7 +40,7 @@ const AgentTasks = () => {
     const {extraUrlsIgnored, setExtraUrlsIgnored, highlightTaskId, duplicateNotice, setDuplicateNotice} = useNavigationNotices(location);
     const {
         queueUploadJob, displayJobs, queueAheadName, hasLiveOrUploadingJobs,
-        query, setQuery, filter, setFilter, filterCounts, visibleJobs, restStartTaskId,
+        query, setQuery, filter, setFilter, filterCounts, visibleJobs, restStartTaskId, courseStarts,
         queuedCount, runningCount,
     } = useRecordList({currentJob, jobs, lang, location, highlightTaskId});
 
@@ -120,6 +120,7 @@ const AgentTasks = () => {
                     visibleJobs={visibleJobs}
                     queueUploadJob={queueUploadJob}
                     restStartTaskId={restStartTaskId}
+                    courseStarts={courseStarts}
                     queueAheadName={queueAheadName}
                     retryError={retryError}
                     highlightTaskId={highlightTaskId}

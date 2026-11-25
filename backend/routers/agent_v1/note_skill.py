@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
-from backend.core import note_feedback, note_skills, visual_note_job
+from backend.core import note_feedback, note_skills, study_record, visual_note_job
 from backend.core.local_request_scope import require_local_agent_access
 from backend.routers.agent_v1 import common
 from backend.routers.agent_v1.common import _job_for_request
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/agent/v1", dependencies=[Depends(require_local_agent
 def _feedback_call(action, *args, **kwargs):
     try:
         return action(*args, **kwargs)
-    except (note_feedback.NoteFeedbackError, visual_note_job.VisualNoteError, ValueError) as exc:
+    except (note_feedback.NoteFeedbackError, study_record.StudyError, visual_note_job.VisualNoteError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
@@ -54,7 +54,8 @@ def apply_note_rule(payload: Optional[dict[str, Any]] = Body(None)) -> dict[str,
 
 @router.get("/note-feedback")
 def list_note_feedback() -> dict[str, Any]:
-    return {"ok": True, "feedback": [note_feedback.public_view(item) for item in note_feedback.list_feedback()]}
+    reviewed = note_feedback.reviewed_studies()
+    return {"ok": True, "feedback": [note_feedback.public_view(item, reviewed) for item in note_feedback.list_feedback()]}
 
 
 @router.post("/note-feedback")
@@ -77,7 +78,22 @@ def record_note_feedback(request: Request, payload: Optional[dict[str, Any]] = B
         part=int(part) if part else None,
         transcript_excerpt=str(body.get("transcript_excerpt") or ""),
         title=title,
+        study_id=str(body.get("study_id") or ""),
     ))}
+
+
+@router.post("/tasks/{task_id}/studied")
+def mark_studied(request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    """The user said they finished studying this note (or took it back)."""
+    body = payload or {}
+    _job_for_request(request, task_id)
+    studied = body.get("studied", True)
+    if not isinstance(studied, bool):
+        raise HTTPException(status_code=422, detail="studied must be true or false")
+    return {"ok": True, **_feedback_call(
+        study_record.mark, task_id, studied=studied, verdict=body.get("verdict") or None,
+        client_id=common._local_client_scope(request),
+    )}
 
 
 @router.post("/tasks/{task_id}/note-draft")

@@ -158,9 +158,30 @@ Speaker separation labels who said each line (说话人 A, B, ...). Left out, a 
 Work in the user's current agent (Codex, Claude Code or another host); no
 Claude installation or model call is needed just to read or save preferences.
 Do not monitor all their notes in the background. Look at the feedback and
-edits they brought into this conversation; fetch a relevant note or a kept
+edits they brought into this conversation, and at the studied records
+FluentFlow kept when they clicked 学完了; fetch a relevant note or a kept
 version only when it helps understand that change.
 
+0. **Record what they say about a note when they say it.** Every error or
+   omission they point out while reading or studying a note is recorded at
+   once with `record_note_feedback` (`kind=one_off`, their words, the note
+   text and `task_id`), and "this note is fine" as `kind=fine`; do not wait
+   until it becomes a rule. When they say they finished studying a note, call
+   `mark_studied` (with `verdict` only if they said good, wrong or missing).
+   - **Go through studied records.** Before working on how notes are written,
+     and when they mark a note studied, read `list_note_feedback` for
+     `kind=studied` records with `reviewed=false`. Read the changes (all of
+     them in `changes_file`) and judge each yourself: a corrected fact or
+     name, a thought or question of their own, or a problem with how notes
+     are written (a point left out, wrong emphasis, structure). Record each
+     corrected fact as `one_off` and each writing problem as `pattern` (with
+     `criterion`), both with that record's `study_id`; when none is a writing
+     problem, record one `kind=fine` with its `study_id`, so it reads as
+     reviewed. A verdict of wrong or missing with no changes means the
+     problem was not written down: ask them once what it was.
+   - When the same kind of writing problem has been recorded twice, show
+     them both passages and propose the rule (steps 3 to 6). Once is not
+     enough.
 1. **Fix the note they pointed at first**, when they asked for a correction.
    Find it with `list_tasks` (the title shown in their screenshot), read with
    `get_task_package`, and save the corrected whole note with `save_agent_note`
