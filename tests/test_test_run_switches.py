@@ -649,19 +649,69 @@ def test_the_test_copy_start_command_is_for_powershell_on_windows():
 
     repo = Path("C:/Users/it's me/fluentflow-local")
     command = prepare_test_copy.start_command(Path("C:/copy"), port=8013, fake=True, max_calls=40, max_usd=1.0,
-                                              max_cny=None, repo=repo, windows=True)
+                                              max_cny=None, repo=repo, token="t", windows=True)
     assert command.startswith(f"Set-Location '{str(repo).replace(chr(39), chr(39) * 2)}'; ")
     assert "$env:FLUENTFLOW_FAKE_MODEL='1'; " in command and "$env:FLUENTFLOW_TEST_MAX_USD='1'" in command
     assert f"& '{repo / '.venv' / 'Scripts' / 'python.exe'}'".replace("it's", "it''s") in command
     assert "-m uvicorn backend.local_main:app --host 127.0.0.1 --port 8013 }" in command
     assert "&&" not in command and "bin/python" not in command
-    # (independent review, 2026-11-25) $env: stays set in the window: taken
-    # out when the service ends, so a later run there does not read the copy.
+    # (independent review, 2026-11-25) $env: stays set in the window: put
+    # back as it was when the service ends, so a later run there does not
+    # read the copy, nor lose an address or token the window had (push
+    # review, 2026-11-25).
     assert " try { $env:FLUENTFLOW_DATA_DIR=" in command
-    cleared = command.split("finally { Remove-Item ", 1)[1]
+    kept, restored = command.split(" try { ", 1)[0], command.split("finally { ", 1)[1]
     for name in ("FLUENTFLOW_DATA_DIR", "FLUENTFLOW_CONFIG_PATH", "FLUENTFLOW_TEST_COPY", "FLUENTFLOW_FAKE_MODEL",
-                 "FLUENTFLOW_TEST_MAX_CALLS", "FLUENTFLOW_TEST_MAX_USD", "FLUENTFLOW_LOCAL_PORT"):
-        assert f"Env:{name}" in cleared
+                 "FLUENTFLOW_TEST_MAX_CALLS", "FLUENTFLOW_TEST_MAX_USD", "FLUENTFLOW_LOCAL_PORT",
+                 "FLUENTFLOW_ACCESS_TOKEN"):
+        assert f"$ff_{name} = $env:{name}" in kept and f"$env:{name} = $ff_{name}" in restored
+
+
+def test_the_test_copy_runs_from_a_worktree_without_a_venv(tmp_path, monkeypatch, capsys):
+    """(2026-11-25) T3 and Claude Code make worktrees without .venv: the
+    command uses the main checkout's, still runs this checkout's code, opens
+    the Agent API with a throwaway token and shows how to call a tool."""
+    import re
+    import shlex
+
+    from scripts import prepare_test_copy
+
+    worktree, main = tmp_path / "worktree", tmp_path / "main"
+    (main / ".venv" / "bin").mkdir(parents=True)
+    (main / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
+    worktree.mkdir()
+    monkeypatch.setattr(prepare_test_copy, "main_checkout", lambda repo: main)
+    assert prepare_test_copy.interpreter(worktree, windows=False) == main / ".venv" / "bin" / "python"
+    (worktree / ".venv" / "bin").mkdir(parents=True)
+    (worktree / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
+    assert prepare_test_copy.interpreter(worktree, windows=False) == worktree / ".venv" / "bin" / "python"
+
+    real = _real_data(tmp_path)
+    build = tmp_path / "build"
+    build.mkdir()
+    # A copy reused for another run keeps its tasks when the build is wrong.
+    (tmp_path / "copy").mkdir()
+    (tmp_path / "copy" / "fluentflow_jobs.sqlite").write_bytes(b"tasks made in the copy")
+    source = Path(prepare_test_copy.__file__).resolve().parents[1] / "frontend"
+    for wrong in (build, source):  # nothing built there; the source folder (push review, 2026-11-25)
+        with pytest.raises(SystemExit, match="not a page build"):
+            prepare_test_copy.main(["--source", str(real), "--into", str(tmp_path / "copy"),
+                                    "--frontend-dir", str(wrong)])
+        assert (tmp_path / "copy" / "fluentflow_jobs.sqlite").read_bytes() == b"tasks made in the copy"
+    (build / "assets").mkdir()
+    (build / "local.html").write_text('<script type="module" src="/assets/local-x.js"></script>', encoding="utf-8")
+    assert prepare_test_copy.main(["--source", str(real), "--into", str(tmp_path / "copy"), "--port", "8013",
+                                   "--frontend-dir", str(build)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    start = lines[lines.index("start the test service with:") + 1]
+    example = lines[-1]
+    token = re.search(r"FLUENTFLOW_ACCESS_TOKEN='?([A-Za-z0-9_-]+)", start).group(1)
+    assert len(token) >= 20 and f"FLUENTFLOW_ACCESS_TOKEN{_assigned(token)}" in example
+    assert f"FLUENTFLOW_TEST_FRONTEND_DIR{_assigned(build.resolve())}" in start
+    assert f"FLUENTFLOW_API_BASE{_assigned('http://127.0.0.1:8013')}" in example
+    assert "from scripts.fluentflow_mcp import notes; print(notes.get_status())" in example
+    if sys.platform != "win32":
+        assert shlex.split(example)[0:2] == ["cd", str(Path(prepare_test_copy.__file__).resolve().parents[1])]
 
 
 def test_the_test_copy_will_not_copy_a_test_copy(tmp_path, monkeypatch):

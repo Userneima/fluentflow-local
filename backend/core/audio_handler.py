@@ -26,8 +26,9 @@ def require_audible_audio(audio_path: str | Path) -> float:
         raise FileNotFoundError(f"Audio file not found: {path}")
 
     ffmpeg = _require_ffmpeg()
+    # ``-vn``: a video's picture is not decoded only to be thrown away.
     completed = subprocess.run(
-        [ffmpeg, "-hide_banner", "-nostdin", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
+        [ffmpeg, "-hide_banner", "-nostdin", "-i", str(path), "-vn", "-af", "volumedetect", "-f", "null", "-"],
         check=True,
         capture_output=True,
         text=True,
@@ -42,37 +43,37 @@ def require_audible_audio(audio_path: str | Path) -> float:
     return peak_db
 
 
-def extract_compressed_mp3(
-    input_path: str | Path,
-    *,
-    output_path: str | Path | None = None,
-    bitrate: str = "64k",
-) -> Path:
+class CompressedMp3InBackground:
+    """The playback MP3 written while the rest of the task goes on.
+
+    Nothing the transcription does reads it, and on long recordings it is most
+    of what extracting the audio costs: LAME encodes on one core, about 1.5
+    minutes of a 3 h 20 min recording against 22 seconds for the recognizer's
+    WAV (2026-11-25). ``path()`` waits for it and raises when
+    ffmpeg failed; ``stop()`` ends an encode nobody will
+    wait for, so a cancelled task does not leave it running.
     """
-    Prepare a compressed MP3 from a video **or** audio source.
 
-    Uses ffmpeg directly for both video and audio — avoids moviepy compatibility
-    issues and works reliably across all ffmpeg versions.
+    def __init__(self, input_path: str | Path, *, output_path: str | Path, bitrate: str = "64k") -> None:
+        src = Path(input_path).expanduser().resolve()
+        if not src.is_file():
+            raise FileNotFoundError(f"File not found: {src}")
+        self._out = Path(output_path).expanduser().resolve()
+        self._out.parent.mkdir(parents=True, exist_ok=True)
+        self._args = [_require_ffmpeg(), "-y", "-nostdin", "-v", "error", "-i", str(src), "-vn",
+                      "-codec:a", "libmp3lame", "-b:a", bitrate, str(self._out)]
+        self._process = subprocess.Popen(self._args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-    Returns:
-        Absolute path to the written MP3.
-    """
-    src = Path(input_path).expanduser().resolve()
-    if not src.is_file():
-        raise FileNotFoundError(f"File not found: {src}")
+    def path(self) -> Path:
+        _, stderr = self._process.communicate()
+        if self._process.returncode != 0:
+            raise subprocess.CalledProcessError(self._process.returncode, self._args, stderr=stderr)
+        return self._out
 
-    if output_path is None:
-        out = src.with_name(f"{src.stem}_fluentflow.mp3")
-    else:
-        out = Path(output_path).expanduser().resolve()
-    out.parent.mkdir(parents=True, exist_ok=True)
-
-    ffmpeg = _require_ffmpeg()
-    subprocess.run(
-        [ffmpeg, "-y", "-i", str(src), "-vn", "-codec:a", "libmp3lame", "-b:a", bitrate, str(out)],
-        check=True, capture_output=True,
-    )
-    return out
+    def stop(self) -> None:
+        if self._process.poll() is None:
+            self._process.kill()
+            self._process.communicate()
 
 
 def extract_stt_wav(

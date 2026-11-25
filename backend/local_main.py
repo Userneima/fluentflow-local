@@ -45,7 +45,7 @@ from backend.core.event_context import event_metadata  # noqa: E402
 from backend.core.event_logger import log_event  # noqa: E402
 from backend.core.claude_code_note import stop_running_notes
 from backend.core.debreath_job import recover_stranded_renders
-from backend.core.frontend_paths import FRONTEND_LOCAL_DIST_DIR
+from backend.core.frontend_paths import local_frontend_dist_dir
 from backend.core.job_store import (
     RESTART_INTERRUPTION_KEY,
     adopt_jobs_for_owner,
@@ -385,7 +385,7 @@ def create_local_app() -> FastAPI:
         title="FluentFlow Local",
         api_routers=LOCAL_API_ROUTERS,
         spa_router=create_local_spa_router(),
-        frontend_dist_dir=FRONTEND_LOCAL_DIST_DIR,
+        frontend_dist_dir=local_frontend_dist_dir(),
         lifespan=lifespan,
         http_middleware=(local_boundary_middleware, test_copy.middleware),
     )
