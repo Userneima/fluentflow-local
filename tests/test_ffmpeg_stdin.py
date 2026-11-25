@@ -58,8 +58,8 @@ def _spawn_calls(tree: ast.AST):
 
 
 def _argv_source(call: ast.Call, func: ast.AST | None) -> tuple[str, bool]:
-    """The text the command is built from, and whether it is a parameter we
-    cannot see into."""
+    """The text the command is built from, and whether it comes from somewhere
+    we cannot see into (a parameter, an attribute, a call)."""
     if not call.args:
         return "", False
     first = call.args[0]
@@ -74,9 +74,12 @@ def _argv_source(call: ast.Call, func: ast.AST | None) -> tuple[str, bool]:
         ]
         if assigned:
             return " ".join(assigned), False
-        params = {a.arg for a in func.args.args + func.args.kwonlyargs + func.args.posonlyargs}
-        return first.id, first.id in params
-    return ast.unparse(first), False
+        return first.id, True
+    if isinstance(first, (ast.List, ast.Tuple)):
+        return ast.unparse(first), False
+    # An attribute (self._args), a call or anything else built elsewhere: we
+    # cannot see what it starts, so it counts as a command handed in.
+    return ast.unparse(first), True
 
 
 def test_every_ffmpeg_and_ffprobe_starts_through_ffmpeg_cmd():
@@ -92,7 +95,7 @@ def test_every_ffmpeg_and_ffprobe_starts_through_ffmpeg_cmd():
             source, is_param = _argv_source(call, func)
             name = getattr(func, "name", "<module>")
             if is_param and (rel, name) not in _NOT_FFMPEG:
-                offenders.append(f"{rel}:{call.lineno} {name}() spawns a command it is handed")
+                offenders.append(f"{rel}:{call.lineno} {name}() spawns a command built elsewhere")
             elif _mentions_media_tool(source):
                 offenders.append(f"{rel}:{call.lineno} starts ffmpeg/ffprobe with subprocess")
     assert not offenders, (
