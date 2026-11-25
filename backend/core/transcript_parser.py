@@ -45,11 +45,23 @@ def utf16_without_mark(raw: bytes) -> bool:
     """Whether the bytes look like UTF-16 saved without its byte-order mark,
     which ``_decode_text`` does not read as UTF-16: one byte in two a zero,
     as the digits, colons and line breaks of a subtitle file are in it. Text
-    in UTF-8 or GB18030 has no zero byte."""
+    in UTF-8 or GB18030 has no zero byte.
+
+    Chinese in UTF-16 has hardly a zero byte, so the text it decodes to is
+    looked at too: a NUL in it (any ASCII character or line break of UTF-16
+    becomes one), or one character in ten a replacement character or another
+    control character. Text in UTF-8 or GB18030 never reads that way; a few
+    stray bytes give a few replacement characters."""
     sample = raw[:4096]
     if len(sample) < 8 or sample[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return False
-    return sample.count(0) * 4 >= len(sample)
+    if sample.count(0) * 4 >= len(sample):
+        return True
+    text = _decode_text(raw)
+    if "\x00" in text:
+        return True
+    unreadable = sum(1 for char in text if char == "\ufffd" or (char < " " and char not in "\t\n\r\f\v"))
+    return unreadable * 10 >= len(text)
 
 
 UTF16_HINT = "文件可能是不带编码标记的 UTF-16，用文本编辑器另存为 UTF-8 后再交"

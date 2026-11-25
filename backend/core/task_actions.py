@@ -325,6 +325,7 @@ async def stop_step(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
 
 RESTART_RESUME_LIMIT = 2
 RESTART_RESUME_COUNT_KEY = "restart_resume_count"
+RESTART_LEFT_REASON = "服务重启中断了这个任务：请重新提交，或对仍保留源文件的任务使用重试。"
 
 
 async def resume_task(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
@@ -430,6 +431,10 @@ async def resume_after_restart(task_ids: list[str]) -> int:
         count = int(metadata.get(RESTART_RESUME_COUNT_KEY) or 0) + (1 if was_running else 0)
         start_at = next((name for name in task_steps.ORDER if named.get(name) in task_steps.OPEN), None)
         reason = None
+        # What the page says when the task is left for the user: the refusal
+        # itself when it names what is gone (the subtitle file, decision 6.82,
+        # where 重试 does nothing), else the restart's general sentence.
+        told = RESTART_LEFT_REASON
         if start_at is None:
             continue
         if count > RESTART_RESUME_LIMIT:
@@ -443,6 +448,8 @@ async def resume_after_restart(task_ids: list[str]) -> int:
                 await _carry_on(job, start_at, route="/startup/resume")
             except Refused as exc:
                 reason = exc.message
+                if exc.code == "source_missing":
+                    told = f"服务重启中断了这个任务。{exc.message}"
             except Exception as exc:  # noqa: BLE001 - left for the user, not lost
                 logger.exception("could not carry %s on after the restart", task_id)
                 reason = f"{type(exc).__name__}: {exc}"
@@ -452,11 +459,17 @@ async def resume_after_restart(task_ids: list[str]) -> int:
             continue
         update_job_metadata(task_id, {task_flow.RESTART_RESUMED_KEY: None})
         task_steps.close_open(task_id, error=task_steps.RESTART_ERROR)
-        if str(job.get("status") or "") in {"queued", "running"}:
-            # Told on the page, as a restart-interrupted task always was.
+        # Told on the page, as a restart-interrupted task always was. A task
+        # the stopping service cancelled (``run_worker_with_terminal_state``
+        # writes worker_cancelled) is one too: it still has a step open, which
+        # a task the user cancelled or stopped never has.
+        status = str(job.get("status") or "")
+        if status in {"queued", "running", "cancelled"}:
+            if status == "cancelled":
+                reopen_job(task_id)  # the one write that turns a cancelled task back
             upsert_job(
                 task_id=task_id, status="failed", client_id=job.get("client_id"), stage="recovery", progress=0,
-                error_reason="服务重启中断了这个任务：请重新提交，或对仍保留源文件的任务使用重试。",
+                error_reason=told,
                 metadata={RESTART_INTERRUPTION_KEY: {
                     "interrupted_at": _now(), "started": was_running, "stage": job.get("stage"),
                     "progress": job.get("progress"),

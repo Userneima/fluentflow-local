@@ -187,6 +187,51 @@ def test_a_subtitle_file_gone_since_is_named_as_the_subtitle_file(task_id, tmp_p
     assert str(srt) in refused.value.message
 
 
+# Review of 643178c: a graceful service stop cancels the worker, which marks
+# the task cancelled (worker_cancelled) while its step stays open. When the
+# restart cannot carry it on, it reads as failed by the restart, not as stopped
+# by the user, and the page names the subtitle file that is missing (the
+# generic text pointed to 重试, which a subtitle task cannot use, decision 6.82).
+
+def _stopped_with_the_service(task_id, tmp_path, status):
+    srt = _in_place_task(task_id, tmp_path, status="running")
+    _cut_off_reading(task_id)
+    if status == "cancelled":
+        job_store.upsert_job(task_id=task_id, status="cancelled", stage="error", error_reason="worker_cancelled")
+    return srt
+
+
+def _left_for_the_user(task_id):
+    assert task_id in task_actions.stepped_tasks_cut_off()
+    assert asyncio.run(task_actions.resume_after_restart([task_id])) == 0
+    job = job_store.get_job(task_id)
+    assert job["status"] == "failed", job.get("error_reason")
+    assert (job.get("metadata") or {}).get(job_store.RESTART_INTERRUPTION_KEY), "the page tells the user once"
+    assert _statuses(task_id)[task_steps.FETCH] == task_steps.FAILED
+    return job
+
+
+@pytest.mark.parametrize("status", ["running", "cancelled"])
+def test_a_subtitle_file_gone_after_a_restart_is_named_on_the_task(task_id, tmp_path, status):
+    srt = _stopped_with_the_service(task_id, tmp_path, status)
+    srt.unlink()
+
+    job = _left_for_the_user(task_id)
+
+    assert str(srt) in job["error_reason"] and "字幕文件" in job["error_reason"]
+    assert "重试" not in job["error_reason"]
+
+
+@pytest.mark.parametrize("status", ["running", "cancelled"])
+def test_a_task_restarts_keep_cutting_off_reads_as_cut_off_by_the_restart(task_id, tmp_path, status):
+    _stopped_with_the_service(task_id, tmp_path, status)
+    job_store.update_job_metadata(task_id, {task_actions.RESTART_RESUME_COUNT_KEY: task_actions.RESTART_RESUME_LIMIT})
+
+    job = _left_for_the_user(task_id)
+
+    assert "服务重启中断" in job["error_reason"]
+
+
 def test_a_stopped_subtitle_task_carries_on_when_the_user_asks(task_id, tmp_path, model):
     _in_place_task(task_id, tmp_path, status="cancelled")
     _cut_off_writing_the_note(task_id)

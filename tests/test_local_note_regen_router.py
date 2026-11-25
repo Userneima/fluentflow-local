@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -294,7 +295,17 @@ def test_transcript_file_rejects_empty_transcript(monkeypatch):
     assert jobs["empty-1"]["status"] == "failed"
 
 
-def test_transcript_file_in_utf16_without_its_mark_is_refused_not_noted(monkeypatch):
+_ZH_TXT = "今天我们来讲一下人工智能产品经理的工作内容，首先是需求分析。\n" * 20
+
+
+@pytest.mark.parametrize("filename, raw", [
+    ("talk.srt", _SRT.encode("utf-16-le")),
+    # (review of 643178c) Chinese in UTF-16 has hardly a zero byte, so the
+    # count of zeros missed it and a note was written from the garbage.
+    ("talk.txt", _ZH_TXT.encode("utf-16-le")),
+    ("talk.md", _ZH_TXT.encode("utf-16-be")),
+], ids=["srt", "chinese txt le", "chinese md be"])
+def test_transcript_file_in_utf16_without_its_mark_is_refused_not_noted(monkeypatch, filename, raw):
     # (independent review, 2026-11-25) Read as another encoding it is garbage,
     # and a note used to be written from that.
     jobs, _ = _install_store(monkeypatch)
@@ -306,7 +317,7 @@ def test_transcript_file_in_utf16_without_its_mark_is_refused_not_noted(monkeypa
     r = _client().post(
         "/summarize-transcript-file",
         headers=_HEADERS,
-        files={"file": ("talk.srt", _SRT.encode("utf-16-le"), "text/plain")},
+        files={"file": (filename, raw, "text/plain")},
         data={"task_id": "utf16-1", "skip_summary": "false"},
     )
     assert r.status_code == 400 and "UTF-16" in r.json()["detail"]
