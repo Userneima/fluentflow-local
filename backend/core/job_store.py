@@ -1075,39 +1075,69 @@ def write_task_step(
     ``reset`` clears what an earlier run of the step recorded (its times and
     error), for a task planned afresh.
     """
+    write_task_steps(task_id, [(name, order)], status, error=error, detail=detail, started=started,
+                     finished=finished, reset=reset, db_path=db_path)
+
+
+def write_task_steps(
+    task_id: str,
+    steps: list[tuple[str, int]],
+    status: str,
+    *,
+    error: str | None = None,
+    detail: dict[str, Any] | None = None,
+    started: bool = False,
+    finished: bool = False,
+    reset: bool = False,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> None:
+    """Record several steps of a task, as ``(name, order)``, in one commit.
+
+    Each commit waits for the disk; on Windows that was measured at tens of
+    milliseconds, up to 400 (GitHub's Windows machine, 2026-11-25), and a task
+    planned step by step held the service that long for every step.
+    """
     ensure_job_db(db_path)
     now = _now_iso()
-    key = f"{task_id}:{name}"
     with sqlite_connection(Path(db_path)) as conn:
-        conn.execute(
-            """
-            INSERT INTO job_steps (
-                task_id, step_key, step_type, status, priority, error_reason, result_json,
-                created_at, updated_at, started_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(step_key) DO UPDATE SET
-                status = excluded.status,
-                priority = excluded.priority,
-                error_reason = CASE WHEN ? THEN excluded.error_reason
-                                    ELSE COALESCE(excluded.error_reason, job_steps.error_reason) END,
-                result_json = CASE WHEN ? THEN excluded.result_json
-                                   ELSE COALESCE(excluded.result_json, job_steps.result_json) END,
-                updated_at = excluded.updated_at,
-                started_at = CASE WHEN ? THEN excluded.started_at
-                                  ELSE COALESCE(excluded.started_at, job_steps.started_at) END,
-                finished_at = CASE WHEN ? THEN excluded.finished_at
-                                   ELSE COALESCE(excluded.finished_at, job_steps.finished_at) END
-            """,
-            (
-                task_id, key, TASK_STEP_PREFIX + name, status, order, error,
-                _json_dumps(detail) if detail is not None else None,
-                now, now, now if started else None, now if finished else None,
-                reset, reset, reset or started, reset or finished,
-            ),
-        )
+        for name, order in steps:
+            _upsert_task_step(conn, task_id, name, status, order=order, error=error, detail=detail,
+                              started=started, finished=finished, reset=reset, now=now)
         # A page polling for changed tasks (``updated_since``) must see the
         # task again when one of its steps moves.
         conn.execute("UPDATE jobs SET updated_at = ? WHERE task_id = ?", (now, task_id))
+
+
+def _upsert_task_step(conn: sqlite3.Connection, task_id: str, name: str, status: str, *, order: int,
+                      error: str | None, detail: dict[str, Any] | None, started: bool, finished: bool,
+                      reset: bool, now: str) -> None:
+    key = f"{task_id}:{name}"
+    conn.execute(
+        """
+        INSERT INTO job_steps (
+            task_id, step_key, step_type, status, priority, error_reason, result_json,
+            created_at, updated_at, started_at, finished_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(step_key) DO UPDATE SET
+            status = excluded.status,
+            priority = excluded.priority,
+            error_reason = CASE WHEN ? THEN excluded.error_reason
+                                ELSE COALESCE(excluded.error_reason, job_steps.error_reason) END,
+            result_json = CASE WHEN ? THEN excluded.result_json
+                               ELSE COALESCE(excluded.result_json, job_steps.result_json) END,
+            updated_at = excluded.updated_at,
+            started_at = CASE WHEN ? THEN excluded.started_at
+                              ELSE COALESCE(excluded.started_at, job_steps.started_at) END,
+            finished_at = CASE WHEN ? THEN excluded.finished_at
+                               ELSE COALESCE(excluded.finished_at, job_steps.finished_at) END
+        """,
+        (
+            task_id, key, TASK_STEP_PREFIX + name, status, order, error,
+            _json_dumps(detail) if detail is not None else None,
+            now, now, now if started else None, now if finished else None,
+            reset, reset, reset or started, reset or finished,
+        ),
+    )
 
 
 def list_task_steps(

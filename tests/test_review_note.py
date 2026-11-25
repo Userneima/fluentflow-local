@@ -145,7 +145,10 @@ class FakeChat:
 @pytest.fixture(autouse=True)
 def home(monkeypatch, tmp_path):
     # Notes are read only from the user's home; the test's folder is it.
+    # Path.home() reads USERPROFILE on Windows, where the runner's temp folder
+    # is itself inside the real home.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     return tmp_path
 
 
@@ -517,6 +520,7 @@ def test_only_a_follow_along_note_in_the_users_home_is_read(tmp_path):
 def test_a_pdf_that_failed_is_reported_and_the_old_one_is_not_passed_off_as_new(tmp_path, monkeypatch):
     monkeypatch.undo()  # the real printing, with a browser that fails
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(note_pdf, "_browser", lambda: "/usr/bin/false")
     folder = _folder(tmp_path)
     old_pdf = folder / "课_复习笔记.pdf"

@@ -80,8 +80,23 @@ class Reached:
 @pytest.fixture
 def reached(monkeypatch):
     found = Reached()
+    inside_socketpair = threading.local()
+    real_socketpair = socket.socketpair
 
-    def no_connect(_sock, address, *_a, **_k):
+    def socketpair(*args, **kwargs):
+        # On Windows every new asyncio loop builds its wake-up pipe as a pair
+        # of sockets joined over 127.0.0.1; that connect stays in the process.
+        inside_socketpair.on = True
+        try:
+            return real_socketpair(*args, **kwargs)
+        finally:
+            inside_socketpair.on = False
+
+    real_connect = socket.socket.connect
+
+    def no_connect(sock, address, *args, **kwargs):
+        if getattr(inside_socketpair, "on", False):
+            return real_connect(sock, address, *args, **kwargs)
         found.stop(f"network {address}")
 
     class NoOpenAI:
@@ -104,6 +119,7 @@ def reached(monkeypatch):
             found.stop("claude command line")
         return real_popen(command, *args, **kwargs)
 
+    monkeypatch.setattr(socket, "socketpair", socketpair)
     monkeypatch.setattr(socket.socket, "connect", no_connect)
     monkeypatch.setattr(ai_client, "OpenAI", NoOpenAI)
     monkeypatch.setattr(claude_vision.anthropic, "Anthropic", NoAnthropic)
@@ -617,9 +633,28 @@ def test_the_test_copy_closes_open_steps_in_the_copy_only_and_prints_a_capped_st
     assert config["preferences"]["export_to_lark"] is False and config["secrets"] == {"deepseek_api_key": "k"}
     assert json.loads((real / "fluentflow_config.json").read_text(encoding="utf-8"))["preferences"]["export_to_lark"]
     printed = capsys.readouterr().out
-    for part in (f"FLUENTFLOW_DATA_DIR={into.resolve()}", "FLUENTFLOW_FAKE_MODEL=1", "FLUENTFLOW_TEST_COPY=1",
-                 "FLUENTFLOW_TEST_MAX_CALLS=40", "FLUENTFLOW_TEST_MAX_USD=1", "--port 8013"):
+    for part in (f"FLUENTFLOW_DATA_DIR{_assigned(into.resolve())}", f"FLUENTFLOW_FAKE_MODEL{_assigned('1')}",
+                 f"FLUENTFLOW_TEST_COPY{_assigned('1')}", f"FLUENTFLOW_TEST_MAX_CALLS{_assigned('40')}",
+                 f"FLUENTFLOW_TEST_MAX_USD{_assigned('1')}", "--port 8013"):
         assert part in printed
+
+
+def _assigned(value) -> str:
+    """How the printed start command sets an environment variable on this system."""
+    return f"='{value}'" if sys.platform == "win32" else f"={value}"
+
+
+def test_the_test_copy_start_command_is_for_powershell_on_windows():
+    from scripts import prepare_test_copy
+
+    repo = Path("C:/Users/it's me/fluentflow-local")
+    command = prepare_test_copy.start_command(Path("C:/copy"), port=8013, fake=True, max_calls=40, max_usd=1.0,
+                                              max_cny=None, repo=repo, windows=True)
+    assert command.startswith(f"Set-Location '{str(repo).replace(chr(39), chr(39) * 2)}'; ")
+    assert "$env:FLUENTFLOW_FAKE_MODEL='1'; " in command and "$env:FLUENTFLOW_TEST_MAX_USD='1'" in command
+    assert f"& '{repo / '.venv' / 'Scripts' / 'python.exe'}'".replace("it's", "it''s") in command
+    assert command.endswith("-m uvicorn backend.local_main:app --host 127.0.0.1 --port 8013")
+    assert "&&" not in command and "bin/python" not in command
 
 
 def test_the_test_copy_refuses_to_go_inside_the_real_data(tmp_path):

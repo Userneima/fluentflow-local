@@ -69,22 +69,29 @@ STOPPED_NOTE = "已停下，点「接着做」从这一步开始。"
 
 
 def _write(task_id: str, name: str, status: str, **kwargs: Any) -> None:
+    _write_steps(task_id, [name], status, **kwargs)
+
+
+def _write_steps(task_id: str, names: list[str], status: str, **kwargs: Any) -> None:
+    """Record these steps in one commit: on Windows each commit was measured
+    at tens of milliseconds, and the queue calls this on the service's loop."""
+    if not names:
+        return
     if task_stop.shutting_down():
         # The service is stopping and stopped this step's work under it: the
         # step was cut off, not stopped or failed, and a restart carries it
         # on from here (``task_stop.shutdown``).
-        logger.info("service stopping: step %s of %s left as it was (not %s)", name, task_id, status)
+        logger.info("service stopping: steps %s of %s left as they were (not %s)", names, task_id, status)
         return
     try:
-        job_store.write_task_step(task_id, name, status, order=ORDER.index(name), **kwargs)
+        job_store.write_task_steps(task_id, [(name, ORDER.index(name)) for name in names], status, **kwargs)
     except Exception:  # noqa: BLE001 - the task goes on without its step record
-        logger.warning("could not record step %s of %s as %s", name, task_id, status, exc_info=True)
+        logger.warning("could not record steps %s of %s as %s", names, task_id, status, exc_info=True)
 
 
 def plan(task_id: str) -> None:
     """Every step of a task about to run, none started yet."""
-    for name in ORDER:
-        _write(task_id, name, PENDING, reset=True)
+    _write_steps(task_id, list(ORDER), PENDING, reset=True)
 
 
 def start(task_id: str, name: str) -> None:
@@ -209,9 +216,8 @@ def reopen_from(task_id: str, name: str, steps: list[dict[str, Any]] | None = No
     """Make ``name`` and every later step not already done open again (not
     started), for a run that carries the task on from ``name``."""
     named = statuses(steps if steps is not None else steps_of([task_id]).get(task_id, []))
-    for later in ORDER[ORDER.index(name):]:
-        if named.get(later) != DONE:
-            _write(task_id, later, PENDING, reset=True)
+    _write_steps(task_id, [later for later in ORDER[ORDER.index(name):] if named.get(later) != DONE], PENDING,
+                 reset=True)
 
 
 def status_of(task_id: str, name: str) -> str | None:

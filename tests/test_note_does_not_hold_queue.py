@@ -31,6 +31,10 @@ from backend.routers import local_processing as lp
 from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
 
 _CREATED: list[str] = []
+# Every test opens the gates itself; this only keeps a broken test from
+# hanging. It is long because a gate that opens on its own lets a note go on
+# as if released (each task's store writes wait for the disk, slow on Windows).
+GATE_SECONDS = 30
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +82,7 @@ class Flow:
     def write_note(self, task_id, client_id, *, on_local_work_done=None):
         """Stands in for ``local_intake_flow.write_note``: blocking, on the note thread."""
         self.log.append(f"frames:{task_id}")
-        self.local_gate[task_id].wait(5)
+        self.local_gate[task_id].wait(GATE_SECONDS)
         if task_id in self.fail_before_handoff:
             self.log.append(f"note-failed:{task_id}")
             return
@@ -91,7 +95,7 @@ class Flow:
             self.remote_now += 1
             self.remote_peak = max(self.remote_peak, self.remote_now)
         self.log.append(f"remote:{task_id}")
-        self.remote_gate[task_id].wait(5)
+        self.remote_gate[task_id].wait(GATE_SECONDS)
         with self._lock:
             self.remote_now -= 1
         self.log.append(f"note-done:{task_id}")
@@ -114,8 +118,10 @@ def _start(flow: Flow, ids, monkeypatch):
     return runners
 
 
-async def _until(predicate, tries=100):
-    for _ in range(tries):
+async def _until(predicate, seconds=10.0):
+    """Wait for a state rather than a fixed time: on Windows each store write
+    waits for the disk, measured at tens of milliseconds."""
+    for _ in range(int(seconds / 0.02)):
         if predicate():
             return True
         await asyncio.sleep(0.02)
@@ -162,7 +168,8 @@ def test_a_long_batch_has_at_most_a_few_notes_waiting_on_claude(monkeypatch):
         runners = _start(flow, ids, monkeypatch)
         for gate in flow.local_gate.values():
             gate.set()
-        await asyncio.sleep(0.5)
+        assert await _until(lambda: flow.remote_now == tf.NOTE_CONCURRENCY and all(f"frames:{i}" in flow.log for i in ids))
+        await asyncio.sleep(0.2)  # time for a third note to start beside them, if it could
         waiting = flow.remote_now
         for gate in flow.remote_gate.values():
             gate.set()
@@ -182,7 +189,7 @@ def test_a_note_that_fails_before_claude_does_not_stick_the_queue(monkeypatch):
         runners = _start(flow, [a, b], monkeypatch)
         for gate in [*flow.local_gate.values(), *flow.remote_gate.values()]:
             gate.set()
-        await asyncio.wait_for(asyncio.gather(*runners), 5)
+        await asyncio.wait_for(asyncio.gather(*runners), GATE_SECONDS)
 
     asyncio.run(scenario())
     assert f"note-failed:{a}" in flow.log
@@ -233,7 +240,7 @@ def test_waiting_notes_do_not_starve_the_threads_uploads_use(monkeypatch):
             gate.set()
         assert await _until(lambda: all(f"frames:{i}" in flow.log for i in ids))
         assert await _until(lambda: flow.remote_now == tf.NOTE_CONCURRENCY)
-        answer = await asyncio.wait_for(asyncio.to_thread(lambda: "saved"), 1)
+        answer = await asyncio.wait_for(asyncio.to_thread(lambda: "saved"), 5)
         for gate in flow.remote_gate.values():
             gate.set()
         await asyncio.gather(*runners)

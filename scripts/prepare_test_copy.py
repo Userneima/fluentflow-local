@@ -24,18 +24,25 @@ the fake model, which calls no model at all. It also sets
 notes, and the service then does not watch them or their Feishu documents.
 
     .venv/bin/python scripts/prepare_test_copy.py --into <scratch dir> --fake --port 8013
+
+On Windows the printed command is for PowerShell.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import sqlite3
 import sys
 from pathlib import Path
 
-DEFAULT_SOURCE = Path.home() / "Library" / "Application Support" / "FluentFlow"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from backend.core.runtime_paths import app_data_root  # noqa: E402
+
+DEFAULT_SOURCE = app_data_root()
 DATABASES = ("fluentflow_jobs.sqlite", "fluentflow_events.sqlite")
 FILES = ("fluentflow_config.json", "recommended_models.json")
 TASKS_FILE = "test_copy_tasks.json"
@@ -140,7 +147,8 @@ def prepare(source: Path, into: Path) -> dict[str, object]:
 
 
 def start_command(into: Path, *, port: int, fake: bool, max_calls: int | None, max_usd: float | None,
-                  max_cny: float | None, repo: Path) -> str:
+                  max_cny: float | None, repo: Path, windows: bool = os.name == "nt") -> str:
+    """The command that starts the test service: PowerShell on Windows, a POSIX shell elsewhere."""
     env = {
         "FLUENTFLOW_DATA_DIR": str(into),
         "FLUENTFLOW_CONFIG_PATH": str(into / "fluentflow_config.json"),
@@ -153,10 +161,17 @@ def start_command(into: Path, *, port: int, fake: bool, max_calls: int | None, m
                         ("FLUENTFLOW_TEST_MAX_CNY", max_cny)):
         if value is not None:
             env[name] = f"{value:g}" if isinstance(value, float) else str(value)
+    serve = f"-m uvicorn backend.local_main:app --host 127.0.0.1 --port {port}"
+    if windows:
+        def quote(value) -> str:
+            return "'" + str(value).replace("'", "''") + "'"
+
+        assignments = "; ".join(f"$env:{name}={quote(value)}" for name, value in env.items())
+        python = quote(repo / ".venv" / "Scripts" / "python.exe")
+        return f"Set-Location {quote(repo)}; {assignments}; & {python} {serve}"
     assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in env.items())
     python = shlex.quote(str(repo / ".venv" / "bin" / "python"))
-    return (f"cd {shlex.quote(str(repo))} && {assignments} {python} -m uvicorn backend.local_main:app "
-            f"--host 127.0.0.1 --port {port}")
+    return f"cd {shlex.quote(str(repo))} && {assignments} {python} {serve}"
 
 
 def main(argv: list[str] | None = None) -> int:

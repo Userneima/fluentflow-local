@@ -19,6 +19,9 @@ in the user's terms:
 - A task waiting for the user's agent to judge its cut is not counted as busy
   (the agent would wait on itself), and a restart leaves it waiting.
 - A cut or note started again on a finished task still counts.
+- Starting a task, or carrying it on, records its steps in one write: each
+  write waits for the disk, measured at tens of milliseconds on Windows, and
+  the queue does it on the loop that answers the page and agents.
 """
 
 from __future__ import annotations
@@ -302,6 +305,35 @@ def test_a_restart_closes_what_was_running_and_leaves_an_agent_wait_alone(task_i
     assert {steps[name]["status"] for name in ("note", "compress", "feishu")} == {"skipped"}
     assert not task_activity.activity(_job(task_id)).busy
     assert _steps(waiting)["cut"]["status"] == "running"
+
+
+def test_planning_and_reopening_a_task_write_its_steps_in_one_commit(monkeypatch, task_id):
+    job_store.upsert_job(task_id=task_id, status="completed", stage="done", result={"task_id": task_id})
+    job_store.ensure_job_db()
+    opened = []
+    real = job_store.sqlite_connection
+
+    def counting(*args, **kwargs):
+        opened.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(job_store, "sqlite_connection", counting)
+    task_steps.plan(task_id)
+    assert len(opened) == 1
+    assert {step["status"] for step in _steps(task_id).values()} == {"pending"}
+    assert set(_steps(task_id)) == set(task_steps.ORDER)
+
+    monkeypatch.undo()
+    task_steps.finish(task_id, "fetch", "done")
+    task_steps.finish(task_id, "transcribe", "failed", "x")
+    recorded = task_steps.steps_of([task_id])[task_id]  # the queue reads them first, as here
+    monkeypatch.setattr(job_store, "sqlite_connection", counting)
+    opened.clear()
+    task_steps.reopen_from(task_id, "transcribe", recorded)
+    assert len(opened) == 1
+    steps = _steps(task_id)
+    assert steps["fetch"]["status"] == "done"
+    assert (steps["transcribe"]["status"], steps["transcribe"]["error_reason"]) == ("pending", None)
 
 
 def test_a_task_waiting_for_the_agent_is_not_busy_but_says_so(task_id):
