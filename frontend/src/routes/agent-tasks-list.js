@@ -123,11 +123,14 @@ export const useRecordList = ({currentJob, jobs, lang, location, highlightTaskId
     const {ordered: visibleJobs, courseStarts} = listed;
     // Where the pinned records end: a small label above the first record after
     // them, so the line between "pinned" and "the rest" is visible.
+    // Not in 学完的: it is grouped by course, and a studied one pinned again
+    // would put the line inside a course.
     const restStartTaskId = useMemo(() => {
+        if (filter === 'studied') return '';
         const firstRest = visibleJobs.findIndex((job) => !isPinnedJob(job) && taskOutcome(job).kind !== 'live');
         if (firstRest <= 0 || !isPinnedJob(visibleJobs[firstRest - 1])) return '';
         return taskIdForJob(visibleJobs[firstRest]);
-    }, [visibleJobs]);
+    }, [visibleJobs, filter]);
     const queuedCount = liveJobs.filter((job) => normalizeTaskState(job) === TASK_STATE_QUEUED).length;
     const runningCount = liveJobs.length - queuedCount;
     return {

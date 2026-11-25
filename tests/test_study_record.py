@@ -12,7 +12,10 @@ From the requirement (owner, 2026-11-25):
 - Taking the mark back deletes the record; marking again keeps its id, so what
   the agent recorded against it still points at it.
 - A study record the agent has been through (a later record names it) reads
-  as reviewed.
+  as reviewed; made again after that (a new verdict, edits since), it is new
+  to the agent again.
+- Edits made before this was in place are still his: the first edit after it
+  must not hide them.
 """
 
 from __future__ import annotations
@@ -186,7 +189,6 @@ def test_marking_again_keeps_the_id_and_taking_it_back_deletes_the_record():
     assert again["record_id"] == first["record_id"]
     assert again["at"] == first["at"]
     assert [i for i in nf.list_feedback() if i.get("kind") == nf.STUDIED][0]["verdict"] == "missing"
-    assert first["record_id"] in nf.reviewed_studies()
     assert found["study_id"] == first["record_id"]
 
     assert study_record.mark(task_id)["studied"]["verdict"] == "missing", "no verdict given keeps the one there"
@@ -194,6 +196,77 @@ def test_marking_again_keeps_the_id_and_taking_it_back_deletes_the_record():
     study_record.mark(task_id, studied=False)
     assert not get_job(task_id)["metadata"].get("studied")
     assert not [i for i in nf.list_feedback() if i.get("kind") == nf.STUDIED]
+
+
+def test_a_record_made_again_after_the_agent_went_through_it_is_new_to_it(monkeypatch):
+    clock = iter(["2026-11-25T10:00:00+08:00", "2026-11-25T10:05:00+08:00", "2026-11-25T10:09:00+08:00"])
+    monkeypatch.setattr(nf, "_now", lambda: next(clock))
+    task_id = _task(WRITTEN, note_versions.GENERATED)
+    record_id = study_record.mark(task_id)["studied"]["record_id"]
+    nf.record_feedback(task_id="", problem="这篇没问题", kind="fine", study_id=record_id)
+    assert record_id in nf.reviewed_studies()
+
+    study_record.mark(task_id, verdict="wrong")
+
+    assert record_id not in nf.reviewed_studies()
+
+
+def test_edits_made_before_this_are_not_hidden_by_the_next_one():
+    # Written, edited on the page before 写成时的笔记 was kept, edited again.
+    from backend.core.job_store import update_job_result
+
+    first_edit = WRITTEN.replace("三个", "五个")
+    task_id = _task(first_edit, note_versions.WEB_EDIT, kept=[(WRITTEN, note_versions.WEB_EDIT)])
+    update_job_result(task_id, note_versions.declare({"summary_markdown": EDITED, "display_title": "第四课"},
+                                                     note_versions.OBSIDIAN))
+
+    study_record.mark(task_id)
+
+    record = _record(task_id)
+    assert any("三" in (c["before"] or "") for c in record["changes"]), "the first edit is still there"
+    assert any("我的想法" in (c["after"] or "") for c in record["changes"])
+    assert record["edited_by"] == {"网页编辑": 1, "Obsidian改了md": 1}
+
+
+def test_an_edit_made_before_the_folder_was_set_up_is_still_found(tmp_path):
+    from backend.core import output_folder
+    from backend.core.job_store import update_job_result
+
+    task_id = _task(WRITTEN, note_versions.GENERATED)
+    update_job_result(task_id, note_versions.declare({"summary_markdown": EDITED, "display_title": "第四课"},
+                                                     note_versions.WEB_EDIT))
+    folder = tmp_path / "第四课"
+    folder.mkdir()
+    result = dict(get_job(task_id)["result"])
+    result[output_folder.RESULT_KEY] = {"path": str(folder), "md_path": str(folder / "第四课.md")}
+    update_job_result(task_id, result)
+
+    study_record.mark(task_id)
+
+    record = _record(task_id)
+    assert record["edited_by"] == {"网页编辑": 1}
+    assert any("五" in (c["after"] or "") for c in record["changes"])
+    assert (folder / "过程文件" / study_record.WRITTEN_FILE).is_file()
+
+
+def test_a_subtitle_read_from_a_folder_is_filed_under_that_folder():
+    task_id = _task(WRITTEN, note_versions.GENERATED, metadata={"subtitle_intake": {
+        "original_path": "/Users/x/张和/实战 2-汇报篇/3-第三课.srt"}})
+    study_record.mark(task_id)
+    assert get_job(task_id)["metadata"]["studied"]["course"] == "实战 2-汇报篇"
+
+
+def test_two_clicks_at_once_make_one_record():
+    import threading
+
+    task_id = _task(WRITTEN, note_versions.GENERATED)
+    threads = [threading.Thread(target=study_record.mark, args=(task_id,)) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len([i for i in nf.list_feedback() if i.get("kind") == nf.STUDIED and i["task_id"] == task_id]) == 1
 
 
 def test_a_task_without_a_note_cannot_be_studied():
