@@ -41,6 +41,7 @@ call is recorded under the provider ``fake`` and counts against no budget.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import functools
 import inspect
@@ -231,6 +232,52 @@ def stoppable_map(fn: Callable[[Any], Any], items: Iterable[Any], *, workers: in
     if errors:
         raise errors[min(errors)]
     return results
+
+
+class ServiceStopping(asyncio.CancelledError):
+    """The service is stopping and this thread stopped waiting for a model's
+    answer. A cancellation, not a failure: the ``except Exception`` that turns
+    a failed request into a failed note or check lets it through, and the
+    step stays open for the restart to carry on (decision 6.42)."""
+
+
+def unless_stopping(ask: Callable[[], Any]) -> Any:
+    """``ask()``, on a thread a stopping service does not wait for.
+
+    The request is sent on a daemon thread and the caller waits for it here;
+    once the service starts stopping (``task_stop.shutdown``) the caller
+    raises ``ServiceStopping`` instead of waiting for the answer, and nothing
+    new is sent. ``ask`` must do no more than the request and keep its answer
+    (``model_answers``): the thread is dropped where it is when the process
+    exits, so nothing a user would lose (a note file, a task record) may be
+    written on it. Every exit asking a model with text goes through here by
+    way of ``model_answers.remembered``; it used to be done on the note's,
+    the check's and the cut judge's own threads, which a stopping service
+    waits for, and one request in flight held its exit for 25 seconds with
+    the fake model (2026-11-06), a minute or two with a real one.
+    """
+    from backend.core import task_stop
+
+    if task_stop.shutting_down():
+        raise ServiceStopping("服务正在停止，这次模型请求没有发出。")
+    outcome: dict[str, Any] = {}
+    answered = threading.Event()
+
+    def run() -> None:
+        try:
+            outcome["answer"] = ask()
+        except BaseException as exc:  # noqa: BLE001 - raised to the caller below
+            outcome["error"] = exc
+        finally:
+            answered.set()
+
+    threading.Thread(target=carry(run), name="model-request", daemon=True).start()
+    while not answered.wait(0.2):
+        if task_stop.shutting_down():
+            raise ServiceStopping("服务正在停止，没有等这次模型请求回来。")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("answer")
 
 
 # ── recording ──────────────────────────────────────────────────────────────
@@ -668,7 +715,7 @@ def for_task(task_id: str) -> dict[str, Any] | None:
 
 __all__ = [
     "ANTHROPIC", "BUDGET_EXCEEDED", "BudgetExceeded", "CarryingExecutor", "FAKE", "api_price", "budget",
-    "budget_refused", "reset_budget", "spent", "stoppable_map", "test_run", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
+    "budget_refused", "reset_budget", "ServiceStopping", "spent", "stoppable_map", "unless_stopping", "test_run", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
     "OUTSIDE_TASKS_LABEL", "call", "carry", "cost", "current", "enter_step", "for_task", "outside_tasks",
     "outside_tasks_or_none", "item", "leave_step", "part_of", "prices",
     "provider_of_base_url", "scope", "summarize", "unit_prices", "works_for",

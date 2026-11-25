@@ -28,6 +28,10 @@ The subscription's command line (``claude_code_note``) is not covered: it is a
 whole agent run, not one request and its answer, and the subscription does not
 bill per call.
 
+The request is sent through ``model_usage.unless_stopping``: a stopping
+service does not wait for it, and an answer it still gets before the process
+exits is kept all the same.
+
 Never costs the task: an answer that cannot be stored or read is logged and
 the model is asked as if nothing were kept.
 """
@@ -121,7 +125,7 @@ def remembered(key: str, ask: Callable[[], str]) -> str:
             _asked[counted] = nth + 1
             run = _runs.get((task_id, step), 0)
     if not open_step:
-        return ask()
+        return model_usage.unless_stopping(ask)
     try:
         kept = job_store.list_model_answers(task_id, step, key)
     except Exception:  # noqa: BLE001 - asked as if nothing were kept
@@ -130,21 +134,27 @@ def remembered(key: str, ask: Callable[[], str]) -> str:
     if nth < len(kept):
         logger.info("step %s of %s: answer %d to this request read from the earlier run", step, task_id, nth + 1)
         return kept[nth]
-    try:
-        answer = ask()
-    except BaseException:
-        with _lock:
-            _unreachable.add((task_id, step))
-        raise
-    with _lock:
-        _unreachable.discard((task_id, step))
-        current_run = _runs.get((task_id, step), 0) == run
-    if isinstance(answer, str) and current_run:
+
+    def ask_and_keep() -> str:
+        # On the request's own thread, so an answer that comes back after a
+        # stopping service stopped waiting for it is still kept.
         try:
-            job_store.insert_model_answer(task_id, step, key, answer)
-        except Exception:  # noqa: BLE001 - the answer goes back all the same
-            logger.warning("could not keep an answer of %s %s", task_id, step, exc_info=True)
-    return answer
+            answer = ask()
+        except BaseException:
+            with _lock:
+                _unreachable.add((task_id, step))
+            raise
+        with _lock:
+            _unreachable.discard((task_id, step))
+            current_run = _runs.get((task_id, step), 0) == run
+        if isinstance(answer, str) and current_run:
+            try:
+                job_store.insert_model_answer(task_id, step, key, answer)
+            except Exception:  # noqa: BLE001 - the answer goes back all the same
+                logger.warning("could not keep an answer of %s %s", task_id, step, exc_info=True)
+        return answer
+
+    return model_usage.unless_stopping(ask_and_keep)
 
 
 __all__ = ["forget_task", "remembered", "request_key", "step_ended", "step_started"]

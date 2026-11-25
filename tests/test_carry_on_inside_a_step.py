@@ -285,3 +285,94 @@ def test_an_answer_that_comes_back_after_its_run_is_not_kept(task_id):
 
     assert late["answer"] == "late answer"
     assert job_store.count_model_answers(task_id) == 0
+
+
+# The service stopping does not wait for a request in flight (2026-11-25).
+# Requirements: stopping the service while a note, its check or the cut
+# judge waits on a model ends that wait within a second, not after the
+# answer; answers already received are kept and read back when the step is
+# carried on, so they are not paid for again; an answer that still arrives
+# before the process exits is kept too; nothing new is sent once it stops.
+
+
+@pytest.fixture()
+def stopping(monkeypatch):
+    """Flip to make the service stop, without stopping other tests' tasks."""
+    flag = threading.Event()
+    monkeypatch.setattr(task_stop, "shutting_down", flag.is_set)
+    return flag
+
+
+def test_the_service_stopping_does_not_wait_for_a_request_in_flight(task_id, stopping):
+    model = CountingModel()
+    release = threading.Event()
+    asked: list[str] = []
+
+    def slow() -> str:
+        asked.append("slow")
+        release.wait(30)
+        return "late answer"
+
+    task_steps.start(task_id, task_steps.NOTE)
+    assert _ask(model, "正文") == "answer to 正文 #1"
+    threading.Timer(0.3, stopping.set).start()
+    started = time.monotonic()
+    with pytest.raises(model_usage.ServiceStopping):
+        model_answers.remembered(model_answers.request_key("test", "查漏"), slow)
+    assert time.monotonic() - started < 1.5
+    # The step is not ended by the stop: its records stay for the restart.
+    with pytest.raises(model_usage.ServiceStopping):
+        _ask(model, "下一章")
+    assert model.sent == ["正文"], "nothing new is sent once the service stops"
+
+    # The late answer still arrives before the process exits: it is kept.
+    release.set()
+    for _ in range(50):
+        if job_store.count_model_answers(task_id) == 2:
+            break
+        time.sleep(0.05)
+    assert job_store.count_model_answers(task_id) == 2
+
+    # The restart carries the note on: both answers read back, none paid again.
+    stopping.clear()
+    task_steps.start(task_id, task_steps.NOTE)
+    assert _ask(model, "正文") == "answer to 正文 #1"
+    assert model_answers.remembered(model_answers.request_key("test", "查漏"), lambda: "asked again") == "late answer"
+    assert model.sent == ["正文"] and asked == ["slow"]
+    task_steps.finish(task_id, task_steps.NOTE, task_steps.DONE)
+
+
+def test_a_note_thread_ends_promptly_when_the_service_stops(task_id, stopping):
+    """The note, its check and the cut judge run on pool threads the
+    interpreter joins on exit; they must end, not wait for the answer. The
+    check's broad ``except Exception`` must not turn the stop into "checked,
+    nothing missing" either."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from backend.core import note_coverage
+
+    release = threading.Event()
+
+    def chat(system: str, user: str) -> str:
+        return model_answers.remembered(model_answers.request_key("test", user), lambda: release.wait(30) and "{}")
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    task_steps.start(task_id, task_steps.NOTE)
+    future = pool.submit(model_usage.carry(note_coverage._ask), chat, "system", "user")
+    time.sleep(0.2)
+    started = time.monotonic()
+    stopping.set()
+    pool.shutdown(wait=True)
+    assert time.monotonic() - started < 1.5
+    with pytest.raises(model_usage.ServiceStopping):
+        future.result()
+    release.set()
+
+
+def test_requests_are_waited_for_as_before_while_the_service_runs(task_id, stopping):
+    def failing() -> str:
+        raise ValueError("bad gateway")
+
+    assert model_usage.unless_stopping(lambda: "answer") == "answer"
+    with pytest.raises(ValueError):
+        model_usage.unless_stopping(failing)
