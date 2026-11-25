@@ -29,6 +29,9 @@ The command sequence (checked against lark-cli 1.0.70 and its embedded
    caption) is unique to that picture in that push: captions are numbered over
    the whole note, so a chapter rewritten later can carry the same caption as
    one left alone, and locating by caption put the picture in the wrong place.
+   Before each insert the task's record of the document notes which picture
+   is going in, and after it what the picture became, so an export cut off
+   here is carried on from the record (``lark_cli_images.resume_pictures``).
 
 A screenshot that fails to upload does not fail the export; the counts come
 back as ``image_count`` / ``image_upload_count`` / ``image_upload_errors``.
@@ -126,7 +129,7 @@ def _first_push_of_older_record(
     links: List[feishu_note.HeadingLink] = []
     written = _feishu_chunk(parts, list(range(len(parts))), links, tight=tight)
     _markdown, pending, _missing = _prepare_images(written, task_id=task_id, artifact_root=artifact_root)
-    first = lark_cli_images.first_push(None, pending, links)
+    first = lark_cli_images.first_push(None, pending, links, tracked=False)
     _remember_created(artifact_root, task_id, {
         "doc_id": resumed["doc_id"], "url": resumed.get("url"), "revision_id": resumed.get("revision_id"),
         "first_push": first,
@@ -177,6 +180,9 @@ def export_markdown_via_lark_cli(
             first = resumed.pop("first_push", None)
             if first is None:
                 first = _first_push_of_older_record(resumed, artifact_root, task_id, state, tight=tight)
+            # The pictures the record says went in are known pictures of
+            # the document: a chapter ``_update`` rewrites drops them.
+            resumed["images"] = lark_cli_images.recorded_pictures(first, resumed["images"])
             previous = resumed
     if previous and previous.get("doc_id") and sections_unread(previous):
         previous = reread_sections(previous, task_id=task_id, artifact_root=artifact_root,
@@ -194,15 +200,19 @@ def export_markdown_via_lark_cli(
             parts = feishu_note.sections(markdown)
             written = _feishu_chunk(parts, list(range(len(parts))), [], tight=tight)
             sync = updated["sync"]
+            if lark_cli_images.tracked(first):
+                lark_cli_images.forget_rewritten(first, sync.get("images") or [])
             # What the chapters just rewritten became, for a resume cut off
             # in turn: their captions carry no marker any more.
-            _remember_created(artifact_root, task_id, {
+            record = {
                 "doc_id": doc_id, "url": previous.get("url"), "revision_id": previous.get("revision_id"),
                 "first_push": first, "images": sync.get("images") or [],
-            }, state)
+            }
+            _remember_created(artifact_root, task_id, record, state)
             images, errors, pending, missing, content = lark_cli_images.resume_pictures(
                 runner, bin_path, doc_id, written, first, list(sync.get("images") or []),
                 task_id=task_id, artifact_root=artifact_root,
+                save=lambda: _remember_created(artifact_root, task_id, record, state),
             )
             sync["images"] = images
             # It may also have been cut off before its chapter links were
@@ -257,15 +267,18 @@ def export_markdown_via_lark_cli(
             f"「{title}」的文档。返回内容：{_tail(json.dumps(data, ensure_ascii=False))}"
         )
 
+    progress = None
     if doc_id:
         # From here the document exists: an export cut off before it is
         # recorded on the task finds it again (``_created_unrecorded``).
         save_pushed_note(artifact_root, task_id, markdown, state)
-        _remember_created(artifact_root, task_id, {
-            "doc_id": doc_id, "url": doc_url, "revision_id": document.get("revision_id"),
-            "first_push": lark_cli_images.first_push(push, pending, links),
-        }, state)
-    images, errors = lark_cli_images._insert_images(runner, bin_path, doc_id, pending)
+        first = lark_cli_images.first_push(push, pending, links)
+        record = {"doc_id": doc_id, "url": doc_url, "revision_id": document.get("revision_id"), "first_push": first}
+        _remember_created(artifact_root, task_id, record, state)
+        progress = lark_cli_images.note_progress(
+            first, lambda: _remember_created(artifact_root, task_id, record, state),
+        )
+    images, errors = lark_cli_images._insert_images(runner, bin_path, doc_id, pending, progress)
     sync = {
         "doc_id": doc_id or None,
         "url": doc_url,

@@ -51,7 +51,9 @@ def _flag(cmd: list[str], name: str) -> str:
 
 
 class FakeDoc:
-    """A Feishu document as lark-cli shows it: top-level blocks with ids."""
+    """A Feishu document as lark-cli shows it: top-level blocks with ids. A
+    callout (``<callout>`` in the markdown written) is one top-level block
+    holding its lines as blocks of their own (``children``)."""
 
     def __init__(self) -> None:
         self.blocks: list[dict] = []
@@ -74,6 +76,18 @@ class FakeDoc:
 
     def _parse(self, markdown: str) -> list[dict]:
         blocks = []
+        for piece in re.split(r"(?ms)(^[ \t]*<callout\b[^>]*>[ \t]*\n.*?^[ \t]*</callout>[ \t]*$)", markdown):
+            if piece.lstrip().startswith("<callout"):
+                lines = piece.strip().split("\n")
+                inside = [line for line in lines[1:-1] if line.strip()]
+                blocks.append({"tag": "callout", "id": self._id(), "text": "", "open": lines[0].strip(),
+                               "children": self._flat("\n\n".join(inside))})
+            else:
+                blocks.extend(self._flat(piece))
+        return blocks
+
+    def _flat(self, markdown: str) -> list[dict]:
+        blocks = []
         for chunk in re.split(r"\n\s*\n", markdown.strip()):
             chunk = chunk.strip()
             if not chunk:
@@ -85,31 +99,39 @@ class FakeDoc:
                 blocks.append({"tag": "p", "id": self._id(), "text": ""})
             elif heading:
                 blocks.append({"tag": f"h{len(heading.group(1))}", "id": self._id(), "text": heading.group(2)})
+            elif re.match(r"^!\[[^\]]*\]\(https?://\S+\)$", chunk):
+                # Feishu fetches a web picture itself; it shows no file name.
+                block_id = self._id()
+                blocks.append({"tag": "img", "id": block_id, "name": "", "token": f"web{block_id}", "text": ""})
             else:
                 blocks.append({"tag": "p", "id": self._id(), "text": chunk})
         return blocks
 
+    def walk(self) -> list[dict]:
+        """Every block, those inside a callout too, in document order."""
+        return [inner for b in self.blocks for inner in [b, *b.get("children", [])]]
+
     def texts(self) -> list[str]:
         """The words of the document, without its pictures, dividers and empty paragraphs."""
-        return [b["text"].lstrip("\u3000") for b in self.blocks if b["tag"] not in ("img", "hr") and b["text"]]
+        return [b["text"].lstrip("\u3000") for b in self.walk() if b["tag"] not in ("img", "hr") and b["text"]]
 
     def markdown(self) -> str:
         """The document as lark-cli's markdown export shows it."""
-        shown = ["<title>t</title>"]
-        for b in self.blocks:
+        def one(b: dict) -> str:
+            if b["tag"] == "callout":
+                return b["open"] + "\n" + "\n".join(one(c) for c in b["children"]) + "\n</callout>"
             if b["tag"] == "img":
-                shown.append(f"![](https://feishu.cn/file/{b['token']})")
-            elif b["tag"] == "hr":
-                shown.append("---")
-            elif b["tag"].startswith("h"):
-                shown.append("#" * int(b["tag"][1:]) + " " + b["text"])
-            else:
-                shown.append(b["text"])
-        return "\n\n".join(shown) + "\n"
+                return f"![](https://feishu.cn/file/{b['token']})"
+            if b["tag"] == "hr":
+                return "---"
+            if b["tag"].startswith("h"):
+                return "#" * int(b["tag"][1:]) + " " + b["text"]
+            return b["text"]
+        return "\n\n".join(["<title>t</title>", *(one(b) for b in self.blocks)]) + "\n"
 
     def edit(self, old: str, new: str) -> None:
         """An edit made in Feishu."""
-        hits = [b for b in self.blocks if old in b.get("text", "")]
+        hits = [b for b in self.walk() if old in b.get("text", "")]
         assert len(hits) == 1, old
         hits[0]["text"] = hits[0]["text"].replace(old, new)
         self.revision += 1
@@ -122,12 +144,15 @@ class FakeDoc:
         self.modified += 100
 
     def _xml(self) -> str:
-        return f'<title id="{DOC}">t</title>' + "".join(
-            f'<img id="{b["id"]}" name="{b.get("name", "")}" src="{b["token"]}"/>' if b["tag"] == "img"
-            else f'<hr id="{b["id"]}"/>' if b["tag"] == "hr"
-            else f'<{b["tag"]} id="{b["id"]}">{html.escape(b["text"])}</{b["tag"]}>'
-            for b in self.blocks
-        )
+        def one(b: dict) -> str:
+            if b["tag"] == "callout":
+                return f'<callout id="{b["id"]}" emoji="bulb">' + "".join(one(c) for c in b["children"]) + "</callout>"
+            if b["tag"] == "img":
+                return f'<img id="{b["id"]}" name="{b.get("name", "")}" src="{b["token"]}"/>'
+            if b["tag"] == "hr":
+                return f'<hr id="{b["id"]}"/>'
+            return f'<{b["tag"]} id="{b["id"]}">{html.escape(b["text"])}</{b["tag"]}>'
+        return f'<title id="{DOC}">t</title>' + "".join(one(b) for b in self.blocks)
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
@@ -137,8 +162,11 @@ class FakeDoc:
             return _ok({"metas": [{"doc_token": DOC, "latest_modify_time": str(self.modified)}]})
         verb = cmd[2]
         if verb == "+media-insert":
+            # lark-cli puts the picture above the top-level block holding the
+            # selection: above a callout, not inside it (its --help, 1.0.70).
             marker = _flag(cmd, "--selection-with-ellipsis")
-            at = next(i for i, b in enumerate(self.blocks) if marker in b.get("text", ""))
+            at = next(i for i, b in enumerate(self.blocks)
+                      if any(marker in inner.get("text", "") for inner in [b, *b.get("children", [])]))
             block = {"tag": "img", "id": self._id(), "token": f"tok{self._next}",
                      "name": "" if self.nameless_pictures else _flag(cmd, "--file")}
             self.blocks.insert(at, block)
@@ -183,7 +211,7 @@ class FakeDoc:
                     return _fail("request timed out")
             elif command == "str_replace":
                 pattern, content = _flag(cmd, "--pattern"), _flag(cmd, "--content")
-                hits = [b for b in self.blocks if pattern in b.get("text", "")]
+                hits = [b for b in self.walk() if pattern in b.get("text", "")]
                 if len(hits) != 1:
                     return _ok({"document": {"revision_id": self.revision}, "result": "failed"})
                 hits[0]["text"] = hits[0]["text"].replace(pattern, content)
@@ -831,3 +859,319 @@ def test_links_in_chapters_a_resume_leaves_alone_point_at_their_chapters(tmp_pat
     assert f"[第三章]({URL}#{_ids(doc)['三、结尾']})" in framework
     assert not any("fluentflow.invalid" in t for t in doc.texts())
     assert result["sync"]["link_errors"] == []
+
+
+# Second independent review of the resume, 2026-11-26: a picture right above
+# a caption is the screenshot only when the export was putting that very
+# screenshot in when it stopped (it records each one before and after it goes
+# in); anything else there (the note's own picture, one the user pasted in
+# Feishu) is left alone and never recorded as the screenshot. A caption inside
+# a callout is found too.
+
+
+def _cut_off_after(doc: FakeDoc, stop: "Callable[[list[str]], bool]"):
+    """``doc``, except that the service stops right after the first command
+    ``stop`` picks has run, before the export learns how it went."""
+    def runner(cmd, **kwargs):
+        result = doc(cmd, **kwargs)
+        if stop(list(cmd)):
+            raise KeyboardInterrupt("the service stopped")
+        return result
+    return runner
+
+
+def _at_picture(doc: FakeDoc, name: str | None, point: str):
+    """``doc`` with the service stopping while picture ``name`` (None: the
+    first one) goes in: before its insert, right after its insert (before
+    the export records it), or after it is recorded but before its marker is
+    taken out."""
+    def inserting(cmd: list[str]) -> bool:
+        return cmd[2] == "+media-insert" and name in (None, _flag(cmd, "--file"))
+
+    if point == "before_insert":
+        return _cut_off_at(doc, inserting)
+    if point == "after_insert":
+        return _cut_off_after(doc, inserting)
+    seen: list[bool] = []
+
+    def stop(cmd: list[str]) -> bool:
+        if inserting(cmd):
+            seen.append(True)
+        return (bool(seen) or name is None) and cmd[2] == "+update" \
+            and _flag(cmd, "--command") == "str_replace" and "FFIMG" in _flag(cmd, "--pattern")
+    return _cut_off_at(doc, stop)
+
+
+def _caption_below(doc: FakeDoc, block: dict) -> str:
+    """The words right below a picture, past any other pictures, inside the
+    next callout when it holds them."""
+    at = doc.blocks.index(block)
+    for below in doc.blocks[at + 1:]:
+        if below["tag"] == "img":
+            continue
+        return below["text"] or next(c["text"] for c in below.get("children", []) if "图 " in c["text"])
+    return ""
+
+
+def _screenshots_recorded(doc: FakeDoc, result: dict, names: list[str]) -> None:
+    """Each screenshot recorded as the picture of its own file, and nothing
+    else in the document recorded (``names``: the screenshots in document
+    order; the other pictures are the note's or the user's)."""
+    ours = [b for b in doc.blocks if b["tag"] == "img" and not b["token"].startswith(("web", "paste"))]
+    recorded = {image["name"]: (image["file_token"], image["block_id"]) for image in result["sync"]["images"]}
+    assert recorded == {name: (b["token"], b["id"]) for name, b in zip(names, ours)}
+
+
+@pytest.mark.parametrize("nameless", [False, True])
+@pytest.mark.parametrize("first_cut", ["before_insert", "after_insert", "before_marker"])
+@pytest.mark.parametrize("resume_cut", [None, "before_insert", "after_insert", "before_marker"])
+def test_a_cut_off_at_any_point_of_a_picture_going_in_ends_with_each_in_once(tmp_path, nameless, first_cut, resume_cut):
+    """The export stopped while picture 2 went in (before the insert, right
+    after it, or before its marker went), the resume in turn stopped at the
+    same points of the first picture it put in: the next export finishes,
+    each picture once right above its caption, recorded as it is, and one
+    more export writes nothing."""
+    _frames(tmp_path, ["a.jpg", "b.jpg", "c.jpg"])
+    doc = FakeDoc()
+    doc.nameless_pictures = nameless
+    names = ["a.jpg", "b.jpg", "c.jpg"]
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path,
+                                         runner=_at_picture(doc, "b.jpg", first_cut))
+    if resume_cut:
+        with pytest.raises(KeyboardInterrupt):
+            cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path,
+                                             runner=_at_picture(doc, None, resume_cut))
+
+    result = cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    shown = [b["tag"] if b["tag"] == "img" else b["text"] for b in doc.blocks if b["tag"] == "img" or "图 " in b["text"]]
+    assert shown == ["img", "图 1：讲者打开设置页", "img", "图 2：点开模型菜单", "img", "图 3：保存后的结果"]
+    assert [b["name"] for b in doc.blocks if b["tag"] == "img"] == ([""] * 3 if nameless else names)
+    assert not any("FFIMG" in t for t in doc.texts())
+    assert result["image_count"] == 3 and result["image_upload_count"] == 3 and result["image_upload_errors"] == []
+    _recorded_as_shown(doc, result, names)
+    assert not (tmp_path / "t1" / cli.CREATED).exists()
+
+    calls = len(doc.calls)
+    again = cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path,
+                                             previous=result["sync"], runner=doc)
+    assert not any(c[2] == "+media-insert" for c in doc.calls[calls:])
+    _recorded_as_shown(doc, again, names)
+
+
+@pytest.mark.parametrize("cut", ["before_insert", "after_insert"])
+def test_the_note_s_own_picture_right_above_a_screenshot_is_not_taken_for_it(tmp_path, cut):
+    """The note's web picture right above a screenshot shows without a name,
+    like a screenshot Feishu does not name. Stopped before or right after
+    that screenshot went in: it ends up in once, and the web picture is kept
+    and not recorded as it."""
+    _frames(tmp_path, ["a.jpg"])
+    note = f"# 访谈\n\n## 一、开场\n\n开场的话。\n\n![](https://example.com/web.png)\n{_pic('a.jpg', '设置页')}\n"
+    doc = FakeDoc()
+    doc.nameless_pictures = True
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", note, task_id="t1", artifact_root=tmp_path,
+                                         runner=_at_picture(doc, "a.jpg", cut))
+
+    web = next(i for i, b in enumerate(doc.blocks) if b["tag"] == "img" and b["token"].startswith("web"))
+    assert "FFIMG" in doc.blocks[web + 1 + (cut == "after_insert")]["text"], "the web picture right above"
+
+    result = cli.export_markdown_via_lark_cli("访谈", note, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    pictures = [b for b in doc.blocks if b["tag"] == "img"]
+    assert [b["token"].startswith("web") for b in pictures] == [True, False], "the web picture, then the screenshot"
+    assert _caption_below(doc, pictures[1]) == "图 1：设置页"
+    assert result["image_upload_count"] == 1 and result["image_upload_errors"] == []
+    _screenshots_recorded(doc, result, ["a.jpg"])
+
+
+def _paste_above(doc: FakeDoc, caption: str) -> dict:
+    """A picture the user pastes in Feishu right above ``caption`` (pasted
+    pictures show no name)."""
+    at = next(i for i, b in enumerate(doc.blocks) if caption in b.get("text", ""))
+    pasted = {"tag": "img", "id": "pasted", "name": "", "token": "pastetok", "text": ""}
+    doc.blocks.insert(at, pasted)
+    return pasted
+
+
+@pytest.mark.parametrize("nameless", [False, True])
+@pytest.mark.parametrize("cut", [("a.jpg", "before_insert"), ("b.jpg", "before_marker"), ("c.jpg", "before_insert")])
+def test_a_picture_pasted_in_feishu_above_a_caption_is_kept_and_not_taken_for_the_screenshot(tmp_path, nameless, cut):
+    """Between the cut-off and the resume the user pastes a picture right
+    above 图 2: picture 2 goes in once (or stays as it was), the user's
+    picture stays, and only the screenshots are recorded."""
+    _frames(tmp_path, ["a.jpg", "b.jpg", "c.jpg"])
+    doc = FakeDoc()
+    doc.nameless_pictures = nameless
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path,
+                                         runner=_at_picture(doc, *cut))
+    pasted = _paste_above(doc, "图 2：")
+
+    result = cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert pasted in doc.blocks
+    ours = [b for b in doc.blocks if b["tag"] == "img" and b is not pasted]
+    assert [_caption_below(doc, b) for b in ours] == ["图 1：讲者打开设置页", "图 2：点开模型菜单", "图 3：保存后的结果"]
+    if not nameless:
+        assert [b["name"] for b in ours] == ["a.jpg", "b.jpg", "c.jpg"]
+    assert not any("FFIMG" in t for t in doc.texts())
+    assert result["image_upload_count"] == 3 and result["image_upload_errors"] == []
+    _screenshots_recorded(doc, result, ["a.jpg", "b.jpg", "c.jpg"])
+
+
+def test_a_caption_whose_picture_did_not_go_in_is_not_given_the_picture_above_it(tmp_path):
+    """Picture 2 failed to upload (its marker is taken out as it fails), the
+    export stopped before picture 3, then the user pasted a picture right
+    above 图 2: the resume puts picture 3 in, reports picture 2 as not
+    uploaded, and keeps the user's picture without recording it as picture 2."""
+    _frames(tmp_path, ["a.jpg", "b.jpg", "c.jpg"])
+    doc = FakeDoc()
+
+    def runner(cmd, **kwargs):
+        if cmd[2] == "+media-insert" and _flag(cmd, "--file") == "b.jpg":
+            return _fail("upload failed")
+        if cmd[2] == "+media-insert" and _flag(cmd, "--file") == "c.jpg":
+            raise KeyboardInterrupt("the service stopped")
+        return doc(cmd, **kwargs)
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path, runner=runner)
+    pasted = _paste_above(doc, "图 2：")
+
+    result = cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert pasted in doc.blocks
+    assert [b["name"] for b in doc.blocks if b["tag"] == "img" and b is not pasted] == ["a.jpg", "c.jpg"]
+    assert result["image_upload_count"] == 2
+    assert result["image_upload_errors"] == ["/jobs/t1/artifacts/frame?file=b.jpg"]
+    by_name = {image["name"]: image for image in result["sync"]["images"]}
+    assert (by_name["b.jpg"]["file_token"], by_name["b.jpg"]["block_id"]) == (None, None)
+    assert "pastetok" not in [image["file_token"] for image in result["sync"]["images"]]
+
+
+CALLOUT = f"""# 访谈
+
+## 一、开场
+
+开场的话。
+
+> [!note] 提示
+> 先看这里。
+> {_pic('a.jpg', '设置页')}
+> {_pic('b.jpg', '菜单')}
+
+后面的话。
+"""
+
+
+@pytest.mark.parametrize("nameless", [False, True])
+@pytest.mark.parametrize("cut", [
+    ("a.jpg", "before_insert"), ("a.jpg", "after_insert"), ("b.jpg", "after_insert"), ("b.jpg", "before_marker"),
+])
+def test_screenshots_in_a_callout_go_in_once_when_the_export_is_carried_on(tmp_path, nameless, cut):
+    """A screenshot under a callout has its caption inside the callout;
+    lark-cli puts its picture right above the callout (it inserts at the
+    top-level block holding the selection). Stopped anywhere while they went
+    in, the resume finds the captions inside the callout: each picture once,
+    above the callout in order, no marker left, recorded as it is."""
+    _frames(tmp_path, ["a.jpg", "b.jpg"])
+    doc = FakeDoc()
+    doc.nameless_pictures = nameless
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", CALLOUT, task_id="t1", artifact_root=tmp_path,
+                                         runner=_at_picture(doc, *cut))
+
+    result = cli.export_markdown_via_lark_cli("访谈", CALLOUT, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    shown = [b["tag"] for b in doc.blocks if b["tag"] in ("img", "callout")]
+    assert shown == ["img", "img", "callout"]
+    callout = next(b for b in doc.blocks if b["tag"] == "callout")
+    assert [c["text"] for c in callout["children"] if "图 " in c["text"]] == ["图 1：设置页", "图 2：菜单"]
+    if not nameless:
+        assert [b["name"] for b in doc.blocks if b["tag"] == "img"] == ["a.jpg", "b.jpg"]
+    assert not any("FFIMG" in t for t in doc.texts())
+    assert result["image_count"] == 2 and result["image_upload_count"] == 2 and result["image_upload_errors"] == []
+    _recorded_as_shown(doc, result, ["a.jpg", "b.jpg"])
+
+
+@pytest.mark.parametrize("older", ["document_only", "no_progress"])
+def test_screenshots_in_a_callout_go_in_for_a_cut_off_recorded_by_an_older_version(tmp_path, older):
+    """A record from before the export noted each picture going in (only the
+    document, or what it wrote without progress): the captions inside a
+    callout are still found and their pictures put in."""
+    _frames(tmp_path, ["a.jpg", "b.jpg"])
+    doc = FakeDoc()
+    _cut_before_pictures(doc, CALLOUT, tmp_path)
+    record = tmp_path / "t1" / cli.CREATED
+    kept = json.loads(record.read_text(encoding="utf-8"))
+    if older == "document_only":
+        kept.pop("first_push")
+    else:
+        kept["first_push"].pop("inserting", None)
+        kept["first_push"].pop("inserted", None)
+        for picture in kept["first_push"]["pictures"]:
+            picture.pop("above", None)
+    record.write_text(json.dumps(kept), encoding="utf-8")
+
+    result = cli.export_markdown_via_lark_cli("访谈", CALLOUT, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert [b["name"] for b in doc.blocks if b["tag"] == "img"] == ["a.jpg", "b.jpg"]
+    assert not any("FFIMG" in t for t in doc.texts())
+    _recorded_as_shown(doc, result)
+
+
+def test_a_marker_inside_a_callout_is_read_from_the_document(tmp_path):
+    """The document as Feishu returns it, a caption led by its marker inside
+    a callout: the picture goes in at that marker and the marker goes."""
+    _frames(tmp_path, ["a.jpg"])
+    xml = ('<title id="D">t</title><h1 id="h1">访谈</h1>'
+           '<callout id="c1" emoji="bulb"><h4 id="h4">提示</h4>'
+           '<p id="p1">⟦FFIMG-abcd1234-1⟧图 1：设置页</p></callout>')
+    calls: list[list[str]] = []
+
+    def runner(cmd, **kwargs):
+        calls.append(list(cmd))
+        if cmd[2] == "+fetch":
+            return _ok({"document": {"content": xml}})
+        if cmd[2] == "+media-insert":
+            return _ok({"block_id": "new", "file_token": "tok"})
+        return _ok({"result": "success"})
+
+    first = {"push": "abcd1234", "pictures": [{"figure": 1, "src": "/jobs/t1/artifacts/frame?file=a.jpg",
+             "line": _pic("a.jpg", "设置页"), "caption": "图 1：设置页", "name": "a.jpg"}], "links": []}
+    written = f"<callout emoji=\"bulb\">\n#### 提示\n{_pic('a.jpg', '设置页')}\n</callout>"
+    images, errors, _pending, _missing, _content = lark_cli_images.resume_pictures(
+        runner, "lark-cli", "D", written, first, [], task_id="t1", artifact_root=tmp_path)
+
+    assert [_flag(c, "--selection-with-ellipsis") for c in calls if c[2] == "+media-insert"] == ["⟦FFIMG-abcd1234-1⟧"]
+    assert [_flag(c, "--pattern") for c in calls if c[2] == "+update"] == ["⟦FFIMG-abcd1234-1⟧"]
+    assert [(image["name"], image["file_token"]) for image in images] == [("a.jpg", "tok")] and errors == []
+
+
+def test_an_older_record_never_gives_a_callout_s_caption_another_picture(tmp_path):
+    """An older record (no progress kept), cut off after both pictures of a
+    callout went in and their markers were taken out: lark-cli stacked both
+    pictures above the callout, so which is whose cannot be read from the
+    document. Neither is recorded as the other's picture; one not told apart
+    is reported as not uploaded rather than recorded wrong."""
+    _frames(tmp_path, ["a.jpg", "b.jpg"])
+    doc = FakeDoc()
+    doc.nameless_pictures = True
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", CALLOUT, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, lambda c: "--scope" in c))
+    record = tmp_path / "t1" / cli.CREATED
+    kept = json.loads(record.read_text(encoding="utf-8"))
+    kept.pop("first_push")
+    record.write_text(json.dumps(kept), encoding="utf-8")
+    calls = len(doc.calls)
+
+    result = cli.export_markdown_via_lark_cli("访谈", CALLOUT, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert not any(c[2] == "+media-insert" for c in doc.calls[calls:])
+    pictures = {b["name"] or f"#{i}": b for i, b in enumerate(b for b in doc.blocks if b["tag"] == "img")}
+    truth = dict(zip(["a.jpg", "b.jpg"], pictures.values()))
+    for image in result["sync"]["images"]:
+        assert image["file_token"] in (None, truth[image["name"]]["token"]), "never another screenshot's picture"
