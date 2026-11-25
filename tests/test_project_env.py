@@ -213,6 +213,40 @@ def test_installers_take_the_system_proxy_when_none_is_set():
     assert "Internet Settings" in helper and "NO_PROXY" in helper
 
 
+# macOS ships bash 3.2; Homebrew's bash 5 often comes first on PATH. Bash 5
+# treats a declared-but-unset local as unbound under set -u, 3.2 does not.
+_BASHES = sorted({b for b in ("/bin/bash", "/opt/homebrew/bin/bash", "/usr/local/bin/bash", shutil.which("bash")) if b and os.path.isfile(b)})
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not _BASHES, reason="the macOS scripts, run by bash")
+@pytest.mark.parametrize(
+    ("scutil_output", "expected"),
+    [
+        # No proxy switched on: the common case, which once stopped the Mac
+        # install with "host: unbound variable" under bash 5.
+        ("<dictionary> {\n  HTTPEnable : 0\n  HTTPSEnable : 0\n}\n", ""),
+        (
+            "<dictionary> {\n  HTTPSEnable : 1\n  HTTPSPort : 7890\n  HTTPSProxy : 127.0.0.1\n}\n",
+            "http://127.0.0.1:7890",
+        ),
+    ],
+)
+def test_the_mac_scripts_read_the_system_proxy_under_set_u(tmp_path, scutil_output, expected):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    scutil = fake_bin / "scutil"
+    scutil.write_text(f"#!/bin/sh\ncat <<'EOF'\n{scutil_output}EOF\n", encoding="utf-8")
+    scutil.chmod(0o755)
+    helper = ROOT / "launchers" / "macos" / "fluentflow-env.sh"
+    env = {k: v for k, v in _clean_env().items() if "proxy" not in k.lower()}
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    script = f'set -euo pipefail; source "{helper}"; ff_use_system_proxy >/dev/null; printf "%s" "${{HTTPS_PROXY:-}}"'
+    for bash in _BASHES:
+        result = subprocess.run([bash, "-c", script], capture_output=True, text=True, env=env)
+        assert result.returncode == 0, (bash, result.stderr)
+        assert result.stdout == expected, bash
+
+
 def test_settings_saved_by_the_old_path_come_along(tmp_path, monkeypatch):
     """Before the fix a data folder set only in .env still had its settings in
     the platform folder; updating must not lose the user's keys."""

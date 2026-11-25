@@ -148,7 +148,8 @@ ff_verified_download() {
 # 本机地址不走代理。
 ff_use_system_proxy() {
 	[[ -n "${HTTPS_PROXY:-}${HTTP_PROXY:-}${https_proxy:-}${http_proxy:-}" ]] && return 0
-	local info host port
+	# 赋空值：只声明不赋值的 local，bash 5（Homebrew 装的常排在 PATH 前面）在 set -u 下一读就报「unbound variable」，没开代理时安装会停在这里；系统自带的 bash 3.2 不报。
+	local info host="" port=""
 	info="$(scutil --proxy 2>/dev/null)" || return 0
 	if [[ "$(printf '%s\n' "$info" | awk '/ HTTPSEnable :/ {print $3}')" == 1 ]]; then
 		host="$(printf '%s\n' "$info" | awk '/ HTTPSProxy :/ {print $3}')"
