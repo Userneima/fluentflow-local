@@ -14,19 +14,26 @@ Requirements, in the user's terms:
   in it, by the page, an agent or the pipeline; a PDF export writes only
   inside the copy.
 - The started copy keeps every runtime path, and a link task's folder, inside
-  the copy, whatever a ``.env`` beside the code says.
+  the copy, whatever a ``.env`` beside the code says; a place to write that
+  is a link out of the copy is refused when the copy is prepared, and no
+  write request is let through while one resolves outside it.
+- With the switch off, the check reads no request body.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import os
 import re
 import uuid
 from pathlib import Path
 from urllib.parse import urlencode
 
 import pytest
+from fastapi import File, UploadFile
+from fastapi.dependencies.utils import get_flat_dependant
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -44,6 +51,8 @@ def copy_of(monkeypatch, tmp_path):
     def turn_on(*task_ids: str) -> None:
         monkeypatch.setenv(test_copy.ENV, "1")
         monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path / "copy"))
+        for name, relative in test_copy.PINNED_PATHS.items():  # as the start command sets them
+            monkeypatch.setenv(name, str(tmp_path / "copy" / relative))
         (tmp_path / "copy").mkdir(exist_ok=True)
         (tmp_path / "copy" / test_copy.TASKS_FILE).write_text(json.dumps(list(task_ids)), encoding="utf-8")
         test_copy.reset()
@@ -125,13 +134,16 @@ def _write_routes() -> list[APIRoute]:
     return [route for route in _app().routes if isinstance(route, APIRoute) and route.methods - SAFE]
 
 
-def _through_the_check(method: str, path: str, headers: dict[str, str], body: bytes) -> tuple[int, bool]:
+def _through_the_check(method: str, path: str, headers: dict[str, str], body: bytes,
+                       read: list[bool] | None = None) -> tuple[int, bool]:
     """Send one request through the copy's check alone; whether the route
-    behind it would have been reached."""
+    behind it would have been reached. ``read`` records each read of the body."""
     reached: list[bool] = []
     sent = [body]
 
     async def receive():
+        if read is not None:
+            read.append(True)
         return {"type": "http.request", "body": sent.pop() if sent else b"", "more_body": False}
 
     async def call_next(_request):
@@ -140,7 +152,8 @@ def _through_the_check(method: str, path: str, headers: dict[str, str], body: by
 
         return JSONResponse({"reached": True})
 
-    scope = {"type": "http", "method": method, "path": path, "raw_path": path.encode(), "query_string": b"",
+    path, _, query = path.partition("?")
+    scope = {"type": "http", "method": method, "path": path, "raw_path": path.encode(), "query_string": query.encode(),
              "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
              "client": ("127.0.0.1", 1), "server": ("127.0.0.1", 8013), "scheme": "http", "root_path": ""}
     response = asyncio.run(test_copy.middleware(Request(scope, receive), call_next))
@@ -186,19 +199,139 @@ def test_no_write_route_reaches_a_copied_task_whatever_the_body(copy_of):
     assert let_through == []
 
 
-def test_every_task_field_a_write_route_reads_is_one_the_check_reads():
-    """A form or body field naming a task under another name (say
-    ``source_task_id``) would pass the check unseen."""
+def _task_fields(route: APIRoute) -> list[tuple[str, str]]:
+    """(where, name) of every field naming a task or a job a write route
+    reads: its path, query and body parameters (and the fields of a model
+    body), and the keys its handler reads from a dict body
+    (``payload.get("…")``, ``body.get("…")``)."""
+    flat = get_flat_dependant(route.dependant)
+    fields = [("path", param.name) for param in flat.path_params]
+    fields += [("query", param.name) for param in flat.query_params]
+    for param in flat.body_params:
+        fields.append(("body", param.name))
+        fields += [("body", name) for name in getattr(param.field_info.annotation, "model_fields", {})]
+    try:
+        source = inspect.getsource(route.endpoint)
+    except (OSError, TypeError):
+        source = ""
+    fields += [("body", key) for key in re.findall(r"\b(?:payload|body)\.get\(\s*[\"']([^\"']+)[\"']", source)]
+    return [(where, name) for where, name in fields if re.search("task|job", name, re.IGNORECASE)]
+
+
+def test_every_task_field_a_write_route_reads_is_one_the_check_reads(copy_of):
+    """A field naming a task where the check does not look (the query, a key
+    of a dict body, a name like ``source_task_id``) would pass unseen: each
+    one, sent naming a copied task, is refused."""
+    old = uuid.uuid4().hex
+    copy_of(old)
     unread = []
     for route in _write_routes():
-        for param in route.dependant.body_params:
-            if re.search("task|job", param.name) and param.name not in test_copy.TASK_FIELDS:
-                unread.append(f"{route.path}: {param.name}")
-        for param in route.dependant.path_params:
-            if re.search("task|job", param.name) and not test_copy._TASK_IN_PATH.search(
-                    route.path.replace("{" + param.name + "}", "abc")):
-                unread.append(f"{route.path}: {param.name}")
+        method = sorted(route.methods - SAFE)[0]
+        for where, name in _task_fields(route):
+            if where == "path":
+                if not test_copy._TASK_IN_PATH.search(route.path.replace("{" + name + "}", old)):
+                    unread.append(f"{route.path}: {name} (address)")
+                continue
+            path = re.sub(r"\{[^}]+\}", "x", route.path)
+            if where == "query":
+                status, reached = _through_the_check(method, f"{path}?{urlencode({name: old})}", {}, b"")
+            else:
+                body = json.dumps({name: old}).encode()
+                status, reached = _through_the_check(method, path, {"content-type": "application/json",
+                                                                    "content-length": str(len(body))}, body)
+            if reached or status != 409:
+                unread.append(f"{route.path}: {name} ({where})")
     assert unread == []
+
+
+@pytest.mark.parametrize("sent", ["no content-type", "spaces", "query", "dict key", "list"])
+def test_a_copied_task_is_refused_however_it_is_named(copy_of, sent):
+    """Each of these reached /events with a copied task (review of 5dbdc21)."""
+    old = uuid.uuid4().hex
+    copy_of(old)
+    path, headers, body = "/events", {}, b""
+    if sent == "no content-type":
+        body = json.dumps({"event_name": "task_cancelled", "task_id": old}).encode()
+    elif sent == "spaces":
+        body = json.dumps({"task_id": f" {old} "}).encode()
+        headers = {"content-type": "application/json"}
+    elif sent == "query":
+        path = f"/notes/rewrite?task_id={old}"
+    elif sent == "dict key":
+        body = json.dumps({"source_task_id": old}).encode()
+        headers = {"content-type": "application/json"}
+    else:
+        body = json.dumps({"job_ids": ["new", old]}).encode()
+        headers = {"content-type": "application/json"}
+    status, reached = _through_the_check("POST", path, {**headers, "content-length": str(len(body))}, body)
+    assert (status, reached) == (409, False)
+
+
+def test_a_json_body_without_content_type_naming_a_copied_task_is_refused_by_the_service(copy_of, tmp_path):
+    old, _real = _real_folder_task(tmp_path)
+    copy_of(old)
+    body = json.dumps({"event_name": "task_cancelled", "task_id": old}).encode()
+    response = TestClient(_app()).post("/events", content=body, headers=OWNER)
+    assert (response.status_code, response.json()["detail"]) == (409, test_copy.READ_ONLY)
+
+
+def test_a_form_without_a_length_naming_a_copied_task_is_refused(copy_of, no_network, tmp_path):
+    old, real = _real_folder_task(tmp_path)
+    copy_of(old)
+    before = _files(real)
+    body = urlencode({"transcript": "hello world transcript", "task_id": old}).encode()
+    response = TestClient(_app()).post("/regenerate-summary", content=iter([body]), headers={
+        **OWNER, "content-type": "application/x-www-form-urlencoded"})
+    assert (response.status_code, response.json()["detail"]) == (409, test_copy.READ_ONLY)
+    assert _files(real) == before
+
+
+def _toy_upload_app():
+    app = _app()
+
+    @app.post("/toy-upload")
+    async def toy(file: UploadFile = File(...)):
+        return {"n": len(await file.read())}
+
+    return app
+
+
+def _multipart(payload: bytes) -> bytes:
+    return (b"--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.bin\"\r\n"
+            b"Content-Type: application/octet-stream\r\n\r\n" + payload + b"\r\n--b--\r\n")
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_an_upload_without_a_length_still_reaches_the_route_whole(copy_of, monkeypatch, on):
+    if on:
+        copy_of()
+    else:
+        monkeypatch.delenv(test_copy.ENV, raising=False)
+    body = _multipart(os.urandom(3 * 1024 * 1024))
+    chunks = [body[i:i + 65536] for i in range(0, len(body), 65536)]
+    response = TestClient(_toy_upload_app()).post("/toy-upload", content=iter(chunks), headers={
+        **OWNER, "content-type": "multipart/form-data; boundary=b"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"n": 3 * 1024 * 1024}
+
+
+def test_a_body_without_a_length_too_large_to_read_is_refused_on_the_copy(copy_of):
+    """It could name a copied task the check cannot see."""
+    copy_of()
+    body = _multipart(b"x" * (16 * 1024 * 1024 + 1))
+    chunks = [body[i:i + 1024 * 1024] for i in range(0, len(body), 1024 * 1024)]
+    response = TestClient(_toy_upload_app()).post("/toy-upload", content=iter(chunks), headers={
+        **OWNER, "content-type": "multipart/form-data; boundary=b"})
+    assert (response.status_code, response.json()["detail"]) == (409, test_copy.UNREAD_BODY)
+
+
+def test_with_the_switch_off_the_check_reads_no_body(monkeypatch):
+    monkeypatch.delenv(test_copy.ENV, raising=False)
+    read: list[bool] = []
+    body = json.dumps({"task_id": "anything"}).encode()
+    for headers in ({"content-type": "application/json"}, {}, {"content-type": "application/x-www-form-urlencoded"}):
+        assert _through_the_check("POST", "/events?task_id=x", headers, body, read) == (200, True)
+    assert read == []
 
 
 def test_a_large_form_naming_a_copied_task_is_refused_where_the_task_is_looked_up(copy_of):
@@ -326,11 +459,24 @@ def test_a_pdf_export_on_the_copy_writes_only_inside_the_copy(copy_of, monkeypat
 
 # ── the started copy keeps every path inside it ────────────────────────────
 
-def _runtime_path_names() -> set[str]:
+def _location_variables() -> set[str]:
+    """Every variable the code takes a place from: ``runtime_path("…")``
+    calls, and any name shaped like one (``FLUENTFLOW_…_DIR``, ``_PATH``,
+    ``_CACHE``) written in backend/ or scripts/."""
     found = set()
-    for path in (ROOT / "backend").rglob("*.py"):
-        found |= set(re.findall(r"runtime_path\(\s*\"([A-Z_]+)\"", path.read_text(encoding="utf-8")))
+    for folder in ("backend", "scripts"):
+        for path in (ROOT / folder).rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            found |= set(re.findall(r"runtime_path\(\s*\"([A-Z_]+)\"", text))
+            found |= set(re.findall(r"[\"'](FLUENTFLOW_[A-Z_]*(?:DIR|PATH|CACHE))[\"']", text))
     return found
+
+
+def test_every_place_the_code_names_is_pinned_or_said_not_to_be_written():
+    names = _location_variables()
+    assert {"FLUENTFLOW_JOB_DB_PATH", "FLUENTFLOW_LINK_OUTPUT_DIR", "FLUENTFLOW_NOTE_SKILL_DIR"} <= names
+    assert names - set(test_copy.NOT_WRITTEN) - set(test_copy.PINNED_PATHS) == set()
+    assert set(test_copy.NOT_WRITTEN) <= names  # no reason kept for a variable gone from the code
 
 
 @pytest.mark.parametrize("windows", [False, True])
@@ -340,9 +486,79 @@ def test_the_copys_start_command_pins_every_runtime_path_inside_the_copy(windows
     into = Path("C:/copy") if windows else Path("/tmp/the-copy")
     command = prepare_test_copy.start_command(into, port=8013, fake=True, max_calls=None, max_usd=None,
                                               max_cny=None, repo=Path("/repo"), token="t", windows=windows)
-    names = _runtime_path_names()
-    assert {"FLUENTFLOW_JOB_DB_PATH", "FLUENTFLOW_ARTIFACT_DIR", "FLUENTFLOW_NOTE_SKILL_DIR"} <= names
-    for name in names | {"FLUENTFLOW_LINK_OUTPUT_DIR"}:
+    for name in _location_variables() - set(test_copy.NOT_WRITTEN):
         set_to = re.search(rf"{name}='?([^';]+)'?", command.split(" try { ")[-1] if windows else command)
         assert set_to, f"{name} not set"
         assert set_to.group(1).replace("\\", "/").startswith(str(into).replace("\\", "/")), name
+
+
+# ── a link cannot carry a write out of the copy ────────────────────────────
+
+def _real_data(tmp_path: Path) -> Path:
+    import sqlite3
+
+    real = tmp_path / "real_data"
+    real.mkdir()
+    with sqlite3.connect(real / "fluentflow_jobs.sqlite") as db:
+        db.execute("create table jobs (task_id text, status text, error_reason text, created_at text)")
+    (real / "models").mkdir()
+    return real
+
+
+@pytest.mark.parametrize("linked", ["artifacts", "note_skills", "exports", "fluentflow_config.json",
+                                    "fluentflow_jobs.sqlite-wal"])
+def test_preparing_into_a_folder_whose_place_to_write_is_a_link_is_refused(tmp_path, linked):
+    from scripts import prepare_test_copy
+
+    real = _real_data(tmp_path)
+    owners = tmp_path / "owners_artifacts"
+    owners.mkdir()
+    into = tmp_path / "copy"
+    into.mkdir()
+    (into / linked).symlink_to(owners)
+    with pytest.raises(SystemExit, match="links a write would follow"):
+        prepare_test_copy.prepare(real, into)
+    assert list(owners.iterdir()) == [] and not (into / test_copy.TASKS_FILE).exists()
+
+
+def test_preparing_the_same_copy_again_keeps_its_models_link(tmp_path):
+    from scripts import prepare_test_copy
+
+    real = _real_data(tmp_path)
+    into = tmp_path / "copy"
+    prepare_test_copy.prepare(real, into)
+    assert (into / "models").is_symlink()
+    prepare_test_copy.prepare(real, into)
+
+
+def test_no_write_is_let_through_while_a_place_resolves_outside_the_copy(copy_of, tmp_path):
+    copy_of()
+    owners = tmp_path / "owners_artifacts"
+    owners.mkdir()
+    (tmp_path / "copy" / "artifacts").symlink_to(owners)
+    assert test_copy.paths_outside() == [f"FLUENTFLOW_ARTIFACT_DIR → {owners.resolve()}"]
+    status, reached = _through_the_check("POST", "/agent/v1/tasks", {}, b"")
+    assert (status, reached) == (409, False)
+    assert _through_the_check("GET", "/jobs", {}, b"") == (200, True)
+
+
+@pytest.mark.parametrize("unpinned", ["FLUENTFLOW_LINK_OUTPUT_DIR", "FLUENTFLOW_CONFIG_PATH"])
+def test_a_place_named_outside_the_copy_or_left_at_the_owners_default_is_found(copy_of, monkeypatch, tmp_path,
+                                                                              unpinned):
+    copy_of()
+    if unpinned == "FLUENTFLOW_LINK_OUTPUT_DIR":
+        monkeypatch.delenv(unpinned)  # the owner's video folder
+    else:
+        monkeypatch.setenv(unpinned, str(tmp_path / "real" / "fluentflow_config.json"))
+    assert [place.split(" → ")[0] for place in test_copy.paths_outside()] == [unpinned]
+
+
+def test_the_default_pdf_folder_linked_out_of_the_copy_is_refused(copy_of, tmp_path):
+    copy_of()
+    owners = tmp_path / "owners_documents"
+    owners.mkdir()
+    (tmp_path / "copy" / test_copy.PDF_DIRNAME).symlink_to(owners)
+    with pytest.raises(ValueError, match=test_copy.OUTSIDE_COPY):
+        test_copy.export_dir(None)
+    with pytest.raises(ValueError, match=test_copy.OUTSIDE_COPY):
+        test_copy.export_dir(str(tmp_path / "copy" / test_copy.PDF_DIRNAME / "sub"))

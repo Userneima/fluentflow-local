@@ -10,10 +10,15 @@ them, so with this switch on:
 - startup carries on and re-queues nothing (``local_main.lifespan``);
 - a request that would change a copied task is refused (``refusal``,
   checked once for every request in ``local_main``), whether it names the
-  task in its address, a JSON body or a form: only new tasks made in this
-  copy can be worked on; the one lookup of an existing task a form names
-  (``local_entry_guards.require_owned_task_id``) refuses it too, for a form
-  too large to read here;
+  task in its address, its query, a JSON body (with or without its
+  Content-Type) or a form, under any field naming a task or a job: only new
+  tasks made in this copy can be worked on; the one lookup of an existing
+  task a form names (``local_entry_guards.require_owned_task_id``) refuses it
+  too, for an upload too large to read here; a body of no stated length
+  larger than that is refused outright;
+- no write request is let through while a place the copy writes resolves
+  outside it (``paths_outside``): a variable naming another place, or a link
+  in the copy leading out of it;
 - nothing a saved change sets off writes beside a copied task's note or
   calls a model for it (every ``job_store`` result listener asks ``writable``
   or ``enabled``), and its output folder is never written
@@ -55,7 +60,38 @@ TASKS_FILE = "test_copy_tasks.json"
 READ_ONLY = "这是测试副本里的旧任务，只能看。"
 NO_FEISHU = "测试副本不往飞书写东西。"
 OUTSIDE_COPY = "测试副本只把导出的文件写进副本自己的文件夹。"
+OUTSIDE_PATHS = "测试副本有要写的位置在副本外面（{}），写请求一律不放行；删掉指出去的链接，或用 prepare_test_copy.py 重新准备副本、用它打印的命令启动。"
+UNREAD_BODY = "测试副本看不出这个请求改的是哪个任务（没写长度，又超过 16 MB），没有放行。"
 PDF_DIRNAME = "exports"
+# Every path the service writes and takes from its own variable before the
+# data directory (``runtime_paths.runtime_path``), and the folder of link
+# tasks: the start command (scripts/prepare_test_copy.py) sets each inside
+# the copy, since the service loads a ``.env`` above the code it runs (the
+# main checkout's, from a worktree) and a real path named there would win
+# over FLUENTFLOW_DATA_DIR. tests/test_test_copy_writes.py finds every such
+# variable in the code.
+PINNED_PATHS = {
+    "FLUENTFLOW_CONFIG_PATH": "fluentflow_config.json",
+    "FLUENTFLOW_JOB_DB_PATH": "fluentflow_jobs.sqlite",
+    "FLUENTFLOW_EVENT_DB_PATH": "fluentflow_events.sqlite",
+    "FLUENTFLOW_SOURCE_DIR": "sources",
+    "FLUENTFLOW_ARTIFACT_DIR": "artifacts",
+    "FLUENTFLOW_EDITED_TRANSCRIPT_DIR": "edited_transcripts",
+    "FLUENTFLOW_TRANSCRIPT_EDIT_RECORDS_DIR": "transcript_edit_records",
+    "FLUENTFLOW_VIDEO_SOURCE_DIR": "video_sources",
+    "FLUENTFLOW_DIARIZATION_MODEL_DIR": "models/speaker",
+    "FLUENTFLOW_PYANNOTE_MODEL_DIR": "models/pyannote",
+    "FLUENTFLOW_MODEL_TABLE_CACHE": "recommended_models.json",
+    "FLUENTFLOW_NOTE_SKILL_DIR": "note_skills/mine",
+    "FLUENTFLOW_LINK_OUTPUT_DIR": "links",
+}
+# Read only, through the copy's ``models`` link to the real models.
+READ_ONLY_PATHS = frozenset({"FLUENTFLOW_DIARIZATION_MODEL_DIR", "FLUENTFLOW_PYANNOTE_MODEL_DIR"})
+# Variables of the same shape that name no place the copy writes.
+NOT_WRITTEN = {
+    "FLUENTFLOW_DATA_DIR": "the copy itself, which every place above is checked against",
+    "FLUENTFLOW_TEST_FRONTEND_DIR": "a page build the copy only reads",
+}
 
 _lock = threading.Lock()
 _copied: frozenset[str] | None = None
@@ -72,17 +108,47 @@ def frontend_dir() -> Path | None:
     return Path(named).expanduser() if named and enabled() else None
 
 
+def _inside(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
 def export_dir(asked: str | None) -> Path:
-    """Where a PDF export on a test copy goes: the folder asked for when it
-    is inside the copy, else the copy's own ``exports`` folder. The default
+    """Where a PDF export on a test copy goes: the folder asked for, else the
+    copy's own ``exports`` folder, either only when it resolves inside the
+    copy (``exports`` may be a link out of it). The default
     (``~/Documents/FluentFlow 笔记``) is the owner's real folder."""
     root = app_data_root().expanduser().resolve()
-    if not asked:
-        return root / PDF_DIRNAME
-    folder = Path(asked).expanduser().resolve()
-    if folder != root and root not in folder.parents:
+    folder = Path(asked).expanduser().resolve() if asked else (root / PDF_DIRNAME).resolve()
+    if not _inside(folder, root):
         raise ValueError(OUTSIDE_COPY)
     return folder
+
+
+def written_children() -> tuple[str, ...]:
+    """What the copy writes, relative to it: its writable runtime paths, the
+    list of copied tasks and the PDF folder."""
+    return tuple(relative for name, relative in PINNED_PATHS.items() if name not in READ_ONLY_PATHS) + (
+        TASKS_FILE, PDF_DIRNAME)
+
+
+def paths_outside() -> list[str]:
+    """The places a running copy writes that resolve outside it: a variable
+    naming another place, or a link in the copy leading out of it. Each is
+    where the service would write: its variable, else its place in the
+    copy (the link tasks' folder: the owner's video folder)."""
+    from backend.core.output_folder import LINK_ROOT_ENV, link_root
+
+    root = app_data_root().expanduser()
+    base = root.resolve()
+    places: dict[str, Path] = {}
+    for name, relative in PINNED_PATHS.items():
+        if name in READ_ONLY_PATHS:
+            continue
+        named = (os.environ.get(name) or "").strip()
+        places[name] = Path(named).expanduser() if named else link_root() if name == LINK_ROOT_ENV else root / relative
+    places[PDF_DIRNAME] = root / PDF_DIRNAME
+    resolved = {name: path.resolve() for name, path in places.items()}
+    return [f"{name} → {path}" for name, path in resolved.items() if not _inside(path, base)]
 
 
 # The page reads its request address from window.FLUENTFLOW_CONFIG.apiBase
@@ -168,23 +234,28 @@ _TASK_IN_PATH = re.compile(r"/(?:jobs|tasks)/([0-9A-Za-z_-]+)")
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _FEISHU_PATHS = ("/export-lark",)
 _EXPORT_PATH = re.compile(r"/tasks/[^/]+/exports$")
-# The fields of a body or form that name a task (a write route taking a task
-# under another name fails tests/test_test_copy_writes.py).
-TASK_FIELDS = ("task_id", "job_id", "task_ids", "job_ids")
+# A field of the query, a body or a form names a task when its name says task
+# or job (``task_id``, ``job_ids``, ``source_task_id``); a write route taking a
+# task under another name fails tests/test_test_copy_writes.py.
+TASK_FIELD = re.compile("task|job", re.IGNORECASE)
 # A form larger than this is an upload: read here it would sit in memory
 # whole. Every route taking one claims a fresh task, and the lookup of an
-# existing one refuses a copied task (``require_owned_task_id``).
+# existing one refuses a copied task (``require_owned_task_id``). A body of no
+# stated length is read up to this and refused beyond it.
 _FORM_READ_LIMIT = 16 * 1024 * 1024
+_UNREAD = object()
 
 
-def _named_tasks(body: Any) -> list[str]:
-    if not isinstance(body, dict):
-        return []
+def _named_tasks(fields: Any) -> list[str]:
+    """The task ids in these (name, value) pairs, stripped as the routes
+    strip them."""
     found = []
-    for name in TASK_FIELDS:
-        value = body.get(name)
-        found += value if isinstance(value, list) else [value]
-    return [str(task_id) for task_id in found if task_id and isinstance(task_id, (str, int))]
+    for name, value in fields:
+        if isinstance(name, str) and TASK_FIELD.search(name):
+            found += value if isinstance(value, list) else [value]
+    ids = (str(task_id).strip() for task_id in found
+           if isinstance(task_id, (str, int)) and not isinstance(task_id, bool))
+    return [task_id for task_id in ids if task_id]
 
 
 def _exports_to_feishu(path: str, body: Any) -> bool:
@@ -194,43 +265,71 @@ def _exports_to_feishu(path: str, body: Any) -> bool:
     return bool(_EXPORT_PATH.search(path)) and str(target or "lark").strip().lower() != "pdf"
 
 
-def refusal(method: str, path: str, body: Any = None) -> str | None:
+def refusal(method: str, path: str, body: Any = None, query: Any = ()) -> str | None:
     """Why this request is refused on a test copy, or None when it may go
-    on: anything that changes a copied task (named in the address or the
-    body), and any export to Feishu. Reading is always allowed."""
+    on: anything that changes a copied task (named in the address, the
+    query's (name, value) pairs or the body), and any export to Feishu.
+    Reading is always allowed."""
     if not enabled() or method.upper() in _SAFE_METHODS:
         return None
     if any(path.endswith(feishu) for feishu in _FEISHU_PATHS) or _exports_to_feishu(path, body):
         return NO_FEISHU
-    named = _TASK_IN_PATH.findall(path) + _named_tasks(body)
+    fields = list(body.items()) if isinstance(body, dict) else []
+    named = _TASK_IN_PATH.findall(path) + _named_tasks(fields) + _named_tasks(query)
     if any(is_copied(task_id) for task_id in named):
         return READ_ONLY
     return None
 
 
+async def _read_bounded(request: Any) -> bool:
+    """Read a body of no stated length, up to the limit; whether it was all
+    read. Kept where Starlette keeps a body read whole (``Request.body``), so
+    the route reads the same bytes."""
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > _FORM_READ_LIMIT:
+            return False
+        chunks.append(chunk)
+    request._body = b"".join(chunks)
+    return True
+
+
 async def _body(request: Any) -> Any:
     """The request's JSON body, or the task fields of its form; None when
-    there is neither (or the form is too large to read here). What is read is
-    kept on the request, so the route reads the same body."""
+    there is neither, or the form is an upload too large to read here;
+    ``_UNREAD`` for a body of no stated length too large to read. FastAPI
+    reads a body without a Content-Type as JSON, and so does this. What is
+    read is kept on the request, so the route reads the same body."""
     kind = (request.headers.get("content-type") or "").lower()
     if "json" in kind:
         try:
             return json.loads(await request.body() or b"null")
         except ValueError:
             return None
-    if not kind.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+    form = kind.startswith(("multipart/form-data", "application/x-www-form-urlencoded"))
+    if kind and not form:
         return None
-    try:
-        if int(request.headers.get("content-length") or "") > _FORM_READ_LIMIT:
+    length = (request.headers.get("content-length") or "").strip()
+    if length.isdigit():
+        if int(length) > _FORM_READ_LIMIT:
+            return None if form else _UNREAD
+        await request.body()
+    elif not await _read_bounded(request):
+        return _UNREAD
+    if not form:
+        try:
+            return json.loads(await request.body() or b"null")
+        except ValueError:
             return None
-    except ValueError:
-        return None
-    await request.body()
     try:
-        async with request.form(max_part_size=_FORM_READ_LIMIT) as form:
-            return {name: [v for v in form.getlist(name) if isinstance(v, str)] for name in TASK_FIELDS}
+        async with request.form(max_part_size=_FORM_READ_LIMIT) as fields:
+            return {name: [v for v in fields.getlist(name) if isinstance(v, str)]
+                    for name in fields.keys() if TASK_FIELD.search(name)}
     except Exception:  # noqa: BLE001 - a form the route cannot read either
         return None
+
 
 
 async def middleware(request: Any, call_next: Any) -> Any:
@@ -238,7 +337,14 @@ async def middleware(request: Any, call_next: Any) -> Any:
     the page's config with ``page_config`` and let the pages connect only
     here (``PAGE_POLICY``)."""
     if enabled() and request.method.upper() not in _SAFE_METHODS:
-        reason = refusal(request.method, request.url.path, await _body(request))
+        outside = paths_outside()
+        if outside:
+            logger.warning("Test copy: write refused, places outside the copy: %s", "; ".join(outside))
+            reason = OUTSIDE_PATHS.format("；".join(outside))
+        else:
+            body = await _body(request)
+            reason = UNREAD_BODY if body is _UNREAD else refusal(
+                request.method, request.url.path, body, request.query_params.multi_items())
         if reason:
             from fastapi.responses import JSONResponse
 
@@ -259,6 +365,7 @@ async def middleware(request: Any, call_next: Any) -> Any:
     return response
 
 
-__all__ = ["ENV", "FRONTEND_ENV", "NO_FEISHU", "OUTSIDE_COPY", "PAGE_CONFIG_PATH", "PAGE_POLICY", "PDF_DIRNAME",
-           "READ_ONLY", "TASKS_FILE", "TASK_FIELDS", "copied_tasks", "enabled", "export_dir", "frontend_dir",
-           "is_copied", "middleware", "page_config", "refusal", "reset", "writable"]
+__all__ = ["ENV", "FRONTEND_ENV", "NOT_WRITTEN", "NO_FEISHU", "OUTSIDE_COPY", "OUTSIDE_PATHS", "PAGE_CONFIG_PATH",
+           "PAGE_POLICY", "PDF_DIRNAME", "PINNED_PATHS", "READ_ONLY", "READ_ONLY_PATHS", "TASKS_FILE", "TASK_FIELD",
+           "UNREAD_BODY", "copied_tasks", "enabled", "export_dir", "frontend_dir", "is_copied", "middleware",
+           "page_config", "paths_outside", "refusal", "reset", "writable", "written_children"]

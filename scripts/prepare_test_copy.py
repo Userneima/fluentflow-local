@@ -10,8 +10,11 @@ What it does, reading the real data directory and writing only the copy:
   automatic export to Feishu turned off in the copy;
 - ``models`` linked, not copied (the transcription and speaker models);
 - every runtime path and the link tasks' folder set inside the copy in the
-  printed command (``PINNED_PATHS``), so a ``.env`` cannot send them back to
-  the real ones;
+  printed command (``test_copy.PINNED_PATHS``), so a ``.env`` cannot send
+  them back to the real ones; a copy folder reused whose places to write are
+  links (or pass through one) is refused before anything is written, since a
+  write would follow the link out of the copy (the ``models`` link is read
+  only);
 - every step in the copy that has not reached its end closed as skipped, and
   every task in the copy still queued or running marked failed: otherwise
   the test service carries on (or queues again from the original) the tasks
@@ -55,12 +58,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from backend.core import test_copy  # noqa: E402
 from backend.core.runtime_paths import app_data_root  # noqa: E402
 
 DEFAULT_SOURCE = app_data_root()
 DATABASES = ("fluentflow_jobs.sqlite", "fluentflow_events.sqlite")
 FILES = ("fluentflow_config.json", "recommended_models.json")
-TASKS_FILE = "test_copy_tasks.json"
+TASKS_FILE = test_copy.TASKS_FILE
 DEFAULT_MAX_CALLS = 40
 DEFAULT_MAX_USD = 1.0
 DEFAULT_MAX_CNY = 1.0
@@ -96,27 +100,23 @@ def close_open_steps(database: Path) -> int:
 
 
 UNFINISHED_REASON = "test_copy_unfinished"
-# Every path the service takes from its own variable before the data
-# directory (``runtime_paths.runtime_path``), and the folder of link tasks,
-# set inside the copy: the service loads a ``.env`` above the code it runs
-# (the main checkout's, from a worktree), and one naming a real path there
-# would win over FLUENTFLOW_DATA_DIR. tests/test_test_copy_writes.py finds
-# every such variable in the code.
-PINNED_PATHS = {
-    "FLUENTFLOW_CONFIG_PATH": "fluentflow_config.json",
-    "FLUENTFLOW_JOB_DB_PATH": "fluentflow_jobs.sqlite",
-    "FLUENTFLOW_EVENT_DB_PATH": "fluentflow_events.sqlite",
-    "FLUENTFLOW_SOURCE_DIR": "sources",
-    "FLUENTFLOW_ARTIFACT_DIR": "artifacts",
-    "FLUENTFLOW_EDITED_TRANSCRIPT_DIR": "edited_transcripts",
-    "FLUENTFLOW_TRANSCRIPT_EDIT_RECORDS_DIR": "transcript_edit_records",
-    "FLUENTFLOW_VIDEO_SOURCE_DIR": "video_sources",
-    "FLUENTFLOW_DIARIZATION_MODEL_DIR": "models/speaker",
-    "FLUENTFLOW_PYANNOTE_MODEL_DIR": "models/pyannote",
-    "FLUENTFLOW_MODEL_TABLE_CACHE": "recommended_models.json",
-    "FLUENTFLOW_NOTE_SKILL_DIR": "note_skills/mine",
-    "FLUENTFLOW_LINK_OUTPUT_DIR": "links",
-}
+PINNED_PATHS = test_copy.PINNED_PATHS
+
+
+def links_in(into: Path) -> list[str]:
+    """The places a copy writes (``test_copy.written_children``, and the
+    files sqlite keeps beside its databases) that are links, or pass through
+    one, in an existing copy folder."""
+    sidecars = tuple(f"{name}{suffix}" for name in DATABASES for suffix in ("-wal", "-shm", "-journal"))
+    found = []
+    for relative in test_copy.written_children() + sidecars:
+        path = into
+        for part in Path(relative).parts:
+            path = path / part
+            if path.is_symlink():
+                found.append(str(path))
+                break
+    return found
 
 
 def close_open_tasks(database: Path) -> int:
@@ -164,6 +164,10 @@ def prepare(source: Path, into: Path) -> dict[str, object]:
                          "pass --source the real data directory")
     if not (source / DATABASES[0]).is_file():
         raise SystemExit(f"no task database in {source}")
+    linked = links_in(into)
+    if linked:
+        raise SystemExit("the copy writes here, and these are links a write would follow out of it: "
+                         + ", ".join(linked) + "; remove them or prepare the copy in a new folder")
     into.mkdir(parents=True, exist_ok=True)
     for name in DATABASES:
         if (source / name).is_file():
