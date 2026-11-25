@@ -1573,9 +1573,13 @@ def generate_bilingual_segments_zh(
     merged_segments: list[dict[str, Any]] = []
     consumed_until = -1
 
-    for chunk in chunks:
+    # How many chunks have answered, so the card measures the wait from the
+    # last answer, not from the start of the step (``model_usage.MODEL_BATCHES``).
+    model_usage.record_batches("translation", 0, len(chunks), answered=False)
+    for number, chunk in enumerate(chunks, start=1):
         payload = json.dumps(chunk, ensure_ascii=False)
         generated = _extract_json_array(chat(_BILINGUAL_SEGMENT_SYSTEM, payload))
+        model_usage.record_batches("translation", number, len(chunks))
         chunk_indices = [int(item["index"]) for item in chunk if "index" in item]
         if not chunk_indices:
             continue

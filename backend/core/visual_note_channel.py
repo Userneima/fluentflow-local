@@ -113,6 +113,27 @@ def resolve_channel(api_key: str | None = None) -> Channel:
     return _api_key_channel(api_key)
 
 
+def unavailable_outcome(channel: Any, text_model_ready: bool) -> dict[str, Any]:
+    """How ``visual_note_unavailable`` records a frame note that cannot run,
+    decided here once for the submission and the note step.
+
+    A notice (success) only when the text model writes the note instead and
+    nothing is the user's to fix: no Anthropic Key is the ordinary setup
+    without Claude (decision 6.86). An expired Claude login is theirs to fix
+    and stays a failure even though the text note still comes; with no text
+    model either there is no note, a failure whatever the reason (review,
+    2026-11-26: both had been recorded as a successful fallback)."""
+    login_expired = (
+        getattr(channel, "name", None) == CHANNEL_SUBSCRIPTION
+        and claude_code_note.login_state() is False
+    )
+    return {
+        "success": text_model_ready and not login_expired,
+        "reason": "login_expired" if login_expired else "channel_unavailable",
+        "fallback": "text_note" if text_model_ready else "none",
+    }
+
+
 __all__ = [
     "CHANNEL_ANTHROPIC_KEY",
     "CHANNEL_LABELS",
@@ -120,4 +141,5 @@ __all__ = [
     "Channel",
     "preferred_channel",
     "resolve_channel",
+    "unavailable_outcome",
 ]

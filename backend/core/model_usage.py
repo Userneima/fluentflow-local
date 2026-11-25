@@ -188,8 +188,34 @@ class CarryingExecutor(ThreadPoolExecutor):
         return super().submit(carry(fn), *args, **kwargs)
 
 
+# How far a step that asks the model in batches has got, in the task's
+# metadata: ``{"stage", "done", "total", "last_answer_at", "updated_at"}``.
+# The card measures a wait on the model from the last answer, not from the
+# start of the step: the word-list correction of a 40,000-character lecture is
+# 14 batches, four at a time, and passed four minutes with every answer on
+# time, which the card then called slow (review, 2026-11-26).
+MODEL_BATCHES = "model_batches"
+
+
+def record_batches(stage: str, done: int, total: int, *, answered: bool = True) -> None:
+    """``done`` of ``total`` batches of ``stage`` have answered, for the task
+    the context names; ``answered`` is false for the count at the start, which
+    has no answer to date. Never raises: a progress line must not end a step."""
+    task_id = current().task_id
+    if not task_id or total <= 0:
+        return
+    now = job_store._now_iso()
+    record: dict[str, Any] = {"stage": stage, "done": done, "total": total, "updated_at": now}
+    if answered:
+        record["last_answer_at"] = now
+    try:
+        job_store.update_job_metadata(task_id, {MODEL_BATCHES: record})
+    except Exception as exc:  # noqa: BLE001 - see above
+        logger.debug("Batch progress not recorded for %s: %s", task_id, exc)
+
+
 def stoppable_map(fn: Callable[[Any], Any], items: Iterable[Any], *, workers: int,
-                  check_stop: Callable[[], None]) -> list[Any]:
+                  check_stop: Callable[[], None], stage: str | None = None) -> list[Any]:
     """``fn`` over ``items`` on up to ``workers`` threads that keep the task
     and step, results in order, the first failure (in order) raised: what
     ``list(CarryingExecutor(...).map(fn, items))`` gives, except that it does
@@ -199,10 +225,15 @@ def stoppable_map(fn: Callable[[Any], Any], items: Iterable[Any], *, workers: in
     seconds (2026-10-26). The threads are daemons, so a service that exits
     does not wait for them either; an answer that still comes back while it
     runs is kept for the step (``model_answers``).
+
+    With ``stage``, how many items have answered is recorded as they do
+    (``record_batches``).
     """
     queue = list(items)
     if not queue:
         return []
+    if stage:
+        record_batches(stage, 0, len(queue), answered=False)
     results: list[Any] = [None] * len(queue)
     errors: dict[int, BaseException] = {}
     lock = threading.Lock()
@@ -222,6 +253,9 @@ def stoppable_map(fn: Callable[[Any], Any], items: Iterable[Any], *, workers: in
                 errors[index] = exc
             with lock:
                 state["done"] += 1
+                if stage and index not in errors:
+                    # Under the lock, so the counts land in order.
+                    record_batches(stage, state["done"], len(queue))
                 if state["done"] == len(queue):
                     finished.set()
 
@@ -715,7 +749,7 @@ def for_task(task_id: str) -> dict[str, Any] | None:
 
 __all__ = [
     "ANTHROPIC", "BUDGET_EXCEEDED", "BudgetExceeded", "CarryingExecutor", "FAKE", "api_price", "budget",
-    "budget_refused", "reset_budget", "ServiceStopping", "spent", "stoppable_map", "unless_stopping", "test_run", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
+    "MODEL_BATCHES", "budget_refused", "record_batches", "reset_budget", "ServiceStopping", "spent", "stoppable_map", "unless_stopping", "test_run", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
     "OUTSIDE_TASKS_LABEL", "call", "carry", "cost", "current", "enter_step", "for_task", "outside_tasks",
     "outside_tasks_or_none", "item", "leave_step", "part_of", "prices",
     "provider_of_base_url", "scope", "summarize", "unit_prices", "works_for",

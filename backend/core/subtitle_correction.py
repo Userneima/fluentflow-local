@@ -585,7 +585,8 @@ def decide(
         return [fix for part in halves if part for fix in part["fixes"]], any(part is None for part in halves)
 
     batches = [items[start:start + DECIDE_BATCH] for start in range(0, len(items), DECIDE_BATCH)]
-    answers = model_usage.stoppable_map(ask, batches, workers=MODEL_WORKERS, check_stop=lambda: _stopped(stop))
+    answers = model_usage.stoppable_map(ask, batches, workers=MODEL_WORKERS, check_stop=lambda: _stopped(stop),
+                                        stage="subtitle_correction")
     fixes: list[dict[str, Any]] = []
     for batch, (answer, _lost) in zip(batches, answers):
         by_id = {item["id"]: item for item in batch}

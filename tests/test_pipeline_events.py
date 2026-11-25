@@ -125,6 +125,7 @@ def test_a_task_that_falls_back_to_the_text_note_says_why(monkeypatch, events, i
     from backend.core import claude_code_note
     monkeypatch.setattr(claude_code_note, "cli_path", lambda: "/fake/claude")
     monkeypatch.setattr(claude_code_note, "login_state", lambda **_kw: False)
+    monkeypatch.setattr(ts, "local_ai_kwargs", lambda **_kw: {"provider": "deepseek", "api_key": "sk-test"})
     [task] = ids("fallback")
 
     ctx = _ctx(task, monkeypatch)
@@ -134,6 +135,9 @@ def test_a_task_that_falls_back_to_the_text_note_says_why(monkeypatch, events, i
     assert event["task_id"] == task
     assert event["metadata"]["reason"] == "login_expired"
     assert event["metadata"]["fallback"] == "text_note"
+    # An expired login is the user's to fix: a failure even though the text
+    # note still comes (review, 2026-11-26).
+    assert event["success"] is False
     # Requirement (2026-10-14): the text note written in Claude's place says
     # so, with the reason, so the user knows why it has no frames.
     assert ctx.note_fallback_reason == "本机 Claude 的登录已过期。"

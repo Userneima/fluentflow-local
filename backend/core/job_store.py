@@ -717,6 +717,10 @@ def reopen_job(task_id: str, db_path: Path | str = DEFAULT_DB_PATH) -> bool:
     with sqlite_connection(Path(db_path), timeout=10) as conn:
         # Back in the queue is a new stage: the card's 「已等…」 counts from now,
         # not from the stage it was cut off in (``STAGE_STARTED_AT``).
+        # Read-merge-write under the write lock, as ``upsert_job`` and
+        # ``update_job_metadata`` do: a metadata write landing between the
+        # read and the write was lost (review, 2026-11-26).
+        conn.execute("BEGIN IMMEDIATE")
         metadata = _merged_metadata_for_upsert(conn, task_id, None, "queued", now)
         cursor = conn.execute(
             "UPDATE jobs SET status = 'queued', stage = 'queued', progress = 0, error_reason = NULL,"

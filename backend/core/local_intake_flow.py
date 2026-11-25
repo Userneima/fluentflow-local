@@ -403,13 +403,17 @@ def _write_text_note_instead(
     )
     reason = channel.unavailable_reason or "结合画面的笔记现在写不了。"
     falls_back = bool(kwargs.get("api_key"))
-    # A notice when the text model writes the note instead: that is the
-    # ordinary setup without Claude, and the note still comes (owner,
-    # 2026-11-21: it read as a red failure beside a 16,903-character note).
-    # The submission already noted the same reason; once is enough for one
-    # task (task_submission._log_visual_note_unavailable).
-    already_noted = falls_back and any(
-        event.get("event_name") == "visual_note_unavailable" and event.get("error_reason") == channel.unavailable_reason
+    # A notice only when the text model writes the note and nothing is the
+    # user's to fix (owner, 2026-11-21: a missing Anthropic Key read as a red
+    # failure beside a 16,903-character note); an expired login or no note at
+    # all stays a failure (``visual_note_channel.unavailable_outcome``). The
+    # submission may have recorded the same reason and outcome already; once
+    # is enough for one task (task_submission._log_visual_note_unavailable).
+    outcome = visual_note_channel.unavailable_outcome(channel, falls_back)
+    already_noted = any(
+        event.get("event_name") == "visual_note_unavailable"
+        and event.get("error_reason") == channel.unavailable_reason
+        and bool(event.get("success")) == outcome["success"]
         for event in list_task_events(task_id)
     )
     if not already_noted:
@@ -418,12 +422,13 @@ def _write_text_note_instead(
             event_name="visual_note_unavailable",
             source_type=str(job.get("source_type") or "") or None,
             stage="summary",
-            success=falls_back,
+            success=outcome["success"],
             error_reason=reason,
             metadata=event_metadata(
                 channel=channel.name,
                 at="note_step",
-                fallback="text_note" if falls_back else "none",
+                reason=outcome["reason"],
+                fallback=outcome["fallback"],
             ),
         )
     if on_local_work_done is not None:

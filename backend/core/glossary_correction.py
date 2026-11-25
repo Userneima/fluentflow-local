@@ -287,7 +287,8 @@ def decide(
             answer = once(batch)
         return answer["fixes"] if answer is not None else None
 
-    answers = model_usage.stoppable_map(ask, batches, workers=MODEL_WORKERS, check_stop=lambda: sc._stopped(stop))
+    answers = model_usage.stoppable_map(ask, batches, workers=MODEL_WORKERS, check_stop=lambda: sc._stopped(stop),
+                                        stage="glossary_correction")
     fixes: list[dict[str, Any]] = []
     for batch, answer in zip(batches, answers):
         allowed = set(batch) - set(protected)

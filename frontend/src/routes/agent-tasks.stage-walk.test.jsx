@@ -131,6 +131,68 @@ const WALK = [
         says: ['正在按词表校正转录稿（已等 4 分 20 秒）', '模型响应较慢，仍在等待'],
     },
     {
+        // Review, 2026-11-26: the correction asks in batches, four at a time
+        // (backend glossary_correction, 3000 characters each); a lecture's 14
+        // batches pass four minutes with every answer on time. The wait that
+        // can be slow is the one since the last answer, and how far it has
+        // got is said instead.
+        name: 'glossary_correction, batches answering on time',
+        row: linkRow({stage: 'glossary_correction', progress: 60, metadata: {
+            stage_started_at: ago(300),
+            model_batches: {stage: 'glossary_correction', done: 12, total: 14, last_answer_at: ago(40), updated_at: ago(40)},
+        }}),
+        says: ['正在按词表校正转录稿（已校正 12/14 段，上一段 40 秒前返回）'],
+        never: ['较慢', '已等 5 分钟'],
+    },
+    {
+        // No batch has answered yet: the wait is since the stage began.
+        name: 'glossary_correction, first batches still out',
+        row: linkRow({stage: 'glossary_correction', progress: 60, metadata: {
+            stage_started_at: ago(50),
+            model_batches: {stage: 'glossary_correction', done: 0, total: 14, updated_at: ago(50)},
+        }}),
+        says: ['正在按词表校正转录稿（已校正 0/14 段，已等 50 秒）'],
+        never: ['较慢'],
+    },
+    {
+        // One request really stuck: nothing has answered for over 4 minutes.
+        name: 'glossary_correction, one batch slow',
+        row: linkRow({stage: 'glossary_correction', progress: 60, metadata: {
+            stage_started_at: ago(600),
+            model_batches: {stage: 'glossary_correction', done: 13, total: 14, last_answer_at: ago(250), updated_at: ago(250)},
+        }}),
+        says: ['已校正 13/14 段，上一段 4 分 10 秒前返回', '模型响应较慢，仍在等待'],
+    },
+    {
+        // Left by an earlier run of the stage, before it was carried on, or
+        // by another stage: not read.
+        name: 'glossary_correction, batches from an earlier run',
+        row: linkRow({stage: 'glossary_correction', progress: 60, metadata: {
+            stage_started_at: ago(30),
+            model_batches: {stage: 'glossary_correction', done: 9, total: 14, last_answer_at: ago(900), updated_at: ago(900)},
+        }}),
+        says: ['正在按词表校正转录稿（已等 30 秒）'],
+        never: ['9/14'],
+    },
+    {
+        name: 'translation, batches',
+        row: linkRow({stage: 'translation', progress: 61, metadata: {
+            stage_started_at: ago(400),
+            model_batches: {stage: 'translation', done: 3, total: 5, last_answer_at: ago(15), updated_at: ago(15)},
+        }}),
+        says: ['正在把转录稿翻译成中文字幕（已翻译 3/5 段，上一段 15 秒前返回）'],
+        never: ['较慢'],
+    },
+    {
+        name: 'translation, a count the correction left behind',
+        row: linkRow({stage: 'translation', progress: 61, metadata: {
+            stage_started_at: ago(20),
+            model_batches: {stage: 'glossary_correction', done: 14, total: 14, last_answer_at: ago(25), updated_at: ago(25)},
+        }}),
+        says: ['已等 20 秒'],
+        never: ['14/14'],
+    },
+    {
         name: 'translation',
         row: linkRow({stage: 'translation', progress: 61, metadata: {stage_started_at: ago(20)}}),
         says: ['翻译', '已等 20 秒'],
