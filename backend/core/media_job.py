@@ -26,7 +26,7 @@ import re
 
 
 from backend.core.audio_handler import (
-    extract_compressed_mp3,
+    CompressedMp3InBackground,
     extract_stt_wav,
     require_audible_audio,
 )
@@ -744,6 +744,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
     # The cut video, when it renders while the cut audio is transcribed.
     pending_video = None
     prepare_watch: TaskWatch | None = None
+    # The playback MP3, while it encodes beside the transcription.
+    pending_playback: CompressedMp3InBackground | None = None
     try:
         if secret_resolver is None:
             raise RuntimeError("Media job context is missing a secret resolver")
@@ -803,7 +805,16 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             if kept_audio is not None:
                 (out_audio, playback_audio_path, enhanced_playback_audio_path,
                  voice_presence, stt_audio_take) = kept_audio
+                if playback_audio_path is None:
+                    # Cut off before its playback take was done: made again
+                    # beside this run's transcription, as in the first run.
+                    pending_playback = CompressedMp3InBackground(in_path, output_path=Path(td) / "playback.mp3")
             else:
+                # The plain take is always kept: it is what the editor falls back to
+                # and what a re-transcription reads, so a re-run reproduces this run.
+                # Nothing before the transcript needs it, so it encodes while the
+                # recognizer runs instead of before (decision 4.23).
+                pending_playback = CompressedMp3InBackground(in_path, output_path=Path(td) / "playback.mp3")
                 # Only when asked. Most material does not need correcting, the
                 # correction damages an already-mixed soundtrack, and no threshold
                 # separates those cases (see `voice_enhance`) — so an upload nobody said
@@ -841,11 +852,6 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 out_audio = await loop.run_in_executor(
                     None, lambda: extract_stt_wav(stt_source, output_path=Path(td) / "stt.wav")
                 )
-                # The plain take is always kept: it is what the editor plays by default
-                # and what a re-transcription reads, so a re-run reproduces this run.
-                playback_audio_path = await loop.run_in_executor(
-                    None, lambda: extract_compressed_mp3(in_path, output_path=Path(td) / "playback.mp3")
-                )
                 if media_guard_enabled(SILENCE_GUARD_ENV) and not screen_text_transcript.picture_note_wanted(
                     get_job(task_id_value)
                 ):
@@ -854,11 +860,14 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                     # would report sound where the recording has none. A video whose
                     # sound is digitally silent fails as nearly silent, so the page offers
                     # 「照画面写笔记」; asked for, the check is skipped and the empty
-                    # transcript is read from the screen instead.
+                    # transcript is read from the screen instead. The recognizer's WAV is
+                    # the plain take unless corrected, and reads in seconds where the
+                    # recording's own audio takes ten times as long.
+                    plain_take = out_audio if stt_audio_take == "plain" else in_path
                     await loop.run_in_executor(
                         None,
                         lambda: screen_text_transcript.guard_silence(
-                            Path(in_path), lambda: require_audible_audio(playback_audio_path)
+                            Path(in_path), lambda: require_audible_audio(plain_take)
                         ),
                     )
 
@@ -1095,6 +1104,9 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 "display_title": display_title_value,
                 "source_file_available": True,
             }
+            if pending_playback is not None:
+                playback_audio_path = await loop.run_in_executor(None, pending_playback.path)
+                pending_playback = None
             if pending_video is not None:
                 # Transcribed from the cut audio; the result records the cut video,
                 # so it waits for it here. Usually it is long done.
@@ -1850,6 +1862,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             prepare_watch.cancel()
         elif prepare_watch is not None and current_stage == "prepare_media":
             prepare_watch.cancel()
+        if pending_playback is not None:
+            pending_playback.stop()
         if stt_process is not None and stt_process.is_alive():
             terminate_process(stt_process)
         if stt_queue is not None:
