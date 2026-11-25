@@ -49,14 +49,14 @@ def ids():
     job_store.delete_jobs(created)
 
 
-def _ctx(task_id, monkeypatch, *, skip_summary=False):
+def _ctx(task_id, monkeypatch, *, skip_summary=False, **form_keys):
     # Built inside the service's async handlers, so built on a loop here too.
     async def build():
         return ts._local_media_job_context(
             task_id=task_id, client_id=None, source_type="video", source_filename="talk.mp4",
             raw_title="talk", display_title="talk", suffix=".mp4", td="/tmp", in_path=Path("/tmp/talk.mp4"),
             content=b"", source_file_size_mb=1.0, duration_preflight_sec=60.0,
-            options={"skip_summary": "true"} if skip_summary else {},
+            options={"skip_summary": "true"} if skip_summary else {}, **form_keys,
         )
 
     return asyncio.run(build())
@@ -141,6 +141,33 @@ def test_a_task_that_falls_back_to_the_text_note_says_why(monkeypatch, events, i
     # Requirement (2026-10-14): the text note written in Claude's place says
     # so, with the reason, so the user knows why it has no frames.
     assert ctx.note_fallback_reason == "本机 Claude 的登录已过期。"
+
+
+@pytest.mark.parametrize("survey_first, fallback", [(False, "text_note"), (True, "none")])
+def test_a_key_typed_into_the_form_counts_only_for_the_step_that_gets_it(monkeypatch, events, ids,
+                                                                          survey_first, fallback):
+    """Second review, 2026-11-26: the submission counted a text-model key
+    typed into the upload form, and the note step after the cut, which reads
+    the stored keys only, then found none: "the text model writes the note"
+    followed by "no note". The pipeline's own note stage gets the form key;
+    the note step after the cut does not."""
+    from types import SimpleNamespace
+    monkeypatch.setattr(local_intake_flow, "survey_first_enabled", lambda: survey_first)
+    monkeypatch.setattr(local_intake_flow, "auto_note_enabled", lambda: True)
+    monkeypatch.setattr(local_intake_flow, "auto_note_will_run", lambda: False)
+    no_key = SimpleNamespace(name="anthropic_api_key", available=False, unavailable_reason="没有 Anthropic Key。")
+    monkeypatch.setattr(ts.visual_note_channel, "resolve_channel", lambda *_a, **_k: no_key)
+    # Nothing stored: only a key handed in has one.
+    monkeypatch.setattr(ts, "local_ai_kwargs", lambda deepseek_api_key=None, **_kw: (
+        {"provider": "deepseek", "api_key": deepseek_api_key} if deepseek_api_key else {"provider": "deepseek"}
+    ))
+    [task] = ids(f"form-key-{survey_first}")
+
+    _ctx(task, monkeypatch, deepseek_api_key="sk-typed")
+
+    [event] = [e for e in events if e["event_name"] == "visual_note_unavailable"]
+    assert event["metadata"]["fallback"] == fallback
+    assert event["success"] is (fallback == "text_note")
 
 
 def test_a_transcript_only_task_records_no_fallback(monkeypatch, events, ids):

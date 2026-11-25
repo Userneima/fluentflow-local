@@ -113,9 +113,39 @@ const WALK = [
     {name: 'audio', row: linkRow({stage: 'audio', progress: 10}), says: ['提取音频']},
     {name: 'stt', row: linkRow({stage: 'stt', progress: 30}), says: ['转录']},
     {
-        name: 'subtitle_correction',
+        // Second review, 2026-11-26: the step reads the whole video's
+        // subtitles before it asks the model anything (4 minutes for a
+        // 3.5-hour interview, decision 4.13), and the card called the model
+        // slow in the meantime. No request of this run yet: it is reading.
+        name: 'subtitle_correction, reading the subtitles',
         row: linkRow({stage: 'subtitle_correction', progress: 60, metadata: {stage_started_at: ago(45)}}),
-        says: ['正在按画面字幕校正转录稿（已等 45 秒）'],
+        says: ['正在读画面字幕（已用 45 秒）'],
+        never: ['已等', '校正转录稿'],
+    },
+    {
+        name: 'subtitle_correction, reading a long video',
+        row: linkRow({stage: 'subtitle_correction', progress: 60, metadata: {stage_started_at: ago(260)}}),
+        says: ['正在读画面字幕（已用 4 分 20 秒）'],
+        never: ['较慢'],
+    },
+    {
+        // Its one request went out 30 seconds ago, after 4 minutes of reading.
+        name: 'subtitle_correction, asking after reading',
+        row: linkRow({stage: 'subtitle_correction', progress: 60, metadata: {
+            stage_started_at: ago(270),
+            model_batches: {stage: 'subtitle_correction', done: 0, total: 1, updated_at: ago(30), waiting_since: ago(30)},
+        }}),
+        says: ['正在按画面字幕校正转录稿（已等 30 秒）'],
+        never: ['较慢', '读画面字幕'],
+    },
+    {
+        name: 'subtitle_correction, batches out after reading',
+        row: linkRow({stage: 'subtitle_correction', progress: 60, metadata: {
+            stage_started_at: ago(300),
+            model_batches: {stage: 'subtitle_correction', done: 0, total: 3, updated_at: ago(20), waiting_since: ago(20)},
+        }}),
+        says: ['正在按画面字幕校正转录稿（已校正 0/3 批，已等 20 秒）'],
+        never: ['较慢'],
     },
     {
         name: 'glossary_correction',
@@ -141,7 +171,7 @@ const WALK = [
             stage_started_at: ago(300),
             model_batches: {stage: 'glossary_correction', done: 12, total: 14, last_answer_at: ago(40), updated_at: ago(40)},
         }}),
-        says: ['正在按词表校正转录稿（已校正 12/14 段，上一段 40 秒前返回）'],
+        says: ['正在按词表校正转录稿（已校正 12/14 批，上一批 40 秒前返回）'],
         never: ['较慢', '已等 5 分钟'],
     },
     {
@@ -151,7 +181,7 @@ const WALK = [
             stage_started_at: ago(50),
             model_batches: {stage: 'glossary_correction', done: 0, total: 14, updated_at: ago(50)},
         }}),
-        says: ['正在按词表校正转录稿（已校正 0/14 段，已等 50 秒）'],
+        says: ['正在按词表校正转录稿（已校正 0/14 批，已等 50 秒）'],
         never: ['较慢'],
     },
     {
@@ -161,7 +191,33 @@ const WALK = [
             stage_started_at: ago(600),
             model_batches: {stage: 'glossary_correction', done: 13, total: 14, last_answer_at: ago(250), updated_at: ago(250)},
         }}),
-        says: ['已校正 13/14 段，上一段 4 分 10 秒前返回', '模型响应较慢，仍在等待'],
+        says: ['已校正 13/14 批，上一批 4 分 10 秒前返回', '模型响应较慢，仍在等待'],
+    },
+    {
+        // Second review, 2026-11-26: one batch stuck while the other workers
+        // keep answering. The last answer is recent, the oldest request out
+        // has waited past 4 minutes.
+        name: 'glossary_correction, one batch stuck among answers',
+        row: linkRow({stage: 'glossary_correction', progress: 60, metadata: {
+            stage_started_at: ago(600),
+            model_batches: {
+                stage: 'glossary_correction', done: 10, total: 14,
+                last_answer_at: ago(10), updated_at: ago(10), waiting_since: ago(250),
+            },
+        }}),
+        says: ['已校正 10/14 批，上一批 10 秒前返回', '有一批已等 4 分 10 秒还没返回，模型响应较慢，仍在等待'],
+    },
+    {
+        name: 'glossary_correction, the oldest request out is recent',
+        row: linkRow({stage: 'glossary_correction', progress: 60, metadata: {
+            stage_started_at: ago(600),
+            model_batches: {
+                stage: 'glossary_correction', done: 10, total: 14,
+                last_answer_at: ago(10), updated_at: ago(10), waiting_since: ago(90),
+            },
+        }}),
+        says: ['已校正 10/14 批，上一批 10 秒前返回'],
+        never: ['较慢', '有一批'],
     },
     {
         // Left by an earlier run of the stage, before it was carried on, or
@@ -180,7 +236,7 @@ const WALK = [
             stage_started_at: ago(400),
             model_batches: {stage: 'translation', done: 3, total: 5, last_answer_at: ago(15), updated_at: ago(15)},
         }}),
-        says: ['正在把转录稿翻译成中文字幕（已翻译 3/5 段，上一段 15 秒前返回）'],
+        says: ['正在把转录稿翻译成中文字幕（已翻译 3/5 批，上一批 15 秒前返回）'],
         never: ['较慢'],
     },
     {

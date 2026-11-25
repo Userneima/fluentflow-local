@@ -472,12 +472,31 @@ def _write_text_note_instead(
         if not markdown:
             raise RuntimeError("模型没有返回内容")
     except Exception as exc:  # noqa: BLE001 - a note must not take the task with it
+        error = f"{reason}改用文本模型写笔记也没成功：{exc}"
         _patch_result(task_id, client_id, {
             "summary_status": "failed",
-            "summary_error": f"{reason}改用文本模型写笔记也没成功：{exc}",
+            "summary_error": error,
             "summary_skipped": False,
         })
         upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed")
+        # The notice above says the text model writes the note; without this
+        # the event log ended on it, green, for a task with no note (second
+        # review, 2026-11-26).
+        log_event(
+            task_id=task_id,
+            event_name="summary_failed",
+            source_type=str(job.get("source_type") or "") or None,
+            stage="summary",
+            success=False,
+            error_reason=error,
+            metadata=event_metadata(
+                at="note_step",
+                fallback="text_note",
+                ai_provider=kwargs.get("provider"),
+                ai_model=kwargs.get("model"),
+                raw_error=str(exc),
+            ),
+        )
         logger.warning("text-note fallback failed for %s: %s", task_id, exc)
         return
     fields: dict[str, Any] = {

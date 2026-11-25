@@ -159,3 +159,27 @@ def test_the_text_note_written_instead_keeps_the_users_settings_and_speakers(cla
         assert note_file and note_file.get("filename", "").endswith("_summary.md")
     finally:
         job_store.delete_jobs([task_id])
+
+
+def test_a_text_note_that_then_fails_is_logged_as_failed(owed_task, claude_unreachable, monkeypatch):
+    """Second review, 2026-11-26: the notice that the text model writes the
+    note stayed the last word in the event log of a task whose text note then
+    failed."""
+    import backend.core.ai_summarizer as summarizer
+    import backend.core.local_entry_guards as guards
+
+    monkeypatch.setattr(guards, "local_ai_kwargs", lambda **_kw: {"provider": "deepseek", "api_key": "sk-test"})
+
+    def refuses(_transcript, **_kw):
+        raise RuntimeError("402 余额不足")
+
+    monkeypatch.setattr(summarizer, "summarize_transcript_with_metadata", refuses)
+
+    local_intake_flow.write_note(owed_task, None)
+
+    assert job_store.get_job(owed_task)["result"]["summary_status"] == "failed"
+    names = [e["event_name"] for e in claude_unreachable]
+    assert names[-1] == "summary_failed", names
+    failed = claude_unreachable[-1]
+    assert failed["success"] is False and "余额不足" in failed["error_reason"]
+    assert failed["metadata"]["fallback"] == "text_note"

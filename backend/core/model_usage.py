@@ -189,25 +189,38 @@ class CarryingExecutor(ThreadPoolExecutor):
 
 
 # How far a step that asks the model in batches has got, in the task's
-# metadata: ``{"stage", "done", "total", "last_answer_at", "updated_at"}``.
-# The card measures a wait on the model from the last answer, not from the
-# start of the step: the word-list correction of a 40,000-character lecture is
-# 14 batches, four at a time, and passed four minutes with every answer on
-# time, which the card then called slow (review, 2026-11-26).
+# metadata: ``{"stage", "done", "total", "last_answer_at", "waiting_since",
+# "updated_at"}``. The card measures a wait on the model from when the oldest
+# request still out was sent, not from the start of the step: the word-list
+# correction of a 40,000-character lecture is 14 batches, four at a time, and
+# passed four minutes with every answer on time, which the card then called
+# slow (review, 2026-11-26). Not from the last answer either: one batch stuck
+# while the other workers kept answering was hidden that way (second review,
+# 2026-11-26).
 MODEL_BATCHES = "model_batches"
 
 
-def record_batches(stage: str, done: int, total: int, *, answered: bool = True) -> None:
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone().isoformat(timespec="seconds")
+
+
+def record_batches(stage: str, done: int, total: int, *, answered: bool = True,
+                   waiting_since: datetime | None = None) -> None:
     """``done`` of ``total`` batches of ``stage`` have answered, for the task
     the context names; ``answered`` is false for the count at the start, which
-    has no answer to date. Never raises: a progress line must not end a step."""
+    has no answer to date. ``waiting_since`` is when the oldest request still
+    out was sent; left out while batches remain, the next one goes out now
+    (a caller asking one batch at a time). Never raises: a progress line must
+    not end a step."""
     task_id = current().task_id
     if not task_id or total <= 0:
         return
-    now = job_store._now_iso()
-    record: dict[str, Any] = {"stage": stage, "done": done, "total": total, "updated_at": now}
+    now = utc_now()
+    record: dict[str, Any] = {"stage": stage, "done": done, "total": total, "updated_at": _stamp(now)}
     if answered:
-        record["last_answer_at"] = now
+        record["last_answer_at"] = _stamp(now)
+    if waiting_since is not None or done < total:
+        record["waiting_since"] = _stamp(waiting_since or now)
     try:
         job_store.update_job_metadata(task_id, {MODEL_BATCHES: record})
     except Exception as exc:  # noqa: BLE001 - see above
@@ -239,6 +252,8 @@ def stoppable_map(fn: Callable[[Any], Any], items: Iterable[Any], *, workers: in
     lock = threading.Lock()
     finished = threading.Event()
     state = {"next": 0, "done": 0}
+    # When each request still out was sent, for ``waiting_since``.
+    sent: dict[int, datetime] = {}
 
     def work() -> None:
         while True:
@@ -247,15 +262,18 @@ def stoppable_map(fn: Callable[[Any], Any], items: Iterable[Any], *, workers: in
                 if index >= len(queue):
                     return
                 state["next"] += 1
+                sent[index] = utc_now()
             try:
                 results[index] = fn(queue[index])
             except BaseException as exc:  # noqa: BLE001 - raised to the caller below
                 errors[index] = exc
             with lock:
+                sent.pop(index, None)
                 state["done"] += 1
                 if stage and index not in errors:
                     # Under the lock, so the counts land in order.
-                    record_batches(stage, state["done"], len(queue))
+                    record_batches(stage, state["done"], len(queue),
+                                   waiting_since=min(sent.values()) if sent else None)
                 if state["done"] == len(queue):
                     finished.set()
 

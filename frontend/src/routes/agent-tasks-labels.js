@@ -87,31 +87,46 @@ const queueWaitDetail = (job, lang, aheadName = '') => {
 
 // The steps that wait on a model after the transcription, said with how long
 // they have waited: the word-list correction was measured waiting 319 seconds
-// with the card at 60% and nothing else on it (2026-11-21).
+// with the card at 60% and nothing else on it (2026-11-21). The correction
+// against the on-screen subtitles first decodes the whole video to read them
+// (4 minutes for a 3.5-hour interview, decision 4.13) and asks the model only
+// after: until its first request is out it says so (`readingZh`), not a wait.
 const MODEL_WAIT_LINES = {
-    subtitle_correction: {zh: '正在按画面字幕校正转录稿', en: 'Checking the transcript against the on-screen text', doneZh: '已校正', doneEn: 'checked'},
+    subtitle_correction: {
+        zh: '正在按画面字幕校正转录稿', en: 'Checking the transcript against the on-screen text', doneZh: '已校正', doneEn: 'checked',
+        readingZh: '正在读画面字幕', readingEn: 'Reading the on-screen subtitles',
+    },
     glossary_correction: {zh: '正在按词表校正转录稿', en: 'Correcting the transcript from the word list', doneZh: '已校正', doneEn: 'corrected'},
     translation: {zh: '正在把转录稿翻译成中文字幕', en: 'Translating the transcript into Chinese subtitles', doneZh: '已翻译', doneEn: 'translated'},
 };
 // One read of a model answer may take 300 seconds (backend ai_client
 // REQUEST_TIMEOUT); a minute before that runs out the wait is said to be long.
 const SLOW_MODEL_SECONDS = 240;
-// How many batches of this stage have answered (backend
-// model_usage.MODEL_BATCHES), when this run of the stage wrote it and asks
-// more than one. These steps send many requests, four at a time, so the time
-// since the stage began says nothing about any one of them: a lecture's
-// correction passed four minutes with every answer on time (review,
-// 2026-11-26). The wait that can be slow is the one since the last answer.
+const parsedTime = (value) => {
+    const time = Date.parse(value || '');
+    return Number.isFinite(time) ? time : null;
+};
+// The model requests of this stage (backend model_usage.MODEL_BATCHES), when
+// this run of the stage wrote them: how many batches have answered, the last
+// answer, and when the oldest request still out was sent. These steps send
+// many requests, four at a time, so the time since the stage began says
+// nothing about any one of them: a lecture's correction passed four minutes
+// with every answer on time (review, 2026-11-26). Nor the time since the last
+// answer: one batch stuck while the others kept answering was hidden that way
+// (second review, 2026-11-26). The wait that can be slow is the oldest one out.
 const modelBatchesOf = (job, since) => {
     const batches = job?.metadata?.model_batches;
     if (!batches || batches.stage !== job?.stage) return null;
     const total = Number(batches.total);
     const done = Number(batches.done);
-    if (!Number.isFinite(total) || total < 2 || !Number.isFinite(done)) return null;
+    if (!Number.isFinite(total) || total < 1 || !Number.isFinite(done)) return null;
     // Left by an earlier run of the same stage (carried on after a stop).
     if (!(Date.parse(batches.updated_at || '') >= since)) return null;
-    const lastAnswer = Date.parse(batches.last_answer_at || '');
-    return {done, total, lastAnswer: Number.isFinite(lastAnswer) && done > 0 ? lastAnswer : null};
+    const lastAnswer = done > 0 ? parsedTime(batches.last_answer_at) : null;
+    // Written before the oldest-request time was recorded: the last answer
+    // (or the first request) stands in for it.
+    const waitingSince = parsedTime(batches.waiting_since) ?? lastAnswer ?? parsedTime(batches.updated_at);
+    return {done, total, lastAnswer, waitingSince};
 };
 const modelWaitDetail = (job, lang) => {
     const words = MODEL_WAIT_LINES[job?.stage];
@@ -120,21 +135,33 @@ const modelWaitDetail = (job, lang) => {
     const since = Date.parse(job?.metadata?.stage_started_at || '');
     if (!Number.isFinite(since)) return zh ? words.zh : words.en;
     const batches = modelBatchesOf(job, since);
-    const seconds = Math.max(0, (Date.now() - (batches?.lastAnswer ?? since)) / 1000);
-    const waited = fmtDuration(seconds, lang);
+    const ago = (moment) => fmtDuration(Math.max(0, (Date.now() - moment) / 1000), lang);
+    if (!batches && words.readingZh) {
+        return zh ? `${words.readingZh}（已用 ${ago(since)}）` : `${words.readingEn} (${ago(since)} so far)`;
+    }
+    const waitingSince = batches?.waitingSince ?? since;
     let line;
-    if (!batches) {
-        line = zh ? `${words.zh}（已等 ${waited}）` : `${words.en} (${waited} so far)`;
+    if (!batches || batches.total < 2) {
+        line = zh ? `${words.zh}（已等 ${ago(waitingSince)}）` : `${words.en} (${ago(waitingSince)} so far)`;
     } else if (batches.lastAnswer !== null) {
+        // 「批」, not 「段」: a batch is many transcript segments (100 in the
+        // subtitle correction), and 「段」 read as the segments themselves.
         line = zh
-            ? `${words.zh}（${words.doneZh} ${batches.done}/${batches.total} 段，上一段 ${waited}前返回）`
-            : `${words.en} (${batches.done}/${batches.total} parts ${words.doneEn}, last one ${waited} ago)`;
+            ? `${words.zh}（${words.doneZh} ${batches.done}/${batches.total} 批，上一批 ${ago(batches.lastAnswer)}前返回）`
+            : `${words.en} (${batches.done}/${batches.total} batches ${words.doneEn}, last one ${ago(batches.lastAnswer)} ago)`;
     } else {
         line = zh
-            ? `${words.zh}（${words.doneZh} 0/${batches.total} 段，已等 ${waited}）`
-            : `${words.en} (0/${batches.total} parts ${words.doneEn}, ${waited} so far)`;
+            ? `${words.zh}（${words.doneZh} 0/${batches.total} 批，已等 ${ago(waitingSince)}）`
+            : `${words.en} (0/${batches.total} batches ${words.doneEn}, ${ago(waitingSince)} so far)`;
     }
-    if (seconds < SLOW_MODEL_SECONDS) return line;
+    if ((Date.now() - waitingSince) / 1000 < SLOW_MODEL_SECONDS) return line;
+    // One batch sent before the last answer is still out: said with its own
+    // wait, which the line above does not show.
+    if (batches?.lastAnswer != null && waitingSince < batches.lastAnswer) {
+        return zh
+            ? `${line}。有一批已等 ${ago(waitingSince)}还没返回，模型响应较慢，仍在等待`
+            : `${line}. One batch has waited ${ago(waitingSince)}; the model is slow to answer, still waiting`;
+    }
     return zh ? `${line}。模型响应较慢，仍在等待` : `${line}. The model is slow to answer; still waiting`;
 };
 

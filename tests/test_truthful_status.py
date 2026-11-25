@@ -286,9 +286,9 @@ def _batch_records(monkeypatch):
     seen: list[tuple[str, int, int, bool]] = []
     real = model_usage.record_batches
 
-    def spy(stage, done, total, *, answered=True):
+    def spy(stage, done, total, *, answered=True, **kw):
         seen.append((stage, done, total, answered))
-        real(stage, done, total, answered=answered)
+        real(stage, done, total, answered=answered, **kw)
 
     monkeypatch.setattr(model_usage, "record_batches", spy)
     return seen
@@ -349,6 +349,69 @@ def test_the_translation_records_each_chunk(task_id, monkeypatch):
     assert [done for _s, done, _t, _a in seen[1:]] == list(range(1, result.chunk_count + 1))
     stored = job_store.get_job(task_id)["metadata"][model_usage.MODEL_BATCHES]
     assert (stored["stage"], stored["done"]) == ("translation", result.chunk_count)
+
+
+def test_one_stuck_batch_is_measured_while_the_others_answer(task_id, monkeypatch):
+    # Second review, 2026-11-26: the wait was measured from the last answer
+    # across all workers, so one batch stuck for minutes was hidden while the
+    # others kept answering. Each record says when the oldest request still
+    # out was sent.
+    import threading
+    from backend.core import model_usage
+    job_store.upsert_job(task_id=task_id, status="running", stage="glossary_correction", progress=60)
+    waits: list[tuple[int, object]] = []
+    real = model_usage.record_batches
+
+    def spy(stage, done, total, *, answered=True, waiting_since=None):
+        waits.append((done, waiting_since))
+        real(stage, done, total, answered=answered, waiting_since=waiting_since)
+
+    monkeypatch.setattr(model_usage, "record_batches", spy)
+    release = threading.Event()
+    stuck_sent: list = []
+    others_done = threading.Event()
+    answered: list[int] = []
+
+    def ask(item):
+        if item == 0:
+            stuck_sent.append(model_usage.utc_now())
+            assert release.wait(5)
+            return item
+        answered.append(item)
+        if len(answered) == 4:
+            others_done.set()
+        return item
+
+    def free_the_stuck_one():
+        assert others_done.wait(5)
+        # The fourth answer is recorded after it returns; give it a moment.
+        import time
+        time.sleep(0.3)
+        release.set()
+
+    threading.Thread(target=free_the_stuck_one, daemon=True).start()
+    before = model_usage.utc_now().replace(microsecond=0)
+    with model_usage.scope(task_id, "correct"):
+        model_usage.stoppable_map(ask, [0, 1, 2, 3, 4], workers=2, check_stop=lambda: None,
+                                  stage="glossary_correction")
+    [sent] = stuck_sent
+    while_stuck = [since for done, since in waits[1:] if done <= 4]
+    assert len(while_stuck) == 4
+    assert all(since is not None and before <= since <= sent for since in while_stuck), (
+        "every answer while batch 0 was out says it is still waiting since it was sent"
+    )
+    assert waits[-1] == (5, None), "nothing is out once all have answered"
+    stored = job_store.get_job(task_id)["metadata"][model_usage.MODEL_BATCHES]
+    assert "waiting_since" not in stored and stored["done"] == 5
+
+
+def test_a_batch_count_says_when_the_next_request_went_out(task_id):
+    from backend.core import model_usage
+    job_store.upsert_job(task_id=task_id, status="running", stage="translation", progress=61)
+    with model_usage.scope(task_id, "correct"):
+        model_usage.record_batches("translation", 0, 3, answered=False)
+    stored = job_store.get_job(task_id)["metadata"][model_usage.MODEL_BATCHES]
+    assert stored["waiting_since"] == stored["updated_at"] and "last_answer_at" not in stored
 
 
 def test_batch_progress_never_fails_the_step(monkeypatch):

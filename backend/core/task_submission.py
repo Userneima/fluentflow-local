@@ -167,10 +167,18 @@ def _local_media_job_context(
     note_after_cut = visual_note_will_run or local_intake_flow.survey_first_enabled()
     note_fallback_reason = None
     if announce_fallback and not skip_summary and local_intake_flow.auto_note_enabled() and not visual_note_will_run:
-        # The same key lookup the note step makes (``local_intake_flow._write_text_note_instead``).
+        # The key lookup of whichever step will write the note. The pipeline's
+        # own note stage gets the keys typed into the form; the note step
+        # after the cut (``local_intake_flow._write_text_note_instead``) reads
+        # the stored ones only, since a form key is never written into the
+        # task record. Counting form keys for it said "the text model writes
+        # the note" at submission and "no note" at the note step (second
+        # review, 2026-11-26).
+        form_keys = {} if note_after_cut else {
+            "deepseek_api_key": deepseek_api_key, "openai_api_key": openai_api_key, "qwen_api_key": qwen_api_key,
+        }
         text_model_ready = bool(local_ai_kwargs(
-            deepseek_api_key=deepseek_api_key, openai_api_key=openai_api_key, qwen_api_key=qwen_api_key,
-            ai_provider=options.get("ai_provider"), ai_model=options.get("ai_model"),
+            **form_keys, ai_provider=options.get("ai_provider"), ai_model=options.get("ai_model"),
         ).get("api_key"))
         note_fallback_reason = _log_visual_note_unavailable(
             task_id, source_type=source_type, source_filename=source_filename, text_model_ready=text_model_ready,
