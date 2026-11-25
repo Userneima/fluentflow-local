@@ -41,7 +41,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backend.core.runtime_paths import app_data_root  # noqa: E402
+from backend.core.runtime_paths import app_data_root, load_project_env  # noqa: E402
+
+# The data folder may be set only in .env; read it before the default source is taken.
+load_project_env()
 
 DEFAULT_SOURCE = app_data_root()
 DATABASES = ("fluentflow_jobs.sqlite", "fluentflow_events.sqlite")
