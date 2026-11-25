@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
+from backend.core import runtime_paths
 from backend.core.runtime_paths import default_config_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG_PATH = default_config_path()
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
 
 LOCAL_SENSITIVE_FIELDS = {
@@ -70,13 +69,36 @@ ENV_ALIAS_FALLBACKS = {
 
 
 def load_project_env() -> None:
-    if DEFAULT_ENV_PATH.exists():
-        load_dotenv(DEFAULT_ENV_PATH, override=False)
+    # One rule for every entry point: runtime_paths.load_project_env.
+    runtime_paths.load_project_env(DEFAULT_ENV_PATH)
 
 
 def config_path() -> Path:
-    override = os.environ.get("FLUENTFLOW_CONFIG_PATH")
-    return Path(override).expanduser() if override else DEFAULT_CONFIG_PATH
+    # Resolved on every call, never at import: the service imports this module
+    # before it reads .env, and a path frozen then put the user's saved keys in
+    # the default data folder while everything else followed FLUENTFLOW_DATA_DIR
+    # from .env (found on GitHub's Windows runner, 2026-11-21).
+    target = default_config_path()
+    _carry_over_settings_saved_by_the_old_path(target)
+    return target
+
+
+def _carry_over_settings_saved_by_the_old_path(target: Path) -> None:
+    """Before that fix, a data folder set only in .env still had its settings
+    file in the platform's default folder. On the first read after updating,
+    that file is copied to where it belongs, so the user's keys stay."""
+    # Only a data folder that came from .env had the old behaviour; one set in
+    # the environment (a test run, a test copy) never shared the default file.
+    if target.exists() or os.environ.get("FLUENTFLOW_CONFIG_PATH") or "FLUENTFLOW_DATA_DIR" not in runtime_paths.FROM_ENV_FILE:
+        return
+    legacy = runtime_paths.default_app_data_root() / target.name
+    if legacy == target or not legacy.is_file():
+        return
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy, target)
+    except OSError:
+        pass
 
 
 def load_config(path: Path | str | None = None) -> dict[str, Any]:

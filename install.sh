@@ -3,6 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.sh | bash
 #
+# 国内用 npmmirror 上随每个发布版发的同一份：
+#   curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest/files/install.sh | bash
+#
 # 依次做完：下载最新发布版到 ~/fluentflow-local、运行安装脚本、启动 FluentFlow、
 # 把它的 MCP 工具注册到本机的 Claude Code 和 Codex、自检。全程不要密码，不弹系统窗口，
 # 不调用 git。目录已经存在时沿用里面的代码，只把后面几步重做一遍。
@@ -10,6 +13,7 @@
 # 可选环境变量：
 #   FLUENTFLOW_INSTALL_DIR   装到哪里，默认 ~/fluentflow-local
 #   FLUENTFLOW_INSTALL_REF   装哪个版本的标签（如 v0.7.0），默认最新发布版
+#   FLUENTFLOW_INSTALL_SOURCE 已经在本机的发布版（解压好的文件夹或 .zip），从它安装或更新，不下载
 # 其余参数原样交给 launchers/macos/setup-local.sh（如 --skip-model）。
 set -euo pipefail
 
@@ -26,32 +30,274 @@ fail() {
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "这个脚本只用于 macOS。Windows 请运行 install.ps1。"
 
+# 更新到一半失败时把旧版本换回来，再照常报错退出。
+SWAPPED=0
+fail_plain() {
+	echo "" >&2
+	echo "✗ $1" >&2
+	exit 1
+}
+fail() {
+	if [[ "${SWAPPED:-0}" -eq 1 ]]; then
+		SWAPPED=0
+		echo "更新失败，换回 ${CURRENT}…" >&2
+		stop_folder_programs "$DIR"
+		rm -rf "${DIR}.failed"
+		[[ -e "$DIR" ]] && mv "$DIR" "${DIR}.failed"
+		mv "${DIR}.old" "$DIR"
+		[[ -d "${HOME}/Desktop/FluentFlow Local.app" ]] && open "${HOME}/Desktop/FluentFlow Local.app"
+		fail_plain "$1
+更新到 ${LATEST} 没有成功，已换回 ${CURRENT}（失败的那份在 ${DIR}.failed）。"
+	fi
+	fail_plain "$1"
+}
+
+# 系统设置里的代理：curl 不看它。和 launchers/macos/fluentflow-env.sh 的
+# ff_use_system_proxy 同一条规则（那份这时还不在这台机器上）。
+if [[ -z "${HTTPS_PROXY:-}${HTTP_PROXY:-}${https_proxy:-}${http_proxy:-}" ]]; then
+	_proxy="$(scutil --proxy 2>/dev/null || true)"
+	_host="$(printf '%s\n' "$_proxy" | awk '/ HTTPSEnable : 1/ {on=1} on && / HTTPSProxy :/ {print $3}')"
+	_port="$(printf '%s\n' "$_proxy" | awk '/ HTTPSEnable : 1/ {on=1} on && / HTTPSPort :/ {print $3}')"
+	if [[ -n "$_host" && -n "$_port" ]]; then
+		export HTTP_PROXY="http://${_host}:${_port}" HTTPS_PROXY="http://${_host}:${_port}" NO_PROXY="127.0.0.1,localhost,::1"
+		echo "用系统设置里的代理：${HTTPS_PROXY}"
+	fi
+fi
+
 # --- 1. 代码 ----------------------------------------------------------------
+# 更新用到的旁边几个文件夹（.new .old .failed）：已经存在的，只有带着本脚本留下的标记
+# （之前某次更新建的）才删；用户自己叫这个名字的备份不动。
+UPDATE_MARKER=".fluentflow-update"
+assert_own_leftover() {
+	[[ -e "$1" && ! -e "$1/${UPDATE_MARKER}" ]] &&
+		fail_plain "$1 已存在，不是 FluentFlow 的更新留下的。请先把它移走或改名。什么都没改。"
+	return 0
+}
+
 step "获取代码"
+# 已经装过、又有新发布版时原地更新：新代码先放在旁边，带上原来的 .env，停掉服务后才换
+# 进去；接着的安装步骤补齐新版本要的依赖、讲话人模型和转录模型；安装或重启失败就把旧版本
+# 换回来（见 fail）。git 检出是开发者自己的，不动。
+HAVE_CODE=0
+IS_GIT=0
+UPDATING=0
+SWAPPED=0
+CURRENT=""
+LATEST=""
 if [[ -f "${DIR}/backend/local_main.py" ]]; then
-	echo "沿用已有的代码：${DIR}（要升级到新版本，按其中 README 的「更新到新版本」操作）"
+	HAVE_CODE=1
+	CURRENT="$(tr -d '[:space:]' <"${DIR}/VERSION" 2>/dev/null || true)"
+	[[ -e "${DIR}/.git" ]] && IS_GIT=1
+fi
+LOCAL_SOURCE="${FLUENTFLOW_INSTALL_SOURCE:-}"
+if [[ "$IS_GIT" -eq 1 ]]; then
+	echo "沿用 git 检出的代码：${DIR}（更新请 git pull，再运行一次本命令）"
+elif [[ -n "$LOCAL_SOURCE" ]]; then
+	if [[ "$LOCAL_SOURCE" == *.zip ]]; then
+		SRC_TMP="$(mktemp -d)"
+		unzip -q "$LOCAL_SOURCE" -d "$SRC_TMP" || fail "解不开 ${LOCAL_SOURCE}。"
+		LOCAL_SOURCE="$SRC_TMP"
+		[[ -f "${LOCAL_SOURCE}/backend/local_main.py" ]] || LOCAL_SOURCE="$(find "$SRC_TMP" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+	fi
+	[[ -f "${LOCAL_SOURCE}/backend/local_main.py" ]] || fail "FLUENTFLOW_INSTALL_SOURCE 不是 FluentFlow Local 的发布版：${FLUENTFLOW_INSTALL_SOURCE}"
+	[[ "$HAVE_CODE" -eq 0 && -e "$DIR" ]] && fail "${DIR} 已存在但不是 FluentFlow Local 的代码目录。请换一个位置（FLUENTFLOW_INSTALL_DIR）。"
+	LATEST="$(tr -d '[:space:]' <"${LOCAL_SOURCE}/VERSION")"
+	if [[ "$HAVE_CODE" -eq 1 && "$LATEST" != "$CURRENT" &&
+		"$(printf '%s\n%s\n' "$CURRENT" "$LATEST" | sort -V | tail -n 1)" == "$LATEST" ]]; then
+		UPDATING=1
+		echo "把 FluentFlow Local 从 ${CURRENT} 更新到 ${LATEST}（来自 ${LOCAL_SOURCE}）。"
+	elif [[ "$HAVE_CODE" -eq 1 ]]; then
+		echo "${DIR} 里的 ${CURRENT} 不比 ${LOCAL_SOURCE} 里的 ${LATEST} 旧。"
+		[[ -n "${SRC_TMP:-}" ]] && rm -rf "$SRC_TMP"
+	fi
+	if [[ "$HAVE_CODE" -eq 0 || "$UPDATING" -eq 1 ]]; then
+		TARGET="$DIR"
+		if [[ "$UPDATING" -eq 1 ]]; then
+			TARGET="${DIR}.new"
+			assert_own_leftover "$TARGET"
+			rm -rf "$TARGET"
+		fi
+		mkdir -p "$(dirname "$TARGET")"
+		cp -R "$LOCAL_SOURCE" "$TARGET"
+		rm -rf "${TARGET}/.git" "${TARGET}/.venv" "${TARGET}/.env"
+		echo "made by a FluentFlow Local install or update" >"${TARGET}/${UPDATE_MARKER}"
+		[[ -n "${SRC_TMP:-}" ]] && rm -rf "$SRC_TMP"
+		echo "已放到 ${TARGET}"
+	fi
 else
-	[[ -e "$DIR" ]] && fail "${DIR} 已存在但不是 FluentFlow Local 的代码目录。请换一个位置（FLUENTFLOW_INSTALL_DIR）。"
+	[[ "$HAVE_CODE" -eq 0 && -e "$DIR" ]] && fail "${DIR} 已存在但不是 FluentFlow Local 的代码目录。请换一个位置（FLUENTFLOW_INSTALL_DIR）。"
+	# 发布版有两个来源：GitHub，和 npmmirror 上的 npm 包 fluentflow-local（见
+	# scripts/stage_npm_package.py），后者在国内打得开。先探 GitHub 几秒，连不上或明显
+	# 慢就先走 npmmirror，和其余下载同一条规则（launchers/macos/fluentflow-env.sh，这时
+	# 还不在这台机器上）。
 	TAG="${FLUENTFLOW_INSTALL_REF:-}"
 	if [[ -z "$TAG" ]]; then
 		# 读 releases/latest 的跳转地址，不走 GitHub API：API 对未登录请求有次数限制。
-		TAG="$(curl -fsSI --connect-timeout 20 "https://github.com/${REPO_SLUG}/releases/latest" |
-			tr -d '\r' | sed -n 's#^[Ll]ocation: .*/tag/##p' | tail -1)"
-		[[ -n "$TAG" ]] || fail "查不到最新版本，请检查能否打开 github.com。"
+		TAG="$(curl -fsSI --connect-timeout 10 --max-time 15 "https://github.com/${REPO_SLUG}/releases/latest" 2>/dev/null |
+			tr -d '\r' | sed -n 's#^[Ll]ocation: .*/tag/##p' | tail -1 || true)"
+		[[ "$TAG" == v[0-9]* ]] || TAG=""
 	fi
-	echo "下载 ${TAG}…"
+	GITHUB_ZIP=""
+	[[ -n "$TAG" ]] && GITHUB_ZIP="https://github.com/${REPO_SLUG}/archive/refs/tags/${TAG}.zip"
+	NPM_VERSION="${TAG#v}"
+	NPM_META="$(curl -fsS --max-time 15 "https://registry.npmmirror.com/fluentflow-local/${NPM_VERSION:-latest}" 2>/dev/null || true)"
+	# plutil 读 JSON：系统自带，不像 /usr/bin/python3 那样在没装开发者工具时弹窗。
+	npm_field() { printf '%s' "$NPM_META" | plutil -extract "$1" raw -o - - 2>/dev/null; }
+	LATEST="${TAG#v}"
+	[[ -z "$LATEST" && -n "$NPM_META" ]] && LATEST="$(npm_field version)"
+	if [[ "$HAVE_CODE" -eq 1 ]]; then
+		if [[ -n "$LATEST" && -n "$CURRENT" && "$LATEST" != "$CURRENT" &&
+			"$(printf '%s\n%s\n' "$CURRENT" "$LATEST" | sort -V | tail -n 1)" == "$LATEST" ]]; then
+			UPDATING=1
+			echo "把 FluentFlow Local 从 ${CURRENT} 更新到 ${LATEST}。"
+		elif [[ -n "$LATEST" ]]; then
+			echo "${DIR} 里的 ${CURRENT} 已经是最新发布版。"
+		else
+			echo "查不到最新版本，沿用 ${DIR} 里的 ${CURRENT}。"
+		fi
+	elif [[ -z "$GITHUB_ZIP" && -z "$NPM_META" ]]; then
+		fail "连不上 github.com，也连不上 registry.npmmirror.com，请检查网络或代理。"
+	fi
+fi
+if [[ "$IS_GIT" -eq 0 && -z "$LOCAL_SOURCE" && ( "$HAVE_CODE" -eq 0 || "$UPDATING" -eq 1 ) ]]; then
+	TARGET="$DIR"
+	if [[ "$UPDATING" -eq 1 ]]; then
+		TARGET="${DIR}.new"
+		assert_own_leftover "$TARGET"
+		rm -rf "$TARGET"
+	fi
+	order="npm github"
+	if [[ -n "$GITHUB_ZIP" ]]; then
+		got="$(curl -sL -r 0-1048575 --max-time 5 -o /dev/null -w '%{size_download}' "$GITHUB_ZIP" 2>/dev/null || true)"
+		[[ -z "$NPM_META" || "${got:-0}" -ge 1048576 ]] && order="github npm"
+	fi
 	WORK="$(mktemp -d)"
 	trap 'rm -rf "$WORK"' EXIT
-	curl -fL --retry 2 --connect-timeout 20 -sS -o "${WORK}/src.zip" \
-		"https://github.com/${REPO_SLUG}/archive/refs/tags/${TAG}.zip" || fail "代码下载失败，请检查能否打开 github.com。"
-	unzip -q "${WORK}/src.zip" -d "${WORK}/src" || fail "代码解压失败。"
+	unpacked=""
+	for source in $order; do
+		if [[ "$source" == github && -n "$GITHUB_ZIP" ]]; then
+			echo "从 github.com 下载 ${TAG}…"
+			if curl -fL --retry 2 --connect-timeout 20 -sS -o "${WORK}/src.zip" "$GITHUB_ZIP" &&
+				unzip -q "${WORK}/src.zip" -d "${WORK}/src"; then
+				unpacked="$(find "${WORK}/src" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+				# 这一版发版时构建好的界面（release.yml），安装脚本就不用装 Node.js、不用构建。
+				# 旧版本没有这个附件，安装脚本照旧在本机构建。
+				if curl -fL --retry 2 --connect-timeout 20 -sS -o "${WORK}/ui.zip" \
+					"https://github.com/${REPO_SLUG}/releases/download/${TAG}/frontend-dist-local.zip" 2>/dev/null; then
+					mkdir -p "${unpacked}/frontend/dist-local" && unzip -oq "${WORK}/ui.zip" -d "${unpacked}/frontend/dist-local"
+				else
+					echo "  （${TAG} 没有附带构建好的界面，安装时在本机构建）"
+				fi
+			fi
+		elif [[ "$source" == npm && -n "$NPM_META" ]]; then
+			echo "从 registry.npmmirror.com 下载 $(npm_field version)…"
+			if curl -fL --retry 2 --connect-timeout 20 -sS -o "${WORK}/src.tgz" "$(npm_field dist.tarball)"; then
+				digest="sha512-$(openssl dgst -sha512 -binary "${WORK}/src.tgz" | base64 | tr -d '\n')"
+				if [[ "$digest" == "$(npm_field dist.integrity)" ]]; then
+					mkdir -p "${WORK}/npm" && tar -xzf "${WORK}/src.tgz" -C "${WORK}/npm" && unpacked="${WORK}/npm/package/source"
+				else
+					echo "  下载的文件和校验值对不上。"
+				fi
+			fi
+		fi
+		[[ -n "$unpacked" && -f "${unpacked}/backend/local_main.py" ]] && break
+		unpacked=""
+		echo "  ${source} 没下成，换另一个来源。"
+	done
+	[[ -n "$unpacked" ]] || fail "代码从 github.com 和 registry.npmmirror.com 都没下成，请检查网络或代理。"
 	mkdir -p "$(dirname "$DIR")"
-	mv "${WORK}"/src/*/ "$DIR"
-	echo "已放到 ${DIR}"
+	mv "$unpacked" "$TARGET"
+	echo "made by a FluentFlow Local install or update" >"${TARGET}/${UPDATE_MARKER}"
+	echo "已放到 ${TARGET}"
+fi
+
+# 还在从某个目录运行的程序（服务、后台下载模型、yt-dlp 更新）。
+# 不算这个脚本自己：它可能就是从那个目录里运行的。
+stop_folder_programs() {
+	local pid
+	for pid in $(pgrep -f "$1/" 2>/dev/null || true); do
+		[[ "$pid" == "$$" || "$pid" == "$PPID" ]] || kill "$pid" 2>/dev/null || true
+	done
+	sleep 1
+}
+
+if [[ "$UPDATING" -eq 1 ]]; then
+	assert_own_leftover "${DIR}.old"
+	assert_own_leftover "${DIR}.failed"
+	# 数据、链接下载、模型若设在代码目录里面，会随旧代码一起被删：先挪出去再更新。
+	# 数据目录的每一部分（任务库、原片、笔记、改过的转录稿、设置……）都能单独设位置。
+	names="HF_HOME $(env | sed -n -E 's/^(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))=.*/\1/p')"
+	[[ -f "${DIR}/.env" ]] && names="$names $(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))[[:space:]]*=.*/\2/p' "${DIR}/.env")"
+	for name in $(printf '%s\n' $names | sort -u); do
+		where="${!name:-}"
+		if [[ -z "$where" && -f "${DIR}/.env" ]]; then
+			where="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${name}[[:space:]]*=" "${DIR}/.env" | tail -n 1 |
+				sed -E "s/^[^=]*=[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//" || true)"
+		fi
+		where="${where/#\~/$HOME}"
+		if [[ "$where" == "${DIR}/"* ]]; then
+			rm -rf "${DIR}.new"
+			fail_plain "${name}（${where}）在代码目录里面，更新会换掉这个目录。请先把它挪到 ${DIR} 外面。什么都没改。"
+		fi
+	done
+	# 端口和桌面启动器一样：环境变量优先，其次是 .env 里的同名行（新旧两份 .env 一样）。
+	if [[ -z "${FLUENTFLOW_LOCAL_PORT:-}" && -f "${DIR}/.env" ]]; then
+		env_port="$(grep -E '^[[:space:]]*(export[[:space:]]+)?FLUENTFLOW_LOCAL_PORT[[:space:]]*=' "${DIR}/.env" | tail -n 1 |
+			sed -E "s/^[^=]*=[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//" || true)"
+		[[ "$env_port" =~ ^[0-9]+$ ]] && PORT="$env_port"
+	fi
+	OLD_PY="${DIR}/.venv/bin/python"
+	[[ -x "${DIR}/venv/bin/python" ]] && OLD_PY="${DIR}/venv/bin/python"
+	health="$(curl -s --max-time 2 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
+	if [[ "$health" != *'"edition":"local"'* && -n "$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null || true)" &&
+		"${FLUENTFLOW_UPDATE_FORCE:-}" != "1" ]]; then
+		rm -rf "${DIR}.new"
+		fail_plain "端口 ${PORT} 上的程序没有像 FluentFlow 那样应答（忙，或是别的程序）。稍后再运行一次；确认可以停掉时设 FLUENTFLOW_UPDATE_FORCE=1。什么都没改。"
+	fi
+	STOPPED_OLD=0
+	if [[ "$health" == *'"edition":"local"'* ]]; then
+		# 每个任务的 activity.busy 算（剪辑、写笔记时任务主状态已经是完成），和启动器的重启
+		# 检查同一份脚本；-1 是问不到。
+		busy="$("$OLD_PY" "${DIR}.new/launchers/macos/count_active_jobs.py" "http://127.0.0.1:${PORT}" 2>/dev/null || echo -1)"
+		[[ "$busy" =~ ^-?[0-9]+$ ]] || busy=-1
+		if [[ "$busy" -ne 0 && "${FLUENTFLOW_UPDATE_FORCE:-}" != "1" ]]; then
+			rm -rf "${DIR}.new"
+			if [[ "$busy" -lt 0 ]]; then
+				fail "问不到正在运行的 FluentFlow 有没有任务在处理。确认没有之后设 FLUENTFLOW_UPDATE_FORCE=1 再运行一次。什么都没改。"
+			fi
+			fail "还有 ${busy} 个任务在处理，等它们做完再运行一次（或设 FLUENTFLOW_UPDATE_FORCE=1 先停掉，重启后接着做）。什么都没改。"
+		fi
+		echo "停止正在运行的 FluentFlow Local…"
+		STOPPED_OLD=1
+		pids="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null || true)"
+		# shellcheck disable=SC2086
+		[[ -n "$pids" ]] && kill $pids 2>/dev/null || true
+	fi
+	stop_folder_programs "$DIR"
+	# 可选的 pyannote 讲话人引擎不在标准依赖里；装过的，更新后照样装上。
+	HAD_PYANNOTE=0
+	compgen -G "$(dirname "$(dirname "$OLD_PY")")/lib/python3*/site-packages/pyannote" >/dev/null && HAD_PYANNOTE=1
+	[[ -f "${DIR}/.env" ]] && cp -p "${DIR}/.env" "${DIR}.new/.env"
+	rm -rf "${DIR}.old"
+	cd "$(dirname "$DIR")"
+	if ! mv "$DIR" "${DIR}.old"; then
+		rm -rf "${DIR}.new"
+		[[ "$STOPPED_OLD" -eq 1 && -d "${HOME}/Desktop/FluentFlow Local.app" ]] && open "${HOME}/Desktop/FluentFlow Local.app"
+		fail_plain "没能把 ${DIR} 挪开（有程序在用它）。关掉它再运行一次。什么都没改。"
+	fi
+	SWAPPED=1
+	# set -e 停下的那些步骤也要先换回旧版本，包括下一步的 mv。
+	trap 'fail "安装中途出错（install.sh 第 ${LINENO} 行）。"' ERR
+	mv "${DIR}.new" "$DIR"
 fi
 
 # --- 2. 安装 ----------------------------------------------------------------
-bash "${DIR}/launchers/macos/setup-local.sh" "$@"
+bash "${DIR}/launchers/macos/setup-local.sh" "$@" || fail "安装步骤没有完成，请看上面的报错。"
+if [[ "$UPDATING" -eq 1 && "${HAD_PYANNOTE:-0}" -eq 1 ]]; then
+	echo "重新装上你装过的 pyannote 讲话人引擎…"
+	"${DIR}/.venv/bin/python" -m pip install -q --disable-pip-version-check -r "${DIR}/requirements-speaker.txt" ||
+		fail "重新装 pyannote 没有成功。"
+fi
 
 VENV_PY="${DIR}/.venv/bin/python"
 [[ -x "${DIR}/venv/bin/python" ]] && VENV_PY="${DIR}/venv/bin/python"
@@ -139,6 +385,13 @@ done
 step "自检 MCP 服务"
 "$VENV_PY" "${DIR}/scripts/check_mcp_server.py" >/dev/null || fail "MCP 服务自检没通过，运行 ${VENV_PY} ${DIR}/scripts/check_mcp_server.py 看详情。"
 echo "MCP 服务正常。"
+
+if [[ "$UPDATING" -eq 1 ]]; then
+	SWAPPED=0
+	trap - ERR
+	rm -rf "${DIR}.old"
+	echo "已更新到 ${LATEST}，旧版本已删除。"
+fi
 
 echo ""
 echo "✓ FluentFlow Local 已装好，并已启动：http://127.0.0.1:${PORT}"

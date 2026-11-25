@@ -30,7 +30,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backend.core.runtime_paths import default_pyannote_model_dir  # noqa: E402
+from backend.core.runtime_paths import default_pyannote_model_dir, load_project_env  # noqa: E402
+
+load_project_env()
 
 MODELSCOPE_FILE = "https://modelscope.cn/api/v1/models/{repo}/repo?Revision=master&FilePath={path}"
 

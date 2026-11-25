@@ -17,6 +17,7 @@ import {
     Video,
 } from 'lucide-react';
 import {useI18n, useSettings} from '../app/shared.jsx';
+import {useNewRelease} from '../lib/useNewRelease.js';
 import {useDismissable} from '../lib/useDismissable.js';
 import {useHoverPeek} from '../lib/useHoverPeek.js';
 import {iconButton, navItem, menuItem, rowButton, floatingLayer} from '../lib/ui.js';
@@ -84,6 +85,11 @@ const SideNav = ({
     useEffect(() => {
         if (!menuOpen) setLegalMenuOpen(false);
     }, [menuOpen]);
+
+    const newRelease = useNewRelease();
+    const updateHint = lang === 'zh'
+        ? '让你的 agent「更新 FluentFlow」，或再运行一次安装命令；任务和设置都会保留。'
+        : 'Ask your agent to update FluentFlow, or run the install command again; tasks and settings stay.';
 
     const items = [
         {path:'/media-text', icon:Video, label: lang === 'zh' ? '视频转录与总结' : 'Media notes'},
@@ -167,6 +173,17 @@ const SideNav = ({
                 </nav>
 
                 <div className={`relative mt-auto border-t border-[#e5e5e5] dark:border-white/[0.12] ${collapsed ? 'pt-5' : 'pt-4'}`} ref={menuRef}>
+                    {newRelease && !collapsed && (
+                        <button
+                            type="button"
+                            onClick={() => setMenuOpen(true)}
+                            title={updateHint}
+                            className={`${menuItem()} mb-2`}
+                        >
+                            <span className="size-2 shrink-0 rounded-full bg-[#2563eb]" aria-hidden="true"/>
+                            <span className="min-w-0 break-words">{lang === 'zh' ? `新版本 v${newRelease}` : `New v${newRelease}`}</span>
+                        </button>
+                    )}
                     <button
                         type="button"
                         onClick={() => setMenuOpen((v) => !v)}
@@ -254,6 +271,12 @@ const SideNav = ({
                                 </div>
                                 {versionDetail && (
                                     <div className="mt-0.5 truncate text-[11px]" title={versionDetail}>{versionDetail}</div>
+                                )}
+                                {newRelease && (
+                                    <div className="mt-1.5 text-[11px] font-semibold text-[#111111] dark:text-white/[0.92]">
+                                        {lang === 'zh' ? `v${newRelease} 可以更新：` : `v${newRelease} is out: `}
+                                        <span className="font-medium text-[#6b6c72] dark:text-white/60">{updateHint}</span>
+                                    </div>
                                 )}
                             </div>
                         </div>

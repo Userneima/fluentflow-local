@@ -11,17 +11,27 @@
 #
 # Nothing here asks for administrator rights, so an agent can run it unattended:
 # Python is installed for the current user only, Node.js (needed only to build
-# the interface) is a portable copy in the data folder, and FFmpeg comes from
-# winget's portable package.
+# the interface) is a portable copy in the data folder, and FFmpeg is a
+# download into the data folder's bin.
 #
-# A failed download is retried once from a mirror in China: pip from Tsinghua,
-# npm from npmmirror, the transcription model from hf-mirror. A PIP_INDEX_URL or
-# npm registry you set yourself is left alone.
+# Every download has a source in China (fluentflow-env.ps1): the original host
+# is probed for a few seconds and, when it fails or is plainly slow, the mirror
+# goes first. Python's installer and Node.js come from python.org / nodejs.org
+# or npmmirror and are checked against pinned SHA-256s; pip uses Tsinghua's
+# index, npm npmmirror's registry, the transcription model hf-mirror, the
+# speaker models ModelScope and hf-mirror. A failed pip or npm run is retried
+# once from the other source. A PIP_INDEX_URL or npm registry you set yourself
+# is left alone.
 #
-# Python dependencies are installed from requirements-local.txt (lower bounds,
-# newest matching versions). There is no tested lock file for Windows yet; the
-# only lock in the repository, requirements-local.lock.macos-arm64.txt, is for
-# Apple Silicon and must not be used here.
+# Where things go follows the repository's .env as the service reads it: the
+# one-folder install (install.ps1) writes the data folder, the model cache and
+# the pip and npm caches there, so nothing large lands on drive C.
+#
+# Python dependencies are installed from requirements-local.lock.windows-AMD64.txt,
+# exact versions resolved for Python 3.10 to 3.14 and tested on GitHub's
+# Windows runner; requirements-local.txt (lower bounds) only when that file is
+# missing. Unpinned installs broke every Windows transcription once already
+# (av 19, 2026-11).
 #
 #   ... -SkipModel   do not download the transcription model
 param([switch]$SkipModel)
@@ -40,6 +50,10 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = Split-Path -Parent (Split-Path -Parent $ScriptDir)
 $Venv = Join-Path $Repo ".venv"
 $Python = Join-Path $Venv "Scripts\python.exe"
+
+. (Join-Path $ScriptDir "fluentflow-env.ps1")
+Import-FluentFlowEnv $Repo
+Use-FluentFlowSystemProxy
 
 function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
     & $FilePath @Arguments
@@ -73,18 +87,65 @@ function Install-WithWinget([string]$Id, [string]$What, [string[]]$Extra = @()) 
     Update-SessionPath
 }
 
-# Retried once from a mirror in China when the default index fails.
-function Invoke-Pip([string[]]$Arguments) {
-    & $Python -m pip @Arguments
-    if ($LASTEXITCODE -eq 0) { return }
-    if ($env:PIP_INDEX_URL) { throw "pip 失败：$($Arguments -join ' ')" }
-    Write-Host "下载失败，换国内镜像（清华源）重试…"
-    $env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
-    try {
-        Invoke-Checked $Python (@("-m", "pip") + $Arguments)
-    } finally {
-        Remove-Item Env:PIP_INDEX_URL -ErrorAction SilentlyContinue
+# The package index: PyPI, or Tsinghua's mirror when PyPI is unreachable or
+# slow (decided once, before the first install); a failed run is retried once
+# from the other. An index the user set (PIP_INDEX_URL) is used as it is.
+$PypiIndex = "https://pypi.org/simple"
+$TunaIndex = "https://pypi.tuna.tsinghua.edu.cn/simple"
+$UserPipIndex = [bool]$env:PIP_INDEX_URL
+$PipIndex = $null
+
+function Select-PipIndex {
+    if ($UserPipIndex) { return }
+    # A 2 MB wheel, at the same path on both hosts.
+    $Wheel = "packages/8a/6a/19e9fe04fca059ccf770861c7d5721ab4c2aebc539889e97c7977528a53b/pip-24.0-py3-none-any.whl"
+    $First = (Get-FluentFlowSourceOrder @("https://files.pythonhosted.org/$Wheel", "https://pypi.tuna.tsinghua.edu.cn/$Wheel"))[0]
+    $script:PipIndex = if ($First -like "*tuna*") { $TunaIndex } else { $PypiIndex }
+    if ($script:PipIndex -eq $TunaIndex) { Write-Host "PyPI 连不上或太慢，Python 依赖从国内镜像（清华源）下载。" }
+}
+
+# Packages go in with uv (pinned, itself installed by pip from the same index):
+# it downloads in parallel and resolves in seconds where pip took minutes
+# (王愉超, 2026-11-21). uv does not read PIP_INDEX_URL, so the index is always
+# passed. When uv cannot be installed, pip does the work as before.
+$UvVersion = "0.13.7"
+$UseUv = $null
+
+function Get-PipIndex {
+    if ($UserPipIndex) { return $env:PIP_INDEX_URL }
+    if (-not $script:PipIndex) { Select-PipIndex }
+    return $script:PipIndex
+}
+
+function Invoke-PipTool([string[]]$Arguments, [string]$Index) {
+    if ($script:UseUv) {
+        $UvArguments = @("-m", "uv", "pip") + @($Arguments | Where-Object { $_ -ne "--disable-pip-version-check" }) + @("--python", $Python, "--index-url", $Index)
+        & $Python @UvArguments
+    } else {
+        & $Python -m pip @Arguments --index-url $Index
     }
+}
+
+function Enable-Uv {
+    if ($null -ne $script:UseUv) { return }
+    $script:UseUv = $false
+    try {
+        & $Python -m pip install --disable-pip-version-check -q "uv==$UvVersion" --index-url (Get-PipIndex)
+        if ($LASTEXITCODE -eq 0) { & $Python -m uv --version | Out-Null; $script:UseUv = ($LASTEXITCODE -eq 0) }
+    } catch {}
+    if (-not $script:UseUv) { Write-Host "uv 没装上，改用 pip 安装依赖（慢一些）。" -ForegroundColor Yellow }
+}
+
+function Invoke-Pip([string[]]$Arguments) {
+    Enable-Uv
+    $Index = Get-PipIndex
+    Invoke-PipTool $Arguments $Index
+    if ($LASTEXITCODE -eq 0) { return }
+    if ($UserPipIndex) { throw "安装失败：$($Arguments -join ' ')" }
+    $Other = if ($Index -eq $TunaIndex) { $PypiIndex } else { $TunaIndex }
+    Write-Host "下载失败，换 $(Get-FluentFlowHost $Other) 重试…"
+    Invoke-PipTool $Arguments $Other
+    if ($LASTEXITCODE -ne 0) { throw "安装失败（退出码 ${LASTEXITCODE}）：$($Arguments -join ' ')" }
 }
 
 function Test-NvidiaAdapter {
@@ -109,8 +170,8 @@ function Test-NvidiaAdapter {
 # fetches Gyan.FFmpeg from GitHub, which can crawl for many minutes in China
 # with nothing on screen (a user's friend, 2026-11-21); it stays as the fallback
 # when the mirror cannot be reached.
-# Same data folder rule as the Node.js step below and the uninstaller.
-$FfmpegDataDir = if ($env:FLUENTFLOW_DATA_DIR) { $env:FLUENTFLOW_DATA_DIR } else { Join-Path $env:APPDATA "FluentFlow" }
+# The data folder as the service reads it (environment, then .env).
+$FfmpegDataDir = Get-FluentFlowDataDir $Repo
 $FfmpegBin = Join-Path $FfmpegDataDir "bin"
 $FfmpegMirror = "https://registry.npmmirror.com/-/binary/ffmpeg-static/b6.1.1"
 # SHA-256 of the unpacked programs, checked before either is run or put on PATH.
@@ -230,33 +291,79 @@ if (Test-Path $Python) {
     }
 }
 
+# Python's own installer, for the current user only (no administrator rights),
+# from python.org or its byte-identical copy on npmmirror, whichever answers
+# faster. winget fetched the same installer from python.org only, which can
+# crawl in China; it stays as the fallback when neither host can be reached.
+# The per-user install goes to its usual place on drive C, like any Python.
+$PythonInstallerVersion = "3.12.10"
+$PythonInstallerSha256 = "67b5635e80ea51072b87941312d00ec8927c4db9ba18938f7ad2d27b328b95fb"
+$UserPythonDir = Join-Path $env:LOCALAPPDATA "Programs\Python\Python312"
+$UserPython = Join-Path $UserPythonDir "python.exe"
+
+function Install-PythonFromInstaller {
+    $Name = "python-$PythonInstallerVersion-amd64.exe"
+    $Work = Join-Path ([System.IO.Path]::GetTempPath()) ("fluentflow-python-" + [guid]::NewGuid())
+    New-Item -ItemType Directory -Path $Work | Out-Null
+    try {
+        $Installer = Join-Path $Work $Name
+        Save-FluentFlowVerifiedDownload @(
+            "https://www.python.org/ftp/python/$PythonInstallerVersion/$Name",
+            "https://registry.npmmirror.com/-/binary/python/$PythonInstallerVersion/$Name"
+        ) $Installer $PythonInstallerSha256
+        Write-Host "  安装 Python $PythonInstallerVersion（只给当前用户，约一分钟）…"
+        $Process = Start-Process -FilePath $Installer -Wait -PassThru -ArgumentList @(
+            "/quiet", "InstallAllUsers=0", "TargetDir=`"$UserPythonDir`"", "PrependPath=0",
+            "Include_launcher=0", "Include_test=0", "Include_doc=0", "Shortcuts=0"
+        )
+        if ($Process.ExitCode -ne 0) { throw "Python 安装程序退出码 $($Process.ExitCode)" }
+    } finally {
+        Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-UserPython {
+    if (-not (Test-Path $UserPython)) { return $false }
+    try {
+        & $UserPython -c $PythonSupported 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch { return $false }
+}
+
 if (-not (Test-Path $Python)) {
     $BasePython = Find-SupportedPython
+    if (-not $BasePython -and (Test-UserPython)) { $BasePython = @($UserPython) }
     if (-not $BasePython) {
-        # User scope: the machine-wide installer asks for administrator rights.
-        Install-WithWinget "Python.Python.3.12" "3.10 到 3.14 之间的 Python" @("--scope", "user")
-        if (-not (Get-Command py.exe -ErrorAction SilentlyContinue)) {
-            throw "Python 已经装好，但 PATH 里还找不到 py.exe。请开一个新的 PowerShell 窗口，重新运行本脚本。"
+        Write-Host "没找到 3.10 到 3.14 之间的 Python，正在安装 Python $PythonInstallerVersion…"
+        try {
+            Install-PythonFromInstaller
+        } catch {
+            Write-Host "Python 安装包下载或安装失败（$($_.Exception.Message)），改用 winget…" -ForegroundColor Yellow
+            # User scope: the machine-wide installer asks for administrator rights.
+            Install-WithWinget "Python.Python.3.12" "3.10 到 3.14 之间的 Python" @("--scope", "user")
         }
-        $BasePython = Find-SupportedPython
+        if (Test-UserPython) { $BasePython = @($UserPython) } else { $BasePython = Find-SupportedPython }
         if (-not $BasePython) {
-            throw "装好了 Python 3.12，但 py.exe 找不到它。请开一个新的 PowerShell 窗口，重新运行本脚本。"
+            throw "装好了 Python 3.12，但找不到它。请开一个新的 PowerShell 窗口，重新运行本脚本。"
         }
     }
-    Write-Host "用 Python $($BasePython[1].TrimStart('-')) 创建项目虚拟环境…"
-    Invoke-Checked $BasePython[0] @($BasePython[1], "-m", "venv", $Venv)
+    Write-Host "用 $($BasePython -join ' ') 创建项目虚拟环境…"
+    Invoke-Checked $BasePython[0] (@($BasePython | Select-Object -Skip 1) + @("-m", "venv", $Venv))
 }
 
 Write-Host "安装 Python 依赖（体积较大，首次约需十几分钟）…"
-Invoke-Pip @("install", "-r", (Join-Path $Repo "requirements-local.txt"))
+$Requirements = Join-Path $Repo "requirements-local.lock.windows-AMD64.txt"
+if (Test-Path $Requirements) { Write-Host "按锁定文件安装：$(Split-Path -Leaf $Requirements)" }
+else { $Requirements = Join-Path $Repo "requirements-local.txt" }
+Invoke-Pip @("install", "-r", $Requirements)
 
 # yt-dlp is kept at its newest release: Douyin, Bilibili and YouTube change their
 # pages often and an old copy fails a whole platform. Not fatal: it only affects
 # video links, and every launch retries through scripts\update_yt_dlp.py.
 Write-Host "安装/更新 yt-dlp（视频链接下载器）…"
 try {
-    & $Python -m pip install -U --disable-pip-version-check yt-dlp
-    $YtDlpOk = ($LASTEXITCODE -eq 0)
+    Invoke-Pip @("install", "-U", "--disable-pip-version-check", "yt-dlp")
+    $YtDlpOk = $true
 } catch {
     $YtDlpOk = $false
 }
@@ -271,88 +378,122 @@ if (Test-NvidiaAdapter) {
     Write-Host "没有检测到 NVIDIA 显卡，FluentFlow 将用 CPU 转录。"
 }
 
-# Only building the interface needs Node.js. Without one on the machine, a
-# portable copy goes into the data folder for this step alone: the winget
-# package is a machine-wide installer that asks for administrator rights.
-$NodeVersion = "v24.20.0"
-$Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-if (-not $Npm) {
-    $DataDir = if ($env:FLUENTFLOW_DATA_DIR) { $env:FLUENTFLOW_DATA_DIR } else { Join-Path $env:APPDATA "FluentFlow" }
-    $ToolsDir = Join-Path $DataDir "tools"
-    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-    $NodeName = "node-$NodeVersion-win-x64"
-    $NodeHome = Join-Path $ToolsDir $NodeName
-    if (-not (Test-Path (Join-Path $NodeHome "npm.cmd"))) {
-        Write-Host "未找到 Node.js（构建界面要用它），正在下载免安装版…"
-        $Zip = Join-Path $ToolsDir "$NodeName.zip"
-        try {
-            Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/$NodeVersion/$NodeName.zip" -OutFile $Zip
-        } catch {
-            Invoke-WebRequest -UseBasicParsing -Uri "https://npmmirror.com/mirrors/node/$NodeVersion/$NodeName.zip" -OutFile $Zip
-        }
-        Expand-Archive -Force -Path $Zip -DestinationPath $ToolsDir
-        Remove-Item $Zip
-    }
-    $env:Path = "$NodeHome;$env:Path"
+# A release install carries the interface already built for its version
+# (release.yml, frontend/dist-local/.release-version), so Node.js, npm and the
+# build are skipped. A git checkout, or a release from before this, builds here.
+$ReleaseStamp = Join-Path $Repo "frontend\dist-local\.release-version"
+$PrebuiltUi = (Test-Path (Join-Path $Repo "frontend\dist-local\local.html")) -and (Test-Path $ReleaseStamp) -and
+    ((Get-Content -Raw $ReleaseStamp).Trim() -eq (Get-Content -Raw (Join-Path $Repo "VERSION")).Trim())
+if ($PrebuiltUi) {
+    Write-Host "界面用这一版发布时构建好的，不用装 Node.js，也不用构建。"
+} else {
+    # Only building the interface needs Node.js. Without one on the machine, a
+    # portable copy goes into the data folder for this step alone: the winget
+    # package is a machine-wide installer that asks for administrator rights.
+    $NodeVersion = "v24.20.0"
+    # From the official SHASUMS256.txt of this release; npmmirror's copy is the same file.
+    $NodeZipSha256 = "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba"
     $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if (-not $Npm) {
-        throw "Node.js 已下载，但运行不了 ${NodeHome} 里的 npm.cmd。"
+        $ToolsDir = Join-Path (Get-FluentFlowDataDir $Repo) "tools"
+        New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+        $NodeName = "node-$NodeVersion-win-x64"
+        $NodeHome = Join-Path $ToolsDir $NodeName
+        if (-not (Test-Path (Join-Path $NodeHome "npm.cmd"))) {
+            Write-Host "未找到 Node.js（构建界面要用它），正在下载免安装版…"
+            $Zip = Join-Path $ToolsDir "$NodeName.zip"
+            Save-FluentFlowVerifiedDownload @(
+                "https://nodejs.org/dist/$NodeVersion/$NodeName.zip",
+                "https://registry.npmmirror.com/-/binary/node/$NodeVersion/$NodeName.zip"
+            ) $Zip $NodeZipSha256
+            Expand-Archive -Force -Path $Zip -DestinationPath $ToolsDir
+            Remove-Item $Zip
+        }
+        $env:Path = "$NodeHome;$env:Path"
+        $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+        if (-not $Npm) {
+            throw "Node.js 已下载，但运行不了 ${NodeHome} 里的 npm.cmd。"
+        }
     }
-}
 
-# Retried once from npmmirror when the default registry fails.
-function Invoke-Npm([string[]]$Arguments) {
-    & $Npm.Source @Arguments
-    if ($LASTEXITCODE -eq 0) { return }
-    Write-Host "下载失败，换国内镜像（npmmirror）重试…"
-    Invoke-Checked $Npm.Source ($Arguments + @("--registry=https://registry.npmmirror.com"))
-}
-
-# Picked by what package.json declares rather than hard-coded, so a renamed
-# build script fails loudly here instead of silently building nothing.
-$BuildScript = "build:frontend"
-$PackageJson = Join-Path $Repo "package.json"
-if (Test-Path $PackageJson) {
-    $Scripts = (Get-Content $PackageJson -Raw | ConvertFrom-Json).scripts
-    if ($Scripts.PSObject.Properties.Name -contains "build:frontend:local") {
-        $BuildScript = "build:frontend:local"
+    # The npm registry: npmjs, or npmmirror when npmjs is unreachable or slow; a
+    # failed run is retried once from the other. A registry the user configured
+    # (npm config or npm_config_registry) is used as it is.
+    $NpmjsRegistry = "https://registry.npmjs.org"
+    $NpmmirrorRegistry = "https://registry.npmmirror.com"
+    $UserNpmRegistry = $null
+    try {
+        $Configured = (& $Npm.Source config get registry 2>$null | Select-Object -First 1)
+        if ($Configured -and ($Configured.TrimEnd('/') -ne $NpmjsRegistry)) { $UserNpmRegistry = $Configured }
+    } catch {}
+    $NpmRegistry = $NpmjsRegistry
+    if (-not $UserNpmRegistry) {
+        # A 5 MB package, at the same path on both registries.
+        $Tarball = "typescript/-/typescript-5.4.5.tgz"
+        $First = (Get-FluentFlowSourceOrder @("$NpmjsRegistry/$Tarball", "$NpmmirrorRegistry/$Tarball"))[0]
+        if ($First -like "$NpmmirrorRegistry*") {
+            $NpmRegistry = $NpmmirrorRegistry
+            Write-Host "npmjs 连不上或太慢，前端依赖从国内镜像（npmmirror）下载。"
+        }
     }
-}
 
-Push-Location $Repo
-try {
-    Write-Host "安装前端依赖…"
-    Invoke-Npm @("ci")
-    Write-Host "构建前端：npm run ${BuildScript}"
-    Invoke-Checked $Npm.Source @("run", $BuildScript)
-} finally {
-    Pop-Location
+    function Invoke-Npm([string[]]$Arguments) {
+        if ($UserNpmRegistry) {
+            Invoke-Checked $Npm.Source $Arguments
+            return
+        }
+        & $Npm.Source @Arguments "--registry=$NpmRegistry"
+        if ($LASTEXITCODE -eq 0) { return }
+        $Other = if ($NpmRegistry -eq $NpmmirrorRegistry) { $NpmjsRegistry } else { $NpmmirrorRegistry }
+        Write-Host "下载失败，换 $(Get-FluentFlowHost $Other) 重试…"
+        Invoke-Checked $Npm.Source ($Arguments + @("--registry=$Other"))
+    }
+
+    # Picked by what package.json declares rather than hard-coded, so a renamed
+    # build script fails loudly here instead of silently building nothing.
+    $BuildScript = "build:frontend"
+    $PackageJson = Join-Path $Repo "package.json"
+    if (Test-Path $PackageJson) {
+        $Scripts = (Get-Content $PackageJson -Raw | ConvertFrom-Json).scripts
+        if ($Scripts.PSObject.Properties.Name -contains "build:frontend:local") {
+            $BuildScript = "build:frontend:local"
+        }
+    }
+
+    Push-Location $Repo
+    try {
+        Write-Host "安装前端依赖…"
+        Invoke-Npm @("ci")
+        Write-Host "构建前端：npm run ${BuildScript}"
+        Invoke-Checked $Npm.Source @("run", $BuildScript)
+    } finally {
+        Pop-Location
+    }
 }
 
 # Two small speaker-diarization models (about 47 MB), so the speaker separation
-# switch works right after install. They exist only on GitHub, with no mirror; a
-# failure costs only that switch, so it is reported and the install continues.
+# switch works right after install. From GitHub or a mirror in China (the script
+# picks); a failure costs only that switch, so it is reported and the install
+# continues.
 Write-Host "准备讲话人区分模型…"
 & $Python (Join-Path $Repo "scripts\fetch_diarization_models.py")
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "提示：讲话人区分模型没有下载成功，其余功能不受影响。网络能打开 github.com 后运行这一句补上：.\.venv\Scripts\python.exe scripts\fetch_diarization_models.py"
+    Write-Host "提示：讲话人区分模型没有下载成功，其余功能不受影响。网络恢复后运行这一句补上：.\.venv\Scripts\python.exe scripts\fetch_diarization_models.py"
 }
 
-# Downloaded here rather than inside the user's first transcription, where the
-# wait has no progress and no explanation. A failure is not fatal: the model can
-# be fetched later, and the first run falls back to downloading it itself.
+# The transcription model (1.5 to 3 GB) downloads in the background, so the
+# install finishes and the app opens without waiting for it (王愉超, 2026-11-21:
+# on a real connection in China it was the longest step). A recording
+# submitted before it is done shows 「正在下载转录模型」 and carries on once it
+# is (local_stt._download_model_if_missing); the download picks the faster of
+# huggingface.co and hf-mirror.com itself. Its output goes to the data folder.
 if ($SkipModel) {
     Write-Host "按要求跳过转录模型，第一次转录时会自动下载。"
 } else {
-    Write-Host "准备转录模型…"
-    & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "下载失败，换镜像源（hf-mirror.com）重试…"
-        & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch" "--mirror"
-    }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "转录模型没有下载成功。第一次转录时会自动下载（连不上 huggingface.co 时换 hf-mirror.com 镜像），也可以现在运行：.\.venv\Scripts\python.exe scripts\stt_model.py fetch --mirror"
-    }
+    $ModelLog = Join-Path (Get-FluentFlowDataDir $Repo) "logs\model-download.log"
+    & $Python (Join-Path $Repo "scripts\stt_model.py") "fetch" "--background" $ModelLog
+    if ($LASTEXITCODE -ne 0) { Write-Host "转录模型没能开始后台下载，第一次转录时会自动下载。" }
+    Write-Host "转录模型（1.5 到 3 GB）不用等它：装完就能打开页面，下完之前提交的录像会等它下完再转。"
 }
 
 # The user's agent reaches this app through the MCP tools, and that interface

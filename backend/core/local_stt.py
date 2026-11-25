@@ -810,6 +810,36 @@ def _normalize_language(language: str | None) -> str | None:
     return aliases.get(value, value)
 
 
+def _download_model_if_missing(
+    model_size: str,
+    *,
+    engine: str | None,
+    device: str,
+    on_status: Callable[[str], None] | None,
+) -> None:
+    """Fetch the planned model first when it is not on disk yet, saying so.
+
+    The installers leave the model downloading in the background so the app
+    opens at once; a recording submitted before it finishes waits here under
+    ``downloading_model`` (the page shows 「正在下载转录模型」) instead of
+    sitting in ``loading_model`` for many minutes or failing. A download the
+    installer started holds the Hugging Face file locks, so this waits for it
+    and carries on from where it is rather than fetching twice. A failure
+    here is not the task's: the load below fetches or reports as it always did.
+    """
+    try:
+        from backend.core import local_stt_assets
+
+        plan = planned_model(model_size, engine=engine, device=device)
+        if local_stt_assets.is_downloaded(plan):
+            return
+        if on_status:
+            on_status("downloading_model")
+        local_stt_assets.ensure_downloaded(plan)
+    except Exception as exc:  # noqa: BLE001 - the model load reports its own failure
+        logger.warning("转录模型预先下载没有成功，交给加载时再试：%s", exc)
+
+
 def transcribe_audio(
     audio_path: str | Path,
     *,
@@ -846,6 +876,8 @@ def transcribe_audio(
     # handle; honouring it matters more than the speed, so the fast lane is
     # skipped rather than quietly ignoring what was passed in.
     lane, fallback_reason = ("faster_whisper", None) if model is not None else resolve_local_stt_engine(engine)
+    if model is None:
+        _download_model_if_missing(model_size, engine=engine, device=device, on_status=on_status)
     if lane == "mlx":
         result = _transcribe_with_mlx(
             path,
@@ -1070,6 +1102,7 @@ def transcribe_audio_chunked(
             on_status=on_status,
         )
 
+    _download_model_if_missing(model_size, engine=engine, device=device, on_status=on_status)
     if on_status:
         on_status("loading_model")
     model, model_stats = get_or_load_model_with_stats(

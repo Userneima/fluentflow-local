@@ -1,26 +1,19 @@
 ﻿# FluentFlow Local launcher (Windows).
 #
-# Double-click FluentFlowLocal.cmd. This console window is the local service:
-# press Ctrl+C or close it to stop FluentFlow Local. It deliberately starts
+# Double-click FluentFlowLocal.cmd. It checks the environment, starts the
+# service in the background (Start-FluentFlowService: closing this window does
+# not stop it), opens the page and exits. Stop it with 「停止 FluentFlow Local」
+# on the Desktop (stop-local.ps1). It deliberately starts
 # backend.local_main:app, never the hosted application entry.
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = if ($env:FLUENTFLOW_REPO) { $env:FLUENTFLOW_REPO } else { Split-Path -Parent (Split-Path -Parent $ScriptDir) }
-# Port: the FLUENTFLOW_LOCAL_PORT environment variable first, then the same line
-# in the repository's .env, else 8000 -- the order the macOS launcher and the
-# backend use, so the launcher probes the port the service actually listens on.
-function Get-EnvFilePort([string]$RepoDir) {
-    $EnvFile = Join-Path $RepoDir ".env"
-    if (-not (Test-Path $EnvFile)) { return $null }
-    $Line = Get-Content $EnvFile -ErrorAction SilentlyContinue |
-        Where-Object { $_ -match '^\s*(export\s+)?FLUENTFLOW_LOCAL_PORT\s*=' } | Select-Object -Last 1
-    if (-not $Line) { return $null }
-    $Value = (($Line -split '=', 2)[1] -split '\s#')[0].Trim().Trim('"').Trim("'")
-    if ($Value -match '^\d+$') { return $Value }
-    return $null
-}
-$Port = if ($env:FLUENTFLOW_LOCAL_PORT) { $env:FLUENTFLOW_LOCAL_PORT } elseif (Get-EnvFilePort $Repo) { Get-EnvFilePort $Repo } else { "8000" }
+# The port follows the environment, then the repository's .env, else 8000:
+# the rule the backend uses (fluentflow-env.ps1), so the launcher probes the
+# port the service actually listens on.
+. (Join-Path $ScriptDir "fluentflow-env.ps1")
+$Port = Get-FluentFlowPort $Repo
 $AppUrl = "http://127.0.0.1:$Port/"
 $LocalAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
 $LogDir = Join-Path $LocalAppData "FluentFlow\Logs"
@@ -149,8 +142,29 @@ $PythonCandidates = @(
     (Join-Path $Repo ".venv\Scripts\python.exe")
 )
 $Python = $PythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$SetupScript = Join-Path $Repo "launchers\windows\setup-local.ps1"
 if (-not $Python) {
-    Fail "没找到 Python 虚拟环境。先在 PowerShell 里运行安装脚本：`npowershell -ExecutionPolicy Bypass -File `"$Repo\launchers\windows\setup-local.ps1`""
+    Fail "没找到 Python 虚拟环境。先在 PowerShell 里运行安装脚本：`npowershell -ExecutionPolicy Bypass -File `"$SetupScript`""
+}
+
+# A virtual environment does not survive every move: after a friend moved the
+# folder to drive D the environment no longer started and had to be rebuilt by
+# hand (2026-11). When it cannot import what the service needs, it is rebuilt
+# here (it holds nothing but packages; the transcription model is not touched).
+function Test-VenvWorks {
+    try {
+        & $Python -c "import fastapi, uvicorn, faster_whisper" 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch { return $false }
+}
+if (-not (Test-VenvWorks)) {
+    Write-Host "Python 环境用不了了（多半是文件夹换过位置），正在重建，需要几分钟…" -ForegroundColor Yellow
+    Remove-Item -Recurse -Force (Split-Path -Parent (Split-Path -Parent $Python)) -ErrorAction SilentlyContinue
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $SetupScript -SkipModel
+    $Python = Join-Path $Repo ".venv\Scripts\python.exe"
+    if ($LASTEXITCODE -ne 0 -or -not (Test-VenvWorks)) {
+        Fail "重建 Python 环境没有成功，请看上面的提示，处理后重新运行：`npowershell -ExecutionPolicy Bypass -File `"$SetupScript`""
+    }
 }
 
 # Add PATH as the registry has it now after what this process already had. The
@@ -214,41 +228,19 @@ try {
 }
 
 Set-Location $Repo
-Start-Job -ScriptBlock {
-    param($ProbePort, $ProbeUrl, $ProbeLog)
-    for ($attempt = 0; $attempt -lt 80; $attempt++) {
-        try {
-            Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$ProbePort/health" -TimeoutSec 1 | Out-Null
-            Start-Process $ProbeUrl
-            return
-        } catch {
-            Start-Sleep -Milliseconds 250
-        }
-    }
-    [System.IO.File]::AppendAllText($ProbeLog, "Service did not listen on port $ProbePort within 20 seconds." + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding $false))
-} -ArgumentList $Port, $AppUrl, $LogFile | Out-Null
-
-Write-Host ""
-Write-Host "FluentFlow Local 正在启动：$AppUrl"
-Write-Host "日志文件：$LogFile"
-Write-Host "停止：在这个窗口按 Ctrl+C，或直接关掉窗口。"
-Write-Host ""
-
-# Let python-dotenv in backend.local_main parse .env; PowerShell must not
-# source it because dotenv files may contain comments, spaces, or non-shell syntax.
-# uvicorn logs to stderr. Under "Stop", Windows PowerShell 5.1 turns the first
-# stderr line of a native command piped through 2>&1 into a terminating error,
-# so the service would die on its own startup banner. Each line is turned back
-# into its text: a stderr line arrives as an error record, which printed a
-# NativeCommandError trailer under every log line.
-$ErrorActionPreference = "Continue"
-# PowerShell decodes a native command's output with the console's code page
-# (GBK on a Chinese Windows), and the service writes UTF-8 under PYTHONUTF8, so
-# every Chinese line in this window and in local.log came out garbled.
-try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
-& $Python -m uvicorn backend.local_main:app --host 127.0.0.1 --port $Port 2>&1 | ForEach-Object {
-    $Line = "$_"
-    Write-Host $Line
-    Write-LogLine $Line
+try {
+    $ServicePid = Start-FluentFlowService $Repo $Python $Port $LogFile
+} catch {
+    Fail "$_"
 }
-exit $LASTEXITCODE
+Write-Host "FluentFlow Local 正在后台启动（进程 $ServicePid）…"
+for ($attempt = 0; $attempt -lt 90 -and -not (Test-FluentFlowHealthy $Port); $attempt++) { Start-Sleep -Seconds 1 }
+if (-not (Test-FluentFlowHealthy $Port)) {
+    Fail "服务没有在 90 秒内启动。日志：$LogFile"
+}
+Start-Process $AppUrl
+Write-Host ""
+Write-Host "FluentFlow Local 在后台运行：$AppUrl"
+Write-Host "关掉这个窗口不影响它。要停止，双击桌面上的「停止 FluentFlow Local」。"
+Write-Host "日志文件：$LogFile"
+exit 0

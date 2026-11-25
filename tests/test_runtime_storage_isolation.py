@@ -9,7 +9,7 @@ def test_module_level_storage_defaults_stay_inside_the_isolated_root(test_runtim
     frozen = {
         "job_store.DEFAULT_DB_PATH": job_store.DEFAULT_DB_PATH,
         "event_logger.DEFAULT_DB_PATH": event_logger.DEFAULT_DB_PATH,
-        "local_config.DEFAULT_CONFIG_PATH": local_config.DEFAULT_CONFIG_PATH,
+        "local_config.config_path()": local_config.config_path(),
     }
 
     escaped = {

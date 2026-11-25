@@ -33,10 +33,18 @@ def test_a_powershell_script_with_non_ascii_text_carries_a_bom():
             assert raw.startswith(b"\xef\xbb\xbf"), f"{script.name} has non-ASCII text but no UTF-8 BOM"
 
 
-def test_uvicorn_does_not_run_under_stop():
-    text = (ROOT / "FluentFlowLocal.ps1").read_text(encoding="utf-8-sig")
-    before = text[: text.index("-m uvicorn")]
-    assert before.rfind('$ErrorActionPreference = "Continue"') > before.rfind('$ErrorActionPreference = "Stop"')
+def test_the_service_runs_in_the_background_not_in_the_launcher_window():
+    """A friend's agent started the service in a temporary window; the window
+    was reclaimed and the service with it (2026-11). The launcher and the
+    installer start it through Windows' process service and return."""
+    launcher = (ROOT / "FluentFlowLocal.ps1").read_text(encoding="utf-8-sig")
+    helper = (ROOT / "fluentflow-env.ps1").read_text(encoding="utf-8-sig")
+    installer = (ROOT.parents[1] / "install.ps1").read_text(encoding="utf-8")
+    assert "Start-FluentFlowService" in launcher and "-m uvicorn" not in launcher
+    assert "Start-FluentFlowService" in installer and "-m uvicorn" not in installer
+    assert "Win32_Process -MethodName Create" in helper
+    assert (ROOT / "stop-local.ps1").is_file()
+    assert "stop-local.ps1" in (ROOT / "install-local-to-desktop.ps1").read_text(encoding="utf-8-sig")
 
 
 def test_the_launcher_rereads_path_before_the_startup_check():
@@ -68,17 +76,32 @@ def test_setup_downloads_ffmpeg_from_the_mirror_before_trying_winget():
 def test_the_uninstaller_reads_the_fields_health_has():
     text = (ROOT / "uninstall-local.ps1").read_text(encoding="utf-8-sig")
     assert "$Health.runtime.execution" in text or "$Health.edition" in text
-    assert "$Jobs.jobs" in text
+    # Busy tasks are counted from each task's activity (Get-FluentFlowBusyCount).
+    assert "Get-FluentFlowBusyCount" in text
+
+
+def test_busy_tasks_are_counted_from_each_tasks_activity():
+    """A task reads "completed" once its transcript is stored while its cut and
+    note still run; the update and the stop icon must see that work."""
+    helper = (ROOT / "fluentflow-env.ps1").read_text(encoding="utf-8-sig")
+    installer = (ROOT.parents[1] / "install.ps1").read_text(encoding="utf-8")
+    for text in (helper, installer):
+        assert "activity.busy" in text and "local-single-user" in text
+    assert "Get-FluentFlowBusyCount" in (ROOT / "stop-local.ps1").read_text(encoding="utf-8-sig")
+    assert "count_active_jobs.py" in (ROOT.parents[1] / "install.sh").read_text(encoding="utf-8")
 
 
 def test_the_service_starts_in_python_utf8_mode():
     """Owner's Windows machine, 2026-10-16: without UTF-8 mode every text read
     that names no encoding used GBK, and ffmpeg's or yt-dlp's UTF-8 output with
-    a Chinese name in it stopped the read waiting for it."""
-    for script in (ROOT / "FluentFlowLocal.ps1", ROOT.parents[1] / "install.ps1"):
-        text = script.read_text(encoding="utf-8-sig")
-        started = text.index("backend.local_main:app", text.index("uvicorn"))
-        assert '$env:PYTHONUTF8 = "1"' in text[:started], script.name
+    a Chinese name in it stopped the read waiting for it. The background
+    service gets a fresh environment from Windows, so its command sets it."""
+    helper = (ROOT / "fluentflow-env.ps1").read_text(encoding="utf-8-sig")
+    command = helper[helper.index("function Start-FluentFlowService"):]
+    line = next(text for text in command.splitlines() if "$Command =" in text)
+    assert line.index("set PYTHONUTF8=1") < line.index("$Runner")
+    launcher = (ROOT / "FluentFlowLocal.ps1").read_text(encoding="utf-8-sig")
+    assert '$env:PYTHONUTF8 = "1"' in launcher[: launcher.index("check_local_readiness.py")]
 
 
 @pytest.mark.skipif(shutil.which("powershell") is None, reason="needs Windows PowerShell to parse the scripts")
@@ -99,3 +122,12 @@ def test_every_powershell_script_parses():
             env={**os.environ, "FFPARSE_SCRIPT": str(script)},
         )
         assert done.returncode == 0 and not done.stdout.strip(), f"{script.name}: {done.stdout or done.stderr}"
+
+
+def test_the_background_service_gets_the_window_environment_without_a_command_line_secret():
+    """Keys on a command line show in any process listing; the window's
+    environment goes over in a temp file the service reads and deletes."""
+    helper = (ROOT / "fluentflow-env.ps1").read_text(encoding="utf-8-sig")
+    command = helper[helper.index("function Start-FluentFlowService"):helper.index("function Test-FluentFlowHealthy")]
+    assert "Get-ChildItem Env:" in command and "--env-file" in command
+    assert "set `\"$($_.Name)" not in command

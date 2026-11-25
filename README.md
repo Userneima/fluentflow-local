@@ -12,6 +12,12 @@
 curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.sh | bash
 ```
 
+国内打不开 GitHub 时，用 npmmirror 上随每个发布版发的同一份（代码也会从那里下载）：
+
+```bash
+curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest/files/install.sh | bash
+```
+
 下面是分步安装的说明，一条命令装不上时再看。
 
 ![主界面](docs/images/home.png)
@@ -36,8 +42,9 @@ agent 会先确认适用范围，再修改你的个人写法；只影响之后�
 
 - **macOS**：Apple 芯片（M 系列）转录走 GPU 加速。Intel Mac 也能装，转录走 CPU，会慢不少。
   不需要先装别的东西，FFmpeg、Node.js 和 Python 由安装脚本装进 FluentFlow 自己的数据文件夹。
-- **Windows 10 / 11**：有 NVIDIA 显卡时走 GPU，没有就走 CPU。FFmpeg 从国内镜像下载到 FluentFlow 自己的
-  数据文件夹（镜像连不上时改用系统自带的 winget），缺 Python 时用 winget 补上。
+- **Windows 10 / 11**：有 NVIDIA 显卡时走 GPU，没有就走 CPU。一条命令安装（`install.ps1`）把整个产品
+  （代码、Python 环境、数据、FFmpeg、转录模型）放进你选的盘上的一个 `FluentFlow` 文件夹，默认推荐 C 盘以外
+  剩余空间最大的盘；缺 Python 时给当前用户装一个（装在 C 盘，和普通装 Python 一样）。
 
 磁盘预留约 8 GB，明细见下文「需要多少磁盘空间」。
 
@@ -54,14 +61,10 @@ cd fluentflow-local
 最新版本的 Source code (zip)，解压后在终端里进入解压出来的文件夹。在一台全新的 Mac 上第一次
 运行 `git`，系统会弹窗要求安装命令行开发者工具，点「安装」等它装完再重跑即可。
 
-在国内网络下 pip 和 npm 下载慢时，先在同一个终端里设置镜像再运行安装脚本，脚本不会自己切换：
-
-```bash
-export PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-npm config set registry https://registry.npmmirror.com
-```
-
-Windows 的 PowerShell 里第一行写成 `$env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"`。
+国内网络不用另外设置：每样要下载的东西（Python 安装包、pip、npm、Node.js、说话人模型、转录模型，
+Windows 上还有 FFmpeg）都有国内来源，安装脚本先试原站几秒，连不上或明显慢就改从镜像下载
+（清华源、npmmirror、ModelScope、hf-mirror）；下载的程序按固定的校验值核对。你自己设了
+`PIP_INDEX_URL` 或 npm 的 registry 时按你设的来。
 
 ### macOS
 
@@ -69,7 +72,7 @@ Windows 的 PowerShell 里第一行写成 `$env:PIP_INDEX_URL = "https://pypi.tu
 bash launchers/macos/setup-local.sh
 ```
 
-它会建虚拟环境、装 Python 和前端依赖、构建前端、下载转录模型，最后在桌面生成
+它会建虚拟环境、装 Python 和前端依赖、构建前端、在后台开始下载转录模型，最后在桌面生成
 「FluentFlow Local.app」。装完双击桌面图标即可使用，不需要再开终端。
 
 整个过程不需要你回答任何问题，也不要密码。缺的 FFmpeg、Node.js 和 Python 装进 FluentFlow 自己的
@@ -77,9 +80,11 @@ bash launchers/macos/setup-local.sh
 不生成桌面图标，`--skip-model` 不下转录模型（留到第一次转录时再下）。
 
 Apple 芯片的 Mac 上，Python 依赖按 `requirements-local.lock.macos-arm64.txt` 安装，那是一份
-实际测过的版本组合；其他平台按 `requirements-local.txt` 的版本下限装最新的。转录模型下载失败时
-脚本会停下来说明：环境已装好，按它给的命令 `scripts/stt_model.py fetch --mirror` 从镜像补下模型，
-再运行一次脚本把剩下的步骤做完。
+实际测过的版本组合；Windows 按 `requirements-local.lock.windows-AMD64.txt`；Intel Mac 和 Linux 按 `requirements-local.txt` 的版本下限装最新的。依赖用 uv 装（比 pip 快得多），装不上 uv 时退回 pip。
+
+转录模型（1.5 到 3 GB）在后台下载，安装不等它：装完就能打开页面，下完之前提交的录像在任务里显示
+「正在下载转录模型」，下完自动接着转。进度写在数据目录的 `logs/model-download.log`；没下成时第一次转录会再下，
+也可以手动运行 `scripts/stt_model.py fetch --mirror` 从镜像补下。
 
 ### Windows
 
@@ -87,13 +92,15 @@ Apple 芯片的 Mac 上，Python 依赖按 `requirements-local.lock.macos-arm64.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\launchers\windows\setup-local.ps1
 ```
 
-同样是一次装完，同样不问问题。缺 FFmpeg 时从国内镜像下载（连不上再用 winget），缺 Python 时用 winget 装上，Node.js 下载免安装版。
+同样是一次装完，同样不问问题。缺 FFmpeg 时从国内镜像下载（连不上再用 winget），缺 Python 时下载官方安装包给当前用户装上（原站和国内镜像挑快的）。用一条命令（发布包）装的，界面是发版时构建好的，不装 Node.js、不构建；git 检出的才下载 Node.js 免安装版在本机构建。
+数据、FFmpeg、转录模型的位置按代码目录里 `.env` 写的来（`FLUENTFLOW_DATA_DIR`、`HF_HOME`）；一条命令安装会替你写好，
+指向它的 `FluentFlow` 文件夹，单独运行这个脚本、`.env` 里没写时，数据在 `%APPDATA%\FluentFlow`，模型在用户目录的 Hugging Face 缓存。
 检测到 NVIDIA 显卡时，它会把 CUDA 12 与 cuDNN 9 运行库装进这个虚拟环境；不需要装机器级
 CUDA Toolkit，但显卡驱动要在。`-SkipModel` 不下转录模型。装完双击桌面上的
 「FluentFlow Local」启动。
 
 如果脚本装完 Python 或 Node.js 后提示找不到它们，关掉这个 PowerShell 窗口，开一个新的再运行一次。
-Windows 和 Linux 还没有经过测试的依赖锁定文件，Python 依赖按 `requirements-local.txt` 的版本下限装最新的。
+Python 依赖按 `requirements-local.lock.windows-AMD64.txt` 装：在 GitHub 的 Windows 机器上装过、跑过全套测试的确切版本，覆盖 Python 3.10 到 3.14。
 
 已经装好、只想补 GPU 运行库：
 
@@ -193,7 +200,7 @@ Anthropic API Key）；导出飞书发笔记内容和截图到你的飞书，默
   记录上从被打断的那一步接着做，做完的步骤不重做；被打断的那一步里已经拿到的模型回答直接沿用，不再花
   第二次钱（用 Claude 订阅写的笔记照旧整篇重写）；正在转录的会从头转录。用终端启动的，在那个终端窗口
   按 Ctrl+C。
-- Windows：启动器那个黑色窗口就是服务，按 Ctrl+C 或关掉窗口。
+- Windows：双击桌面上的「停止 FluentFlow Local」。服务在后台跑，启动器的窗口检查完、打开页面就关掉，关窗口不会停服务。
 
 重启电脑也会停掉它；它不会开机自启。
 
@@ -323,17 +330,20 @@ FluentFlow 只回应发给本机地址、本机 IP 或本机 `.local` 名的请�
 
 ## 更新到新版本
 
+有新版本时，页面左下角会出现「新版本 vX」。用一条命令（发布包）装的，再运行一次当初那条安装命令就行，
+也可以直接对你的 agent 说「更新 FluentFlow」：它会把新版本下到旁边，保留 `.env`、任务记录、设置和模型，
+停掉服务、换上新代码、补齐新版本要的依赖和模型，再重新启动；中间任何一步失败，就换回原来的版本。
+有任务正在处理时它不动，等任务做完再运行。
+
+用 git 检出的：
+
 ```bash
 cd fluentflow-local
 git pull
 bash launchers/macos/setup-local.sh
 ```
 
-Windows 同样是 `git pull` 后重新运行 `setup-local.ps1`。安装脚本可以重复运行，会按新版本
-重装依赖、重建界面；任务记录和填过的 Key 不在代码目录里，不受影响。用 zip 安装的，下载新版本解压后
-在新文件夹里运行安装脚本，它会把桌面图标指向新文件夹；确认新版本能正常处理一个任务之后，再删掉旧
-文件夹（里面的 `.venv` 和 `node_modules` 占着几 GB，而你的任务记录不在那里）。旧文件夹里有 `.env` 的，
-先把它复制到新文件夹。
+Windows 同样是 `git pull` 后重新运行 `setup-local.ps1`。
 
 ## 出问题时
 
@@ -386,12 +396,17 @@ bash launchers/macos/uninstall-local.sh --all --dry-run   # 先看看要删什�
 Windows 用 `launchers\windows\uninstall-local.ps1`，开关是 `-Models`、`-Data`、
 `-All`、`-DryRun`。
 
-默认只删虚拟环境、前端依赖、桌面启动器和日志，这些重装就回来。转录模型和任务
-数据各自需要显式开口：模型住在 Hugging Face 的公共缓存里，脚本只删本产品下载过
-的那几个目录；任务数据删掉无法恢复，所以会再确认一次。
+默认只删程序：用一条命令（发布包）装的，整个代码目录连同虚拟环境一起删；用 git 检出的，只删虚拟环境、
+前端依赖和构建产物，代码留着（里面可能有你的改动）。另外删安装时下载的 FFmpeg、Node.js，桌面启动器、日志、
+给 agent 的 skill，并注销 Claude Code、Codex 里的 `fluentflow-local` 工具（只在它指向这份安装时）。这些重装就回来。
+转录模型和任务数据各自需要显式开口：模型在 Hugging Face 的公共缓存里时，脚本只删本产品下载过的那几个目录；
+任务数据删掉无法恢复，所以会再确认一次。
 
-FFmpeg、Node.js、Homebrew 和 Python 不会被动，它们是系统工具。代码目录留给你自己
-删——卸载脚本就在里面。
+Windows 上用一条命令装进 `FluentFlow` 文件夹的，`-All` 删完后这个文件夹也不在了。也可以让你的 agent 替你卸载，
+做法写在 [AGENT_INSTALL.md](AGENT_INSTALL.md) 的「Uninstalling」。
+
+机器上原本就有的 FFmpeg、Node.js、Homebrew 和 Python 不会被动；Windows 上安装脚本替你装的 Python 也留着，
+在「设置 → 应用」里可以自己卸载。
 
 ## Development
 

@@ -1,0 +1,99 @@
+# Runs when a release is published (or by hand for an existing tag):
+#
+# 1. Builds the interface once (frontend/dist-local, stamped with the version
+#    in .release-version) and attaches it to the release as
+#    frontend-dist-local.zip, so installs from a release need no Node.js, npm
+#    or build on the user's machine (the setup scripts skip that step when the
+#    stamp matches VERSION).
+# 2. Publishes the release, interface included, to npm as `fluentflow-local`,
+#    so it can be installed from npmmirror in China
+#    (scripts/stage_npm_package.py says why and how). Two ways to authenticate
+#    (docs/04-维护手册.md, "发到 npm"): the NPM_TOKEN repository secret, needed
+#    for the very first publish, then npm trusted publishing (this workflow
+#    proves itself to npm, no stored token), switched on by the repository
+#    variable NPM_TRUSTED_PUBLISHING=true. With neither, this step is skipped
+#    and stays green.
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.12.0"
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Build the interface
+        env:
+          FLUENTFLOW_GIT_DIRTY: "0"
+        run: |
+          npm ci
+          npm run build:frontend
+          cp VERSION frontend/dist-local/.release-version
+          (cd frontend/dist-local && zip -qr "$GITHUB_WORKSPACE/frontend-dist-local.zip" .)
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" frontend-dist-local.zip --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-local
+          path: frontend-dist-local.zip
+
+  npm:
+    needs: frontend
+    runs-on: ubuntu-latest
+    env:
+      HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' || vars.NPM_TRUSTED_PUBLISHING == 'true' }}
+    steps:
+      - name: Skip without a token
+        if: env.HAS_TOKEN != 'true'
+        run: echo "::notice::Neither NPM_TOKEN nor NPM_TRUSTED_PUBLISHING is set, so $TAG is not published to npm. See docs/04-维护手册.md, 发到 npm."
+      # The default branch's scripts, with every tag: the staging script
+      # archives the release's own tree.
+      - uses: actions/checkout@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          name: frontend-dist-local
+      - uses: actions/setup-node@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Stage and publish
+        if: env.HAS_TOKEN == 'true'
+        env:
+          # Empty under trusted publishing, where npm uses this run's identity.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          mkdir -p build/frontend && unzip -q frontend-dist-local.zip -d build/frontend
+          python3 scripts/stage_npm_package.py "$TAG" build/npm build/frontend
+          npm --version
+          # ./ makes it a local folder; a bare build/npm is read as a GitHub repository.
+          npm publish ./build/npm --access public --provenance
+      - name: Ask npmmirror to copy it now
+        if: env.HAS_TOKEN == 'true'
+        # npmmirror also copies on its own within minutes; this only shortens the wait.
+        run: curl -fsS -X PUT https://registry-direct.npmmirror.com/-/package/fluentflow-local/syncs || true
