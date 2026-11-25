@@ -221,7 +221,8 @@ on run
 		set verb to "停止"
 		if isRestart then set verb to "重启"
 		if runningJobs > 0 then
-			set warnText to "当前有 " & runningJobs & " 个任务正在进行中。" & verb & "会中断它们，之后需要重新提交。"
+			-- 服务起来后会从断点接着做（决策 6.42），只有正在做的那一步要从头再做。
+			set warnText to "当前有 " & runningJobs & " 个任务正在进行中。" & verb & "会打断它们：下次服务启动时从断点接着做，正在做的那一步要从头再做。"
 		else if runningJobs < 0 then
 			-- 读不到任务列表，不代表没有任务。宁可多问一句，也不静默中断。
 			set warnText to "读不到任务列表，没法确认现在有没有任务在跑。" & verb & "会中断正在进行的任务。"

@@ -32,7 +32,7 @@ from backend.core import (
 )
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
-from backend.core.job_store import get_job, list_jobs_by_statuses, save_result_changes
+from backend.core.job_store import get_job, list_jobs_by_statuses, save_result_changes, update_job_metadata
 from backend.core.lark_cli_exporter import export_markdown_via_lark_cli, lark_cli_ready
 from backend.core.lark_exporter import export_markdown_to_lark
 from backend.core.local_config import resolve_secret
@@ -265,6 +265,14 @@ def _raise_if_stopped(task_id: str) -> None:
         raise StepStopped()
 
 
+# Set on a task the service carried on by itself after a restart cut it off
+# (``task_actions.resume_after_restart``), and cleared when that run ends, so
+# the page can say 「服务重启后已从断点恢复」 while it works: the metadata's
+# restart_resume_count alone was never read, and the owner saw a task pick up
+# again with nothing saying why (2026-11-21).
+RESTART_RESUMED_KEY = "restart_resumed"
+
+
 async def run_pipeline_then_note(
     done: asyncio.Event, ctx: MediaJobContext, *, start_at: str = task_steps.FETCH,
 ) -> None:
@@ -361,6 +369,7 @@ async def run_pipeline_then_note(
         done.set()
         # Nothing runs this task's steps once this returns.
         task_steps.close_open(task_id, stopped=stopped or task_stop.requested(task_id))
+        update_job_metadata(task_id, {RESTART_RESUMED_KEY: None})
 
 
 def _bound_to(task_id: str, work: Any) -> Any:

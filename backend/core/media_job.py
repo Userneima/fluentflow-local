@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 import asyncio
 import threading
+import json
 import shutil
 import time
 import logging
@@ -594,11 +595,65 @@ def _keep_for_resume(task_id: str, path: Any) -> str | None:
     folder = _artifact_storage_dir() / task_id / RESUME_DIRNAME
     folder.mkdir(parents=True, exist_ok=True)
     kept = folder / Path(path).name
-    shutil.copyfile(path, kept)
+    # A take carried on from an earlier run is already the kept one.
+    if Path(path).resolve() != kept.resolve():
+        shutil.copyfile(path, kept)
     return str(kept)
 
 
 RESUME_DIRNAME = "resume"
+_AUDIO_KEPT_FILE = "audio.json"
+
+
+def _source_stamp(path: Path) -> dict[str, Any] | None:
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return {"path": str(path), "size": stat.st_size, "mtime": stat.st_mtime}
+
+
+def _keep_audio_for_resume(ctx: "MediaJobContext", in_path: Path, *, out_audio: Any, playback: Any,
+                           enhanced: Any, voice_presence: Any, stt_audio_take: str) -> None:
+    """Keep this task's extracted takes beside its transcription checkpoint, for
+    a run carried on after the transcription was cut off. Only for a run that
+    can be carried on (``save_checkpoint``); dropped with that checkpoint."""
+    if ctx.save_checkpoint is None:
+        return
+    try:
+        stamp = _source_stamp(in_path)
+        stt_wav = _keep_for_resume(ctx.task_id_value, out_audio)
+        if stamp is None or stt_wav is None:
+            return
+        record = {
+            "source": stamp, "stt_wav": stt_wav,
+            "playback": _keep_for_resume(ctx.task_id_value, playback),
+            "enhanced": _keep_for_resume(ctx.task_id_value, enhanced),
+            "voice_presence": voice_presence, "stt_audio_take": stt_audio_take,
+        }
+        path = Path(stt_wav).parent / _AUDIO_KEPT_FILE
+        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    except Exception:  # noqa: BLE001 - carrying on would extract again, nothing worse
+        logger.warning("could not keep the audio of %s for carrying on", ctx.task_id_value, exc_info=True)
+
+
+def _kept_audio_for_resume(ctx: "MediaJobContext", in_path: Path) -> tuple[Any, ...] | None:
+    """The takes kept by ``_keep_audio_for_resume``, when they are of this very
+    file (same path, size and time) and still all there; else None."""
+    if ctx.save_checkpoint is None:
+        return None
+    path = _artifact_storage_dir() / ctx.task_id_value / RESUME_DIRNAME / _AUDIO_KEPT_FILE
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("source") != _source_stamp(in_path):
+        return None
+    takes = [record.get("stt_wav"), record.get("playback"), record.get("enhanced")]
+    if not takes[0] or any(take and not Path(take).is_file() for take in takes):
+        return None
+    return (Path(takes[0]), Path(takes[1]) if takes[1] else None, Path(takes[2]) if takes[2] else None,
+            record.get("voice_presence"), str(record.get("stt_audio_take") or "plain"))
 
 
 def _checkpoint_advanced(ctx: "MediaJobContext", checkpoint: dict[str, Any], **changes: Any) -> dict[str, Any]:
@@ -740,84 +795,98 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             yield _sse({"stage": "audio", "progress": audio_start_progress})
             audio_started_at = time.perf_counter()
 
-            # Only when asked. Most material does not need correcting, the
-            # correction damages an already-mixed soundtrack, and no threshold
-            # separates those cases (see `voice_enhance`) — so an upload nobody said
-            # anything about is left alone entirely, including what the recognizer
-            # reads. Correcting it also changes what silence looks like: `loudnorm`
-            # lifts the gaps between words, which is why de-breathing measures its
-            # own threshold per file instead of trusting a constant.
-            #
-            # When asked: measure the consonant band, write a clearer take, and
-            # transcribe from that. Measured on four speakers with two whisper sizes,
-            # it transcribes at least as well and better on consonant-dense words —
-            # "IG ID / EVN ID" came back as "Agent ID / Event ID".
-            if voice_enhance_requested:
-                try:
-                    reading = await loop.run_in_executor(None, lambda: measure_presence(in_path))
-                    voice_presence = reading.as_dict()
-                    enhanced_playback_audio_path = await loop.run_in_executor(
-                        None,
-                        lambda: enhance_voice(in_path, output_path=Path(td) / "playback_enhanced.m4a"),
-                    )
-                except Exception as exc:  # noqa: BLE001 - clarity is optional, the transcript is not
-                    logger.warning("Voice enhancement skipped for %s: %s", task_id_value, exc)
-                    enhanced_playback_audio_path = None
+            # Carried on after a restart cut the transcription off: the takes
+            # this task already extracted are used again rather than extracted
+            # a second time (26 seconds on the owner's run, 2026-11-21).
+            # Only for the file as given: a prepared (cut) file is made anew each run.
+            kept_audio = _kept_audio_for_resume(ctx, in_path) if Path(in_path) == Path(ctx.in_path) else None
+            if kept_audio is not None:
+                (out_audio, playback_audio_path, enhanced_playback_audio_path,
+                 voice_presence, stt_audio_take) = kept_audio
+            else:
+                # Only when asked. Most material does not need correcting, the
+                # correction damages an already-mixed soundtrack, and no threshold
+                # separates those cases (see `voice_enhance`) — so an upload nobody said
+                # anything about is left alone entirely, including what the recognizer
+                # reads. Correcting it also changes what silence looks like: `loudnorm`
+                # lifts the gaps between words, which is why de-breathing measures its
+                # own threshold per file instead of trusting a constant.
+                #
+                # When asked: measure the consonant band, write a clearer take, and
+                # transcribe from that. Measured on four speakers with two whisper sizes,
+                # it transcribes at least as well and better on consonant-dense words —
+                # "IG ID / EVN ID" came back as "Agent ID / Event ID".
+                if voice_enhance_requested:
+                    try:
+                        reading = await loop.run_in_executor(None, lambda: measure_presence(in_path))
+                        voice_presence = reading.as_dict()
+                        enhanced_playback_audio_path = await loop.run_in_executor(
+                            None,
+                            lambda: enhance_voice(in_path, output_path=Path(td) / "playback_enhanced.m4a"),
+                        )
+                    except Exception as exc:  # noqa: BLE001 - clarity is optional, the transcript is not
+                        logger.warning("Voice enhancement skipped for %s: %s", task_id_value, exc)
+                        enhanced_playback_audio_path = None
 
-            # Derived from the corrected take that was just written, not by filtering
-            # the original a second time. The two are not interchangeable, and the
-            # measurement that justified feeding the recognizer corrected audio was
-            # made on this one. Filtering the original straight to a recognizer input
-            # skips a lossy generation and should be the better of the two, but when
-            # compared it dropped a company name the m4a-derived take recovered
-            # ("MyFitnessPal" survived as "MetfitnessPal", against nothing at all),
-            # so the measured path wins over the one that ought to be better.
-            stt_source, stt_audio_take = stt_audio_source(enhanced_playback_audio_path, in_path)
-            audio_output_format = "wav"
-            out_audio = await loop.run_in_executor(
-                None, lambda: extract_stt_wav(stt_source, output_path=Path(td) / "stt.wav")
-            )
-            # The plain take is always kept: it is what the editor plays by default
-            # and what a re-transcription reads, so a re-run reproduces this run.
-            playback_audio_path = await loop.run_in_executor(
-                None, lambda: extract_compressed_mp3(in_path, output_path=Path(td) / "playback.mp3")
-            )
-            if media_guard_enabled(SILENCE_GUARD_ENV) and not screen_text_transcript.picture_note_wanted(
-                get_job(task_id_value)
-            ):
-                # Checked on the plain take on purpose. `loudnorm` lifts a near-silent
-                # recording's noise floor into audible range, so the corrected take
-                # would report sound where the recording has none. A video whose
-                # sound is digitally silent fails as nearly silent, so the page offers
-                # 「照画面写笔记」; asked for, the check is skipped and the empty
-                # transcript is read from the screen instead.
-                await loop.run_in_executor(
-                    None,
-                    lambda: screen_text_transcript.guard_silence(
-                        Path(in_path), lambda: require_audible_audio(playback_audio_path)
+                # Derived from the corrected take that was just written, not by filtering
+                # the original a second time. The two are not interchangeable, and the
+                # measurement that justified feeding the recognizer corrected audio was
+                # made on this one. Filtering the original straight to a recognizer input
+                # skips a lossy generation and should be the better of the two, but when
+                # compared it dropped a company name the m4a-derived take recovered
+                # ("MyFitnessPal" survived as "MetfitnessPal", against nothing at all),
+                # so the measured path wins over the one that ought to be better.
+                stt_source, stt_audio_take = stt_audio_source(enhanced_playback_audio_path, in_path)
+                audio_output_format = "wav"
+                out_audio = await loop.run_in_executor(
+                    None, lambda: extract_stt_wav(stt_source, output_path=Path(td) / "stt.wav")
+                )
+                # The plain take is always kept: it is what the editor plays by default
+                # and what a re-transcription reads, so a re-run reproduces this run.
+                playback_audio_path = await loop.run_in_executor(
+                    None, lambda: extract_compressed_mp3(in_path, output_path=Path(td) / "playback.mp3")
+                )
+                if media_guard_enabled(SILENCE_GUARD_ENV) and not screen_text_transcript.picture_note_wanted(
+                    get_job(task_id_value)
+                ):
+                    # Checked on the plain take on purpose. `loudnorm` lifts a near-silent
+                    # recording's noise floor into audible range, so the corrected take
+                    # would report sound where the recording has none. A video whose
+                    # sound is digitally silent fails as nearly silent, so the page offers
+                    # 「照画面写笔记」; asked for, the check is skipped and the empty
+                    # transcript is read from the screen instead.
+                    await loop.run_in_executor(
+                        None,
+                        lambda: screen_text_transcript.guard_silence(
+                            Path(in_path), lambda: require_audible_audio(playback_audio_path)
+                        ),
+                    )
+
+                audio_elapsed_sec = time.perf_counter() - audio_started_at
+                log_event(
+                    task_id=task_id_value,
+                    event_name="audio_extracted",
+                    source_type=source_type,
+                    source_filename=source_filename,
+                    source_file_size_mb=source_file_size_mb,
+                    stage="audio",
+                    duration_seconds=round(audio_elapsed_sec, 3),
+                    success=True,
+                    metadata=event_metadata(
+                        route=event_route,
+                        stt_provider=stt_provider_value,
+                        stt_provider_label=stt_provider_label(stt_provider_value),
+                        audio_output_format=audio_output_format,
+                        audio_output_size_mb=path_size_mb(out_audio),
+                        stt_audio_take=stt_audio_take,
+                        presence_deficit_db=(voice_presence or {}).get("presence_deficit_db"),
                     ),
                 )
-
-            audio_elapsed_sec = time.perf_counter() - audio_started_at
-            log_event(
-                task_id=task_id_value,
-                event_name="audio_extracted",
-                source_type=source_type,
-                source_filename=source_filename,
-                source_file_size_mb=source_file_size_mb,
-                stage="audio",
-                duration_seconds=round(audio_elapsed_sec, 3),
-                success=True,
-                metadata=event_metadata(
-                    route=event_route,
-                    stt_provider=stt_provider_value,
-                    stt_provider_label=stt_provider_label(stt_provider_value),
-                    audio_output_format=audio_output_format,
-                    audio_output_size_mb=path_size_mb(out_audio),
+                _keep_audio_for_resume(
+                    ctx, in_path, out_audio=out_audio, playback=playback_audio_path,
+                    enhanced=enhanced_playback_audio_path, voice_presence=voice_presence,
                     stt_audio_take=stt_audio_take,
-                    presence_deficit_db=(voice_presence or {}).get("presence_deficit_db"),
-                ),
-            )
+                )
             upsert_job(task_id=task_id_value, status="running", stage="audio", progress=20)
             yield _sse({"stage": "audio", "progress": 20})
 

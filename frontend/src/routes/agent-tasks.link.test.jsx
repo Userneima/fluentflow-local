@@ -113,7 +113,7 @@ describe('a download of unknown size', () => {
             source_type: 'video_link',
             created_at: '2026-10-08T10:00:00Z',
             updated_at: '2026-10-08T10:00:00Z',
-            metadata: {display_title: 'B 站讲座', video_source_progress: {message: '正在下载视频', loaded_bytes: 52428800}},
+            metadata: {display_title: 'B 站讲座', progress_message_stage: 'downloading', video_source_progress: {message: '正在下载视频', loaded_bytes: 52428800}},
         }];
         mount();
         expect(await screen.findAllByText(/已下载 50(\.0)? MB/)).toBeTruthy();
@@ -179,8 +179,8 @@ describe('a link task while it downloads', () => {
         expect(await screen.findByText('等待前面的链接下载完成')).toBeTruthy();
     });
 
-    it('also reads the line from metadata', async () => {
-        tasks = [downloading({metadata: {display_title: '抖音分享', progress_message: '正在解析链接'}})];
+    it('also reads the line from metadata while the stage that wrote it lasts', async () => {
+        tasks = [downloading({metadata: {display_title: '抖音分享', progress_message: '正在解析链接', progress_message_stage: 'resolving'}})];
         mount();
         expect(await screen.findByText('正在解析链接')).toBeTruthy();
     });
@@ -218,6 +218,32 @@ describe('a task whose note the text model wrote instead', () => {
             },
         }];
         mount();
-        expect(await screen.findByText('文本模型代写，没看画面；原因见编辑器里的「笔记说明」')).toBeTruthy();
+        expect(await screen.findByText('本次由文本模型写笔记，没看画面；原因见编辑器里的「笔记说明」')).toBeTruthy();
+    });
+
+    // Requirement (owner, 2026-11-21): with no Anthropic key the fallback is
+    // the ordinary setup, said as an outcome first, never as a failure.
+    it('names a missing Anthropic key as the plain reason, not as a failure', async () => {
+        tasks = [{
+            task_id: 'fb-2',
+            client_id: 'local-single-user',
+            status: 'completed',
+            stage: 'done',
+            source_type: 'video',
+            created_at: '2026-10-08T10:00:00Z',
+            updated_at: '2026-10-08T10:00:00Z',
+            metadata: {display_title: '讲座'},
+            result: {
+                task_id: 'fb-2',
+                summary_status: 'completed',
+                summary_chars: 16903,
+                summary_markdown: '# 笔记',
+                summary_written_from: 'text_fallback',
+                note_fallback_reason: '还没有配置 Anthropic 的 API Key，无法请 Claude 看画面。在设置页「账号和 Key」里填入 Anthropic API Key 后重试，不必重启。',
+            },
+        }];
+        mount();
+        expect(await screen.findByText('本次由文本模型写笔记（未配 Anthropic Key）')).toBeTruthy();
+        expect(screen.queryByTestId('task-outcome')).toBeNull();
     });
 });

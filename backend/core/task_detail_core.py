@@ -433,6 +433,18 @@ def _note_payload(
     return {key: value for key, value in payload.items() if value not in (None, "")}
 
 
+def _minutes_seconds(seconds: float) -> str:
+    """「1 分 20 秒」, the page's way of writing a span (format.js fmtDuration)."""
+    total = int(round(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours} 小时 {minutes} 分" if minutes else f"{hours} 小时"
+    if minutes:
+        return f"{minutes} 分 {secs} 秒" if secs else f"{minutes} 分钟"
+    return f"{secs} 秒"
+
+
 def _detail_for(
     policy: TaskDetailPolicy,
     step_id: str,
@@ -453,8 +465,16 @@ def _detail_for(
         if progress_meta.get("message") and status == "running":
             loaded = _num(progress_meta.get("loaded_bytes"))
             total = _num(progress_meta.get("total_bytes"))
-            suffix = f"（{round(loaded / 1024 / 1024, 1)}MB / {round(total / 1024 / 1024, 1)}MB）" if loaded and total else ""
-            return f"{progress_meta.get('message')}{suffix}"
+            parts = [f"{round(loaded / 1024 / 1024, 1)}MB / {round(total / 1024 / 1024, 1)}MB" if loaded and total else ""]
+            # Pace and time left only when the downloader reported them.
+            speed = _num(progress_meta.get("speed_bps"))
+            eta = _num(progress_meta.get("eta_seconds"))
+            if speed:
+                parts.append(f"{round(speed / 1024 / 1024, 1)}MB/s")
+            if eta:
+                parts.append(f"剩余约 {_minutes_seconds(eta)}")
+            suffix = " · ".join(part for part in parts if part)
+            return f"{progress_meta.get('message')}{f'（{suffix}）' if suffix else ''}"
         video_source = _video_source(metadata)
         provider = _text(video_source.get("provider"))
         if provider:

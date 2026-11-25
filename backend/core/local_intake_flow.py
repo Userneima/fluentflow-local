@@ -379,7 +379,7 @@ def _write_text_note_instead(
     """
     from backend.core.ai_summarizer import summarize_transcript_with_metadata, text_model_name
     from backend.core.event_context import event_metadata
-    from backend.core.event_logger import log_event
+    from backend.core.event_logger import list_task_events, log_event
     from backend.core.local_entry_guards import local_ai_kwargs
 
     from backend.core import note_prompt
@@ -402,19 +402,30 @@ def _write_text_note_instead(
         note_mode=_option("note_mode"),
     )
     reason = channel.unavailable_reason or "结合画面的笔记现在写不了。"
-    log_event(
-        task_id=task_id,
-        event_name="visual_note_unavailable",
-        source_type=str(job.get("source_type") or "") or None,
-        stage="summary",
-        success=False,
-        error_reason=reason,
-        metadata=event_metadata(
-            channel=channel.name,
-            at="note_step",
-            fallback="text_note" if kwargs.get("api_key") else "none",
-        ),
+    falls_back = bool(kwargs.get("api_key"))
+    # A notice when the text model writes the note instead: that is the
+    # ordinary setup without Claude, and the note still comes (owner,
+    # 2026-11-21: it read as a red failure beside a 16,903-character note).
+    # The submission already noted the same reason; once is enough for one
+    # task (task_submission._log_visual_note_unavailable).
+    already_noted = falls_back and any(
+        event.get("event_name") == "visual_note_unavailable" and event.get("error_reason") == channel.unavailable_reason
+        for event in list_task_events(task_id)
     )
+    if not already_noted:
+        log_event(
+            task_id=task_id,
+            event_name="visual_note_unavailable",
+            source_type=str(job.get("source_type") or "") or None,
+            stage="summary",
+            success=falls_back,
+            error_reason=reason,
+            metadata=event_metadata(
+                channel=channel.name,
+                at="note_step",
+                fallback="text_note" if falls_back else "none",
+            ),
+        )
     if on_local_work_done is not None:
         on_local_work_done()  # nothing below uses this machine
     if not kwargs.get("api_key"):

@@ -165,6 +165,29 @@ def test_a_restart_carries_the_same_task_on_from_the_cut(monkeypatch, task_id, t
     assert job_store.get_job(task_id)["status"] == "completed"
 
 
+def test_a_task_carried_on_after_a_restart_says_so_while_it_works(monkeypatch, task_id, tmp_path):
+    # Requirement (owner, 2026-11-21): the page says 「服务重启后已从断点恢复」
+    # while a task the service carried on by itself is at work, and not after.
+    _in_place_task(task_id, tmp_path)
+    _cut_off_during_the_cut(task_id)
+    edges = Edges(task_id)
+    edges.note_gate.clear()
+    _wire(monkeypatch, edges)
+
+    def resumed_mark():
+        return (job_store.get_job(task_id).get("metadata") or {}).get(tf.RESTART_RESUMED_KEY)
+
+    async def scenario():
+        assert await task_actions.resume_after_restart([task_id]) == 1
+        assert await _until(lambda: "note" in edges.ran)
+        mark = resumed_mark()
+        assert mark and mark["step"] == task_steps.CUT, "said while the carried-on task works"
+        edges.note_gate.set()
+        assert await _until(lambda: _ended(task_id) and not resumed_mark()), "cleared once the run ends"
+
+    asyncio.run(scenario())
+
+
 def test_a_task_waiting_its_turn_is_carried_on_and_not_counted(monkeypatch, task_id, tmp_path):
     _in_place_task(task_id, tmp_path, status="queued", result={})
     task_steps.plan(task_id)

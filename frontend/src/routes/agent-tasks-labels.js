@@ -1,16 +1,18 @@
 // The words on a record card: its time, the stage it is at, why it is waiting,
 // the cut and note blocks, and where the cut file went. Plain functions of a
 // task row, so the card, the tests and the list read the same answer.
-import {fmtCharCount, fmtDuration, progressMessageOf} from '../lib/format.js';
+import {fmtCharCount, fmtDownloadProgress, fmtDuration, progressMessageOf, videoSourceProgressOf} from '../lib/format.js';
 import {noteProgressStatus} from '../lib/noteProgress.js';
-import {fmtBytes, fmtFileSize} from '../app/shared.jsx';
+import {fmtFileSize} from '../app/shared.jsx';
 import {
     normalizeTaskState,
+    stageName,
     TASK_STATE_QUEUED,
     taskStatusLabel,
     noteCharsOf,
     noteProgressT,
     noteWritingLabel,
+    noteWritingSentence,
 } from '../lib/taskState.js';
 
 export const formatTaskDateTime = (value, lang) => {
@@ -44,38 +46,17 @@ export const isAudioOnlySource = (job) => {
     return /\.(mp3|wav|flac|aac|ogg|m4a|wma|opus)$/i.test(name);
 };
 
+// The steps the service says are still to do or running (task_activity).
+const openSteps = (job) => (job?.activity?.busy && Array.isArray(job.activity.open_steps) ? job.activity.open_steps : []);
+
 // FluentFlow's own writer on the note says how far it has got
 // (backend note_progress); the stage the row was last written at does not.
 const noteProgressOf = (job) => job?.activity?.note_progress || null;
 
 export const stageLabel = (job, lang) => {
-    const isZh = lang === 'zh';
     const writing = noteWritingLabel(job, lang);
     if (writing) return writing;
-    const audioOnly = isAudioOnlySource(job);
-    const labels = {
-        upload: isZh ? '接收材料' : 'Receiving',
-        queued: isZh ? '等待开始' : 'Waiting',
-        resolving: isZh ? '解析链接' : 'Resolving link',
-        downloading: audioOnly
-            ? (isZh ? '下载音频' : 'Downloading audio')
-            : (isZh ? '下载视频' : 'Downloading video'),
-        saving: isZh ? '保存来源' : 'Saving source',
-        // Named in this map because the pipeline has this stage now; without it the
-        // card fell through to the generic status and a working cut read as stalled.
-        prepare_media: isZh ? '剪掉气口（要几分钟）' : 'Removing breath gaps (minutes)',
-        render_video: isZh ? '等剪后视频导出完' : 'Finishing the cut video',
-        // "提取音频" from an audio file is the product telling the user it thinks
-        // they uploaded a video. It is still converting — just not extracting.
-        audio: audioOnly
-            ? (isZh ? '准备音频' : 'Preparing audio')
-            : (isZh ? '提取音频' : 'Extracting audio'),
-        stt: isZh ? '语音转录' : 'Transcribing',
-        transcript_ready: isZh ? '整理转录' : 'Transcript ready',
-        summary: isZh ? '生成笔记' : 'Generating note',
-        export: isZh ? '导出飞书' : 'Exporting',
-    };
-    return labels[job?.stage] || statusLabel(job, lang);
+    return stageName(job?.stage, lang, {audioOnly: isAudioOnlySource(job)}) || statusLabel(job, lang);
 };
 
 // Which task this one is behind, and how long it has been behind it.
@@ -104,26 +85,64 @@ const queueWaitDetail = (job, lang, aheadName = '') => {
     return `Waiting for "${ahead}"${waited ? `, ${waited} so far` : ''}. One at a time; that task removes its breath gaps before transcribing, which takes minutes on long material.`;
 };
 
+// The steps that wait on a model after the transcription, said with how long
+// they have waited: the word-list correction was measured waiting 319 seconds
+// with the card at 60% and nothing else on it (2026-11-21).
+const MODEL_WAIT_LINES = {
+    subtitle_correction: {zh: '正在按画面字幕校正转录稿', en: 'Checking the transcript against the on-screen text'},
+    glossary_correction: {zh: '正在按词表校正转录稿', en: 'Correcting the transcript from the word list'},
+    translation: {zh: '正在把转录稿翻译成中文字幕', en: 'Translating the transcript into Chinese subtitles'},
+};
+// One read of a model answer may take 300 seconds (backend ai_client
+// REQUEST_TIMEOUT); a minute before that runs out the wait is said to be long.
+const SLOW_MODEL_SECONDS = 240;
+const modelWaitDetail = (job, lang) => {
+    const words = MODEL_WAIT_LINES[job?.stage];
+    if (!words) return '';
+    const zh = lang === 'zh';
+    const since = Date.parse(job?.metadata?.stage_started_at || '');
+    if (!Number.isFinite(since)) return zh ? words.zh : words.en;
+    const seconds = Math.max(0, (Date.now() - since) / 1000);
+    const waited = fmtDuration(seconds, lang);
+    const line = zh ? `${words.zh}（已等 ${waited}）` : `${words.en} (${waited} so far)`;
+    if (seconds < SLOW_MODEL_SECONDS) return line;
+    return zh ? `${line}。模型响应较慢，仍在等待` : `${line}. The model is slow to answer; still waiting`;
+};
+
+// Said ahead of the line while a task the service carried on after a restart
+// is at work again (backend task_actions.resume_after_restart).
+const restartResumedNote = (job, lang) => {
+    if (!job?.metadata?.restart_resumed) return '';
+    return lang === 'zh' ? '服务重启后已从断点恢复。' : 'Carried on from where it stopped after the service restarted. ';
+};
+
 export const liveStageDetail = (job, lang, aheadName = '') => {
     // Ahead of the snapshot's own line: the snapshot describes the step this task
     // will run, which for a task that has not started is the least useful true
     // thing on the card.
     const waiting = queueWaitDetail(job, lang, aheadName);
     if (waiting) return waiting;
+    const line = currentStageDetail(job, lang);
+    return `${restartResumedNote(job, lang)}${line}`;
+};
+
+const currentStageDetail = (job, lang) => {
+    const writing = noteWritingSentence(job, lang);
+    if (writing) return writing;
     if (noteProgressOf(job)) return noteProgressStatus(noteProgressOf(job), noteProgressT(lang), lang);
-    const progressMeta = job?.metadata?.video_source_progress || {};
-    const loaded = progressMeta.loaded_bytes ? fmtBytes(progressMeta.loaded_bytes) : '';
-    const total = progressMeta.total_bytes ? fmtBytes(progressMeta.total_bytes) : '';
-    const byteText = loaded && total ? ` · ${loaded} / ${total}` : (loaded ? ` · ${loaded}` : '');
-    // A link task's own line while it downloads or waits ("正在下载视频…"). The
-    // service only sends it while the stage that wrote it lasts.
+    const modelWait = modelWaitDetail(job, lang);
+    if (modelWait) return modelWait;
+    // A link task's own line while it downloads ("正在下载视频"), only while
+    // the stage that wrote it lasts (progressMessageOf).
     const progressMessage = progressMessageOf(job);
-    if (progressMessage) return `${progressMessage}${byteText}`;
+    if (progressMessage) {
+        const download = fmtDownloadProgress(videoSourceProgressOf(job), lang);
+        return download ? `${progressMessage} · ${download}` : progressMessage;
+    }
     const snapshotStep = Array.isArray(job?.task_snapshot?.steps)
         ? job.task_snapshot.steps.find((step) => step?.id === job.task_snapshot?.current_step)
         : null;
     if (snapshotStep?.detail) return snapshotStep.detail;
-    if (progressMeta.message) return `${progressMeta.message}${byteText}`;
     if (normalizeTaskState(job) === TASK_STATE_QUEUED) {
         // Say why the wait can be long. One task runs at a time, and the task
         // ahead now starts by re-encoding its whole recording to remove the
@@ -238,6 +257,9 @@ export const debreathTile = (job, lang) => {
     // nothing", which is why the list payload carries this block at all: without it
     // a freshly cut task reported "未剪" on this very card.
     if (!state || typeof state !== 'object') {
+        // The transcript is stored (completed) and the cut step is open: it is
+        // being judged and has written nothing yet. It read "older task" here.
+        if (openSteps(job).includes('cut')) return {value: isZh ? '正在剪…' : 'Cutting…'};
         // A task still running has not reached the cut yet: the recording is
         // transcribed whole first, so a fresh task read "older task" until then.
         if (!['completed', 'failed', 'cancelled'].includes(job?.status)) {
@@ -300,6 +322,11 @@ export const noteTileValue = (job, lang) => {
             : base;
     }
     if (result.summary_status === 'failed' || result.summary_error) return isZh ? '没生成' : 'Not written';
+    // The note step is still to come (it follows the cut): the pipeline's
+    // "skipped" on the result only means it left the note to that step.
+    if (openSteps(job).includes('note')) {
+        return job?.activity?.current_step === 'note' ? (isZh ? '正在写…' : 'Being written…') : (isZh ? '剪完再写' : 'After the cut');
+    }
     if (result.summary_skipped_reason === 'no_model_key') return isZh ? '没填 Key，只出转录稿' : 'No key: transcript only';
     if (result.summary_skipped) return isZh ? '已跳过' : 'Skipped';
     if (result.summary_status === 'pending') return isZh ? '正在写…' : 'Being written…';

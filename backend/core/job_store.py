@@ -120,14 +120,25 @@ def _json_loads(value: str | None) -> Any:
         return None
 
 
+# When the task entered the stage it is at. Written here, where every stage
+# change passes, so a page can say how long a step has been waiting ("已等
+# 2 分 10 秒") without each stage remembering to record it: the word-list
+# correction waited 319 seconds with nothing on the card (2026-11-21).
+STAGE_STARTED_AT = "stage_started_at"
+
+
 def _merged_metadata_for_upsert(
     conn: sqlite3.Connection,
     task_id: str,
     metadata: dict[str, Any] | None,
+    stage: str | None = None,
+    now: str | None = None,
 ) -> dict[str, Any] | None:
+    row = conn.execute("SELECT metadata_json, stage FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
+    if stage and (not row or row[1] != stage):
+        metadata = {**(metadata or {}), STAGE_STARTED_AT: now or _now_iso()}
     if metadata is None:
         return None
-    row = conn.execute("SELECT metadata_json FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
     if not row:
         return metadata
     existing = _json_loads(row[0])
@@ -269,7 +280,7 @@ def upsert_job(
                 # keys, and the queue-wait bookkeeping and the progress loop
                 # do write the same row at the same time.
                 conn.execute("BEGIN IMMEDIATE")
-                merged_metadata = _merged_metadata_for_upsert(conn, task_id, metadata)
+                merged_metadata = _merged_metadata_for_upsert(conn, task_id, metadata, stage, now)
                 conn.execute(
                     """
                     INSERT INTO jobs (

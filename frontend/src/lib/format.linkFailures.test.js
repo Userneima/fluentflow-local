@@ -85,7 +85,7 @@ describe('download progress', () => {
     const t = (key) => ({'dash.progressUnknown': '处理中'}[key] || key);
 
     it('has no number when neither a percent nor a total size was reported', () => {
-        const job = {stage: 'downloading', progress: 10, metadata: {video_source_progress: {message: '正在下载视频', loaded_bytes: 5_000_000}}};
+        const job = {stage: 'downloading', progress: 10, metadata: {progress_message_stage: 'downloading', video_source_progress: {message: '正在下载视频', loaded_bytes: 5_000_000}}};
         expect(isDownloadProgressUnmeasured(job)).toBe(true);
         expect(isProgressUnmeasured(job)).toBe(true);
         expect(jobProgressLabel(job, t)).toBe('处理中');

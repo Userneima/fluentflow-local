@@ -7,7 +7,6 @@ import {AlertCircle, ChevronDown, LoaderCircle, MoreHorizontal, Pin} from 'lucid
 import {CutReport, hasReport} from '../components/CutReport.jsx';
 import AgentCutWait from '../components/AgentCutWait.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
-import {progressMessageOf} from '../lib/format.js';
 import {DropdownMenu} from '../app/DropdownMenu.jsx';
 import {noteFallbackSentence} from '../lib/noteWriter.js';
 import {
@@ -97,6 +96,7 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
             : (zh ? '处理中' : 'Working'))
         : `${progress}%`;
     const resume = resumeOffer(job, lang);
+    const noteWriting = completed && Boolean(noteWritingLabel(job, lang));
     // A finished transcript whose later steps still run: the step it is on can
     // be stopped and carried on later (a task still transcribing is cancelled).
     const stoppable = completed && taskId && Boolean(job?.activity?.busy);
@@ -211,6 +211,12 @@ const AgentTaskCardView = ({job, lang, aheadName = '', retryError = '', highligh
                         {liveStageDetail(job, lang, aheadName)}
                     </p>
                 </div>
+            ) : noteWriting ? (
+                // The transcript is stored (completed), the note is not: said
+                // as both, with how far the writer has got.
+                <p data-testid="note-writing-detail" className="mt-2 text-[12px] font-semibold leading-5 text-[#57585d] dark:text-white/60">
+                    {liveStageDetail(job, lang, aheadName)}
+                </p>
             ) : null}
             {failedTerminal && diagnosis?.detail ? (
                 <div className="mt-2 flex max-w-full flex-wrap items-start gap-x-3 gap-y-1.5 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold leading-5 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
@@ -300,7 +306,9 @@ const cardRenderKey = (job) => {
         meta.queue_wait?.waiting_for, meta.queue_wait?.since,
         meta.video_source_progress?.message, meta.video_source_progress?.loaded_bytes,
         meta.video_source_progress?.total_bytes, meta.video_source_progress?.percent,
-        progressMessageOf(job),
+        // The live line itself: it carries waits counted from the clock
+        // (已等 2 分 10 秒), which change while the row does not.
+        liveStageDetail(job, 'zh'),
         job?.task_snapshot?.current_step,
         job?.activity?.busy, job?.activity?.label, job?.activity?.stopped, job?.activity?.resume_from?.step,
         (job?.activity?.failed_steps || []).map((step) => step?.step).join(','),

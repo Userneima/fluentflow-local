@@ -101,7 +101,11 @@ def _collect_options(**raw_options: Optional[str]) -> dict[str, str]:
 def _log_visual_note_unavailable(task_id: str, *, source_type: str, source_filename: str) -> str:
     """The automatic frame note is on but cannot run, so this task gets the text
     note instead. Recorded because it is invisible otherwise: the task looks
-    like any other text-note task. Returns the reason, which the note carries."""
+    like any other text-note task. Returns the reason, which the note carries.
+
+    Recorded as a notice (success): the text note is written instead, which is
+    the ordinary setup without Claude, not a failure. The note step records it
+    again only when its reason or outcome differs."""
     channel = visual_note_channel.resolve_channel(resolve_secret(None, "anthropic_api_key"))
     login_expired = (
         channel.name == visual_note_channel.CHANNEL_SUBSCRIPTION
@@ -113,7 +117,7 @@ def _log_visual_note_unavailable(task_id: str, *, source_type: str, source_filen
         source_type=source_type,
         source_filename=source_filename,
         stage="summary",
-        success=False,
+        success=True,
         error_reason=channel.unavailable_reason,
         metadata=event_metadata(
             channel=channel.name,

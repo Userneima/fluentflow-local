@@ -731,14 +731,18 @@ const AgentTrace = () => {
     useEffect(() => {
         const taskStatus = String(pageData?.task?.status || '').toLowerCase();
         const taskStage = String(pageData?.task?.stage || '').toLowerCase();
-        if (!['queued', 'running'].includes(taskStatus) && !['queued', 'resolving', 'downloading', 'saving', 'audio', 'stt', 'summary', 'export'].includes(taskStage)) return undefined;
+        // A completed task whose cut, note, copy or export still runs
+        // (activity.busy) is still changing: the note took 7 minutes after the
+        // transcript was stored, and this page stood still for all of them.
+        const stillWorking = Boolean(pageData?.activity?.busy);
+        if (!stillWorking && !['queued', 'running'].includes(taskStatus) && !['queued', 'resolving', 'downloading', 'saving', 'audio', 'stt', 'subtitle_correction', 'glossary_correction', 'translation', 'summary', 'export'].includes(taskStage)) return undefined;
         const staleRef = {current: false};
         const timer = setInterval(() => loadTaskDetail(staleRef, {silent: true}), 3000);
         return () => {
             staleRef.current = true;
             clearInterval(timer);
         };
-    }, [pageData?.task?.status, pageData?.task?.stage, taskId]);
+    }, [pageData?.task?.status, pageData?.task?.stage, pageData?.activity?.busy, taskId]);
 
     const title = pageData?.task?.title || pageData?.title || taskId;
     const decisions = useMemo(() => decisionEntries(pageData, lang), [pageData, lang]);

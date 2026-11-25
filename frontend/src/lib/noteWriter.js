@@ -163,6 +163,13 @@ export const noteExplanation = (result, lang = 'zh', connection = {}) => {
     };
 };
 
+// Whether the text model stood in because no Anthropic key is set up: the
+// ordinary setup of a user without one, not something that went wrong.
+const fellBackForMissingKey = (result) => {
+    const reason = String(result?.note_fallback_reason || '');
+    return /Anthropic/.test(reason) && /API Key/i.test(reason) && /(还没有配置|没有配置|not configured|no .*key)/i.test(reason);
+};
+
 // Why the text model stood in, said plainly. The backend's reason for a missing
 // key is a set of instructions for configuring one; here that is only the
 // second option, so it is said as what happened. Any other reason (an expired
@@ -174,7 +181,7 @@ const fallbackWhy = (result, lang) => {
     }
     const reason = String(result?.note_fallback_reason || '').trim();
     if (!reason) return zh ? '这次没连上 Claude。' : 'Claude could not be reached this time.';
-    if (/Anthropic/.test(reason) && /API Key/i.test(reason) && /(还没有配置|没有配置|not configured|no .*key)/i.test(reason)) {
+    if (fellBackForMissingKey(result)) {
         return zh
             ? 'FluentFlow 自己写结合画面的笔记要用 Claude，这台电脑上没有配 Claude，所以先由文本模型照转录稿代写了。'
             : 'FluentFlow writes notes from the frames with Claude, and none is set up on this machine, so the text model wrote this one from the transcript.';
@@ -182,14 +189,20 @@ const fallbackWhy = (result, lang) => {
     return reason;
 };
 
-// Said on the task card: one short line. The reason and what to do about it
-// are in the editor's 笔记说明 (owner, 2026-10-18: the full paragraph took too
-// much room). Empty for any other note.
+// Said on the task card: one short line, the outcome first. The reason and
+// what to do about it are in the editor's 笔记说明 (owner, 2026-10-18: the
+// full paragraph took too much room). A missing Anthropic key is named, since
+// that is the usual case and nothing failed (owner, 2026-11-21: it read as
+// "FluentFlow needs an Anthropic key"). Empty for any other note.
 export const noteFallbackSentence = (result, lang = 'zh') => {
     if (!noteWasTextFallback(result)) return '';
-    return lang === 'zh'
-        ? '文本模型代写，没看画面；原因见编辑器里的「笔记说明」'
-        : 'Written by the text model without the frames; see About this note in the editor';
+    const zh = lang === 'zh';
+    if (fellBackForMissingKey(result)) {
+        return zh ? '本次由文本模型写笔记（未配 Anthropic Key）' : 'The text model wrote this note (no Anthropic key set up)';
+    }
+    return zh
+        ? '本次由文本模型写笔记，没看画面；原因见编辑器里的「笔记说明」'
+        : 'The text model wrote this note without the frames; see About this note in the editor';
 };
 
 // What the editor says while the note is still being written. Only Claude,

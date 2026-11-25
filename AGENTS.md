@@ -65,7 +65,7 @@ exists and that no other file judges whether a task is still busy.
 - Matching note sections to playback times: `backend/core/note_section_times.py`; the current agent reading material and returning its table: `backend/core/agent_alignment.py`
 - What each processing step currently uses, for the settings page and agents: `backend/core/workflow_status.py`
 - Where runtime data lives: `backend/core/runtime_paths.py`; which edition answers: `backend/core/edition_identity.py`
-- Button and card styles: `frontend/src/lib/ui.js`; a task's status as the pages show it: `frontend/src/lib/taskState.js`
+- Button and card styles: `frontend/src/lib/ui.js`; a task's status as the pages show it, and what each pipeline stage is called (`stageName`): `frontend/src/lib/taskState.js`; the record card's live line (what the current stage is doing, never a line an earlier stage left in metadata): `frontend/src/routes/agent-tasks-labels.js` (`liveStageDetail`); when the task entered its stage (`stage_started_at`): `backend/core/job_store.py` (`upsert_job`)
 - What an agent is told: the MCP tools in `scripts/fluentflow_mcp/`, one module per group of tools (each tool described once, in the `tool()` decorator on its function; `scripts/fluentflow_mcp_server.py` is the entry point and loads them in the order `tools/list` gives), and `agent/skills/fluentflow/SKILL.md` (workflow)
 - How an MCP tool reaches the service (the request, access token, edition check), the hold that answers a long call "still working", and the heartbeat for watched tasks: `scripts/fluentflow_mcp/core.py` (tests replace them on `core`)
 

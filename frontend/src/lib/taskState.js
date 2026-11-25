@@ -1,4 +1,4 @@
-import {noteProgressShort} from './noteProgress.js';
+import {noteProgressDetail, noteProgressShort, noteProgressStatus} from './noteProgress.js';
 import {msgs} from '../app/shared.jsx';
 
 // Translates FluentFlow's own message keys, English when a language lacks one.
@@ -49,6 +49,37 @@ export const normalizeTaskState = (job={}) => {
     return TASK_STATE_IDLE;
 };
 
+// What a pipeline stage is called, for the records card and the processing
+// page alike; '' for a stage it does not know. Two maps of their own drifted:
+// the correction stages had no name in either, and a task waiting minutes on
+// the word-list correction read as the generic 处理中 at 60% (2026-11-21).
+export const stageName = (stage, lang = 'zh', {audioOnly = false} = {}) => {
+    const zh = lang === 'zh';
+    const names = {
+        upload: zh ? '接收材料' : 'Receiving',
+        queued: zh ? '排队中' : 'Queued',
+        resolving: zh ? '解析链接' : 'Resolving link',
+        downloading: audioOnly ? (zh ? '下载音频' : 'Downloading audio') : (zh ? '下载视频' : 'Downloading video'),
+        saving: zh ? '保存来源' : 'Saving source',
+        // Named because it is long: without a name it read as a hung task.
+        prepare_media: zh ? '剪掉气口（要几分钟）' : 'Removing breath gaps (minutes)',
+        render_video: zh ? '等剪后视频导出完' : 'Finishing the cut video',
+        // "提取音频" from an audio file tells the user the product thinks they
+        // gave it a video. It is still converting, just not extracting.
+        audio: audioOnly ? (zh ? '准备音频' : 'Preparing audio') : (zh ? '提取音频' : 'Extracting audio'),
+        stt: zh ? '转录中' : 'Transcribing',
+        subtitle_correction: zh ? '按画面字幕校正' : 'Checking against on-screen text',
+        glossary_correction: zh ? '按词表校正' : 'Correcting from the word list',
+        translation: zh ? '翻译字幕' : 'Translating subtitles',
+        transcript_cleanup: zh ? '整理转录' : 'Tidying the transcript',
+        transcript_ready: zh ? '整理转录' : 'Transcript ready',
+        summary: zh ? '生成笔记' : 'Generating note',
+        note: zh ? '写笔记' : 'Writing the note',
+        export: zh ? '导出飞书' : 'Exporting',
+    };
+    return names[stage] || '';
+};
+
 // The task's state as one word, the same on every page that lists tasks.
 // A task whose transcript is done while its note is still being written. The
 // backend counts it completed (the transcript is usable), but showing a green
@@ -81,6 +112,21 @@ export const noteWritingLabel = (job = {}, lang = 'zh') => {
     const short = noteProgressShort(progress, noteProgressT(lang), lang);
     const head = lang === 'zh' ? '写笔记中' : 'Writing note';
     return short ? `${head} · ${short}` : head;
+};
+
+// The sentence for a task whose transcript is stored (the service counts it
+// completed) while its note is being written: said as both, with how far the
+// writer has got when it reports (FluentFlow's own writer does; Claude and the
+// user's agent do not). '' for any other task. The owner saw 「已完成」 and an
+// empty note for the 7 minutes the note took (2026-11-21).
+export const noteWritingSentence = (job = {}, lang = 'zh') => {
+    if (!isNoteStillBeingWritten(job)) return '';
+    const zh = lang === 'zh';
+    const progress = job?.activity?.note_progress || null;
+    if (!progress) return zh ? '转录已完成，正在写笔记。' : 'Transcript done; writing the note.';
+    // The writer's own line already says it is writing the note.
+    const t = noteProgressT(lang);
+    return `${zh ? '转录已完成。' : 'Transcript done. '}${noteProgressStatus(progress, t, lang)}${zh ? '，' : ', '}${noteProgressDetail(progress, t, lang)}`;
 };
 
 export const taskStatusLabel = (job, lang = 'zh') => {

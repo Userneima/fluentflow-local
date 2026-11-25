@@ -1122,18 +1122,50 @@ export const isSttProgressUnmeasured = (job) => (
     && sttProgressFraction(job) <= 0
     && job?.sttStatus !== 'transcribing_segments'
 );
-// The download report a link task carries, wherever this job shape keeps it.
-export const videoSourceProgressOf = (job) => (
-    job?.metadata?.video_source_progress || job?.video_source_progress || job?.videoSourceProgress || null
-);
-// The live progress line of a link task ("正在下载视频…"). The service sends it
-// as the job's own progress_message while the stage that wrote it lasts; older
-// payloads may carry it inside metadata. It is never the note's status.
+// Whether the link download's report in metadata belongs to the stage the task
+// is at. Metadata keeps what every stage wrote, so the download's last line
+// ("正在保存视频信息") stays there for the rest of the task; read without this,
+// it was shown through transcription and correction (2026-11-21).
+const downloadReportIsCurrent = (job) => {
+    const stage = String(job?.stage || '');
+    return Boolean(stage) && job?.metadata?.progress_message_stage === stage;
+};
+// The download report a link task carries, wherever this job shape keeps it,
+// while the stage that wrote it lasts.
+export const videoSourceProgressOf = (job) => {
+    if (job?.metadata?.video_source_progress) {
+        return downloadReportIsCurrent(job) ? job.metadata.video_source_progress : null;
+    }
+    return job?.video_source_progress || job?.videoSourceProgress || null;
+};
+// The live progress line of a link task ("正在下载视频…"), only while the stage
+// that wrote it lasts: the service sends it as the job's own progress_message
+// then; a copy inside metadata counts only when it names the current stage.
+// It is never the note's status.
 export const progressMessageOf = (job) => {
     const top = typeof job?.progress_message === 'string' ? job.progress_message.trim() : '';
     if (top) return top;
-    const nested = typeof job?.metadata?.progress_message === 'string' ? job.metadata.progress_message.trim() : '';
-    return nested;
+    if (!downloadReportIsCurrent(job)) return '';
+    return typeof job?.metadata?.progress_message === 'string' ? job.metadata.progress_message.trim() : '';
+};
+// A download's pace: 「3.20 MB/s」, '' when it was not reported (never 0).
+export const fmtByteRate = (bytesPerSecond) => {
+    const size = fmtBytes(bytesPerSecond);
+    return size ? `${size}/s` : '';
+};
+// How far a link download has got: 「40.0 MB / 100.0 MB · 3.20 MB/s · 剩余约
+// 1 分 20 秒」. Pace and time left only when the downloader reported them:
+// none is said as nothing, never as 0, so slow and stalled stay apart.
+export const fmtDownloadProgress = (report, lang = 'zh') => {
+    if (!report || typeof report !== 'object') return '';
+    const loaded = report.loaded_bytes ? fmtBytes(report.loaded_bytes) : '';
+    const total = report.total_bytes ? fmtBytes(report.total_bytes) : '';
+    const parts = [loaded && total ? `${loaded} / ${total}` : loaded];
+    if (Number(report.speed_bps) > 0) parts.push(fmtByteRate(report.speed_bps));
+    if (Number(report.eta_seconds) > 0) {
+        parts.push(lang === 'zh' ? `剩余约 ${fmtDuration(report.eta_seconds, lang)}` : `about ${fmtDuration(report.eta_seconds, lang)} left`);
+    }
+    return parts.filter(Boolean).join(' · ');
 };
 // A link download whose size the platform did not say (yt-dlp, a stream without
 // a length) has no percentage. The job's own number then stays at the stage's

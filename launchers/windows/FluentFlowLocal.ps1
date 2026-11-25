@@ -66,9 +66,16 @@ function Get-PortOwnerIds {
 }
 
 function Get-RunningJobCount {
+    # The same answer as launchers/macos/count_active_jobs.py: a task reads
+    # completed once its transcript is stored while its cut and note still run,
+    # so the service's own activity.busy decides; status only for a service
+    # from before that answer existed.
     try {
-        $jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?limit=100" -TimeoutSec 3
-        return @($jobs.jobs | Where-Object { $_.status -in @("queued", "processing", "running", "pending") }).Count
+        $jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?limit=100" -TimeoutSec 10
+        return @($jobs.jobs | Where-Object {
+            if ($_.activity -and ($_.activity.busy -is [bool])) { $_.activity.busy }
+            else { $_.status -in @("queued", "processing", "running", "pending") }
+        }).Count
     } catch {
         # The instance cannot answer for itself, so there is nothing worth keeping.
         return 0
@@ -117,7 +124,7 @@ if ($health) {
         # a three-hour transcription killed halfway starts over from nothing.
         $running = Get-RunningJobCount
         if ($running -gt 0) {
-            Write-Host "$running job(s) are still in progress; restarting makes them start over."
+            Write-Host "$running job(s) are still in progress. Restarting interrupts them: they carry on from where they stopped once the service is up, redoing only the step they were on."
             Read-Host "Press Enter to restart anyway, or Ctrl+C to cancel" | Out-Null
         }
         foreach ($id in $ownerIds) { Stop-Process -Id $id -ErrorAction SilentlyContinue }

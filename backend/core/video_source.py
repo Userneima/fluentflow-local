@@ -69,6 +69,10 @@ class VideoSourceProgress:
     percent: int | None = None
     loaded_bytes: int | None = None
     total_bytes: int | None = None
+    # How fast and how long: without them a slow download and a stalled one
+    # read the same (2026-11-21). None when the downloader did not say.
+    speed_bps: int | None = None
+    eta_seconds: int | None = None
 
 
 @dataclass
@@ -1687,6 +1691,7 @@ def download_file(
                 loaded_bytes=0,
                 total_bytes=content_length or None,
             ))
+            pace = _DownloadPace()
             with scratch.open("wb") as output:
                 while True:
                     _raise_if_cancelled(cancellation_event)
@@ -1704,12 +1709,15 @@ def download_file(
                             raise RuntimeError(link_needs_more_disk_message(downloaded, free))
                     output.write(chunk)
                     percent = min(99, round(downloaded / content_length * 100)) if content_length else None
+                    speed, eta = pace.update(downloaded, content_length or None)
                     on_progress and on_progress(VideoSourceProgress(
                         stage="downloading",
                         message="正在下载视频",
                         percent=percent,
                         loaded_bytes=downloaded,
                         total_bytes=content_length or None,
+                        speed_bps=speed,
+                        eta_seconds=eta,
                     ))
             if content_length and downloaded < content_length:
                 raise RuntimeError(f"视频下载中断：只收到 {downloaded} / {content_length} 字节")
@@ -2082,6 +2090,7 @@ _PROGRESS_PREFIX = "[fluentflow-progress]"
 _PROGRESS_TEMPLATE = (
     "download:" + _PROGRESS_PREFIX
     + " %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s"
+    + " %(progress.speed)s %(progress.eta)s"
 )
 _MAX_FILESIZE_RE = re.compile(r"larger than max-filesize \((\d+) bytes > (\d+) bytes\)", re.I)
 
@@ -2118,15 +2127,40 @@ def _yt_dlp_progress_reporter(on_progress: ProgressCallback) -> Callable[[str], 
         if last is not None and part_percent + 50 < last:
             state["part"] += 1
         state["last_percent"] = part_percent
+        # Speed and time left come after the sizes; yt-dlp writes NA for
+        # either until it has measured them.
         on_progress(VideoSourceProgress(
             stage="downloading",
             message="正在下载视频" if state["part"] == 0 else "正在下载音频",
             percent=min(99, round(part_percent)),
             loaded_bytes=loaded,
             total_bytes=total,
+            speed_bps=_int_or_none(fields[3]) if len(fields) > 3 else None,
+            eta_seconds=_int_or_none(fields[4]) if len(fields) > 4 else None,
         ))
 
     return handle
+
+
+class _DownloadPace:
+    """Bytes per second over the last few seconds, and the time left at that
+    pace, for a download that does not measure its own (a direct link)."""
+
+    WINDOW_SECONDS = 3.0
+
+    def __init__(self) -> None:
+        self._mark: tuple[float, int] | None = None
+        self.speed_bps: int | None = None
+
+    def update(self, loaded: int, total: int | None) -> tuple[int | None, int | None]:
+        now = time.monotonic()
+        if self._mark is None:
+            self._mark = (now, loaded)
+        elif now - self._mark[0] >= self.WINDOW_SECONDS:
+            self.speed_bps = int((loaded - self._mark[1]) / (now - self._mark[0])) or None
+            self._mark = (now, loaded)
+        eta = int((total - loaded) / self.speed_bps) if self.speed_bps and total and total > loaded else None
+        return self.speed_bps, eta
 
 
 def _probe_duration_seconds(path: Path) -> float | None:

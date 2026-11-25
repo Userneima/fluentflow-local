@@ -347,7 +347,7 @@ async def resume_task(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
     start_at = task_steps.resume_point(steps)
     if start_at is None:
         raise Refused("这个任务的每一步都已经做完了。", "nothing_to_resume")
-    update_job_metadata(task_id, {RESTART_RESUME_COUNT_KEY: 0})
+    update_job_metadata(task_id, {RESTART_RESUME_COUNT_KEY: 0, task_flow.RESTART_RESUMED_KEY: None})
     await _carry_on(job, start_at, route="/jobs/{task_id}/resume")
     log_event(task_id=task_id, event_name="task_resumed", stage=start_at, success=True,
               metadata=event_metadata(trigger="user", resume_from=start_at))
@@ -425,7 +425,10 @@ async def resume_after_restart(task_ids: list[str]) -> int:
         if count > RESTART_RESUME_LIMIT:
             reason = "restart_limit"
         else:
-            update_job_metadata(task_id, {RESTART_RESUME_COUNT_KEY: count})
+            update_job_metadata(task_id, {
+                RESTART_RESUME_COUNT_KEY: count,
+                task_flow.RESTART_RESUMED_KEY: {"step": start_at, "at": _now()},
+            })
             try:
                 await _carry_on(job, start_at, route="/startup/resume")
             except Refused as exc:
@@ -437,6 +440,7 @@ async def resume_after_restart(task_ids: list[str]) -> int:
         if reason is None:
             resumed += 1
             continue
+        update_job_metadata(task_id, {task_flow.RESTART_RESUMED_KEY: None})
         task_steps.close_open(task_id, error=task_steps.RESTART_ERROR)
         if str(job.get("status") or "") in {"queued", "running"}:
             # Told on the page, as a restart-interrupted task always was.

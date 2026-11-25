@@ -326,6 +326,8 @@ def _download_progress_reporter(job: _LinkTask, loop: asyncio.AbstractEventLoop)
                     "percent": progress.percent,
                     "loaded_bytes": progress.loaded_bytes,
                     "total_bytes": progress.total_bytes,
+                    "speed_bps": progress.speed_bps,
+                    "eta_seconds": progress.eta_seconds,
                 },
             ),
         )
@@ -339,6 +341,8 @@ def _download_progress_reporter(job: _LinkTask, loop: asyncio.AbstractEventLoop)
                     "percent": progress.percent,
                     "loaded_bytes": progress.loaded_bytes,
                     "total_bytes": progress.total_bytes,
+                    "speed_bps": progress.speed_bps,
+                    "eta_seconds": progress.eta_seconds,
                 },
             ),
             loop,

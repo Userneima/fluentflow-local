@@ -13,45 +13,23 @@ import {
     useApi,
     useI18n,
 } from '../app/shared.jsx';
-import {fmtCharCount, fmtDuration, shortReason} from '../lib/format.js';
-import {taskOutcome} from '../lib/taskState.js';
+import {fmtCharCount, fmtDownloadProgress, fmtDuration, shortReason} from '../lib/format.js';
+import {noteWritingSentence, stageName, taskOutcome} from '../lib/taskState.js';
 import {useApp} from '../app/AppContext.jsx';
 import {button} from '../lib/ui.js';
 import {useConfirm} from './ConfirmDialog.jsx';
 
+// The stage's name from the one map the records card uses too (taskState
+// stageName); the processing page adds its terminal words.
 const stageLabel = (stage, lang, {audioOnly = false} = {}) => {
     const isZh = lang === 'zh';
-    const labels = {
-        queued: isZh ? '排队中' : 'Queued',
-        upload: isZh ? '接收材料' : 'Receiving',
-        resolving: isZh ? '解析链接' : 'Resolving link',
-        downloading: audioOnly
-            ? (isZh ? '下载音频' : 'Downloading audio')
-            : (isZh ? '下载视频' : 'Downloading video'),
-        saving: isZh ? '保存来源' : 'Saving source',
-        // Named here because it is long. An upload removes its own breath gaps
-        // before anything reads the file, which on a 24-minute recording is a
-        // full re-encode and many minutes of CPU. Without a name it fell into the
-        // generic "处理中" at 2% and read as a hung task — which is exactly how it
-        // was reported.
-        prepare_media: isZh ? '剪掉气口（要几分钟）' : 'Removing breath gaps (minutes)',
-        render_video: isZh ? '等剪后视频导出完' : 'Finishing the cut video',
-        // Extracting audio *from* an audio file is the product misreading what it
-        // was given. It converts either way; only the word is wrong.
-        audio: audioOnly
-            ? (isZh ? '准备音频' : 'Preparing audio')
-            : (isZh ? '提取音频' : 'Extracting audio'),
-        stt: isZh ? '转录中' : 'Transcribing',
-        transcript_ready: isZh ? '转录完成' : 'Transcript ready',
-        cleanup: isZh ? '整理转录' : 'Cleaning transcript',
-        summary: isZh ? '生成笔记' : 'Generating note',
-        export: isZh ? '导出飞书' : 'Exporting',
+    const terminal = {
         failed: isZh ? '失败' : 'Failed',
         error: isZh ? '失败' : 'Failed',
         cancelled: isZh ? '已取消' : 'Cancelled',
         done: isZh ? '已完成' : 'Done',
     };
-    return labels[stage] || (isZh ? '处理中' : 'Processing');
+    return stageName(stage, lang, {audioOnly}) || terminal[stage] || (isZh ? '处理中' : 'Processing');
 };
 
 const MediaPreparation = ({prep, lang}) => {
@@ -236,6 +214,9 @@ const outcomeJobFromPage = (pageData) => {
     return {
         status: task.status,
         stage: task.stage,
+        // What the service says the task is still doing (task_activity), so a
+        // stored transcript with its note still being written reads as such.
+        activity: pageData?.activity || undefined,
         result: {
             download_only: Boolean(task.download_only),
             summary_status: note.status || null,
@@ -266,7 +247,10 @@ const outcomeHint = (outcome, pageData, isZh) => {
     if (outcome.kind === 'downloaded') return isZh ? '只下载了视频，没有转录稿和笔记。视频在产出文件夹里。' : 'Only the video was downloaded; no transcript or note. The video is in the output folder.';
     if (outcome.kind === 'transcript_only') return isZh ? '没填模型 Key，这次只有转录稿。' : 'No model key, so this time there is a transcript only.';
     if (outcome.kind === 'judge') return isZh ? '剪辑有几处等你判断，点「查看结果」去处理。' : 'Some cuts wait for your judgement; open the result to review them.';
-    if (outcome.kind === 'live') return isZh ? '还在出结果，进度会在这里更新。' : 'Still producing results; progress updates here.';
+    if (outcome.kind === 'live') {
+        return noteWritingSentence(outcomeJobFromPage(pageData), isZh ? 'zh' : 'en')
+            || (isZh ? '还在出结果，进度会在这里更新。' : 'Still producing results; progress updates here.');
+    }
     return isZh ? '处理已完成，可以打开结果继续复查。' : 'Processing is complete. Open the result to review it.';
 };
 
@@ -321,6 +305,8 @@ const TaskProgressOverview = ({pageData}) => {
         : [
             `${isZh ? '当前阶段' : 'Current stage'}：${currentStageLabel}`,
             `${isZh ? '进度' : 'Progress'}：${progressText}`,
+            // Pace and time left while a link downloads, when reported.
+            task.stage === 'downloading' ? fmtDownloadProgress(task.videoSourceProgress, lang) : '',
             route ? `${isZh ? '路线' : 'Route'}：${route}` : '',
         ].filter(Boolean).join(isZh ? ' · ' : ' · ');
     const activeJobElapsed = activeCurrentJob ? Math.max(0, Math.floor((Date.now() - (activeCurrentJob.startedAt || Date.now())) / 1000)) : 0;
