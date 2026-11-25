@@ -467,9 +467,85 @@ def test_a_retry_leaves_the_old_task_alone_while_that_one_runs_again(monkeypatch
     _retry_of(task_id, retry_id, tmp_path)
     tf._drop_checkpoint_of_retried(retry_id, None)
     assert (kept / "stt.wav").is_file()
+    # What the old task keeps from that run is its own: carrying the retry on
+    # later does not take it either.
     job_store.upsert_job(task_id=task_id, status="failed", stage="stt", progress=100)
     tf._drop_checkpoint_of_retried(retry_id, None)
+    assert (kept / "stt.wav").is_file()
+
+
+def test_carrying_a_retry_on_again_keeps_what_the_old_task_kept_since(monkeypatch, task_id, tmp_path):
+    # Review of ed133bc (2026-11-26): retry A as B; B drops A's folder on its
+    # first run and stops; A is carried on, transcribes again and fails at the
+    # corrections, keeping a new transcription; carrying B on must not drop
+    # it, or carrying A on transcribes a third time.
+    monkeypatch.setattr(tf, "_artifact_storage_dir", lambda: tmp_path)
+    kept = _cut_off_with_audio_kept(task_id, tmp_path, status="failed")
+    retry_id = f"{task_id}-retry"
+    _retry_of(task_id, retry_id, tmp_path)
+    edges = Edges(retry_id)
+    _wire(monkeypatch, edges)
+
+    async def run_retry():
+        await task_actions._carry_on(job_store.get_job(retry_id), task_steps.FETCH, route="/test")
+        assert await _until(lambda: _ended(retry_id) and not task_actions.JOB_EVENTS.is_running(retry_id))
+
+    asyncio.run(run_retry())
+    assert not kept.exists(), "the first run of the retry drops the old task's folder"
+
+    tf._save_checkpoint(task_id, {"tr": {"text": "大家好"}, "base_result": {}, "in_path": "x"})
+    asyncio.run(run_retry())
+    assert tf.load_checkpoint(task_id) is not None, "the old task's later transcription stays"
+
+
+def test_a_retry_copying_another_tasks_mark_still_drops_its_own_source(monkeypatch, task_id, tmp_path):
+    monkeypatch.setattr(tf, "_artifact_storage_dir", lambda: tmp_path)
+    kept = _cut_off_with_audio_kept(task_id, tmp_path, status="failed")
+    retry_id = f"{task_id}-retry"
+    _retry_of(task_id, retry_id, tmp_path)
+    job_store.update_job_metadata(retry_id, {tf.RETRY_SOURCE_CHECKED_KEY: "some-earlier-task"})
+    tf._drop_checkpoint_of_retried(retry_id, None)
     assert not kept.exists()
+
+
+def _failed_at_the_corrections(task_id, tmp_path):
+    _in_place_task(task_id, tmp_path, status="failed", result={})
+    task_steps.plan(task_id)
+    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+    task_steps.finish(task_id, task_steps.TRANSCRIBE, task_steps.DONE)
+    task_steps.start(task_id, task_steps.CORRECT)
+    task_steps.finish(task_id, task_steps.CORRECT, task_steps.FAILED, "模型没有回答")
+    for name in task_steps.ORDER[task_steps.ORDER.index(task_steps.CUT):]:
+        task_steps.finish(task_id, name, task_steps.SKIPPED)
+
+
+def test_carrying_on_offers_the_corrections_only_while_the_transcription_is_kept(monkeypatch, task_id, tmp_path):
+    # Review of ed133bc (2026-11-26): with the transcription gone (a retry
+    # dropped it), the card said 从校对接着做 and the run transcribed again.
+    monkeypatch.setattr(tf, "_artifact_storage_dir", lambda: tmp_path)
+    _failed_at_the_corrections(task_id, tmp_path)
+    tf._save_checkpoint(task_id, {"tr": {"text": "大家好"}, "base_result": {}, "in_path": "x"})
+    activity = task_activity.activity(job_store.get_job(task_id))
+    assert activity.resume_from == task_steps.CORRECT
+    assert activity.as_dict()["resume_from"]["label"] == task_steps.LABELS[task_steps.CORRECT]
+
+    tf._drop_checkpoint(task_id)
+    activity = task_activity.activity(job_store.get_job(task_id))
+    assert activity.resume_from == task_steps.TRANSCRIBE
+    assert activity.as_dict()["resume_from"]["label"] == task_steps.LABELS[task_steps.TRANSCRIBE]
+
+    edges = Edges(task_id)
+    _wire(monkeypatch, edges)
+
+    async def scenario():
+        answer = await task_actions.resume_task(task_id, None)
+        assert answer["resume_from"]["step"] == task_steps.TRANSCRIBE, "the answer says what will run"
+        assert await _until(lambda: _ended(task_id) and not task_actions.JOB_EVENTS.is_running(task_id))
+
+    asyncio.run(scenario())
+    assert edges.ran[0] == "pipeline" and edges.checkpoints == [None]
+    assert _statuses(task_id)[task_steps.TRANSCRIBE] == task_steps.DONE
+    assert job_store.get_job(task_id)["status"] == "completed"
 
 
 def test_stopping_kills_what_the_step_started():

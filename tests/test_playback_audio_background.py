@@ -266,6 +266,27 @@ def test_an_encode_failing_late_costs_the_playback_take_not_the_transcript(tmp_p
 
 
 @needs_ffmpeg
+def test_an_encode_failing_late_says_why_the_audio_is_missing(tmp_path, monkeypatch):
+    # Review of ed133bc (2026-11-26): only the service log said it. The result
+    # and the task's events now do, and so does the transcription kept for
+    # carrying on, so a resumed run still explains it.
+    events: list[dict] = []
+    monkeypatch.setattr(media_job, "log_event", lambda **kw: events.append(kw))
+    job, _transcribed, checkpoints, _folder = _pipeline_run(tmp_path, monkeypatch, encode=_FakeEncode(early=False))
+    assert job["result"]["playback_audio_error"] == "No space left on device"
+    assert checkpoints[0]["base_result"]["playback_audio_error"] == "No space left on device"
+    failed = [event for event in events if event.get("event_name") == "playback_audio_failed"]
+    assert len(failed) == 1
+    assert failed[0]["success"] is False and failed[0]["error_reason"] == "No space left on device"
+
+
+@needs_ffmpeg
+def test_a_playback_take_that_encoded_carries_no_error(tmp_path, monkeypatch):
+    job, _transcribed, _checkpoints, _folder = _pipeline_run(tmp_path, monkeypatch)
+    assert "playback_audio_error" not in job["result"]
+
+
+@needs_ffmpeg
 def test_no_audio_is_kept_for_carrying_on_when_a_prepared_file_was_transcribed(tmp_path, monkeypatch):
     cut = _tone(tmp_path / "cut.wav", 1)
     job, transcribed, _checkpoints, folder = _pipeline_run(tmp_path, monkeypatch, preprocessed=cut)

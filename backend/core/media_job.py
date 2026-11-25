@@ -1122,9 +1122,18 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 except subprocess.CalledProcessError as exc:
                     # Failed after the transcription started: the transcript is
                     # kept and the task goes on without a playback take, which
-                    # the result already allows for.
+                    # the result already allows for. Why it is missing stays in
+                    # the result and the task's events (the checkpoint carries
+                    # ``base_result``, so a resumed run keeps it too).
+                    playback_error = (exc.stderr or "").strip()[-500:] or str(exc)
                     logger.warning("Playback MP3 of %s failed, the task goes on without it: %s",
-                                   task_id_value, (exc.stderr or "").strip()[-500:])
+                                   task_id_value, playback_error)
+                    base_result["playback_audio_error"] = playback_error
+                    log_event(
+                        task_id=task_id_value, event_name="playback_audio_failed", source_type=source_type,
+                        source_filename=source_filename, stage="audio", success=False,
+                        error_reason=playback_error, metadata=event_metadata(route=event_route),
+                    )
                     playback_audio_path = None
                 pending_playback = None
             if pending_video is not None:

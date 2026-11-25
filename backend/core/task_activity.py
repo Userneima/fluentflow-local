@@ -62,6 +62,20 @@ class Activity:
         }
 
 
+def resume_point(task_id: str, steps: list[dict[str, Any]] | None) -> str | None:
+    """The step carrying the task on starts from (``task_steps.resume_point``),
+    as it will really run: from the corrections only while the transcription
+    they need is still kept, else from the transcription, which is done again
+    (``task_flow._steps_before_transcript``). The card and ``resume_task``
+    both read it here."""
+    from backend.core import task_flow
+
+    start_at = task_steps.resume_point(steps)
+    if start_at == task_steps.CORRECT and not task_flow.has_checkpoint(task_id):
+        return task_steps.TRANSCRIBE
+    return start_at
+
+
 def _step_name(step: dict[str, Any]) -> str:
     return str(step.get("step_type") or "").split(":", 1)[-1]
 
@@ -86,7 +100,7 @@ def activity(job: dict[str, Any] | None, steps: list[dict[str, Any]] | None = No
         name for name in task_steps.ORDER if str((named.get(name) or {}).get("status")) == task_steps.STOPPED
     )
     resting = {"failed_steps": failed, "stopped_steps": stopped,
-               "resume_from": task_steps.resume_point(steps) if not open_steps else None}
+               "resume_from": resume_point(task_id, steps) if not open_steps else None}
     if status in {"failed", "cancelled"}:
         return Activity(busy=False, label="已停下" if stopped else None, **resting)
     if agent_cut.is_waiting(result) and str((named.get(task_steps.CUT) or {}).get("status")) != task_steps.STOPPED:
@@ -143,4 +157,4 @@ def busy_reason(job: dict[str, Any]) -> str | None:
     return _DELETE_WORDS[task_steps.TRANSCRIBE]
 
 
-__all__ = ["Activity", "activity", "busy_reason"]
+__all__ = ["Activity", "activity", "busy_reason", "resume_point"]

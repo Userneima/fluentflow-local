@@ -345,7 +345,7 @@ async def resume_task(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
     steps = task_steps.steps_of([task_id]).get(task_id, [])
     if not steps:
         raise Refused("这个任务是在记录步骤之前处理的，没法从中断处接着做；可以重新提交这个文件。", "no_steps")
-    start_at = task_steps.resume_point(steps)
+    start_at = task_activity.resume_point(task_id, steps)
     if start_at is None:
         raise Refused("这个任务的每一步都已经做完了。", "nothing_to_resume")
     update_job_metadata(task_id, {RESTART_RESUME_COUNT_KEY: 0, task_flow.RESTART_RESUMED_KEY: None})
