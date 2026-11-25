@@ -12,7 +12,11 @@ them, so with this switch on:
   checked once for every request in ``local_main``): only new tasks made in
   this copy can be worked on;
 - the output folder of a copied task is never written (``output_folder.sync``);
-- nothing is pushed to or pulled from Feishu, and nothing is exported there.
+- nothing is pushed to or pulled from Feishu, and nothing is exported there;
+- the page it serves sends every request back to this service
+  (``page_config``), whatever its build or its port says;
+- the page may come from a build of its own (``FRONTEND_ENV``), to look at a
+  change to the page that is not pushed (decision 8.29).
 
 Which tasks were copied is the list the script writes beside the copy
 (``TASKS_FILE``); without it, every task in the database when the service
@@ -27,6 +31,7 @@ import os
 import re
 import sqlite3
 import threading
+from pathlib import Path
 from typing import Any
 
 from backend.core.runtime_paths import app_data_root, default_job_db_path
@@ -35,6 +40,8 @@ from backend.core.sqlite_connection import sqlite_connection
 logger = logging.getLogger(__name__)
 
 ENV = "FLUENTFLOW_TEST_COPY"
+FRONTEND_ENV = "FLUENTFLOW_TEST_FRONTEND_DIR"
+PAGE_CONFIG_PATH = "/assets/config.js"
 TASKS_FILE = "test_copy_tasks.json"
 READ_ONLY = "这是测试副本里的旧任务，只能看。"
 NO_FEISHU = "测试副本不往飞书写东西。"
@@ -45,6 +52,37 @@ _copied: frozenset[str] | None = None
 
 def enabled() -> bool:
     return (os.environ.get(ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def frontend_dir() -> Path | None:
+    """The build the page is served from on a test copy, when one is named;
+    never on the owner's own service."""
+    named = (os.environ.get(FRONTEND_ENV) or "").strip()
+    return Path(named).expanduser() if named and enabled() else None
+
+
+# The page reads its request address from window.FLUENTFLOW_CONFIG.apiBase
+# before anything else (frontend/src/lib/apiBase.js); without one it guesses
+# from its port, and on 4173, 5173 or 5186 guesses 8000. A build made with
+# FLUENTFLOW_API_BASE set (the MCP server's variable too) writes 8000 there.
+# Either way a delete on the copy's page would land on the owner's real tasks
+# (decision 8.25), so the copy answers with the build's config and then its
+# own origin as the address.
+_SEND_BACK_HERE = (
+    "\n// FluentFlow test copy: this page's requests go back to the service that served it.\n"
+    "window.FLUENTFLOW_CONFIG = Object.assign({}, window.FLUENTFLOW_CONFIG, {apiBase: window.location.origin});\n"
+)
+
+
+def page_config() -> str:
+    """The page's config script on a test copy."""
+    from backend.core.frontend_paths import local_frontend_dist_dir
+
+    try:
+        built = (local_frontend_dist_dir() / "assets" / "config.js").read_text(encoding="utf-8")
+    except OSError:
+        built = ""
+    return built + _SEND_BACK_HERE
 
 
 def _read_copied() -> frozenset[str]:
@@ -118,7 +156,12 @@ def refusal(method: str, path: str, body: Any = None) -> str | None:
 
 
 async def middleware(request: Any, call_next: Any) -> Any:
-    """Refuse what ``refusal`` names, for the page and agents alike."""
+    """Refuse what ``refusal`` names, for the page and agents alike; answer
+    the page's config with ``page_config``."""
+    if enabled() and request.method.upper() in {"GET", "HEAD"} and request.url.path == PAGE_CONFIG_PATH:
+        from fastapi.responses import Response
+
+        return Response(page_config(), media_type="text/javascript", headers={"Cache-Control": "no-store"})
     if enabled() and request.method.upper() not in _SAFE_METHODS:
         body: Any = None
         if "json" in (request.headers.get("content-type") or ""):
@@ -134,5 +177,5 @@ async def middleware(request: Any, call_next: Any) -> Any:
     return await call_next(request)
 
 
-__all__ = ["ENV", "NO_FEISHU", "READ_ONLY", "TASKS_FILE", "copied_tasks", "enabled", "is_copied", "middleware",
-           "refusal", "reset", "writable"]
+__all__ = ["ENV", "FRONTEND_ENV", "NO_FEISHU", "PAGE_CONFIG_PATH", "READ_ONLY", "TASKS_FILE", "copied_tasks", "enabled", "frontend_dir", "is_copied",
+           "middleware", "page_config", "refusal", "reset", "writable"]

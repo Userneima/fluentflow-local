@@ -649,7 +649,7 @@ def test_the_test_copy_start_command_is_for_powershell_on_windows():
 
     repo = Path("C:/Users/it's me/fluentflow-local")
     command = prepare_test_copy.start_command(Path("C:/copy"), port=8013, fake=True, max_calls=40, max_usd=1.0,
-                                              max_cny=None, repo=repo, windows=True)
+                                              max_cny=None, repo=repo, token="t", windows=True)
     assert command.startswith(f"Set-Location '{str(repo).replace(chr(39), chr(39) * 2)}'; ")
     assert "$env:FLUENTFLOW_FAKE_MODEL='1'; " in command and "$env:FLUENTFLOW_TEST_MAX_USD='1'" in command
     assert f"& '{repo / '.venv' / 'Scripts' / 'python.exe'}'".replace("it's", "it''s") in command
@@ -662,6 +662,44 @@ def test_the_test_copy_start_command_is_for_powershell_on_windows():
     for name in ("FLUENTFLOW_DATA_DIR", "FLUENTFLOW_CONFIG_PATH", "FLUENTFLOW_TEST_COPY", "FLUENTFLOW_FAKE_MODEL",
                  "FLUENTFLOW_TEST_MAX_CALLS", "FLUENTFLOW_TEST_MAX_USD", "FLUENTFLOW_LOCAL_PORT"):
         assert f"Env:{name}" in cleared
+
+
+def test_the_test_copy_runs_from_a_worktree_without_a_venv(tmp_path, monkeypatch, capsys):
+    """(2026-11-25) T3 and Claude Code make worktrees without .venv: the
+    command uses the main checkout's, still runs this checkout's code, opens
+    the Agent API with a throwaway token and shows how to call a tool."""
+    import shlex
+
+    from scripts import prepare_test_copy
+
+    worktree, main = tmp_path / "worktree", tmp_path / "main"
+    (main / ".venv" / "bin").mkdir(parents=True)
+    (main / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
+    worktree.mkdir()
+    monkeypatch.setattr(prepare_test_copy, "main_checkout", lambda repo: main)
+    assert prepare_test_copy.interpreter(worktree, windows=False) == main / ".venv" / "bin" / "python"
+    (worktree / ".venv" / "bin").mkdir(parents=True)
+    (worktree / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
+    assert prepare_test_copy.interpreter(worktree, windows=False) == worktree / ".venv" / "bin" / "python"
+
+    real = _real_data(tmp_path)
+    build = tmp_path / "build"
+    build.mkdir()
+    with pytest.raises(SystemExit, match="no local.html"):
+        prepare_test_copy.main(["--source", str(real), "--into", str(tmp_path / "copy"), "--frontend-dir", str(build)])
+    (build / "local.html").write_text("", encoding="utf-8")
+    assert prepare_test_copy.main(["--source", str(real), "--into", str(tmp_path / "copy"), "--port", "8013",
+                                   "--frontend-dir", str(build)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    start = lines[lines.index("start the test service with:") + 1]
+    example = lines[-1]
+    token = start.split("FLUENTFLOW_ACCESS_TOKEN", 1)[1][1:].split()[0].strip("'")
+    assert len(token) >= 20 and f"FLUENTFLOW_ACCESS_TOKEN{_assigned(token)}" in example
+    assert f"FLUENTFLOW_TEST_FRONTEND_DIR{_assigned(build.resolve())}" in start
+    assert f"FLUENTFLOW_API_BASE{_assigned('http://127.0.0.1:8013')}" in example
+    assert "from scripts.fluentflow_mcp import notes; print(notes.get_status())" in example
+    if sys.platform != "win32":
+        assert shlex.split(example)[0:2] == ["cd", str(Path(prepare_test_copy.__file__).resolve().parents[1])]
 
 
 def test_the_test_copy_will_not_copy_a_test_copy(tmp_path, monkeypatch):

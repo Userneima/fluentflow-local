@@ -23,6 +23,15 @@ the fake model, which calls no model at all. It also sets
 ``FLUENTFLOW_TEST_COPY``: the copied tasks still point at the user's real
 notes, and the service then does not watch them or their Feishu documents.
 
+It runs the service with this checkout's ``.venv``, or, in a worktree that has
+none, the main checkout's; and gives it a throwaway access token, printed with
+a line that calls the MCP tool functions in ``scripts/fluentflow_mcp`` against
+the copy: the MCP tools a conversation is connected to reach port 8000 and the
+main checkout's code, not this one. ``--frontend-dir`` serves the page from a
+build of its own (``npx vite build --config vite.local.config.mjs --outDir
+<dir>``); the copy's page always sends its requests back to the copy
+(``backend/core/test_copy.py``, decision 8.29).
+
     .venv/bin/python scripts/prepare_test_copy.py --into <scratch dir> --fake --port 8013
 
 On Windows the printed command is for PowerShell, and takes the variables it
@@ -34,8 +43,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import shlex
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -152,37 +163,81 @@ def prepare(source: Path, into: Path) -> dict[str, object]:
     }
 
 
+def _venv_python(checkout: Path, windows: bool) -> Path:
+    return checkout / ".venv" / ("Scripts/python.exe" if windows else "bin/python")
+
+
+def main_checkout(repo: Path) -> Path | None:
+    """The checkout a worktree was made from, or None outside git."""
+    try:
+        common = subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return Path(common).parent if common else None
+
+
+def interpreter(repo: Path, *, windows: bool = os.name == "nt") -> Path:
+    """This checkout's ``.venv`` Python; in a worktree without one (T3 and
+    Claude Code make them without), the main checkout's. Run from this
+    checkout either way, so it serves this checkout's code."""
+    own = _venv_python(repo, windows)
+    if own.exists():
+        return own
+    main = main_checkout(repo)
+    if main is not None and _venv_python(main, windows).exists():
+        return _venv_python(main, windows)
+    return own
+
+
 def start_command(into: Path, *, port: int, fake: bool, max_calls: int | None, max_usd: float | None,
-                  max_cny: float | None, repo: Path, windows: bool = os.name == "nt") -> str:
+                  max_cny: float | None, repo: Path, token: str, python: Path | None = None,
+                  frontend_dir: Path | None = None, windows: bool = os.name == "nt") -> str:
     """The command that starts the test service: PowerShell on Windows, a POSIX shell elsewhere."""
     env = {
         "FLUENTFLOW_DATA_DIR": str(into),
         "FLUENTFLOW_CONFIG_PATH": str(into / "fluentflow_config.json"),
         "FLUENTFLOW_LOCAL_PORT": str(port),
         "FLUENTFLOW_TEST_COPY": "1",
+        # The Agent API is closed without one, and a worktree has no .env.
+        "FLUENTFLOW_ACCESS_TOKEN": token,
     }
+    if frontend_dir is not None:
+        env["FLUENTFLOW_TEST_FRONTEND_DIR"] = str(frontend_dir)
     if fake:
         env["FLUENTFLOW_FAKE_MODEL"] = "1"
     for name, value in (("FLUENTFLOW_TEST_MAX_CALLS", max_calls), ("FLUENTFLOW_TEST_MAX_USD", max_usd),
                         ("FLUENTFLOW_TEST_MAX_CNY", max_cny)):
         if value is not None:
             env[name] = f"{value:g}" if isinstance(value, float) else str(value)
-    serve = f"-m uvicorn backend.local_main:app --host 127.0.0.1 --port {port}"
+    python = python or _venv_python(repo, windows)
+    return _run_in(repo, env, python, f"-m uvicorn backend.local_main:app --host 127.0.0.1 --port {port}", windows)
+
+
+def tool_call_example(*, port: int, repo: Path, token: str, python: Path | None = None,
+                      windows: bool = os.name == "nt") -> str:
+    """A command calling one MCP tool function against the copy: replace
+    ``notes.get_status()`` with the tool to try."""
+    env = {"FLUENTFLOW_API_BASE": f"http://127.0.0.1:{port}", "FLUENTFLOW_ACCESS_TOKEN": token}
+    code = "from scripts.fluentflow_mcp import notes; print(notes.get_status())"
+    quoted = "'" + code + "'" if windows else shlex.quote(code)
+    return _run_in(repo, env, python or _venv_python(repo, windows), f"-c {quoted}", windows)
+
+
+def _run_in(repo: Path, env: dict[str, str], python: Path, arguments: str, windows: bool) -> str:
     if windows:
         def quote(value) -> str:
             return "'" + str(value).replace("'", "''") + "'"
 
         assignments = "; ".join(f"$env:{name}={quote(value)}" for name, value in env.items())
-        python = quote(repo / ".venv" / "Scripts" / "python.exe")
         # $env: is set for the whole PowerShell window; taken out again when
-        # the service ends (finally runs on Ctrl+C too), so a later command
+        # the command ends (finally runs on Ctrl+C too), so a later command
         # there does not read the copy as the real data.
         cleared = ", ".join(f"Env:{name}" for name in env)
-        return (f"Set-Location {quote(repo)}; try {{ {assignments}; & {python} {serve} }} "
+        return (f"Set-Location {quote(repo)}; try {{ {assignments}; & {quote(python)} {arguments} }} "
                 f"finally {{ Remove-Item {cleared} -ErrorAction SilentlyContinue }}")
     assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in env.items())
-    python = shlex.quote(str(repo / ".venv" / "bin" / "python"))
-    return f"cd {shlex.quote(str(repo))} && {assignments} {python} {serve}"
+    return f"cd {shlex.quote(str(repo))} && {assignments} {shlex.quote(str(python))} {arguments}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -195,15 +250,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-usd", type=float, default=DEFAULT_MAX_USD)
     parser.add_argument("--max-cny", type=float, default=DEFAULT_MAX_CNY)
     parser.add_argument("--no-limit", action="store_true", help="no budget (only with the owner's go-ahead)")
+    parser.add_argument("--frontend-dir", type=Path,
+                        help="serve the page from this build (vite build --outDir), not frontend/dist-local")
     args = parser.parse_args(argv)
     done = prepare(args.source, args.into)
     limits = (None, None, None) if args.no_limit else (args.max_calls, args.max_usd, args.max_cny)
     repo = Path(__file__).resolve().parents[1]
+    frontend_dir = args.frontend_dir.expanduser().resolve() if args.frontend_dir else None
+    if frontend_dir is not None and not (frontend_dir / "local.html").is_file():
+        raise SystemExit(f"no local.html in {frontend_dir}: build into it with "
+                         f"npx vite build --config vite.local.config.mjs --outDir {frontend_dir}")
+    python = interpreter(repo)
+    token = secrets.token_urlsafe(18)
     print(f"copy: {done['into']}  ({done['copied_tasks']} tasks copied, read-only in the test service; "
           f"closed in the copy: {done['closed_steps']} steps, {done['closed_tasks']} tasks)")
+    if not _venv_python(repo, os.name == "nt").exists():
+        print(f"this checkout has no .venv: using {python}")
     print("start the test service with:")
     print(start_command(done["into"], port=args.port, fake=args.fake, max_calls=limits[0], max_usd=limits[1],
-                        max_cny=limits[2], repo=repo))
+                        max_cny=limits[2], repo=repo, token=token, python=python, frontend_dir=frontend_dir))
+    print("call an MCP tool function on it (the conversation's own MCP tools reach port 8000) with:")
+    print(tool_call_example(port=args.port, repo=repo, token=token, python=python))
     return 0
 
 

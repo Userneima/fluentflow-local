@@ -36,7 +36,7 @@ def test_local_spa_reports_a_missing_frontend_index(tmp_path):
     assert "npm run build:frontend 后" in response.json()["detail"]
 
 
-def test_local_spa_defaults_to_the_local_bundle_entry():
+def test_local_spa_defaults_to_the_local_bundle_entry(monkeypatch):
     import inspect
 
     from backend import local_main
@@ -45,10 +45,14 @@ def test_local_spa_defaults_to_the_local_bundle_entry():
         local_frontend_index_path,
     )
 
+    # Another build is served only by a test copy (backend/core/test_copy.py).
+    monkeypatch.delenv("FLUENTFLOW_TEST_COPY", raising=False)
+    monkeypatch.setenv("FLUENTFLOW_TEST_FRONTEND_DIR", "/elsewhere")
+
     # The local edition must never serve the hosted bundle: its default index
     # is dist-local/local.html (no source or index.html fallback), and the
     # composition root mounts assets from dist-local.
     assert local_frontend_index_path() == FRONTEND_LOCAL_DIST_DIR / "local.html"
     assert FRONTEND_LOCAL_DIST_DIR.name == "dist-local"
     source = inspect.getsource(local_main)
-    assert "frontend_dist_dir=FRONTEND_LOCAL_DIST_DIR" in source
+    assert "frontend_dist_dir=local_frontend_dist_dir()" in source
