@@ -363,16 +363,16 @@ async def _carry_on(job: dict[str, Any], start_at: str, *, route: str) -> None:
     task_id = str(job.get("task_id") or "")
     client_id = job.get("client_id")
     before_transcript = start_at in task_steps.BEFORE_TRANSCRIPT
-    # A task made from subtitles has no recording: it reads them again and
-    # writes its note, whichever step it stopped in, and never enters the
+    # A task made from subtitles has no recording: it reads them again, or at
+    # its note writes it from the transcript it holds, and never enters the
     # transcription pipeline below.
     if transcript_note.subtitle_in_place_of(job) is not None:
         try:
-            started = await transcript_note.resume_subtitle_in_place(job, route=route)
+            started = await transcript_note.resume_subtitle_in_place(job, route=route, start_at=start_at)
         except FileNotFoundError as exc:
             raise Refused(str(exc), "source_missing") from exc
     elif link_submission.captions_of(job) is not None:
-        started = await link_submission.resume_captions_note(job, route=route)
+        started = await link_submission.resume_captions_note(job, route=route, start_at=start_at)
     elif start_at == task_steps.FETCH and link_submission.link_of(job) and task_submission.find_source_file(task_id) is None:
         task_steps.reopen_from(task_id, start_at)
         reopen_job(task_id)

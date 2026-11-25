@@ -199,3 +199,103 @@ def test_a_stopped_subtitle_task_carries_on_when_the_user_asks(task_id, tmp_path
     asyncio.run(scenario())
     output_folder._WORKER.submit(lambda: None).result(timeout=10)
     _assert_finished_with_its_note(task_id, model)
+
+
+# ── the user's transcript edits survive carrying the note on ────────────────
+#
+# Requirement (review of 2026-11-25): when only the note failed (the model
+# failed) and the user then edited the transcript in FluentFlow, carrying the
+# task on writes the note from their edited transcript and keeps it; it does
+# not read the subtitles again, so neither the file's text nor a file changed
+# on disk since replaces what they edited. A recording carried on at its note
+# is not transcribed again either.
+
+EDITED = "今天讲最小二乘法。先看残差平方和为什么能代表拟合得好不好。"
+EDITED_SEGMENTS = [
+    {"start": 1.0, "end": 4.0, "text": "今天讲最小二乘法。"},
+    {"start": 5.0, "end": 9.0, "text": "先看残差平方和为什么能代表拟合得好不好。"},
+]
+
+
+def _first_run_the_model_fails(task_id, monkeypatch):
+    def fails(_text, **_kw):
+        raise RuntimeError("模型这次没有回答")
+
+    monkeypatch.setattr(transcript_note, "summarize_transcript_with_metadata", fails)
+    _cut_off_reading(task_id)
+    _restart(task_id)
+    job = job_store.get_job(task_id)
+    assert job["status"] == "completed" and job["result"]["summary_status"] == "failed"
+    assert _statuses(task_id)[task_steps.NOTE] == task_steps.FAILED
+
+
+def _user_edits_the_transcript(task_id):
+    """What the editor's save writes (``local_job_edit.update_job_transcript``)."""
+    before = dict(job_store.get_job(task_id)["result"])
+    job_store.save_result_changes(task_id, before, {
+        **before, "transcript_text": EDITED, "raw_segments": EDITED_SEGMENTS, "display_segments": EDITED_SEGMENTS,
+        "transcript_edited": True,
+    })
+    return before
+
+
+def _carry_on(task_id):
+    async def scenario():
+        await task_actions.resume_task(task_id, None)
+        assert await _until(lambda: _ended(task_id) and job_store.get_job(task_id)["result"].get(
+            "summary_status") not in {"pending", "failed"})
+
+    asyncio.run(scenario())
+    output_folder._WORKER.submit(lambda: None).result(timeout=10)
+
+
+def _assert_note_from_the_edit(task_id, model, before):
+    job = job_store.get_job(task_id)
+    result = job["result"]
+    assert job["status"] == "completed", job.get("error_reason")
+    assert result["transcript_text"] == EDITED, "the user's edit was replaced"
+    assert result["raw_segments"] == EDITED_SEGMENTS
+    assert result.get("transcript_edited") is True
+    from backend.core import glossary_correction
+    assert result.get(glossary_correction.FINGERPRINTS) == before.get(glossary_correction.FINGERPRINTS)
+    assert "模型写的" in result["summary_markdown"]
+    assert not result.get("summary_error")
+    assert len(model) == 1 and "残差平方和" in model[0], "the note was not written from the edited transcript"
+    assert _statuses(task_id)[task_steps.NOTE] == task_steps.DONE
+
+
+def test_a_subtitle_files_transcript_edits_survive_carrying_its_note_on(task_id, tmp_path, model, monkeypatch):
+    srt = _in_place_task(task_id, tmp_path, status="running")
+    _first_run_the_model_fails(task_id, monkeypatch)
+    before = _user_edits_the_transcript(task_id)
+    # The file changed on disk since: its new words are not the note's.
+    srt.write_text(SRT.replace("最小二乘法", "傅里叶变换"), encoding="utf-8")
+    monkeypatch.setattr(transcript_note, "summarize_transcript_with_metadata",
+                        lambda text, **_kw: (model.append(text), SimpleNamespace(
+                            markdown="# 最小二乘法\n\n模型写的。", requested_mode="auto",
+                            resolved_mode="direct", chunk_count=1))[1])
+
+    _carry_on(task_id)
+
+    _assert_note_from_the_edit(task_id, model, before)
+    assert "傅里叶变换" not in model[0]
+
+
+def test_a_links_captions_transcript_edits_survive_carrying_its_note_on(task_id, model, monkeypatch):
+    from backend.core import link_submission
+
+    def no_download(*_a, **_kw):
+        raise AssertionError("the captions are on disk: nothing is downloaded again")
+
+    monkeypatch.setattr(link_submission, "download_video_source", no_download)
+    _captions_task(task_id, status="running")
+    _first_run_the_model_fails(task_id, monkeypatch)
+    before = _user_edits_the_transcript(task_id)
+    monkeypatch.setattr(transcript_note, "summarize_transcript_with_metadata",
+                        lambda text, **_kw: (model.append(text), SimpleNamespace(
+                            markdown="# 最小二乘法\n\n模型写的。", requested_mode="auto",
+                            resolved_mode="direct", chunk_count=1))[1])
+
+    _carry_on(task_id)
+
+    _assert_note_from_the_edit(task_id, model, before)

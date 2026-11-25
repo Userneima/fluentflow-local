@@ -297,3 +297,44 @@ def test_cancelling_a_note_already_with_claude_keeps_its_turn_until_it_stops(mon
 
     asyncio.run(scenario())
     assert flow.remote_peak == tf.NOTE_CONCURRENCY
+
+
+def test_a_subtitle_files_note_does_not_hold_the_next_recording(monkeypatch, tmp_path):
+    """A subtitle file whose note FluentFlow's text model writes: the minutes
+    that note waits on the model use nothing on this machine, so a recording
+    submitted meanwhile starts transcribing at once."""
+    from backend.core import transcript_note as tn
+
+    (b,) = _ids("b")
+    srt = tmp_path / "a.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nhi\n", encoding="utf-8")
+    log: list[str] = []
+
+    async def scenario():
+        model_answers = asyncio.Event()
+
+        async def note_waiting_on_the_model(task_id, *_a, **_k):
+            _CREATED.append(task_id)
+            log.append("note-started")
+            await model_answers.wait()
+            log.append("note-done")
+
+        monkeypatch.setattr(tn, "_run_subtitle_in_place", note_waiting_on_the_model)
+
+        async def recording(previous, done):
+            try:
+                await tq.wait_for_queue_turn(previous, b, None)
+                log.append("pipeline:b")
+            finally:
+                done.set()
+
+        await tn.submit_subtitle_in_place(srt, client_id=None, options={"intelligence": "fluentflow"},
+                                          route="t", origin={})
+        assert await _until(lambda: "note-started" in log)
+        await tq._start_behind_queue(task_id=b, client_id=None, route="t", stage="x", chained_worker=recording)
+        assert await _until(lambda: "pipeline:b" in log), "the recording waited for the subtitle file's note"
+        assert "note-done" not in log
+        model_answers.set()
+        assert await _until(lambda: "note-done" in log)
+
+    asyncio.run(scenario())

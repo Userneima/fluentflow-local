@@ -463,3 +463,157 @@ def test_resubmitting_a_running_task_id_does_not_let_the_next_job_jump_the_queue
         await _settle()
 
     asyncio.run(scenario())
+
+
+# ── a job that never waits its turn ─────────────────────────────────────────
+#
+# Requirement (independent review of 2026-11-25, decision 1.19): a task with nothing to transcribe (a subtitle file by path, a link's
+# captions, a link whose download failed) never waits for its turn, and it must
+# not free the line for the recording behind it while the recording ahead of
+# it still transcribes. With one job at a time, two transcriptions side by side
+# is what this machine was measured collapsing under.
+
+
+def _recording(name: str, running: set, overlap: list, hold: dict):
+    async def worker(previous, done):
+        try:
+            await tq.wait_for_queue_turn(previous, name, None)
+            running.add(name)
+            if len(running) > 1:
+                overlap.append(set(running))
+            gate = hold.get(name)
+            if gate is not None:
+                await gate.wait()
+            else:
+                await asyncio.sleep(0.05)
+        finally:
+            running.discard(name)
+            done.set()
+    return worker
+
+
+def test_a_recording_queued_behind_a_subtitle_file_waits_for_the_recording_ahead(monkeypatch, tmp_path):
+    """A transcribes; a subtitle file is submitted and done in a moment; B,
+    submitted next, starts only once A is done. The heartbeat is short so the
+    wait also outlasts B's check that the task ahead of it is still there:
+    the subtitle task is gone by then, and B still waits for A."""
+    from backend.core import transcript_note as tn
+
+    monkeypatch.setattr(tq, "_QUEUE_HEARTBEAT_SECONDS", 0.02)
+    monkeypatch.setattr(tq, "QUEUE_CONCURRENCY", 1)
+    srt = tmp_path / "a.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nhi\n", encoding="utf-8")
+
+    async def read_at_once(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(tn, "_run_subtitle_in_place", read_at_once)
+    running: set = set()
+    overlap: list = []
+    order: list[str] = []
+
+    async def scenario():
+        hold = {"serial-sub-a": asyncio.Event()}
+        for task_id in ("serial-sub-a", "serial-sub-b"):
+            upsert_job(task_id=task_id, status="queued", client_id=None, stage="queued", progress=0)
+        a = _recording("serial-sub-a", running, overlap, hold)
+        b = _recording("serial-sub-b", running, overlap, hold)
+
+        async def b_logged(previous, done):
+            await tq.wait_for_queue_turn(previous, "serial-sub-b", None)
+            order.append("b")
+            await b(None, done)
+
+        await tq._start_behind_queue(task_id="serial-sub-a", client_id=None, route="t", stage="x", chained_worker=a)
+        await _settle()
+        await tn.submit_subtitle_in_place(srt, client_id=None, options={}, route="t", origin={})
+        await tq._start_behind_queue(task_id="serial-sub-b", client_id=None, route="t", stage="x",
+                                     chained_worker=b_logged)
+        await _settle()
+        await asyncio.sleep(0.2)  # ten heartbeats
+        assert order == [], "B started while A still transcribed"
+        hold["serial-sub-a"].set()
+        await _until(lambda: order == ["b"])
+        await _settle()
+
+    asyncio.run(scenario())
+    assert not overlap, f"recordings ran together: {overlap}"
+
+
+def test_a_job_that_ends_without_waiting_passes_its_place_on_and_does_not_free_the_line(monkeypatch):
+    """Any entry that ends before waiting (a failed download, a link's
+    captions): the next recording still waits for the one ahead of it, and
+    starts as soon as that one is done."""
+    monkeypatch.setattr(tq, "_QUEUE_HEARTBEAT_SECONDS", 0.02)
+    monkeypatch.setattr(tq, "QUEUE_CONCURRENCY", 1)
+    running: set = set()
+    overlap: list = []
+    started: list[str] = []
+
+    async def ends_at_once(_previous, done):
+        done.set()
+
+    async def scenario():
+        hold = {"serial-end-a": asyncio.Event()}
+        for task_id in ("serial-end-a", "serial-end-x", "serial-end-y", "serial-end-b"):
+            upsert_job(task_id=task_id, status="queued", client_id=None, stage="queued", progress=0)
+        a = _recording("serial-end-a", running, overlap, hold)
+        b = _recording("serial-end-b", running, overlap, hold)
+
+        async def b_logged(previous, done):
+            await tq.wait_for_queue_turn(previous, "serial-end-b", None)
+            started.append("b")
+            await b(None, done)
+
+        await tq._start_behind_queue(task_id="serial-end-a", client_id=None, route="t", stage="x", chained_worker=a)
+        await _settle()
+        # Two in a row: the second passes on the first's place, which passes on A's.
+        for task_id in ("serial-end-x", "serial-end-y"):
+            await tq._start_behind_queue(task_id=task_id, client_id=None, route="t", stage="x",
+                                         chained_worker=ends_at_once)
+        await tq._start_behind_queue(task_id="serial-end-b", client_id=None, route="t", stage="x",
+                                     chained_worker=b_logged)
+        await asyncio.sleep(0.2)
+        assert started == [], "B started while A still transcribed"
+        hold["serial-end-a"].set()
+        assert await _until_true(lambda: started == ["b"]), "B never started once A was done"
+        await _settle()
+
+    asyncio.run(scenario())
+    assert not overlap, f"recordings ran together: {overlap}"
+
+
+def test_a_job_that_ends_without_waiting_does_not_hold_an_idle_line(monkeypatch):
+    """Nothing ahead of it: the next recording starts at once."""
+    started: list[str] = []
+
+    async def ends_at_once(_previous, done):
+        done.set()
+
+    async def recording(previous, done):
+        try:
+            await tq.wait_for_queue_turn(previous, "serial-idle-b", None)
+            started.append("b")
+        finally:
+            done.set()
+
+    async def scenario():
+        for task_id in ("serial-idle-x", "serial-idle-b"):
+            upsert_job(task_id=task_id, status="queued", client_id=None, stage="queued", progress=0)
+        await tq._start_behind_queue(task_id="serial-idle-x", client_id=None, route="t", stage="x",
+                                     chained_worker=ends_at_once)
+        await _settle()
+        await tq._start_behind_queue(task_id="serial-idle-b", client_id=None, route="t", stage="x",
+                                     chained_worker=recording)
+        await _settle()
+        assert started == ["b"]
+
+    asyncio.run(scenario())
+
+
+async def _until_true(predicate, seconds: float = 5.0) -> bool:
+    for _ in range(int(seconds / 0.01)):
+        if predicate():
+            return True
+        await asyncio.sleep(0.01)
+    return predicate()
