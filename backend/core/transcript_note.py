@@ -38,7 +38,7 @@ from backend.core.media_intake import TRANSCRIPT_SUFFIXES, file_size_mb
 from backend.core.runtime_env import truthy
 from backend.core.result_artifacts import _attach_result_artifacts
 from backend.core.transcript_cleaner import clean_repeated_transcript
-from backend.core.transcript_parser import parse_transcript_file
+from backend.core.transcript_parser import UTF16_HINT, parse_transcript_file, utf16_without_mark
 
 
 def _friendly_error(error: Any) -> str:
@@ -187,6 +187,10 @@ async def summarize_transcript_source(
         )
 
     try:
+        if utf16_without_mark(raw):
+            # Read as another encoding it is garbage with zeros in it, and the
+            # note would be written from that.
+            raise HTTPException(status_code=400, detail=f"没有读出 {filename} 的文字：{UTF16_HINT}。")
         parsed = parse_transcript_file(raw, filename)
         if not parsed.text.strip():
             raise HTTPException(status_code=400, detail="Transcript file is empty")
@@ -444,7 +448,6 @@ async def submit_subtitle_in_place(
     brings a cancelled or deleted task back; like a link's captions it does
     not wait its turn, as there is nothing to transcribe."""
     from backend.core.output_folder import SUBTITLE_INTAKE_KEY
-    from backend.core.task_queue import _start_behind_queue
 
     # Read before the task exists: a file gone since it was checked, or one
     # too large to read, leaves no queued task behind.
@@ -473,21 +476,65 @@ async def submit_subtitle_in_place(
         ),
     )
 
+    await _start_subtitle_run(task_id_value, source, client_id=client_id, options=options, title=title, route=route)
+    return {"task_id": task_id_value, "status": "queued", "filename": source.name, "title": title}
+
+
+def subtitle_in_place_of(job: dict[str, Any]) -> Optional[Path]:
+    """The subtitle file a task was made from by path, or None for any other task."""
+    from backend.core.output_folder import SUBTITLE_INTAKE_KEY
+
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    origin = metadata.get(SUBTITLE_INTAKE_KEY)
+    if not isinstance(origin, dict) or not origin.get("original_path"):
+        return None
+    return Path(str(origin["original_path"]))
+
+
+async def resume_subtitle_in_place(job: dict[str, Any], *, route: str) -> bool:
+    """Carry a subtitle task by path on after a restart or a stop: read the
+    file again and write the note, whichever step it was cut off in. Reading
+    takes seconds; the model answers the note already got are kept
+    (``model_answers``), so they are not paid for again. Raises
+    ``FileNotFoundError`` with the user's words when the file is gone."""
+    from backend.core.job_store import reopen_job
+
+    source = subtitle_in_place_of(job)
+    if source is None or not source.is_file():
+        raise FileNotFoundError(f"这个任务的字幕文件已不在原来的位置：{source}，没法接着做；请重新提交这个字幕文件。")
+    task_id = str(job.get("task_id") or "")
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    stored = metadata.get("queue_options")
+    options = dict(stored) if isinstance(stored, dict) else {}
+    title = str(metadata.get("display_title") or options.get("title") or "").strip() or source.stem
+    task_steps.reopen_from(task_id, task_steps.FETCH)
+    reopen_job(task_id)
+    return await _start_subtitle_run(task_id, source, client_id=job.get("client_id"), options=options,
+                                     title=title, route=route)
+
+
+async def _start_subtitle_run(
+    task_id: str, source: Path, *, client_id: Optional[str], options: dict[str, Any], title: str, route: str,
+) -> bool:
+    from backend.core.task_flow import RESTART_RESUMED_KEY
+    from backend.core.job_store import update_job_metadata
+    from backend.core.task_queue import _start_behind_queue
+
     async def worker(_previous: Any, done: asyncio.Event) -> None:
         stopped = False
         try:
-            await _run_subtitle_in_place(task_id_value, source, client_id=client_id, options=options,
+            await _run_subtitle_in_place(task_id, source, client_id=client_id, options=options,
                                          title=title, route=route)
         except asyncio.CancelledError:
             stopped = True
             raise
         finally:
             done.set()
-            task_steps.close_open(task_id_value, stopped=stopped)
+            task_steps.close_open(task_id, stopped=stopped)
+            update_job_metadata(task_id, {RESTART_RESUMED_KEY: None})
 
-    await _start_behind_queue(task_id=task_id_value, client_id=client_id, route=route,
-                              stage="transcript_file", chained_worker=worker)
-    return {"task_id": task_id_value, "status": "queued", "filename": source.name, "title": title}
+    return await _start_behind_queue(task_id=task_id, client_id=client_id, route=route,
+                                     stage="transcript_file", chained_worker=worker)
 
 
 async def _run_subtitle_in_place(
@@ -506,7 +553,8 @@ async def _run_subtitle_in_place(
         # header, another format) would otherwise be read as plain text and
         # handed to the note writer.
         if not parse_transcript_file(raw, source.name).segments:
-            raise HTTPException(status_code=400, detail=f"{source.name} 里没有读出带时间的字幕。")
+            hint = f"：{UTF16_HINT}" if utf16_without_mark(raw) else ""
+            raise HTTPException(status_code=400, detail=f"{source.name} 里没有读出带时间的字幕{hint}。")
         task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
         if not truthy(options.get("skip_summary")):
             task_steps.start(task_id, task_steps.NOTE)

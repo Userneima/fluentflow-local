@@ -41,6 +41,20 @@ def _decode_text(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def utf16_without_mark(raw: bytes) -> bool:
+    """Whether the bytes look like UTF-16 saved without its byte-order mark,
+    which ``_decode_text`` does not read as UTF-16: one byte in two a zero,
+    as the digits, colons and line breaks of a subtitle file are in it. Text
+    in UTF-8 or GB18030 has no zero byte."""
+    sample = raw[:4096]
+    if len(sample) < 8 or sample[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return False
+    return sample.count(0) * 4 >= len(sample)
+
+
+UTF16_HINT = "文件可能是不带编码标记的 UTF-16，用文本编辑器另存为 UTF-8 后再交"
+
+
 def _parse_timestamp(value: str) -> float:
     match = _TIMESTAMP_RE.search(value.strip())
     if not match:

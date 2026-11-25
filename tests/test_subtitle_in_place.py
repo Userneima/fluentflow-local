@@ -249,3 +249,14 @@ def test_a_folder_holding_a_hand_sorted_subtitle_copy_is_not_written_over(client
 
     assert kept.read_text(encoding="utf-8") == "我自己整理的"
     assert (folder / "过程文件" / "课程 (2).txt").is_file()
+
+
+def test_a_subtitle_file_in_utf16_without_its_mark_says_it_may_be_the_encoding(client, tmp_path):
+    """(independent review, 2026-11-25) Not read as UTF-16, the file has no
+    timed line; the reason given points at the encoding."""
+    path = tmp_path / "无标记.srt"
+    path.write_bytes(SRT.encode("utf-16-le"))
+    task_id = _submit(client, path)
+
+    job = job_store.get_job(task_id)
+    assert job["status"] == "failed" and "UTF-16" in job["error_reason"]

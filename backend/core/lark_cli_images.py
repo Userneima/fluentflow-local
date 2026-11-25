@@ -194,7 +194,8 @@ def resume_pictures(
 
     Checked on a document made for the test in the owner's Feishu
     (2026-11-25): a picture inserted just before the cut-off sits right above
-    its marker paragraph, so it is not put in twice."""
+    its marker paragraph, so it is not put in twice, also when Feishu shows it
+    without its file name."""
     fetched = lark_cli_run._run(
         runner, [bin_path, "docs", "+fetch", "--doc", doc_id, "--detail", "with-ids", "--as", "user"], timeout=60,
     )
@@ -233,7 +234,11 @@ def resume_pictures(
             continue
         record = {"src": item["src"], "line": item["line"], "caption": item["caption"], "name": item["path"].name}
         above = parser.items[position - 1] if position else None
-        if above and above[0] == "img" and above[1].get("name") == item["path"].name:
+        # The picture Feishu shows right above the caption is this one's when
+        # it carries this file name, or no name at all: only one document was
+        # checked to carry it, and a picture inserted just before the cut-off
+        # must not go in twice. One named after another file is not this one.
+        if above and above[0] == "img" and above[1].get("name") in (item["path"].name, "", None):
             images.append({**record, "file_token": above[1].get("src"), "block_id": above[1].get("id")})
             if marker:
                 stray.append(marker.group(0))

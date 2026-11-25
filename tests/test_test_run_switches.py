@@ -653,8 +653,27 @@ def test_the_test_copy_start_command_is_for_powershell_on_windows():
     assert command.startswith(f"Set-Location '{str(repo).replace(chr(39), chr(39) * 2)}'; ")
     assert "$env:FLUENTFLOW_FAKE_MODEL='1'; " in command and "$env:FLUENTFLOW_TEST_MAX_USD='1'" in command
     assert f"& '{repo / '.venv' / 'Scripts' / 'python.exe'}'".replace("it's", "it''s") in command
-    assert command.endswith("-m uvicorn backend.local_main:app --host 127.0.0.1 --port 8013")
+    assert "-m uvicorn backend.local_main:app --host 127.0.0.1 --port 8013 }" in command
     assert "&&" not in command and "bin/python" not in command
+    # (independent review, 2026-11-25) $env: stays set in the window: taken
+    # out when the service ends, so a later run there does not read the copy.
+    assert " try { $env:FLUENTFLOW_DATA_DIR=" in command
+    cleared = command.split("finally { Remove-Item ", 1)[1]
+    for name in ("FLUENTFLOW_DATA_DIR", "FLUENTFLOW_CONFIG_PATH", "FLUENTFLOW_TEST_COPY", "FLUENTFLOW_FAKE_MODEL",
+                 "FLUENTFLOW_TEST_MAX_CALLS", "FLUENTFLOW_TEST_MAX_USD", "FLUENTFLOW_LOCAL_PORT"):
+        assert f"Env:{name}" in cleared
+
+
+def test_the_test_copy_will_not_copy_a_test_copy(tmp_path, monkeypatch):
+    """(independent review, 2026-11-25) In a window where the start command
+    ran, FLUENTFLOW_DATA_DIR (the default source) names the copy."""
+    from scripts import prepare_test_copy
+
+    real = _real_data(tmp_path)
+    first = tmp_path / "copy"
+    assert prepare_test_copy.main(["--source", str(real), "--into", str(first)]) == 0
+    with pytest.raises(SystemExit, match="test copy"):
+        prepare_test_copy.main(["--source", str(first), "--into", str(tmp_path / "copy2")])
 
 
 def test_the_test_copy_refuses_to_go_inside_the_real_data(tmp_path):

@@ -25,7 +25,8 @@ notes, and the service then does not watch them or their Feishu documents.
 
     .venv/bin/python scripts/prepare_test_copy.py --into <scratch dir> --fake --port 8013
 
-On Windows the printed command is for PowerShell.
+On Windows the printed command is for PowerShell, and takes the variables it
+sets out of the window again when the service ends.
 """
 
 from __future__ import annotations
@@ -121,6 +122,11 @@ def prepare(source: Path, into: Path) -> dict[str, object]:
     source, into = source.expanduser().resolve(), into.expanduser().resolve()
     if into == source or source in into.parents:
         raise SystemExit(f"the copy must not be inside the real data directory: {into}")
+    if (source / TASKS_FILE).is_file():
+        # A window the printed command ran in can still name the copy as the
+        # data directory (FLUENTFLOW_DATA_DIR, the default --source).
+        raise SystemExit(f"{source} is a test copy ({TASKS_FILE} is in it), not the real data: "
+                         "pass --source the real data directory")
     if not (source / DATABASES[0]).is_file():
         raise SystemExit(f"no task database in {source}")
     into.mkdir(parents=True, exist_ok=True)
@@ -168,7 +174,12 @@ def start_command(into: Path, *, port: int, fake: bool, max_calls: int | None, m
 
         assignments = "; ".join(f"$env:{name}={quote(value)}" for name, value in env.items())
         python = quote(repo / ".venv" / "Scripts" / "python.exe")
-        return f"Set-Location {quote(repo)}; {assignments}; & {python} {serve}"
+        # $env: is set for the whole PowerShell window; taken out again when
+        # the service ends (finally runs on Ctrl+C too), so a later command
+        # there does not read the copy as the real data.
+        cleared = ", ".join(f"Env:{name}" for name in env)
+        return (f"Set-Location {quote(repo)}; try {{ {assignments}; & {python} {serve} }} "
+                f"finally {{ Remove-Item {cleared} -ErrorAction SilentlyContinue }}")
     assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in env.items())
     python = shlex.quote(str(repo / ".venv" / "bin" / "python"))
     return f"cd {shlex.quote(str(repo))} && {assignments} {python} {serve}"

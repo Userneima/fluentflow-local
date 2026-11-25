@@ -32,12 +32,15 @@ from fastapi import HTTPException
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core import task_steps, task_stop
-from backend.core.job_store import get_job, list_jobs, progress_message_metadata, upsert_job
+from backend.core.job_store import (
+    get_job, list_jobs, progress_message_metadata, reopen_job, update_job_metadata, upsert_job,
+)
 from backend.core.local_entry_guards import CancellationGate, claim_task_id
 from backend.core.local_config import ALLOWED_COOKIE_BROWSERS, get_preference, normalize_cookie_browser
 from backend.core.local_error_diagnostics import diagnose_error
 from backend.core.local_job_runtime import JOB_EVENTS
 from backend.core.media_intake import (
+    TRANSCRIPT_SUFFIXES,
     adopt_source_file,
     path_size_mb,
 )
@@ -45,7 +48,7 @@ from backend.core.media_preflight import MediaPreflightError, preflight_media_fi
 from backend.core.queue_options import _queue_options_from_mapping
 from backend.core.local_config import saved_choices
 from backend.core.runtime_env import truthy
-from backend.core.storage_paths import _video_source_storage_dir
+from backend.core.storage_paths import _video_source_storage_dir, find_source_file
 from backend.core.title_display import display_title_for_user
 from backend.core.video_source import (
     DOUYIN_IMAGE_POST_MESSAGE,
@@ -60,7 +63,7 @@ from backend.core.video_source import (
     is_douyin_url,
     normalize_source_link,
 )
-from backend.core.task_flow import run_pipeline_then_note
+from backend.core.task_flow import RESTART_RESUMED_KEY, run_pipeline_then_note
 from backend.core.transcript_note import summarize_transcript_source
 from backend.core.task_queue import _start_behind_queue, wait_for_queue_turn
 from backend.core.task_submission import _effective_duration_limit, _local_media_job_context
@@ -193,6 +196,10 @@ async def _run_local_video_source_job(
         link_done.set()
         # However the download ended, no step of it is left open.
         task_steps.close_open(task_id, stopped=stopped or task_stop.requested(task_id))
+        # Ended without the pipeline (download failed, download only, a note
+        # from captions), whose own end clears it otherwise: the run a restart
+        # carried on is over.
+        update_job_metadata(task_id, {RESTART_RESUMED_KEY: None})
 
 
 def _progress_throttle() -> Any:
@@ -468,14 +475,18 @@ def _record_downloaded(job: _LinkTask, saved: SavedVideoSource) -> _Downloaded:
 
 
 async def _note_from_captions(job: _LinkTask, downloaded: _Downloaded) -> None:
+    await _note_from_caption_file(job, downloaded.target_path, downloaded.saved.filename)
+
+
+async def _note_from_caption_file(job: _LinkTask, path: Path, filename: str) -> None:
     """A caption track is summarised like an uploaded transcript; nothing is
     transcribed, corrected, cut, compressed or exported."""
     task_id, client_id, options = job.task_id, job.client_id, job.options
     try:
-        raw = await asyncio.to_thread(downloaded.target_path.read_bytes)
+        raw = await asyncio.to_thread(path.read_bytes)
         result = await summarize_transcript_source(
             raw=raw,
-            filename=downloaded.saved.filename,
+            filename=filename,
             client_id=client_id,
             task_id=task_id,
             ai_provider=options.get("ai_provider"),
@@ -786,6 +797,49 @@ def link_of(job: dict[str, Any]) -> str:
     return str(metadata.get("video_source_url") or "").strip() or (
         extract_first_url(str(metadata.get("video_source_input_preview") or "")) or ""
     )
+
+
+def captions_of(job: dict[str, Any]) -> Path | None:
+    """The caption file a link task already holds as its source, or None when
+    the task is not one whose link came with captions."""
+    if str(job.get("source_type") or "") != "transcript_file" or not link_of(job):
+        return None
+    source = find_source_file(str(job.get("task_id") or ""))
+    return source if source is not None and source.suffix.lower() in TRANSCRIPT_SUFFIXES else None
+
+
+async def resume_captions_note(job: dict[str, Any], *, route: str) -> bool:
+    """Carry on a link task whose captions are on disk, after a restart or a
+    stop: its note is written from them again, as when they arrived; the
+    link is not fetched again and nothing is transcribed."""
+    task_id = str(job.get("task_id") or "")
+    client_id = job.get("client_id")
+    source = captions_of(job)
+    if source is None:
+        raise FileNotFoundError("这个链接任务下载的字幕已不在，没法接着做；请重新提交链接。")
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    stored = metadata.get("queue_options")
+    options = dict(stored) if isinstance(stored, dict) else {}
+    filename = str(job.get("source_filename") or source.name)
+    link = _LinkTask(task_id, link_of(job), None, options, client_id, CancellationGate(), route)
+    task_steps.reopen_from(task_id, task_steps.FETCH)
+    reopen_job(task_id)
+
+    async def worker(_previous: Any, done: asyncio.Event) -> None:
+        stopped = False
+        try:
+            task_steps.start(task_id, task_steps.FETCH)
+            await _note_from_caption_file(link, source, filename)
+        except asyncio.CancelledError:
+            stopped = True
+            raise
+        finally:
+            done.set()
+            task_steps.close_open(task_id, stopped=stopped or task_stop.requested(task_id))
+            update_job_metadata(task_id, {RESTART_RESUMED_KEY: None})
+
+    return await _start_behind_queue(task_id=task_id, client_id=client_id, route=route, stage="transcript_file",
+                                     gate=link.gate, plan_steps=False, chained_worker=worker)
 
 
 async def resume_link_download(job: dict[str, Any]) -> bool:

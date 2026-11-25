@@ -62,6 +62,9 @@ class FakeDoc:
         self.fail_outline = False
         self.fail_insert = False
         self.gone = False
+        # Feishu showing a picture block without its file name (only one
+        # document was ever checked to carry it).
+        self.nameless_pictures = False
         self.modified = 1700000000
         self._next = 0
 
@@ -136,7 +139,8 @@ class FakeDoc:
         if verb == "+media-insert":
             marker = _flag(cmd, "--selection-with-ellipsis")
             at = next(i for i, b in enumerate(self.blocks) if marker in b.get("text", ""))
-            block = {"tag": "img", "id": self._id(), "token": f"tok{self._next}", "name": _flag(cmd, "--file")}
+            block = {"tag": "img", "id": self._id(), "token": f"tok{self._next}",
+                     "name": "" if self.nameless_pictures else _flag(cmd, "--file")}
             self.blocks.insert(at, block)
             self.modified += 1
             return _ok({"block_id": block["id"], "file_token": block["token"], "document_id": DOC})
@@ -563,3 +567,37 @@ def test_screenshots_an_export_was_cut_off_before_go_in_when_it_is_carried_on(tm
     assert {name: image["file_token"] for name, image in by_name.items()} == tokens
     assert by_name["b.jpg"]["line"] == "![点开模型菜单](/jobs/t1/artifacts/frame?file=b.jpg)"
     assert not (tmp_path / "t1" / cli.CREATED).exists()
+
+
+def test_a_picture_feishu_shows_without_its_name_is_not_put_in_twice(tmp_path):
+    """(independent review, 2026-11-25) Telling that a picture is already in
+    by the file name Feishu shows on it was checked on one document only.
+    Cut off between inserting picture 2 and removing its marker, with Feishu
+    not naming the picture: the picture right above a caption still led by
+    its marker is that caption's, and is not inserted a second time."""
+    frames = tmp_path / "t1" / "frames"
+    frames.mkdir(parents=True)
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        (frames / name).write_bytes(b"\xff\xd8 jpeg")
+    doc = FakeDoc()
+    doc.nameless_pictures = True
+    inserted: list[str] = []
+
+    def stop(cmd: list[str]) -> bool:
+        if cmd[2] == "+media-insert":
+            inserted.append(_flag(cmd, "--file"))
+        return cmd[2] == "+update" and inserted == ["a.jpg", "b.jpg"]
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, stop))
+
+    result = cli.export_markdown_via_lark_cli("访谈", PICTURED, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    shown = [b["tag"] if b["tag"] == "img" else b["text"] for b in doc.blocks if b["tag"] == "img" or "图 " in b["text"]]
+    assert shown == ["img", "图 1：讲者打开设置页", "img", "图 2：点开模型菜单", "img", "图 3：保存后的结果"]
+    assert not any("FFIMG" in b.get("text", "") for b in doc.blocks)
+    assert result["image_upload_count"] == 3 and result["image_upload_errors"] == []
+    assert [image["file_token"] for image in result["sync"]["images"]] == [
+        b["token"] for b in doc.blocks if b["tag"] == "img"
+    ]

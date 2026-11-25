@@ -188,6 +188,32 @@ def test_a_task_carried_on_after_a_restart_says_so_while_it_works(monkeypatch, t
     asyncio.run(scenario())
 
 
+def test_a_link_carried_on_after_a_restart_stops_saying_so_when_its_download_fails(monkeypatch, task_id):
+    # The run a restart carried on can end in the link's own paths (download
+    # failed, download only, a note from captions) without the pipeline, whose
+    # end used to be the only place the mark was cleared: the page kept saying
+    # 「服务重启后已从断点恢复」 on a task that had ended.
+    from backend.core import link_submission
+
+    def fails(*_a, **_kw):
+        raise RuntimeError("连不上")
+
+    monkeypatch.setattr(link_submission, "download_video_source", fails)
+    job_store.upsert_job(
+        task_id=task_id, status="running", stage="video_source", progress=5, source_type="video_link",
+        metadata={"video_source_url": "https://www.bilibili.com/video/BV1xx", "queue_options": {}},
+    )
+    task_steps.plan(task_id)
+    task_steps.start(task_id, task_steps.FETCH)
+
+    async def scenario():
+        assert await task_actions.resume_after_restart([task_id]) == 1
+        assert await _until(lambda: job_store.get_job(task_id)["status"] == "failed" and _ended(task_id))
+
+    asyncio.run(scenario())
+    assert not (job_store.get_job(task_id).get("metadata") or {}).get(tf.RESTART_RESUMED_KEY)
+
+
 def test_a_task_waiting_its_turn_is_carried_on_and_not_counted(monkeypatch, task_id, tmp_path):
     _in_place_task(task_id, tmp_path, status="queued", result={})
     task_steps.plan(task_id)
@@ -238,6 +264,61 @@ def test_only_the_corrections_run_again_when_the_transcription_was_kept(monkeypa
     assert _statuses(task_id)[task_steps.TRANSCRIBE] == task_steps.DONE
     assert _statuses(task_id)[task_steps.CORRECT] == task_steps.DONE
     assert tf.load_checkpoint(task_id) is None, "dropped once the transcript is stored"
+
+
+def test_a_correction_the_service_stopped_under_is_carried_on_after_the_restart(monkeypatch, task_id, tmp_path):
+    # Checked for the review of 2026-11-25: the word-list correction ends as
+    # "cancelled" when the service stops under it, and the runner then marks
+    # the task cancelled. The step itself stays open (no step is written while
+    # the service stops), so the restart carries the task on from it.
+    from backend.core import media_job, model_usage
+
+    _in_place_task(task_id, tmp_path, status="running", result={})
+    task_steps.plan(task_id)
+    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+    task_steps.finish(task_id, task_steps.TRANSCRIBE, task_steps.DONE)
+    task_steps.start(task_id, task_steps.CORRECT)
+
+    def stopping(_system, _user):
+        task_stop.shutdown()
+        raise model_usage.ServiceStopping()
+
+    monkeypatch.setattr(media_job.glossary_correction, "enabled", lambda: True)
+    monkeypatch.setattr(media_job, "_subtitle_chat", lambda *_a: (stopping, "test"))
+    monkeypatch.setattr(media_job.correction_notes, "for_task", lambda *_a: "最小二乘法")
+
+    async def stopped_under_it():
+        ctx = SimpleNamespace(task_id_value=task_id, client_id=None, secret_resolver=None,
+                              loop=asyncio.get_running_loop(), source_type="video", source_filename="a.mp4",
+                              event_route="/test")
+        await media_job._run_glossary_correction_stage(
+            ctx, segments=[{"start": 0.0, "end": 2.0, "text": "今天讲最小二成法"}], ai_kwargs={})
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(stopped_under_it())
+        # What the runner writes as the run ends while the service stops.
+        task_steps.close_open(task_id, stopped=True)
+        job_store.upsert_job(task_id=task_id, status="cancelled", error_reason="worker_cancelled")
+    finally:
+        task_stop.service_started()
+    assert _statuses(task_id)[task_steps.CORRECT] == task_steps.RUNNING, "left for the restart"
+    assert task_id in task_actions.stepped_tasks_cut_off()
+
+    kept = {"tr": {"text": "大家好"}, "base_result": {}, "in_path": "x", "segments_payload": []}
+    monkeypatch.setattr(tf, "_artifact_storage_dir", lambda: tmp_path)
+    tf._save_checkpoint(task_id, kept)
+    edges = Edges(task_id)
+    _wire(monkeypatch, edges)
+
+    async def scenario():
+        assert await task_actions.resume_after_restart([task_id]) == 1
+        assert await _until(lambda: _ended(task_id))
+
+    asyncio.run(scenario())
+    assert edges.checkpoints == [kept], "carried on from the corrections, not transcribed again"
+    assert _statuses(task_id)[task_steps.CORRECT] == task_steps.DONE
+    assert job_store.get_job(task_id)["status"] == "completed"
 
 
 def test_a_cut_cut_off_mid_render_is_rendered_again_without_asking_a_model(monkeypatch, task_id, tmp_path):

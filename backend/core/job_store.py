@@ -715,10 +715,13 @@ def reopen_job(task_id: str, db_path: Path | str = DEFAULT_DB_PATH) -> bool:
     ensure_job_db(db_path)
     now = _now_iso()
     with sqlite_connection(Path(db_path), timeout=10) as conn:
+        # Back in the queue is a new stage: the card's 「已等…」 counts from now,
+        # not from the stage it was cut off in (``STAGE_STARTED_AT``).
+        metadata = _merged_metadata_for_upsert(conn, task_id, None, "queued", now)
         cursor = conn.execute(
             "UPDATE jobs SET status = 'queued', stage = 'queued', progress = 0, error_reason = NULL,"
-            " updated_at = ? WHERE task_id = ?",
-            (now, task_id),
+            " metadata_json = COALESCE(?, metadata_json), updated_at = ? WHERE task_id = ?",
+            (_json_dumps(metadata), now, task_id),
         )
         return bool(cursor.rowcount)
 

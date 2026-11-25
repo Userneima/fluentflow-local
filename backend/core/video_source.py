@@ -2098,7 +2098,8 @@ _MAX_FILESIZE_RE = re.compile(r"larger than max-filesize \((\d+) bytes > (\d+) b
 def _int_or_none(value: str) -> int | None:
     try:
         parsed = int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: yt-dlp may print "inf" for a rate or time it cannot tell.
         return None
     return parsed if parsed > 0 else None
 

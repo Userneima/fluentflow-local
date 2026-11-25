@@ -294,6 +294,25 @@ def test_transcript_file_rejects_empty_transcript(monkeypatch):
     assert jobs["empty-1"]["status"] == "failed"
 
 
+def test_transcript_file_in_utf16_without_its_mark_is_refused_not_noted(monkeypatch):
+    # (independent review, 2026-11-25) Read as another encoding it is garbage,
+    # and a note used to be written from that.
+    jobs, _ = _install_store(monkeypatch)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("no note from a file that was not read")
+
+    monkeypatch.setattr(transcript_note, "summarize_transcript_with_metadata", unexpected)
+    r = _client().post(
+        "/summarize-transcript-file",
+        headers=_HEADERS,
+        files={"file": ("talk.srt", _SRT.encode("utf-16-le"), "text/plain")},
+        data={"task_id": "utf16-1", "skip_summary": "false"},
+    )
+    assert r.status_code == 400 and "UTF-16" in r.json()["detail"]
+    assert jobs["utf16-1"]["status"] == "failed"
+
+
 def test_transcript_file_size_limit(monkeypatch):
     _install_store(monkeypatch)
     monkeypatch.setattr(local_note_regen, "max_transcript_upload_mb", lambda: 1.0)

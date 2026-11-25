@@ -44,6 +44,20 @@ def test_a_stage_change_records_when_it_started_and_staying_does_not_move_it(tas
     assert after["other"] == 1, "the rest of the metadata is kept"
 
 
+def test_a_task_put_back_in_the_queue_counts_its_wait_from_then(task_id, monkeypatch):
+    # Carried on after a stop or a restart (``reopen_job``): the card must not
+    # say it has waited since the stage it was cut off in began.
+    times = iter(["2026-11-21T20:17:59+08:00", "2026-11-21T21:05:00+08:00"])
+    monkeypatch.setattr(job_store, "_now_iso", lambda: next(times))
+    job_store.upsert_job(task_id=task_id, status="running", stage="glossary_correction", progress=60,
+                         metadata={"other": 1})
+    assert job_store.reopen_job(task_id)
+    job = job_store.get_job(task_id)
+    assert job["stage"] == "queued"
+    assert job["metadata"][job_store.STAGE_STARTED_AT] == "2026-11-21T21:05:00+08:00"
+    assert job["metadata"]["other"] == 1
+
+
 def _reported(lines):
     reports: list[VideoSourceProgress] = []
     handle = video_source._yt_dlp_progress_reporter(reports.append)
@@ -62,6 +76,9 @@ def test_yt_dlp_progress_carries_its_pace_and_time_left():
     assert early.speed_bps is None and early.eta_seconds is None
     [older] = _reported([f"{prefix} 1024 104857600 NA"])
     assert older.loaded_bytes == 1024 and older.speed_bps is None
+    # yt-dlp can print inf for a rate or time it cannot tell.
+    [endless] = _reported([f"{prefix} 1024 104857600 NA inf inf"])
+    assert endless.loaded_bytes == 1024 and endless.speed_bps is None and endless.eta_seconds is None
 
 
 def test_a_direct_download_measures_its_own_pace(monkeypatch):
