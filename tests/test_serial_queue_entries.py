@@ -617,3 +617,183 @@ async def _until_true(predicate, seconds: float = 5.0) -> bool:
             return True
         await asyncio.sleep(0.01)
     return predicate()
+
+
+# Requirement (review of 5d6a580, 2026-11-26): no job waits forever in any
+# chain, and one transcription at a time still holds. A job whose runner ended
+# without releasing its link (its setup raised before its own ``finally``, or
+# it was stopped before it began) is healed past by the job behind it; when
+# the user then carries that task on under the same task id, its new runner
+# queues behind the job that healed past it. That job must still free the
+# line when it ends: it used to pass its place on through the dead link, whose
+# task id was running again, and the carried-on task waited on it for ever.
+
+
+def _carried_on_scenario(how_a_dies: str, when_resumed: str):
+    log: list[str] = []
+
+    async def a_raises(_previous, _done):
+        # e.g. ``run_pipeline_then_note``'s step bookkeeping raising before its
+        # try/finally (a locked database): the runner ends, its link unset.
+        raise RuntimeError("database is locked")
+
+    async def scenario():
+        for task_id in ("serial-heal-a", "serial-heal-b"):
+            upsert_job(task_id=task_id, status="queued", client_id=None, stage="queued", progress=0)
+        hold_b = asyncio.Event()
+
+        async def b(previous, done):
+            try:
+                await tq.wait_for_queue_turn(previous, "serial-heal-b", None)
+                log.append("b")
+                await hold_b.wait()
+            finally:
+                done.set()
+
+        async def a_again(previous, done):
+            try:
+                await tq.wait_for_queue_turn(previous, "serial-heal-a", None)
+                log.append("a-again")
+            finally:
+                done.set()
+
+        async def resume_a():
+            upsert_job(task_id="serial-heal-a", status="queued", client_id=None, stage="queued", progress=0)
+            assert await tq._start_behind_queue(task_id="serial-heal-a", client_id=None, route="t", stage="x",
+                                                chained_worker=a_again)
+
+        await tq._start_behind_queue(task_id="serial-heal-a", client_id=None, route="t", stage="x",
+                                     chained_worker=a_raises)
+        if how_a_dies == "stopped before it began":
+            # Cancelled before its first step: its coroutine never runs, so no
+            # ``finally`` of its own releases the link.
+            await tq.JOB_EVENTS.cancel("serial-heal-a")
+        await _settle()
+        await tq._start_behind_queue(task_id="serial-heal-b", client_id=None, route="t", stage="x",
+                                     chained_worker=b)
+        if when_resumed == "at once":
+            await resume_a()
+        assert await _until_true(lambda: "b" in log), "B never got past the job that died"
+        if when_resumed == "while B works":
+            await resume_a()
+        await _settle()
+        assert log == ["b"], "the carried-on task started beside B"
+        hold_b.set()
+        assert await _until_true(lambda: log == ["b", "a-again"], 2.0), f"the carried-on task never started: {log}"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("how_a_dies", ["raised before releasing", "stopped before it began"])
+@pytest.mark.parametrize("when_resumed", ["while B works", "at once"])
+def test_a_task_carried_on_behind_the_job_that_got_past_it_is_not_stuck(monkeypatch, how_a_dies, when_resumed):
+    monkeypatch.setattr(tq, "_QUEUE_HEARTBEAT_SECONDS", 0.02)
+    monkeypatch.setattr(tq, "QUEUE_CONCURRENCY", 1)
+    _carried_on_scenario(how_a_dies, when_resumed)
+
+
+def test_a_job_that_got_past_a_dead_link_frees_the_line_at_once_even_when_that_task_runs_again(monkeypatch):
+    """A link left unset with no runner behind it (however that came about):
+    B goes past it; the user then carries that task on under the same id
+    behind B, and C queues behind that. When B ends the carried-on task starts
+    at once, not after a heartbeat spent asking about a task id that now
+    names another runner, and C follows it."""
+    monkeypatch.setattr(tq, "QUEUE_CONCURRENCY", 1)
+    monkeypatch.setattr(tq, "_QUEUE_HEARTBEAT_SECONDS", 0.02)
+    log: list[str] = []
+
+    def waits(name, hold=None):
+        async def worker(previous, done):
+            try:
+                await tq.wait_for_queue_turn(previous, name, None)
+                log.append(name)
+                if hold is not None:
+                    await hold.wait()
+            finally:
+                done.set()
+        return worker
+
+    async def scenario():
+        for task_id in ("serial-free-a", "serial-free-b", "serial-free-c"):
+            upsert_job(task_id=task_id, status="queued", client_id=None, stage="queued", progress=0)
+        hold_b = asyncio.Event()
+        tq._queue_tail_record("serial-free-a", tq._ChainLink(None))  # nobody will release it
+        await tq._start_behind_queue(task_id="serial-free-b", client_id=None, route="t", stage="x",
+                                     chained_worker=waits("serial-free-b", hold_b))
+        assert await _until_true(lambda: log == ["serial-free-b"]), "B never got past the dead link"
+        await tq._start_behind_queue(task_id="serial-free-a", client_id=None, route="t", stage="x",
+                                     chained_worker=waits("serial-free-a"))
+        await tq._start_behind_queue(task_id="serial-free-c", client_id=None, route="t", stage="x",
+                                     chained_worker=waits("serial-free-c"))
+        # From here a missed release costs a whole (long) heartbeat at least.
+        monkeypatch.setattr(tq, "_QUEUE_HEARTBEAT_SECONDS", 30.0)
+        await _settle()
+        assert log == ["serial-free-b"]
+        hold_b.set()
+        done = await _until_true(lambda: log == ["serial-free-b", "serial-free-a", "serial-free-c"], 1.0)
+        if not done:
+            for task in list(tq._LINK_RELAYS):
+                task.cancel()
+        assert done, f"the line stopped behind B: {log}"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stopped", [None, "r2 waiting", "s1 running", "s2 running", "r1 running"])
+def test_recordings_and_jobs_that_never_wait_mixed_run_one_at_a_time_and_all_finish(monkeypatch, stopped):
+    """r1, s1, r2, s2, r3 submitted in turn (r = a recording, s = a job with
+    nothing to transcribe), with one of them stopped: no two recordings run
+    together, and every one not stopped runs."""
+    monkeypatch.setattr(tq, "_QUEUE_HEARTBEAT_SECONDS", 0.02)
+    monkeypatch.setattr(tq, "QUEUE_CONCURRENCY", 1)
+    running: set = set()
+    overlap: list = []
+    order: list[str] = []
+
+    def recording(name, hold):
+        async def worker(previous, done):
+            try:
+                await tq.wait_for_queue_turn(previous, f"serial-mix-{name}", None)
+                running.add(name)
+                order.append(name)
+                if len(running) > 1:
+                    overlap.append(set(running))
+                await hold.wait()
+            finally:
+                running.discard(name)
+                done.set()
+        return worker
+
+    def never_waits(name, hold):
+        async def worker(_previous, done):
+            done.set()
+            try:
+                order.append(name)
+                await hold.wait()
+            finally:
+                done.set()
+        return worker
+
+    async def scenario():
+        holds = {name: asyncio.Event() for name in ("r1", "s1", "r2", "s2", "r3")}
+        kinds = {"r1": recording, "s1": never_waits, "r2": recording, "s2": never_waits, "r3": recording}
+        for name, hold in holds.items():
+            upsert_job(task_id=f"serial-mix-{name}", status="queued", client_id=None, stage="queued", progress=0)
+            await tq._start_behind_queue(task_id=f"serial-mix-{name}", client_id=None, route="t", stage="x",
+                                         chained_worker=kinds[name](name, hold))
+            await asyncio.sleep(0.02)
+        holds["s1"].set()
+        holds["s2"].set()
+        if stopped:
+            await tq.JOB_EVENTS.cancel(f"serial-mix-{stopped.split()[0]}")
+        await asyncio.sleep(0.2)
+        if stopped != "r1 running":
+            assert "r2" not in order and "r3" not in order, f"a recording started while r1 transcribed: {order}"
+        for name in ("r1", "r2", "r3"):
+            holds[name].set()
+            await asyncio.sleep(0.15)
+        expected = {"r1", "s1", "r2", "s2", "r3"} - ({"r2"} if stopped == "r2 waiting" else set())
+        assert await _until_true(lambda: set(order) == expected, 2.0), order
+
+    asyncio.run(scenario())
+    assert not overlap, f"recordings ran together: {overlap}"

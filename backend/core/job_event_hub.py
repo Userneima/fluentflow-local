@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 
 
 def _sse(data: dict) -> str:
@@ -97,6 +97,12 @@ class JobEventHub:
         """Drop a finished runner so the table only ever holds live ones."""
         if self._tasks.get(task_id) is task:
             self._tasks.pop(task_id, None)
+
+    def runner_of(self, task_id: str) -> Optional[asyncio.Task[None]]:
+        """The live runner of this task, for a caller that must know when it
+        ends however it ends (``task_queue``'s link); None when none runs."""
+        task = self._tasks.get(task_id)
+        return task if task and not task.done() else None
 
     def is_running(self, task_id: str) -> bool:
         """Whether a runner for this task is alive right now.

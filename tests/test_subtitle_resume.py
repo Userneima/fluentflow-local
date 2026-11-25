@@ -299,3 +299,152 @@ def test_a_links_captions_transcript_edits_survive_carrying_its_note_on(task_id,
     _carry_on(task_id)
 
     _assert_note_from_the_edit(task_id, model, before)
+
+
+# ── carrying on after the note: what the note already is stays ─────────────
+#
+# Requirement (review of 5d6a580, 2026-11-26): a subtitle task carried on at
+# its Feishu step only exports the note it holds: the model is not called and
+# the note (which the user may have edited since) is not touched. A
+# transcript edit saved while a carried-on note is written stays in the
+# database and in the files. Stopping a carried-on note leaves the task as a
+# recording stopped at its note: completed, its note step stopped.
+
+
+def _feishu_failed_after_the_note(task_id, *, edited_note: str) -> None:
+    """The note is done, the export to Feishu failed (an expired login); the
+    user then edited the note."""
+    result = {"transcript_text": "今天讲最小二乘法。先看误差平方和为什么能代表拟合得好不好。",
+              "raw_segments": EDITED_SEGMENTS, "summary_markdown": edited_note, "summary_status": "completed",
+              "display_title": "最小二乘法", "lark_error": "飞书登录过期"}
+    job_store.upsert_job(task_id=task_id, status="completed", stage="done", progress=100,
+                         summary_status="completed", result=result)
+    task_steps.plan(task_id)
+    for name in task_steps.ORDER:
+        task_steps.finish(task_id, name, task_steps.SKIPPED)
+    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+    task_steps.finish(task_id, task_steps.NOTE, task_steps.DONE)
+    task_steps.finish(task_id, task_steps.FEISHU, task_steps.FAILED, "飞书登录过期")
+
+
+def _exports_succeed(monkeypatch) -> list[str]:
+    from backend.core import task_flow
+
+    exports: list[str] = []
+
+    def export(task_id_, client_id, job, options, source_filename, title):
+        exports.append(job_store.get_job(task_id_)["result"]["summary_markdown"])
+        before = dict(job_store.get_job(task_id_)["result"])
+        job_store.save_result_changes(task_id_, before, {**before, "lark_response": {"url": "https://x"},
+                                                         "lark_error": None})
+        task_steps.settle(task_id_, task_steps.FEISHU, task_steps.feishu_outcome(job_store.get_job(task_id_)))
+
+    monkeypatch.setattr(task_flow, "_export_agent_note", export)
+    monkeypatch.setattr(task_flow.test_copy, "enabled", lambda: False)
+    return exports
+
+
+@pytest.mark.parametrize("kind", ["subtitle file by path", "link captions"])
+def test_carrying_on_at_feishu_only_exports_the_note_it_holds(task_id, tmp_path, model, monkeypatch, kind):
+    from backend.core import link_submission
+
+    monkeypatch.setattr(link_submission, "download_video_source", lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("nothing is downloaded again")))
+    monkeypatch.setitem(_OPTIONS, "export_to_lark", "true")
+    if kind == "subtitle file by path":
+        _in_place_task(task_id, tmp_path, status="completed")
+    else:
+        _captions_task(task_id, status="completed")
+    _feishu_failed_after_the_note(task_id, edited_note="# 笔记\n\n我自己改过的。")
+    exports = _exports_succeed(monkeypatch)
+
+    async def scenario():
+        answer = await task_actions.resume_task(task_id, None)
+        assert answer["resume_from"]["step"] == task_steps.FEISHU
+        assert await _until(lambda: _ended(task_id) and exports)
+        await asyncio.sleep(0.1)
+
+    asyncio.run(scenario())
+    output_folder._WORKER.submit(lambda: None).result(timeout=10)
+
+    job = job_store.get_job(task_id)
+    assert model == [], "the note's model was called again"
+    assert exports == ["# 笔记\n\n我自己改过的。"]
+    assert job["result"]["summary_markdown"] == "# 笔记\n\n我自己改过的。"
+    assert job["status"] == "completed"
+    assert _statuses(task_id)[task_steps.FEISHU] == task_steps.DONE
+    assert _statuses(task_id)[task_steps.NOTE] == task_steps.DONE
+
+
+def _note_held_by_the_model(monkeypatch):
+    import threading
+
+    in_model, answer = threading.Event(), threading.Event()
+
+    def slow(text, **_kw):
+        in_model.set()
+        assert answer.wait(10)
+        return SimpleNamespace(markdown="# 最小二乘法\n\n模型写的。", requested_mode="auto",
+                               resolved_mode="direct", chunk_count=1)
+
+    monkeypatch.setattr(transcript_note, "summarize_transcript_with_metadata", slow)
+    return in_model, answer
+
+
+def test_a_transcript_edit_saved_while_the_carried_on_note_is_written_stays_in_the_files(
+        task_id, tmp_path, monkeypatch):
+    from backend.core.result_artifacts import _artifact_storage_dir, _attach_result_artifacts
+
+    srt = _in_place_task(task_id, tmp_path, status="running")
+    _first_run_the_model_fails(task_id, monkeypatch)
+    in_model, answer = _note_held_by_the_model(monkeypatch)
+
+    async def scenario():
+        await task_actions.resume_task(task_id, None)
+        assert await _until(in_model.is_set)
+        # What the editor's save does (``local_job_edit.update_job_transcript``).
+        before = dict(job_store.get_job(task_id)["result"])
+        edited = {**before, "transcript_text": EDITED, "raw_segments": EDITED_SEGMENTS,
+                  "display_segments": EDITED_SEGMENTS, "transcript_edited": True}
+        job_store.save_result_changes(task_id, before, _attach_result_artifacts(task_id, edited, parts=("transcript",)))
+        answer.set()
+        assert await _until(lambda: _ended(task_id) and "模型写的" in str(
+            job_store.get_job(task_id)["result"].get("summary_markdown")))
+
+    asyncio.run(scenario())
+    output_folder._WORKER.submit(lambda: None).result(timeout=10)
+
+    result = job_store.get_job(task_id)["result"]
+    assert result["transcript_text"] == EDITED
+    on_disk = (_artifact_storage_dir() / task_id / result["artifacts"]["transcript_txt"]["filename"]).read_text(
+        encoding="utf-8")
+    assert "残差平方和" in on_disk, "the transcript file went back to the text before the edit"
+    process = srt.parent / "最小二乘法" / output_folder.PROCESS_DIRNAME
+    copies = [path.read_text(encoding="utf-8") for path in process.glob("*.txt")]
+    assert copies and all("残差平方和" in text for text in copies), copies
+
+
+def test_stopping_a_carried_on_note_leaves_the_task_as_a_recording_stopped_at_its_note(
+        task_id, tmp_path, monkeypatch):
+    _in_place_task(task_id, tmp_path, status="running")
+    _first_run_the_model_fails(task_id, monkeypatch)
+    in_model, answer = _note_held_by_the_model(monkeypatch)
+
+    async def scenario():
+        await task_actions.resume_task(task_id, None)
+        assert await _until(in_model.is_set)
+        assert job_store.get_job(task_id)["status"] == "completed", "a task with its transcript reads completed"
+        await task_actions.stop_step(task_id, None)
+        assert await _until(lambda: _ended(task_id) and not task_queue.JOB_EVENTS.is_running(task_id))
+
+    from backend.core import task_queue
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        answer.set()
+    job = job_store.get_job(task_id)
+    assert job["status"] == "completed"
+    assert _statuses(task_id)[task_steps.NOTE] == task_steps.STOPPED
+    assert job["result"]["summary_error"] == task_steps.STOPPED_NOTE
+    assert "误差平方和" in job["result"]["transcript_text"]

@@ -327,8 +327,13 @@ async def _write_transcript_note(
     ``before`` is the result as the caller read it, when the task was already
     stored before this run: then only what the note changed is written onto
     the result as it is now (``save_result_changes``), so an edit made while
-    the model wrote is kept."""
+    the model wrote is kept, in the files as in the database: only the note's
+    files are written then, as for a recording's note
+    (``local_intake_flow._write_text_note_instead``); writing them all again
+    put the transcript the note started from back into the transcript files
+    and the 过程文件 copy (review of 5d6a580)."""
     loop = asyncio.get_event_loop()
+    artifact_parts = {} if before is None else {"parts": ("summary",)}
 
     def _store(result: dict[str, Any], **fields: Any) -> None:
         if before is None:
@@ -358,7 +363,7 @@ async def _write_transcript_note(
             ),
         )
         result = result_for_transcript_only(base_result)
-        result = _attach_result_artifacts(task_id_value, result)
+        result = _attach_result_artifacts(task_id_value, result, **artifact_parts)
         _store(
             result,
             stage="done",
@@ -433,7 +438,7 @@ async def _write_transcript_note(
             ),
         )
         failed_result = result_for_summary_failure(base_result, friendly_error)
-        failed_result = _attach_result_artifacts(task_id_value, failed_result)
+        failed_result = _attach_result_artifacts(task_id_value, failed_result, **artifact_parts)
         _store(
             failed_result,
             stage="done",
@@ -462,7 +467,7 @@ async def _write_transcript_note(
         prompt_preset_label=(prompt_preset_label or "").strip() or None,
         deadline_hit=bool(getattr(summary_result, "deadline_hit", False)),
     )
-    result = _attach_result_artifacts(task_id_value, result)
+    result = _attach_result_artifacts(task_id_value, result, **artifact_parts)
     _store(
         result,
         stage="done",
@@ -480,6 +485,47 @@ def stored_transcript_of(job: dict[str, Any]) -> bool:
     return bool(str(result.get("transcript_text") or "").strip() or result.get("raw_segments"))
 
 
+def stored_resume_point(job: dict[str, Any], start_at: str) -> str:
+    """Where a task made from a transcript file (a subtitle file by path, a
+    link's captions) picks up when carried on from ``start_at``: cut off
+    before its transcript was stored, it reads the file again (FETCH); with
+    the transcript stored, the note is written from it while the note is not
+    done (NOTE); with the note done, only the note it holds is exported
+    (FEISHU). Every step after reading the file used to write the note again,
+    the Feishu step included: the user's edited note was replaced and nothing
+    was exported (review of 5d6a580)."""
+    if start_at == task_steps.FETCH or not stored_transcript_of(job):
+        return task_steps.FETCH
+    if task_steps.status_of(str(job.get("task_id") or ""), task_steps.NOTE) != task_steps.DONE:
+        return task_steps.NOTE
+    return task_steps.FEISHU
+
+
+async def export_stored_note(task_id: str, client_id: Optional[str]) -> None:
+    """Carry a transcript-file task on at its Feishu step: send the note it
+    holds, as the user may have edited it; the model is not asked again.
+
+    The export is the one the task's note took the first time
+    (``task_flow.export_agent_note_if_asked``), which takes a recorded error
+    for an export already tried, so the failure being carried on is cleared
+    first, as a recording's export overwrites it. Waited for, so the step is
+    not closed as unfinished under it."""
+    from backend.core import task_flow
+
+    job = get_job(task_id, client_id=client_id) or {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if result.get("lark_error"):
+        save_result_changes(task_id, result, {**result, "lark_error": None}, client_id=client_id)
+    if job.get("status") != "completed":
+        # Its transcript and note are stored: the task is done but for this.
+        upsert_job(task_id=task_id, status="completed", client_id=client_id, stage="done", progress=100)
+    export = task_flow.export_agent_note_if_asked(task_id, client_id)
+    if export is None:
+        task_steps.skip_open(task_id)
+        return
+    await asyncio.to_thread(export.join)
+
+
 @model_usage.works_for(task_steps.NOTE)
 async def note_from_stored_transcript(
     task_id: str, *, client_id: Optional[str], options: dict[str, Any], route: str,
@@ -492,14 +538,18 @@ async def note_from_stored_transcript(
     replaced by the file's text, and a file changed on disk since gave a note
     from other words (review of 2026-11-25). A recording carried on at its
     note is not transcribed again either. The note reads the transcript as
-    every text-model note does (``note_prompt.transcript_for_note``)."""
-    from backend.core import note_prompt
+    every text-model note does (``note_prompt.transcript_for_note``).
 
+    The task stays completed while the note is written, as a recording
+    writing its note after its transcript does (``mark_note_running``):
+    marked running, a stop made it a cancelled task, listed 已取消, and a link
+    sent again no longer found it as a duplicate (review of 5d6a580)."""
+    from backend.core import local_intake_flow, note_prompt
+
+    local_intake_flow.mark_note_running(task_id, client_id)
     job = get_job(task_id, client_id=client_id) or {}
     before = dict(job.get("result") or {})
     note_input, speaker_labeled = note_prompt.transcript_for_note(before)
-    upsert_job(task_id=task_id, status="running", client_id=client_id, stage="summary", progress=60,
-               summary_status="pending")
     return await _write_transcript_note(
         task_id, client_id, before, note_input,
         summary_disabled=truthy(options.get("skip_summary")), route=route,
@@ -579,7 +629,8 @@ async def resume_subtitle_in_place(job: dict[str, Any], *, route: str, start_at:
     """Carry a subtitle task by path on after a restart or a stop. Cut off
     while it read the file, it reads it again; at its note with the transcript
     stored, only the note is written, from that transcript, so what the user
-    edited in it stays (``note_from_stored_transcript``). The model answers
+    edited in it stays (``note_from_stored_transcript``); at its Feishu step,
+    only the note it holds is exported (``stored_resume_point``). The model answers
     the note already got are kept (``model_answers``), so they are not paid
     for again. Raises ``FileNotFoundError`` with the user's words when the
     file is gone."""
@@ -593,17 +644,17 @@ async def resume_subtitle_in_place(job: dict[str, Any], *, route: str, start_at:
     stored = metadata.get("queue_options")
     options = dict(stored) if isinstance(stored, dict) else {}
     title = str(metadata.get("display_title") or options.get("title") or "").strip() or source.stem
-    from_stored = start_at != task_steps.FETCH and stored_transcript_of(job)
-    task_steps.reopen_from(task_id, task_steps.NOTE if from_stored else task_steps.FETCH)
-    if not (from_stored and job.get("status") == "completed"):
+    resume_at = stored_resume_point(job, start_at)
+    task_steps.reopen_from(task_id, resume_at)
+    if not (resume_at != task_steps.FETCH and job.get("status") == "completed"):
         reopen_job(task_id)
     return await _start_subtitle_run(task_id, source, client_id=job.get("client_id"), options=options,
-                                     title=title, route=route, from_stored=from_stored)
+                                     title=title, route=route, resume_at=resume_at)
 
 
 async def _start_subtitle_run(
     task_id: str, source: Path, *, client_id: Optional[str], options: dict[str, Any], title: str, route: str,
-    from_stored: bool = False,
+    resume_at: str = task_steps.FETCH,
 ) -> bool:
     from backend.core.task_flow import RESTART_RESUMED_KEY
     from backend.core.job_store import update_job_metadata
@@ -618,7 +669,7 @@ async def _start_subtitle_run(
         stopped = False
         try:
             await _run_subtitle_in_place(task_id, source, client_id=client_id, options=options,
-                                         title=title, route=route, from_stored=from_stored)
+                                         title=title, route=route, resume_at=resume_at)
         except asyncio.CancelledError:
             stopped = True
             raise
@@ -633,16 +684,20 @@ async def _start_subtitle_run(
 
 async def _run_subtitle_in_place(
     task_id: str, source: Path, *, client_id: Optional[str], options: dict[str, Any], title: str, route: str,
-    from_stored: bool = False,
+    resume_at: str = task_steps.FETCH,
 ) -> None:
     """Read the subtitle file, store its transcript (and the note, when
-    FluentFlow's text model writes it), and fill the folder beside it; with
-    ``from_stored``, only the note, from the transcript the task holds. The
-    agent's note, saved later, refreshes that folder as any note does.
-    A failure is recorded on the task for ``wait_task``."""
+    FluentFlow's text model writes it), and fill the folder beside it; carried
+    on at its note, only the note, from the transcript the task holds; at its
+    Feishu step, only the export (``stored_resume_point``). The agent's note,
+    saved later, refreshes that folder as any note does. A failure is
+    recorded on the task for ``wait_task``."""
     from backend.core import output_folder, task_flow
 
-    if from_stored:
+    if resume_at == task_steps.FEISHU:
+        await export_stored_note(task_id, client_id)
+        return
+    if resume_at == task_steps.NOTE:
         task_steps.start(task_id, task_steps.NOTE)
         await note_from_stored_transcript(task_id, client_id=client_id, options=options, route=route)
     else:

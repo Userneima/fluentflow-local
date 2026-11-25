@@ -64,7 +64,12 @@ from backend.core.video_source import (
     normalize_source_link,
 )
 from backend.core.task_flow import RESTART_RESUMED_KEY, run_pipeline_then_note
-from backend.core.transcript_note import note_from_stored_transcript, stored_transcript_of, summarize_transcript_source
+from backend.core.transcript_note import (
+    export_stored_note,
+    note_from_stored_transcript,
+    stored_resume_point,
+    summarize_transcript_source,
+)
 from backend.core.task_queue import _start_behind_queue, wait_for_queue_turn
 from backend.core.task_submission import _effective_duration_limit, _local_media_job_context
 
@@ -817,7 +822,9 @@ async def resume_captions_note(job: dict[str, Any], *, route: str, start_at: str
     before its transcript was stored, the note is written from the captions
     again, as when they arrived; at its note with the transcript stored, from
     that transcript, so what the user edited in it stays
-    (``transcript_note.note_from_stored_transcript``)."""
+    (``transcript_note.note_from_stored_transcript``); at its Feishu step (an
+    agent's note whose export failed), only that note is exported
+    (``transcript_note.stored_resume_point``)."""
 
     task_id = str(job.get("task_id") or "")
     client_id = job.get("client_id")
@@ -829,9 +836,9 @@ async def resume_captions_note(job: dict[str, Any], *, route: str, start_at: str
     options = dict(stored) if isinstance(stored, dict) else {}
     filename = str(job.get("source_filename") or source.name)
     link = _LinkTask(task_id, link_of(job), None, options, client_id, CancellationGate(), route)
-    from_stored = start_at != task_steps.FETCH and stored_transcript_of(job)
-    task_steps.reopen_from(task_id, task_steps.NOTE if from_stored else task_steps.FETCH)
-    if not (from_stored and job.get("status") == "completed"):
+    resume_at = stored_resume_point(job, start_at)
+    task_steps.reopen_from(task_id, resume_at)
+    if not (resume_at != task_steps.FETCH and job.get("status") == "completed"):
         reopen_job(task_id)
 
     async def worker(_previous: Any, done: asyncio.Event) -> None:
@@ -840,7 +847,9 @@ async def resume_captions_note(job: dict[str, Any], *, route: str, start_at: str
         done.set()
         stopped = False
         try:
-            if from_stored:
+            if resume_at == task_steps.FEISHU:
+                await export_stored_note(task_id, client_id)
+            elif resume_at == task_steps.NOTE:
                 task_steps.start(task_id, task_steps.NOTE)
                 result = await note_from_stored_transcript(task_id, client_id=client_id, options=options,
                                                            route=route)

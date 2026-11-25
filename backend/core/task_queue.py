@@ -140,6 +140,7 @@ async def _await_predecessor(
                     return
                 if await _still_ahead(previous_id, previous_event):
                     continue
+                _release_for_good(previous_event)
                 log_event(
                     task_id=task_id,
                     event_name="queue_chain_healed",
@@ -328,6 +329,16 @@ async def _start_behind_queue(
             worker=functools.partial(chained_worker, previous, done),
         ),
     )
+    runner = JOB_EVENTS.runner_of(task_id) if started else None
+    if runner is not None:
+        # The link is released when the runner ends, however it ends: a worker
+        # whose setup raised before its own ``finally``, a gate that never ran
+        # it, or a runner stopped before it began used to leave it unset, and
+        # the job behind could only go past it by asking whether this task id
+        # still ran. Carried on under the same id, it did, and the line stopped
+        # for good (review of 5d6a580). ``_ChainLink`` still waits out the job
+        # ahead first.
+        runner.add_done_callback(lambda _runner: done.set())
     if not started:
         # Nothing will run that worker (this task id is already running), so
         # nothing will run its ``finally``. The link comes off the chain, so the
@@ -374,6 +385,22 @@ class _ChainLink(asyncio.Event):
             _hold_link_until_released(previous, super().set)
 
 
+def _release_for_good(link: asyncio.Event) -> None:
+    """Mark a link whose runner is gone without releasing it as released,
+    bypassing its relay (``_ChainLink.set``), once a waiter or a relay has
+    gone past it.
+
+    Left unset, everything behind it went on asking whether its task id still
+    ran, and that question stops meaning "this job" once the user carries the
+    task on under the same id: the new runner queues behind the job that went
+    past the dead link, which then waited for that runner to release the dead
+    link, while the runner waited for it (review of 5d6a580). Set, nobody asks
+    again, and the job that went past it frees the line as soon as it ends.
+    Every runner ``_start_behind_queue`` starts releases its link when it
+    ends; this keeps a link left unset some other way from stopping the line."""
+    asyncio.Event.set(link)
+
+
 async def _still_ahead(previous_id: Optional[str], previous_event: asyncio.Event) -> bool:
     """Whether the job ahead still holds the line: its runner is alive, or it
     ended without waiting and its link is passing the place on
@@ -399,6 +426,7 @@ def _hold_link_until_released(
                         break
                     if await _still_ahead(previous_id, previous_event):
                         continue
+                    _release_for_good(previous_event)
                     break
         finally:
             release()
