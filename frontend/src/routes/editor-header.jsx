@@ -1,15 +1,17 @@
 // The editor's header bar, moved out of editor.jsx: where the page is
 // (处理记录 / title), the one thing that needs the user if anything
 // (headerStatus), the Feishu document, pinning the task and its output
-// folder. useTaskPin is the pin's state, kept by the page.
+// folder. useTaskPin is the pin's state, kept by the page; useTaskStudied the
+// 学完了 mark's.
 import {useMemo, useState} from 'react';
 import {Link} from 'react-router-dom';
-import {AlertCircle, Pin} from 'lucide-react';
+import {AlertCircle, CheckCheck, Pin} from 'lucide-react';
 import {markBackendJob} from '../lib/taskState.js';
 import SvgIcon from '../components/SvgIcon.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
-import {isPinnedJob} from '../app/shared.jsx';
-import {iconButton, statusButton} from '../lib/ui.js';
+import {isPinnedJob, studiedOf} from '../app/shared.jsx';
+import {DropdownMenu} from '../app/DropdownMenu.jsx';
+import {button, iconButton, statusButton} from '../lib/ui.js';
 
 export const useTaskPin = ({activeTaskId, tasks, pinJob, ingestJobs}) => {
     // Pinned or not comes from the shared task list, which the records page
@@ -36,6 +38,84 @@ export const useTaskPin = ({activeTaskId, tasks, pinJob, ingestJobs}) => {
     return {activeTaskPinned, pinBusy, pinError, togglePin};
 };
 
+const VERDICTS = [
+    {id: 'good', zh: '好用', en: 'Useful'},
+    {id: 'wrong', zh: '有错', en: 'Has errors'},
+    {id: 'missing', zh: '有漏', en: 'Misses things'},
+];
+
+export const useTaskStudied = ({activeTaskId, tasks, markStudied, ingestJobs}) => {
+    // From the shared task list, like the pin, so the records page agrees.
+    const studied = useMemo(
+        () => studiedOf((tasks || []).find((job) => String(job?.task_id || '') === String(activeTaskId || ''))),
+        [tasks, activeTaskId],
+    );
+    const [studyBusy, setStudyBusy] = useState(false);
+    const [studyError, setStudyError] = useState('');
+    const setStudied = async (value, verdict = null) => {
+        if (!activeTaskId || studyBusy) return;
+        setStudyBusy(true);
+        setStudyError('');
+        try {
+            const updated = await markStudied(activeTaskId, value, verdict);
+            if (updated?.task_id) ingestJobs([markBackendJob(updated)]);
+        } catch (err) {
+            setStudyError(err?.message || String(err));
+        } finally {
+            setStudyBusy(false);
+        }
+    };
+    return {studied, studyBusy, studyError, setStudied};
+};
+
+const StudiedControl = ({lang, study}) => {
+    const {studied, studyBusy, studyError, setStudied} = study;
+    const zh = lang === 'zh';
+    if (!studied) {
+        return (
+            <button
+                type="button"
+                data-testid="editor-studied"
+                onClick={() => setStudied(true)}
+                disabled={studyBusy}
+                title={studyError || (zh ? '学完了：取消置顶，收进处理记录的「学完的」，你改过的地方留给 agent 改进写法' : 'Finished studying: unpin it, file it under Studied, and keep your edits for your agent')}
+                className={button('secondary', 'sm')}
+            >
+                <CheckCheck className="size-4" strokeWidth={2.15}/>
+                {zh ? '学完了' : 'Studied'}
+            </button>
+        );
+    }
+    const current = VERDICTS.find((item) => item.id === studied.verdict);
+    // Asking 这篇怎么样 until he answers; answering is optional.
+    const label = current ? (zh ? current.zh : current.en) : (zh ? '这篇怎么样' : 'How was it');
+    return (
+        <DropdownMenu
+            trigger={(
+                <button
+                    type="button"
+                    data-testid="editor-studied"
+                    disabled={studyBusy}
+                    title={studyError || undefined}
+                    className={button('secondary', 'sm')}
+                >
+                    <CheckCheck className="size-4" strokeWidth={2.15}/>
+                    {zh ? `已学完 · ${label}` : `Studied · ${label}`}
+                </button>
+            )}
+            items={[
+                ...VERDICTS.map((item) => ({
+                    label: zh ? item.zh : item.en,
+                    badge: item.id === studied.verdict ? '✓' : '',
+                    onClick: () => setStudied(true, item.id),
+                })),
+                {divider: true},
+                {label: zh ? '取消学完' : 'Not studied yet', onClick: () => setStudied(false)},
+            ]}
+        />
+    );
+};
+
 const EditorHeader = ({
     lang,
     result,
@@ -43,6 +123,7 @@ const EditorHeader = ({
     rawEditorTitle,
     activeTaskId,
     pin,
+    study,
     taskResume,
     cutFileUnavailable,
     cutJudgeCount,
@@ -119,6 +200,7 @@ const EditorHeader = ({
                         <SvgIcon name="open_in_new" className="text-base"/>
                     </a>
                 )}
+                {activeTaskId && hasEditableSummary && study ? <StudiedControl lang={lang} study={study}/> : null}
                 {activeTaskId ? (
                     <button
                         type="button"

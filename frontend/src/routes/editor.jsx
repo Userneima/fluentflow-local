@@ -52,7 +52,7 @@ import {useContentSaves} from './editor-saves.js';
 import {useResumeWatch, useNotePolling} from './editor-note-polling.js';
 import {useNoteRegeneration} from './editor-note-regenerate.js';
 import {useRetranscribe} from './editor-retranscribe.js';
-import EditorHeader, {useTaskPin} from './editor-header.jsx';
+import EditorHeader, {useTaskPin, useTaskStudied} from './editor-header.jsx';
 import TranscriptPane from './editor-transcript-pane.jsx';
 import NotePane from './editor-note-pane.jsx';
 
@@ -80,7 +80,7 @@ const Editor = () => {
         ingestJobs,
         tasks,
     } = useApp();
-    const {processVideoSSE, retryJob, resumeJob, pinJob, getJobActivity, fetchJobArtifactFile, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
+    const {processVideoSSE, retryJob, resumeJob, pinJob, markStudied, getJobActivity, fetchJobArtifactFile, getJob, saveTranscriptEdit, saveSummaryEdit, startJobVisualNote, getVisualNoteAvailability, getCredentialsStatus} = useApi();
     const {loadSettings} = useSettings();
     const {toast, showToast, doneJobTimerRef} = useEditorToast();
     const writeNoteButtonRef = useRef(null);
@@ -115,6 +115,7 @@ const Editor = () => {
     const durSec = result?.audio_duration_seconds || 0;
     const activeTaskId = result?.task_id || fallbackTaskIdRef.current;
     const pin = useTaskPin({activeTaskId, tasks, pinJob, ingestJobs});
+    const study = useTaskStudied({activeTaskId, tasks, markStudied, ingestJobs});
     const summaryFailureHint = summaryFailureNextStep(result, lang);
     const resultTitle = resultDisplayTitle(result, {name: t('edit.title')});
     const rawEditorTitle = resultTitle || result?.filename || t('edit.title');
@@ -368,6 +369,7 @@ const Editor = () => {
                         rawEditorTitle={rawEditorTitle}
                         activeTaskId={activeTaskId}
                         pin={pin}
+                        study={study}
                         taskResume={taskResume}
                         cutFileUnavailable={cutFileUnavailable}
                         cutJudgeCount={cutJudgeCount}

@@ -71,9 +71,12 @@ class CompressedMp3InBackground:
         return self._out
 
     def stop(self) -> None:
+        # A cancelled task can stop the encode while ``path()`` still waits on it
+        # in a worker thread, so this only kills and reaps: a second
+        # ``communicate()`` on the same pipe is not safe across threads.
         if self._process.poll() is None:
             self._process.kill()
-            self._process.communicate()
+            self._process.wait()
 
 
 def extract_stt_wav(

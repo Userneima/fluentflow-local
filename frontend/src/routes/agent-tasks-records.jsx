@@ -50,7 +50,7 @@ export const RecordsToolbar = ({lang, loading, filter, setFilter, filterCounts, 
     </section>
 );
 
-export const RecordsList = ({lang, loading, displayJobs, visibleJobs, queueUploadJob, restStartTaskId, queueAheadName, retryError, highlightTaskId, busy, cardHandlers}) => (
+export const RecordsList = ({lang, loading, displayJobs, visibleJobs, queueUploadJob, restStartTaskId, courseStarts, queueAheadName, retryError, highlightTaskId, busy, cardHandlers}) => (
     <section className="space-y-2">
         {loading && !displayJobs.length && !queueUploadJob && (
             <div className="flex h-48 items-center justify-center rounded-[16px] border border-[#e4e0e0] bg-white text-sm font-semibold text-[#676970] dark:border-white/[0.10] dark:bg-white/[0.055] dark:text-white/60">
@@ -85,6 +85,11 @@ export const RecordsList = ({lang, loading, displayJobs, visibleJobs, queueUploa
             {restStartTaskId && restStartTaskId === taskIdForJob(job) ? (
                 <p data-testid="records-after-pinned" className="px-1 pt-2 text-[12px] font-bold text-[#85868c] dark:text-white/50">
                     {lang === 'zh' ? '其余记录' : 'Other records'}
+                </p>
+            ) : null}
+            {courseStarts?.has(taskIdForJob(job)) ? (
+                <p data-testid="records-course" className="px-1 pt-2 text-[12px] font-bold text-[#85868c] dark:text-white/50">
+                    {courseStarts.get(taskIdForJob(job))}
                 </p>
             ) : null}
             <AgentTaskCard

@@ -12,6 +12,7 @@ from __future__ import annotations
 import inspect
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -93,3 +94,28 @@ def test_the_silence_check_reads_a_video_without_its_picture(tmp_path, monkeypat
     monkeypatch.setattr(audio_handler.subprocess, "run", run)
     audio_handler.require_audible_audio(_tone(tmp_path / "tone.wav", 2))
     assert "-vn" in seen[-1]
+
+
+@needs_ffmpeg
+def test_stop_while_another_thread_waits_for_the_encode(tmp_path):
+    """A task cancelled while it waits for the MP3 stops the encode from the
+    task's cleanup while the wait still runs in a worker thread: the stop must
+    not raise, and the waiting thread must come back."""
+    source = _tone(tmp_path / "long.wav", 600)
+    pending = CompressedMp3InBackground(source, output_path=tmp_path / "playback.mp3")
+    outcome: list[BaseException | Path] = []
+
+    def wait() -> None:
+        try:
+            outcome.append(pending.path())
+        except BaseException as exc:  # noqa: BLE001 - recorded for the assert
+            outcome.append(exc)
+
+    waiter = threading.Thread(target=wait)
+    waiter.start()
+    time.sleep(0.3)
+    pending.stop()
+    waiter.join(timeout=10)
+    assert not waiter.is_alive()
+    assert pending._process.returncode is not None
+    assert len(outcome) == 1 and isinstance(outcome[0], subprocess.CalledProcessError)

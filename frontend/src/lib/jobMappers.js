@@ -165,6 +165,15 @@ export const reconcileTaskList = ({
 export const pinnedAtOf = (job) => String(job?.metadata?.pinned_at || '').trim();
 export const isPinnedJob = (job) => Boolean(pinnedAtOf(job));
 
+// The user's 学完了 mark (metadata.studied, set by POST /jobs/{id}/studied):
+// {at, verdict, course, record_id, edits}, or null when not studied. course is
+// the folder the recording came from, decided by backend/core/study_record.py.
+export const studiedOf = (job) => {
+    const mark = job?.metadata?.studied;
+    return mark && typeof mark === 'object' && mark.at ? mark : null;
+};
+export const isStudiedJob = (job) => Boolean(studiedOf(job));
+
 // Live tasks first; then the records the user pinned, the latest pinned first;
 // everything else — failed or not — by time. Ranking failures above completions
 // buried today's results under month-old failures once the list stopped being

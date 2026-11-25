@@ -31,8 +31,12 @@ def get_note_skill(api_base: str | None = None, client_id: str | None = None) ->
 
 
 @tool(
-    description=("Keep a problem the user reported about a note as a test case. kind=one_off for a single "
-        "error (a misspelt name) or pattern for a way of writing that would recur. A pattern needs "
+    description=("Keep what the user said about a note, at once, every time: kind=one_off for a single "
+        "error or omission (a misspelt name, a point left out), pattern for a way of writing that would recur, "
+        "fine when they say the note needed nothing. Record each error or omission they point out when they "
+        "say it, not only once it becomes a rule. study_id: the studied record (list_note_feedback) you found "
+        "it in; once you have been through a studied record, record what you found with its study_id, or "
+        "kind=fine when it showed no problem with how notes are written. A pattern needs "
         "criterion: how a checker tells the problem is fixed. With task_id the transcript of that "
         "part is frozen into the case. A one-off fact correction is not a lasting writing preference. "
         "Propose a preference from the user's feedback or edits and confirm its effect and scope before "
@@ -43,8 +47,9 @@ def get_note_skill(api_base: str | None = None, client_id: str | None = None) ->
     input_schema={
         "type": "object",
         "properties": {
-            "problem": {"type": "string", "description": "What the user said is wrong, in their words."},
-            "kind": {"type": "string", "enum": ["one_off", "pattern"]},
+            "problem": {"type": "string", "description": "What the user said, in their words (or, from a studied record, what the edit shows)."},
+            "kind": {"type": "string", "enum": ["one_off", "pattern", "fine"]},
+            "study_id": {"type": "string"},
             "task_id": {"type": "string"},
             "criterion": {"type": "string", "description": "Pass / fail: what a fixed note does."},
             "note_excerpt": {"type": "string", "description": "The note text the problem is in."},
@@ -63,18 +68,53 @@ def record_note_feedback(
     note_excerpt: str = "",
     part: int | None = None,
     transcript_excerpt: str = "",
+    study_id: str | None = None,
     api_base: str | None = None,
     client_id: str | None = None,
 ) -> dict[str, Any]:
     return core._agent_request(
         "POST", "/agent/v1/note-feedback", api_base=api_base, client_id=client_id,
         payload=_options(task_id=task_id, problem=problem, kind=kind, criterion=criterion,
-                         note_excerpt=note_excerpt, part=part, transcript_excerpt=transcript_excerpt),
+                         note_excerpt=note_excerpt, part=part, transcript_excerpt=transcript_excerpt,
+                         study_id=study_id),
     )
 
 
 @tool(
-    description=("Every problem the user has reported, newest first, with rule_id when a rule came of it. Read it to tell whether a new report is a problem that came back."),
+    description=("Mark a task's note studied when the user says they finished studying it (the page's 学完了 "
+        "button does the same), or studied=false to take it back. It unpins the task and moves it to the "
+        "学完的 list, grouped by its recording's folder. verdict, only if the user said: good (好用), wrong "
+        "(有错), missing (有漏). It keeps a studied record of the user's changes to the note since it was "
+        "last written whole; read it with list_note_feedback."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "studied": {"type": "boolean", "default": True},
+            "verdict": {"type": "string", "enum": ["good", "wrong", "missing"]},
+        },
+        "required": ["task_id"],
+    },
+)
+def mark_studied(
+    task_id: str,
+    studied: bool = True,
+    verdict: str | None = None,
+    api_base: str | None = None,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    return core._agent_request(
+        "POST", f"/agent/v1/tasks/{task_id}/studied", api_base=api_base, client_id=client_id,
+        payload=_options(studied=studied, verdict=verdict),
+    )
+
+
+@tool(
+    description=("Everything recorded about notes, newest first: problems the user reported (rule_id when a rule "
+        "came of it), notes said to be fine, and kind=studied records kept when the user finished studying a "
+        "note: verdict, changes_total, edited_by, the first changes (chapter, before, after) and changes_file "
+        "with all of them. reviewed=false means no agent has been through it yet. Read it to tell whether a "
+        "new report is a problem that came back, and before working on how notes are written."),
     input_schema={"type": "object", "properties": {"api_base": {"type": "string"}}},
 )
 def list_note_feedback(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:

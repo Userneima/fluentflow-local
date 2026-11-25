@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from backend.core import task_actions, task_activity
+from backend.core import study_record, task_actions, task_activity
 from backend.core.job_store import PINNED_AT_KEY, delete_jobs, get_job, update_job_metadata
 from backend.core.local_request_scope import request_client_id
 from backend.core.local_task_detail import build_task_snapshot
@@ -77,6 +77,27 @@ def pin_job(
         update_job_metadata(task_id, {PINNED_AT_KEY: stamp})
         job = get_job(task_id, client_id=client_id) or job
     # The same shape as GET /jobs/{id}, so the page can drop it into its list.
+    return {**job, "task_snapshot": build_task_snapshot(job), "activity": task_activity.activity(job).as_dict()}
+
+
+@router.post("/jobs/{task_id}/studied")
+def mark_studied(
+    request: Request,
+    task_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+) -> dict[str, Any]:
+    """学完了: mark the note studied with an optional verdict, or take it back
+    (``{"studied": false}``); ``study_record.mark`` says what that keeps."""
+    client_id = _local_client_scope(request)
+    body = payload if isinstance(payload, dict) else {}
+    studied = body.get("studied", True)
+    if not isinstance(studied, bool):
+        raise HTTPException(status_code=422, detail="studied must be true or false")
+    try:
+        study_record.mark(task_id, studied=studied, verdict=body.get("verdict") or None, client_id=client_id)
+    except study_record.StudyError as exc:
+        raise HTTPException(status_code=404 if "不存在" in str(exc) else 409, detail=str(exc)) from exc
+    job = get_job(task_id, client_id=client_id) or {}
     return {**job, "task_snapshot": build_task_snapshot(job), "activity": task_activity.activity(job).as_dict()}
 
 
