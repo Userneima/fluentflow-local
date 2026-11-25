@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import codecs
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -41,27 +43,67 @@ def _decode_text(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def _readable_share(text: str) -> float:
+    """The share of ``text`` that reads as ordinary Chinese or English text:
+    printable ASCII, the usual whitespace, and characters simplified or
+    traditional Chinese text is written in (GB2312 or Big5). The bytes of
+    any text read as UTF-16 come out as CJK code points too, but mostly rare
+    ones, and the ones read from English letters seldom all common."""
+    if not text:
+        return 0.0
+    return sum(1 for char in text if _readable(char)) / len(text)
+
+
+@lru_cache(maxsize=8192)
+def _readable(char: str) -> bool:
+    if " " <= char <= "~" or char in "\t\n\r\f":
+        return True
+    if char < "\x80":
+        return False
+    for encoding in ("gb2312", "big5"):
+        try:
+            char.encode(encoding)
+            return True
+        except UnicodeEncodeError:
+            continue
+    return False
+
+
+def _decode_start(sample: bytes, encoding: str) -> str | None:
+    """``sample``, the start of a file, decoded strictly; a character cut off
+    at its end is left out. None when it is not in ``encoding``."""
+    try:
+        return codecs.getincrementaldecoder(encoding)().decode(sample, final=False)
+    except UnicodeDecodeError:
+        return None
+
+
 def utf16_without_mark(raw: bytes) -> bool:
     """Whether the bytes look like UTF-16 saved without its byte-order mark,
-    which ``_decode_text`` does not read as UTF-16: one byte in two a zero,
-    as the digits, colons and line breaks of a subtitle file are in it. Text
-    in UTF-8 or GB18030 has no zero byte.
+    which ``_decode_text`` does not read as UTF-16: the start of the file,
+    read as UTF-16 little- or big-endian, is ordinary Chinese or English
+    text, and read the way ``_decode_text`` reads it, it is not (an ASCII
+    character of UTF-16 reads as itself and a NUL, Chinese as garbage).
 
-    Chinese in UTF-16 has hardly a zero byte, so the text it decodes to is
-    looked at too: a NUL in it (any ASCII character or line break of UTF-16
-    becomes one), or one character in ten a replacement character or another
-    control character. Text in UTF-8 or GB18030 never reads that way; a few
-    stray bytes give a few replacement characters."""
+    Only a 4 KB sample is looked at. A file that reads as ordinary text the
+    usual way is never taken for it, so stray bytes, a cut-off last
+    character, NUL padding, terminal colour codes or a Latin-1 file are read
+    as before (review of 71b101f, 2026-11-26)."""
     sample = raw[:4096]
     if len(sample) < 8 or sample[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return False
-    if sample.count(0) * 4 >= len(sample):
-        return True
-    text = _decode_text(raw)
-    if "\x00" in text:
-        return True
-    unreadable = sum(1 for char in text if char == "\ufffd" or (char < " " and char not in "\t\n\r\f\v"))
-    return unreadable * 10 >= len(text)
+    usual = _decode_start(sample, "utf-8-sig")
+    if usual is None:
+        usual = _decode_start(sample, "gb18030")
+    if usual is None:
+        usual = sample.decode("utf-8", errors="replace")
+    if _readable_share(usual) >= 0.9:
+        return False
+    even = sample[: len(sample) // 2 * 2]
+    return any(
+        (text := _decode_start(even, encoding)) is not None and _readable_share(text) >= 0.9
+        for encoding in ("utf-16-le", "utf-16-be")
+    )
 
 
 UTF16_HINT = "文件可能是不带编码标记的 UTF-16，用文本编辑器另存为 UTF-8 后再交"

@@ -72,3 +72,42 @@ ORDINARY = {
 @pytest.mark.parametrize("raw", ORDINARY.values(), ids=ORDINARY.keys())
 def test_ordinary_files_are_not_taken_for_it(raw):
     assert not utf16_without_mark(raw)
+
+
+# Review of 71b101f: the rule that took one character in ten a replacement or
+# control character for UTF-16 refused files that had always loaded, and told
+# a Latin-1 file it was UTF-16. UTF-16 is now told apart by reading the start
+# of the file as UTF-16; none of these reads as ordinary text that way.
+
+_SRT_ZH = "1\n00:00:01,000 --> 00:00:03,000\n今天我们讲人工智能\n\n2\n00:00:03,000 --> 00:00:05,000\n下面是需求分析\n\n"
+
+LOADED_BEFORE = {
+    "srt with a trailing NUL": _SRT_ZH.encode() + b"\x00",
+    "srt with NUL padding": _SRT_ZH.encode() + b"\x00" * 4096,
+    "short UTF-8 cut mid-character": "今天讲最小二乘法\n".encode()[:-2] + b"\n",
+    "one bad byte in eight characters": b"hello\xffab",
+    "a lossy earlier conversion": ("今天我们讲人工智能产品经�" * 40).encode(),
+    "terminal colour codes": ("\x1b[32m[00:01]\x1b[0m 今天讲\n" * 30).encode(),
+    "dense colour codes": ("\x1b[1;32mok\x1b[0m\n" * 30).encode(),
+    "backspaces": ("abc\x08\x08\x08def 今天\n" * 20).encode(),
+    "form feeds": ("第一页内容\x0c" * 30).encode(),
+    "ASS tags": ("Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,{\\an8}{\\c&H00FF00&}今天讲\\N下面\n" * 20).encode(),
+    "VTT with a mark": "﻿WEBVTT\n\n00:01.000 --> 00:03.000\n今天\n".encode(),
+    "cp1252 with accents": ("Caf\xe9 is nice. We talk about r\xe9sum\xe9s today.\n" * 20).encode("latin-1"),
+    "Latin-1 French": ("\xe9t\xe9 \xe0 l'\xe9cole, d\xe9j\xe0 \xe9t\xe9\n" * 20).encode("latin-1"),
+    "big5": ("今天我們講人工智慧產品經理的工作內容\n" * 20).encode("big5"),
+    "shift-jis": ("今日は人工知能について話します\n" * 20).encode("shift_jis"),
+    "english": ("The quick brown fox jumps over the lazy dog.\n" * 40).encode(),
+    "eight ASCII bytes": b"hi there",
+}
+
+
+@pytest.mark.parametrize("raw", LOADED_BEFORE.values(), ids=LOADED_BEFORE.keys())
+def test_files_that_loaded_before_are_not_taken_for_it(raw):
+    assert not utf16_without_mark(raw)
+
+
+def test_only_the_start_of_a_file_is_looked_at():
+    # UTF-16 past the first 4 KB of an ordinary file does not count.
+    raw = ZH_TXT.encode("utf-8")[:4096] + ZH_TXT.encode("utf-16-le") * 4
+    assert not utf16_without_mark(raw)

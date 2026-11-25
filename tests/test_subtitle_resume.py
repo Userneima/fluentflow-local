@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 import backend.core.transcript_note as transcript_note
-from backend.core import job_store, note_pdf, output_folder, storage_paths, task_actions, task_steps
+from backend.core import job_store, note_pdf, output_folder, storage_paths, task_actions, task_steps, task_stop
 from backend.core.output_folder import SUBTITLE_INTAKE_KEY
 
 SRT = """1
@@ -230,6 +230,19 @@ def test_a_task_restarts_keep_cutting_off_reads_as_cut_off_by_the_restart(task_i
     job = _left_for_the_user(task_id)
 
     assert "服务重启中断" in job["error_reason"]
+    # Review of 71b101f: 重试 does nothing for a subtitle task (6.82); its file
+    # is still there, so the page points to 接着做.
+    assert "接着做" in job["error_reason"] and "重试" not in job["error_reason"]
+
+
+def test_a_links_captions_restarts_keep_cutting_off_point_to_carrying_on(task_id):
+    _captions_task(task_id, status="running")
+    _cut_off_reading(task_id)
+    job_store.update_job_metadata(task_id, {task_actions.RESTART_RESUME_COUNT_KEY: task_actions.RESTART_RESUME_LIMIT})
+
+    job = _left_for_the_user(task_id)
+
+    assert "接着做" in job["error_reason"] and "重试" not in job["error_reason"]
 
 
 def test_a_stopped_subtitle_task_carries_on_when_the_user_asks(task_id, tmp_path, model):
@@ -493,3 +506,59 @@ def test_stopping_a_carried_on_note_leaves_the_task_as_a_recording_stopped_at_it
     assert _statuses(task_id)[task_steps.NOTE] == task_steps.STOPPED
     assert job["result"]["summary_error"] == task_steps.STOPPED_NOTE
     assert "误差平方和" in job["result"]["transcript_text"]
+
+
+# Review of 71b101f: a stop the user makes while the service is stopping. The
+# steps cannot be written then (``task_steps`` freezes them for the restart),
+# so the task is cancelled (user_stopped) with its step still open. The
+# restart must keep the user's stop: not carry the task on, and not read it as
+# failed by the restart when the file is gone.
+
+def _user_stops_while_the_service_stops(task_id, tmp_path, how):
+    srt = _in_place_task(task_id, tmp_path, status="running")
+    _cut_off_reading(task_id)
+    task_stop.shutdown()
+    try:
+        if how == "stop":
+            asyncio.run(task_actions.stop_step(task_id, None))
+        else:
+            asyncio.run(task_actions.cancel_task(task_id, None))
+    finally:
+        task_stop.service_started()
+    assert job_store.get_job(task_id)["status"] == "cancelled"
+    return srt
+
+
+@pytest.mark.parametrize("source", ["present", "gone"])
+@pytest.mark.parametrize("how", ["stop", "cancel"])
+def test_a_stop_while_the_service_stops_stays_the_users_stop(task_id, tmp_path, model, how, source):
+    srt = _user_stops_while_the_service_stops(task_id, tmp_path, how)
+    if source == "gone":
+        srt.unlink()
+
+    assert asyncio.run(task_actions.resume_after_restart(task_actions.stepped_tasks_cut_off())) == 0
+
+    job = job_store.get_job(task_id)
+    assert job["status"] == "cancelled"
+    assert job["error_reason"] in {"user_stopped", "user_cancelled"}
+    assert not (job.get("metadata") or {}).get(job_store.RESTART_INTERRUPTION_KEY)
+    assert _statuses(task_id)[task_steps.FETCH] == task_steps.STOPPED
+    assert task_id not in task_actions.stepped_tasks_cut_off()
+    assert model == []
+
+
+def test_a_task_already_being_carried_on_is_left_to_its_runner(task_id, tmp_path, monkeypatch):
+    _in_place_task(task_id, tmp_path, status="running")
+    _cut_off_reading(task_id)
+
+    async def busy(job, start_at, *, route):
+        raise task_actions.Refused("这个任务已经在处理了。", "busy")
+
+    monkeypatch.setattr(task_actions, "_carry_on", busy)
+
+    assert asyncio.run(task_actions.resume_after_restart([task_id])) == 0
+
+    job = job_store.get_job(task_id)
+    assert job["status"] == "running"
+    assert not (job.get("metadata") or {}).get(job_store.RESTART_INTERRUPTION_KEY)
+    assert _statuses(task_id)[task_steps.FETCH] == task_steps.RUNNING
