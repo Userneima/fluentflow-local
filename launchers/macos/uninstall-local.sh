@@ -186,6 +186,7 @@ add_target "${HOME}/Desktop/FluentFlow Local.command" "桌面启动器（旧版�
 add_target "${HOME}/Library/Logs/FluentFlow" "日志"
 add_target "${DATA_ROOT}/bin" "安装时下载的 FFmpeg 和 uv"
 add_target "${DATA_ROOT}/tools" "安装时下载的 Node.js 和 Python"
+add_target "${DATA_ROOT}/cache" "安装时的下载缓存"
 # install.sh 装的 skill 是链到本目录的链接；用户自己的同名目录不动。
 for skill in "${HOME}/.claude/skills/fluentflow" "${HOME}/.codex/skills/fluentflow"; do
 	if [[ -L "$skill" && "$(readlink "$skill")" == "${REPO}/"* ]]; then

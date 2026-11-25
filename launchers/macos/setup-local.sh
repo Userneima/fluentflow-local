@@ -72,6 +72,9 @@ TOOLS_BIN="${DATA_DIR}/bin"
 TOOLS_DIR="${DATA_DIR}/tools"
 mkdir -p "$TOOLS_BIN" "$TOOLS_DIR"
 export PATH="${TOOLS_BIN}:${PATH}"
+# uv 的下载缓存放进数据目录（1 GB 多），卸载时能一起删；默认的 ~/.cache/uv 别的程序也在用，
+# 卸载不能动（2026-11-25 沙箱实测卸载后剩 1.4 GB）。用户自己设了 UV_CACHE_DIR 的照用。
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${DATA_DIR}/cache/uv}"
 
 case "$(uname -m)" in
 arm64) ARCH_FFMPEG="arm64" ARCH_UV="aarch64" ARCH_NODE="arm64" ;;

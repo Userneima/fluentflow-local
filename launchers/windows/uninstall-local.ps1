@@ -201,7 +201,7 @@ Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "停止 FluentFl
 Add-Target (Join-Path $env:LOCALAPPDATA "FluentFlow\Logs") "日志"
 Add-Target (Join-Path $DataRoot "bin") "安装时下载的 FFmpeg"
 Add-Target (Join-Path $DataRoot "tools") "安装时下载的 Node.js"
-if ($HomeDir) { Add-Target (Join-Path $HomeDir "cache") "pip 和 npm 的下载缓存" }
+if ($HomeDir) { Add-Target (Join-Path $HomeDir "cache") "pip、uv 和 npm 的下载缓存" }
 foreach ($ToolDir in @((Join-Path $env:USERPROFILE ".claude"), (Join-Path $env:USERPROFILE ".codex"))) {
     $Skill = Join-Path $ToolDir "skills\fluentflow"
     if (Test-Path (Join-Path $Skill ".installed-by-fluentflow")) { Add-Target $Skill "给 agent 的 skill" }
