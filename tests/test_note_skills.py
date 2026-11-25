@@ -66,6 +66,24 @@ def test_saving_keeps_the_version_it_replaced(monkeypatch, tmp_path):
     assert kept == ["第二版", "第一版"]
 
 
+def test_saves_in_the_same_clock_tick_keep_their_order(monkeypatch, tmp_path):
+    """Windows' clock moves in steps of about 15 ms; saves inside one step
+    must still list newest first."""
+    _own_skill(monkeypatch, tmp_path, "第一版")
+    frozen = note_skills.datetime(2026, 11, 25, 12, 0, 0, tzinfo=note_skills.timezone.utc)
+
+    class StuckClock(note_skills.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(note_skills, "datetime", StuckClock)
+    for text in ("第二版", "第三版", "第四版"):
+        note_skills.save_user_skill(text)
+    kept = [path.read_text(encoding="utf-8").strip() for path in note_skills.skill_history()]
+    assert kept == ["第三版", "第二版", "第一版"]
+
+
 def test_both_channels_send_the_same_text_and_a_preview_uses_its_own(monkeypatch, tmp_path):
     _own_skill(monkeypatch, tmp_path, "生效中的版本")
     sent = {}

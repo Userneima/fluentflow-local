@@ -21,7 +21,7 @@ import re
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from backend.core.runtime_paths import runtime_path
@@ -98,7 +98,7 @@ def _replace(body: str, *, base_version: str | None) -> NoteSkill:
     directory = user_skill_dir()
     history = directory / "history"
     history.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S-%f")
+    stamp = _later_than_kept(datetime.now(timezone.utc).astimezone().replace(tzinfo=None))
     (history / f"{stamp}-{current.version}.md").write_text(current.text + "\n", encoding="utf-8")
     target = user_skill_path()
     tmp = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
@@ -127,6 +127,24 @@ def restore_user_skill(*, name: str | None = None, use_default: bool = False, ba
         if not body:
             raise ValueError("这个旧版本没有写法内容。")
         return _replace("" if body == default_skill().text else body, base_version=base_version)
+
+
+_STAMP = "%Y%m%d-%H%M%S-%f"
+
+
+def _later_than_kept(now: datetime) -> str:
+    """The history name's time, after every kept one: Windows' clock moves in
+    steps of about 15 ms, so two saves can read the same time, and the order
+    (newest first) would fall to the version hash that follows."""
+    newest = skill_history()[:1]
+    if newest:
+        try:
+            kept = datetime.strptime(newest[0].name[:22], _STAMP)
+        except ValueError:
+            kept = None
+        if kept is not None and now <= kept:
+            now = kept + timedelta(microseconds=1)
+    return now.strftime(_STAMP)
 
 
 def skill_history() -> list[Path]:
