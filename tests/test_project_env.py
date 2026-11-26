@@ -285,24 +285,3 @@ def test_a_data_folder_set_in_the_environment_takes_no_old_settings(tmp_path, mo
 
     assert local_config.load_config() == {}
     assert not (tmp_path / "isolated" / "fluentflow_config.json").exists()
-
-
-def test_update_and_uninstall_leave_what_is_not_theirs():
-    """A folder the user named app.old, data kept inside the code folder, and
-    another Windows account's install are not the scripts' to delete or take."""
-    windows = (ROOT / "install.ps1").read_text(encoding="utf-8")
-    macos = (ROOT / "install.sh").read_text(encoding="utf-8")
-    for text in (windows, macos):
-        assert ".fluentflow-update" in text
-        # Every setting that can place the user's files, not a fixed few.
-        assert ("FLUENTFLOW_\\w*(DIR|PATH|CACHE)" in text or "FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE)" in text) and "HF_HOME" in text
-    assert "Assert-OwnLeftover" in windows and "assert_own_leftover" in macos
-    assert "WindowsIdentity]::GetCurrent().User.Value" in windows
-    assert "another Windows account's FluentFlow" in windows and "icacls" in windows
-    # An empty folder made beforehand is made private too, not only a new one.
-    assert "$FirstTake = -not (Test-Path $Marker)" in windows and "if ($FirstTake) {" in windows
-    # A release older than this installer is installed by its own installer.
-    assert "predates this installer" in windows
-    assert "KeepsUserFiles" in (ROOT / "launchers" / "windows" / "uninstall-local.ps1").read_text(encoding="utf-8-sig")
-    assert "KEEPS_USER_FILES" in (ROOT / "launchers" / "macos" / "uninstall-local.sh").read_text(encoding="utf-8")
-    assert '"release-check"' in (ROOT / "backend" / "core" / "local_http_boundary.py").read_text(encoding="utf-8")

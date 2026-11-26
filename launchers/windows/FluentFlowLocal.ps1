@@ -88,6 +88,12 @@ if (-not (Test-Path (Join-Path $Repo "backend\local_main.py"))) {
     Fail "Cannot find the FluentFlow code directory (looked in: $Repo). Set FLUENTFLOW_REPO to the code directory, or run install-local-to-desktop.ps1 again."
 }
 
+# The whole FluentFlow folder may have been moved to another drive: .env still
+# names the old place, and the service would start on an empty data folder.
+# Point it here again (only when the old place is gone; see Repair-FluentFlowHome).
+$Repaired = @(Repair-FluentFlowHome $Repo)
+if ($Repaired.Count -gt 0) { Write-Host "The FluentFlow folder moved; .env now points at this folder again ($($Repaired -join ', '))." -ForegroundColor Yellow }
+
 $health = Get-LocalHealth
 if ($health) {
     # /health nests the edition marker under "runtime"; reading it from the

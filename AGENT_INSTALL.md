@@ -64,7 +64,10 @@ submitted before it is done shows "正在下载转录模型" and carries on once
 registers the MCP server `fluentflow-local` with Claude Code and Codex when their command
 line tools are on this machine, and checks that server. Every download has a source in
 China: the script tries the original host for a few seconds and switches to the mirror
-when it is unreachable or slow; downloaded programs are checked against fixed checksums.
+when it is unreachable or slow. Node.js, Windows' Python installer and FFmpeg, the speaker
+models and the npm code package are checked against fixed checksums; pip packages and the
+transcription model are taken by version only, and macOS's FFmpeg comes from
+`ffmpeg.martin-riedl.de`, which has no mirror.
 
 Success is exit code 0 and a last line starting with `✓` (Windows: "FluentFlow Local
 is installed"). On failure the last lines say what went wrong and what to do; fix that
@@ -159,9 +162,12 @@ Agent-written notes and tasks handed to an agent do not trigger background Claud
 ## Updating
 
 When the user asks you to update FluentFlow, or the page says a new version is out
-(`http://127.0.0.1:8000/release-check` answers `"update_available": true`), run the same
-install command again (with the same `FLUENTFLOW_INSTALL_DIR` on Windows), from a directory
-outside the install. It sees the install, downloads the newest release beside it, keeps
+(`http://127.0.0.1:8000/release-check` answers `"update_available": true`; its
+`update_command` is the exact command for this copy), run the install command again (on
+Windows: the same `FLUENTFLOW_INSTALL_DIR`), from a directory outside the install. When the
+folder is not passed, the installer asks the running service where its code is and updates
+that copy, so an install in a folder the user chose is not joined by a second copy in the
+default place. It sees the install, downloads the newest release beside it, keeps
 `.env`, the tasks, settings and models, stops the service, swaps the code in, adds what the
 new version needs (packages, speaker models, the transcription model) and starts it again.
 If any of that fails, it puts the previous version back, starts it again and says so. It
@@ -169,8 +175,12 @@ also refuses, changing nothing, when a data, download or model location is insid
 folder (a relative path counts) or cannot be read for sure; the message names the setting,
 and the user decides where to move it. It refuses while tasks
 are being processed: wait for them, or set `FLUENTFLOW_UPDATE_FORCE=1` after the user agrees
-(interrupted tasks carry on after the restart). A git checkout is not updated by it; there,
-`git pull` and run the setup script.
+(interrupted tasks carry on after the restart). An update that was interrupted or lost power
+part way leaves the previous version beside the install, or a half-written copy without the
+update's marker; the next run puts the previous version back when the code folder is missing,
+and stops and names the half-written copy rather than deleting it — tell the user, and delete
+that copy only with their word. A git checkout is not updated by it; there, `git pull` and run
+the setup script.
 
 ## Starting, checking and stopping the service
 
@@ -239,10 +249,13 @@ the same command without `--dry-run` / `-DryRun`, adding `--yes` / `-Yes`:
 It stops the running service, removes the program (for an install from these
 instructions, the code folder itself, and the copy a failed update kept beside it), the downloaded FFmpeg and Node.js, the Desktop
 icon, the logs and the agent skill, and unregisters `fluentflow-local` from Claude Code
-and Codex (only an entry that points at this install). On Windows with `-All`, the
-`FluentFlow` folder is gone afterwards. When the data folder also holds files FluentFlow
+and Codex (only an entry that points at this install, and under the scope it was registered
+in; Codex's config is read from `CODEX_HOME` when that is set). On Windows with `-All`, the
+`FluentFlow` folder is gone afterwards, also when the folder was moved to another drive since
+it was installed. When the data folder also holds files FluentFlow
 does not recognise, only FluentFlow's own are removed and the rest are listed, in the dry
-run too: show the user that list, and do not delete those files yourself. A copy of the code
+run too, and also when there was nothing else to delete: show the user that list, and do not
+delete those files yourself. A copy of the code
 folder the user made (`app.old`, for example) is left alone. It leaves Python and anything that was on the
 machine before. Tell the user what was removed and what is left (the last lines say).
 The MCP tools disappear from your next conversation.

@@ -50,10 +50,10 @@ def _read(path: Path) -> str:
 
 # --- the helpers' text in the two installers ---------------------------------
 
-SHARED_BASH = ("ff_env_file_value", "ff_unquote", "ff_setting", "ff_normalize", "ff_place", "ff_lower", "ff_physical", "ff_inside",
-               "ff_update_marker_says", "ff_mark_update_copy", "ff_stop_folder_programs")
+SHARED_BASH = ("ff_env_file_value", "ff_unquote", "ff_setting", "ff_normalize", "ff_physical_path", "ff_place", "ff_lower", "ff_physical",
+               "ff_inside", "ff_update_marker_says", "ff_mark_update_copy", "ff_codex_home", "ff_stop_folder_programs")
 SHARED_POWERSHELL = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowQuoted", "ConvertFrom-FluentFlowEnvValue", "Get-FluentFlowEnvFileValue",
-                     "Get-FluentFlowSetting", "Resolve-FluentFlowPlace", "Test-FluentFlowInside",
+                     "Get-FluentFlowSetting", "Get-FluentFlowRealPath", "Resolve-FluentFlowPlace", "Test-FluentFlowInside",
                      "Test-FluentFlowUpdateCopy", "Set-FluentFlowUpdateCopy")
 
 
@@ -389,9 +389,9 @@ def _install(tmp_path: Path, folder: Path, source: Path, **extra: str) -> subpro
                           env=env, cwd=tmp_path, timeout=120)
 
 
-def _uninstall(tmp_path: Path, folder: Path, *args: str) -> subprocess.CompletedProcess:
+def _uninstall(tmp_path: Path, folder: Path, *args: str, **extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(["bash", str(folder / "launchers" / "macos" / "uninstall-local.sh"), *args],
-                          capture_output=True, text=True, env=_sandbox_env(tmp_path), cwd=tmp_path, timeout=120)
+                          capture_output=True, text=True, env={**_sandbox_env(tmp_path), **extra}, cwd=tmp_path, timeout=120)
 
 
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="the macOS installer and uninstaller")
@@ -676,3 +676,330 @@ def test_the_windows_setup_stops_on_a_place_it_cannot_tell():
     setup = _read(ROOT / "launchers" / "windows" / "setup-local.ps1")
     assert "$Unplaced = @(Import-FluentFlowEnv $Repo)" in setup
     assert setup.index("$Unplaced.Count -gt 0") < setup.index("Get-FluentFlowDataDir $Repo")
+
+
+# --- an update that was interrupted, and the install it belongs to ----------
+
+def _mark_update_copy(folder: Path) -> None:
+    (folder / ".fluentflow-update").write_text(
+        "Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.\n"
+        f"{folder}\n", encoding="utf-8")
+
+
+@mac_only
+def test_an_update_interrupted_while_swapping_puts_the_old_version_back(tmp_path):
+    """The old version was moved aside and the new one never arrived: <dir> is
+    missing and <dir>.old is the update's. Run as a fresh install, the next run
+    left the previous version, and the user's install, beside a new copy."""
+    aside = _fake_code(tmp_path / "app.old")
+    _mark_update_copy(aside)
+
+    result = _install(tmp_path, tmp_path / "app", _fake_code(tmp_path / "release", version="0.1.0"))
+
+    assert "上一次更新" in result.stdout + result.stderr, result.stdout + result.stderr
+    assert (tmp_path / "app" / "backend" / "local_main.py").is_file()
+    assert (tmp_path / "app" / "VERSION").read_text(encoding="utf-8").strip() == "0.1.0"
+    assert not (tmp_path / "app" / ".fluentflow-update").exists()
+    assert not aside.exists()
+
+
+@mac_only
+def test_a_half_written_update_copy_is_named_not_trusted(tmp_path):
+    """The marker is written last, so a copy that stopped half way has none: the
+    next update must stop and say what it is, never delete it as an update's."""
+    app = _fake_code(tmp_path / "app")
+    half = tmp_path / "app.new"
+    half.mkdir()
+    (half / "backend").mkdir()
+    (half / "backend" / "local_main.py").write_text("", encoding="utf-8")
+
+    result = _install(tmp_path, app, _fake_code(tmp_path / "release", version="9.0.0"))
+
+    assert result.returncode != 0
+    assert "上一次更新没做完" in result.stderr, result.stderr
+    assert half.exists() and (app / "VERSION").read_text(encoding="utf-8").strip() == "0.1.0"
+
+
+@mac_only
+def test_a_data_part_named_in_env_stops_the_update(tmp_path):
+    """Every setting that can place the user's files, not only the data folder:
+    FLUENTFLOW_SOURCE_DIR inside the code folder goes with it."""
+    app = _fake_code(tmp_path / "app")
+    (app / ".env").write_text("FLUENTFLOW_SOURCE_DIR=sources-copy\n", encoding="utf-8")
+    (app / "sources-copy").mkdir()
+    (app / "sources-copy" / "a.mp4").write_bytes(b"video")
+
+    result = _install(tmp_path, app, _fake_code(tmp_path / "release", version="9.0.0"))
+
+    assert result.returncode != 0 and "代码目录" in result.stderr, result.stderr
+    assert (app / "sources-copy" / "a.mp4").read_bytes() == b"video"
+    assert not (tmp_path / "app.new").exists() and not (tmp_path / "app.old").exists()
+
+
+@mac_only
+def test_the_install_folder_is_the_one_the_running_service_reports(tmp_path):
+    """Run again without a folder, the installer updated the copy it found in the
+    default place: an install in a folder the user chose got a second copy."""
+    import http.server
+    import json
+    import threading
+
+    chosen = _fake_code(tmp_path / "chosen" / "app")
+    # Compact, as the service answers: {"edition":"local","install":{"code_dir":"..."}}
+    answer = json.dumps({"status": "ok", "edition": "local", "install": {"code_dir": str(chosen)}},
+                        separators=(",", ":")).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer)))
+            self.end_headers()
+            self.wfile.write(answer)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = str(server.server_address[1])
+        result = _install(tmp_path, tmp_path / "unused", _fake_code(tmp_path / "release", version="0.1.0"),
+                          **{"FLUENTFLOW_INSTALL_DIR": "", "FLUENTFLOW_LOCAL_PORT": port})
+    finally:
+        server.shutdown()
+
+    assert "正在运行的 FluentFlow 装在" in result.stdout, result.stdout + result.stderr
+    assert (chosen / "VERSION").read_text(encoding="utf-8").strip() == "0.1.0"
+    assert not (tmp_path / "home" / "fluentflow-local").exists()
+
+
+@mac_only
+def test_nothing_to_delete_still_names_what_it_left(tmp_path):
+    """The data folder held only files FluentFlow does not know: the run found
+    nothing to delete and exited without saying they were left there."""
+    app = _fake_code(tmp_path / "app")
+    (app / ".env").write_text("FLUENTFLOW_DATA_DIR=data\n", encoding="utf-8")
+    (app / "data" / "bin").mkdir(parents=True)
+    (app / "data" / "bin" / "my-tool").write_text("mine", encoding="utf-8")
+
+    result = _uninstall(tmp_path, app, "--models", "--yes")
+
+    assert result.returncode == 0, result.stderr
+    assert "没有找到需要删除的东西" in result.stdout
+    assert "认不出" in result.stdout and "bin" in result.stdout.split("认不出")[-1]
+    assert (app / "data" / "bin" / "my-tool").exists()
+
+
+@mac_only
+def test_unregistering_uses_the_scope_and_codex_folder_it_was_registered_with(tmp_path):
+    """`claude mcp get` found a project-level entry and remove used "user", so it
+    stayed; and the Codex config was read from ~/.codex although CODEX_HOME sets
+    another folder."""
+    app = _fake_code(tmp_path / "app")
+    calls = tmp_path / "calls"
+    calls.mkdir()
+    fake = tmp_path / "fake-bin"
+    fake.mkdir()
+    (fake / "claude").write_text(
+        "#!/bin/bash\n"
+        "if [[ \"$1 $2\" == \"mcp get\" ]]; then\n"
+        f"  echo 'fluentflow-local:'; echo '  Scope: Project config'; echo '  Args: python3 {app}/scripts/fluentflow_mcp_server.py'\n"
+        "  echo 'To remove this server, run: claude mcp remove fluentflow-local -s project'\n"
+        "  exit 0\n"
+        "fi\n"
+        f"echo \"claude $*\" >> '{calls}/log'\nexit 0\n", encoding="utf-8")
+    (fake / "claude").chmod(0o755)
+    (fake / "codex").write_text(f"#!/bin/bash\necho \"codex $*\" >> '{calls}/log'\n", encoding="utf-8")
+    (fake / "codex").chmod(0o755)
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        f"[mcp_servers.fluentflow-local]\ncommand = 'python3'\nargs = ['{app}/scripts/fluentflow_mcp_server.py']\n",
+        encoding="utf-8")
+
+    result = _uninstall(tmp_path, app, "--yes", CODEX_HOME=str(codex_home),
+                        PATH=f"{fake}:/usr/bin:/bin:/usr/sbin:/sbin")
+
+    assert result.returncode == 0, result.stderr
+    log = (calls / "log").read_text(encoding="utf-8")
+    assert "claude mcp remove --scope project fluentflow-local" in log, log
+    assert "codex mcp remove fluentflow-local" in log, log
+
+
+@mac_only
+def test_a_link_before_a_dotdot_lands_where_the_system_puts_it(tmp_path):
+    """A data folder written as link/../../data: the system follows the link and
+    then backs up from the link's target, so the service and the setup put files
+    somewhere else than the text says when only the text is normalized."""
+    folder = _setup_code(tmp_path / "app", "FLUENTFLOW_DATA_DIR=inner/../../data")
+    (tmp_path / "outside" / "deep" / "target").mkdir(parents=True)
+    (folder / "inner").symlink_to(tmp_path / "outside" / "deep" / "target")
+
+    run = _setup(tmp_path, folder, tmp_path / "elsewhere")
+
+    # inner -> outside/deep/target, two levels up -> outside, then data.
+    assert (tmp_path / "outside" / "data" / "bin").is_dir(), run.stdout + run.stderr
+    assert not (tmp_path / "data").exists()
+
+
+# --- the Windows halves -------------------------------------------------------
+# These run in the GitHub Windows check (there is no PowerShell on the Mac this
+# is maintained on). They run the scripts' own functions against temporary
+# folders; the real install/update/uninstall run is the workflow's.
+
+WIN_FUNCTIONS = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowQuoted", "ConvertFrom-FluentFlowEnvValue",
+                 "Get-FluentFlowEnvFileValue", "Get-FluentFlowSetting", "Get-FluentFlowRealPath",
+                 "Resolve-FluentFlowPlace", "Test-FluentFlowInside", "Add-FluentFlowEnvLine",
+                 "Set-FluentFlowEnvLine", "Get-FluentFlowHomeRoot", "Repair-FluentFlowHome",
+                 "Get-FluentFlowDataDir", "Add-FluentFlowFolderLines")
+
+
+def _win_helper_script() -> str:
+    text = _read(WIN_HELPER)
+    parts = []
+    for name in WIN_FUNCTIONS:
+        function = _powershell_function(text, name)
+        assert function, f"{name} missing from fluentflow-env.ps1"
+        parts.append(function)
+    return "\n".join(parts)
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_a_moved_folder_points_its_env_at_itself_again(tmp_path):
+    """The whole FluentFlow folder moved to another drive: .env still names the
+    old place, and the service would start on an empty data folder. The folder
+    the installer marked is taken as the one this code belongs to, and what
+    named the old place is pointed here again; a value pointing elsewhere is
+    the user's and stays."""
+    root = tmp_path / "FluentFlow"
+    app = root / "app"
+    app.mkdir(parents=True)
+    (root / ".fluentflow-home").write_text("FluentFlow Local lives here", encoding="ascii")
+    old = tmp_path / "OldDrive" / "FluentFlow"
+    (app / ".env").write_text(
+        f"FLUENTFLOW_HOME='{old}'\r\n"
+        f"FLUENTFLOW_DATA_DIR='{old}\\data'\r\n"
+        "HF_HOME='${FLUENTFLOW_HOME}\\models'\r\n"
+        f"MY_OWN_DIR='{tmp_path / 'elsewhere'}'\r\n", encoding="utf-8")
+    script = _win_helper_script() + (
+        f"\n[Console]::OutputEncoding = [Text.Encoding]::UTF8\n"
+        f"$changed = @(Repair-FluentFlowHome '{app}')\n"
+        f"'changed=' + ($changed -join ',')\n"
+        f"'home=' + (Get-FluentFlowEnvFileValue '{app}' 'FLUENTFLOW_HOME')\n"
+        f"'data=' + (Get-FluentFlowEnvFileValue '{app}' 'FLUENTFLOW_DATA_DIR')\n"
+        f"'own=' + (Get-FluentFlowEnvFileValue '{app}' 'MY_OWN_DIR')\n"
+        f"'models=' + (Get-FluentFlowEnvFileValue '{app}' 'HF_HOME')\n")
+
+    result = _powershell(script)
+
+    assert result.returncode == 0, result.stderr
+    lines = dict(line.split("=", 1) for line in result.stdout.strip().splitlines() if "=" in line)
+    assert lines["home"] == str(root)
+    assert lines["data"] == str(root / "data")
+    assert lines["models"] == str(root / "models")
+    assert lines["own"] == str(tmp_path / "elsewhere")
+    assert "FLUENTFLOW_HOME" in lines["changed"] and "FLUENTFLOW_DATA_DIR" in lines["changed"]
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_a_folder_still_in_its_old_place_is_left_alone(tmp_path):
+    """The old place still holds an install the user keeps: its data is not this
+    copy's to take over."""
+    root = tmp_path / "FluentFlow"
+    app = root / "app"
+    app.mkdir(parents=True)
+    (root / ".fluentflow-home").write_text("FluentFlow Local lives here", encoding="ascii")
+    old = tmp_path / "Other" / "FluentFlow"
+    old.mkdir(parents=True)
+    (app / ".env").write_text(f"FLUENTFLOW_HOME='{old}'\r\n", encoding="utf-8")
+    script = _win_helper_script() + (
+        f"\n[Console]::OutputEncoding = [Text.Encoding]::UTF8\n"
+        f"'changed=' + (@(Repair-FluentFlowHome '{app}') -join ',')\n"
+        f"'home=' + (Get-FluentFlowEnvFileValue '{app}' 'FLUENTFLOW_HOME')\n")
+
+    result = _powershell(script)
+
+    assert result.returncode == 0, result.stderr
+    assert "changed=" in result.stdout and "FLUENTFLOW_HOME" not in result.stdout.split("changed=")[1].splitlines()[0]
+    assert f"home={old}" in result.stdout
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_the_folder_lines_follow_fluentflow_home(tmp_path):
+    """A one-folder install writes its data, models and caches under
+    ${FLUENTFLOW_HOME}, so the repair above moves them all; an older layout's
+    caches go into its data folder, where uninstalling can remove them."""
+    root = tmp_path / "FluentFlow"
+    app = root / "app"
+    app.mkdir(parents=True)
+    script = _win_helper_script() + (
+        f"\nAdd-FluentFlowFolderLines '{app}' '{root}' $true\n")
+    result = _powershell(script)
+    assert result.returncode == 0, result.stderr
+    env_text = (app / ".env").read_text(encoding="utf-8")
+    for name, part in (("FLUENTFLOW_DATA_DIR", "data"), ("HF_HOME", "models"),
+                       ("FLUENTFLOW_LINK_OUTPUT_DIR", "downloads"),
+                       ("PIP_CACHE_DIR", "cache\\pip"), ("UV_CACHE_DIR", "cache\\uv"),
+                       ("npm_config_cache", "cache\\npm")):
+        assert f"{name}='${{FLUENTFLOW_HOME}}\\{part}'" in env_text, (name, env_text)
+
+    legacy = tmp_path / "old-layout"
+    legacy.mkdir()
+    (legacy / ".env").write_text("", encoding="utf-8")
+    script = _win_helper_script() + (
+        f"\n$env:APPDATA = '{tmp_path / 'Roaming'}'\n"
+        f"Add-FluentFlowFolderLines '{legacy}' '{legacy}' $false\n")
+    result = _powershell(script)
+    assert result.returncode == 0, result.stderr
+    legacy_text = (legacy / ".env").read_text(encoding="utf-8")
+    assert str(tmp_path / "Roaming" / "FluentFlow" / "cache" / "uv") in legacy_text
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_a_junction_before_a_dotdot_lands_where_the_system_puts_it(tmp_path):
+    """A data folder written as a junction, then .., then data: the system
+    follows the junction and backs up from its target, so the setup must place
+    files there and not where the text suggests."""
+    root = tmp_path / "app"
+    root.mkdir()
+    (tmp_path / "outside" / "deep" / "target").mkdir(parents=True)
+    make = subprocess.run([_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
+                           f"New-Item -ItemType Junction -Path '{root / 'inner'}' "
+                           f"-Target '{tmp_path / 'outside' / 'deep' / 'target'}' | Out-Null"],
+                          capture_output=True, text=True)
+    assert make.returncode == 0, make.stderr
+    script = _win_helper_script() + (
+        f"\n$p = Resolve-FluentFlowPlace '{root}' 'inner/../../data'\n"
+        f"'path=' + $p.Path\n")
+    result = _powershell(script)
+    assert result.returncode == 0, result.stderr
+    assert f"path={tmp_path / 'outside' / 'data'}" in result.stdout, result.stdout
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows uninstaller, run by Windows PowerShell")
+def test_the_uninstaller_asks_the_code_for_a_chinese_data_folder(tmp_path):
+    """The uninstaller asks the code where the data lives. Python's output was
+    read in the system code page, so a Chinese path came back wrong (or, on an
+    English Windows, the print itself failed) and it fell back to the raw
+    setting: it left data behind rather than delete too much (2026-11-26)."""
+    app = tmp_path / "app"
+    (app / "backend" / "core").mkdir(parents=True)
+    (app / "backend" / "local_main.py").write_text("", encoding="utf-8")
+    (app / "backend" / "core" / "__init__.py").write_text("", encoding="utf-8")
+    shutil.copy2(ROOT / "backend" / "core" / "runtime_paths.py", app / "backend" / "core" / "runtime_paths.py")
+    subprocess.run([sys.executable, "-m", "venv", str(app / ".venv")], check=True, timeout=300)
+    windows = app / "launchers" / "windows"
+    windows.mkdir(parents=True)
+    for name in ("uninstall-local.ps1", "fluentflow-env.ps1"):
+        shutil.copy2(ROOT / "launchers" / "windows" / name, windows / name)
+    shutil.copy2(REGISTRY, app / "launchers" / REGISTRY.name)
+    data = tmp_path / "任务数据"
+    (data / "sources").mkdir(parents=True)
+    (data / "fluentflow_jobs.sqlite").write_text("tasks", encoding="utf-8")
+    (app / ".env").write_text(f"FLUENTFLOW_DATA_DIR='{data}'\r\n", encoding="utf-8")
+    run = subprocess.run([_POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                          str(windows / "uninstall-local.ps1"), "-Data", "-DryRun", "-Yes"],
+                         capture_output=True, text=True, encoding="utf-8", timeout=300,
+                         env={**os.environ, "PYTHONUTF8": "1"})
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "问不到代码里的数据目录" not in run.stdout, run.stdout
+    assert "任务数据" in run.stdout, run.stdout

@@ -35,6 +35,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Python's UTF-8 mode and the console decoding its output as UTF-8: the data
+# folder is asked for below, and a Chinese path on an English Windows otherwise
+# comes back in the code page and reads wrong (leaving data behind, never
+# deleting too much).
+$env:PYTHONUTF8 = "1"
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
 
 if ($All) { $Models = $true; $Data = $true }
 
@@ -134,8 +140,12 @@ function Get-SurePath($Place) { if ($Place -and $Place.Sure) { return $Place.Pat
 # Inside the code folder, or cannot be told.
 function Test-InRepo($Place) { return $Place -and ((-not $Place.Sure) -or (Test-FluentFlowInside $Place.Path $Repo)) }
 
-# A one-folder install: everything below this folder is FluentFlow's.
-$HomeDir = Get-SurePath (Get-Place "FLUENTFLOW_HOME")
+# A one-folder install: everything below this folder is FluentFlow's. The folder
+# the installer marked is taken as the one this code belongs to, so a FluentFlow
+# folder moved to another drive (whose .env still names the old place) is still
+# emptied by -All.
+$HomeDir = Get-FluentFlowHomeRoot $Repo
+if (-not $HomeDir) { $HomeDir = Get-SurePath (Get-Place "FLUENTFLOW_HOME") }
 function Test-InHome([string]$Path) {
     if (-not $HomeDir -or -not $Path) { return $false }
     return (Test-FluentFlowInside $Path $HomeDir) -and -not (Test-FluentFlowInside $HomeDir $Path)
@@ -249,7 +259,7 @@ if ($DataSure) {
     }
 }
 if ($HomeDir) { Add-Target (Join-Path $HomeDir "cache") "pip、uv 和 npm 的下载缓存" }
-foreach ($ToolDir in @((Join-Path $env:USERPROFILE ".claude"), (Join-Path $env:USERPROFILE ".codex"))) {
+foreach ($ToolDir in @((Join-Path $env:USERPROFILE ".claude"), (Get-FluentFlowCodexHome))) {
     $Skill = Join-Path $ToolDir "skills\fluentflow"
     if (Test-Path (Join-Path $Skill ".installed-by-fluentflow")) { Add-Target $Skill "给 agent 的 skill" }
 }
@@ -283,12 +293,18 @@ function Test-MentionsRepo([string]$Text) {
     return $Text.Replace('\\', '\').IndexOf($Repo.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 $McpRemovals = New-Object System.Collections.ArrayList
+$ClaudeScope = "user"
 if (Get-Command claude -ErrorAction SilentlyContinue) {
     $Described = Invoke-FluentFlowTool claude @("mcp", "get", "fluentflow-local")
-    if ($Described.Code -eq 0 -and (Test-MentionsRepo $Described.Output)) { [void]$McpRemovals.Add("Claude Code") }
-    elseif ($Described.Code -eq 0) { Write-Host "`nClaude Code 里的 fluentflow-local 指向别的位置，不动它。" }
+    if ($Described.Code -eq 0 -and (Test-MentionsRepo $Described.Output)) {
+        [void]$McpRemovals.Add("Claude Code")
+        # The scope it was registered under: `claude mcp get` ends with the line
+        # "claude mcp remove fluentflow-local -s <scope>"; only "user" would leave
+        # a project-level entry pointing at the deleted install.
+        if ($Described.Output -match 'claude mcp remove fluentflow-local -s ([A-Za-z]+)') { $ClaudeScope = $Matches[1] }
+    } elseif ($Described.Code -eq 0) { Write-Host "`nClaude Code 里的 fluentflow-local 指向别的位置，不动它。" }
 }
-$CodexConfig = Join-Path $env:USERPROFILE ".codex\config.toml"
+$CodexConfig = Join-Path (Get-FluentFlowCodexHome) "config.toml"
 if (Test-Path $CodexConfig) {
     $Toml = [System.IO.File]::ReadAllText($CodexConfig)
     $Section = [regex]::Match($Toml, '(?ms)^\[mcp_servers\.fluentflow-local\]\s*$.*?(?=^\[|\z)')
@@ -297,6 +313,13 @@ if (Test-Path $CodexConfig) {
 }
 
 if ($Targets.Count -eq 0 -and $McpRemovals.Count -eq 0) {
+    # Nothing of FluentFlow's is left, but the data folder may still hold files it
+    # does not recognise: name them too, so "nothing to delete" does not hide them.
+    if ($DataLeft.Count -gt 0) {
+        Write-Host "`n数据目录 ${DataRoot} 里还有 FluentFlow 认不出的东西，不删，文件夹也留着："
+        foreach ($Entry in $DataLeft) { Write-Host "  $($Entry.Name)" }
+        Write-Host "  它们可能是你自己的文件，确认不要了再自己删。"
+    }
     Write-Host "`n✓ 没有找到需要删除的东西。"
     exit 0
 }
@@ -335,8 +358,8 @@ if ($HasSensitive) {
 Write-Host "`n== 删除 =="
 foreach ($Tool in $McpRemovals) {
     if ($Tool -eq "Claude Code") {
-        if ((Invoke-FluentFlowTool claude @("mcp", "remove", "--scope", "user", "fluentflow-local")).Code -eq 0) { Write-Host "已注销：Claude Code 里的 fluentflow-local" }
-        else { Write-Host "Claude Code 注销失败，请手动运行：claude mcp remove --scope user fluentflow-local" }
+        if ((Invoke-FluentFlowTool claude @("mcp", "remove", "--scope", $ClaudeScope, "fluentflow-local")).Code -eq 0) { Write-Host "已注销：Claude Code 里的 fluentflow-local" }
+        else { Write-Host "Claude Code 注销失败，请手动运行：claude mcp remove --scope $ClaudeScope fluentflow-local" }
     } else {
         $Removed = $false
         if (Get-Command codex -ErrorAction SilentlyContinue) {

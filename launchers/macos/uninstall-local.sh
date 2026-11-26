@@ -248,25 +248,29 @@ if [[ "$DATA_SURE" -eq 1 ]]; then
 	done
 fi
 # install.sh 装的 skill 是链到本目录的链接；用户自己的同名目录不动。
-for skill in "${HOME}/.claude/skills/fluentflow" "${HOME}/.codex/skills/fluentflow"; do
+for skill in "${HOME}/.claude/skills/fluentflow" "$(ff_codex_home)/skills/fluentflow"; do
 	if [[ -L "$skill" && "$(readlink "$skill")" == "${REPO}/"* ]]; then
 		add_target "$skill" "给 agent 的 skill（链接）"
 	fi
 done
 
 # 装时注册的 MCP 工具，只在它启动的是本目录的服务时注销：指向别处的是另一份安装的。
+# 注销按它当初注册的作用域来（claude mcp get 的提示行写着 -s <作用域>），只按 user 删不掉
+# 项目级注册的那条，删完还留着指向已删安装的条目。
 mcp_removals=()
+claude_removal_scope=""
 if command -v claude >/dev/null 2>&1; then
 	if described="$(claude mcp get fluentflow-local 2>/dev/null)"; then
 		if [[ "$described" == *"${REPO}/"* ]]; then
 			mcp_removals+=("Claude Code")
+			claude_removal_scope="$(printf '%s\n' "$described" | sed -n 's/.*claude mcp remove fluentflow-local -s \([A-Za-z]*\).*/\1/p' | tail -n 1)"
 		else
 			echo ""
 			echo "Claude Code 里的 fluentflow-local 指向别的位置，不动它。"
 		fi
 	fi
 fi
-CODEX_CONFIG="${HOME}/.codex/config.toml"
+CODEX_CONFIG="$(ff_codex_home)/config.toml"
 if [[ -f "$CODEX_CONFIG" ]]; then
 	section="$(awk '/^\[mcp_servers\.fluentflow-local\][[:space:]]*$/ { on = 1; next } /^\[/ { on = 0 } on' "$CODEX_CONFIG")"
 	if grep -q '^\[mcp_servers\.fluentflow-local\]' "$CODEX_CONFIG"; then
@@ -308,6 +312,13 @@ elif [[ "$REMOVE_DATA" -eq 1 && -d "$DATA_ROOT" ]]; then
 fi
 
 if [[ ${#targets[@]} -eq 0 && ${#mcp_removals[@]} -eq 0 ]]; then
+	# 数据目录里只剩认不出的东西时，也要说清留下了什么：这些可能是用户自己的文件。
+	if [[ ${#data_left[@]} -gt 0 ]]; then
+		echo ""
+		echo "数据目录 ${DATA_ROOT} 里还有 FluentFlow 认不出的东西，不删，文件夹也留着："
+		for entry in "${data_left[@]}"; do echo "  ${entry##*/}"; done
+		echo "  它们可能是你自己的文件，确认不要了再自己删。"
+	fi
 	echo ""
 	echo "✓ 没有找到需要删除的东西。"
 	exit 0
@@ -356,10 +367,11 @@ step "删除"
 for tool in "${mcp_removals[@]:-}"; do
 	case "$tool" in
 	"Claude Code")
-		if claude mcp remove --scope user fluentflow-local >/dev/null 2>&1; then
+		if claude mcp remove --scope "${claude_removal_scope:-user}" fluentflow-local >/dev/null 2>&1 ||
+			claude mcp remove --scope user fluentflow-local >/dev/null 2>&1; then
 			echo "已注销：Claude Code 里的 fluentflow-local"
 		else
-			echo "Claude Code 注销失败，请手动运行：claude mcp remove --scope user fluentflow-local"
+			echo "Claude Code 注销失败，请手动运行：claude mcp remove --scope ${claude_removal_scope:-user} fluentflow-local"
 		fi
 		;;
 	Codex)

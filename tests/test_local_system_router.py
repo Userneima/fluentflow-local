@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.core import release_check
 from backend.routers.local_system import router
 
 
@@ -19,6 +20,9 @@ def test_local_system_routes_report_local_runtime(monkeypatch, tmp_path):
 
     assert health["status"] == "ok"
     assert health["runtime"]["execution"] == "local"
+    # The install command run without a folder asks where this copy is, so it
+    # updates it instead of putting a second copy in the default place.
+    assert health["install"]["code_dir"] == str(release_check.PROJECT_ROOT)
     # Declared, not inferred: a client routing between the two editions reads this
     # instead of guessing from an intake rejection.
     assert health["edition"] == "local"

@@ -60,6 +60,10 @@ def health() -> dict[str, Any]:
         # the two editions reads this instead of inferring from a rejection.
         **identity_payload(),
         "runtime": {"execution": "local"},
+        # Where this copy's code is: the install command run without a folder
+        # asks, so it updates this copy instead of putting a second one in the
+        # default place (a folder the user chose, 2026-11-26).
+        "install": {"code_dir": str(PROJECT_ROOT)},
         "limits": _limits(),
         # A run started for testing (decision 8.11): the fake model, the budget.
         "test_run": model_usage.test_run(),

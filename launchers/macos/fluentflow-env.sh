@@ -128,6 +128,29 @@ ff_normalize() {
 	printf '/%s' "${out[*]-}"
 }
 
+# 一个绝对路径最终落在哪个目录：一段段走，碰到已存在的就用 cd 进去（pwd -P 解开链接），
+# 碰到 .. 就真的往上一级。服务拿到路径后是系统按实际目录打开的（/tmp/link/../data 里的 ..
+# 从链接指向的目录算），只按字面化简会和服务放在两个地方。
+ff_physical_path() {
+	local rest="${1#/}" cur="" part
+	while [[ -n "$rest" ]]; do
+		part="${rest%%/*}"
+		if [[ "$rest" == */* ]]; then rest="${rest#*/}"; else rest=""; fi
+		case "$part" in
+		"" | .) continue ;;
+		..)
+			if [[ -n "$cur" ]]; then
+				if [[ -d "$cur" ]]; then cur="$(cd "$cur/.." 2>/dev/null && pwd -P)" || cur="${cur%/*}"; else cur="${cur%/*}"; fi
+			fi
+			continue
+			;;
+		esac
+		if [[ -z "$cur" ]]; then cur="/${part}"; else cur="${cur}/${part}"; fi
+		[[ -d "$cur" ]] && cur="$(cd "$cur" 2>/dev/null && pwd -P)" || true
+	done
+	printf '%s' "${cur:-/}"
+}
+
 # ff_place <代码目录> <设置的值>：服务把这个设置放在哪，打印绝对路径。开头的 ~ 是家目录；
 # 相对路径从代码目录算起，服务在代码目录里运行（启动器先 cd 进去）。值里展开之后还剩 $
 # 时（$HOME 不带花括号，服务照字面用）看不准，返回 1：调用方当作「可能在代码目录里」。
@@ -138,9 +161,14 @@ ff_place() {
 	"~/"*) value="${HOME}/${value#"~/"}" ;;
 	esac
 	[[ "$value" == /* ]] || value="${folder}/${value}"
-	value="$(ff_normalize "$value")"
+	value="$(ff_physical_path "$value")"
 	printf '%s' "$value"
 	[[ "$value" != *'$'* ]]
+}
+
+# Codex 的配置和 skill 在哪：设了 CODEX_HOME 就在那里，否则在 ~/.codex。
+ff_codex_home() {
+	printf '%s' "${CODEX_HOME:-${HOME}/.codex}"
 }
 
 ff_lower() {

@@ -136,6 +136,29 @@ ff_normalize() {
 	printf '/%s' "${out[*]-}"
 }
 
+# 一个绝对路径最终落在哪个目录：一段段走，碰到已存在的就用 cd 进去（pwd -P 解开链接），
+# 碰到 .. 就真的往上一级。服务拿到路径后是系统按实际目录打开的（/tmp/link/../data 里的 ..
+# 从链接指向的目录算），只按字面化简会和服务放在两个地方。
+ff_physical_path() {
+	local rest="${1#/}" cur="" part
+	while [[ -n "$rest" ]]; do
+		part="${rest%%/*}"
+		if [[ "$rest" == */* ]]; then rest="${rest#*/}"; else rest=""; fi
+		case "$part" in
+		"" | .) continue ;;
+		..)
+			if [[ -n "$cur" ]]; then
+				if [[ -d "$cur" ]]; then cur="$(cd "$cur/.." 2>/dev/null && pwd -P)" || cur="${cur%/*}"; else cur="${cur%/*}"; fi
+			fi
+			continue
+			;;
+		esac
+		if [[ -z "$cur" ]]; then cur="/${part}"; else cur="${cur}/${part}"; fi
+		[[ -d "$cur" ]] && cur="$(cd "$cur" 2>/dev/null && pwd -P)" || true
+	done
+	printf '%s' "${cur:-/}"
+}
+
 # ff_place <代码目录> <设置的值>：服务把这个设置放在哪，打印绝对路径。开头的 ~ 是家目录；
 # 相对路径从代码目录算起，服务在代码目录里运行（启动器先 cd 进去）。值里展开之后还剩 $
 # 时（$HOME 不带花括号，服务照字面用）看不准，返回 1：调用方当作「可能在代码目录里」。
@@ -146,9 +169,14 @@ ff_place() {
 	"~/"*) value="${HOME}/${value#"~/"}" ;;
 	esac
 	[[ "$value" == /* ]] || value="${folder}/${value}"
-	value="$(ff_normalize "$value")"
+	value="$(ff_physical_path "$value")"
 	printf '%s' "$value"
 	[[ "$value" != *'$'* ]]
+}
+
+# Codex 的配置和 skill 在哪：设了 CODEX_HOME 就在那里，否则在 ~/.codex。
+ff_codex_home() {
+	printf '%s' "${CODEX_HOME:-${HOME}/.codex}"
 }
 
 ff_lower() {
@@ -206,16 +234,36 @@ ff_stop_folder_programs() {
 	sleep 1
 }
 
+PORT="${FLUENTFLOW_LOCAL_PORT:-8000}"
+
+# 正在运行的 FluentFlow 把它的代码目录写在 /health 里。装在自选文件夹、没设
+# FLUENTFLOW_INSTALL_DIR 再运行一次安装命令时，靠它接着更新那一份；不然这里会在
+# ~/fluentflow-local 另装一份，看上去像更新了，原来的任务和设置却不在页面里。
+ff_code_dir_from_service() {
+	local health dir
+	health="$(curl -s --max-time 3 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
+	[[ "$health" == *'"edition":"local"'* ]] || return 1
+	dir="$(printf '%s' "$health" | sed -n 's/.*"code_dir":"\([^"]*\)".*/\1/p')"
+	[[ -n "$dir" && -f "${dir}/backend/local_main.py" ]] || return 1
+	printf '%s' "$dir"
+}
+
 # 装到哪：展开 ~，相对路径从当前目录算起，去掉结尾的 /。后面要挪进挪出这个目录，
 # 也要拿它和 .env 里的位置比。
-DIR="${FLUENTFLOW_INSTALL_DIR:-${HOME}/fluentflow-local}"
+DIR="${FLUENTFLOW_INSTALL_DIR:-}"
+if [[ -z "$DIR" && ! -f "${HOME}/fluentflow-local/backend/local_main.py" ]]; then
+	if found="$(ff_code_dir_from_service)"; then
+		echo "正在运行的 FluentFlow 装在 ${found}，接着更新那一份（要装到别处就设 FLUENTFLOW_INSTALL_DIR）。"
+		DIR="$found"
+	fi
+fi
+DIR="${DIR:-${HOME}/fluentflow-local}"
 case "$DIR" in
 "~") DIR="$HOME" ;;
 "~/"*) DIR="${HOME}/${DIR#"~/"}" ;;
 esac
 [[ "$DIR" == /* ]] || DIR="${PWD}/${DIR}"
 DIR="$(ff_normalize "$DIR")"
-PORT="${FLUENTFLOW_LOCAL_PORT:-8000}"
 
 step() { echo ""; echo "== $1 =="; }
 fail() {
@@ -280,12 +328,20 @@ fi
 # （之前某次更新放下的，见 ff_mark_update_copy）才删；用户自己复制或改名出来的不动。
 assert_own_leftover() {
 	if [[ -e "$1" ]] && ! ff_update_marker_says "$1"; then
-		fail_plain "$1 已存在，不是 FluentFlow 的更新留下的。请先把它移走或改名。什么都没改。"
+		fail_plain "$1 已存在，不是 FluentFlow 的更新留下的。它可能是上一次更新没做完时留下的拷贝（写到一半就停了，没来得及写标记）。确认不是你的文件夹后删掉它，再运行一次。什么都没改。"
 	fi
 	return 0
 }
 
 step "获取代码"
+# 上一次更新在换文件夹的中间被关掉或断电：旧版本挪到了 ${DIR}.old，新代码还没放进来，
+# ${DIR} 这时不存在。先把它放回去，再照常判断要不要更新；不然这次会当成没装过，另装一份，
+# 旧版本一直躺在旁边，页面看到的也是新的空数据。
+if [[ ! -e "$DIR" ]] && ff_update_marker_says "${DIR}.old"; then
+	echo "上一次更新在换文件夹时被打断，把原来的版本从 ${DIR}.old 放回 ${DIR}…"
+	mv "${DIR}.old" "$DIR"
+	rm -f "${DIR}/.fluentflow-update"
+fi
 # 已经装过、又有新发布版时原地更新：新代码先放在旁边，带上原来的 .env，停掉服务后才换
 # 进去；接着的安装步骤补齐新版本要的依赖、讲话人模型和转录模型；安装或重启失败就把旧版本
 # 换回来（见 fail）。git 检出是开发者自己的，不动。
@@ -329,8 +385,14 @@ elif [[ -n "$LOCAL_SOURCE" ]]; then
 			rm -rf "$TARGET"
 		fi
 		mkdir -p "$(dirname "$TARGET")"
-		cp -R "$LOCAL_SOURCE" "$TARGET"
-		rm -rf "${TARGET}/.git" "${TARGET}/.venv" "${TARGET}/.env"
+		# 写到一半停下（磁盘满、窗口被关）的拷贝没有标记，下次更新会停下说明它；这次先自己删掉。
+		if ! cp -R "$LOCAL_SOURCE" "$TARGET"; then
+			rm -rf "$TARGET"
+			fail "拷贝到 ${TARGET} 没有写完。请检查磁盘空间后重新运行。什么都没改。"
+		fi
+		rm -rf "${TARGET}/.git" "${TARGET}/.venv" "${TARGET}/.env" "${TARGET}/.fluentflow-update"
+		# 标记最后才写：整份拷贝在才写。
+		[[ -f "${TARGET}/backend/local_main.py" ]] || { rm -rf "$TARGET"; fail "拷贝到 ${TARGET} 没有写完。请检查磁盘空间后重新运行。"; }
 		if [[ "$UPDATING" -eq 1 ]]; then ff_mark_update_copy "$TARGET"; fi
 		[[ -n "${SRC_TMP:-}" ]] && rm -rf "$SRC_TMP"
 		echo "已放到 ${TARGET}"
@@ -536,7 +598,12 @@ fi
 
 # --- 4. MCP 工具 ------------------------------------------------------------
 # MCP 服务自己从仓库的 .env 读访问令牌，所以注册时不带任何密钥。
+# 已经注册过的：指向这一份就不动；指向另一份还在的安装也不动（那是有效的另一份）；
+# 指向的文件已经不在了（那份删了、或换了位置）就注销再注册，留给 agent 的不能是失效条目。
+# 注销要按它当初注册的作用域来，只按 user 删不掉项目级的。
 step "注册 MCP 工具"
+CODEX_HOME_DIR="$(ff_codex_home)"
+CODEX_CONFIG="${CODEX_HOME_DIR}/config.toml"
 CODEX_TOML="[mcp_servers.fluentflow-local]
 command = \"${VENV_PY}\"
 args = [\"${MCP_SCRIPT}\"]"
@@ -544,9 +611,31 @@ registered=0
 # 默认端口时 MCP 服务自己就连得上；换过端口才需要告诉它。
 MCP_ENV=()
 [[ "$PORT" != "8000" ]] && MCP_ENV=(-e "FLUENTFLOW_API_BASE=http://127.0.0.1:${PORT}")
+# claude mcp get 打印的作用域："Scope: User config …" 和最后一行
+# "To remove this server, run: claude mcp remove fluentflow-local -s user"。
+claude_scope_of() {
+	printf '%s\n' "$1" | sed -n 's/.*claude mcp remove fluentflow-local -s \([A-Za-z]*\).*/\1/p' | tail -n 1
+}
+claude_target_of() {
+	printf '%s\n' "$1" | sed -n 's/^[[:space:]]*Args:[[:space:]]*//p' | tail -n 1 | awk '{print $NF}'
+}
 if command -v claude >/dev/null 2>&1; then
-	if claude mcp get fluentflow-local >/dev/null 2>&1; then
-		echo "Claude Code：已注册过 fluentflow-local，保持不动。"
+	described="$(claude mcp get fluentflow-local 2>/dev/null || true)"
+	if [[ -n "$described" && "$described" == *"${MCP_SCRIPT}"* ]]; then
+		echo "Claude Code：已注册过 fluentflow-local（这一份），保持不动。"
+	elif [[ -n "$described" ]]; then
+		target="$(claude_target_of "$described")"
+		if [[ -n "$target" && -e "$target" ]]; then
+			echo "Claude Code：fluentflow-local 已注册到另一份安装（${target}），不动它。卸载那份后重新运行本命令，就会注册到这一份。"
+		else
+			claude mcp remove --scope "$(claude_scope_of "$described" || true)" fluentflow-local >/dev/null 2>&1 ||
+				claude mcp remove --scope user fluentflow-local >/dev/null 2>&1 || true
+			if claude mcp add --scope user fluentflow-local ${MCP_ENV[@]+"${MCP_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null; then
+				echo "Claude Code：原来那条指向的位置已经没了，已重新注册 fluentflow-local。"
+			else
+				echo "Claude Code：注册失败，可以手动运行：claude mcp add --scope user fluentflow-local -- \"${VENV_PY}\" \"${MCP_SCRIPT}\""
+			fi
+		fi
 	elif claude mcp add --scope user fluentflow-local ${MCP_ENV[@]+"${MCP_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null; then
 		echo "Claude Code：已注册 fluentflow-local。"
 	else
@@ -555,12 +644,27 @@ if command -v claude >/dev/null 2>&1; then
 	registered=1
 fi
 if command -v codex >/dev/null 2>&1; then
-	if grep -q '^\[mcp_servers\.fluentflow-local\]' "${HOME}/.codex/config.toml" 2>/dev/null; then
-		echo "Codex：已注册过 fluentflow-local，保持不动。"
+	section=""
+	[[ -f "$CODEX_CONFIG" ]] && section="$(awk '/^\[mcp_servers\.fluentflow-local\][[:space:]]*$/ { on = 1; next } /^\[/ { on = 0 } on' "$CODEX_CONFIG")"
+	stale=0
+	if [[ -n "$section" && "$section" != *"${MCP_SCRIPT}"* ]]; then
+		target="$(printf '%s\n' "$section" | sed -n 's/^[[:space:]]*args[[:space:]]*=[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+		[[ -n "$target" && -e "$target" ]] || stale=1
+	fi
+	if [[ -n "$section" && "$stale" -eq 0 ]]; then
+		echo "Codex：已注册过 fluentflow-local（这一份，或另一份还在的安装），保持不动。"
+	elif [[ "$stale" -eq 1 ]]; then
+		codex mcp remove fluentflow-local >/dev/null 2>&1 || true
+		if codex mcp add fluentflow-local -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null 2>&1; then
+			echo "Codex：原来那条指向的位置已经没了，已重新注册 fluentflow-local。"
+		else
+			echo "Codex：没能自动注册，把下面几行加进 ${CODEX_CONFIG}："
+			echo "$CODEX_TOML"
+		fi
 	elif codex mcp add fluentflow-local -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null 2>&1; then
 		echo "Codex：已注册 fluentflow-local。"
 	else
-		echo "Codex：没能自动注册，把下面几行加进 ~/.codex/config.toml："
+		echo "Codex：没能自动注册，把下面几行加进 ${CODEX_CONFIG}："
 		echo "$CODEX_TOML"
 	fi
 	registered=1
@@ -577,7 +681,7 @@ fi
 # 升级代码时 skill 跟着更新。已有同名的、不是链接的目录不动：那是用户自己的。
 step "安装给 agent 的 skill"
 SKILL_SRC="${DIR}/agent/skills/fluentflow"
-for skills_dir in "${HOME}/.claude/skills" "${HOME}/.codex/skills"; do
+for skills_dir in "${HOME}/.claude/skills" "${CODEX_HOME_DIR}/skills"; do
 	tool_dir="$(dirname "$skills_dir")"
 	[[ -d "$tool_dir" ]] || continue
 	mkdir -p "$skills_dir"
@@ -599,6 +703,10 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	trap - ERR
 	rm -rf "${DIR}.old"
 	echo "已更新到 ${LATEST}，旧版本已删除。"
+elif ff_update_marker_says "${DIR}.old"; then
+	# 上一次更新已经换好了新代码、之后被打断：新版跑通了，旁边那份旧版本删掉。
+	rm -rf "${DIR}.old"
+	echo "上一次更新留下的旧版本（${DIR}.old）已删除。"
 fi
 
 echo ""

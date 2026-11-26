@@ -87,9 +87,15 @@ const SideNav = ({
     }, [menuOpen]);
 
     const newRelease = useNewRelease();
-    const updateHint = lang === 'zh'
-        ? '让你的 agent「更新 FluentFlow」，或再运行一次安装命令；任务和设置都会保留。'
-        : 'Ask your agent to update FluentFlow, or run the install command again; tasks and settings stay.';
+    // A git checkout is not updated by the install command (it says so and stops):
+    // say what does update it (2026-11-26).
+    const updateHint = newRelease?.checkout === 'git'
+        ? (lang === 'zh'
+            ? '这是 git 检出：在代码目录里 git pull，再运行一次安装脚本（launchers 里的 setup-local）；任务和设置都会保留。'
+            : 'This is a git checkout: run git pull in the code folder, then the setup script in launchers; tasks and settings stay.')
+        : (lang === 'zh'
+            ? '让你的 agent「更新 FluentFlow」，或再运行一次安装命令；它更新的是正在运行的这一份，任务和设置都会保留。'
+            : 'Ask your agent to update FluentFlow, or run the install command again; it updates this copy, and tasks and settings stay.');
 
     const items = [
         {path:'/media-text', icon:Video, label: lang === 'zh' ? '视频转录与总结' : 'Media notes'},
@@ -173,7 +179,7 @@ const SideNav = ({
                 </nav>
 
                 <div className={`relative mt-auto border-t border-[#e5e5e5] dark:border-white/[0.12] ${collapsed ? 'pt-5' : 'pt-4'}`} ref={menuRef}>
-                    {newRelease && !collapsed && (
+                    {newRelease?.version && !collapsed && (
                         <button
                             type="button"
                             onClick={() => setMenuOpen(true)}
@@ -181,7 +187,7 @@ const SideNav = ({
                             className={`${menuItem()} mb-2`}
                         >
                             <span className="size-2 shrink-0 rounded-full bg-[#2563eb]" aria-hidden="true"/>
-                            <span className="min-w-0 break-words">{lang === 'zh' ? `新版本 v${newRelease}` : `New v${newRelease}`}</span>
+                            <span className="min-w-0 break-words">{lang === 'zh' ? `新版本 v${newRelease.version}` : `New v${newRelease.version}`}</span>
                         </button>
                     )}
                     <button
@@ -272,9 +278,9 @@ const SideNav = ({
                                 {versionDetail && (
                                     <div className="mt-0.5 truncate text-[11px]" title={versionDetail}>{versionDetail}</div>
                                 )}
-                                {newRelease && (
+                                {newRelease?.version && (
                                     <div className="mt-1.5 text-[11px] font-semibold text-[#111111] dark:text-white/[0.92]">
-                                        {lang === 'zh' ? `v${newRelease} 可以更新：` : `v${newRelease} is out: `}
+                                        {lang === 'zh' ? `v${newRelease.version} 可以更新：` : `v${newRelease.version} is out: `}
                                         <span className="font-medium text-[#6b6c72] dark:text-white/60">{updateHint}</span>
                                     </div>
                                 )}

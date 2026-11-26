@@ -134,6 +134,53 @@ function Get-FluentFlowSetting([string]$Repo, [string]$Name) {
     return Get-FluentFlowEnvFileValue $Repo $Name
 }
 
+# Where a full path really lands, the way the system opens it: each part that
+# exists is followed through a link or junction, and ".." backs up from the
+# folder the system is really in (after a link, ".." is the link target's
+# parent, not where the text suggests). The service hands paths to the system as
+# written, so a script that only normalized the text could put files where the
+# service does not look (a symlinked code folder with "..\data", 2026-11-26).
+# Anything unexpected leaves the path as it came in.
+function Get-FluentFlowRealPath([string]$Path, [int]$Depth = 0) {
+    if (-not $Path -or $Depth -gt 8) { return $Path }
+    $Text = $Path -replace '/', '\'
+    $Root = $null
+    $Rest = $Text
+    if ($Text -match '^([A-Za-z]:)\\') {
+        $Root = $Matches[1] + '\'
+        $Rest = $Text.Substring(3)
+    } elseif ($Text -match '^\\\\([^\\]+)\\([^\\]+)') {
+        $Root = "\\$($Matches[1])\$($Matches[2])"
+        $Rest = $Text.Substring($Root.Length).TrimStart('\')
+    }
+    if (-not $Root) { return $Text }
+    $Cur = $Root
+    while ($Rest) {
+        $Cut = $Rest.IndexOf('\')
+        if ($Cut -lt 0) { $Part = $Rest; $Rest = '' } else { $Part = $Rest.Substring(0, $Cut); $Rest = $Rest.Substring($Cut + 1) }
+        if (-not $Part -or $Part -eq '.') { continue }
+        if ($Part -eq '..') {
+            $Up = [System.IO.Path]::GetDirectoryName($Cur.TrimEnd('\'))
+            $Cur = if ($Up) { $Up } else { $Root }
+            continue
+        }
+        $Cur = if ($Cur.EndsWith('\')) { $Cur + $Part } else { "$Cur\$Part" }
+        try {
+            $Item = Get-Item -LiteralPath $Cur -Force -ErrorAction Stop
+        } catch {
+            continue
+        }
+        if ($Item.LinkType -and $Item.Target) {
+            $Target = [string]($Item.Target | Select-Object -First 1)
+            if ($Target -and -not [System.IO.Path]::IsPathRooted($Target)) {
+                $Target = Join-Path (Split-Path -Parent $Cur) $Target
+            }
+            if ($Target) { $Cur = Get-FluentFlowRealPath ([System.IO.Path]::GetFullPath($Target)) ($Depth + 1) }
+        }
+    }
+    return $Cur
+}
+
 # Where the service puts a path setting: Path, the full path, and Sure,
 # whether that can be told. The service reads the value with its ${NAME}
 # references expanded (Get-FluentFlowSetting), turns a leading ~ into the
@@ -150,7 +197,7 @@ function Resolve-FluentFlowPlace([string]$Repo, [string]$Value) {
     if ($Path -match '^[A-Za-z]:(?![\\/])') { return [pscustomobject]@{ Path = $Path; Sure = $false } }
     if ($Path -match '^[\\/](?![\\/])') { $Path = [System.IO.Path]::GetPathRoot($Repo).TrimEnd('\', '/') + $Path }
     elseif (-not [System.IO.Path]::IsPathRooted($Path)) { $Path = $Repo.TrimEnd('\', '/') + '\' + $Path }
-    try { $Path = [System.IO.Path]::GetFullPath($Path) } catch { return [pscustomobject]@{ Path = $Path; Sure = $false } }
+    try { $Path = Get-FluentFlowRealPath ([System.IO.Path]::GetFullPath($Path)) } catch { return [pscustomobject]@{ Path = $Path; Sure = $false } }
     if ($Path.Length -gt 3) { $Path = $Path.TrimEnd('\') }
     return [pscustomobject]@{ Path = $Path; Sure = $Sure }
 }
@@ -233,6 +280,106 @@ function Add-FluentFlowEnvLine([string]$Repo, [string]$Name, [string]$Value) {
         if (-not $Text.EndsWith("`n")) { $Lead = "`r`n" }
     }
     [System.IO.File]::AppendAllText($EnvFile, "$Lead$Name=$Written`r`n", (New-Object System.Text.UTF8Encoding $false))
+}
+
+# Writes one setting's value where its line already is (the order matters: a
+# value may use ${NAME} of a line above it), or appends the line.
+function Set-FluentFlowEnvLine([string]$Repo, [string]$Name, [string]$Value) {
+    $EnvFile = Join-Path $Repo ".env"
+    if ($Value -notmatch '^[A-Za-z]:[\\/]$') { $Value = $Value.TrimEnd('\', '/') }
+    $Written = if ($Value.Contains("'")) { $Value } else { "'$Value'" }
+    if (-not (Test-Path -LiteralPath $EnvFile)) {
+        [System.IO.File]::AppendAllText($EnvFile, "$Name=$Written`r`n", (New-Object System.Text.UTF8Encoding $false))
+        return
+    }
+    $Pattern = '^\s*(export\s+)?' + [regex]::Escape($Name) + '\s*='
+    $Lines = [System.Collections.ArrayList]@([System.IO.File]::ReadAllLines($EnvFile, [System.Text.Encoding]::UTF8))
+    $Found = $false
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match $Pattern) { $Lines[$i] = "$Name=$Written"; $Found = $true }
+    }
+    if (-not $Found) { [void]$Lines.Add("$Name=$Written") }
+    [System.IO.File]::WriteAllLines($EnvFile, [string[]]$Lines, (New-Object System.Text.UTF8Encoding $false))
+}
+
+# The one-folder root this code belongs to: the folder the installer marked
+# (.fluentflow-home) around the code folder. $null for an older layout, whose
+# code folder is the install itself.
+function Get-FluentFlowHomeRoot([string]$Repo) {
+    $Parent = Split-Path -Parent ($Repo.TrimEnd('\'))
+    if ($Parent -and (Test-Path -LiteralPath (Join-Path $Parent ".fluentflow-home"))) { return $Parent.TrimEnd('\') }
+    return $null
+}
+
+# The whole FluentFlow folder moved to another drive (copied or renamed by the
+# user), so .env still names the old place: the service would look there, find
+# nothing and start with an empty data folder. When this code's folder carries
+# the install's marker, and the old place is gone, point .env at this folder
+# again: FLUENTFLOW_HOME and every value that named the old place. A value
+# pointing anywhere else is the user's and stays. Returns what was rewritten.
+function Repair-FluentFlowHome([string]$Repo) {
+    $Root = Get-FluentFlowHomeRoot $Repo
+    if (-not $Root) { return @() }
+    $Said = Get-FluentFlowEnvFileValue $Repo "FLUENTFLOW_HOME"
+    if (-not $Said) { return @() }
+    $Old = Resolve-FluentFlowPlace $Repo $Said
+    if (-not $Old -or -not $Old.Sure) { return @() }
+    $OldPath = $Old.Path.TrimEnd('\')
+    if ($OldPath.Equals($Root, [StringComparison]::OrdinalIgnoreCase)) { return @() }
+    # The old place may still be there as another install the user keeps: its
+    # data is not this one's to take over.
+    if (Test-Path -LiteralPath $OldPath) { return @() }
+    $Changed = @("FLUENTFLOW_HOME")
+    $Fixes = @{}
+    $EnvFile = Join-Path $Repo ".env"
+    foreach ($Line in [System.IO.File]::ReadAllLines($EnvFile, [System.Text.Encoding]::UTF8)) {
+        if ($Line -notmatch '^\s*(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$') { continue }
+        $Name = $Matches[2]
+        $Raw = $Matches[3].Trim().Trim('"', "'")
+        if ($Name -eq "FLUENTFLOW_HOME" -or $Name -eq "FLUENTFLOW_ACCESS_TOKEN") { continue }
+        # A value written as ${FLUENTFLOW_HOME}\… follows the line above by itself.
+        if ($Raw.StartsWith('${FLUENTFLOW_HOME}')) { continue }
+        $Place = Resolve-FluentFlowPlace $Repo (Get-FluentFlowEnvFileValue $Repo $Name)
+        if (-not $Place -or -not $Place.Sure) { continue }
+        $Path = $Place.Path
+        if ($Path.Equals($OldPath, [StringComparison]::OrdinalIgnoreCase)) { $Fixes[$Name] = $Root }
+        elseif ($Path.StartsWith($OldPath + '\', [StringComparison]::OrdinalIgnoreCase)) { $Fixes[$Name] = $Root + $Path.Substring($OldPath.Length) }
+    }
+    Set-FluentFlowEnvLine $Repo "FLUENTFLOW_HOME" $Root
+    foreach ($Name in @($Fixes.Keys)) { Set-FluentFlowEnvLine $Repo $Name $Fixes[$Name] }
+    return $Changed + @($Fixes.Keys | Sort-Object)
+}
+
+# Codex keeps its config and skills in CODEX_HOME when that is set, else in the
+# user's .codex folder (a test run sets it elsewhere).
+function Get-FluentFlowCodexHome {
+    if ($env:CODEX_HOME) { return $env:CODEX_HOME }
+    return Join-Path $env:USERPROFILE ".codex"
+}
+
+# The folders the installer keeps for the product. A one-folder install writes
+# them under ${FLUENTFLOW_HOME} rather than as this drive's full paths, so moving
+# the folder to another drive takes the data, models and caches with it
+# (Repair-FluentFlowHome points FLUENTFLOW_HOME at the new place). An install
+# from before that layout keeps its data in APPDATA; its pip, uv and npm caches
+# went to the shared folders on drive C, where uninstalling cannot tell them
+# from other programs', so they go into its data folder from now on.
+function Add-FluentFlowFolderLines([string]$Repo, [string]$Root, [bool]$OneFolder) {
+    if ($OneFolder) {
+        Add-FluentFlowEnvLine $Repo "FLUENTFLOW_HOME" $Root
+        Add-FluentFlowEnvLine $Repo "FLUENTFLOW_DATA_DIR" '${FLUENTFLOW_HOME}\data'
+        Add-FluentFlowEnvLine $Repo "HF_HOME" '${FLUENTFLOW_HOME}\models'
+        Add-FluentFlowEnvLine $Repo "FLUENTFLOW_LINK_OUTPUT_DIR" '${FLUENTFLOW_HOME}\downloads'
+        Add-FluentFlowEnvLine $Repo "PIP_CACHE_DIR" '${FLUENTFLOW_HOME}\cache\pip'
+        Add-FluentFlowEnvLine $Repo "UV_CACHE_DIR" '${FLUENTFLOW_HOME}\cache\uv'
+        Add-FluentFlowEnvLine $Repo "npm_config_cache" '${FLUENTFLOW_HOME}\cache\npm'
+    } else {
+        $Data = Resolve-FluentFlowPlace $Repo (Get-FluentFlowDataDir $Repo)
+        $Data = if ($Data) { $Data.Path } else { Join-Path $env:APPDATA "FluentFlow" }
+        Add-FluentFlowEnvLine $Repo "PIP_CACHE_DIR" (Join-Path $Data "cache\pip")
+        Add-FluentFlowEnvLine $Repo "UV_CACHE_DIR" (Join-Path $Data "cache\uv")
+        Add-FluentFlowEnvLine $Repo "npm_config_cache" (Join-Path $Data "cache\npm")
+    }
 }
 
 $script:FluentFlowProbeBytes = 1MB
