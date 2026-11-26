@@ -536,7 +536,11 @@ def test_a_stop_while_the_service_stops_stays_the_users_stop(task_id, tmp_path, 
     if source == "gone":
         srt.unlink()
 
-    assert asyncio.run(task_actions.resume_after_restart(task_actions.stepped_tasks_cut_off())) == 0
+    # Only this task: the job database is shared by the whole test session, so
+    # other tests' cut-off tasks are in the list too when the suite runs in one
+    # process (CI), and resuming them would count them here.
+    cut_off = [t for t in task_actions.stepped_tasks_cut_off() if t == task_id]
+    assert asyncio.run(task_actions.resume_after_restart(cut_off)) == 0
 
     job = job_store.get_job(task_id)
     assert job["status"] == "cancelled"
