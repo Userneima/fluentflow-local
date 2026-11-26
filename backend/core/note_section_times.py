@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Callable
 
-from backend.core import job_store, model_usage, task_steps
+from backend.core import job_store, model_usage, task_steps, test_copy
 from backend.core.result_schema import NOTE_FROM_AGENT, canonical_display_segments
 
 logger = logging.getLogger(__name__)
@@ -594,6 +594,8 @@ def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[st
     covering every heading costs nothing (no model call)."""
     if not _enabled or not isinstance(after, dict) or uses_agent(after) or _watched(before) == _watched(after):
         return
+    if not test_copy.writable(task_id):
+        return  # a model call for a task the test copy only shows
     if not str(after.get("summary_markdown") or "").strip():
         return
     if str(after.get("summary_status") or "") not in {"", "completed"}:

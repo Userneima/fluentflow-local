@@ -403,13 +403,17 @@ def _write_text_note_instead(
     )
     reason = channel.unavailable_reason or "结合画面的笔记现在写不了。"
     falls_back = bool(kwargs.get("api_key"))
-    # A notice when the text model writes the note instead: that is the
-    # ordinary setup without Claude, and the note still comes (owner,
-    # 2026-11-21: it read as a red failure beside a 16,903-character note).
-    # The submission already noted the same reason; once is enough for one
-    # task (task_submission._log_visual_note_unavailable).
-    already_noted = falls_back and any(
-        event.get("event_name") == "visual_note_unavailable" and event.get("error_reason") == channel.unavailable_reason
+    # A notice only when the text model writes the note and nothing is the
+    # user's to fix (owner, 2026-11-21: a missing Anthropic Key read as a red
+    # failure beside a 16,903-character note); an expired login or no note at
+    # all stays a failure (``visual_note_channel.unavailable_outcome``). The
+    # submission may have recorded the same reason and outcome already; once
+    # is enough for one task (task_submission._log_visual_note_unavailable).
+    outcome = visual_note_channel.unavailable_outcome(channel, falls_back)
+    already_noted = any(
+        event.get("event_name") == "visual_note_unavailable"
+        and event.get("error_reason") == channel.unavailable_reason
+        and bool(event.get("success")) == outcome["success"]
         for event in list_task_events(task_id)
     )
     if not already_noted:
@@ -418,12 +422,13 @@ def _write_text_note_instead(
             event_name="visual_note_unavailable",
             source_type=str(job.get("source_type") or "") or None,
             stage="summary",
-            success=falls_back,
+            success=outcome["success"],
             error_reason=reason,
             metadata=event_metadata(
                 channel=channel.name,
                 at="note_step",
-                fallback="text_note" if falls_back else "none",
+                reason=outcome["reason"],
+                fallback=outcome["fallback"],
             ),
         )
     if on_local_work_done is not None:
@@ -467,12 +472,31 @@ def _write_text_note_instead(
         if not markdown:
             raise RuntimeError("模型没有返回内容")
     except Exception as exc:  # noqa: BLE001 - a note must not take the task with it
+        error = f"{reason}改用文本模型写笔记也没成功：{exc}"
         _patch_result(task_id, client_id, {
             "summary_status": "failed",
-            "summary_error": f"{reason}改用文本模型写笔记也没成功：{exc}",
+            "summary_error": error,
             "summary_skipped": False,
         })
         upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed")
+        # The notice above says the text model writes the note; without this
+        # the event log ended on it, green, for a task with no note (second
+        # review, 2026-11-26).
+        log_event(
+            task_id=task_id,
+            event_name="summary_failed",
+            source_type=str(job.get("source_type") or "") or None,
+            stage="summary",
+            success=False,
+            error_reason=error,
+            metadata=event_metadata(
+                at="note_step",
+                fallback="text_note",
+                ai_provider=kwargs.get("provider"),
+                ai_model=kwargs.get("model"),
+                raw_error=str(exc),
+            ),
+        )
         logger.warning("text-note fallback failed for %s: %s", task_id, exc)
         return
     fields: dict[str, Any] = {

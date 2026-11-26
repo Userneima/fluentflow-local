@@ -376,3 +376,26 @@ def test_requests_are_waited_for_as_before_while_the_service_runs(task_id, stopp
     assert model_usage.unless_stopping(lambda: "answer") == "answer"
     with pytest.raises(ValueError):
         model_usage.unless_stopping(failing)
+
+
+def test_a_stop_signal_counts_as_stopping_before_the_server_waits_for_requests():
+    # Review 2026-11-25: the server waits for running requests before the
+    # app's shutdown runs (and skips it on a second Ctrl+C), so a model
+    # request inside a request's background task held the exit for the whole
+    # note. The signal itself now raises the flag.
+    import signal
+
+    seen = []
+    stopped = threading.Event()
+    originals = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    signal.signal(signal.SIGTERM, lambda signum, frame: seen.append(task_stop.shutting_down()))
+    try:
+        task_stop.service_started()
+        task_stop.stop_on_signals(then=stopped.set)
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        assert seen == [True], "the server's own handler still runs, after the flag is up"
+        assert stopped.wait(2), "the running work is stopped at the signal, not after requests finish"
+    finally:
+        for sig, handler in originals.items():
+            signal.signal(sig, handler)
+        task_stop.service_started()

@@ -140,15 +140,94 @@ def test_the_same_reason_noted_at_submission_is_not_recorded_again(owed_task, no
     assert job_store.get_job(owed_task)["result"]["summary_markdown"] == "# 三件事"
 
 
-def test_the_submission_notes_the_fallback_as_a_notice(monkeypatch):
-    from backend.core import task_submission
-    channel = SimpleNamespace(name="anthropic_api_key", available=False, unavailable_reason=NO_KEY)
+LOGIN_EXPIRED = "本机 Claude 的登录已过期，在终端运行 `claude` 重新登录。"
+
+
+def _submission_event(monkeypatch, channel, *, text_model_ready, login_state=None):
+    from backend.core import claude_code_note, task_submission
     monkeypatch.setattr(task_submission.visual_note_channel, "resolve_channel", lambda *_a, **_k: channel)
+    monkeypatch.setattr(claude_code_note, "login_state", lambda **_kw: login_state)
     logged: list[dict] = []
     monkeypatch.setattr(task_submission, "log_event", lambda **kw: logged.append(kw))
-    task_submission._log_visual_note_unavailable("t", source_type="video", source_filename="a.mp4")
+    task_submission._log_visual_note_unavailable("t", source_type="video", source_filename="a.mp4",
+                                                 text_model_ready=text_model_ready)
     [event] = logged
-    assert event["success"] is True
+    return event
+
+
+def test_the_submission_tells_a_missing_key_an_expired_login_and_no_model_apart(monkeypatch):
+    # Review, 2026-11-26: every case was a green successful fallback.
+    no_key = SimpleNamespace(name="anthropic_api_key", unavailable_reason=NO_KEY)
+    expired = SimpleNamespace(name=visual_note_channel.CHANNEL_SUBSCRIPTION, unavailable_reason=LOGIN_EXPIRED)
+
+    missing_key = _submission_event(monkeypatch, no_key, text_model_ready=True)
+    assert missing_key["success"] is True, "the ordinary setup without Claude is a notice (6.86)"
+    assert missing_key["metadata"]["fallback"] == "text_note"
+
+    login = _submission_event(monkeypatch, expired, text_model_ready=True, login_state=False)
+    assert login["success"] is False, "an expired login is the user's to fix"
+    assert login["metadata"]["reason"] == "login_expired" and login["metadata"]["fallback"] == "text_note"
+
+    nothing = _submission_event(monkeypatch, no_key, text_model_ready=False)
+    assert nothing["success"] is False and nothing["metadata"]["fallback"] == "none"
+
+
+@pytest.fixture()
+def event_log(monkeypatch):
+    """The event log as one list both the submission and the note step write
+    to and the note step reads back, the way the database holds it."""
+    import backend.core.event_logger as event_logger
+    from backend.core import task_submission
+    logged: list[dict] = []
+    monkeypatch.setattr(task_submission, "log_event", lambda **kw: logged.append(kw))
+    monkeypatch.setattr(event_logger, "log_event", lambda **kw: logged.append(kw))
+    monkeypatch.setattr(event_logger, "list_task_events", lambda _task: [
+        {"event_name": e["event_name"], "success": int(bool(e["success"])), "error_reason": e["error_reason"]}
+        for e in logged
+    ])
+    return logged
+
+
+def _submit_then_write(owed_task, monkeypatch, channel, *, text_key, login_state=None):
+    import backend.core.ai_summarizer as summarizer
+    import backend.core.local_entry_guards as guards
+    from backend.core import claude_code_note, task_submission
+    monkeypatch.setattr(visual_note_channel, "resolve_channel", lambda *_a, **_k: channel)
+    monkeypatch.setattr(claude_code_note, "login_state", lambda **_kw: login_state)
+    kwargs = {"provider": "deepseek", "api_key": "sk-test"} if text_key else {"provider": "deepseek"}
+    monkeypatch.setattr(guards, "local_ai_kwargs", lambda **_kw: kwargs)
+    monkeypatch.setattr(summarizer, "summarize_transcript_with_metadata",
+                        lambda transcript, **kw: SimpleNamespace(markdown="# 三件事"))
+    task_submission._log_visual_note_unavailable(owed_task, source_type="video", source_filename="a.mp4",
+                                                 text_model_ready=text_key)
+    local_intake_flow.write_note(owed_task, None)
+
+
+def _unavailable(log):
+    return [e for e in log if e["event_name"] == "visual_note_unavailable"]
+
+
+def test_an_expired_login_stays_one_failure_through_the_note_step(owed_task, event_log, monkeypatch):
+    expired = SimpleNamespace(name=visual_note_channel.CHANNEL_SUBSCRIPTION, available=False, unavailable_reason=LOGIN_EXPIRED)
+    _submit_then_write(owed_task, monkeypatch, expired, text_key=True, login_state=False)
+    [event] = _unavailable(event_log)
+    assert event["success"] is False and event["metadata"]["reason"] == "login_expired"
+    assert job_store.get_job(owed_task)["result"]["summary_markdown"] == "# 三件事"
+
+
+def test_no_model_at_all_is_one_failure_never_a_successful_fallback(owed_task, event_log, monkeypatch):
+    no_key = SimpleNamespace(name="anthropic_api_key", available=False, unavailable_reason=NO_KEY)
+    _submit_then_write(owed_task, monkeypatch, no_key, text_key=False)
+    events = _unavailable(event_log)
+    assert events and all(e["success"] is False and e["metadata"]["fallback"] == "none" for e in events)
+    assert len(events) == 1
+
+
+def test_a_missing_key_with_a_text_model_is_one_notice(owed_task, event_log, monkeypatch):
+    no_key = SimpleNamespace(name="anthropic_api_key", available=False, unavailable_reason=NO_KEY)
+    _submit_then_write(owed_task, monkeypatch, no_key, text_key=True)
+    [event] = _unavailable(event_log)
+    assert event["success"] is True and event["metadata"]["fallback"] == "text_note"
 
 
 def _ctx(task_id, source, *, resumable=True):
@@ -191,3 +270,183 @@ def test_audio_is_not_kept_for_a_run_that_cannot_be_carried_on(tmp_path, monkeyp
     media_job._keep_audio_for_resume(_ctx("t2", source, resumable=False), source, out_audio=wav, playback=None,
                                      enhanced=None, voice_presence=None, stt_audio_take="plain")
     assert not (tmp_path / "artifacts").exists()
+
+
+# ── a step that asks the model in batches says how far it has got ─────────
+#
+# Review, 2026-11-26: the card measured the wait on the model from the start
+# of the whole step and called it slow at 4 minutes, but the word-list
+# correction of a lecture is many batches, four at a time; every answer came
+# on time and the card still said the model was slow. Each answer is recorded,
+# so the card measures from the last one and says 「已校正 3/14 段」.
+
+
+def _batch_records(monkeypatch):
+    from backend.core import model_usage
+    seen: list[tuple[str, int, int, bool]] = []
+    real = model_usage.record_batches
+
+    def spy(stage, done, total, *, answered=True, **kw):
+        seen.append((stage, done, total, answered))
+        real(stage, done, total, answered=answered, **kw)
+
+    monkeypatch.setattr(model_usage, "record_batches", spy)
+    return seen
+
+
+def test_a_batched_correction_records_each_answer(task_id, monkeypatch):
+    from backend.core import glossary_correction, model_usage
+    job_store.upsert_job(task_id=task_id, status="running", stage="glossary_correction", progress=60)
+    seen = _batch_records(monkeypatch)
+    sentence = "今天我们讲一下 Cloud Cool 的用法，" * 20
+    segments = [{"start": i, "end": i + 1, "text": f"{i}{sentence}"} for i in range(20)]
+    asked: list[str] = []
+
+    def chat(_system, user):
+        asked.append(user)
+        return '{"fixes": []}'
+
+    with model_usage.scope(task_id, "correct"):
+        _fixes, calls, _unreadable = glossary_correction.decide(segments, "Claude Code", chat)
+    batches = len(asked)
+    assert batches >= 3 and calls == batches
+    assert seen[0] == ("glossary_correction", 0, batches, False), "the count is there before any answer"
+    assert [done for _s, done, _t, _a in seen[1:]] == list(range(1, batches + 1)), "one per answer, in order"
+    stored = job_store.get_job(task_id)["metadata"][model_usage.MODEL_BATCHES]
+    assert stored["stage"] == "glossary_correction"
+    assert (stored["done"], stored["total"]) == (batches, batches)
+    assert stored["last_answer_at"] and stored["updated_at"] >= job_store.get_job(task_id)["metadata"][job_store.STAGE_STARTED_AT]
+
+
+def test_a_failed_batch_is_not_counted_as_answered(task_id, monkeypatch):
+    from backend.core import model_usage
+    job_store.upsert_job(task_id=task_id, status="running", stage="glossary_correction", progress=60)
+    seen = _batch_records(monkeypatch)
+
+    def ask(item):
+        if item == 2:
+            raise RuntimeError("quota")
+        return item
+
+    with model_usage.scope(task_id, "correct"), pytest.raises(RuntimeError):
+        model_usage.stoppable_map(ask, [1, 2, 3], workers=1, check_stop=lambda: None, stage="glossary_correction")
+    assert [done for _s, done, _t, answered in seen if answered] == [1, 3]
+
+
+def test_the_translation_records_each_chunk(task_id, monkeypatch):
+    from backend.core import ai_summarizer, model_usage
+    job_store.upsert_job(task_id=task_id, status="running", stage="translation", progress=61)
+    seen = _batch_records(monkeypatch)
+    segments = [{"start": i, "end": i + 1, "text": "word " * 40} for i in range(30)]
+
+    def chat(_system, _user):
+        return "[]"
+
+    with model_usage.scope(task_id, "correct"):
+        result = ai_summarizer.generate_bilingual_segments_zh(segments, chat=chat, max_chunk_chars=1500)
+    assert result.chunk_count >= 3
+    assert seen[0] == ("translation", 0, result.chunk_count, False)
+    assert [done for _s, done, _t, _a in seen[1:]] == list(range(1, result.chunk_count + 1))
+    stored = job_store.get_job(task_id)["metadata"][model_usage.MODEL_BATCHES]
+    assert (stored["stage"], stored["done"]) == ("translation", result.chunk_count)
+
+
+def test_one_stuck_batch_is_measured_while_the_others_answer(task_id, monkeypatch):
+    # Second review, 2026-11-26: the wait was measured from the last answer
+    # across all workers, so one batch stuck for minutes was hidden while the
+    # others kept answering. Each record says when the oldest request still
+    # out was sent.
+    import threading
+    from backend.core import model_usage
+    job_store.upsert_job(task_id=task_id, status="running", stage="glossary_correction", progress=60)
+    waits: list[tuple[int, object]] = []
+    real = model_usage.record_batches
+
+    def spy(stage, done, total, *, answered=True, waiting_since=None):
+        waits.append((done, waiting_since))
+        real(stage, done, total, answered=answered, waiting_since=waiting_since)
+
+    monkeypatch.setattr(model_usage, "record_batches", spy)
+    release = threading.Event()
+    stuck_sent: list = []
+    others_done = threading.Event()
+    answered: list[int] = []
+
+    def ask(item):
+        if item == 0:
+            stuck_sent.append(model_usage.utc_now())
+            assert release.wait(5)
+            return item
+        answered.append(item)
+        if len(answered) == 4:
+            others_done.set()
+        return item
+
+    def free_the_stuck_one():
+        assert others_done.wait(5)
+        # The fourth answer is recorded after it returns; give it a moment.
+        import time
+        time.sleep(0.3)
+        release.set()
+
+    threading.Thread(target=free_the_stuck_one, daemon=True).start()
+    before = model_usage.utc_now().replace(microsecond=0)
+    with model_usage.scope(task_id, "correct"):
+        model_usage.stoppable_map(ask, [0, 1, 2, 3, 4], workers=2, check_stop=lambda: None,
+                                  stage="glossary_correction")
+    [sent] = stuck_sent
+    while_stuck = [since for done, since in waits[1:] if done <= 4]
+    assert len(while_stuck) == 4
+    assert all(since is not None and before <= since <= sent for since in while_stuck), (
+        "every answer while batch 0 was out says it is still waiting since it was sent"
+    )
+    assert waits[-1] == (5, None), "nothing is out once all have answered"
+    stored = job_store.get_job(task_id)["metadata"][model_usage.MODEL_BATCHES]
+    assert "waiting_since" not in stored and stored["done"] == 5
+
+
+def test_a_batch_count_says_when_the_next_request_went_out(task_id):
+    from backend.core import model_usage
+    job_store.upsert_job(task_id=task_id, status="running", stage="translation", progress=61)
+    with model_usage.scope(task_id, "correct"):
+        model_usage.record_batches("translation", 0, 3, answered=False)
+    stored = job_store.get_job(task_id)["metadata"][model_usage.MODEL_BATCHES]
+    assert stored["waiting_since"] == stored["updated_at"] and "last_answer_at" not in stored
+
+
+def test_batch_progress_never_fails_the_step(monkeypatch):
+    from backend.core import model_usage
+
+    def broken(*_a, **_k):
+        raise OSError("database is locked")
+
+    monkeypatch.setattr(job_store, "update_job_metadata", broken)
+    with model_usage.scope("any-task", "correct"):
+        assert model_usage.stoppable_map(lambda x: x * 2, [1, 2], workers=2, check_stop=lambda: None,
+                                         stage="translation") == [2, 4]
+
+
+def test_putting_a_task_back_in_the_queue_keeps_a_metadata_write_made_meanwhile(task_id, monkeypatch):
+    # Review, 2026-11-26: reopen_job read the metadata and wrote it back
+    # without the write lock, so a write landing in between was lost.
+    import threading
+    job_store.upsert_job(task_id=task_id, status="cancelled", stage="glossary_correction", progress=60,
+                         metadata={"other": 1})
+    real = job_store._merged_metadata_for_upsert
+    writer: list[threading.Thread] = []
+
+    def read_then_someone_writes(*args, **kwargs):
+        merged = real(*args, **kwargs)
+        thread = threading.Thread(target=job_store.update_job_metadata, args=(task_id, {"meanwhile": True}))
+        thread.start()
+        writer.append(thread)
+        thread.join(timeout=0.5)  # with the lock held it waits for reopen to commit
+        return merged
+
+    monkeypatch.setattr(job_store, "_merged_metadata_for_upsert", read_then_someone_writes)
+    assert job_store.reopen_job(task_id)
+    writer[0].join(timeout=15)
+    metadata = job_store.get_job(task_id)["metadata"]
+    assert metadata.get("meanwhile") is True, "the write made meanwhile is kept"
+    assert metadata["other"] == 1
+    assert job_store.get_job(task_id)["stage"] == "queued"

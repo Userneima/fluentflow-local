@@ -38,6 +38,8 @@ def copy_of(monkeypatch, tmp_path):
     def turn_on(*task_ids: str) -> None:
         monkeypatch.setenv(test_copy.ENV, "1")
         monkeypatch.setenv("FLUENTFLOW_DATA_DIR", str(tmp_path))
+        for name, relative in test_copy.PINNED_PATHS.items():  # as the start command sets them
+            monkeypatch.setenv(name, str(tmp_path / relative))
         (tmp_path / test_copy.TASKS_FILE).write_text(json.dumps(list(task_ids)), encoding="utf-8")
         test_copy.reset()
 

@@ -9,6 +9,12 @@ What it does, reading the real data directory and writing only the copy:
 - ``fluentflow_config.json`` and ``recommended_models.json`` copied, with
   automatic export to Feishu turned off in the copy;
 - ``models`` linked, not copied (the transcription and speaker models);
+- every runtime path and the link tasks' folder set inside the copy in the
+  printed command (``test_copy.PINNED_PATHS``), so a ``.env`` cannot send
+  them back to the real ones; a copy folder reused whose places to write are
+  links (or pass through one) is refused before anything is written, since a
+  write would follow the link out of the copy (the ``models`` link is read
+  only);
 - every step in the copy that has not reached its end closed as skipped, and
   every task in the copy still queued or running marked failed: otherwise
   the test service carries on (or queues again from the original) the tasks
@@ -52,6 +58,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from backend.core import test_copy  # noqa: E402
 from backend.core.runtime_paths import app_data_root, load_project_env  # noqa: E402
 
 # The data folder may be set only in .env; read it before the default source is taken.
@@ -60,7 +67,7 @@ load_project_env()
 DEFAULT_SOURCE = app_data_root()
 DATABASES = ("fluentflow_jobs.sqlite", "fluentflow_events.sqlite")
 FILES = ("fluentflow_config.json", "recommended_models.json")
-TASKS_FILE = "test_copy_tasks.json"
+TASKS_FILE = test_copy.TASKS_FILE
 DEFAULT_MAX_CALLS = 40
 DEFAULT_MAX_USD = 1.0
 DEFAULT_MAX_CNY = 1.0
@@ -96,6 +103,23 @@ def close_open_steps(database: Path) -> int:
 
 
 UNFINISHED_REASON = "test_copy_unfinished"
+PINNED_PATHS = test_copy.PINNED_PATHS
+
+
+def links_in(into: Path) -> list[str]:
+    """The places a copy writes (``test_copy.written_children``, and the
+    files sqlite keeps beside its databases) that are links, or pass through
+    one, in an existing copy folder."""
+    sidecars = tuple(f"{name}{suffix}" for name in DATABASES for suffix in ("-wal", "-shm", "-journal"))
+    found = []
+    for relative in test_copy.written_children() + sidecars:
+        path = into
+        for part in Path(relative).parts:
+            path = path / part
+            if path.is_symlink():
+                found.append(str(path))
+                break
+    return found
 
 
 def close_open_tasks(database: Path) -> int:
@@ -143,6 +167,10 @@ def prepare(source: Path, into: Path) -> dict[str, object]:
                          "pass --source the real data directory")
     if not (source / DATABASES[0]).is_file():
         raise SystemExit(f"no task database in {source}")
+    linked = links_in(into)
+    if linked:
+        raise SystemExit("the copy writes here, and these are links a write would follow out of it: "
+                         + ", ".join(linked) + "; remove them or prepare the copy in a new folder")
     into.mkdir(parents=True, exist_ok=True)
     for name in DATABASES:
         if (source / name).is_file():
@@ -199,7 +227,7 @@ def start_command(into: Path, *, port: int, fake: bool, max_calls: int | None, m
     """The command that starts the test service: PowerShell on Windows, a POSIX shell elsewhere."""
     env = {
         "FLUENTFLOW_DATA_DIR": str(into),
-        "FLUENTFLOW_CONFIG_PATH": str(into / "fluentflow_config.json"),
+        **{name: str(into / relative) for name, relative in PINNED_PATHS.items()},
         "FLUENTFLOW_LOCAL_PORT": str(port),
         "FLUENTFLOW_TEST_COPY": "1",
         # The Agent API is closed without one, and a worktree has no .env.

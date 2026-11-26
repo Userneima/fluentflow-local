@@ -110,8 +110,12 @@ def public_view(item: dict[str, Any], reviewed: set[str] | None = None) -> dict[
         if changes and item.get("id"):
             path = _changes_path(str(item["id"]))
             if not path.is_file():
+                # Whole or not at all: a file cut short by two lists at once
+                # would stay, since it is written only when missing.
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(changes, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex[:6]}.tmp")
+                temporary.write_text(json.dumps(changes, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                os.replace(temporary, path)
             view["changes_file"] = str(path)
         if reviewed is not None:
             view["reviewed"] = item.get("id") in reviewed
@@ -316,8 +320,12 @@ def remove_study(record_id: str) -> None:
 
 
 def reviewed_studies() -> set[str]:
-    """Study records a later record names: the agent has been through them."""
-    return {str(item["study_id"]) for item in _read(FEEDBACK_FILE) if item.get("study_id")}
+    """Study records a later record names: the agent has been through them.
+    A record made again since (a new verdict, edits made after) is new to it."""
+    items = _read(FEEDBACK_FILE)
+    made = {item.get("id"): str(item.get("created_at") or "") for item in items if item.get("kind") == STUDIED}
+    return {str(item["study_id"]) for item in items
+            if item.get("study_id") in made and str(item.get("created_at") or "") >= made[item["study_id"]]}
 
 
 def list_feedback() -> list[dict[str, Any]]:

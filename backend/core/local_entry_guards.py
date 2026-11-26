@@ -11,7 +11,8 @@ Guards provided:
 - ``claim_task_id``: format check + atomic global reservation for every new
   task, so concurrent callers cannot steal the same id.
 - ``require_owned_task_id``: validate a reference to an existing task without
-  granting write access to arbitrary same-client history.
+  granting write access to arbitrary same-client history (nor, on a test
+  copy, to a copied task).
 - ``read_upload_bounded``: chunked upload read that aborts with 413 as soon
   as the limit is crossed, never buffering an unbounded payload first.
 - ``local_ai_kwargs``: strict provider↔key matching against the local
@@ -93,13 +94,19 @@ def require_owned_task_id(
     client_id: Optional[str],
     allowed_statuses: set[str] | frozenset[str] | None = None,
 ) -> str:
-    """Validate an existing task reference and require client ownership."""
+    """Validate an existing task reference and require client ownership. On a
+    test copy a copied task is refused: every caller writes to the task, and a
+    form too large for the copy's check reaches it here (``test_copy``)."""
+    from backend.core import test_copy
+
     candidate = _validated_task_id_value(requested)
     if not candidate:
         raise HTTPException(status_code=400, detail="Task id is required")
     existing = get_job(candidate, client_id=client_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    if not test_copy.writable(candidate):
+        raise HTTPException(status_code=409, detail=test_copy.READ_ONLY)
     if allowed_statuses is not None and existing.get("status") not in allowed_statuses:
         raise HTTPException(status_code=409, detail="Task is not in a reusable state")
     return candidate

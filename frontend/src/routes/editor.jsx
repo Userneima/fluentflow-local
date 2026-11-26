@@ -115,7 +115,9 @@ const Editor = () => {
     const durSec = result?.audio_duration_seconds || 0;
     const activeTaskId = result?.task_id || fallbackTaskIdRef.current;
     const pin = useTaskPin({activeTaskId, tasks, pinJob, ingestJobs});
-    const study = useTaskStudied({activeTaskId, tasks, markStudied, ingestJobs});
+    // A note edited in the last moment is still on its way to the service: the
+    // study record is made from the note the service has, so wait for it.
+    const study = useTaskStudied({activeTaskId, tasks, markStudied, ingestJobs, saving: noteDraft.summaryUnsaved});
     const summaryFailureHint = summaryFailureNextStep(result, lang);
     const resultTitle = resultDisplayTitle(result, {name: t('edit.title')});
     const rawEditorTitle = resultTitle || result?.filename || t('edit.title');
@@ -369,7 +371,7 @@ const Editor = () => {
                         rawEditorTitle={rawEditorTitle}
                         activeTaskId={activeTaskId}
                         pin={pin}
-                        study={study}
+                        study={result?.task_id ? study : null}
                         taskResume={taskResume}
                         cutFileUnavailable={cutFileUnavailable}
                         cutJudgeCount={cutJudgeCount}

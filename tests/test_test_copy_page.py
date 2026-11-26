@@ -140,7 +140,21 @@ def test_the_copy_pages_may_connect_only_to_the_copy(monkeypatch, own_build):
     monkeypatch.setenv(test_copy.FRONTEND_ENV, str(own_build))
     client = TestClient(_app())
     for page in ("/", "/agent", "/editor"):
-        assert client.get(page).headers["content-security-policy"] == "connect-src 'self'"
+        policy = client.get(page).headers["content-security-policy"]
+        assert policy == "connect-src 'self'; media-src 'self' blob: data:"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node to run the page's address code")
+def test_a_build_config_that_locks_its_address_still_leaves_the_page_on_the_copy(monkeypatch, own_build):
+    """(review, 2026-11-26) Run against the real window, a config that makes
+    its address read-only kept 8000 for video, audio and links."""
+    locked = ("Object.defineProperty(window, 'FLUENTFLOW_CONFIG', "
+              "{value: {apiBase: 'http://127.0.0.1:8000'}, writable: false});\n")
+    (own_build / "assets" / "config.js").write_text(locked, encoding="utf-8")
+    monkeypatch.setenv(test_copy.ENV, "1")
+    monkeypatch.setenv(test_copy.FRONTEND_ENV, str(own_build))
+    config = TestClient(_app()).get("/assets/config.js").text
+    assert _page_api_base(config, "http://127.0.0.1:5173/agent") == "http://127.0.0.1:5173"
 
 
 def test_the_copy_config_still_passes_the_service_checks(monkeypatch, own_build):

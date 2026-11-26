@@ -64,7 +64,12 @@ from backend.core.video_source import (
     normalize_source_link,
 )
 from backend.core.task_flow import RESTART_RESUMED_KEY, run_pipeline_then_note
-from backend.core.transcript_note import summarize_transcript_source
+from backend.core.transcript_note import (
+    export_stored_note,
+    note_from_stored_transcript,
+    stored_resume_point,
+    summarize_transcript_source,
+)
 from backend.core.task_queue import _start_behind_queue, wait_for_queue_turn
 from backend.core.task_submission import _effective_duration_limit, _local_media_job_context
 
@@ -296,6 +301,9 @@ async def _download_then_process(
 
     await JOB_EVENTS.publish(task_id, {"stage": "queued", "progress": 0})
     if downloaded.media_type == "transcript":
+        # Captions: nothing to transcribe, so the place in line passes on
+        # while the text model writes the note (``task_queue._ChainLink``).
+        done.set()
         await _note_from_captions(job, downloaded)
         return
     await _hand_to_pipeline(job, downloaded, previous=previous, done=done)
@@ -808,10 +816,16 @@ def captions_of(job: dict[str, Any]) -> Path | None:
     return source if source is not None and source.suffix.lower() in TRANSCRIPT_SUFFIXES else None
 
 
-async def resume_captions_note(job: dict[str, Any], *, route: str) -> bool:
+async def resume_captions_note(job: dict[str, Any], *, route: str, start_at: str = task_steps.FETCH) -> bool:
     """Carry on a link task whose captions are on disk, after a restart or a
-    stop: its note is written from them again, as when they arrived; the
-    link is not fetched again and nothing is transcribed."""
+    stop: the link is not fetched again and nothing is transcribed. Cut off
+    before its transcript was stored, the note is written from the captions
+    again, as when they arrived; at its note with the transcript stored, from
+    that transcript, so what the user edited in it stays
+    (``transcript_note.note_from_stored_transcript``); at its Feishu step (an
+    agent's note whose export failed), only that note is exported
+    (``transcript_note.stored_resume_point``)."""
+
     task_id = str(job.get("task_id") or "")
     client_id = job.get("client_id")
     source = captions_of(job)
@@ -822,14 +836,30 @@ async def resume_captions_note(job: dict[str, Any], *, route: str) -> bool:
     options = dict(stored) if isinstance(stored, dict) else {}
     filename = str(job.get("source_filename") or source.name)
     link = _LinkTask(task_id, link_of(job), None, options, client_id, CancellationGate(), route)
-    task_steps.reopen_from(task_id, task_steps.FETCH)
-    reopen_job(task_id)
+    resume_at = stored_resume_point(job, start_at)
+    task_steps.reopen_from(task_id, resume_at)
+    if not (resume_at != task_steps.FETCH and job.get("status") == "completed"):
+        reopen_job(task_id)
 
     async def worker(_previous: Any, done: asyncio.Event) -> None:
+        # Nothing is transcribed: the place in line passes on at once
+        # (``task_queue._ChainLink``), as when the captions first arrived.
+        done.set()
         stopped = False
         try:
-            task_steps.start(task_id, task_steps.FETCH)
-            await _note_from_caption_file(link, source, filename)
+            if resume_at == task_steps.FEISHU:
+                await export_stored_note(task_id, client_id)
+            elif resume_at == task_steps.NOTE:
+                task_steps.start(task_id, task_steps.NOTE)
+                result = await note_from_stored_transcript(task_id, client_id=client_id, options=options,
+                                                           route=route)
+                task_steps.settle(task_id, task_steps.NOTE,
+                                  task_steps.note_outcome(get_job(task_id, client_id=client_id)))
+                task_steps.skip_open(task_id)
+                await JOB_EVENTS.publish(task_id, {"stage": "done", "progress": 100, "result": result})
+            else:
+                task_steps.start(task_id, task_steps.FETCH)
+                await _note_from_caption_file(link, source, filename)
         except asyncio.CancelledError:
             stopped = True
             raise

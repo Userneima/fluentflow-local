@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from backend.core import device_profile, ffmpeg_cmd
 from backend.core.local_error_diagnostics import NO_SPEECH
 
 SILENCE_PEAK_THRESHOLD_DB = -80.0
@@ -27,7 +28,7 @@ def require_audible_audio(audio_path: str | Path) -> float:
 
     ffmpeg = _require_ffmpeg()
     # ``-vn``: a video's picture is not decoded only to be thrown away.
-    completed = subprocess.run(
+    completed = ffmpeg_cmd.run(
         [ffmpeg, "-hide_banner", "-nostdin", "-i", str(path), "-vn", "-af", "volumedetect", "-f", "null", "-"],
         check=True,
         capture_output=True,
@@ -50,9 +51,16 @@ class CompressedMp3InBackground:
     of what extracting the audio costs: LAME encodes on one core, about 1.5
     minutes of a 3 h 20 min recording against 22 seconds for the recognizer's
     WAV (2026-11-25). ``path()`` waits for it and raises when
-    ffmpeg failed; ``stop()`` ends an encode nobody will
-    wait for, so a cancelled task does not leave it running.
+    ffmpeg failed; ``failure()`` says so without waiting; ``stop()`` ends an
+    encode nobody will wait for, so a cancelled task does not leave it running.
+
+    ffmpeg's messages go to a file beside the MP3, not a pipe: on a damaged
+    recording it writes a line per bad packet, and a pipe nobody reads until
+    the transcription ends filled up and held the encode still (a 10-minute
+    AAC with a corrupted ``mdat`` wrote 1.9 MB and stopped after 0 bytes).
     """
+
+    _ERROR_TAIL_BYTES = 4000
 
     def __init__(self, input_path: str | Path, *, output_path: str | Path, bitrate: str = "64k") -> None:
         src = Path(input_path).expanduser().resolve()
@@ -60,23 +68,45 @@ class CompressedMp3InBackground:
             raise FileNotFoundError(f"File not found: {src}")
         self._out = Path(output_path).expanduser().resolve()
         self._out.parent.mkdir(parents=True, exist_ok=True)
+        self._log = self._out.with_name(f"{self._out.name}.log")
         self._args = [_require_ffmpeg(), "-y", "-nostdin", "-v", "error", "-i", str(src), "-vn",
                       "-codec:a", "libmp3lame", "-b:a", bitrate, str(self._out)]
-        self._process = subprocess.Popen(self._args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # The child keeps its own handle; this one is closed once it started.
+        with self._log.open("wb") as log:
+            self._process = ffmpeg_cmd.popen(self._args, stdout=subprocess.DEVNULL, stderr=log)
+        # Held to the CPU share the user chose, like every other encode.
+        device_profile.lower_priority(self._process.pid)
+
+    def failure(self) -> subprocess.CalledProcessError | None:
+        """The error of an encode that already ended badly; None while it
+        runs and after it succeeded."""
+        returncode = self._process.poll()
+        if returncode is None or returncode == 0:
+            return None
+        return subprocess.CalledProcessError(returncode, self._args, stderr=self._error_tail())
 
     def path(self) -> Path:
-        _, stderr = self._process.communicate()
-        if self._process.returncode != 0:
-            raise subprocess.CalledProcessError(self._process.returncode, self._args, stderr=stderr)
+        self._process.wait()
+        error = self.failure()
+        if error is not None:
+            raise error
         return self._out
 
     def stop(self) -> None:
         # A cancelled task can stop the encode while ``path()`` still waits on it
-        # in a worker thread, so this only kills and reaps: a second
-        # ``communicate()`` on the same pipe is not safe across threads.
+        # in a worker thread, so this only kills and reaps.
         if self._process.poll() is None:
             self._process.kill()
             self._process.wait()
+
+    def _error_tail(self) -> str:
+        try:
+            with self._log.open("rb") as log:
+                log.seek(0, 2)
+                log.seek(max(log.tell() - self._ERROR_TAIL_BYTES, 0))
+                return log.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
 
 
 def extract_stt_wav(
@@ -102,10 +132,11 @@ def extract_stt_wav(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     ffmpeg = _require_ffmpeg()
-    subprocess.run(
+    ffmpeg_cmd.run(
         [
             ffmpeg,
             "-y",
+            "-nostdin",
             "-i",
             str(src),
             "-vn",

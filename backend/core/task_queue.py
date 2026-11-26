@@ -12,7 +12,7 @@ import asyncio
 import functools
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from backend.core import device_profile, task_steps
 from backend.core.event_context import event_metadata
@@ -138,8 +138,9 @@ async def _await_predecessor(
                 # anything.
                 if previous_event.is_set():
                     return
-                if previous_id and await JOB_EVENTS.has_running_task(previous_id):
+                if await _still_ahead(previous_id, previous_event):
                     continue
+                _release_for_good(previous_event)
                 log_event(
                     task_id=task_id,
                     event_name="queue_chain_healed",
@@ -298,9 +299,12 @@ async def _start_behind_queue(
 ) -> bool:
     """Put a job on the chain and start its runner; say whether one started.
 
-    ``chained_worker(previous, done)`` is the job: it must wait its turn with
-    ``wait_for_queue_turn(previous, ...)`` before the expensive part and set
-    ``done`` when it is over, however it ends.
+    ``chained_worker(previous, done)`` is the job: it waits its turn with
+    ``wait_for_queue_turn(previous, ...)`` before the expensive part and sets
+    ``done`` when it is over, however it ends. A job with nothing expensive to
+    wait for (a subtitle file, a link's captions, a download that failed)
+    never waits; its ``done`` still moves the line on only once the job ahead
+    has (``_ChainLink``).
     """
     # Barrier and record happen together, before the first await, so two
     # submissions arriving at once cannot both take the same job as the one
@@ -310,7 +314,7 @@ async def _start_behind_queue(
         # turn carries it on in place (``task_actions.resume_after_restart``).
         task_steps.plan(task_id)
     previous = _queue_tail_barrier()
-    done = asyncio.Event()
+    done = _ChainLink(previous)
     _queue_tail_record(task_id, done)
     started = await JOB_EVENTS.start(
         task_id,
@@ -325,28 +329,91 @@ async def _start_behind_queue(
             worker=functools.partial(chained_worker, previous, done),
         ),
     )
+    runner = JOB_EVENTS.runner_of(task_id) if started else None
+    if runner is not None:
+        # The link is released when the runner ends, however it ends: a worker
+        # whose setup raised before its own ``finally``, a gate that never ran
+        # it, or a runner stopped before it began used to leave it unset, and
+        # the job behind could only go past it by asking whether this task id
+        # still ran. Carried on under the same id, it did, and the line stopped
+        # for good (review of 5d6a580). ``_ChainLink`` still waits out the job
+        # ahead first.
+        runner.add_done_callback(lambda _runner: done.set())
     if not started:
         # Nothing will run that worker (this task id is already running), so
         # nothing will run its ``finally``. The link comes off the chain, so the
         # next submission waits behind the job that really is working. A
         # submission that already took this link as its barrier while the start
-        # was pending is released only when the job ahead of this one is: setting
-        # ``done`` now told it the line was empty while that job still ran.
+        # was pending is released only when the job ahead of this one is
+        # (``_ChainLink``): releasing it at once told it the line was empty
+        # while that job still ran.
         _queue_tail_forget(done)
-        if previous is None:
-            done.set()
-        else:
-            _hold_link_until_released(previous, done)
+        done.set()
     return started
 
 
 _LINK_RELAYS: set[asyncio.Task[None]] = set()
 
 
+class _ChainLink(asyncio.Event):
+    """A job's link in the chain, which releases the line only after the
+    link ahead of it has.
+
+    The queue is serial because each job waits for the one ahead before its
+    expensive part. A job that never waits (a subtitle file or a link's
+    captions, with nothing to transcribe; a link whose download failed) used to
+    set its link when its own short run ended, while the recording ahead of it
+    still transcribed: the recording queued behind it then found its barrier
+    set and transcribed beside that one, which this machine was measured to
+    collapse under (2026-11-25 review). Its ``set()`` now waits the job ahead
+    out (or for it to be gone) first, so such a job only passes its place on;
+    a job that did wait its turn sets its link at once, as before.
+    """
+
+    def __init__(self, previous: Optional[tuple[Optional[str], asyncio.Event]]) -> None:
+        super().__init__()
+        self._previous = previous
+        self.relaying = False
+
+    def set(self) -> None:
+        previous = self._previous
+        if previous is None or previous[1].is_set():
+            super().set()
+            return
+        if not self.relaying:
+            self.relaying = True
+            _hold_link_until_released(previous, super().set)
+
+
+def _release_for_good(link: asyncio.Event) -> None:
+    """Mark a link whose runner is gone without releasing it as released,
+    bypassing its relay (``_ChainLink.set``), once a waiter or a relay has
+    gone past it.
+
+    Left unset, everything behind it went on asking whether its task id still
+    ran, and that question stops meaning "this job" once the user carries the
+    task on under the same id: the new runner queues behind the job that went
+    past the dead link, which then waited for that runner to release the dead
+    link, while the runner waited for it (review of 5d6a580). Set, nobody asks
+    again, and the job that went past it frees the line as soon as it ends.
+    Every runner ``_start_behind_queue`` starts releases its link when it
+    ends; this keeps a link left unset some other way from stopping the line."""
+    asyncio.Event.set(link)
+
+
+async def _still_ahead(previous_id: Optional[str], previous_event: asyncio.Event) -> bool:
+    """Whether the job ahead still holds the line: its runner is alive, or it
+    ended without waiting and its link is passing the place on
+    (``_ChainLink``) — that link is set by its relay, which itself heals."""
+    if getattr(previous_event, "relaying", False):
+        return True
+    return bool(previous_id) and await JOB_EVENTS.has_running_task(previous_id)
+
+
 def _hold_link_until_released(
-    previous: tuple[Optional[str], asyncio.Event], done: asyncio.Event
+    previous: tuple[Optional[str], asyncio.Event], release: Callable[[], None]
 ) -> None:
-    """Set ``done`` once the job ahead releases the chain or is gone."""
+    """Call ``release`` once the job ahead releases the chain or is gone."""
 
     async def relay() -> None:
         previous_id, previous_event = previous
@@ -357,11 +424,12 @@ def _hold_link_until_released(
                 except asyncio.TimeoutError:
                     if previous_event.is_set():
                         break
-                    if previous_id and await JOB_EVENTS.has_running_task(previous_id):
+                    if await _still_ahead(previous_id, previous_event):
                         continue
+                    _release_for_good(previous_event)
                     break
         finally:
-            done.set()
+            release()
 
     task = asyncio.get_running_loop().create_task(relay())
     _LINK_RELAYS.add(task)

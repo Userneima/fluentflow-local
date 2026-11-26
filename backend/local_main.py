@@ -250,9 +250,20 @@ def _log_restart_interruption(
     )
 
 
+def _stop_running_work() -> None:
+    """Stop every task's command lines and the note writers. Both may run
+    twice (at the signal and in the shutdown below): the second finds
+    nothing left."""
+    killed = task_stop.shutdown()
+    stopped = stop_running_notes()
+    if killed or stopped:
+        logger.info("Stopping: %s command lines of running tasks, %s note writers", killed, stopped)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task_stop.service_started()
+    task_stop.stop_on_signals(then=_stop_running_work)
     # Readiness is advisory at startup: the server still boots (the SPA
     # router and diagnostics give readable errors), but failures are logged
     # up front so they are visible before the first task fails mid-way.

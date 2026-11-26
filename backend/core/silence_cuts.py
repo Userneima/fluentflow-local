@@ -60,7 +60,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Callable, Sequence
 
-from backend.core import device_profile
+from backend.core import device_profile, ffmpeg_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +247,7 @@ class SilenceCutError(RuntimeError):
 def run_command(command: Sequence[str], timeout: float = 14400) -> "subprocess.CompletedProcess[str]":
     """Run one command; ffmpeg is held to the CPU share the user chose."""
     argv = device_profile.limit_ffmpeg_threads(command)
-    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **device_profile.COMMAND_TEXT) as process:
+    with ffmpeg_cmd.popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **device_profile.COMMAND_TEXT) as process:
         device_profile.lower_priority(process.pid)
         try:
             stdout, stderr = process.communicate(timeout=timeout)
@@ -951,7 +951,7 @@ def measure_every_cut(media: Path | str, plan: CutPlan) -> list[tuple[float | No
         return None
     rate = 8000
     try:
-        completed = subprocess.run(
+        completed = ffmpeg_cmd.run(
             [_ffmpeg_path(), "-v", "error", "-i", str(media), "-vn", "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"],
             capture_output=True, timeout=3600,
         )
@@ -1104,7 +1104,7 @@ def drop_voiceless_fragments(
         import numpy as np
 
         rate = 16000
-        completed = subprocess.run(
+        completed = ffmpeg_cmd.run(
             [_ffmpeg_path(), "-v", "error", "-i", str(media), "-vn", "-ac", "1", "-ar", str(rate), "-f", "f32le", "-"],
             capture_output=True, timeout=3600,
         )
@@ -1345,7 +1345,7 @@ def voiced_speech_level_db(media: Path | str, *, window_seconds: float = QUIET_W
         return None
     rate = 16000
     try:
-        completed = subprocess.run(
+        completed = ffmpeg_cmd.run(
             [_ffmpeg_path(), "-v", "error", "-i", str(media), "-vn", "-ac", "1", "-ar", str(rate), "-f", "f32le", "-"],
             capture_output=True, timeout=3600,
         )

@@ -42,7 +42,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import model_usage, task_steps
+from backend.core import ffmpeg_cmd, model_usage, task_steps
 from backend.core import cut_cases, cut_judge, cut_trust, cut_report, cut_timeline, misheard, original_locator, debreath_job, job_store, output_folder, silence_cuts, task_stop
 from backend.core.result_artifacts import DEBREATH_MEDIA_KIND, TRANSCRIPT_MEDIA_CUT, TRANSCRIPT_MEDIA_SOURCE, resolve_artifact_file
 from backend.core.storage_paths import _artifact_storage_dir
@@ -511,7 +511,7 @@ def voiced_parts(source: Path, regions: list[TimeRange]) -> list[TimeRange] | No
         return []
     options = VadOptions(threshold=VOICE_THRESHOLD, min_speech_duration_ms=silence_cuts.FRAGMENT_MIN_VOICE_MS,
                          min_silence_duration_ms=100, speech_pad_ms=30)
-    process = subprocess.Popen(
+    process = ffmpeg_cmd.popen(
         [silence_cuts._ffmpeg_path(), "-v", "error", "-i", str(source), "-vn", "-ac", "1",
          "-ar", str(VOICE_RATE), "-f", "s16le", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,

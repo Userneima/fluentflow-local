@@ -325,6 +325,8 @@ async def stop_step(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
 
 RESTART_RESUME_LIMIT = 2
 RESTART_RESUME_COUNT_KEY = "restart_resume_count"
+RESTART_LEFT_REASON = "服务重启中断了这个任务：请重新提交，或对仍保留源文件的任务使用重试。"
+RESTART_LEFT_SUBTITLE_REASON = "服务重启中断了这个任务，已连续几次：字幕还在，点「接着做」从断处接着做。"
 
 
 async def resume_task(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
@@ -344,7 +346,7 @@ async def resume_task(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
     steps = task_steps.steps_of([task_id]).get(task_id, [])
     if not steps:
         raise Refused("这个任务是在记录步骤之前处理的，没法从中断处接着做；可以重新提交这个文件。", "no_steps")
-    start_at = task_steps.resume_point(steps)
+    start_at = task_activity.resume_point(task_id, steps)
     if start_at is None:
         raise Refused("这个任务的每一步都已经做完了。", "nothing_to_resume")
     update_job_metadata(task_id, {RESTART_RESUME_COUNT_KEY: 0, task_flow.RESTART_RESUMED_KEY: None})
@@ -363,16 +365,16 @@ async def _carry_on(job: dict[str, Any], start_at: str, *, route: str) -> None:
     task_id = str(job.get("task_id") or "")
     client_id = job.get("client_id")
     before_transcript = start_at in task_steps.BEFORE_TRANSCRIPT
-    # A task made from subtitles has no recording: it reads them again and
-    # writes its note, whichever step it stopped in, and never enters the
+    # A task made from subtitles has no recording: it reads them again, or at
+    # its note writes it from the transcript it holds, and never enters the
     # transcription pipeline below.
     if transcript_note.subtitle_in_place_of(job) is not None:
         try:
-            started = await transcript_note.resume_subtitle_in_place(job, route=route)
+            started = await transcript_note.resume_subtitle_in_place(job, route=route, start_at=start_at)
         except FileNotFoundError as exc:
             raise Refused(str(exc), "source_missing") from exc
     elif link_submission.captions_of(job) is not None:
-        started = await link_submission.resume_captions_note(job, route=route)
+        started = await link_submission.resume_captions_note(job, route=route, start_at=start_at)
     elif start_at == task_steps.FETCH and link_submission.link_of(job) and task_submission.find_source_file(task_id) is None:
         task_steps.reopen_from(task_id, start_at)
         reopen_job(task_id)
@@ -423,6 +425,16 @@ async def resume_after_restart(task_ids: list[str]) -> int:
     jobs = [job for job in (get_job(task_id) for task_id in task_ids) if job]
     for job in sorted(jobs, key=lambda each: str(each.get("created_at") or "")):
         task_id = str(job.get("task_id"))
+        status = str(job.get("status") or "")
+        if status == "cancelled" and job.get("error_reason") != "worker_cancelled":
+            # The user stopped or cancelled it while the service was stopping:
+            # its steps were left open then (``task_steps`` writes nothing
+            # while the service stops), so they are closed as stopped now and
+            # the task stays as the user left it. Only a task the stopping
+            # service cancelled (``run_worker_with_terminal_state`` writes
+            # worker_cancelled) was cut off by the restart.
+            task_steps.close_open(task_id, stopped=True)
+            continue
         steps = task_steps.steps_of([task_id]).get(task_id, [])
         named = task_steps.statuses(steps)
         was_running = task_steps.RUNNING in named.values()
@@ -430,10 +442,16 @@ async def resume_after_restart(task_ids: list[str]) -> int:
         count = int(metadata.get(RESTART_RESUME_COUNT_KEY) or 0) + (1 if was_running else 0)
         start_at = next((name for name in task_steps.ORDER if named.get(name) in task_steps.OPEN), None)
         reason = None
+        # What the page says when the task is left for the user: the refusal
+        # itself when it names what is gone (the subtitle file, decision 6.82,
+        # where 重试 does nothing), a subtitle task's own at the restart
+        # limit, else the restart's general sentence.
+        told = RESTART_LEFT_REASON
         if start_at is None:
             continue
         if count > RESTART_RESUME_LIMIT:
             reason = "restart_limit"
+            told = _restart_limit_told(job)
         else:
             update_job_metadata(task_id, {
                 RESTART_RESUME_COUNT_KEY: count,
@@ -442,7 +460,11 @@ async def resume_after_restart(task_ids: list[str]) -> int:
             try:
                 await _carry_on(job, start_at, route="/startup/resume")
             except Refused as exc:
+                if exc.code == "busy":
+                    continue  # already being carried on: its runner closes its steps
                 reason = exc.message
+                if exc.code == "source_missing":
+                    told = f"服务重启中断了这个任务。{exc.message}"
             except Exception as exc:  # noqa: BLE001 - left for the user, not lost
                 logger.exception("could not carry %s on after the restart", task_id)
                 reason = f"{type(exc).__name__}: {exc}"
@@ -452,17 +474,34 @@ async def resume_after_restart(task_ids: list[str]) -> int:
             continue
         update_job_metadata(task_id, {task_flow.RESTART_RESUMED_KEY: None})
         task_steps.close_open(task_id, error=task_steps.RESTART_ERROR)
-        if str(job.get("status") or "") in {"queued", "running"}:
-            # Told on the page, as a restart-interrupted task always was.
+        # Told on the page, as a restart-interrupted task always was; a
+        # cancelled one here is one the stopping service cancelled (above).
+        if status in {"queued", "running", "cancelled"}:
+            if status == "cancelled":
+                reopen_job(task_id)  # the one write that turns a cancelled task back
             upsert_job(
                 task_id=task_id, status="failed", client_id=job.get("client_id"), stage="recovery", progress=0,
-                error_reason="服务重启中断了这个任务：请重新提交，或对仍保留源文件的任务使用重试。",
+                error_reason=told,
                 metadata={RESTART_INTERRUPTION_KEY: {
                     "interrupted_at": _now(), "started": was_running, "stage": job.get("stage"),
                     "progress": job.get("progress"),
                 }, "queue_wait": None},
             )
     return resumed
+
+
+def _restart_limit_told(job: dict[str, Any]) -> str:
+    """What the page says when restarts kept cutting a task off. A task made
+    from subtitles cannot use 重试 (decision 6.82): with its subtitles still
+    there it is pointed to 接着做."""
+    from backend.core import link_submission, transcript_note
+
+    source = transcript_note.subtitle_in_place_of(job)
+    if source is not None and not source.is_file():
+        return f"服务重启中断了这个任务。这个任务的字幕文件已不在原来的位置：{source}；请重新提交这个字幕文件。"
+    if source is not None or link_submission.captions_of(job) is not None:
+        return RESTART_LEFT_SUBTITLE_REASON
+    return RESTART_LEFT_REASON
 
 
 def _log_restart(job: dict[str, Any], start_at: str | None, *, count: int, left_because: str | None) -> None:

@@ -994,7 +994,12 @@ def export_markdown_to_lark(
     task_id: Optional[str] = None,
     artifact_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Convenience wrapper used by the pipeline."""
+    """Convenience wrapper used by the pipeline. Refused on a test copy,
+    whoever asks (``test_copy``)."""
+    from backend.core import test_copy
+
+    if test_copy.enabled():
+        raise RuntimeError(test_copy.NO_FEISHU)
     exporter = LarkExporter(
         app_id=app_id,
         app_secret=app_secret,

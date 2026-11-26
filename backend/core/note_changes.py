@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from backend.core import job_store, note_versions
+from backend.core import job_store, note_versions, test_copy
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +235,8 @@ def record(path: Path, text: str) -> None:
 
 
 def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[str, Any] | None) -> None:
+    if not test_copy.writable(task_id):
+        return  # a copied task's log sits in the owner's real folder
     old = str((before or {}).get("summary_markdown") or "")
     new = str((after or {}).get("summary_markdown") or "")
     if not old.strip() or old == new:

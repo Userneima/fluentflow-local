@@ -28,11 +28,15 @@ import json
 import logging
 import os
 import re
+import shutil
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.core import job_store, note_changes, note_feedback, note_versions, original_locator, test_copy
+from backend.core import (
+    job_store, note_changes, note_feedback, note_versions, original_locator, output_folder, test_copy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +77,21 @@ EDITS_FILE = "写成后的改动.json"
 
 
 def _written_paths(task_id: str, result: dict[str, Any]) -> tuple[Path, Path]:
+    """Where they are, moved first from the task's own storage when the note
+    was written there before its folder was set up (an edit can come in
+    before the folder catches up)."""
     process = note_changes.path_for(task_id, result).parent
-    return process / WRITTEN_FILE, process / EDITS_FILE
+    paths = process / WRITTEN_FILE, process / EDITS_FILE
+    early = note_changes.path_for(task_id, {}).parent
+    if early != process and not paths[0].is_file() and (early / WRITTEN_FILE).is_file():
+        try:
+            process.mkdir(parents=True, exist_ok=True)
+            for name, path in zip((WRITTEN_FILE, EDITS_FILE), paths):
+                if (early / name).is_file():
+                    shutil.move(str(early / name), str(path))
+        except OSError as exc:
+            logger.warning("written note of %s not moved to its folder: %s", task_id, exc)
+    return paths
 
 
 def _replace(path: Path, text: str) -> None:
@@ -96,14 +113,29 @@ def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[st
             _replace(written, new)
             edits.unlink(missing_ok=True)
             return
-        if not written.is_file() and old.strip():
+        counts: dict[str, int] = {}
+        if not written.is_file():
             # Written before this was kept (or by a save that told no
-            # listener): the note before its first edit is the note as written.
-            _replace(written, old)
-        try:
-            counts = json.loads(edits.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            counts = {}
+            # listener). When the note before this edit was written whole, it
+            # is the note as written; when it was itself an edit (made before
+            # 2026-11-25), the note as written is found in 历史版本, or not
+            # at all, and then nothing is kept: the study record says it
+            # cannot tell rather than leave the earlier edits out.
+            if note_versions.changed_by(before) not in EDITS:
+                if not old.strip():
+                    return
+                _replace(written, old)
+            else:
+                found = _from_history(task_id, before or {})
+                if found is None:
+                    return
+                _replace(written, found[0])
+                counts = found[1]
+        else:
+            try:
+                counts = json.loads(edits.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                counts = {}
         label = note_versions.BY_LABELS[by]
         counts[label] = int(counts.get(label) or 0) + 1
         _replace(edits, json.dumps(counts, ensure_ascii=False))
@@ -120,57 +152,75 @@ class StudyError(ValueError):
 
 def course_of(job: dict[str, Any]) -> str:
     """The name of the folder the task's recording came from."""
-    _field, path = original_locator._recorded(job)
+    path = output_folder.original_path(job) or original_locator._recorded(job)[1]
     name = Path(path).parent.name if path else ""
     return name or NO_FOLDER
 
 
-def edits_since_written(task_id: str, result: dict[str, Any]) -> dict[str, Any]:
-    """The owner's changes to the note since it was last written whole.
+def _from_history(task_id: str, result: dict[str, Any]) -> tuple[str, dict[str, int]] | None:
+    """The note as last written whole, from the kept versions, and who edited
+    it since; None when no version from before the edits was kept.
 
-    The note as written is kept on every save (``_on_result_saved``). For a
-    note last written before that, the kept versions say what replaced each
-    one, so the oldest
-    of the versions followed only by edits is the note as written; it is
-    compared with the note now. Both the task's note and the md beside the
-    recording are looked at: an edit pulled from Feishu or made by an agent
-    has kept only the md's version (seen on real notes, 2026-11-25).
+    The kept versions say what replaced each one, so the oldest of the
+    versions followed only by edits is the note as written. Both the task's
+    note and the md beside the recording are looked at: an edit pulled from
+    Feishu or made by an agent has kept only the md's version (seen on real
+    notes, 2026-11-25).
     """
-    note = str(result.get("summary_markdown") or "")
-    written_file, edits_file = _written_paths(task_id, result)
-    try:
-        written = written_file.read_text(encoding="utf-8")
-        try:
-            by = json.loads(edits_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            by = {}
-        found = note_changes.changes(written, note) if written.strip() != note.strip() else []
-        return {"changes": found, "total": len(found), "edited_by": by, "baseline_kept": True}
-    except OSError:
-        pass  # a note last written before 2026-11-25: found from 历史版本 below
     kept = [v for v in note_versions.kept(note_versions.md_for(task_id, result))
             if v.side in (note_versions.TASK, note_versions.LOCAL)]
     start = len(kept)
     while start > 0 and kept[start - 1].by in EDITS:
         start -= 1
-    if note_versions.changed_by(result) not in EDITS:
-        return {"changes": [], "total": 0, "edited_by": {}, "baseline_kept": True}
     if start == len(kept):
-        # Edited, but no version from before the edit was kept.
-        label = note_versions.BY_LABELS[note_versions.changed_by(result)]
-        return {"changes": [], "total": 0, "edited_by": {label: 1}, "baseline_kept": False}
+        return None
     # One edit keeps a version on each side in the same second: counted once.
     by: dict[str, int] = {}
     for code, _second in dict.fromkeys((v.by, v.stamp[:15]) for v in kept[start:]):
         label = note_versions.BY_LABELS[code]
         by[label] = by.get(label, 0) + 1
     try:
-        written = kept[start].path.read_text(encoding="utf-8")
+        return kept[start].path.read_text(encoding="utf-8"), by
     except OSError:
-        return {"changes": [], "total": 0, "edited_by": by, "baseline_kept": False}
+        return None
+
+
+def edits_since_written(task_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    """The owner's changes to the note since it was last written whole.
+
+    The note as written is kept on every save (``_on_result_saved``); for a
+    note last written before that, it is found in 历史版本 (``_from_history``)
+    and compared with the note now.
+    """
+    note = str(result.get("summary_markdown") or "")
+    written_file, edits_file = _written_paths(task_id, result)
+    written: str | None = None
+    by: dict[str, int] = {}
+    try:
+        written = written_file.read_text(encoding="utf-8")
+        try:
+            by = json.loads(edits_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            by = {}
+    except OSError:
+        changed = note_versions.changed_by(result)
+        if changed not in EDITS:
+            return {"changes": [], "total": 0, "edited_by": {}, "baseline_kept": True}
+        found = _from_history(task_id, result)
+        if found is None:
+            # Edited, but no version from before the edit was kept.
+            return {"changes": [], "total": 0, "edited_by": {note_versions.BY_LABELS[changed]: 1},
+                    "baseline_kept": False}
+        written, by = found
+    # The note as written may be the md's copy, which links screenshots its own way.
     before, after = _comparable(written), _comparable(note)
-    found = note_changes.changes(before, after) if before.strip() != after.strip() else []
-    return {"changes": found, "total": len(found), "edited_by": by, "baseline_kept": True}
+    found_changes = note_changes.changes(before, after) if before.strip() != after.strip() else []
+    return {"changes": found_changes, "total": len(found_changes), "edited_by": by, "baseline_kept": True}
+
+
+# One mark at a time: two clicks at once would each make a study record and
+# the task would name only one of them.
+_MARK_LOCK = threading.Lock()
 
 
 def mark(task_id: str, *, studied: bool = True, verdict: str | None = None,
@@ -181,6 +231,11 @@ def mark(task_id: str, *, studied: bool = True, verdict: str | None = None,
     verdict later also takes in edits made since. Taking the mark back deletes
     the record: a click by mistake must not teach the writer anything.
     """
+    with _MARK_LOCK:
+        return _mark(task_id, studied=studied, verdict=verdict, client_id=client_id)
+
+
+def _mark(task_id: str, *, studied: bool, verdict: str | None, client_id: str | None) -> dict[str, Any]:
     job = job_store.get_job(task_id, client_id=client_id)
     if not job:
         raise StudyError("任务不存在")

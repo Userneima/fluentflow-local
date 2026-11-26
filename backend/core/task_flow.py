@@ -24,6 +24,7 @@ from backend.core import (
     output_folder,
     survey_cut,
     tail_trim,
+    task_activity,
     task_steps,
     task_stop,
     test_copy,
@@ -423,10 +424,42 @@ def _drop_checkpoint(task_id: str) -> None:
     shutil.rmtree(_checkpoint_path(task_id).parent, ignore_errors=True)
 
 
+def has_checkpoint(task_id: str) -> bool:
+    """Whether carrying the task on from its corrections would find the
+    transcription kept (``task_activity.resume_point``)."""
+    return _checkpoint_path(task_id).is_file()
+
+
+RETRY_SOURCE_CHECKED_KEY = "retry_source_checkpoint_checked"
+
+
+def _drop_checkpoint_of_retried(task_id: str, client_id: Any) -> None:
+    """A retry is a new task that starts over, so what the task it was retried
+    from kept for carrying on (the transcription, and the audio, about 115 MB an
+    hour) is dropped when the retry first runs, not left until history
+    retention. Left alone while that task is itself queued or running again
+    (carried on after the retry). Decided once, on the retry's first run: what
+    the old task keeps after that is from its own later runs, and carrying the
+    retry on again must not take it (review of ed133bc, 2026-11-26)."""
+    metadata = (get_job(task_id, client_id=client_id) or {}).get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    source_id = str(metadata.get("retry_source_task_id") or "")
+    # Recorded as the task checked, so a key copied over from another task's
+    # metadata never counts for this one.
+    if not source_id or source_id == task_id or metadata.get(RETRY_SOURCE_CHECKED_KEY) == source_id:
+        return
+    update_job_metadata(task_id, {RETRY_SOURCE_CHECKED_KEY: source_id})
+    source = get_job(source_id, client_id=client_id)
+    if source is not None and task_activity.activity(source).busy:
+        return
+    _drop_checkpoint(source_id)
+
+
 async def _steps_before_transcript(ctx: Any, start_at: str) -> bool:
     """Fetch (a file already on this machine), transcribe and correct, as
     steps. Raises ``StepStopped`` when the user stopped one."""
     task_id = ctx.task_id_value
+    _drop_checkpoint_of_retried(task_id, ctx.client_id)
     if start_at == task_steps.FETCH:
         task_steps.start(task_id, task_steps.FETCH)
         task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)

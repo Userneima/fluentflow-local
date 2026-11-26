@@ -30,13 +30,12 @@ from __future__ import annotations
 import logging
 import re
 import shutil
-import subprocess
 import tempfile
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-from backend.core import frame_text, silence_cuts
+from backend.core import ffmpeg_cmd, frame_text, silence_cuts
 from backend.core.local_error_diagnostics import (
     NO_SPEECH,
     NO_SPEECH_LONG,
@@ -119,7 +118,7 @@ def read_screen(video: Path, duration_seconds: float | None) -> list[dict[str, A
         step = duration_seconds / MAX_SAMPLES
     with tempfile.TemporaryDirectory(prefix="screen-text-") as tmp:
         folder = Path(tmp)
-        subprocess.run(
+        ffmpeg_cmd.run(
             [_ffmpeg(), "-hide_banner", "-nostdin", "-v", "error", "-i", str(video),
              "-vf", f"fps=1/{step:.3f}", "-q:v", "3", str(folder / "f_%05d.jpg")],
             check=True, capture_output=True,

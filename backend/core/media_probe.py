@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import wave
 from pathlib import Path
+
+from backend.core import ffmpeg_cmd
 
 FFPROBE_TIMEOUT_SECONDS = 10
 
@@ -36,7 +37,7 @@ def media_duration_seconds(path: Path | str) -> float | None:
     if not ffprobe:
         return None
     try:
-        result = subprocess.run(
+        result = ffmpeg_cmd.run(
             [
                 ffprobe,
                 "-v",

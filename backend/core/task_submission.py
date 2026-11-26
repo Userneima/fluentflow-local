@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
-from backend.core import agent_cut, claude_code_note, local_intake_flow, screen_text_transcript, task_flow, task_intelligence, test_copy, visual_note_channel
+from backend.core import agent_cut, local_intake_flow, screen_text_transcript, task_flow, task_intelligence, test_copy, visual_note_channel
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
@@ -98,34 +98,28 @@ def _collect_options(**raw_options: Optional[str]) -> dict[str, str]:
     })
 
 
-def _log_visual_note_unavailable(task_id: str, *, source_type: str, source_filename: str) -> str:
+def _log_visual_note_unavailable(task_id: str, *, source_type: str, source_filename: str,
+                                 text_model_ready: bool) -> str:
     """The automatic frame note is on but cannot run, so this task gets the text
     note instead. Recorded because it is invisible otherwise: the task looks
     like any other text-note task. Returns the reason, which the note carries.
 
-    Recorded as a notice (success): the text note is written instead, which is
-    the ordinary setup without Claude, not a failure. The note step records it
-    again only when its reason or outcome differs."""
+    A notice only when the text model will write the note and nothing is the
+    user's to fix (``visual_note_channel.unavailable_outcome``). The note step
+    records it again only when its reason or outcome differs."""
     channel = visual_note_channel.resolve_channel(resolve_secret(None, "anthropic_api_key"))
-    login_expired = (
-        channel.name == visual_note_channel.CHANNEL_SUBSCRIPTION
-        and claude_code_note.login_state() is False
-    )
+    outcome = visual_note_channel.unavailable_outcome(channel, text_model_ready)
     log_event(
         task_id=task_id,
         event_name="visual_note_unavailable",
         source_type=source_type,
         source_filename=source_filename,
         stage="summary",
-        success=True,
+        success=outcome["success"],
         error_reason=channel.unavailable_reason,
-        metadata=event_metadata(
-            channel=channel.name,
-            reason="login_expired" if login_expired else "channel_unavailable",
-            fallback="text_note",
-        ),
+        metadata=event_metadata(channel=channel.name, reason=outcome["reason"], fallback=outcome["fallback"]),
     )
-    if login_expired:
+    if outcome["reason"] == "login_expired":
         return "本机 Claude 的登录已过期。"
     return channel.unavailable_reason or "结合画面的笔记现在写不了。"
 
@@ -173,7 +167,22 @@ def _local_media_job_context(
     note_after_cut = visual_note_will_run or local_intake_flow.survey_first_enabled()
     note_fallback_reason = None
     if announce_fallback and not skip_summary and local_intake_flow.auto_note_enabled() and not visual_note_will_run:
-        note_fallback_reason = _log_visual_note_unavailable(task_id, source_type=source_type, source_filename=source_filename)
+        # The key lookup of whichever step will write the note. The pipeline's
+        # own note stage gets the keys typed into the form; the note step
+        # after the cut (``local_intake_flow._write_text_note_instead``) reads
+        # the stored ones only, since a form key is never written into the
+        # task record. Counting form keys for it said "the text model writes
+        # the note" at submission and "no note" at the note step (second
+        # review, 2026-11-26).
+        form_keys = {} if note_after_cut else {
+            "deepseek_api_key": deepseek_api_key, "openai_api_key": openai_api_key, "qwen_api_key": qwen_api_key,
+        }
+        text_model_ready = bool(local_ai_kwargs(
+            **form_keys, ai_provider=options.get("ai_provider"), ai_model=options.get("ai_model"),
+        ).get("api_key"))
+        note_fallback_reason = _log_visual_note_unavailable(
+            task_id, source_type=source_type, source_filename=source_filename, text_model_ready=text_model_ready,
+        )
     return MediaJobContext(
         task_id_value=task_id,
         client_id=client_id,

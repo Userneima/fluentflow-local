@@ -20,6 +20,7 @@ import asyncio
 import threading
 import json
 import shutil
+import subprocess
 import time
 import logging
 import re
@@ -800,8 +801,10 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             # Carried on after a restart cut the transcription off: the takes
             # this task already extracted are used again rather than extracted
             # a second time (26 seconds on the owner's run, 2026-11-21).
-            # Only for the file as given: a prepared (cut) file is made anew each run.
-            kept_audio = _kept_audio_for_resume(ctx, in_path) if Path(in_path) == Path(ctx.in_path) else None
+            # Only for the file as given: a prepared (cut) file is made anew each
+            # run, so its takes are neither read back nor kept.
+            audio_resumable = Path(in_path) == Path(ctx.in_path)
+            kept_audio = _kept_audio_for_resume(ctx, in_path) if audio_resumable else None
             if kept_audio is not None:
                 (out_audio, playback_audio_path, enhanced_playback_audio_path,
                  voice_presence, stt_audio_take) = kept_audio
@@ -892,11 +895,12 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                         presence_deficit_db=(voice_presence or {}).get("presence_deficit_db"),
                     ),
                 )
-                _keep_audio_for_resume(
-                    ctx, in_path, out_audio=out_audio, playback=playback_audio_path,
-                    enhanced=enhanced_playback_audio_path, voice_presence=voice_presence,
-                    stt_audio_take=stt_audio_take,
-                )
+                if audio_resumable:
+                    _keep_audio_for_resume(
+                        ctx, in_path, out_audio=out_audio, playback=playback_audio_path,
+                        enhanced=enhanced_playback_audio_path, voice_presence=voice_presence,
+                        stt_audio_take=stt_audio_take,
+                    )
             upsert_job(task_id=task_id_value, status="running", stage="audio", progress=20)
             yield _sse({"stage": "audio", "progress": 20})
 
@@ -937,6 +941,13 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 "duration_seconds": duration_estimate_sec,
                 "stt_status": "starting",
             }
+
+            # An encode that already failed (no MP3 encoder in this ffmpeg, a
+            # full disk) fails the task now, in seconds, as it did before the
+            # MP3 moved beside the transcription, not after the whole of it.
+            playback_failure = pending_playback.failure() if pending_playback is not None else None
+            if playback_failure is not None:
+                raise playback_failure
 
             stt_started_at = time.perf_counter()
             stt_watch = _SttWatch(_stale_job_seconds(), stt_started_at)
@@ -1107,7 +1118,24 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                 "source_file_available": True,
             }
             if pending_playback is not None:
-                playback_audio_path = await loop.run_in_executor(None, pending_playback.path)
+                try:
+                    playback_audio_path = await loop.run_in_executor(None, pending_playback.path)
+                except subprocess.CalledProcessError as exc:
+                    # Failed after the transcription started: the transcript is
+                    # kept and the task goes on without a playback take, which
+                    # the result already allows for. Why it is missing stays in
+                    # the result and the task's events (the checkpoint carries
+                    # ``base_result``, so a resumed run keeps it too).
+                    playback_error = (exc.stderr or "").strip()[-500:] or str(exc)
+                    logger.warning("Playback MP3 of %s failed, the task goes on without it: %s",
+                                   task_id_value, playback_error)
+                    base_result["playback_audio_error"] = playback_error
+                    log_event(
+                        task_id=task_id_value, event_name="playback_audio_failed", source_type=source_type,
+                        source_filename=source_filename, stage="audio", success=False,
+                        error_reason=playback_error, metadata=event_metadata(route=event_route),
+                    )
+                    playback_audio_path = None
                 pending_playback = None
             if pending_video is not None:
                 # Transcribed from the cut audio; the result records the cut video,

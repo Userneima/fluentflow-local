@@ -44,7 +44,7 @@ const VERDICTS = [
     {id: 'missing', zh: '有漏', en: 'Misses things'},
 ];
 
-export const useTaskStudied = ({activeTaskId, tasks, markStudied, ingestJobs}) => {
+export const useTaskStudied = ({activeTaskId, tasks, markStudied, ingestJobs, saving = false}) => {
     // From the shared task list, like the pin, so the records page agrees.
     const studied = useMemo(
         () => studiedOf((tasks || []).find((job) => String(job?.task_id || '') === String(activeTaskId || ''))),
@@ -53,7 +53,7 @@ export const useTaskStudied = ({activeTaskId, tasks, markStudied, ingestJobs}) =
     const [studyBusy, setStudyBusy] = useState(false);
     const [studyError, setStudyError] = useState('');
     const setStudied = async (value, verdict = null) => {
-        if (!activeTaskId || studyBusy) return;
+        if (!activeTaskId || studyBusy || saving) return;
         setStudyBusy(true);
         setStudyError('');
         try {
@@ -65,20 +65,21 @@ export const useTaskStudied = ({activeTaskId, tasks, markStudied, ingestJobs}) =
             setStudyBusy(false);
         }
     };
-    return {studied, studyBusy, studyError, setStudied};
+    return {studied, studyBusy, studyError, setStudied, saving};
 };
 
 const StudiedControl = ({lang, study}) => {
-    const {studied, studyBusy, studyError, setStudied} = study;
+    const {studied, studyBusy, studyError, setStudied, saving} = study;
     const zh = lang === 'zh';
+    const waitTitle = saving ? (zh ? '你刚改的还在保存，存好再点' : 'Your last edit is still saving') : '';
     if (!studied) {
         return (
             <button
                 type="button"
                 data-testid="editor-studied"
                 onClick={() => setStudied(true)}
-                disabled={studyBusy}
-                title={studyError || (zh ? '学完了：取消置顶，收进处理记录的「学完的」，你改过的地方留给 agent 改进写法' : 'Finished studying: unpin it, file it under Studied, and keep your edits for your agent')}
+                disabled={studyBusy || saving}
+                title={studyError || waitTitle || (zh ? '学完了：取消置顶，收进处理记录的「学完的」，你改过的地方留给 agent 改进写法' : 'Finished studying: unpin it, file it under Studied, and keep your edits for your agent')}
                 className={button('secondary', 'sm')}
             >
                 <CheckCheck className="size-4" strokeWidth={2.15}/>
@@ -95,8 +96,8 @@ const StudiedControl = ({lang, study}) => {
                 <button
                     type="button"
                     data-testid="editor-studied"
-                    disabled={studyBusy}
-                    title={studyError || undefined}
+                    disabled={studyBusy || saving}
+                    title={studyError || waitTitle || undefined}
                     className={button('secondary', 'sm')}
                 >
                     <CheckCheck className="size-4" strokeWidth={2.15}/>

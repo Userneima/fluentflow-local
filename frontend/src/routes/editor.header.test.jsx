@@ -238,6 +238,13 @@ describe('the studied button in the header', () => {
         await screen.findByTestId('editor-pin');
         expect(screen.queryByTestId('editor-studied')).toBeNull();
     });
+
+    it('is not offered for a note kept only in this browser', async () => {
+        const {task_id: _none, ...result} = withFolder();
+        mount('/editor', result);
+        await screen.findByTestId('editor-pin');
+        expect(screen.queryByTestId('editor-studied')).toBeNull();
+    });
 });
 
 describe('the slim header', () => {

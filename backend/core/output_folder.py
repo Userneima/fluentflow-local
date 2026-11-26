@@ -949,7 +949,9 @@ def schedule_sync_when_quiet(task_id: str) -> None:
 def _on_result_saved(task_id: str, before: dict[str, Any] | None, after: dict[str, Any] | None) -> None:
     """Refresh a folder that already exists when what it holds changed, once
     the changes have stopped coming."""
-    if not isinstance(after, dict) or not isinstance(after.get(RESULT_KEY), dict):
+    from backend.core import test_copy
+
+    if not isinstance(after, dict) or not isinstance(after.get(RESULT_KEY), dict) or not test_copy.writable(task_id):
         return
     if _what_the_folder_holds(after) != _what_the_folder_holds(before):
         schedule_sync_when_quiet(task_id)

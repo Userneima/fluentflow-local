@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from backend.core import task_stop
+from backend.core import ffmpeg_cmd, task_stop
 from backend.core.task_watch import TaskCancelled
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ def _run(cmd: list[str], **kwargs: Any) -> "subprocess.CompletedProcess[str]":
     task_id = task_stop.current()
     if task_id and task_stop.requested(task_id):
         raise TaskCancelled("任务已取消")
-    return subprocess.run(cmd, **kwargs)
+    return ffmpeg_cmd.run(cmd, **kwargs)
 
 
 def _ffmpeg_path() -> str:

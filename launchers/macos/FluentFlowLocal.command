@@ -220,4 +220,5 @@ else
 	echo "  lsof -ti:${PORT} | xargs kill"
 fi
 echo ""
-exec "$VENV_PY" -m uvicorn backend.local_main:app --host 127.0.0.1 --port "$PORT" 2>&1 | tee -a "$LOG_FILE"
+# stdin 接 /dev/null：后端开的 ffmpeg 等子进程不会继承这个终端去等键盘输入（2026-11-25 抽音频卡死过）。
+exec "$VENV_PY" -m uvicorn backend.local_main:app --host 127.0.0.1 --port "$PORT" </dev/null 2>&1 | tee -a "$LOG_FILE"

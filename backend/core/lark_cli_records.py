@@ -58,7 +58,10 @@ def _created_unrecorded(
     artifact_root: Optional[Path], task_id: Optional[str], state: str = "",
 ) -> Optional[dict[str, Any]]:
     """The document an export of this task created and never finished, as a
-    ``sync`` whose chapters are read again from it, or None."""
+    ``sync`` whose chapters are read again from it, or None. ``first_push``
+    is what that export wrote (``lark_cli_images.first_push``), None when a
+    version before it kept only the document; ``images`` what the chapters a
+    resume cut off in turn rewrote became."""
     path = _created_path(artifact_root, task_id, state)
     if path is None or not path.is_file():
         return None
@@ -69,8 +72,8 @@ def _created_unrecorded(
     if not isinstance(document, dict) or not document.get("doc_id"):
         return None
     return {"doc_id": str(document["doc_id"]), "url": str(document.get("url") or ""),
-            "revision_id": document.get("revision_id"), "images": [], "headings": {},
-            "sections": None, "link_errors": []}
+            "revision_id": document.get("revision_id"), "images": document.get("images") or [], "headings": {},
+            "sections": None, "link_errors": [], "first_push": document.get("first_push")}
 
 
 def pushed_note_path(artifact_root: Optional[Path], task_id: Optional[str], state: str = "") -> Optional[Path]:
