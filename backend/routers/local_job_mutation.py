@@ -8,7 +8,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from backend.core import study_record, task_actions, task_activity
-from backend.core.job_store import PINNED_AT_KEY, delete_jobs, get_job, update_job_metadata
+from backend.core.job_store import PINNED_AT_KEY, delete_jobs, get_job, update_job_marks
 from backend.core.local_request_scope import request_client_id
 from backend.core.local_task_detail import build_task_snapshot
 from backend.core.storage_cleanup import cleanup_task_all_files
@@ -60,9 +60,10 @@ def pin_job(
 
     Stored as ``metadata.pinned_at`` (when it was pinned, newest first; absent
     when not pinned). ``updated_at`` is left alone on purpose: pinning is not a
-    change to the task, and unpinning one must put it back where it was. The
-    page applies the returned row itself; other windows see it on their next
-    full read.
+    change to the task, and unpinning one must put it back where it was;
+    ``metadata.marks_changed_at`` says when instead, so the page keeps this
+    over a reply read before it. The page applies the returned row itself;
+    other windows see it on their next full read.
     """
     client_id = _local_client_scope(request)
     job = get_job(task_id, client_id=client_id)
@@ -74,7 +75,7 @@ def pin_job(
     already = bool((job.get("metadata") or {}).get(PINNED_AT_KEY))
     if pinned != already:
         stamp = datetime.now(timezone.utc).isoformat() if pinned else None
-        update_job_metadata(task_id, {PINNED_AT_KEY: stamp})
+        update_job_marks(task_id, {PINNED_AT_KEY: stamp})
         job = get_job(task_id, client_id=client_id) or job
     # The same shape as GET /jobs/{id}, so the page can drop it into its list.
     return {**job, "task_snapshot": build_task_snapshot(job), "activity": task_activity.activity(job).as_dict()}

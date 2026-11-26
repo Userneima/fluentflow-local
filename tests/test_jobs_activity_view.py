@@ -95,9 +95,10 @@ def test_the_light_list_carries_activity_and_no_result(jobs_app):
         assert light[task_id]["activity"] == listed[task_id]["activity"], task_id
         assert guard.is_busy(light[task_id]) is busy
 
-    # The page's list: what the card shows, not the rest of the result.
+    # The page's list: what the card shows, and the two files the editor
+    # plays from the row while it reads the task, not the rest of the result.
     row = listed["idle-done"]
-    assert set(row["result"]["artifacts"]) == {"debreath_media"}
+    assert set(row["result"]["artifacts"]) == {"debreath_media", "playback_audio"}
     assert "transcript_text_preview" not in row["result"] and "summary_preview" not in row["result"]
     assert "raw_segments" not in row["result"]
     assert row["result"]["summary_chars"] == len("# 笔记\n" + "正文" * 200)
@@ -149,6 +150,6 @@ def test_the_restart_guard_answers_within_its_wait_on_300_tasks(jobs_app):
         thread.join(timeout=10)
 
     assert count == 2
-    assert asked and all(query == "view=activity" for query in asked)
+    assert asked and all(query == "view=activity&limit=100" for query in asked)
     # Both scopes are asked; each answer is a fraction of the guard's wait.
     assert took < guard.TIMEOUT_SECONDS / 2

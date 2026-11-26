@@ -60,3 +60,16 @@ def test_pin_rejects_a_non_boolean():
     response = _client().post(f"/jobs/{task_id}/pin", json={"pinned": "yes"}, headers=_HEADERS)
     assert response.status_code == 422
     assert not get_job(task_id)["metadata"].get("pinned_at")
+
+
+def test_each_pin_and_unpin_says_when_the_marks_changed():
+    """Pinning leaves updated_at alone, so the page tells a fresh pin from a
+    reply read before it by metadata.marks_changed_at, which must move on
+    every change, unpinning included."""
+    task_id = _task()
+    assert not get_job(task_id)["metadata"].get("marks_changed_at")
+    pinned = _client().post(f"/jobs/{task_id}/pin", json={"pinned": True}, headers=_HEADERS).json()
+    first = pinned["metadata"]["marks_changed_at"]
+    assert first
+    unpinned = _client().post(f"/jobs/{task_id}/pin", json={"pinned": False}, headers=_HEADERS).json()
+    assert unpinned["metadata"]["marks_changed_at"] > first

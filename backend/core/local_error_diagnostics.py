@@ -649,10 +649,16 @@ _DISK_FULL = ("no space left on device", "disk full", "磁盘已满", "磁盘满
 
 
 def playback_audio_diagnosis(result: Any) -> dict[str, Any] | None:
-    """Why this task has no playback audio, or None when nothing went wrong
-    making it. ``error`` keeps ffmpeg's text for an agent; the editor shows
-    ``detail`` under its player when nothing can play, and never quotes it."""
-    raw = str((result or {}).get("playback_audio_error") or "").strip() if isinstance(result, dict) else ""
+    """Why this task has no playback audio, or None when it has one (made
+    later, by a retry) or nothing went wrong making it. ``error`` keeps
+    ffmpeg's text for an agent; the editor shows ``detail`` under its player
+    when nothing can play, and never quotes it."""
+    if not isinstance(result, dict):
+        return None
+    artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
+    if artifacts.get("playback_audio") or result.get("playback_audio_available"):
+        return None
+    raw = str(result.get("playback_audio_error") or "").strip()
     if not raw:
         return None
     if any(token in raw.lower() for token in _DISK_FULL):

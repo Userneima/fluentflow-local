@@ -131,3 +131,22 @@ def test_the_background_service_gets_the_window_environment_without_a_command_li
     command = helper[helper.index("function Start-FluentFlowService"):helper.index("function Test-FluentFlowHealthy")]
     assert "Get-ChildItem Env:" in command and "--env-file" in command
     assert "set `\"$($_.Name)" not in command
+
+
+def test_every_busy_count_asks_the_light_list_capped_for_an_old_service():
+    """The light list ignores limit; a service from before it sends the full
+    list, which limit keeps to the newest tasks instead of every result."""
+    texts = [(ROOT / "fluentflow-env.ps1").read_text(encoding="utf-8-sig"),
+             (ROOT.parents[1] / "install.ps1").read_text(encoding="utf-8"),
+             (ROOT.parents[1] / "launchers" / "macos" / "count_active_jobs.py").read_text(encoding="utf-8")]
+    for text in texts:
+        assert "view=activity&limit=100" in text
+
+
+def test_the_launcher_asks_before_restarting_when_it_cannot_tell():
+    """A busy service can answer slower than the wait; that is not an idle
+    one, so the launcher asks, as the update and the stop icon do (-1)."""
+    text = (ROOT / "FluentFlowLocal.ps1").read_text(encoding="utf-8-sig")
+    assert "Get-RunningJobCount" not in text
+    assert "$running = Get-FluentFlowBusyCount $Port" in text
+    assert "if ($running -ne 0)" in text

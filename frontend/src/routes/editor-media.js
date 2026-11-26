@@ -180,8 +180,10 @@ export const useMediaSource = ({result, matchedLocalSourceFile, lang}) => {
     // Why FluentFlow has no audio of its own to play, when making it failed
     // after the transcription started (decision 4.23): the service words it,
     // only the task's own record carries it, and the player says it when
-    // nothing plays.
-    const playbackProblem = result?.playback_audio_problem?.detail || '';
+    // nothing plays. A retry that made the audio after all leaves the old
+    // reason on the record; with audio to play there is nothing to explain.
+    const hasPlaybackAudio = !!result?.artifacts?.playback_audio || !!result?.playback_audio_available;
+    const playbackProblem = hasPlaybackAudio ? '' : (result?.playback_audio_problem?.detail || '');
 
     return {mediaUrl, mediaKind, mediaLoading, mediaError, playbackProblem, setMediaError, loadMediaFile, mediaObjectUrlRef};
 };

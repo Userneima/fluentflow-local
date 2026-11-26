@@ -29,3 +29,13 @@ def test_the_reason_is_said_in_chinese_without_ffmpegs_words(error, cause):
 @pytest.mark.parametrize("result", [None, {}, {"playback_audio_available": True}, {"playback_audio_error": "  "}])
 def test_no_reason_when_nothing_failed(result):
     assert playback_audio_diagnosis(result) is None
+
+
+@pytest.mark.parametrize("made_later", [
+    {"artifacts": {"playback_audio": {"filename": "a_audio.mp3"}}},
+    {"playback_audio_available": True},
+])
+def test_no_reason_once_the_audio_was_made_after_all(made_later):
+    """A retry that made the audio leaves the old error on the result; the
+    page and agents must not still say it failed."""
+    assert playback_audio_diagnosis({"playback_audio_error": "No space left on device", **made_later}) is None

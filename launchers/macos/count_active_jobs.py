@@ -40,12 +40,14 @@ SCOPES = (None, "local-single-user")
 # few tenths of a second for 300 tasks; the full list read every result and
 # took 12 seconds on a busy machine (2026-11-25), past this wait, so the guard
 # answered "could not tell" on an idle queue. A service from before the view
-# ignores it and sends the full list, whose rows carry the same activity.
+# ignores it and sends the full list, whose rows carry the same activity; the
+# limit, which the view ignores, keeps that list to the newest 100 tasks.
 TIMEOUT_SECONDS = 10
+QUERY = "view=activity&limit=100"
 
 
 def count_for_scope(base_url: str, client_id: str | None) -> int | None:
-    request = urllib.request.Request(base_url.rstrip("/") + "/jobs?view=activity")
+    request = urllib.request.Request(base_url.rstrip("/") + "/jobs?" + QUERY)
     if client_id:
         request.add_header("X-FluentFlow-Client-Id", client_id)
     try:

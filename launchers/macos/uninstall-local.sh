@@ -72,12 +72,18 @@ fail() {
 step "检查服务是否在运行"
 health="$(curl -s --max-time 2 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
 if [[ "$health" == *'"execution":"local"'* ]]; then
-	# `|| true`：grep 数不到任何在跑的任务时返回 1，而 set -e 会让「一切正常」
-	# 这个最常见的情况直接终止脚本。
-	running="$(curl -s --max-time 3 "http://127.0.0.1:${PORT}/jobs?limit=100" 2>/dev/null |
-		grep -c '"status":"\(queued\|processing\|running\|pending\)"' || true)"
+	# 数任务交给 count_active_jobs.py，和启动器的重启确认用同一个口径：剪辑和
+	# 写笔记时任务已经记成完成，只有服务自己的 activity.busy 说得准。它只用标准库，
+	# 优先用项目虚拟环境里的 Python（没装命令行开发者工具的 Mac 上，系统的
+	# python3 是一个会弹窗的占位程序）。-1 表示查不清。
+	count_py="${REPO}/venv/bin/python"
+	[[ -x "$count_py" ]] || count_py="${REPO}/.venv/bin/python"
+	[[ -x "$count_py" ]] || count_py="python3"
+	running="$("$count_py" "${REPO}/launchers/macos/count_active_jobs.py" "http://127.0.0.1:${PORT}" 2>/dev/null || echo -1)"
 	echo "FluentFlow Local 正在端口 ${PORT} 上运行。"
-	if [[ "${running:-0}" -gt 0 ]]; then
+	if [[ "${running:--1}" == "-1" ]]; then
+		echo "⚠ 查不清后台有没有任务在进行，停止可能会打断正在转写的任务。"
+	elif [[ "$running" -gt 0 ]]; then
 		echo "⚠ 后台还有 ${running} 个任务在进行中，停止会让它们中断。"
 	fi
 	if [[ "$DRY_RUN" -eq 1 ]]; then

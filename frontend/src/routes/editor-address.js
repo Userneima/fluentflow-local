@@ -6,6 +6,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {useSearchParams} from 'react-router-dom';
 import {markBackendJob} from '../lib/taskState.js';
+import {taskStateRow} from '../lib/jobMappers.js';
 
 export const useEditorAddress = ({lastResult, getJob, setLastResult, setNoteReadFor, ingestJobs}) => {
     const [searchParams, setSearchParams] = useSearchParams();
@@ -35,7 +36,7 @@ export const useEditorAddress = ({lastResult, getJob, setLastResult, setNoteRead
                 // The header's 置顶 and 学完了 read the shared list, which on a
                 // fresh load holds the browser's cached copy until the whole
                 // list arrives; this task's own record says them now.
-                if (job.task_id) ingestJobs?.([markBackendJob(job)]);
+                if (job.task_id) ingestJobs?.([taskStateRow(markBackendJob(job))]);
                 setNoteReadFor(urlTaskId);
                 setUrlTask({id: urlTaskId, state: 'loaded'});
             })

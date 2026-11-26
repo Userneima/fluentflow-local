@@ -14,6 +14,7 @@ import {
     pickTranscriptSegments,
 } from '../app/shared.jsx';
 import {markBackendJob} from '../lib/taskState.js';
+import {taskStateRow} from '../lib/jobMappers.js';
 import {filterVisibleEditRecords, groupTranscriptParagraphs, mergeNoteFields, resultIdentity} from './editor-helpers.js';
 
 export const useResultTranscript = ({result, setLastResult, getJob, resultJobOptions, noteReadFor, setNoteReadFor, ingestJobs}) => {
@@ -77,7 +78,7 @@ export const useResultTranscript = ({result, setLastResult, getJob, resultJobOpt
                 const full = job?.result;
                 if (cancelled || !full) return;
                 // Its 置顶 and 学完了 too, as when the address opens a task.
-                if (job.task_id) ingestJobs?.([markBackendJob(job)]);
+                if (job.task_id) ingestJobs?.([taskStateRow(markBackendJob(job))]);
                 const fullSegments = pickTranscriptSegments(full);
                 const fullText = full.transcript_text || '';
                 const currentDisplayCount = pickDisplayTranscriptSegments(result, currentSegments).length;

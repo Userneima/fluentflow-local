@@ -77,10 +77,12 @@ def get_jobs(
 
 # What a list row leaves to the task's own read (``GET /jobs/{id}``, or its
 # ``/detail`` for the processing page), because no list reader uses it: the
-# files a task made (the card offers only the cut copy), the previews' second
-# copies, and the snapshot's files, actions and data checks. They were about a
-# third of the list's 3.2 MB on 300 tasks (2026-11-26).
-_LIST_ARTIFACTS = ("debreath_media",)
+# files a task made other than the two the editor plays from the row while it
+# reads the task (the cut copy, which the card offers too, and the playback
+# audio, which retranscribing also reads), the previews' second copies, and the
+# snapshot's files, actions and data checks. They were about a third of the
+# list's 3.2 MB on 300 tasks (2026-11-26).
+_LIST_ARTIFACTS = ("debreath_media", "playback_audio")
 _LIST_DROPPED_RESULT_KEYS = ("summary_preview", "transcript_text_preview")
 _LIST_DROPPED_SNAPSHOT_KEYS = ("artifacts", "actions", "step_statuses", "data_quality")
 

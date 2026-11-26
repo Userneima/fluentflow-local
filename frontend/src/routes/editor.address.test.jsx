@@ -20,6 +20,9 @@ const runtimeConfig = {allowedSttProviders: ['local'], defaultSttProvider: 'loca
 let jobs = {};
 let getJobCalls = [];
 let setResultFromTest = null;
+let uiLang = 'zh';
+// The service answering that a task's media file is not there.
+let mediaMissing = false;
 
 vi.mock('../app/AppContext.jsx', async () => {
     const React = await vi.importActual('react');
@@ -31,7 +34,10 @@ vi.mock('../app/shared.jsx', async () => {
     const actual = await vi.importActual('../app/shared.jsx');
     return {
         ...actual,
-        useI18n: () => ({t: (key) => key, lang: 'zh'}),
+        useI18n: () => ({t: (key) => key, lang: uiLang}),
+        apiFetch: (url, ...rest) => (mediaMissing && String(url).includes('/artifacts/')
+            ? Promise.resolve(new Response('', {status: 404}))
+            : actual.apiFetch(url, ...rest)),
         useSettings: () => ({loadSettings: () => ({}), saveSettings: () => {}}),
         // One object for the whole page, as the real useApi gives (useMemo).
         useApi: () => (globalThis.__addressTestApi ||= {
@@ -318,6 +324,7 @@ describe('switching while nothing plays', () => {
 // audio it plays and the recording is not kept either, the player says why in
 // the service's words, never ffmpeg's English; with audio, nothing is said.
 describe('the player without audio', () => {
+    afterEach(() => { mediaMissing = false; });
     const problem = {code: 'playback_audio_failed', detail: '播放用的音频没做成：当时这台电脑的磁盘满了。转录稿和笔记不受影响。',
         error: 'av_interleaved_write_frame(): No space left on device'};
 
@@ -338,6 +345,36 @@ describe('the player without audio', () => {
         mount('/editor?task=t1', light);
 
         expect(await screen.findByText(/播放用的音频没做成/)).toBeTruthy();
+    });
+
+    it('says nothing of it once the audio was made after all', async () => {
+        mediaMissing = true;
+        jobs.t1 = {task_id: 't1', result: task('t1', {source_file_available: false, playback_audio_available: true,
+            artifacts: {playback_audio: {filename: 't1_audio.mp3'}}, playback_audio_problem: problem})};
+        mount('/editor?task=t1');
+
+        expect(await screen.findByText('edit.mediaOpenFailed')).toBeTruthy();
+        expect(screen.queryByText(/播放用的音频没做成/)).toBeNull();
+    });
+
+    it('says a file that would not open in its own words, not the error behind it', async () => {
+        mediaMissing = true;
+        jobs.t1 = {task_id: 't1', result: task('t1', {source_file_available: false,
+            artifacts: {playback_audio: {filename: 't1_audio.mp3'}}})};
+        mount('/editor?task=t1');
+        expect(await screen.findByText('edit.mediaOpenFailed')).toBeTruthy();
+        expect(screen.queryByText(/读不到|unavailable|not found/i)).toBeNull();
+    });
+
+    it('gives the English page its own sentence, from the translations', async () => {
+        uiLang = 'en';
+        try {
+            jobs.t1 = {task_id: 't1', result: task('t1', {source_file_available: false, playback_audio_problem: problem})};
+            mount('/editor?task=t1');
+            expect(await screen.findByText('edit.playbackAudioFailed')).toBeTruthy();
+        } finally {
+            uiLang = 'zh';
+        }
     });
 
     it('says nothing of it when nothing failed', async () => {

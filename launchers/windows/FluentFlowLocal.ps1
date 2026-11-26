@@ -58,23 +58,6 @@ function Get-PortOwnerIds {
     }
 }
 
-function Get-RunningJobCount {
-    # The same answer as launchers/macos/count_active_jobs.py: a task reads
-    # completed once its transcript is stored while its cut and note still run,
-    # so the service's own activity.busy decides; status only for a service
-    # from before that answer existed.
-    try {
-        $jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?view=activity" -TimeoutSec 10
-        return @($jobs.jobs | Where-Object {
-            if ($_.activity -and ($_.activity.busy -is [bool])) { $_.activity.busy }
-            else { $_.status -in @("queued", "processing", "running", "pending") }
-        }).Count
-    } catch {
-        # The instance cannot answer for itself, so there is nothing worth keeping.
-        return 0
-    }
-}
-
 function Test-PortListening {
     $client = New-Object System.Net.Sockets.TcpClient
     try {
@@ -115,9 +98,16 @@ if ($health) {
         # broken instance is restarted without asking. The one case worth stopping
         # for is real work in flight: a dead interface does not mean a dead job, and
         # a three-hour transcription killed halfway starts over from nothing.
-        $running = Get-RunningJobCount
-        if ($running -gt 0) {
-            Write-Host "$running job(s) are still in progress. Restarting interrupts them: they carry on from where they stopped once the service is up, redoing only the step they were on."
+        # Counted as count_active_jobs.py does (Get-FluentFlowBusyCount): -1 when
+        # the service cannot say, which asks too, as the Mac launcher, the update
+        # and the stop icon do; a busy service that times out is not an idle one.
+        $running = Get-FluentFlowBusyCount $Port
+        if ($running -ne 0) {
+            if ($running -lt 0) {
+                Write-Host "Could not tell whether any job is still in progress. Restarting may interrupt a transcription."
+            } else {
+                Write-Host "$running job(s) are still in progress. Restarting interrupts them: they carry on from where they stopped once the service is up, redoing only the step they were on."
+            }
             Read-Host "Press Enter to restart anyway, or Ctrl+C to cancel" | Out-Null
         }
         foreach ($id in $ownerIds) { Stop-Process -Id $id -ErrorAction SilentlyContinue }

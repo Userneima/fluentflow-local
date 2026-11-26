@@ -246,7 +246,7 @@ def _mark(task_id: str, *, studied: bool, verdict: str | None, client_id: str | 
     if not studied:
         if previous.get("record_id"):
             note_feedback.remove_study(str(previous["record_id"]))
-        job_store.update_job_metadata(task_id, {STUDIED_KEY: None})
+        job_store.update_job_marks(task_id, {STUDIED_KEY: None})
         return {"studied": None}
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     if not str(result.get("summary_markdown") or "").strip():
@@ -266,7 +266,7 @@ def _mark(task_id: str, *, studied: bool, verdict: str | None, client_id: str | 
         "record_id": record["id"],
         "edits": edits["total"],
     }
-    job_store.update_job_metadata(task_id, {STUDIED_KEY: mark, job_store.PINNED_AT_KEY: None})
+    job_store.update_job_marks(task_id, {STUDIED_KEY: mark, job_store.PINNED_AT_KEY: None})
     return {"studied": mark}
 
 

@@ -603,3 +603,11 @@ def test_the_uninstaller_stops_programs_running_from_the_code_folder(tmp_path):
             if process.poll() is None:
                 os.kill(process.pid, signal.SIGKILL)
                 process.wait()
+
+
+def test_the_mac_uninstaller_counts_busy_tasks_as_the_launcher_does():
+    """A task reads completed while its cut and note still run; a grep over
+    the list's statuses missed them and waited only 3 seconds."""
+    text = _read(ROOT / "launchers" / "macos" / "uninstall-local.sh")
+    assert "count_active_jobs.py" in text
+    assert "/jobs?limit" not in text and "grep -c" not in text

@@ -48,14 +48,42 @@ const snapshotCurrentStage = (snapshot={}) => {
     return map[step] || '';
 };
 
+// The cut as a list row has it (backend job_store._debreath_summary): its
+// counts, not the survey's thousands of ranges.
+const compactCutForCache = (debreath) => {
+    if (!debreath || typeof debreath !== 'object') return debreath;
+    const survey = asObject(debreath.survey);
+    return {
+        ...debreath,
+        survey: debreath.survey ? {
+            has_report: Boolean(survey.has_report || survey.report),
+            to_judge: survey.to_judge,
+            rerendering: survey.rerendering,
+        } : debreath.survey,
+    };
+};
+
+// The browser keeps a copy of the list, not of each task: a task the editor
+// read whole carries megabytes of segments (5.5 MB for one long recording,
+// 2026-11-26), past what the browser stores, and a write that fails leaves
+// the copy at an old version. Every *segments field goes, whatever its
+// prefix (raw_, display_, stt_raw_, source_*); the editor reads them again.
 const minimizeJobForCache = (job) => {
     if (!job || typeof job !== 'object') return null;
-    const {__cacheOnly, ...persistedJob} = job;
+    const {__cacheOnly, __marksOnly, ...persistedJob} = job;
     const result = job.result && typeof job.result === 'object' ? job.result : null;
+    const withoutSegments = result ? Object.fromEntries(
+        Object.entries(result).map(([key, value]) => [key, key.endsWith('segments') ? null : value]),
+    ) : result;
+    const visualNote = asObject(result?.visual_note);
     return {
         ...persistedJob,
         result: result ? {
-            ...result,
+            ...withoutSegments,
+            debreath: compactCutForCache(result.debreath),
+            visual_note: result.visual_note && typeof result.visual_note === 'object'
+                ? {...visualNote, markdown: compactTextForCache(visualNote.markdown)}
+                : result.visual_note,
             transcript_text_preview: result.transcript_text_preview || compactTextForCache(result.transcript_text),
             transcript_text: compactTextForCache(result.transcript_text),
             summary_markdown: compactTextForCache(result.summary_markdown),
@@ -92,6 +120,32 @@ export const writeCachedAccountJobs = (accountId, jobs) => {
     } catch(_) {}
 };
 
+// The user's marks on a task (置顶, 学完了) and when they last changed
+// (metadata.marks_changed_at, written with them by the service). Marking
+// leaves updated_at alone on purpose, so the row with the later change time
+// decides them, whichever row wins otherwise: a reply read before the click
+// and arriving after it must not put the old mark back.
+const MARK_KEYS = ['pinned_at', 'studied', 'marks_changed_at'];
+const marksChangedAt = (job) => String(job?.metadata?.marks_changed_at || '');
+const withMarksOf = (job, from) => {
+    const metadata = {...asObject(job.metadata)};
+    const source = asObject(from.metadata);
+    MARK_KEYS.forEach((key) => {
+        if (key in source) metadata[key] = source[key];
+        else delete metadata[key];
+    });
+    return {...job, metadata};
+};
+
+// A row that brings only a task's state and marks (``taskStateRow``) onto the
+// list's own row, which keeps its trimmed result.
+const STATE_KEYS = ['status', 'task_state', 'stage', 'summary_status', 'updated_at'];
+const withStateOf = (job, from) => {
+    const next = {...job, metadata: {...asObject(job.metadata), ...asObject(from.metadata)}};
+    STATE_KEYS.forEach((key) => { if (key in from) next[key] = from[key]; });
+    return next;
+};
+
 export const mergeCachedJobs = (...groups) => {
     const byKey = new Map();
     const order = [];
@@ -103,12 +157,33 @@ export const mergeCachedJobs = (...groups) => {
         const existing = byKey.get(key);
         if (!existing) {
             order.push(key);
-            byKey.set(key, job);
+            const {__marksOnly, ...row} = job;
+            byKey.set(key, row);
             return;
         }
-        if (timestampForJob(job) >= timestampForJob(existing)) byKey.set(key, job);
+        const newer = timestampForJob(job) >= timestampForJob(existing);
+        let next = existing;
+        if (newer) next = job.__marksOnly ? withStateOf(existing, job) : job;
+        if (marksChangedAt(job) > marksChangedAt(existing)) next = withMarksOf(next, job);
+        else if (marksChangedAt(existing) > marksChangedAt(job)) next = withMarksOf(next, existing);
+        if (next.__marksOnly) {
+            const {__marksOnly, ...row} = next;
+            next = row;
+        }
+        byKey.set(key, next);
     });
     return order.map((key) => byKey.get(key)).filter(Boolean);
+};
+
+// What the editor's own read of a task (GET /jobs/{id}, the whole result)
+// puts into the shared list: its state and marks onto the list's row, so the
+// header's 置顶 and 学完了 are right before the whole list arrives, without
+// the megabytes of transcript the list and its browser copy have no use for.
+// With no row yet, the list's shape of it: the result as minimizeJobForCache
+// keeps it, until the whole list replaces it.
+export const taskStateRow = (job) => {
+    const row = minimizeJobForCache(job);
+    return row ? {...row, __marksOnly: true} : row;
 };
 
 export const taskKeyForJob = (job) => String(job?.task_id || job?.result?.task_id || '').trim();

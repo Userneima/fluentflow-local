@@ -563,6 +563,10 @@ RESTART_INTERRUPTION_KEY = "restart_interruption"
 # Metadata key for a record the user pinned to the top of the list: when it
 # was pinned (ISO time), null or absent when it is not.
 PINNED_AT_KEY = "pinned_at"
+# When the user last pinned, unpinned, marked studied or took it back (ISO time
+# in UTC). Those marks leave ``updated_at`` alone on purpose, so the page
+# compares this instead to tell a fresh mark from a reply read before it.
+MARKS_CHANGED_AT_KEY = "marks_changed_at"
 
 
 def list_unacknowledged_restart_interruptions(
@@ -747,6 +751,13 @@ def update_job_metadata(
             (json.dumps(merged, ensure_ascii=False), task_id),
         )
     return True
+
+
+def update_job_marks(task_id: str, fields: dict[str, Any], db_path: Path | str = DEFAULT_DB_PATH) -> bool:
+    """Write the user's marks (pinned, studied) with the time they changed,
+    ``MARKS_CHANGED_AT_KEY``, the only way those keys are written."""
+    stamp = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return update_job_metadata(task_id, {**fields, MARKS_CHANGED_AT_KEY: stamp}, db_path)
 
 
 def reopen_job(task_id: str, db_path: Path | str = DEFAULT_DB_PATH) -> bool:

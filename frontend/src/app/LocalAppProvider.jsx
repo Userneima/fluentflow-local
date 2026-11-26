@@ -157,9 +157,19 @@ export const LocalAppProvider = ({children}) => {
             .then((data) => {
                 if (!active) return;
                 const fetched = Array.isArray(data?.jobs) ? data.jobs : [];
-                const next = reconcileTaskList({fetched, cached, accountId: LOCAL_SCOPE, fetchedIsComplete: true});
-                setTasks(next);
-                const running = next.find((job) => [TASK_STATE_RUNNING, TASK_STATE_QUEUED].includes(normalizeTaskState(job)));
+                // Onto the list as it is now, not as the browser had it at
+                // load: a pin or 学完了 clicked while this was on its way is
+                // already in it, newer than what this read says.
+                setTasks((current) => reconcileTaskList({
+                    fetched,
+                    cached: current,
+                    tombstones: tombstonesRef.current,
+                    cancelled: cancelledRef.current,
+                    accountId: LOCAL_SCOPE,
+                    fetchedIsComplete: true,
+                }));
+                const running = reconcileTaskList({fetched, accountId: LOCAL_SCOPE})
+                    .find((job) => [TASK_STATE_RUNNING, TASK_STATE_QUEUED].includes(normalizeTaskState(job)));
                 if (running) setCurrentJob(jobToCurrentJob(running));
             })
             .catch((error) => { if (active) reportBackendError(error); });

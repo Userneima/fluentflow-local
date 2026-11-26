@@ -72,6 +72,16 @@ def test_studied_unpins_and_files_it_under_its_recordings_folder():
     assert metadata["studied"]["verdict"] == "good"
 
 
+def test_marking_and_taking_back_say_when_the_marks_changed():
+    """Studied leaves updated_at alone, as the pin does; the page compares
+    metadata.marks_changed_at to keep a fresh mark over an older reply."""
+    task_id = _task(WRITTEN, note_versions.GENERATED)
+    study_record.mark(task_id)
+    first = get_job(task_id)["metadata"]["marks_changed_at"]
+    study_record.mark(task_id, studied=False)
+    assert get_job(task_id)["metadata"]["marks_changed_at"] > first
+
+
 def test_a_task_without_a_recording_on_this_machine_is_grouped_as_links():
     task_id = _task(WRITTEN, note_versions.GENERATED)
     study_record.mark(task_id)
