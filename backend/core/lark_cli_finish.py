@@ -32,8 +32,8 @@ def _finish(
 ) -> None:
     """After the writes: note each chapter's heading block, point each link to
     a heading at that heading, and note the revision, all on ``sync``. A link
-    that cannot be fixed keeps its words and is listed; the document stands
-    either way."""
+    that cannot be fixed keeps its words and is listed, with the ones the
+    caller already reported; the document stands either way."""
     try:
         outline = lark_cli_run._run(
             runner,
@@ -43,7 +43,10 @@ def _finish(
         )
     except LarkCliError as exc:
         logger.warning("lark-cli outline fetch failed for %s: %s", doc_id, exc)
-        sync["link_errors"] = [link.label for link in links]
+        # The links this push wrote stay unpointed too, and are listed with
+        # the ones already reported: the user is told every placeholder the
+        # document still holds.
+        sync["link_errors"].extend(link.label for link in links)
         # The document was written; only its headings' ids are not known. The
         # next export reads them again (``reread_sections``) before writing,
         # rather than the note dropping out of sync (owner, 2026-10-24: a

@@ -249,8 +249,9 @@ def export_markdown_via_lark_cli(
                 # The note is not the one that export wrote, so a placeholder
                 # in the document cannot be told from one this note would
                 # write: pointing the wrong chapter is worse than a
-                # placeholder left in sight, so they stay and are reported.
-                sync["link_errors"] = [link["label"] for link in left]
+                # placeholder left in sight, so they stay and are reported,
+                # with the ones ``_update`` reported for its own chapters.
+                sync["link_errors"].extend(link["label"] for link in left)
                 left = []
             links = [feishu_note.HeadingLink(**link) for link in left]
             _finish(runner, bin_path, doc_id, str(previous.get("url") or ""), links, parts, sync)

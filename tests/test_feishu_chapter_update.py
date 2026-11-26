@@ -969,6 +969,66 @@ def test_a_record_whose_note_is_not_the_one_it_wrote_points_no_link(tmp_path):
     assert result["sync"]["link_errors"] == ["第三章"]
 
 
+def _cut_off_with_the_note_replaced(tmp_path, doc: FakeDoc, note: str) -> str:
+    """``note`` pushed and cut off before its links were pointed, its record
+    kept in the older shape (document only), and the note written again since:
+    the next export can trust neither its pictures nor its links. Returns the
+    note as it is now, the first chapter of which links to a heading the
+    document does not have."""
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", note, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, lambda c: "--scope" in c))
+    doc.blocks = [b for b in doc.blocks if b["text"] not in ("三、结尾", "结尾的话。")]
+    pushed = """# 访谈
+
+## 一、开场
+
+开场的话。
+
+## 二、框架
+
+框架的话，见[[#三、结尾|第三章]]。
+"""
+    record = tmp_path / "t1" / cli.CREATED
+    older = json.loads(record.read_text(encoding="utf-8"))
+    older.pop("first_push")
+    record.write_text(json.dumps(older), encoding="utf-8")
+    cli.save_pushed_note(tmp_path, "t1", pushed)
+    os.utime(record, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    os.utime(tmp_path / "t1" / cli.PUSHED_NOTE, ns=(1_700_000_009_000_000_000, 1_700_000_009_000_000_000))
+    return pushed.replace("开场的话。", "开场的话，见[[#四、附录|附录]]。")
+
+
+def test_the_links_the_rewrite_reports_are_kept_with_the_ones_left_in_place(tmp_path):
+    """A resume rewrites a chapter whose link has no heading (reported), and
+    leaves the placeholders of the note it cannot vouch for in place
+    (reported): the task lists both, not only the last it found."""
+    doc = FakeDoc()
+    edited = _cut_off_with_the_note_replaced(tmp_path, doc, NOTE)
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert result["sync"]["link_errors"] == ["附录", "第三章"]
+
+
+def test_links_reported_before_the_chapters_cannot_be_read_are_not_dropped(tmp_path):
+    """From the snapshot on, reading the document's chapters fails: the links
+    this push wrote are reported, and the ones already reported stay, so the
+    task still lists every placeholder left in the document."""
+    doc = FakeDoc()
+    edited = _cut_off_with_the_note_replaced(tmp_path, doc, NOTE)
+
+    def runner(cmd, **kwargs):
+        if cmd[1:3] == ["drive", "metas"]:
+            doc.fail_outline = True
+        return doc(cmd, **kwargs)
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=runner)
+
+    assert result["sync"]["sections"] is None
+    assert result["sync"]["link_errors"] == ["附录", "第三章"]
+
+
 def test_a_resume_numbers_its_links_after_the_first_push_s_even_when_that_chapter_is_gone(tmp_path):
     """The first push put its second link in a chapter a resume since deleted,
     and that resume saved the note without noting the record: the next resume
