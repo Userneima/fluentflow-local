@@ -282,32 +282,44 @@ async def stop_step(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
     there."""
     job = _job(task_id, client_id, "任务不存在")
     current = task_activity.activity(job)
-    open_steps = [name for name, status in task_steps.statuses(task_steps.steps_of([task_id]).get(task_id, [])).items()
-                  if status in task_steps.OPEN]
+    recorded = (await task_steps.steps_of_off_loop([task_id])).get(task_id, [])
+    open_steps = [name for name, status in task_steps.statuses(recorded).items() if status in task_steps.OPEN]
+
     if not open_steps and not JOB_EVENTS.is_running(task_id):
         if current.busy:
             raise Refused("这是单独发起的重新剪辑或重写笔记，不能停下，等它做完。", "rerun_not_stoppable")
         raise Refused("这个任务现在没有在做的步骤。", "not_working")
     step = current.current_step or (open_steps[0] if open_steps else None)
     killed = task_stop.request(task_id)
-    cancelled = await JOB_EVENTS.cancel(task_id)
-    # Whatever no runner closes (a task still waiting for its turn).
-    task_steps.close_open(task_id, stopped=True)
-    if (job.get("status") in {"queued", "running"} and not task_stop.shutting_down()
-            and _transcript_note_under_way(task_id, client_id)):
+    stopped_at_its_note = (job.get("status") in {"queued", "running"} and not task_stop.shutting_down()
+                           and _transcript_note_under_way(task_id, client_id))
+    if stopped_at_its_note:
         # A transcript file (a subtitle file, a link's captions) whose
         # transcript is stored and whose first note was being written: stopped
         # at its note, as a recording is once its transcript is stored. It
         # read 已取消 before (the review of 2026-11-26), while its note step
         # read 已停下; 接着做 writes the note from the stored transcript. Not
         # while the service stops: the steps stay as they are then, and a
-        # cancelled task keeps the user's stop over the restart.
+        # cancelled task keeps the user's stop over the restart. Written
+        # before the runner is cancelled: a cancelled runner marks its task
+        # 已取消, and a cancelled task cannot be written back (``upsert_job``),
+        # so the order decided which one the user saw (review of 2026-11-27).
         local_intake_flow._patch_result(task_id, client_id, {
             "summary_status": "failed", "summary_error": task_steps.STOPPED_NOTE, "summary_skipped": False,
         })
         upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed",
                    client_id=job.get("client_id"), metadata={"queue_wait": None})
-    elif job.get("status") in {"queued", "running"}:
+    cancelled = await JOB_EVENTS.cancel(task_id)
+    # Whatever no runner closes (a task still waiting for its turn).
+    await task_steps.close_open_off_loop(task_id, stopped=True)
+    if not task_stop.shutting_down():
+        # The run is over, so the page must stop saying it was carried on after
+        # a restart. A run that ended by itself clears it; a task stopped
+        # before its runner started has no run to do that, and would keep the
+        # mark over its own 已停下 (review of 2026-11-27).
+        update_job_metadata(task_id, {task_flow.RESTART_RESUMED_KEY: None})
+
+    if not stopped_at_its_note and job.get("status") in {"queued", "running"}:
         # Stopped before its transcript was stored: it reads stopped now, as a
         # cancel does, not once the task ahead of it in line is done (its
         # runner keeps its place until then, so the line stays serial).
@@ -368,7 +380,7 @@ async def resume_task(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
         raise Refused("这个任务刚停下，还占着排队的位置，等前面那条做完再接着做。", "still_stopping")
     if task_id in debreath_job.running_task_ids() or visual_note_job.is_claimed(task_id):
         raise Refused("上次停下的那一步还在收尾，过几秒再接着做。", "still_stopping")
-    steps = task_steps.steps_of([task_id]).get(task_id, [])
+    steps = (await task_steps.steps_of_off_loop([task_id])).get(task_id, [])
     if not steps:
         raise Refused("这个任务是在记录步骤之前处理的，没法从中断处接着做；可以重新提交这个文件。", "no_steps")
     start_at = task_activity.resume_point(task_id, steps)
@@ -401,7 +413,7 @@ async def _carry_on(job: dict[str, Any], start_at: str, *, route: str) -> None:
     elif link_submission.captions_of(job) is not None:
         started = await link_submission.resume_captions_note(job, route=route, start_at=start_at)
     elif start_at == task_steps.FETCH and link_submission.link_of(job) and task_submission.find_source_file(task_id) is None:
-        task_steps.reopen_from(task_id, start_at)
+        await task_steps.reopen_from_off_loop(task_id, start_at)
         reopen_job(task_id)
         try:
             started = await link_submission.resume_link_download(job)

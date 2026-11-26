@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import UploadFile
 
 from backend.core.job_event_hub import JobEventHub
+from backend.core import job_store
 from backend.core.job_store import upsert_job
 from backend.core.video_source import SavedVideoSource
 from backend.routers import local_job_debreath, local_job_visual_note
@@ -796,3 +797,92 @@ def test_recordings_and_jobs_that_never_wait_mixed_run_one_at_a_time_and_all_fin
 
     asyncio.run(scenario())
     assert not overlap, f"recordings ran together: {overlap}"
+
+
+# ── taking a place in line before anything is written ──────────────────────
+#
+# The steps of a task are read and written off the event loop (decision 8.30),
+# so the queue takes the task's place in line before those awaits. Review of
+# 2026-11-27: arriving order and a stop pressed meanwhile both depend on it.
+
+def test_two_submissions_keep_the_order_they_arrived_in(monkeypatch):
+    """Two submissions arriving together are queued in the order they arrived:
+    the first one's step write is held, and the second must not overtake it."""
+    from backend.core import task_steps
+
+    entered: list[str] = []
+    release = asyncio.Event()
+    real_plan = task_steps.plan_off_loop
+
+    async def slow_plan(task_id):
+        entered.append(task_id)
+        if len(entered) == 1:
+            await release.wait()  # the first arrival is held here
+            # Long enough that, without a place in line taken before this
+            # write, the second one reaches its own place first.
+            await asyncio.sleep(0.2)
+        else:
+            release.set()  # the second one lets it go, and rushes on
+        await real_plan(task_id)
+
+    monkeypatch.setattr(task_steps, "plan_off_loop", slow_plan)
+
+    async def worker(_previous, done):
+        await asyncio.sleep(0.05)
+        done.set()
+
+    async def scenario():
+        first = asyncio.ensure_future(tq._start_behind_queue(
+            task_id="order-a", client_id=None, route="t", stage="x", chained_worker=worker))
+        assert await _until_true(lambda: entered == ["order-a"]), entered
+        second = asyncio.ensure_future(tq._start_behind_queue(
+            task_id="order-b", client_id=None, route="t", stage="x", chained_worker=worker))
+        assert await _until_true(lambda: "order-b" in entered), entered
+        in_line = [link["task_id"] for link in tq._QUEUE_LINE if link["task_id"] in {"order-a", "order-b"}]
+        assert in_line == ["order-a", "order-b"], in_line
+        assert await asyncio.gather(first, second) == [True, True]
+
+    asyncio.run(scenario())
+
+
+def test_a_stop_pressed_while_the_steps_are_written_keeps_the_task_stopped(monkeypatch):
+    """A task stopped between taking its place in line and starting its runner
+    does not start afterwards: ``JOB_EVENTS.cancel`` finds no runner then, and
+    a runner that started would clear the stop (``task_stop.begin``)."""
+    from backend.core import task_actions, task_flow
+    from backend.core import task_steps
+
+    task_id = "queue-stopped-while-planning"
+    upsert_job(task_id=task_id, status="queued", client_id=None, stage="queued", progress=0,
+               metadata={task_flow.RESTART_RESUMED_KEY: {"step": task_steps.FETCH, "at": "2026-11-27T00:00:00"}})
+    ran: list[str] = []
+    planning = asyncio.Event()
+    release = asyncio.Event()
+    real_plan = task_steps.plan_off_loop
+
+    async def slow_plan(tid):
+        await real_plan(tid)
+        planning.set()
+        await release.wait()
+
+    monkeypatch.setattr(task_steps, "plan_off_loop", slow_plan)
+
+    async def worker(_previous, done):
+        ran.append(task_id)
+        done.set()
+
+    async def scenario():
+        start = asyncio.ensure_future(tq._start_behind_queue(
+            task_id=task_id, client_id=None, route="t", stage="x", chained_worker=worker))
+        assert await _until_true(planning.is_set), "the steps were never written"
+        # The user presses 停止 now, while the queue still holds the plan write.
+        await task_actions.stop_step(task_id, None)
+        release.set()
+        assert await start is False, "the stopped task started anyway"
+        await _settle()
+        assert ran == []
+        steps = task_steps.statuses(task_steps.steps_of([task_id]).get(task_id, []))
+        assert steps[task_steps.FETCH] == task_steps.STOPPED, steps
+        assert not (job_store.get_job(task_id).get("metadata") or {}).get(task_flow.RESTART_RESUMED_KEY)
+
+    asyncio.run(scenario())

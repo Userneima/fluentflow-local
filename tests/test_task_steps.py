@@ -298,40 +298,126 @@ def test_the_feishu_step_says_what_came_of_the_export(monkeypatch, task_id):
     assert (feishu["status"], feishu["error_reason"]) == ("failed", "飞书没登录")
 
 
-def test_the_step_records_are_never_written_on_the_event_loop(monkeypatch, task_id):
+class _StepStoreWatch:
+    """Records every task-store read and write that runs on the loop's thread.
+
+    The test's own reads go through ``steps`` below and are not counted: they
+    run on purpose, from here."""
+
+    def __init__(self, monkeypatch):
+        self.on_the_loop: list[str] = []
+        self._reading_here = False
+        loop_thread = threading.main_thread()
+        real_write, real_read = job_store.write_task_steps, job_store.list_task_steps
+
+        def note(what: str) -> None:
+            if not self._reading_here and threading.current_thread() is loop_thread:
+                self.on_the_loop.append(what)
+
+        def write(*args, **kwargs):
+            note("write")
+            return real_write(*args, **kwargs)
+
+        def read(*args, **kwargs):
+            note("read")
+            return real_read(*args, **kwargs)
+
+        monkeypatch.setattr(job_store, "write_task_steps", write)
+        monkeypatch.setattr(job_store, "list_task_steps", read)
+
+    def steps(self, task_id: str) -> dict[str, dict]:
+        """The task's steps, read by the test itself."""
+        self._reading_here = True
+        try:
+            return _steps(task_id)
+        finally:
+            self._reading_here = False
+
+
+def test_the_step_records_are_never_written_on_the_event_loop(monkeypatch, task_id, tmp_path):
     """Requirement (decision 8.30): writing a step waits for the disk (on the
-    GitHub Windows machine 33 ms median, up to 400), so the flow, which runs on
-    the loop that also answers the page and agents, hands every write and read
-    of the task store to a worker thread."""
+    GitHub Windows machine 33 ms median, up to 400), so everything that runs on
+    the loop that also answers the page and agents hands every write and read of
+    the task store to a worker thread: a recording's whole flow, a subtitle
+    file read where it is, and the stop endpoint (review of 2026-11-27)."""
+    watch = _StepStoreWatch(monkeypatch)
+    # A recording, through its whole flow.
     _queued(task_id)
     flow = Flow(task_id)
     flow.render_gate.set()
     flow.note_gate.set()
     _wire(monkeypatch, flow)
-    on_the_loop: list[str] = []
-    loop_thread = threading.main_thread()
-    real_write, real_read = job_store.write_task_steps, job_store.list_task_steps
-
-    def write(*args, **kwargs):
-        if threading.current_thread() is loop_thread:
-            on_the_loop.append("write")
-        return real_write(*args, **kwargs)
-
-    def read(*args, **kwargs):
-        if threading.current_thread() is loop_thread:
-            on_the_loop.append("read")
-        return real_read(*args, **kwargs)
-
-    monkeypatch.setattr(job_store, "write_task_steps", write)
-    monkeypatch.setattr(job_store, "list_task_steps", read)
-
     asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), FLOW_SECONDS))
-
-    # Before reading the steps below, which would count itself.
-    assert on_the_loop == []
-    steps = _steps(task_id)
+    assert watch.on_the_loop == []
+    steps = watch.steps(task_id)
     assert steps["note"]["status"] == task_steps.DONE
     assert all(step["status"] in task_steps.ENDS for step in steps.values())
+
+    # A subtitle file read where it is (``transcript_note``), its note faked.
+    from backend.core import transcript_note as tn
+
+    subtitle = tmp_path / "课.srt"
+    subtitle.write_text("1\n00:00:01,000 --> 00:00:02,000\n你好\n", encoding="utf-8")
+
+    async def fake_summarize(**_kwargs):
+        return {"task_id": _kwargs.get("task_id"), "transcript_text": "你好"}
+
+    monkeypatch.setattr(tn, "summarize_transcript_source", fake_summarize)
+    started = asyncio.run(asyncio.wait_for(
+        tn.submit_subtitle_in_place(subtitle, client_id=None, options={}, route="/t", origin={}),
+        FLOW_SECONDS,
+    ))
+    assert watch.on_the_loop == []
+    assert all(step["status"] in task_steps.ENDS
+               for step in watch.steps(started["task_id"]).values())
+
+    # The stop endpoint, on a task with a step open and no runner.
+    from backend.core import task_actions
+
+    stopping = task_id + "-stop"
+    job_store.upsert_job(task_id=stopping, status="running", stage="cut", progress=50)
+    task_steps.plan(stopping)
+    task_steps.start(stopping, task_steps.CUT)
+    watch.on_the_loop.clear()  # the setup above is the test's own, on the loop
+    asyncio.run(task_actions.stop_step(stopping, None))
+    # The write and the close are off the loop; the one read is
+    # ``task_activity``'s, which the page asks too (docs/01-待办.md).
+    assert watch.on_the_loop == ["read"], watch.on_the_loop
+    assert watch.steps(stopping)[task_steps.CUT]["status"] == task_steps.STOPPED
+
+
+def test_a_second_cancel_waits_out_the_write_too(monkeypatch, task_id):
+    """Requirement (decision 8.30, review of 2026-11-27): a stop and then the
+    service stopping arrive as two cancellations. Both have to wait for a write
+    already handed to its thread: escaping on the second put the close that
+    follows beside it, on the same task's steps."""
+    started, release, wrote = threading.Event(), threading.Event(), threading.Event()
+
+    def slow_write(*_args, **_kwargs):
+        started.set()
+        assert release.wait(30), "the write was never let go"
+        wrote.set()
+
+    monkeypatch.setattr(job_store, "write_task_steps", slow_write)
+
+    async def scenario():
+        task = asyncio.ensure_future(task_steps.start_off_loop(task_id, task_steps.NOTE))
+        for _ in range(300):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert started.is_set(), "the write never began"
+        task.cancel()  # the user stops the step
+        await asyncio.sleep(0.05)
+        task.cancel()  # then the service stops
+        await asyncio.sleep(0.05)
+        assert not task.done(), "the cancellation came through with the write still running"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert wrote.is_set(), "the write did not finish before the cancellation"
+
+    asyncio.run(scenario())
 
 
 def test_a_restart_closes_what_was_running_and_leaves_an_agent_wait_alone(task_id):

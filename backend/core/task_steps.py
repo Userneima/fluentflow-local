@@ -88,16 +88,22 @@ async def _off_loop(call: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
 
     A call already handed to the thread finishes before a cancellation goes
     on, so the code that closes a stopped or failed run's steps never races a
-    write that is still on its way. Each such wait is one commit: that is the
-    same wait this call would have made on the loop."""
+    write that is still on its way. Every cancellation is waited out, not just
+    the first (a stop, then the service stopping): each one lands while the
+    thread is still writing, and escaping on the second would put the close
+    back beside it. Each such wait is one commit: the same wait this call
+    would have made on the loop."""
     pending = asyncio.ensure_future(asyncio.to_thread(call, *args, **kwargs))
     try:
         return await asyncio.shield(pending)
     except asyncio.CancelledError:
-        try:
-            await asyncio.shield(pending)
-        except BaseException:  # noqa: BLE001 - the cancellation goes on all the same
-            logger.debug("a task-store call did not finish before the cancellation", exc_info=True)
+        while not pending.done():
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:  # noqa: BLE001 - the call's own failure is not the caller's
+                break
         raise
 
 

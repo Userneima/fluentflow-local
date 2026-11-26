@@ -492,17 +492,18 @@ async def _write_transcript_note(
 _NOT_FOR_TRANSCRIPT_FILES = (task_steps.TRANSCRIBE, task_steps.CORRECT, task_steps.CUT, task_steps.COMPRESS)
 
 
-def transcript_read(task_id: str, *, note: bool) -> None:
+async def transcript_read(task_id: str, *, note: bool) -> None:
     """A transcript file (a subtitle file by path, a link's captions) was read
     and will be stored: the fetch is done, the steps it never does are
     skipped, and the note, when one is wanted, is its own step from here. A
     stop while the note is written then carries the task on at its note, from
     the stored transcript the user may have edited, not from reading the file
-    again (second review of decision 6.95)."""
-    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
-    task_steps.skip_pending(task_id, _NOT_FOR_TRANSCRIPT_FILES)
+    again (second review of decision 6.95). Awaited from the event loop, so
+    the writes go to a worker thread (decision 8.30)."""
+    await task_steps.finish_off_loop(task_id, task_steps.FETCH, task_steps.DONE)
+    await task_steps.skip_pending_off_loop(task_id, _NOT_FOR_TRANSCRIPT_FILES)
     if note:
-        task_steps.start(task_id, task_steps.NOTE)
+        await task_steps.start_off_loop(task_id, task_steps.NOTE)
 
 
 def stored_transcript_of(job: dict[str, Any]) -> bool:
@@ -548,7 +549,7 @@ async def export_stored_note(task_id: str, client_id: Optional[str]) -> None:
         upsert_job(task_id=task_id, status="completed", client_id=client_id, stage="done", progress=100)
     export = task_flow.export_agent_note_if_asked(task_id, client_id)
     if export is None:
-        task_steps.skip_open(task_id)
+        await task_steps.skip_open_off_loop(task_id)
         return
     await asyncio.to_thread(export.join)
 
@@ -672,7 +673,7 @@ async def resume_subtitle_in_place(job: dict[str, Any], *, route: str, start_at:
     options = dict(stored) if isinstance(stored, dict) else {}
     title = str(metadata.get("display_title") or options.get("title") or "").strip() or source.stem
     resume_at = stored_resume_point(job, start_at)
-    task_steps.reopen_from(task_id, resume_at)
+    await task_steps.reopen_from_off_loop(task_id, resume_at)
     if not (resume_at != task_steps.FETCH and job.get("status") == "completed"):
         reopen_job(task_id)
     return await _start_subtitle_run(task_id, source, client_id=job.get("client_id"), options=options,
@@ -702,8 +703,8 @@ async def _start_subtitle_run(
             raise
         finally:
             done.set()
-            task_steps.close_open(task_id, stopped=stopped)
             update_job_metadata(task_id, {RESTART_RESUMED_KEY: None})
+            await task_steps.close_open_off_loop(task_id, stopped=stopped)
 
     return await _start_behind_queue(task_id=task_id, client_id=client_id, route=route,
                                      stage="transcript_file", chained_worker=worker)
@@ -725,14 +726,16 @@ async def _run_subtitle_in_place(
         await export_stored_note(task_id, client_id)
         return
     if resume_at == task_steps.NOTE:
-        task_steps.start(task_id, task_steps.NOTE)
+        await task_steps.start_off_loop(task_id, task_steps.NOTE)
         await note_from_stored_transcript(task_id, client_id=client_id, options=options, route=route)
     else:
         if not await _read_subtitle_in_place(task_id, source, client_id=client_id, options=options,
                                              title=title, route=route):
             return
-    task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
-    task_steps.skip_open(task_id)
+    await task_steps.settle_off_loop(
+        task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)),
+    )
+    await task_steps.skip_open_off_loop(task_id)
     output_folder.schedule_sync(task_id)
     # FluentFlow's model wrote the note: sent to Feishu when the user turned
     # on the automatic export, as the agent's note is once it saves it.
@@ -744,7 +747,7 @@ async def _read_subtitle_in_place(
 ) -> bool:
     """Read the file, store its transcript and write the note; False when
     that failed (recorded on the task)."""
-    task_steps.start(task_id, task_steps.FETCH)
+    await task_steps.start_off_loop(task_id, task_steps.FETCH)
     try:
         raw = await asyncio.to_thread(source.read_bytes)
         # A file named .srt/.vtt with no timed line in it (a bare WEBVTT
@@ -753,7 +756,7 @@ async def _read_subtitle_in_place(
         if not parse_transcript_file(raw, source.name).segments:
             hint = f"：{UTF16_HINT}" if utf16_without_mark(raw) else ""
             raise HTTPException(status_code=400, detail=f"{source.name} 里没有读出带时间的字幕{hint}。")
-        transcript_read(task_id, note=not truthy(options.get("skip_summary")))
+        await transcript_read(task_id, note=not truthy(options.get("skip_summary")))
         await summarize_transcript_source(
             raw=raw,
             filename=source.name,

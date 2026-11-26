@@ -112,6 +112,38 @@ def reached(monkeypatch):
             return real_getaddrinfo(host, *args, **kwargs)
         found.stop(f"name lookup {host}")
 
+    def _this_machine(address) -> bool:
+        host = address[0] if isinstance(address, (tuple, list)) else address
+        return host in _THIS_MACHINE or str(host).startswith("127.")
+
+    # A numeric address skips the name lookup (``_ipaddr_info``), and on Windows
+    # the Proactor loop connects with ConnectEx, outside ``socket.connect``: a
+    # public address typed as numbers passed both guards above (2026-11-27).
+    # The loop's own connect is guarded, where every platform makes the
+    # attempt. Each platform's loop class that defines it is wrapped: the Unix
+    # one and the Proactor one are different methods.
+    def _loop_classes(cls: type) -> list[type]:
+        found_classes: list[type] = []
+        for sub in cls.__subclasses__():
+            found_classes.append(sub)
+            found_classes.extend(_loop_classes(sub))
+        return found_classes
+
+    guarded = []
+    for loop_class in _loop_classes(asyncio.AbstractEventLoop):
+        if "sock_connect" not in vars(loop_class):
+            continue
+        real_loop_connect = vars(loop_class)["sock_connect"]
+
+        async def no_loop_connect(loop, sock, address, *args, _real=real_loop_connect, **kwargs):
+            if not _this_machine(address):
+                found.stop(f"network {address}")
+            return await _real(loop, sock, address, *args, **kwargs)
+
+        monkeypatch.setattr(loop_class, "sock_connect", no_loop_connect)
+        guarded.append(loop_class.__name__)
+    assert guarded, "no event loop class to guard"
+
     class NoOpenAI:
         """Building a client sends nothing; a request through it would."""
 
@@ -321,6 +353,22 @@ def test_the_guard_stops_a_name_lookup_on_every_platform(reached):
     assert reached.attempts == ["name lookup example.com"]
     # The loop's own wake-up stays inside this machine.
     assert socket.getaddrinfo("127.0.0.1", 9, type=socket.SOCK_STREAM)
+
+
+def test_a_numeric_address_through_a_loop_is_stopped(reached, monkeypatch):
+    """A public address written as numbers skips the name lookup, and on
+    Windows the Proactor loop's ConnectEx skips ``socket.connect``: this
+    makes the socket connect a no-op as ConnectEx does, and the loop's own
+    connect must still stop it (2026-11-27)."""
+    monkeypatch.setattr(socket.socket, "connect", lambda *_a, **_k: None)  # as ConnectEx
+
+    async def attempt():
+        await asyncio.open_connection("93.184.216.34", 80)
+
+    with pytest.raises(AssertionError, match="a real request was made"):
+        asyncio.run(attempt())
+    assert reached.attempts and reached.attempts[0].startswith("network ")
+    assert "93.184.216.34" in reached.attempts[0]
 
 
 # ── the fake model: each exit on its own ───────────────────────────────────

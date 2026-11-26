@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
-from backend.core import device_profile, task_steps
+from backend.core import device_profile, task_steps, task_stop
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import upsert_job
@@ -306,17 +306,25 @@ async def _start_behind_queue(
     never waits; its ``done`` still moves the line on only once the job ahead
     has (``_ChainLink``).
     """
-    # Barrier and record happen together, with no await between them, so two
-    # submissions arriving at once cannot both take the same job as the one
-    # they wait for. Its steps are recorded first (off the event loop: a
-    # commit waits on the disk, decision 8.30).
+    # The place in line is taken before the first await, with no await between
+    # the barrier and the record: two submissions arriving together keep the
+    # order they arrived in (reading and writing their steps used to happen
+    # without yielding, and a stop pressed meanwhile could not be seen).
+    stopped_before = task_stop.requested(task_id)
+    previous = _queue_tail_barrier()
+    done = _ChainLink(previous)
+    _queue_tail_record(task_id, done)
     if plan_steps and not (await task_steps.steps_of_off_loop([task_id])).get(task_id):
         # Recorded from the moment the task is queued, so a restart before its
         # turn carries it on in place (``task_actions.resume_after_restart``).
         await task_steps.plan_off_loop(task_id)
-    previous = _queue_tail_barrier()
-    done = _ChainLink(previous)
-    _queue_tail_record(task_id, done)
+    if not stopped_before and task_stop.requested(task_id):
+        # Stopped while its steps were being read or written: no runner may
+        # start, and one would clear that stop (``task_stop.begin``). The stop
+        # closed its steps already; this run is over.
+        _queue_tail_forget(done)
+        done.set()
+        return False
     started = await JOB_EVENTS.start(
         task_id,
         functools.partial(

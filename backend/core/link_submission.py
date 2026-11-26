@@ -512,7 +512,7 @@ async def _note_from_caption_file(job: _LinkTask, path: Path, filename: str) -> 
             # was written, a stop during the note carried the task on from the
             # fetch, and reading the captions again put back the transcript
             # the user had edited since (second review of decision 6.95).
-            transcript_read(task_id, note=not truthy(str(options.get("skip_summary") or "")))
+            await transcript_read(task_id, note=not truthy(str(options.get("skip_summary") or "")))
         result = await summarize_transcript_source(
             raw=raw,
             filename=filename,
