@@ -260,6 +260,99 @@ def test_the_configured_port_follows_the_launchers_rule(monkeypatch, tmp_path):
     assert core._configured_port() == 8001, "the last line wins, as the backend reads it"
     monkeypatch.setenv("FLUENTFLOW_LOCAL_PORT", "8123")
     assert core._configured_port() == 8123, "the environment wins over .env, as in the launcher"
+    # Not a number in the environment: 8000, not the .env line. The Windows
+    # launcher takes the environment's value as it is and only falls back to 8000
+    # when it is not a number; looking in .env here would name a port no launcher
+    # starts on, and the port check would then start a second service.
+    for junk in ("not-a-port", " 8123", "8123 "):
+        monkeypatch.setenv("FLUENTFLOW_LOCAL_PORT", junk)
+        assert core._configured_port() == 8000, junk
+
+
+@pytest.mark.parametrize("age_minutes,refused", [(0, True), (59, True), (61, False)])
+def test_the_marker_refuses_until_it_is_an_hour_old(monkeypatch, tmp_path, age_minutes, refused):
+    ready = threading.Event()
+
+    def fake_launcher(log_path):
+        starts.append(1)
+        ready.set()
+        return _Process()
+
+    _answers(monkeypatch, lambda: LOCAL_HEALTH if ready.is_set() else _refused())
+    starts = _allow_autostart(monkeypatch, tmp_path, fake_launcher)
+    install = tmp_path / "fluentflow-local"
+    install.mkdir()
+    monkeypatch.setattr(core, "_install_folder", lambda: install)
+    marker = tmp_path / "fluentflow-local.fluentflow-updating"
+    marker.write_text("FluentFlow Local is being updated; do not start the service.\n", encoding="utf-8")
+    when = time.time() - age_minutes * 60
+    os.utime(marker, (when, when))
+
+    result = core._agent_request("GET", "/agent/v1/status", api_base=API)
+
+    if refused:
+        assert result["ok"] is False and result["code"] == "updating"
+        assert str(marker) in result["error"] and "再调一次" in result["error"]
+        assert starts == [], "nothing is started from a tree that is being updated"
+    else:
+        assert result == {"ok": True}
+        assert starts == [1], "an hour on, the marker is the one a killed run left: start"
+
+
+def test_the_marker_of_a_one_folder_install_sits_beside_its_folder(monkeypatch, tmp_path):
+    """A Windows one-folder install keeps the code in <folder>\\app; the marker is
+    beside that folder, not inside app (release_check.install_folder)."""
+    from backend.core import release_check
+
+    folder = tmp_path / "FluentFlow"
+    code = folder / "app"
+    code.mkdir(parents=True)
+    (folder / ".fluentflow-home").write_text("", encoding="utf-8")
+    monkeypatch.setattr(release_check, "PROJECT_ROOT", code)
+    marker = tmp_path / "FluentFlow.fluentflow-updating"
+    marker.write_text("being updated\n", encoding="utf-8")
+
+    assert core._updating_marker() == marker
+
+
+@posix_shell
+@pytest.mark.parametrize(
+    "env_value,env_file,expected",
+    [
+        ("8123", None, 8123),
+        ("", "FLUENTFLOW_LOCAL_PORT=8124\n", 8124),
+        ("", None, 8000),
+        ("not-a-port", "FLUENTFLOW_LOCAL_PORT=8124\n", 8000),
+        (" 8123", None, 8000),
+    ],
+)
+def test_the_mac_launcher_and_the_client_compute_the_same_port(tmp_path, monkeypatch, env_value, env_file, expected):
+    """Both sides read the same environment and .env and must land on one port:
+    otherwise the client refuses to start (or starts a second service)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    if env_file:
+        (repo / ".env").write_text(env_file, encoding="utf-8")
+    text = LAUNCHER.read_text(encoding="utf-8")
+    script = tmp_path / "port.sh"
+    script.write_text(
+        "#!/bin/bash\nset -euo pipefail\n"
+        f"REPO={repo}\n" + _function(text, "env_port") + _function(text, "configured_port") + "configured_port\n",
+        encoding="utf-8",
+    )
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    if env_value:
+        env["FLUENTFLOW_LOCAL_PORT"] = env_value
+    done = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env, timeout=30)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == str(expected), done.stderr
+
+    monkeypatch.setattr(core, "PROJECT_ROOT", repo)
+    if env_value:
+        monkeypatch.setenv("FLUENTFLOW_LOCAL_PORT", env_value)
+    else:
+        monkeypatch.delenv("FLUENTFLOW_LOCAL_PORT", raising=False)
+    assert core._configured_port() == expected
 
 
 def test_a_different_configured_port_is_not_started_over(monkeypatch, tmp_path):

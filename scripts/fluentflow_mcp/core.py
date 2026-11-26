@@ -199,6 +199,15 @@ AUTOSTART_POLL_SECONDS = 0.5
 # the Windows launcher waits for /health before exiting, a launcher that put the
 # service in the background may exit at once.
 LAUNCHER_EXIT_GRACE_SECONDS = 5.0
+# An install being updated writes this beside its install folder before it stops
+# anything, and removes it on every way out (docs/04-维护手册.md「更新进行中的
+# 标记」): stopped service, code folder being swapped, virtual environment being
+# rebuilt. A service started from that tree is half-built.
+UPDATING_MARKER_SUFFIX = ".fluentflow-updating"
+# An hour, the same bound the installers use: one older than that was left by a
+# killed run, and they clear it on their next run and go ahead. Refusing it
+# forever would leave an agent with no way to get the service started.
+UPDATING_MARKER_STALE_SECONDS = 3600.0
 _NO_START_VALUES = ("0", "false", "no", "off")
 
 
@@ -235,16 +244,20 @@ def _local_target(api_base: str) -> tuple[str, int] | None:
 
 
 # The port a launcher would use, by the launchers' own rule
-# (`FluentFlowLocal.command` env_port, `Get-FluentFlowPort`): the environment
-# first, then the last matching line of the repository .env, then 8000.
+# (`FluentFlowLocal.command` configured_port, `Get-FluentFlowPort`): the
+# environment first, then the last matching line of the repository .env, then
+# 8000. An environment value that is not a plain number is 8000 — not a reason to
+# look in .env: the Windows launcher takes whatever the environment says and only
+# falls back to 8000 when it is not a number, so falling through here would
+# compute a port the launcher never uses.
 _DEFAULT_PORT = 8000
 _PORT_LINE = re.compile(r"^\s*(?:export\s+)?FLUENTFLOW_LOCAL_PORT\s*=(.*)$")
 
 
 def _configured_port() -> int:
-    value = (os.environ.get("FLUENTFLOW_LOCAL_PORT") or "").strip()
-    if value.isdigit():
-        return int(value)
+    raw = os.environ.get("FLUENTFLOW_LOCAL_PORT") or ""
+    if raw:
+        return int(raw) if re.fullmatch(r"[0-9]+", raw) else _DEFAULT_PORT
     try:
         text = (PROJECT_ROOT / ".env").read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
@@ -404,6 +417,48 @@ def _start_failed(api_base: str, log_path: Path, reason: str) -> dict[str, Any]:
     }
 
 
+def _install_folder() -> Path:
+    """The folder the user installed into.
+
+    The rule lives in ``release_check.install_folder`` (a Windows one-folder
+    install keeps the code in ``<folder>\\app``); it is imported here rather than
+    at the top because the MCP server starts with every conversation and this is
+    only asked when a start is being considered.
+    """
+    from backend.core.release_check import install_folder
+
+    return install_folder()
+
+
+def _updating_marker() -> Path | None:
+    """The marker of an update running right now, or None.
+
+    One left by a killed run is stale after an hour, the same bound the
+    installers use, and is ignored: they clear it and go ahead on their next run,
+    and refusing for ever would leave the agent unable to start FluentFlow.
+    """
+    marker = Path(f"{_install_folder()}{UPDATING_MARKER_SUFFIX}")
+    try:
+        age = time.time() - marker.stat().st_mtime
+    except OSError:
+        return None
+    return marker if age < UPDATING_MARKER_STALE_SECONDS else None
+
+
+def _updating(marker: Path) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "code": "updating",
+        "error": (
+            f"FluentFlow Local 正在更新（安装文件夹旁边的 {marker} 还在），这会儿从这份代码起服务会拿到装了一半的一份，所以没有起。"
+            "更新结束那个文件会被删掉，等几分钟再调一次就行。"
+            "确认没有更新在跑时（例如这是被强杀的那次留下的），删掉那个文件再试。"
+        ),
+        "status": None,
+        "payload": None,
+    }
+
+
 def _port_disagreement(api_base: str, configured: int, asked: int) -> dict[str, Any]:
     """The launcher would use another port than the one this client asks.
 
@@ -435,11 +490,15 @@ def _start_local_service(api_base: str) -> dict[str, Any] | None:
     holding the port (another program, the hosted edition, a FluentFlow whose
     health check is failing), or a .env port that disagrees with this client's.
     Nothing is started or stopped then, and the caller keeps its own message
-    (except for the port, where the caller has none).
+    (except for the port, where the caller has none). An install that is being
+    updated right now is a refusal of its own: the tree is half-built.
     """
     target = _local_target(api_base)
     if target is None or not _autostart_allowed() or _launcher_path() is None:
         return None
+    updating = _updating_marker()
+    if updating is not None:
+        return _updating(updating)
     host, port = target
     if _port_answers(host, port):
         return None

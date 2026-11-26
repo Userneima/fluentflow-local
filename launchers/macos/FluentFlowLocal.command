@@ -91,8 +91,22 @@ env_port() {
 	line="$(printf '%s' "$line" | sed -E "s/^[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//")"
 	[[ "$line" =~ ^[0-9]+$ ]] && printf '%s' "$line"
 }
-PORT="${FLUENTFLOW_LOCAL_PORT:-$(env_port)}"
-PORT="${PORT:-8000}"
+
+# 端口：环境变量优先，其次仓库 .env 里那一行，都不是数字就按 8000——和 Windows
+# 启动器的 Get-FluentFlowPort 同一规则；MCP 自己起服务时照同一条算（决策 1.20），
+# 两边算出的端口不一样就会各起一个服务。
+configured_port() {
+	local value="${FLUENTFLOW_LOCAL_PORT:-$(env_port)}"
+	if [[ "$value" =~ ^[0-9]+$ ]]; then
+		printf '%s' "$value"
+		return 0
+	fi
+	if [[ -n "$value" ]]; then
+		echo "FLUENTFLOW_LOCAL_PORT=${value} 不是端口号，按 8000 启动；要换端口请写数字。" >&2
+	fi
+	printf '%s' 8000
+}
+PORT="$(configured_port)"
 APP_URL="http://127.0.0.1:${PORT}/"
 LOG_DIR="${HOME}/Library/Logs/FluentFlow"
 LOG_FILE="${LOG_DIR}/local.log"
