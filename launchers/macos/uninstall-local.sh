@@ -394,6 +394,10 @@ for i in "${!targets[@]}"; do
 done
 
 step "还剩下"
+# 代码目录旁边没删掉的另一份（标记写的是它原来在的位置，或者没有标记）：说清留着，不藏着。
+for side in "${REPO}.new" "${REPO}.old" "${REPO}.failed"; do
+	[[ -e "$side" ]] && echo "  ${side}：没删（可能是你自己复制出来的拷贝），确认不要了再自己删。"
+done
 if [[ ${#data_left[@]} -gt 0 ]]; then
 	echo "  数据目录 ${DATA_ROOT}：FluentFlow 自己的部分删了，认不出的这些留着，确认不要了再自己删："
 	for entry in "${data_left[@]}"; do echo "    ${entry##*/}"; done

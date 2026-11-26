@@ -1013,3 +1013,22 @@ def test_the_uninstaller_asks_the_code_for_a_chinese_data_folder(tmp_path):
     assert run.returncode == 0, run.stdout + run.stderr
     assert "问不到代码里的数据目录" not in run.stdout, run.stdout
     assert "任务数据" in run.stdout, run.stdout
+
+
+@mac_only
+def test_a_copy_beside_the_code_folder_that_is_left_is_named(tmp_path):
+    """A copy of the code the uninstaller does not recognise (its marker names
+    where it was before the folder moved) is left, and the run says so instead
+    of looking like everything went."""
+    app = _fake_code(tmp_path / "app")
+    copy = _fake_code(tmp_path / "app.failed")
+    (copy / ".fluentflow-update").write_text(
+        "Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.\n"
+        f"{tmp_path}/somewhere-else/app.failed\n", encoding="utf-8")
+
+    result = _uninstall(tmp_path, app, "--yes")
+
+    assert result.returncode == 0, result.stderr
+    assert not app.exists()
+    assert copy.exists()
+    assert "app.failed" in result.stdout.split("还剩下")[-1]

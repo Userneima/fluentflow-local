@@ -364,6 +364,24 @@ function Repair-FluentFlowHome([string]$Repo) {
     }
     Set-FluentFlowEnvLine $Repo "FLUENTFLOW_HOME" $Root
     foreach ($Name in @($Fixes.Keys)) { Set-FluentFlowEnvLine $Repo $Name $Fixes[$Name] }
+    # An update's copies (.failed, .old, .new) moved with the folder, and their
+    # markers name the old place: a marker naming another place means "not ours
+    # to remove", so the uninstaller would leave them, and the folder with them.
+    # One named <old root>\<name> and now beside this code folder is the same
+    # copy, so its marker is written again for where it is.
+    foreach ($Side in @(".failed", ".old", ".new")) {
+        $Copy = "$Repo$Side"
+        if (-not (Test-Path -LiteralPath $Copy)) { continue }
+        $Marker = Join-Path $Copy ".fluentflow-update"
+        if (-not (Test-Path -LiteralPath $Marker)) { continue }
+        $Was = @([System.IO.File]::ReadAllLines($Marker, [System.Text.Encoding]::UTF8) | Where-Object { $_.Trim() }) | Select-Object -Last 1
+        if (-not $Was) { continue }
+        $Leaf = Split-Path -Leaf $Copy
+        if ($Was.Trim().TrimEnd('\').Equals((Join-Path $OldPath $Leaf), [StringComparison]::OrdinalIgnoreCase)) {
+            Set-FluentFlowUpdateCopy $Copy
+            $Changed += $Leaf
+        }
+    }
     return $Changed + @($Fixes.Keys | Sort-Object)
 }
 

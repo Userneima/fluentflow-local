@@ -403,6 +403,16 @@ if ($HomeDir -and (Test-Path $HomeDir) -and -not (Get-ChildItem -Force -LiteralP
 }
 
 Write-Host "`n== 还剩下 =="
+# A copy beside the install that does not carry this place's marker is left (it
+# may be the user's own copy, or one whose marker still names where the folder
+# was before it moved): name it, do not hide it.
+if ($HomeDir -and (Test-Path -LiteralPath $HomeDir)) {
+    $LeftBeside = @(Get-ChildItem -Force -LiteralPath $HomeDir | Where-Object { $_.Name -ne ".fluentflow-home" })
+    if ($LeftBeside.Count -gt 0) {
+        Write-Host "  安装文件夹 ${HomeDir} 里还有这些没删（可能是你自己复制出来的拷贝），确认不要了再自己删："
+        foreach ($Entry in $LeftBeside) { Write-Host "    $($Entry.Name)" }
+    }
+}
 if ($DataLeft.Count -gt 0) {
     Write-Host "  数据目录 ${DataRoot}：FluentFlow 自己的部分删了，认不出的这些留着，确认不要了再自己删："
     foreach ($Entry in $DataLeft) { Write-Host "    $($Entry.Name)" }
