@@ -1,0 +1,43 @@
+# What FluentFlow itself makes in its data folder (FLUENTFLOW_DATA_DIR), one
+# name or wildcard pattern per line. Removing the data (uninstall --all / -All)
+# removes the whole folder only when everything in it is on this list; otherwise
+# it removes just these and names what it left, because the folder may be one
+# the user also keeps their own files in. Read by launchers/macos/uninstall-local.sh
+# and launchers/windows/uninstall-local.ps1; tests/test_install_places.py fails
+# when the code writes something here that is not on the list.
+
+# Settings, task history and their SQLite side files
+fluentflow_config.json
+fluentflow_config.json.*
+fluentflow_jobs.sqlite
+fluentflow_jobs.sqlite-*
+fluentflow_jobs.sqlite.*
+fluentflow_events.sqlite
+fluentflow_events.sqlite-*
+fluentflow_events.sqlite.*
+
+# Recordings, transcripts, notes and their edits
+sources
+artifacts
+edited_transcripts
+transcript_edit_records
+video_sources
+note_skills
+
+# Speaker models, the model table and its temporary copies
+models
+recommended_models.json
+.recommended_models.json.*
+
+# Downloaded FFmpeg, uv, Node.js and Python, the download cache, logs
+bin
+tools
+cache
+logs
+yt_dlp_last_update
+.fluentflow-write-check
+
+# Left by the system's file browser
+.DS_Store
+desktop.ini
+Thumbs.db

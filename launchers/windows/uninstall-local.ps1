@@ -111,7 +111,7 @@ if (Test-Path $Python) {
     try {
         $Output = & $Python -c "from backend.core.runtime_paths import load_project_env, app_data_root; load_project_env(); print(app_data_root())" 2>$null
         $Candidate = ($Output | Select-Object -Last 1)
-        if ($Candidate -and (Split-Path -IsAbsolute $Candidate)) { $DataRoot = $Candidate.Trim() }
+        if ($Candidate) { $DataRoot = $Candidate.Trim() }
     } catch {
         $DataRoot = $null
     } finally {
@@ -122,36 +122,44 @@ if (-not $DataRoot) {
     $DataRoot = Get-FluentFlowDataDir $Repo
     Write-Host "`n（问不到代码里的数据目录，按 .env 和默认位置处理：${DataRoot}）"
 }
+# Every location below is placed as the service places it (Resolve-FluentFlowPlace:
+# a relative path is in the code folder, which the service runs in). One that
+# cannot be placed for sure is neither deleted nor taken to be outside the code
+# folder.
+$DataPlace = Resolve-FluentFlowPlace $Repo $DataRoot
+$DataSure = $DataPlace.Sure
+$DataRoot = $DataPlace.Path
+function Get-Place([string]$Name) { return Resolve-FluentFlowPlace $Repo (Get-FluentFlowSetting $Repo $Name) }
+function Get-SurePath($Place) { if ($Place -and $Place.Sure) { return $Place.Path }; return $null }
+# Inside the code folder, or cannot be told.
+function Test-InRepo($Place) { return $Place -and ((-not $Place.Sure) -or (Test-FluentFlowInside $Place.Path $Repo)) }
 
 # A one-folder install: everything below this folder is FluentFlow's.
-$HomeDir = Get-FluentFlowSetting $Repo "FLUENTFLOW_HOME"
+$HomeDir = Get-SurePath (Get-Place "FLUENTFLOW_HOME")
 function Test-InHome([string]$Path) {
     if (-not $HomeDir -or -not $Path) { return $false }
-    $Base = [System.IO.Path]::GetFullPath($HomeDir).TrimEnd('\') + '\'
-    return [System.IO.Path]::GetFullPath($Path).StartsWith($Base, [StringComparison]::OrdinalIgnoreCase)
+    return (Test-FluentFlowInside $Path $HomeDir) -and -not (Test-FluentFlowInside $HomeDir $Path)
 }
 # Only a folder the installer made (it leaves .fluentflow-home in it) is
 # FluentFlow's to empty; a folder the user already had keeps what was there.
 if ($HomeDir -and (-not (Test-InHome $Repo) -or -not (Test-Path (Join-Path $HomeDir ".fluentflow-home")))) { $HomeDir = $null }
-$ModelHome = Get-FluentFlowSetting $Repo "HF_HOME"
-$LinkRoot = Get-FluentFlowSetting $Repo "FLUENTFLOW_LINK_OUTPUT_DIR"
+$ModelPlace = Get-Place "HF_HOME"
+$LinkPlace = Get-Place "FLUENTFLOW_LINK_OUTPUT_DIR"
+$ModelHome = Get-SurePath $ModelPlace
+$LinkRoot = Get-SurePath $LinkPlace
 $IsGitCheckout = Test-Path (Join-Path $Repo ".git")
 # The code folder goes whole only when nothing the user keeps lives in it: a
 # data, download or model folder set inside it is left, and only the program's
 # own parts are removed (as for a git checkout).
-function Test-InRepo([string]$Path) {
-    if (-not $Path -or -not [System.IO.Path]::IsPathRooted($Path)) { return $false }
-    return [System.IO.Path]::GetFullPath($Path).StartsWith($Repo.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
-}
-$KeepsUserFiles = (Test-InRepo $DataRoot) -or (Test-InRepo $LinkRoot) -or (Test-InRepo $ModelHome)
+$KeepsUserFiles = (Test-InRepo $DataPlace) -or (Test-InRepo $LinkPlace) -or (Test-InRepo $ModelPlace)
 # Each part of the data can be moved on its own (task database, sources, notes,
 # edits, settings...): any of them inside the code folder keeps it too.
 $PartNames = @(Get-ChildItem Env: | Where-Object { $_.Name -match '^FLUENTFLOW_\w*(DIR|PATH|CACHE)$' } | ForEach-Object { $_.Name })
 if (Test-Path (Join-Path $Repo ".env")) {
-    $PartNames += @(Get-Content (Join-Path $Repo ".env") | ForEach-Object { if ($_ -match '^\s*(export\s+)?(FLUENTFLOW_\w*(DIR|PATH|CACHE))\s*=') { $Matches[2] } })
+    $PartNames += @([System.IO.File]::ReadAllLines((Join-Path $Repo ".env"), [System.Text.Encoding]::UTF8) | ForEach-Object { if ($_ -match '^\s*(export\s+)?(FLUENTFLOW_\w*(DIR|PATH|CACHE))\s*=') { $Matches[2] } })
 }
-foreach ($Name in ($PartNames | Sort-Object -Unique)) {
-    if (Test-InRepo (Get-FluentFlowSetting $Repo $Name)) { $KeepsUserFiles = $true }
+foreach ($Name in ($PartNames | Where-Object { $_ -ne "FLUENTFLOW_INSTALL_DIR" } | Sort-Object -Unique)) {
+    if (Test-InRepo (Get-Place $Name)) { $KeepsUserFiles = $true }
 }
 
 $ModelDirs = @()
@@ -192,25 +200,52 @@ if ($IsGitCheckout -or $KeepsUserFiles) {
     Add-Target $Repo "程序（代码、Python 虚拟环境、前端）"
     # An update's copies beside the program (install.ps1): the one that failed,
     # or one an interrupted update left. Only those carrying its marker.
+    # Only one whose marker names where it is now (Test-FluentFlowUpdateCopy):
+    # a copy or rename the user made of the code folder is left alone.
     foreach ($Side in @("$Repo.new", "$Repo.old", "$Repo.failed")) {
-        if (Test-Path (Join-Path $Side ".fluentflow-update")) { Add-Target $Side "更新时留下的另一份程序" }
+        if (Test-FluentFlowUpdateCopy $Side) { Add-Target $Side "更新时留下的另一份程序" }
     }
 }
 Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd") "桌面启动器"
 Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "停止 FluentFlow Local.cmd") "桌面上的停止图标"
 Add-Target (Join-Path $env:LOCALAPPDATA "FluentFlow\Logs") "日志"
-Add-Target (Join-Path $DataRoot "bin") "安装时下载的 FFmpeg"
-Add-Target (Join-Path $DataRoot "tools") "安装时下载的 Node.js"
+if ($DataSure) {
+    Add-Target (Join-Path $DataRoot "bin") "安装时下载的 FFmpeg"
+    Add-Target (Join-Path $DataRoot "tools") "安装时下载的 Node.js"
+}
 if ($HomeDir) { Add-Target (Join-Path $HomeDir "cache") "pip、uv 和 npm 的下载缓存" }
 foreach ($ToolDir in @((Join-Path $env:USERPROFILE ".claude"), (Join-Path $env:USERPROFILE ".codex"))) {
     $Skill = Join-Path $ToolDir "skills\fluentflow"
     if (Test-Path (Join-Path $Skill ".installed-by-fluentflow")) { Add-Target $Skill "给 agent 的 skill" }
 }
 foreach ($Dir in $ModelDirs) { Add-Target $Dir "转录模型" }
-if ($Data) {
-    Add-Target $DataRoot "任务历史、转录稿、笔记、媒体文件" $true
-    if (Test-InHome $LinkRoot) { Add-Target $LinkRoot "从链接下载的视频和它们的笔记" $true }
+# The data folder may be one the user keeps their own files in too: it goes
+# whole only when everything in it is something FluentFlow makes
+# (launchers/data-folder-contents.txt); otherwise only those go, and the rest
+# is named and left.
+$DataLeft = @()
+if ($Data -and -not $DataSure) {
+    Write-Host "`n数据目录的位置读不准（${DataRoot}，里面有展开不了的 `$），不删它；请自己确认它在哪后再删。"
+} elseif ($Data -and (Test-Path -LiteralPath $DataRoot -PathType Container)) {
+    $Registry = Join-Path $Repo "launchers\data-folder-contents.txt"
+    $Known = @()
+    if (Test-Path -LiteralPath $Registry) {
+        $Known = @([System.IO.File]::ReadAllLines($Registry, [System.Text.Encoding]::UTF8) | ForEach-Object { ($_ -split '#', 2)[0].Trim() } | Where-Object { $_ })
+    }
+    $Recognised = @()
+    foreach ($Entry in @(Get-ChildItem -Force -LiteralPath $DataRoot)) {
+        $EntryName = $Entry.Name
+        if (@($Known | Where-Object { $EntryName -like $_ }).Count -gt 0) { $Recognised += $Entry } else { $DataLeft += $Entry }
+    }
+    if ($DataLeft.Count -eq 0) {
+        Add-Target $DataRoot "任务历史、转录稿、笔记、媒体文件" $true
+    } else {
+        foreach ($Entry in $Recognised) {
+            if (@($Targets | Where-Object { $_.Path -eq $Entry.FullName }).Count -eq 0) { Add-Target $Entry.FullName "FluentFlow 的数据：$($Entry.Name)" $true }
+        }
+    }
 }
+if ($Data -and (Test-InHome $LinkRoot)) { Add-Target $LinkRoot "从链接下载的视频和它们的笔记" $true }
 
 # The MCP tools registered at install, removed only when they start this
 # folder's server: an entry pointing at another copy is someone else's.
@@ -246,6 +281,11 @@ foreach ($Target in $Targets) {
     if ($Target.Sensitive) { $HasSensitive = $true }
 }
 foreach ($Tool in $McpRemovals) { Write-Host "  注销 $Tool 里的 fluentflow-local 工具" }
+if ($DataLeft.Count -gt 0) {
+    Write-Host "`n数据目录 ${DataRoot} 里还有 FluentFlow 认不出的东西，不删，文件夹也留着："
+    foreach ($Entry in $DataLeft) { Write-Host "  $($Entry.Name)" }
+    Write-Host "  它们可能是你自己的文件，确认不要了再自己删。"
+}
 
 if ($DryRun) {
     Write-Host "`n（-DryRun：以上都没有真的删除。）"
@@ -312,6 +352,10 @@ if ($HomeDir -and (Test-Path $HomeDir) -and -not (Get-ChildItem -Force -LiteralP
 }
 
 Write-Host "`n== 还剩下 =="
+if ($DataLeft.Count -gt 0) {
+    Write-Host "  数据目录 ${DataRoot}：FluentFlow 自己的部分删了，认不出的这些留着，确认不要了再自己删："
+    foreach ($Entry in $DataLeft) { Write-Host "    $($Entry.Name)" }
+}
 # A zip install's code folder, and this script with it, is gone by now, so
 # what is left is removed by deleting its folder.
 if ((-not $Data) -and (Test-Path $DataRoot)) {

@@ -21,7 +21,8 @@ Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { "{0} 
 
 When there is more than one drive, ask the user which to install to, recommending the
 one other than C: with the most free space (it needs about 10 GB). Pass the answer as
-the folder: `D:\FluentFlow` for drive D, `%USERPROFILE%\FluentFlow` for drive C. With only
+the folder: `D:\FluentFlow` for drive D, `"$env:USERPROFILE\FluentFlow"` for drive C
+(PowerShell's spelling, in double quotes so it is expanded). With only
 drive C, do not ask. The script never asks anything itself when an agent runs it: without
 `FLUENTFLOW_INSTALL_DIR` it picks that same recommended drive and prints where it went.
 
@@ -161,7 +162,10 @@ install command again (with the same `FLUENTFLOW_INSTALL_DIR` on Windows), from 
 outside the install. It sees the install, downloads the newest release beside it, keeps
 `.env`, the tasks, settings and models, stops the service, swaps the code in, adds what the
 new version needs (packages, speaker models, the transcription model) and starts it again.
-If any of that fails, it puts the previous version back, starts it again and says so. It refuses while tasks
+If any of that fails, it puts the previous version back, starts it again and says so. It
+also refuses, changing nothing, when a data, download or model location is inside the code
+folder (a relative path counts) or cannot be read for sure; the message names the setting,
+and the user decides where to move it. It refuses while tasks
 are being processed: wait for them, or set `FLUENTFLOW_UPDATE_FORCE=1` after the user agrees
 (interrupted tasks carry on after the restart). A git checkout is not updated by it; there,
 `git pull` and run the setup script.
@@ -219,7 +223,10 @@ It stops the running service, removes the program (for an install from these
 instructions, the code folder itself, and the copy a failed update kept beside it), the downloaded FFmpeg and Node.js, the Desktop
 icon, the logs and the agent skill, and unregisters `fluentflow-local` from Claude Code
 and Codex (only an entry that points at this install). On Windows with `-All`, the
-`FluentFlow` folder is gone afterwards. It leaves Python and anything that was on the
+`FluentFlow` folder is gone afterwards. When the data folder also holds files FluentFlow
+does not recognise, only FluentFlow's own are removed and the rest are listed, in the dry
+run too: show the user that list, and do not delete those files yourself. A copy of the code
+folder the user made (`app.old`, for example) is left alone. It leaves Python and anything that was on the
 machine before. Tell the user what was removed and what is left (the last lines say).
 The MCP tools disappear from your next conversation.
 

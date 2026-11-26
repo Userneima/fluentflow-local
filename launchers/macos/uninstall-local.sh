@@ -116,7 +116,7 @@ data_root_from_code() {
 	local out
 	out="$(cd "$REPO" && "$py" -c 'from backend.core.runtime_paths import load_project_env, app_data_root; load_project_env(); print(app_data_root())' 2>/dev/null)" || return 1
 	out="$(printf '%s\n' "$out" | tail -n 1)"
-	[[ "$out" == /* ]] || return 1
+	[[ -n "$out" ]] || return 1
 	printf '%s\n' "$out"
 }
 
@@ -126,16 +126,22 @@ if [[ -z "$DATA_ROOT" ]]; then
 	echo ""
 	echo "（问不到代码里的数据目录，按 .env 和默认位置处理：${DATA_ROOT}）"
 fi
+# 相对路径从代码目录算起（服务在那里运行）；读不准（还剩 $）的数据目录不删，代码目录也不整个删。
+DATA_SURE=1
+DATA_ROOT="$(ff_place "$REPO" "$DATA_ROOT")" || DATA_SURE=0
 IS_GIT_CHECKOUT=0
 [[ -e "${REPO}/.git" ]] && IS_GIT_CHECKOUT=1
 # 数据、链接下载或模型设在代码目录里面时，代码目录不整个删，只删程序自己的部分（同 git 检出）。
+# 位置照服务的读法定（ff_place）；读不准的当作在里面。
 KEEPS_USER_FILES=0
 part_names="FLUENTFLOW_LINK_OUTPUT_DIR HF_HOME $(env | sed -n -E 's/^(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))=.*/\1/p')"
 [[ -f "${REPO}/.env" ]] && part_names="$part_names $(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))[[:space:]]*=.*/\2/p' "${REPO}/.env")"
-[[ "$DATA_ROOT" == "${REPO}/"* ]] && KEEPS_USER_FILES=1
+if [[ "$DATA_SURE" -ne 1 ]] || ff_inside "$DATA_ROOT" "$REPO"; then KEEPS_USER_FILES=1; fi
 for name in $part_names; do
+	[[ "$name" != FLUENTFLOW_INSTALL_DIR ]] || continue
 	where="$(ff_setting "$REPO" "$name")"
-	[[ -n "$where" && "$where" == "${REPO}/"* ]] && KEEPS_USER_FILES=1
+	[[ -n "$where" ]] || continue
+	if ! place="$(ff_place "$REPO" "$where")" || ff_inside "$place" "$REPO"; then KEEPS_USER_FILES=1; fi
 done
 
 # 模型目录同理：交给 scripts/stt_model.py 列，它知道产品下过哪些 repo。
@@ -176,17 +182,20 @@ if [[ "$IS_GIT_CHECKOUT" -eq 1 || "$KEEPS_USER_FILES" -eq 1 ]]; then
 else
 	# 从发布包装的：目录里只有程序（和 .env，重装时会重新生成访问令牌）。
 	add_target "$REPO" "程序（代码、Python 虚拟环境、前端）"
-	# 更新时放在旁边的另一份（install.sh）：失败的那份，或更新被打断时留下的。只认带着它标记的。
+	# 更新时放在旁边的另一份（install.sh）：失败的那份，或更新被打断时留下的。只认标记写着
+	# 就是它现在位置的（ff_update_marker_says）；用户自己复制、改名出来的不动。
 	for side in "${REPO}.new" "${REPO}.old" "${REPO}.failed"; do
-		if [[ -e "${side}/.fluentflow-update" ]]; then add_target "$side" "更新时留下的另一份程序"; fi
+		if ff_update_marker_says "$side"; then add_target "$side" "更新时留下的另一份程序"; fi
 	done
 fi
 add_target "${HOME}/Desktop/FluentFlow Local.app" "桌面启动器"
 add_target "${HOME}/Desktop/FluentFlow Local.command" "桌面启动器（旧版）"
 add_target "${HOME}/Library/Logs/FluentFlow" "日志"
-add_target "${DATA_ROOT}/bin" "安装时下载的 FFmpeg 和 uv"
-add_target "${DATA_ROOT}/tools" "安装时下载的 Node.js 和 Python"
-add_target "${DATA_ROOT}/cache" "安装时的下载缓存"
+if [[ "$DATA_SURE" -eq 1 ]]; then
+	add_target "${DATA_ROOT}/bin" "安装时下载的 FFmpeg 和 uv"
+	add_target "${DATA_ROOT}/tools" "安装时下载的 Node.js 和 Python"
+	add_target "${DATA_ROOT}/cache" "安装时的下载缓存"
+fi
 # install.sh 装的 skill 是链到本目录的链接；用户自己的同名目录不动。
 for skill in "${HOME}/.claude/skills/fluentflow" "${HOME}/.codex/skills/fluentflow"; do
 	if [[ -L "$skill" && "$(readlink "$skill")" == "${REPO}/"* ]]; then
@@ -223,8 +232,45 @@ for dir in "${model_dirs[@]:-}"; do
 	[[ -n "$dir" ]] && add_target "$dir" "转录模型"
 done
 
-if [[ "$REMOVE_DATA" -eq 1 ]]; then
-	add_target "$DATA_ROOT" "任务历史、转录稿、笔记、媒体文件" 1
+# 数据目录可能被指到用户自己也在用的文件夹：里面全是 FluentFlow 认得的东西
+# （launchers/data-folder-contents.txt）才整个删；有认不出的，只删认得的那些，
+# 认不出的留下并列出来。
+data_left=()
+if [[ "$REMOVE_DATA" -eq 1 && "$DATA_SURE" -ne 1 ]]; then
+	echo ""
+	echo "数据目录的位置读不准（${DATA_ROOT}，里面有展开不了的 \$），不删它；请自己确认它在哪后再删。"
+elif [[ "$REMOVE_DATA" -eq 1 && -d "$DATA_ROOT" ]]; then
+	known_patterns=()
+	if [[ -f "${REPO}/launchers/data-folder-contents.txt" ]]; then
+		while IFS= read -r pattern || [[ -n "$pattern" ]]; do
+			pattern="${pattern%%#*}"
+			pattern="${pattern%"${pattern##*[![:space:]]}"}"
+			[[ -n "$pattern" ]] && known_patterns+=("$pattern")
+		done <"${REPO}/launchers/data-folder-contents.txt"
+	fi
+	data_known=()
+	shopt -s nullglob dotglob
+	for entry in "$DATA_ROOT"/*; do
+		recognised=0
+		for pattern in ${known_patterns[@]+"${known_patterns[@]}"}; do
+			# shellcheck disable=SC2053 # the pattern is a wildcard on purpose
+			if [[ "${entry##*/}" == $pattern ]]; then
+				recognised=1
+				break
+			fi
+		done
+		if [[ "$recognised" -eq 1 ]]; then data_known+=("$entry"); else data_left+=("$entry"); fi
+	done
+	shopt -u nullglob dotglob
+	if [[ ${#data_left[@]} -eq 0 ]]; then
+		add_target "$DATA_ROOT" "任务历史、转录稿、笔记、媒体文件" 1
+	else
+		for entry in ${data_known[@]+"${data_known[@]}"}; do
+			already=0
+			for target in ${targets[@]+"${targets[@]}"}; do [[ "$target" == "$entry" ]] && already=1; done
+			[[ "$already" -eq 1 ]] || add_target "$entry" "FluentFlow 的数据：${entry##*/}" 1
+		done
+	fi
 fi
 
 if [[ ${#targets[@]} -eq 0 && ${#mcp_removals[@]} -eq 0 ]]; then
@@ -244,6 +290,12 @@ done
 for tool in "${mcp_removals[@]:-}"; do
 	[[ -n "$tool" ]] && echo "  注销 ${tool} 里的 fluentflow-local 工具"
 done
+if [[ ${#data_left[@]} -gt 0 ]]; then
+	echo ""
+	echo "数据目录 ${DATA_ROOT} 里还有 FluentFlow 认不出的东西，不删，文件夹也留着："
+	for entry in "${data_left[@]}"; do echo "  ${entry##*/}"; done
+	echo "  它们可能是你自己的文件，确认不要了再自己删。"
+fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
 	echo ""
@@ -285,6 +337,14 @@ for tool in "${mcp_removals[@]:-}"; do
 		;;
 	esac
 done
+# 还在从代码目录运行的程序占着文件、删完还会接着写：后台下载转录模型、每天更新 yt-dlp、
+# 别的端口上的服务。和 Windows 一样先停掉，不算本脚本自己。
+repo_pattern="$(printf '%s/' "$REPO" | sed -e 's/[].*^$+?(){}|\\[]/\\&/g')"
+[[ "${#repo_pattern}" -gt 2 ]] || fail "认不出代码目录的路径（${REPO}），不去停程序。"
+for pid in $(pgrep -f -- "$repo_pattern" 2>/dev/null || true); do
+	[[ "$pid" == "$$" || "$pid" == "$PPID" ]] || kill "$pid" 2>/dev/null || true
+done
+sleep 1
 # 代码目录可能就是当前目录；bash 已经打开了本脚本，删掉文件也能读完。
 cd "$HOME"
 for i in "${!targets[@]}"; do
@@ -293,6 +353,10 @@ for i in "${!targets[@]}"; do
 done
 
 step "还剩下"
+if [[ ${#data_left[@]} -gt 0 ]]; then
+	echo "  数据目录 ${DATA_ROOT}：FluentFlow 自己的部分删了，认不出的这些留着，确认不要了再自己删："
+	for entry in "${data_left[@]}"; do echo "    ${entry##*/}"; done
+fi
 if [[ "$REMOVE_DATA" -ne 1 && -e "$DATA_ROOT" ]]; then
 	size="$(du -sh "$DATA_ROOT" 2>/dev/null | cut -f1 || echo "?")"
 	echo "  你的任务数据（${size}）：${DATA_ROOT}"

@@ -18,7 +18,135 @@
 set -euo pipefail
 
 REPO_SLUG="Userneima/fluentflow-local"
+
+# 读 .env、判断位置的几个函数，和 launchers/macos/fluentflow-env.sh 里的一字不差
+# （tests/test_install_places.py 守着）：更新换代码之前，新旧两份的脚本都还靠不上
+# （旧版本可能没有这些函数，新版本还没放好）。
+# .env 里某个名字的值，不看环境变量。引用前面行的值（${BASE}/data）时，照服务那边
+# 读前面那一行；FF_ENV_DEPTH 防止互相引用转圈。
+ff_env_file_value() {
+	local repo="$1" name="$2" line value
+	[[ -f "${repo}/.env" ]] || return 0
+	line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${name}[[:space:]]*=" "${repo}/.env" 2>/dev/null | tail -n 1 || true)"
+	[[ -n "$line" ]] || return 0
+	value="${line#*=}"
+	value="${value#"${value%%[![:space:]]*}"}"
+	case "$value" in
+	\"*)
+		value="${value#\"}"
+		value="${value%%\"*}"
+		;;
+	\'*)
+		value="${value#\'}"
+		value="${value%%\'*}"
+		;;
+	*)
+		value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')"
+		;;
+	esac
+	# ${NAME} 和 ${NAME:-默认值}，照服务那边（python-dotenv 的规则）从环境变量展开。
+	local ref name default found
+	while [[ "$value" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\} ]]; do
+		ref="${BASH_REMATCH[0]}" name="${BASH_REMATCH[1]}" default="${BASH_REMATCH[3]}"
+		found="${!name:-}"
+		if [[ -z "$found" && "${FF_ENV_DEPTH:-0}" -lt 5 ]]; then
+			found="$(FF_ENV_DEPTH=$(( ${FF_ENV_DEPTH:-0} + 1 )) ff_env_file_value "$repo" "$name")"
+		fi
+		found="${found:-$default}"
+		value="${value/"$ref"/$found}"
+	done
+	printf '%s' "$value"
+}
+
+ff_setting() {
+	local repo="$1" name="$2"
+	if [[ -n "${!name:-}" ]]; then
+		printf '%s' "${!name}"
+	else
+		ff_env_file_value "$repo" "$name"
+	fi
+}
+
+# 去掉多余的 /、. 和 ..，只按字面算，不碰磁盘（服务的 Path 也不解开链接）。
+ff_normalize() {
+	local part parts out=()
+	IFS=/ read -r -a parts <<<"$1"
+	for part in ${parts[@]+"${parts[@]}"}; do
+		case "$part" in
+		"" | .) ;;
+		..) [[ ${#out[@]} -gt 0 ]] && unset 'out[${#out[@]}-1]' && out=(${out[@]+"${out[@]}"}) ;;
+		*) out+=("$part") ;;
+		esac
+	done
+	local IFS=/
+	printf '/%s' "${out[*]-}"
+}
+
+# ff_place <代码目录> <设置的值>：服务把这个设置放在哪，打印绝对路径。开头的 ~ 是家目录；
+# 相对路径从代码目录算起，服务在代码目录里运行（启动器先 cd 进去）。值里展开之后还剩 $
+# 时（$HOME 不带花括号，服务照字面用）看不准，返回 1：调用方当作「可能在代码目录里」。
+ff_place() {
+	local folder="$1" value="$2"
+	case "$value" in
+	"~") value="$HOME" ;;
+	"~/"*) value="${HOME}/${value#"~/"}" ;;
+	esac
+	[[ "$value" == /* ]] || value="${folder}/${value}"
+	value="$(ff_normalize "$value")"
+	printf '%s' "$value"
+	[[ "$value" != *'$'* ]]
+}
+
+ff_lower() {
+	printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# 已存在的那段上级目录换成解开链接后的样子（/tmp 是 /private/tmp），其余照抄。
+ff_physical() {
+	local head="$1" tail="" real
+	[[ "$head" == /* ]] || { printf '%s' "$1"; return 0; }
+	while [[ "$head" != "/" && ! -d "$head" ]]; do
+		tail="/${head##*/}${tail}"
+		head="${head%/*}"
+		[[ -n "$head" ]] || head="/"
+	done
+	real="$(cd "$head" 2>/dev/null && pwd -P)" || real="$head"
+	printf '%s%s' "${real%/}" "$tail"
+}
+
+# ff_inside <路径> <目录>：路径在目录里或就是它。照字面比一次、解开链接再比一次，不分大小写
+# （Mac 默认的磁盘格式不分）；多判成「在里面」只会让更新停下、卸载少删，不会多删。
+ff_inside() {
+	local path folder
+	path="$(ff_lower "$1")" folder="$(ff_lower "$2")"
+	[[ "$path" == "$folder" || "$path" == "$folder/"* ]] && return 0
+	path="$(ff_lower "$(ff_physical "$1")")" folder="$(ff_lower "$(ff_physical "$2")")"
+	[[ "$path" == "$folder" || "$path" == "$folder/"* ]]
+}
+
+# 更新时挪到旁边的那几份（.new .old .failed）里放一个标记，写明它是在哪个位置被放下的。
+# 只有标记写的就是它现在的位置，才是更新留下的、可以删；用户把代码目录复制或改名成
+# app.old 时，标记写的是别的位置（或者没有标记），不动。正在用的那份里没有标记。
+ff_mark_update_copy() {
+	printf 'Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.\n%s\n' "$1" >"$1/.fluentflow-update"
+}
+
+ff_update_marker_says() {
+	local said
+	[[ -f "$1/.fluentflow-update" ]] || return 1
+	said="$(tail -n 1 "$1/.fluentflow-update")"
+	[[ -n "$said" && "$(ff_lower "$(ff_physical "$said")")" == "$(ff_lower "$(ff_physical "$1")")" ]]
+}
+
+# 装到哪：展开 ~，相对路径从当前目录算起，去掉结尾的 /。后面要挪进挪出这个目录，
+# 也要拿它和 .env 里的位置比。
 DIR="${FLUENTFLOW_INSTALL_DIR:-${HOME}/fluentflow-local}"
+case "$DIR" in
+"~") DIR="$HOME" ;;
+"~/"*) DIR="${HOME}/${DIR#"~/"}" ;;
+esac
+[[ "$DIR" == /* ]] || DIR="${PWD}/${DIR}"
+DIR="$(ff_normalize "$DIR")"
 PORT="${FLUENTFLOW_LOCAL_PORT:-8000}"
 
 step() { echo ""; echo "== $1 =="; }
@@ -56,8 +184,9 @@ fail() {
 		echo "更新失败，换回 ${CURRENT}…" >&2
 		stop_folder_programs "$DIR"
 		rm -rf "${DIR}.failed"
-		[[ -e "$DIR" ]] && mv "$DIR" "${DIR}.failed"
+		if [[ -e "$DIR" ]]; then mv "$DIR" "${DIR}.failed" && ff_mark_update_copy "${DIR}.failed"; fi
 		mv "${DIR}.old" "$DIR"
+		rm -f "${DIR}/.fluentflow-update"
 		# 更新前在跑的服务换回后接着跑（没有桌面启动器的安装也一样）。
 		if [[ "${STOPPED_OLD:-0}" -eq 1 || -d "${HOME}/Desktop/FluentFlow Local.app" ]]; then start_service; fi
 		fail_plain "$1
@@ -79,12 +208,12 @@ if [[ -z "${HTTPS_PROXY:-}${HTTP_PROXY:-}${https_proxy:-}${http_proxy:-}" ]]; th
 fi
 
 # --- 1. 代码 ----------------------------------------------------------------
-# 更新用到的旁边几个文件夹（.new .old .failed）：已经存在的，只有带着本脚本留下的标记
-# （之前某次更新建的）才删；用户自己叫这个名字的备份不动。
-UPDATE_MARKER=".fluentflow-update"
+# 更新用到的旁边几个文件夹（.new .old .failed）：已经存在的，只有标记写着就是这个位置的
+# （之前某次更新放下的，见 ff_mark_update_copy）才删；用户自己复制或改名出来的不动。
 assert_own_leftover() {
-	[[ -e "$1" && ! -e "$1/${UPDATE_MARKER}" ]] &&
+	if [[ -e "$1" ]] && ! ff_update_marker_says "$1"; then
 		fail_plain "$1 已存在，不是 FluentFlow 的更新留下的。请先把它移走或改名。什么都没改。"
+	fi
 	return 0
 }
 
@@ -134,7 +263,7 @@ elif [[ -n "$LOCAL_SOURCE" ]]; then
 		mkdir -p "$(dirname "$TARGET")"
 		cp -R "$LOCAL_SOURCE" "$TARGET"
 		rm -rf "${TARGET}/.git" "${TARGET}/.venv" "${TARGET}/.env"
-		echo "made by a FluentFlow Local install or update" >"${TARGET}/${UPDATE_MARKER}"
+		if [[ "$UPDATING" -eq 1 ]]; then ff_mark_update_copy "$TARGET"; fi
 		[[ -n "${SRC_TMP:-}" ]] && rm -rf "$SRC_TMP"
 		echo "已放到 ${TARGET}"
 	fi
@@ -221,7 +350,7 @@ if [[ "$IS_GIT" -eq 0 && -z "$LOCAL_SOURCE" && ( "$HAVE_CODE" -eq 0 || "$UPDATIN
 	[[ -n "$unpacked" ]] || fail "代码从 github.com 和 registry.npmmirror.com 都没下成，请检查网络或代理。"
 	mkdir -p "$(dirname "$DIR")"
 	mv "$unpacked" "$TARGET"
-	echo "made by a FluentFlow Local install or update" >"${TARGET}/${UPDATE_MARKER}"
+	if [[ "$UPDATING" -eq 1 ]]; then ff_mark_update_copy "$TARGET"; fi
 	echo "已放到 ${TARGET}"
 fi
 
@@ -240,18 +369,22 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	assert_own_leftover "${DIR}.failed"
 	# 数据、链接下载、模型若设在代码目录里面，会随旧代码一起被删：先挪出去再更新。
 	# 数据目录的每一部分（任务库、原片、笔记、改过的转录稿、设置……）都能单独设位置。
+	# 照服务的读法定位置（ff_setting、ff_place）：相对路径、${HOME} 这样的引用、~ 都算上；
+	# 读不准的当作在里面。
 	names="HF_HOME $(env | sed -n -E 's/^(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))=.*/\1/p')"
 	[[ -f "${DIR}/.env" ]] && names="$names $(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?(FLUENTFLOW_[A-Z0-9_]*(DIR|PATH|CACHE))[[:space:]]*=.*/\2/p' "${DIR}/.env")"
 	for name in $(printf '%s\n' $names | sort -u); do
-		where="${!name:-}"
-		if [[ -z "$where" && -f "${DIR}/.env" ]]; then
-			where="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${name}[[:space:]]*=" "${DIR}/.env" | tail -n 1 |
-				sed -E "s/^[^=]*=[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*(#.*)?$//" || true)"
-		fi
-		where="${where/#\~/$HOME}"
-		if [[ "$where" == "${DIR}/"* ]]; then
+		# 装到哪的那个变量本身不算（它就是这份安装的位置）。
+		[[ "$name" != FLUENTFLOW_INSTALL_DIR ]] || continue
+		where="$(ff_setting "$DIR" "$name")"
+		[[ -n "$where" ]] || continue
+		if ! place="$(ff_place "$DIR" "$where")"; then
 			rm -rf "${DIR}.new"
-			fail_plain "${name}（${where}）在代码目录里面，更新会换掉这个目录。请先把它挪到 ${DIR} 外面。什么都没改。"
+			fail_plain "${name}（${where}）里有展开不了的 \$，看不准它在不在代码目录里；更新会换掉代码目录，所以先停下。请把它改成完整路径（或 \${HOME}/… 这样带花括号的写法），并确认在 ${DIR} 外面。什么都没改。"
+		fi
+		if ff_inside "$place" "$DIR"; then
+			rm -rf "${DIR}.new"
+			fail_plain "${name}（${where}，也就是 ${place}）在代码目录里面，更新会换掉这个目录。请先把它挪到 ${DIR} 外面。什么都没改。"
 		fi
 	done
 	# 端口和桌面启动器一样：环境变量优先，其次是 .env 里的同名行（新旧两份 .env 一样）。
@@ -302,7 +435,9 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	SWAPPED=1
 	# set -e 停下的那些步骤也要先换回旧版本，包括下一步的 mv。
 	trap 'fail "安装中途出错（install.sh 第 ${LINENO} 行）。"' ERR
+	ff_mark_update_copy "${DIR}.old"
 	mv "${DIR}.new" "$DIR"
+	rm -f "${DIR}/.fluentflow-update"
 fi
 
 # --- 2. 安装 ----------------------------------------------------------------

@@ -94,6 +94,57 @@ function Get-FluentFlowSetting([string]$Repo, [string]$Name) {
     return Get-FluentFlowEnvFileValue $Repo $Name
 }
 
+# Where the service puts a path setting: Path, the full path, and Sure,
+# whether that can be told. The service reads the value with its ${NAME}
+# references expanded (Get-FluentFlowSetting), turns a leading ~ into the
+# user's folder, and takes a relative path from the code folder, which it runs
+# in (scripts/run_service.py); a path starting with a single \ is on the code
+# folder's drive. A $ left after expanding ($HOME, which the service takes
+# literally), a drive-relative D:data or a path Windows rejects cannot be
+# placed for sure: callers treat it as possibly inside the code folder.
+function Resolve-FluentFlowPlace([string]$Repo, [string]$Value) {
+    if (-not $Value) { return $null }
+    $Path = $Value
+    if ($Path -eq '~' -or $Path -match '^~[\\/]') { $Path = $env:USERPROFILE + $Path.Substring(1) }
+    $Sure = -not $Path.Contains('$')
+    if ($Path -match '^[A-Za-z]:(?![\\/])') { return [pscustomobject]@{ Path = $Path; Sure = $false } }
+    if ($Path -match '^[\\/](?![\\/])') { $Path = [System.IO.Path]::GetPathRoot($Repo).TrimEnd('\', '/') + $Path }
+    elseif (-not [System.IO.Path]::IsPathRooted($Path)) { $Path = $Repo.TrimEnd('\', '/') + '\' + $Path }
+    try { $Path = [System.IO.Path]::GetFullPath($Path) } catch { return [pscustomobject]@{ Path = $Path; Sure = $false } }
+    if ($Path.Length -gt 3) { $Path = $Path.TrimEnd('\') }
+    return [pscustomobject]@{ Path = $Path; Sure = $Sure }
+}
+
+# Whether a full path is the folder or inside it, ignoring case as Windows
+# does; when either cannot be read as a path, it counts as inside.
+function Test-FluentFlowInside([string]$Path, [string]$Folder) {
+    if (-not $Path -or -not $Folder) { return $false }
+    try {
+        $Base = [System.IO.Path]::GetFullPath($Folder).TrimEnd('\')
+        $Full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    } catch { return $true }
+    return $Full.Equals($Base, [StringComparison]::OrdinalIgnoreCase) -or $Full.StartsWith($Base + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+
+# An update's copies beside the install (.new, .old, .failed) carry a marker
+# naming the place the update put them. Only a copy whose marker names where
+# it is now is the update's to remove: a copy or rename the user made of the
+# code folder names another place, or has no marker (the copy in use has none).
+function Set-FluentFlowUpdateCopy([string]$Folder) {
+    $Lines = @("Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.", [System.IO.Path]::GetFullPath($Folder))
+    [System.IO.File]::WriteAllLines((Join-Path $Folder ".fluentflow-update"), [string[]]$Lines, (New-Object System.Text.UTF8Encoding $false))
+}
+
+function Test-FluentFlowUpdateCopy([string]$Folder) {
+    $Marker = Join-Path $Folder ".fluentflow-update"
+    if (-not (Test-Path -LiteralPath $Marker)) { return $false }
+    $Said = @([System.IO.File]::ReadAllLines($Marker, [System.Text.Encoding]::UTF8) | Where-Object { $_.Trim() }) | Select-Object -Last 1
+    if (-not $Said) { return $false }
+    try {
+        return [System.IO.Path]::GetFullPath($Said.Trim()).TrimEnd('\').Equals([System.IO.Path]::GetFullPath($Folder).TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
+    } catch { return $false }
+}
+
 function Get-FluentFlowDataDir([string]$Repo) {
     $Setting = Get-FluentFlowSetting $Repo "FLUENTFLOW_DATA_DIR"
     if ($Setting) { return $Setting }
@@ -117,11 +168,15 @@ function Import-FluentFlowEnv([string]$Repo) {
 }
 
 # Appends NAME=value to .env unless the file already has the name. Single
-# quotes keep a Windows path literal (no escapes, a " #" in it stays).
+# quotes keep a Windows path literal (no escapes, a " #" in it stays), except
+# a closing \' , which the service's reader takes as an escaped quote and then
+# reads the next line into the value: a trailing separator is dropped, and a
+# drive's root (D:\) is written without quotes.
 function Add-FluentFlowEnvLine([string]$Repo, [string]$Name, [string]$Value) {
     if (Get-FluentFlowEnvFileValue $Repo $Name) { return }
     $EnvFile = Join-Path $Repo ".env"
-    $Written = if ($Value.Contains("'")) { $Value } else { "'$Value'" }
+    if ($Value -notmatch '^[A-Za-z]:[\\/]$') { $Value = $Value.TrimEnd('\', '/') }
+    $Written = if ($Value.Contains("'") -or $Value.EndsWith('\') -or $Value.EndsWith('/')) { $Value } else { "'$Value'" }
     $Lead = ""
     if ((Test-Path -LiteralPath $EnvFile) -and (Get-Item -LiteralPath $EnvFile).Length -gt 0) {
         $Text = [System.IO.File]::ReadAllText($EnvFile)

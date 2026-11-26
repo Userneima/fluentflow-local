@@ -46,6 +46,137 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::S
 
 $RepoSlug = "Userneima/fluentflow-local"
 
+# Reading .env and telling where a setting puts files: the exact text of the
+# functions of the same name in launchers/windows/fluentflow-env.ps1
+# (tests/test_install_places.py checks), repeated because until the update has
+# swapped the folders neither copy's scripts can be relied on (the old one may
+# predate them, the new one is not in place yet).
+# ${NAME} and ${NAME:-default}, from the environment or an earlier line of
+# the same .env, as the service's reader (python-dotenv's rule) does.
+function Expand-FluentFlowReferences([string]$Value, [hashtable]$Earlier) {
+    return [regex]::Replace($Value, '\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}', {
+        param($Match)
+        $Name = $Match.Groups[1].Value
+        $Found = [Environment]::GetEnvironmentVariable($Name)
+        if (-not $Found -and $Earlier -and $Earlier.ContainsKey($Name)) { $Found = $Earlier[$Name] }
+        if ($Found) { return $Found }
+        return $Match.Groups[2].Value
+    })
+}
+
+function ConvertFrom-FluentFlowEnvValue([string]$Raw, [hashtable]$Earlier) {
+    $Value = $Raw.Trim()
+    if ($Value.Length -ge 1 -and ($Value[0] -eq '"' -or $Value[0] -eq "'")) {
+        $Quote = $Value[0]
+        $End = $Value.IndexOf($Quote, 1)
+        if ($End -gt 0) {
+            $Inner = $Value.Substring(1, $End - 1)
+            if ($Quote -eq '"') { $Inner = $Inner.Replace('\n', "`n").Replace('\"', '"').Replace('\\', '\') }
+            return Expand-FluentFlowReferences $Inner $Earlier
+        }
+    }
+    return Expand-FluentFlowReferences (([regex]::Split($Value, '\s+#', 2)[0]).Trim()) $Earlier
+}
+
+# The value of a line in the repository's .env, ignoring the environment.
+function Get-FluentFlowEnvFileValue([string]$Repo, [string]$Name) {
+    $EnvFile = Join-Path $Repo ".env"
+    if (-not (Test-Path -LiteralPath $EnvFile)) { return $null }
+    # Every line in order, so a value can use an earlier one.
+    $Values = @{}
+    foreach ($Line in [System.IO.File]::ReadAllLines($EnvFile, [System.Text.Encoding]::UTF8)) {
+        if ($Line -match '^\s*(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$') {
+            $Values[$Matches[2]] = ConvertFrom-FluentFlowEnvValue $Matches[3] $Values
+        }
+    }
+    if ($Values[$Name]) { return $Values[$Name] }
+    return $null
+}
+
+function Get-FluentFlowSetting([string]$Repo, [string]$Name) {
+    $FromEnvironment = [Environment]::GetEnvironmentVariable($Name, "Process")
+    if ($FromEnvironment) { return $FromEnvironment }
+    return Get-FluentFlowEnvFileValue $Repo $Name
+}
+
+# Where the service puts a path setting: Path, the full path, and Sure,
+# whether that can be told. The service reads the value with its ${NAME}
+# references expanded (Get-FluentFlowSetting), turns a leading ~ into the
+# user's folder, and takes a relative path from the code folder, which it runs
+# in (scripts/run_service.py); a path starting with a single \ is on the code
+# folder's drive. A $ left after expanding ($HOME, which the service takes
+# literally), a drive-relative D:data or a path Windows rejects cannot be
+# placed for sure: callers treat it as possibly inside the code folder.
+function Resolve-FluentFlowPlace([string]$Repo, [string]$Value) {
+    if (-not $Value) { return $null }
+    $Path = $Value
+    if ($Path -eq '~' -or $Path -match '^~[\\/]') { $Path = $env:USERPROFILE + $Path.Substring(1) }
+    $Sure = -not $Path.Contains('$')
+    if ($Path -match '^[A-Za-z]:(?![\\/])') { return [pscustomobject]@{ Path = $Path; Sure = $false } }
+    if ($Path -match '^[\\/](?![\\/])') { $Path = [System.IO.Path]::GetPathRoot($Repo).TrimEnd('\', '/') + $Path }
+    elseif (-not [System.IO.Path]::IsPathRooted($Path)) { $Path = $Repo.TrimEnd('\', '/') + '\' + $Path }
+    try { $Path = [System.IO.Path]::GetFullPath($Path) } catch { return [pscustomobject]@{ Path = $Path; Sure = $false } }
+    if ($Path.Length -gt 3) { $Path = $Path.TrimEnd('\') }
+    return [pscustomobject]@{ Path = $Path; Sure = $Sure }
+}
+
+# Whether a full path is the folder or inside it, ignoring case as Windows
+# does; when either cannot be read as a path, it counts as inside.
+function Test-FluentFlowInside([string]$Path, [string]$Folder) {
+    if (-not $Path -or -not $Folder) { return $false }
+    try {
+        $Base = [System.IO.Path]::GetFullPath($Folder).TrimEnd('\')
+        $Full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    } catch { return $true }
+    return $Full.Equals($Base, [StringComparison]::OrdinalIgnoreCase) -or $Full.StartsWith($Base + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+
+# An update's copies beside the install (.new, .old, .failed) carry a marker
+# naming the place the update put them. Only a copy whose marker names where
+# it is now is the update's to remove: a copy or rename the user made of the
+# code folder names another place, or has no marker (the copy in use has none).
+function Set-FluentFlowUpdateCopy([string]$Folder) {
+    $Lines = @("Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.", [System.IO.Path]::GetFullPath($Folder))
+    [System.IO.File]::WriteAllLines((Join-Path $Folder ".fluentflow-update"), [string[]]$Lines, (New-Object System.Text.UTF8Encoding $false))
+}
+
+function Test-FluentFlowUpdateCopy([string]$Folder) {
+    $Marker = Join-Path $Folder ".fluentflow-update"
+    if (-not (Test-Path -LiteralPath $Marker)) { return $false }
+    $Said = @([System.IO.File]::ReadAllLines($Marker, [System.Text.Encoding]::UTF8) | Where-Object { $_.Trim() }) | Select-Object -Last 1
+    if (-not $Said) { return $false }
+    try {
+        return [System.IO.Path]::GetFullPath($Said.Trim()).TrimEnd('\').Equals([System.IO.Path]::GetFullPath($Folder).TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
+    } catch { return $false }
+}
+
+# The folder asked for in FLUENTFLOW_INSTALL_DIR, as a full path with no
+# trailing separator. Agents set it in PowerShell, which expands neither
+# %USERPROFILE% nor '$env:USERPROFILE' in single quotes: both are expanded
+# here, and a relative path is taken from the current folder. Taken as given, a
+# relative folder put the data inside the code folder (the service runs there),
+# and a trailing \ ('D:\FF\' in .env) made the service read the next line
+# into the value. A drive's root is refused: uninstalling empties the folder.
+function Get-FluentFlowInstallRoot([string]$Asked) {
+    $Path = $Asked.Trim().Trim('"').Trim("'")
+    $Path = [regex]::Replace($Path, '\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?', {
+        param($Match)
+        $Found = [Environment]::GetEnvironmentVariable($Match.Groups[1].Value)
+        if ($Found) { return $Found }
+        return $Match.Value
+    })
+    $Path = [Environment]::ExpandEnvironmentVariables($Path)
+    if ($Path -eq '~' -or $Path -match '^~[\\/]') { $Path = $env:USERPROFILE + $Path.Substring(1) }
+    if ($Path.Contains('$') -or $Path -match '%[A-Za-z_][A-Za-z0-9_]*%') {
+        throw "FLUENTFLOW_INSTALL_DIR ($Asked) names a variable that is not set; give the folder's full path, for example D:\FluentFlow."
+    }
+    $Path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path).TrimEnd('\', '/')
+    if (-not $Path -or $Path -match '^[A-Za-z]:$' -or $Path -match '^\\\\[^\\]+\\[^\\]+$') {
+        throw "FLUENTFLOW_INSTALL_DIR ($Asked) is a whole drive; give a folder on it, for example $Path\FluentFlow."
+    }
+    return $Path
+}
+
 function Get-FixedDrives {
     $SystemDrive = $env:SystemDrive.TrimEnd('\')
     @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue |
@@ -99,7 +230,7 @@ $LegacyDir = Join-Path $env:USERPROFILE "fluentflow-local"
 $Existing = $null
 if (-not $env:FLUENTFLOW_INSTALL_DIR) { $Existing = Find-ExistingRoot }
 if ($env:FLUENTFLOW_INSTALL_DIR) {
-    $Root = $env:FLUENTFLOW_INSTALL_DIR
+    $Root = Get-FluentFlowInstallRoot $env:FLUENTFLOW_INSTALL_DIR
 } elseif ($Existing) {
     $Root = $Existing
 } elseif (Test-Path (Join-Path $LegacyDir "backend\local_main.py")) {
@@ -153,24 +284,12 @@ if (Test-Path (Join-Path $Root "backend\local_main.py")) {
 Write-Host "Installing into $Root"
 
 # The update's working folders beside the install. One already there is
-# removed only when an earlier update made it (its .fluentflow-update marker):
-# a folder the user named app.old is theirs.
-$UpdateMarker = ".fluentflow-update"
+# removed only when an earlier update put it there (Test-FluentFlowUpdateCopy):
+# a folder the user copied or renamed to app.old is theirs.
 function Assert-OwnLeftover([string]$Path) {
-    if ((Test-Path $Path) -and -not (Test-Path (Join-Path $Path $UpdateMarker))) {
+    if ((Test-Path $Path) -and -not (Test-FluentFlowUpdateCopy $Path)) {
         throw "$Path exists and was not made by a FluentFlow update; move or rename it first"
     }
-}
-# Where the old .env (or this window) puts data; inside the code folder it would
-# go away with the old code.
-function Get-InstalledSetting([string]$Folder, [string]$Name) {
-    $FromEnv = [Environment]::GetEnvironmentVariable($Name)
-    if ($FromEnv) { return $FromEnv }
-    $EnvFile = Join-Path $Folder ".env"
-    if (-not (Test-Path $EnvFile)) { return $null }
-    $Line = Get-Content $EnvFile | Where-Object { $_ -match ('^\s*(export\s+)?' + $Name + '\s*=') } | Select-Object -Last 1
-    if (-not $Line) { return $null }
-    return (($Line -split '=', 2)[1] -split '\s#')[0].Trim().Trim('"').Trim("'")
 }
 
 Write-Host "== Getting the code =="
@@ -212,9 +331,9 @@ if ($IsGit) {
         if (Test-Path $Target) { Remove-Item -Recurse -Force -LiteralPath $Target }
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Target) | Out-Null
         Copy-Item -Recurse -LiteralPath $LocalSource -Destination $Target
-        Remove-Item -Recurse -Force -LiteralPath (Join-Path $Target ".git"), (Join-Path $Target ".venv"), (Join-Path $Target ".env") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force -LiteralPath (Join-Path $Target ".git"), (Join-Path $Target ".venv"), (Join-Path $Target ".env"), (Join-Path $Target ".fluentflow-update") -ErrorAction SilentlyContinue
         if ($Unzipped) { Remove-Item -Recurse -Force -LiteralPath $Unzipped -ErrorAction SilentlyContinue }
-        Set-Content -Path (Join-Path $Target $UpdateMarker) -Value "made by a FluentFlow Local install or update" -Encoding ASCII
+        if ($Updating) { Set-FluentFlowUpdateCopy $Target }
         Write-Host "Placed in $Target"
     }
   } else {
@@ -326,7 +445,7 @@ if ($IsGit) {
         $ProgressPreference = $SavedProgress
         Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
     }
-    Set-Content -Path (Join-Path $Target $UpdateMarker) -Value "made by a FluentFlow Local install or update" -Encoding ASCII
+    if ($Updating) { Set-FluentFlowUpdateCopy $Target }
     Write-Host "Placed in $Target"
   }
   }
@@ -385,16 +504,22 @@ if ($Updating) {
     foreach ($Leftover in @("$Dir.old", "$Dir.failed")) { Assert-OwnLeftover $Leftover }
     # Every place a setting can put the user's files: the data folder and each
     # of its parts (task database, sources, notes, edits...), link downloads,
-    # the models.
+    # the models. Placed as the service places them (Resolve-FluentFlowPlace: a
+    # relative path, a ${NAME} reference, ~); one that cannot be placed for sure
+    # counts as inside. FLUENTFLOW_INSTALL_DIR is where this install is.
     $Names = @("HF_HOME") + @(Get-ChildItem Env: | Where-Object { $_.Name -match '^FLUENTFLOW_\w*(DIR|PATH|CACHE)$' } | ForEach-Object { $_.Name })
     if (Test-Path (Join-Path $Dir ".env")) {
-        $Names += @(Get-Content (Join-Path $Dir ".env") | ForEach-Object { if ($_ -match '^\s*(export\s+)?(FLUENTFLOW_\w*(DIR|PATH|CACHE))\s*=') { $Matches[2] } })
+        $Names += @([System.IO.File]::ReadAllLines((Join-Path $Dir ".env"), [System.Text.Encoding]::UTF8) | ForEach-Object { if ($_ -match '^\s*(export\s+)?(FLUENTFLOW_\w*(DIR|PATH|CACHE))\s*=') { $Matches[2] } })
     }
-    foreach ($Name in ($Names | Sort-Object -Unique)) {
-        $Where = Get-InstalledSetting $Dir $Name
-        if ($Where -and [System.IO.Path]::IsPathRooted($Where) -and
-            [System.IO.Path]::GetFullPath($Where).StartsWith($Dir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
-            throw "$Name ($Where) is inside the code folder, which an update replaces; move it out of $Dir first"
+    foreach ($Name in ($Names | Where-Object { $_ -ne "FLUENTFLOW_INSTALL_DIR" } | Sort-Object -Unique)) {
+        $Where = Get-FluentFlowSetting $Dir $Name
+        $Place = Resolve-FluentFlowPlace $Dir $Where
+        if (-not $Place) { continue }
+        if (-not $Place.Sure) {
+            throw "$Name ($Where) cannot be placed for sure (a `$ that is not a `${NAME} reference, or a drive without a folder); an update replaces the code folder, so it stops here. Write it as a full path outside $Dir"
+        }
+        if (Test-FluentFlowInside $Place.Path $Dir) {
+            throw "$Name ($Where, that is $($Place.Path)) is inside the code folder, which an update replaces; move it out of $Dir first"
         }
     }
     $OldPort = Get-InstalledPort $Dir
@@ -425,6 +550,7 @@ if ($Updating) {
     } catch {
         throw "Could not move $Dir aside ($($_.Exception.Message)). A window or program is using it; close it (or run this from another folder) and run this again"
     }
+    Set-FluentFlowUpdateCopy "$Dir.old"
   } catch {
     $Why = $_.Exception.Message
     Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
@@ -439,8 +565,11 @@ if ($Updating) {
         Move-Item -LiteralPath "$Dir.new" -Destination $Dir -ErrorAction Stop
     } catch {
         Move-Item -LiteralPath "$Dir.old" -Destination $Dir -ErrorAction SilentlyContinue
+        Remove-Item -Force -LiteralPath (Join-Path $Dir ".fluentflow-update") -ErrorAction SilentlyContinue
         throw "Could not put the new version in place ($($_.Exception.Message)); FluentFlow Local $Current is back in $Dir."
     }
+    # The copy in use carries no marker: a copy the user makes of it later is not an update's.
+    Remove-Item -Force -LiteralPath (Join-Path $Dir ".fluentflow-update") -ErrorAction SilentlyContinue
 }
 
 $Port = "8000"
@@ -568,7 +697,9 @@ try {
     if (Test-Path "$Dir.failed") { Remove-Item -Recurse -Force -LiteralPath "$Dir.failed" -ErrorAction SilentlyContinue }
     Set-Location (Split-Path -Parent $Dir)
     Move-Item -LiteralPath $Dir -Destination "$Dir.failed"
+    Set-FluentFlowUpdateCopy "$Dir.failed"
     Move-Item -LiteralPath "$Dir.old" -Destination $Dir
+    Remove-Item -Force -LiteralPath (Join-Path $Dir ".fluentflow-update") -ErrorAction SilentlyContinue
     $Launcher = Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd"
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Dir "launchers\windows\install-local-to-desktop.ps1") | Out-Null
     if (Test-Path $Launcher) { Start-Process $Launcher }

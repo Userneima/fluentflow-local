@@ -59,6 +59,77 @@ ff_setting() {
 	fi
 }
 
+# 去掉多余的 /、. 和 ..，只按字面算，不碰磁盘（服务的 Path 也不解开链接）。
+ff_normalize() {
+	local part parts out=()
+	IFS=/ read -r -a parts <<<"$1"
+	for part in ${parts[@]+"${parts[@]}"}; do
+		case "$part" in
+		"" | .) ;;
+		..) [[ ${#out[@]} -gt 0 ]] && unset 'out[${#out[@]}-1]' && out=(${out[@]+"${out[@]}"}) ;;
+		*) out+=("$part") ;;
+		esac
+	done
+	local IFS=/
+	printf '/%s' "${out[*]-}"
+}
+
+# ff_place <代码目录> <设置的值>：服务把这个设置放在哪，打印绝对路径。开头的 ~ 是家目录；
+# 相对路径从代码目录算起，服务在代码目录里运行（启动器先 cd 进去）。值里展开之后还剩 $
+# 时（$HOME 不带花括号，服务照字面用）看不准，返回 1：调用方当作「可能在代码目录里」。
+ff_place() {
+	local folder="$1" value="$2"
+	case "$value" in
+	"~") value="$HOME" ;;
+	"~/"*) value="${HOME}/${value#"~/"}" ;;
+	esac
+	[[ "$value" == /* ]] || value="${folder}/${value}"
+	value="$(ff_normalize "$value")"
+	printf '%s' "$value"
+	[[ "$value" != *'$'* ]]
+}
+
+ff_lower() {
+	printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# 已存在的那段上级目录换成解开链接后的样子（/tmp 是 /private/tmp），其余照抄。
+ff_physical() {
+	local head="$1" tail="" real
+	[[ "$head" == /* ]] || { printf '%s' "$1"; return 0; }
+	while [[ "$head" != "/" && ! -d "$head" ]]; do
+		tail="/${head##*/}${tail}"
+		head="${head%/*}"
+		[[ -n "$head" ]] || head="/"
+	done
+	real="$(cd "$head" 2>/dev/null && pwd -P)" || real="$head"
+	printf '%s%s' "${real%/}" "$tail"
+}
+
+# ff_inside <路径> <目录>：路径在目录里或就是它。照字面比一次、解开链接再比一次，不分大小写
+# （Mac 默认的磁盘格式不分）；多判成「在里面」只会让更新停下、卸载少删，不会多删。
+ff_inside() {
+	local path folder
+	path="$(ff_lower "$1")" folder="$(ff_lower "$2")"
+	[[ "$path" == "$folder" || "$path" == "$folder/"* ]] && return 0
+	path="$(ff_lower "$(ff_physical "$1")")" folder="$(ff_lower "$(ff_physical "$2")")"
+	[[ "$path" == "$folder" || "$path" == "$folder/"* ]]
+}
+
+# 更新时挪到旁边的那几份（.new .old .failed）里放一个标记，写明它是在哪个位置被放下的。
+# 只有标记写的就是它现在的位置，才是更新留下的、可以删；用户把代码目录复制或改名成
+# app.old 时，标记写的是别的位置（或者没有标记），不动。正在用的那份里没有标记。
+ff_mark_update_copy() {
+	printf 'Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.\n%s\n' "$1" >"$1/.fluentflow-update"
+}
+
+ff_update_marker_says() {
+	local said
+	[[ -f "$1/.fluentflow-update" ]] || return 1
+	said="$(tail -n 1 "$1/.fluentflow-update")"
+	[[ -n "$said" && "$(ff_lower "$(ff_physical "$said")")" == "$(ff_lower "$(ff_physical "$1")")" ]]
+}
+
 ff_data_dir() {
 	local value
 	value="$(ff_setting "$1" FLUENTFLOW_DATA_DIR)"
