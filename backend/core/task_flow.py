@@ -149,8 +149,9 @@ def _write_note_holding_slot(
             local_intake_flow._patch_result(task_id, client_id, {
                 "summary_status": "failed", "summary_error": task_steps.STOPPED_NOTE, "summary_skipped": False,
             })
-    except TaskCancelled:
-        # Picking its pictures stopped with the step (``frame_extractor``).
+    except (TaskCancelled, task_stop.StepStopped):
+        # Picking its pictures stopped with the step (``frame_extractor``),
+        # or a request of the note did (``model_usage.unless_stopping``).
         if not task_stop.requested(task_id):
             raise
         if task_stop.shutting_down():
@@ -257,8 +258,9 @@ async def _run_serially(
     await run_pipeline_then_note(done, ctx, start_at=start_at)
 
 
-class StepStopped(asyncio.CancelledError):
-    """The user stopped this task's step (``task_stop``)."""
+# The user stopped this task's step: raised here on the event loop, and by
+# the step's own threads where they stop (``task_stop``).
+StepStopped = task_stop.StepStopped
 
 
 def _raise_if_stopped(task_id: str) -> None:

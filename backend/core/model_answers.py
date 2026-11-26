@@ -29,8 +29,9 @@ whole agent run, not one request and its answer, and the subscription does not
 bill per call.
 
 The request is sent through ``model_usage.unless_stopping``: a stopping
-service does not wait for it, and an answer it still gets before the process
-exits is kept all the same.
+service, or a step the user stopped, does not wait for it, and an answer it
+still gets before the process exits (or before the step is carried on) is
+kept all the same.
 
 Never costs the task: an answer that cannot be stored or read is logged and
 the model is asked as if nothing were kept.

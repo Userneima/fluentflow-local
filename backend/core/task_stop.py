@@ -8,8 +8,13 @@ built on it kills the ffmpeg it runs), and the Claude command lines a thread
 starts while bound to the task (``bound``) are registered and killed when the
 task is stopped (``request``).
 
-A request already sent to a model over HTTP cannot be called back: its answer
-is dropped, and the step waits for nothing.
+A request already sent to a model over HTTP cannot be called back: the thread
+waiting for it stops waiting (``model_usage.unless_stopping``) and raises
+``StepStopped``, nothing more is sent for the step, and an answer that still
+comes back is kept for the run that carries the step on (``model_answers``).
+The binding is a context variable, so work handed to another thread through
+``model_usage.carry`` (a note's chapters, its coverage check, the request
+itself) is the task's work too.
 
 When the service itself stops (``shutdown``), every task's work is stopped the
 same way, but the steps are not recorded as stopped: from then on
@@ -22,6 +27,8 @@ the restarted service rendered the same cut again beside them (measured
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import subprocess
 import threading
 from contextlib import contextmanager
@@ -32,7 +39,7 @@ from backend.core import process_tree
 _lock = threading.Lock()
 _events: dict[str, threading.Event] = {}
 _processes: dict[str, set[subprocess.Popen]] = {}
-_bound = threading.local()
+_bound: contextvars.ContextVar[str | None] = contextvars.ContextVar("task_stop_bound", default=None)
 _shutting_down = threading.Event()
 
 
@@ -90,20 +97,36 @@ def requested(task_id: str) -> bool:
     return bool(found and found.is_set())
 
 
+class StepStopped(asyncio.CancelledError):
+    """The user stopped this task's step (``request``), and the code that
+    raised it stopped: a request not sent, an answer not waited for, a part
+    of the note not written. A cancellation, not a failure, so the
+    ``except Exception`` that turns a failed request into a failed note lets
+    it through; unlike ``model_usage.ServiceStopping`` the step is recorded
+    as stopped (已停下) and waits for 接着做."""
+
+
 @contextmanager
 def bound(task_id: str) -> Iterator[None]:
     """Run the block (on a worker thread) as work of this task."""
-    previous = getattr(_bound, "task_id", None)
-    _bound.task_id = task_id
+    token = _bound.set(task_id)
     try:
         yield
     finally:
-        _bound.task_id = previous
+        _bound.reset(token)
 
 
 def current() -> str | None:
     """The task the calling thread works for, if it is bound to one."""
-    return getattr(_bound, "task_id", None)
+    return _bound.get()
+
+
+def stopped_here() -> bool:
+    """Whether the user stopped the step of the task the calling thread works
+    for. Only bound work asks: a rewrite asked for on request is not bound,
+    and the stop of an earlier run must not reach it."""
+    task_id = current()
+    return bool(task_id) and requested(task_id)
 
 
 def bound_runner() -> Any:
@@ -118,7 +141,7 @@ def bound_runner() -> Any:
 
 
 def track(process: subprocess.Popen) -> None:
-    task_id = getattr(_bound, "task_id", None)
+    task_id = current()
     if not task_id:
         return
     with _lock:
@@ -207,4 +230,4 @@ def shutting_down() -> bool:
     return _shutting_down.is_set()
 
 
-__all__ = ["Either", "either", "begin", "bound", "bound_runner", "current", "event", "request", "requested", "service_started", "shutdown", "shutting_down", "stop_on_signals", "track", "untrack"]
+__all__ = ["Either", "StepStopped", "either", "begin", "bound", "bound_runner", "current", "event", "request", "requested", "service_started", "shutdown", "shutting_down", "stop_on_signals", "stopped_here", "track", "untrack"]

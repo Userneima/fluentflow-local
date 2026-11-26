@@ -686,6 +686,9 @@ def _cli_pass(
     command: list[str], prompt: str, execute: Callable[..., subprocess.CompletedProcess[str]], call: Any,
 ) -> tuple[dict[str, Any], list[str]]:
     """One pass through the CLI: the result event, and the frames it opened."""
+    # Not started for a step already stopped (the next part of a note, its
+    # check), nor once the service is stopping.
+    model_usage.stop_if_asked()
     # An empty working directory, so the only files in reach are the frames that
     # were explicitly added. Running this in the project directory would put the
     # user's whole repository one Read away from a note-writing errand.
@@ -720,6 +723,11 @@ def _cli_pass(
         # answer: not a failure of the note or the check; the step stays open
         # for the restart (review of the 2026-11-25 stop change).
         raise model_usage.ServiceStopping("服务正在停止，本机 Claude 被停下，这一步重启后接着做。")
+    if task_stop.stopped_here() and (completed.returncode != 0 or payload is None or payload.get("is_error")):
+        # Killed because the user stopped the step (``task_stop.request``):
+        # the step reads stopped, not failed with what the killed command
+        # line printed.
+        raise task_stop.StepStopped("这一步已停下，本机 Claude 被停下。")
     if not stdout:
         raise _friendly_failure(completed.stderr or "本机 Claude 没有任何输出")
     if payload is not None:

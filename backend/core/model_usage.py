@@ -293,25 +293,47 @@ class ServiceStopping(asyncio.CancelledError):
     step stays open for the restart to carry on (decision 6.42)."""
 
 
-def unless_stopping(ask: Callable[[], Any]) -> Any:
-    """``ask()``, on a thread a stopping service does not wait for.
-
-    The request is sent on a daemon thread and the caller waits for it here;
-    once the service starts stopping (``task_stop.shutdown``) the caller
-    raises ``ServiceStopping`` instead of waiting for the answer, and nothing
-    new is sent. ``ask`` must do no more than the request and keep its answer
-    (``model_answers``): the thread is dropped where it is when the process
-    exits, so nothing a user would lose (a note file, a task record) may be
-    written on it. Every exit asking a model with text goes through here by
-    way of ``model_answers.remembered``; it used to be done on the note's,
-    the check's and the cut judge's own threads, which a stopping service
-    waits for, and one request in flight held its exit for 25 seconds with
-    the fake model (2026-11-06), a minute or two with a real one.
-    """
+def stop_if_asked() -> None:
+    """Raise when the work on this thread is to stop before its next model
+    request: ``ServiceStopping`` when the service is stopping (the step stays
+    open for the restart), ``task_stop.StepStopped`` when the user stopped
+    the step of the task this thread works for (recorded as stopped). The
+    service is asked first: a stopping service stops every task too."""
     from backend.core import task_stop
 
     if task_stop.shutting_down():
         raise ServiceStopping("服务正在停止，这次模型请求没有发出。")
+    if task_stop.stopped_here():
+        raise task_stop.StepStopped("这一步已停下，这次模型请求没有发出。")
+
+
+def unless_stopping(ask: Callable[[], Any]) -> Any:
+    """``ask()``, on a thread a stopping service or a stopped step does not
+    wait for.
+
+    The request is sent on a daemon thread and the caller waits for it here;
+    once the service starts stopping (``task_stop.shutdown``) the caller
+    raises ``ServiceStopping`` instead of waiting for the answer, and once
+    the user stops the step of the task the caller works for
+    (``task_stop.request``) it raises ``task_stop.StepStopped``; nothing new
+    is sent after either (``stop_if_asked``). ``ask`` must do no more than
+    the request and keep its answer (``model_answers``): the thread is
+    dropped where it is when the process exits, so nothing a user would lose
+    (a note file, a task record) may be written on it. Every exit asking a
+    model with text goes through here by way of ``model_answers.remembered``;
+    it used to be done on the note's, the check's and the cut judge's own
+    threads, which a stopping service waits for, and one request in flight
+    held its exit for 25 seconds with the fake model (2026-11-06), a minute
+    or two with a real one. A stopped step used to wait for the request in
+    flight and then write and check every part after it (2026-11-25).
+    """
+    from backend.core import task_stop
+
+    stop_if_asked()
+    task_id = task_stop.current()
+    # This run's stop, read once: a later run of the task gets an event of
+    # its own (``task_stop.begin``).
+    stopped = task_stop.event(task_id) if task_id else None
     outcome: dict[str, Any] = {}
     answered = threading.Event()
 
@@ -327,6 +349,8 @@ def unless_stopping(ask: Callable[[], Any]) -> Any:
     while not answered.wait(0.2):
         if task_stop.shutting_down():
             raise ServiceStopping("服务正在停止，没有等这次模型请求回来。")
+        if stopped is not None and stopped.is_set():
+            raise task_stop.StepStopped("这一步已停下，没有等这次模型请求回来。")
     if "error" in outcome:
         raise outcome["error"]
     return outcome.get("answer")
@@ -767,7 +791,7 @@ def for_task(task_id: str) -> dict[str, Any] | None:
 
 __all__ = [
     "ANTHROPIC", "BUDGET_EXCEEDED", "BudgetExceeded", "CarryingExecutor", "FAKE", "api_price", "budget",
-    "MODEL_BATCHES", "budget_refused", "record_batches", "reset_budget", "ServiceStopping", "spent", "stoppable_map", "unless_stopping", "test_run", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
+    "MODEL_BATCHES", "budget_refused", "record_batches", "reset_budget", "ServiceStopping", "spent", "stop_if_asked", "stoppable_map", "unless_stopping", "test_run", "KEY", "SUBSCRIPTION", "UNATTRIBUTED", "UNATTRIBUTED_LABEL",
     "OUTSIDE_TASKS_LABEL", "call", "carry", "cost", "current", "enter_step", "for_task", "outside_tasks",
     "outside_tasks_or_none", "item", "leave_step", "part_of", "prices",
     "provider_of_base_url", "scope", "summarize", "unit_prices", "works_for",

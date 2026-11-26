@@ -359,7 +359,7 @@ def test_stopping_the_step_stops_the_stand_in_while_the_note_is_written(monkeypa
         with task_stop.bound(task_id):
             try:
                 outcome["draft"] = ccn.write_visual_note(TRANSCRIPT, [])
-            except Exception as exc:  # noqa: BLE001 - the stop is what is expected
+            except BaseException as exc:  # noqa: BLE001 - the stop is what is expected
                 outcome["error"] = exc
 
     writer = threading.Thread(target=write)
@@ -376,6 +376,8 @@ def test_stopping_the_step_stops_the_stand_in_while_the_note_is_written(monkeypa
 
     assert not writer.is_alive() and time.monotonic() - stopped_at < 3
     assert process.poll() is not None and "draft" not in outcome
+    # A stop of the user's, not a failed note nor the service stopping.
+    assert isinstance(outcome["error"], task_stop.StepStopped)
     assert task_steps.status_of(task_id, task_steps.NOTE) == task_steps.STOPPED
     assert reached.attempts == []
 

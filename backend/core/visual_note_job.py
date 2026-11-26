@@ -59,7 +59,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import claude_vision, cut_timeline, debreath_job, model_usage, task_steps, visual_note_channel
+from backend.core import claude_vision, cut_timeline, debreath_job, model_usage, task_steps, task_stop, visual_note_channel
 from backend.core import note_coverage, note_join, note_progress, note_skills, note_versions, visual_note_check
 from backend.core.claude_vision import ClaudeVisionError, FrameInput
 from backend.core.visual_note_channel import Channel
@@ -1336,6 +1336,10 @@ def _run_visual_note(
         drafts = []
         coverage_parts = []
         for part in parts:
+            # Stopped (the step, or the service) between parts: no part after
+            # it is written or checked. A request already out is not waited
+            # for either (``model_usage.unless_stopping``).
+            model_usage.stop_if_asked()
             part = with_known_people(part, drafts)
             part_frames = claude_vision.frames_for_part(frames, part)
             note_progress.part(task_id, index=part.index, total=part.total,
@@ -1348,6 +1352,7 @@ def _run_visual_note(
                 )
             part_draft = _checked_draft(write, part, part_frames, api_key=api_key, rules=rules)
             if check_chat is not None:
+                model_usage.stop_if_asked()
                 note_progress.stage(task_id, note_progress.CHECKING)
                 _store(
                     task_id,
@@ -1443,6 +1448,17 @@ def _run_visual_note(
             state={"status": STATUS_FAILED, "stage": "done", "error": str(exc), "finished_at": _now()},
         )
         raise VisualNoteError(str(exc), actionable=getattr(exc, "actionable", False)) from exc
+    except task_stop.StepStopped:
+        # The user stopped the step: the note reads stopped, not running, and
+        # the task keeps the note it had. The parts' answers are kept for the
+        # step (``model_answers``), so 接着做 reads them back instead of paying
+        # for them again.
+        _store(
+            task_id,
+            client_id=client_id,
+            state={"status": STATUS_FAILED, "stage": "done", "error": task_steps.STOPPED_NOTE, "finished_at": _now()},
+        )
+        raise
     except Exception as exc:  # noqa: BLE001 - the job must not be left "running"
         logger.exception("visual note failed for %s", task_id)
         _store(

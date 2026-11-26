@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 
-from backend.core import glossary_correction, model_usage, task_steps
+from backend.core import glossary_correction, model_usage, task_steps, task_stop
 from backend.core.ai_summarizer import summarize_transcript_with_metadata
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
@@ -382,13 +382,23 @@ async def _write_transcript_note(
         note_mode=note_mode,
     )
     started_at = time.perf_counter()
-    try:
-        summary_result = await loop.run_in_executor(
-            None, model_usage.carry(lambda: summarize_transcript_with_metadata(
+
+    def summarize() -> Any:
+        # Bound to the task, so 停下这一步 stops its chapters' and check's
+        # requests too (``model_usage.unless_stopping``): stopping this
+        # coroutine alone left the thread writing the note to the end.
+        with task_stop.bound(task_id_value):
+            return summarize_transcript_with_metadata(
                 note_transcript_text, speaker_labeled=speaker_labeled, task_id=task_id_value,
                 client_id=client_id, **kwargs,
-            ))
-        )
+            )
+
+    # A run of its own: a stop of an earlier run does not reach it. One
+    # stopped earlier in this run was delivered at an await before this
+    # line, so it never gets here.
+    task_stop.begin(task_id_value)
+    try:
+        summary_result = await loop.run_in_executor(None, model_usage.carry(summarize))
         summary_md = summary_result.markdown
         if not summary_md.strip():
             raise ValueError("AI summarization returned empty result")
