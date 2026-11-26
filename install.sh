@@ -263,7 +263,8 @@ case "$DIR" in
 "~/"*) DIR="${HOME}/${DIR#"~/"}" ;;
 esac
 [[ "$DIR" == /* ]] || DIR="${PWD}/${DIR}"
-DIR="$(ff_normalize "$DIR")"
+# 按实际目录算（链接和 .. 交给磁盘），和服务打开它的方式一致。
+DIR="$(ff_physical_path "$DIR")"
 
 step() { echo ""; echo "== $1 =="; }
 fail() {

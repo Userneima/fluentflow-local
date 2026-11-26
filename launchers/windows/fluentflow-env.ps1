@@ -165,20 +165,35 @@ function Get-FluentFlowRealPath([string]$Path, [int]$Depth = 0) {
             continue
         }
         $Cur = if ($Cur.EndsWith('\')) { $Cur + $Part } else { "$Cur\$Part" }
-        try {
-            $Item = Get-Item -LiteralPath $Cur -Force -ErrorAction Stop
-        } catch {
-            continue
-        }
-        if ($Item.LinkType -and $Item.Target) {
-            $Target = [string]($Item.Target | Select-Object -First 1)
-            if ($Target -and -not [System.IO.Path]::IsPathRooted($Target)) {
+        $Target = Get-FluentFlowLinkTarget $Cur
+        if ($Target) {
+            if (-not [System.IO.Path]::IsPathRooted($Target)) {
                 $Target = Join-Path (Split-Path -Parent $Cur) $Target
             }
-            if ($Target) { $Cur = Get-FluentFlowRealPath ([System.IO.Path]::GetFullPath($Target)) ($Depth + 1) }
+            $Cur = Get-FluentFlowRealPath ([System.IO.Path]::GetFullPath($Target)) ($Depth + 1)
         }
     }
     return $Cur
+}
+
+# Where a link or junction points, or $null for anything else. Windows
+# PowerShell 5.1 does not always expose a junction's target as a property, so a
+# reparse point without one is asked with fsutil (what the system itself has).
+function Get-FluentFlowLinkTarget([string]$Path) {
+    $Item = $null
+    try { $Item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop } catch { return $null }
+    $IsLink = $false
+    try { $IsLink = [bool]($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } catch {}
+    if (-not $IsLink) { return $null }
+    $Target = [string](@($Item.Target) | Where-Object { $_ } | Select-Object -First 1)
+    if (-not $Target) {
+        $Line = @(& fsutil.exe reparsepoint query "$Path" 2>$null | Where-Object { $_ -match 'Substitute Name:' } | Select-Object -First 1)
+        if ($Line.Count -gt 0) { $Target = ($Line[0] -replace '.*Substitute Name:\s*', '').Trim() }
+    }
+    # fsutil prints the path as \??\C:\..., the form the system uses.
+    if ($Target.StartsWith('\??\')) { $Target = $Target.Substring(4) }
+    if ($Target) { return $Target }
+    return $null
 }
 
 # Where the service puts a path setting: Path, the full path, and Sure,
@@ -197,7 +212,9 @@ function Resolve-FluentFlowPlace([string]$Repo, [string]$Value) {
     if ($Path -match '^[A-Za-z]:(?![\\/])') { return [pscustomobject]@{ Path = $Path; Sure = $false } }
     if ($Path -match '^[\\/](?![\\/])') { $Path = [System.IO.Path]::GetPathRoot($Repo).TrimEnd('\', '/') + $Path }
     elseif (-not [System.IO.Path]::IsPathRooted($Path)) { $Path = $Repo.TrimEnd('\', '/') + '\' + $Path }
-    try { $Path = Get-FluentFlowRealPath ([System.IO.Path]::GetFullPath($Path)) } catch { return [pscustomobject]@{ Path = $Path; Sure = $false } }
+    # Walked as written: GetFullPath would collapse ".." by the text, past a link
+    # to somewhere else, and hand the walker a path that no link is left in.
+    try { $Path = Get-FluentFlowRealPath $Path } catch { return [pscustomobject]@{ Path = $Path; Sure = $false } }
     if ($Path.Length -gt 3) { $Path = $Path.TrimEnd('\') }
     return [pscustomobject]@{ Path = $Path; Sure = $Sure }
 }

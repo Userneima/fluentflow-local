@@ -53,7 +53,7 @@ def _read(path: Path) -> str:
 SHARED_BASH = ("ff_env_file_value", "ff_unquote", "ff_setting", "ff_normalize", "ff_physical_path", "ff_place", "ff_lower", "ff_physical",
                "ff_inside", "ff_update_marker_says", "ff_mark_update_copy", "ff_codex_home", "ff_stop_folder_programs")
 SHARED_POWERSHELL = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowQuoted", "ConvertFrom-FluentFlowEnvValue", "Get-FluentFlowEnvFileValue",
-                     "Get-FluentFlowSetting", "Get-FluentFlowRealPath", "Resolve-FluentFlowPlace", "Test-FluentFlowInside",
+                     "Get-FluentFlowSetting", "Get-FluentFlowRealPath", "Get-FluentFlowLinkTarget", "Resolve-FluentFlowPlace", "Test-FluentFlowInside",
                      "Test-FluentFlowUpdateCopy", "Set-FluentFlowUpdateCopy")
 
 
@@ -236,12 +236,21 @@ def test_the_windows_helpers_read_the_file_as_the_service_does(tmp_path, raw, ex
     assert result.stdout.strip() == expected
 
 
+def _install_root_script() -> str:
+    """Get-FluentFlowInstallRoot with what it calls (the real folder is walked
+    the way the system opens it, so the path helpers come along)."""
+    text = _read(ROOT / "install.ps1")
+    parts = []
+    for name in ("Get-FluentFlowRealPath", "Get-FluentFlowLinkTarget", "Get-FluentFlowInstallRoot"):
+        function = _powershell_function(text, name)
+        assert function, f"{name} missing from install.ps1"
+        parts.append(function)
+    return "\n".join(parts)
+
 @pytest.mark.skipif(not _POWERSHELL, reason="install.ps1, run by Windows PowerShell")
 @pytest.mark.parametrize("asked", ["{tmp}\\FF\\", "{tmp}\\FF", "$env:FF_TEST_BASE\\FF", "%FF_TEST_BASE%\\FF", "FF\\"])
 def test_the_install_folder_is_absolute_without_a_trailing_separator(tmp_path, asked):
-    function = _powershell_function(_read(ROOT / "install.ps1"), "Get-FluentFlowInstallRoot")
-    assert function
-    script = f"Set-Location '{tmp_path}'; {function}\nGet-FluentFlowInstallRoot '{asked.format(tmp=tmp_path)}'"
+    script = f"Set-Location '{tmp_path}'; {_install_root_script()}\nGet-FluentFlowInstallRoot '{asked.format(tmp=tmp_path)}'"
     result = _powershell(script, {"FF_TEST_BASE": str(tmp_path)})
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().lower() == str(tmp_path / "FF").lower()
@@ -249,8 +258,7 @@ def test_the_install_folder_is_absolute_without_a_trailing_separator(tmp_path, a
 
 @pytest.mark.skipif(not _POWERSHELL, reason="install.ps1, run by Windows PowerShell")
 def test_a_drive_root_is_not_an_install_folder():
-    function = _powershell_function(_read(ROOT / "install.ps1"), "Get-FluentFlowInstallRoot")
-    result = _powershell(f"{function}\nGet-FluentFlowInstallRoot 'D:\\'")
+    result = _powershell(f"{_install_root_script()}\nGet-FluentFlowInstallRoot 'D:\\'")
     assert result.returncode != 0
 
 
@@ -850,7 +858,7 @@ def test_a_link_before_a_dotdot_lands_where_the_system_puts_it(tmp_path):
 
 WIN_FUNCTIONS = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowQuoted", "ConvertFrom-FluentFlowEnvValue",
                  "Get-FluentFlowEnvFileValue", "Get-FluentFlowSetting", "Get-FluentFlowRealPath",
-                 "Resolve-FluentFlowPlace", "Test-FluentFlowInside", "Add-FluentFlowEnvLine",
+                 "Resolve-FluentFlowPlace", "Get-FluentFlowLinkTarget", "Test-FluentFlowInside", "Add-FluentFlowEnvLine",
                  "Set-FluentFlowEnvLine", "Get-FluentFlowHomeRoot", "Repair-FluentFlowHome",
                  "Get-FluentFlowDataDir", "Add-FluentFlowFolderLines")
 
@@ -893,10 +901,10 @@ def test_a_moved_folder_points_its_env_at_itself_again(tmp_path):
 
     assert result.returncode == 0, result.stderr
     lines = dict(line.split("=", 1) for line in result.stdout.strip().splitlines() if "=" in line)
-    assert lines["home"] == str(root)
-    assert lines["data"] == str(root / "data")
-    assert lines["models"] == str(root / "models")
-    assert lines["own"] == str(tmp_path / "elsewhere")
+    # Windows paths differ in case between what was written and what the disk has.
+    for name, expected in (("home", root), ("data", root / "data"), ("models", root / "models"),
+                           ("own", tmp_path / "elsewhere")):
+        assert lines[name].lower() == str(expected).lower(), (name, lines)
     assert "FLUENTFLOW_HOME" in lines["changed"] and "FLUENTFLOW_DATA_DIR" in lines["changed"]
 
 
@@ -920,7 +928,7 @@ def test_a_folder_still_in_its_old_place_is_left_alone(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "changed=" in result.stdout and "FLUENTFLOW_HOME" not in result.stdout.split("changed=")[1].splitlines()[0]
-    assert f"home={old}" in result.stdout
+    assert f"home={old}".lower() in result.stdout.lower()
 
 
 @pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
@@ -972,7 +980,7 @@ def test_a_junction_before_a_dotdot_lands_where_the_system_puts_it(tmp_path):
         f"'path=' + $p.Path\n")
     result = _powershell(script)
     assert result.returncode == 0, result.stderr
-    assert f"path={tmp_path / 'outside' / 'data'}" in result.stdout, result.stdout
+    assert f"path={tmp_path / 'outside' / 'data'}".lower() in result.stdout.lower(), result.stdout
 
 
 @pytest.mark.skipif(not _POWERSHELL, reason="the Windows uninstaller, run by Windows PowerShell")
@@ -996,10 +1004,12 @@ def test_the_uninstaller_asks_the_code_for_a_chinese_data_folder(tmp_path):
     (data / "sources").mkdir(parents=True)
     (data / "fluentflow_jobs.sqlite").write_text("tasks", encoding="utf-8")
     (app / ".env").write_text(f"FLUENTFLOW_DATA_DIR='{data}'\r\n", encoding="utf-8")
+    # Without the test run's own data folder and the other places it sets: here
+    # the .env line is what says where the data is.
+    base = {k: v for k, v in os.environ.items() if not k.upper().startswith("FLUENTFLOW_") and k.upper() != "HF_HOME"}
     run = subprocess.run([_POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                           str(windows / "uninstall-local.ps1"), "-Data", "-DryRun", "-Yes"],
-                         capture_output=True, text=True, encoding="utf-8", timeout=300,
-                         env={**os.environ, "PYTHONUTF8": "1"})
+                         capture_output=True, text=True, encoding="utf-8", timeout=300, env=base)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "问不到代码里的数据目录" not in run.stdout, run.stdout
     assert "任务数据" in run.stdout, run.stdout
