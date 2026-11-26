@@ -499,9 +499,6 @@ def _write_text_note_instead(
         )
         logger.warning("text-note fallback failed for %s: %s", task_id, exc)
         return
-    # Stopped after the last answer came back: the note is not saved and
-    # does not replace the one the task has (``task_flow`` records the stop).
-    model_usage.stop_if_asked()
     fields: dict[str, Any] = {
         "summary_markdown": markdown,
         "summary_status": "completed",
@@ -532,6 +529,11 @@ def _write_text_note_instead(
         speaker_payload = next_result.get("speaker_diarization")
         if isinstance(speaker_payload, dict):
             next_result["speaker_diarization"] = {**speaker_payload, "note_input_labeled": speaker_labeled}
+        # Stopped after the last answer came back: the note is not saved and
+        # does not replace the one the task has (``task_flow`` records the
+        # stop). Asked right before the note's file and record are written,
+        # nothing in between that waits.
+        model_usage.stop_if_asked()
         # The downloadable note file, as the pipeline writes it.
         save_result_changes(
             task_id, before, _attach_result_artifacts(task_id, next_result, parts=("summary",)), client_id=client_id,

@@ -64,11 +64,13 @@ from backend.core.video_source import (
     normalize_source_link,
 )
 from backend.core.task_flow import RESTART_RESUMED_KEY, run_pipeline_then_note
+from backend.core.transcript_parser import parse_transcript_file, utf16_without_mark
 from backend.core.transcript_note import (
     export_stored_note,
     note_from_stored_transcript,
     stored_resume_point,
     summarize_transcript_source,
+    transcript_read,
 )
 from backend.core.task_queue import _start_behind_queue, wait_for_queue_turn
 from backend.core.task_submission import _effective_duration_limit, _local_media_job_context
@@ -486,12 +488,28 @@ async def _note_from_captions(job: _LinkTask, downloaded: _Downloaded) -> None:
     await _note_from_caption_file(job, downloaded.target_path, downloaded.saved.filename)
 
 
+def _readable_captions(raw: bytes, filename: str) -> bool:
+    """Whether the captions read as text (``summarize_transcript_source``
+    refuses the rest, and the fetch then fails with its reason)."""
+    try:
+        return not utf16_without_mark(raw) and bool(parse_transcript_file(raw, filename).text.strip())
+    except Exception:  # noqa: BLE001 - refused with its reason below
+        return False
+
+
 async def _note_from_caption_file(job: _LinkTask, path: Path, filename: str) -> None:
     """A caption track is summarised like an uploaded transcript; nothing is
     transcribed, corrected, cut, compressed or exported."""
     task_id, client_id, options = job.task_id, job.client_id, job.options
     try:
         raw = await asyncio.to_thread(path.read_bytes)
+        if _readable_captions(raw, filename):
+            # The captions are read: the fetch is done and the note is its own
+            # step, as for a subtitle file by path. Left open until the note
+            # was written, a stop during the note carried the task on from the
+            # fetch, and reading the captions again put back the transcript
+            # the user had edited since (second review of decision 6.95).
+            transcript_read(task_id, note=not truthy(str(options.get("skip_summary") or "")))
         result = await summarize_transcript_source(
             raw=raw,
             filename=filename,

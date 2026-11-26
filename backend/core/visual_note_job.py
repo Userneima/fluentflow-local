@@ -1434,6 +1434,10 @@ def _run_visual_note(
             result_fields, state["replaced_note"] = _promotion(
                 current_result, markdown, media_kind=media.kind, by=note_by,
             )
+        # Asked again right before the note is stored: a stop that came while
+        # its pictures were cropped and its file written does not let it
+        # replace the task's note either.
+        model_usage.stop_if_asked()
         return _store(
             task_id,
             client_id=client_id,

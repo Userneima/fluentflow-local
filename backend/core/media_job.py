@@ -535,6 +535,9 @@ class MediaJobContext:
     transcribe_checkpoint: Any = None
     on_transcribed: Any = None
     save_checkpoint: Any = None
+    # Called as the pipeline starts writing its own note (``task_flow``: the
+    # note step opens, so the answers it gets are kept for carrying it on).
+    on_note_started: Any = None
 
 
 def _declared_generated(result: dict[str, Any]) -> dict[str, Any]:
@@ -1502,6 +1505,8 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
 
         # ── Stage 3: AI summarization ──────────────────────
         current_stage = "summary"
+        if ctx.on_note_started is not None:
+            ctx.on_note_started()
         upsert_job(task_id=task_id_value, status="running", stage="summary", progress=62)
         yield _sse({"stage": "summary", "progress": 62})
 
@@ -1531,22 +1536,24 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             # Same dict the result carries, so whether the note actually saw
             # speaker labels is answerable from the stored task.
             speaker_payload["note_input_labeled"] = bool(note_speaker_text)
-            def summarize() -> Any:
-                # Bound to the task, so 停下这一步 stops its chapters' and
-                # check's requests too (``model_usage.unless_stopping``), as
-                # for a transcript file's note (``transcript_note``):
-                # cancelling this coroutine alone left the thread writing
-                # the note to the end.
-                with task_stop.bound(ctx.task_id_value):
-                    return summarize_transcript_with_metadata(
-                        note_input_text,
-                        speaker_labeled=bool(note_speaker_text),
-                        task_id=ctx.task_id_value,
-                        client_id=ctx.client_id,
-                        **kwargs,
-                    )
+            def task_work(work: Any) -> Any:
+                # Bound to the task, so 停下这一步 stops the note's requests
+                # (its chapters, its check, picking its pictures) on the
+                # worker thread too (``model_usage.unless_stopping``), as for
+                # a transcript file's note (``transcript_note``): cancelling
+                # this coroutine alone left the thread asking to the end.
+                def run() -> Any:
+                    with task_stop.bound(ctx.task_id_value):
+                        return work()
+                return model_usage.carry(run)
 
-            summary_result = await loop.run_in_executor(None, model_usage.carry(summarize))
+            summary_result = await loop.run_in_executor(None, task_work(lambda: summarize_transcript_with_metadata(
+                note_input_text,
+                speaker_labeled=bool(note_speaker_text),
+                task_id=ctx.task_id_value,
+                client_id=ctx.client_id,
+                **kwargs,
+            )))
             summary_md = summary_result.markdown
             if not summary_md.strip():
                 raise ValueError("AI summarization returned empty result")
@@ -1557,7 +1564,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                         raise RuntimeError("Media job context is missing a keyframe extraction policy")
                     visual_plan = await loop.run_in_executor(
                         None,
-                        model_usage.carry(lambda: plan_visual_evidence_requests(
+                        task_work(lambda: plan_visual_evidence_requests(
                             summary_md,
                             note_segments_payload,
                             api_key=kwargs.get("api_key"),
@@ -1598,7 +1605,7 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
                             visual_api_key = kwargs.get("api_key") or ""
                         visual_selection = await loop.run_in_executor(
                             None,
-                            model_usage.carry(lambda: select_visual_evidence_frames(
+                            task_work(lambda: select_visual_evidence_frames(
                                 visual_requests,
                                 frame_metadata,
                                 api_key=visual_api_key or None,

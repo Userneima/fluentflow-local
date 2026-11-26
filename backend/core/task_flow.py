@@ -481,6 +481,14 @@ async def _steps_before_transcript(ctx: Any, start_at: str) -> bool:
 
     ctx.transcribe_checkpoint = checkpoint
     ctx.on_transcribed = transcribed
+    # The pipeline writes the note itself only with the automatic cut and
+    # Claude's note both off. The note step opens alongside the corrections,
+    # which stay open until the pipeline ends: its answers are kept under the
+    # note step (``model_answers``), so a stop carries the task on from the
+    # corrections (replayed from their own kept answers) and the note reads
+    # back what it was answered instead of paying again (second review of
+    # decision 6.95).
+    ctx.on_note_started = functools.partial(task_steps.start, task_id, task_steps.NOTE)
     ctx.save_checkpoint = functools.partial(_save_checkpoint, task_id)
     await _run_pipeline(ctx)
     outcome = task_steps.transcribe_outcome(get_job(task_id, client_id=ctx.client_id))
@@ -490,6 +498,10 @@ async def _steps_before_transcript(ctx: Any, start_at: str) -> bool:
     for name in (task_steps.TRANSCRIBE, task_steps.CORRECT):
         if current.get(name) in task_steps.OPEN:
             task_steps.settle(task_id, name, outcome)
+    if current.get(task_steps.NOTE) == task_steps.RUNNING and outcome[0] != task_steps.STOPPED:
+        # The pipeline wrote the note (``on_note_started``): what came of it.
+        # The note step later finds a note and does not write another.
+        task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=ctx.client_id)))
     if outcome[0] == task_steps.STOPPED:
         raise StepStopped()
     if outcome[0] == task_steps.DONE:

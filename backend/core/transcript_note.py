@@ -488,6 +488,23 @@ async def _write_transcript_note(
 
 
 
+# What a task made from a transcript file never does.
+_NOT_FOR_TRANSCRIPT_FILES = (task_steps.TRANSCRIBE, task_steps.CORRECT, task_steps.CUT, task_steps.COMPRESS)
+
+
+def transcript_read(task_id: str, *, note: bool) -> None:
+    """A transcript file (a subtitle file by path, a link's captions) was read
+    and will be stored: the fetch is done, the steps it never does are
+    skipped, and the note, when one is wanted, is its own step from here. A
+    stop while the note is written then carries the task on at its note, from
+    the stored transcript the user may have edited, not from reading the file
+    again (second review of decision 6.95)."""
+    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+    task_steps.skip_pending(task_id, _NOT_FOR_TRANSCRIPT_FILES)
+    if note:
+        task_steps.start(task_id, task_steps.NOTE)
+
+
 def stored_transcript_of(job: dict[str, Any]) -> bool:
     """Whether the task already holds its transcript, so carrying it on at the
     note writes the note from it instead of reading the file again."""
@@ -736,9 +753,7 @@ async def _read_subtitle_in_place(
         if not parse_transcript_file(raw, source.name).segments:
             hint = f"：{UTF16_HINT}" if utf16_without_mark(raw) else ""
             raise HTTPException(status_code=400, detail=f"{source.name} 里没有读出带时间的字幕{hint}。")
-        task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
-        if not truthy(options.get("skip_summary")):
-            task_steps.start(task_id, task_steps.NOTE)
+        transcript_read(task_id, note=not truthy(options.get("skip_summary")))
         await summarize_transcript_source(
             raw=raw,
             filename=source.name,

@@ -159,6 +159,16 @@ def close_open(task_id: str, *, stopped: bool = False, error: str = UNFINISHED_E
             ended_early = True
 
 
+def skip_pending(task_id: str, names: Iterable[str]) -> None:
+    """These steps will not run for this task (a transcript file is not
+    transcribed, corrected, cut or compressed): the ones not started are
+    skipped now, in one commit, so a stop before the run ends does not read
+    them as stopped and carry the task on from them."""
+    named = statuses(steps_of([task_id]).get(task_id, []))
+    _write_steps(task_id, [name for name in ORDER if name in set(names) and named.get(name) == PENDING],
+                 SKIPPED, finished=True)
+
+
 def skip_open(task_id: str) -> None:
     """The run is over and the steps not started were not needed (a link that
     gave captions has nothing to transcribe or cut): skipped, unlike the ones

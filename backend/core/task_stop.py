@@ -39,7 +39,10 @@ from backend.core import process_tree
 _lock = threading.Lock()
 _events: dict[str, threading.Event] = {}
 _processes: dict[str, set[subprocess.Popen]] = {}
-_bound: contextvars.ContextVar[str | None] = contextvars.ContextVar("task_stop_bound", default=None)
+# The task the work is for, and that run's stop event as it was when the work
+# was bound: a later run (``begin``) does not release work of an earlier one.
+_bound: contextvars.ContextVar[tuple[str, threading.Event] | None] = contextvars.ContextVar(
+    "task_stop_bound", default=None)
 _shutting_down = threading.Event()
 
 
@@ -108,8 +111,11 @@ class StepStopped(asyncio.CancelledError):
 
 @contextmanager
 def bound(task_id: str) -> Iterator[None]:
-    """Run the block (on a worker thread) as work of this task."""
-    token = _bound.set(task_id)
+    """Run the block (on a worker thread) as work of this task's current
+    run: its stop is the one this run began with (``begin``), kept for the
+    block, so 接着做 pressed right after a stop starts a new run without
+    letting this one's requests through (second review of decision 6.95)."""
+    token = _bound.set((task_id, event(task_id)))
     try:
         yield
     finally:
@@ -118,26 +124,33 @@ def bound(task_id: str) -> Iterator[None]:
 
 def current() -> str | None:
     """The task the calling thread works for, if it is bound to one."""
-    return _bound.get()
+    found = _bound.get()
+    return found[0] if found else None
+
+
+def bound_event() -> threading.Event | None:
+    """The stop of the run the calling thread works for (``bound``)."""
+    found = _bound.get()
+    return found[1] if found else None
 
 
 def stopped_here() -> bool:
-    """Whether the user stopped the step of the task the calling thread works
+    """Whether the user stopped the run of the task the calling thread works
     for. Only bound work asks: a rewrite asked for on request is not bound,
     and the stop of an earlier run must not reach it."""
-    task_id = current()
-    return bool(task_id) and requested(task_id)
+    stop = bound_event()
+    return bool(stop and stop.is_set())
 
 
 def bound_runner() -> Any:
     """A command runner that stops with the bound task (``TaskWatch``), or
     None on a thread not bound to one."""
-    task_id = current()
-    if not task_id:
+    stop = bound_event()
+    if stop is None:
         return None
     from backend.core.task_watch import TaskWatch
 
-    return TaskWatch(cancelled=event(task_id)).runner
+    return TaskWatch(cancelled=stop).runner
 
 
 def track(process: subprocess.Popen) -> None:
@@ -230,4 +243,4 @@ def shutting_down() -> bool:
     return _shutting_down.is_set()
 
 
-__all__ = ["Either", "StepStopped", "either", "begin", "bound", "bound_runner", "current", "event", "request", "requested", "service_started", "shutdown", "shutting_down", "stop_on_signals", "stopped_here", "track", "untrack"]
+__all__ = ["Either", "StepStopped", "either", "begin", "bound", "bound_event", "bound_runner", "current", "event", "request", "requested", "service_started", "shutdown", "shutting_down", "stop_on_signals", "stopped_here", "track", "untrack"]

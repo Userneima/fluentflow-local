@@ -330,10 +330,9 @@ def unless_stopping(ask: Callable[[], Any]) -> Any:
     from backend.core import task_stop
 
     stop_if_asked()
-    task_id = task_stop.current()
-    # This run's stop, read once: a later run of the task gets an event of
-    # its own (``task_stop.begin``).
-    stopped = task_stop.event(task_id) if task_id else None
+    # The stop of the run this work is bound to, not the task's latest: a
+    # later run of the task gets an event of its own (``task_stop.begin``).
+    stopped = task_stop.bound_event()
     outcome: dict[str, Any] = {}
     answered = threading.Event()
 

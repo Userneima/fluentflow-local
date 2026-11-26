@@ -485,10 +485,10 @@ def test_a_transcript_file_stopped_at_its_first_note_reads_stopped_and_carries_o
     assert _subtitle_statuses(task_id)[task_steps.NOTE] == task_steps.DONE
 
 
-def test_the_pipelines_own_text_note_is_the_tasks_work(monkeypatch, tmp_path):
-    """With the automatic cut and Claude's note both off, the pipeline writes
-    the text note itself (``media_job``); its chapters and check stop with
-    the step only when that work is bound to the task (``task_stop.bound``)."""
+def _pipeline_note(monkeypatch, tmp_path, task_id, *, summarize=None, visuals=None):
+    """A recording's pipeline from its kept transcription, writing its own
+    text note (the automatic cut and Claude's note both off): the
+    corrections leave the transcript as it is."""
     from backend.core import media_job, task_submission
 
     async def unchanged(_ctx, *, segments, **_kw):
@@ -496,6 +496,38 @@ def test_the_pipelines_own_text_note_is_the_tasks_work(monkeypatch, tmp_path):
 
     monkeypatch.setattr(media_job, "_run_subtitle_correction_stage", unchanged)
     monkeypatch.setattr(media_job, "_run_glossary_correction_stage", unchanged)
+    if summarize is not None:
+        monkeypatch.setattr(media_job, "summarize_transcript_with_metadata", summarize)
+    segments = [{"start": 0.0, "end": 4.0, "text": "今天讲最小二乘法。"},
+                {"start": 4.0, "end": 9.0, "text": "看误差平方和。"}]
+    ctx = task_submission._local_media_job_context(
+        task_id=task_id, client_id=None, source_type="video", source_filename="course.mp4",
+        raw_title="course", display_title="course", suffix=".mp4", td=str(tmp_path),
+        in_path=tmp_path / "course.mp4", content=b"", source_file_size_mb=1,
+        duration_preflight_sec=9, options={"intelligence": "fluentflow"}, announce_fallback=False,
+    )
+    ctx.summary_disabled = False
+    ctx.note_deferred_to_visual_note = False
+    ctx.ai_kwargs_builder = lambda **_kw: {"provider": "deepseek", "api_key": "sk-test-not-a-real-key"}
+    ctx.finalize_result_storage = lambda _task, result, _meta: result
+    checkpoint = {
+        "base_result": {}, "tr": {"text": "".join(s["text"] for s in segments), "language": "zh"},
+        "segments_payload": segments, "transcript_text": "".join(s["text"] for s in segments),
+        "in_path": str(tmp_path / "course.mp4"), "duration_sec": 9,
+    }
+    if visuals is not None:
+        ctx.generate_visuals = True
+        ctx.keyframe_extractor = visuals
+        ctx.secret_resolver = lambda value, name: value or "sk-test-not-a-real-key"
+    return ctx, checkpoint
+
+
+def test_the_pipelines_own_text_note_is_the_tasks_work(monkeypatch, tmp_path):
+    """With the automatic cut and Claude's note both off, the pipeline writes
+    the text note itself (``media_job``); its chapters and check stop with
+    the step only when that work is bound to the task (``task_stop.bound``)."""
+    from backend.core import media_job
+
     bound_to: list[str | None] = []
 
     def summarize(transcript, **_kw):
@@ -503,27 +535,10 @@ def test_the_pipelines_own_text_note_is_the_tasks_work(monkeypatch, tmp_path):
         return SimpleNamespace(markdown="# 笔记\n\n正文。", requested_mode="direct", resolved_mode="direct",
                                chunk_count=1)
 
-    monkeypatch.setattr(media_job, "summarize_transcript_with_metadata", summarize)
     task_id = f"stop-pipeline-note-{int(time.time() * 1000) % 1_000_000}"
-    segments = [{"start": 0.0, "end": 4.0, "text": "今天讲最小二乘法。"}]
-
     async def run():
-        ctx = task_submission._local_media_job_context(
-            task_id=task_id, client_id="anonymous", source_type="video", source_filename="course.mp4",
-            raw_title="course", display_title="course", suffix=".mp4", td=str(tmp_path),
-            in_path=tmp_path / "course.mp4", content=b"", source_file_size_mb=1,
-            duration_preflight_sec=5, options={"intelligence": "fluentflow"},
-            announce_fallback=False,
-        )
-        ctx.summary_disabled = False
-        ctx.note_deferred_to_visual_note = False
-        ctx.ai_kwargs_builder = lambda **_kw: {"provider": "deepseek", "api_key": "sk-test-not-a-real-key"}
-        ctx.finalize_result_storage = lambda _task, result, _meta: result
-        ctx.transcribe_checkpoint = {
-            "base_result": {}, "tr": {"text": segments[0]["text"], "language": "zh"},
-            "segments_payload": segments, "transcript_text": segments[0]["text"],
-            "in_path": str(tmp_path / "course.mp4"), "duration_sec": 5,
-        }
+        ctx, checkpoint = _pipeline_note(monkeypatch, tmp_path, task_id, summarize=summarize)
+        ctx.transcribe_checkpoint = checkpoint
         await media_job.execute_media_job(ctx)
 
     try:
@@ -532,3 +547,234 @@ def test_the_pipelines_own_text_note_is_the_tasks_work(monkeypatch, tmp_path):
     finally:
         store.delete_jobs([task_id])
     assert bound_to == [task_id], "the pipeline's note is not stopped by 停下这一步"
+
+
+def test_the_pipelines_note_stops_picking_its_pictures(text_model, monkeypatch, tmp_path):
+    """The pipeline's own text note then asks for pictures, one request per
+    place it wants one: stopped while the first is out, none of the others is
+    asked."""
+    from backend.core import media_job
+
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    frames = []
+    for index, at in enumerate((1.0, 5.0, 8.0)):
+        path = frames_dir / f"f{index}.jpg"
+        path.write_bytes(b"not really a picture %d" % index)
+        frames.append({"path": str(path), "timestamp_seconds": at, "visual_request_id": f"v{index}"})
+    requests = [{"id": f"v{index}", "start_seconds": at - 0.5, "end_seconds": at + 0.5, "query": "公式"}
+                for index, at in enumerate((1.0, 5.0, 8.0))]
+    monkeypatch.setattr(media_job, "plan_visual_evidence_requests", lambda *_a, **_k: SimpleNamespace(
+        requests=requests, transcript_truncated=False, covered_until_seconds=None))
+
+    def extractor(*_a, **_k):
+        return SimpleNamespace(frames=frames, skipped_reason=None, provider="fake")
+
+    def summarize(transcript, **_kw):
+        return SimpleNamespace(markdown="# 笔记\n\n## 一、公式\n\n正文。", requested_mode="direct",
+                               resolved_mode="direct", chunk_count=1)
+
+    task_id = f"stop-pictures-{int(time.time() * 1000) % 1_000_000}"
+    model = text_model(lambda system, part: part == "挑截图")
+
+    async def pipeline_run():
+        ctx, checkpoint = _pipeline_note(monkeypatch, tmp_path, task_id, summarize=summarize, visuals=extractor)
+        ctx.transcribe_checkpoint = checkpoint
+        await media_job.execute_media_job(ctx)
+
+    def run() -> None:
+        try:
+            asyncio.run(pipeline_run())
+        except BaseException:  # noqa: BLE001 - the pipeline records how it ended
+            pass
+
+    task_stop.begin(task_id)
+    try:
+        pipeline = threading.Thread(target=run, daemon=True)
+        pipeline.start()
+        assert model.held.wait(10), "the first picture was asked for"
+        stopped_at = time.monotonic()
+        task_stop.request(task_id)
+        pipeline.join(5)
+        assert not pipeline.is_alive()
+        assert time.monotonic() - stopped_at < 1.5, "the request in flight is not waited for"
+        model.release.set()
+        time.sleep(0.5)
+        assert model.sent_after(stopped_at) == [], "pictures are still asked for after the stop"
+    finally:
+        model.release.set()
+        task_stop.begin(task_id)
+        store.delete_jobs([task_id])
+
+
+def test_carrying_the_pipelines_note_on_pays_only_for_what_was_not_answered(monkeypatch, tmp_path):
+    """Stopped after the pipeline's note got its first answer: carried on (from
+    the corrections, which the pipeline does before its note), the note reads
+    that answer back and asks only for the rest."""
+    task_id = f"stop-pipeline-paid-{int(time.time() * 1000) % 1_000_000}"
+    sent: list[str] = []
+    runs = {"count": 0}
+
+    def summarize(transcript, **_kw):
+        runs["count"] += 1
+        with model_usage.part_of(task_steps.NOTE, "写正文"):
+            def asking(what):
+                return lambda: sent.append(what) or f"回答 {what}"
+
+            first = model_answers.remembered(model_answers.request_key("pipeline-note", "第一章"), asking("第一章"))
+            if runs["count"] == 1:
+                task_stop.request(task_id)  # the user presses 停下这一步 after the first chapter
+            second = model_answers.remembered(model_answers.request_key("pipeline-note", "第二章"), asking("第二章"))
+        return SimpleNamespace(markdown=f"# 笔记\n\n{first}\n\n{second}", requested_mode="chapter_coverage",
+                               resolved_mode="chapter_coverage", chunk_count=2)
+
+    async def carry_on_from_corrections():
+        ctx, checkpoint = _pipeline_note(monkeypatch, tmp_path, task_id, summarize=summarize)
+        task_flow._save_checkpoint(task_id, checkpoint)
+        task_stop.begin(task_id)
+        stopped = False
+        try:
+            await task_flow._steps_before_transcript(ctx, task_steps.CORRECT)
+        except asyncio.CancelledError:
+            stopped = True
+        finally:
+            task_steps.close_open(task_id, stopped=stopped or task_stop.requested(task_id))
+        return stopped
+
+    task_steps.plan(task_id)
+    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+    task_steps.finish(task_id, task_steps.TRANSCRIBE, task_steps.DONE)
+    try:
+        assert asyncio.run(carry_on_from_corrections()), "the first run was stopped"
+        assert sent == ["第一章"]
+        assert task_activity.resume_point(task_id, task_steps.steps_of([task_id]).get(task_id, [])) == task_steps.CORRECT
+        # What 接着做 does before the run (``task_actions.resume_task``).
+        task_steps.reopen_from(task_id, task_steps.CORRECT)
+        store.reopen_job(task_id)
+        assert not asyncio.run(carry_on_from_corrections())
+        statuses = task_steps.statuses(task_steps.steps_of([task_id]).get(task_id, []))
+    finally:
+        store.delete_model_answers(task_id)
+        store.delete_jobs([task_id])
+        task_stop.begin(task_id)
+    assert sent == ["第一章", "第二章"], "carrying on paid again for the chapter already answered"
+    assert statuses[task_steps.NOTE] == task_steps.DONE
+    assert statuses[task_steps.CORRECT] == task_steps.DONE
+
+
+def test_work_of_a_stopped_run_stays_stopped_when_the_task_is_carried_on():
+    """接着做 pressed right after 停下: the new run gets a stop of its own; the
+    stopped run's work still reads stopped and sends nothing."""
+    task_id = f"stop-old-run-{int(time.time() * 1000) % 1_000_000}"
+    sent: list[str] = []
+    task_stop.begin(task_id)
+    try:
+        with task_stop.bound(task_id):
+            task_stop.request(task_id)
+            task_stop.begin(task_id)  # 接着做: the next run
+            assert task_stop.stopped_here()
+            with pytest.raises(task_stop.StepStopped):
+                model_usage.unless_stopping(lambda: sent.append("request") or "answer")
+        with task_stop.bound(task_id):
+            assert not task_stop.stopped_here(), "the new run's work is not stopped"
+    finally:
+        task_stop.begin(task_id)
+    assert sent == []
+
+
+def test_a_stop_while_the_frame_note_is_put_together_does_not_save_it(job_store, tmp_path, monkeypatch):  # noqa: F811
+    written = vn.write_text_artifact
+
+    def write_then_stop(*args, **kwargs):
+        artifact = written(*args, **kwargs)
+        task_stop.request(TASK)  # pressed after the last check, before the note is stored
+        return artifact
+
+    monkeypatch.setattr(vn, "write_text_artifact", write_then_stop)
+
+    def writer(transcript, frames, *, part=None, **_kwargs):
+        return VisualNoteDraft(markdown=NOTE, basis_note="", model="claude-x", frames_sent=list(frames),
+                               transcript_chars=len(transcript))
+
+    task_stop.begin(TASK)
+    try:
+        with task_stop.bound(TASK), pytest.raises(task_stop.StepStopped):
+            vn.run_visual_note(TASK, client_id="anonymous", api_key="sk-ant-test-not-a-real-key",
+                               keyframe_extractor=_fake_extractor(tmp_path), writer=writer, replace_note=True)
+    finally:
+        task_stop.begin(TASK)
+    assert job_store["result"]["summary_markdown"] == "原来的文字笔记", "the task keeps the note it had"
+
+
+def test_a_stop_while_the_text_models_note_is_put_together_does_not_save_it(monkeypatch):
+    import backend.core.local_entry_guards as guards
+
+    task_id = f"stop-window-{int(time.time() * 1000) % 1_000_000}"
+    store.upsert_job(task_id=task_id, status="completed", stage="done",
+                     metadata={"queue_options": {"ai_provider": "deepseek"}},
+                     result={"task_id": task_id, "transcript_text": "今天讲最小二乘法。",
+                             "summary_markdown": "原来的笔记", "summary_status": "completed"})
+    channel = SimpleNamespace(name="anthropic_api_key", available=False, unavailable_reason="没有 Anthropic Key。")
+    monkeypatch.setattr(local_intake_flow.visual_note_channel, "resolve_channel", lambda *_a, **_k: channel)
+    monkeypatch.setattr(guards, "local_ai_kwargs", lambda **_kw: dict(CHAPTERED))
+    monkeypatch.setattr(summ, "summarize_transcript_with_metadata", lambda transcript, **_kw: SimpleNamespace(
+        markdown="# 新写的笔记"))
+    replaced = local_intake_flow.visual_note_job.record_replaced_note
+
+    def replaced_then_stopped(*args, **kwargs):
+        task_stop.request(task_id)  # pressed after the answer, while the note is put together
+        return replaced(*args, **kwargs)
+
+    monkeypatch.setattr(local_intake_flow.visual_note_job, "record_replaced_note", replaced_then_stopped)
+    task_stop.begin(task_id)
+    try:
+        task_flow._write_note_holding_slot(task_id, None, None, threading.Event())
+    finally:
+        task_stop.begin(task_id)
+    result = store.get_job(task_id)["result"]
+    assert result["summary_markdown"] == "原来的笔记", "the note written after the stop replaced the task's"
+    assert result["summary_error"] == task_steps.STOPPED_NOTE
+
+
+def test_link_captions_stopped_at_their_first_note_keep_the_users_transcript_edit(text_model, monkeypatch):
+    """Stopped while the captions' first note is written, then the user edits
+    the transcript: 接着做 writes the note from the edit, at the note, without
+    reading the captions again (decisions 6.94, 6.95)."""
+    import backend.core.transcript_note as transcript_note
+
+    task_id = f"stop-captions-edit-{int(time.time() * 1000) % 1_000_000}"
+    _captions_task(task_id, status="cancelled")
+    _cut_off_reading(task_id)
+    task_steps.close_open(task_id, stopped=True)
+    monkeypatch.setattr(transcript_note, "local_ai_kwargs", lambda **_kw: dict(CHAPTERED))
+    model = text_model(HOLDS["a chapter"])
+
+    async def scenario():
+        await task_actions.resume_task(task_id, None)
+        assert await _subtitle_until(model.held.is_set)
+        await task_actions.stop_step(task_id, None)
+        assert await _subtitle_until(lambda: _subtitle_ended(task_id)
+                                     and not task_actions.JOB_EVENTS.is_running(task_id), tries=100)
+        model.release.set()
+        await asyncio.sleep(0.3)
+        statuses = _subtitle_statuses(task_id)
+        assert statuses[task_steps.FETCH] == task_steps.DONE
+        assert statuses[task_steps.NOTE] == task_steps.STOPPED
+        for never in (task_steps.TRANSCRIBE, task_steps.CORRECT, task_steps.CUT, task_steps.COMPRESS):
+            assert statuses[never] == task_steps.SKIPPED, f"{never} reads stopped on the card"
+        assert task_activity.activity(store.get_job(task_id)).resume_from == task_steps.NOTE
+        before = dict(store.get_job(task_id)["result"])
+        store.save_result_changes(task_id, before, {**before, "transcript_text": "用户改过：" + before["transcript_text"]})
+        answer = await task_actions.resume_task(task_id, None)
+        assert answer["resume_from"]["step"] == task_steps.NOTE
+        assert await _subtitle_until(lambda: _subtitle_ended(task_id)
+                                     and not task_actions.JOB_EVENTS.is_running(task_id))
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        model.release.set()
+        store.delete_model_answers(task_id)
+    job = store.get_job(task_id)
+    assert job["result"]["transcript_text"].startswith("用户改过："), "carrying on read the captions again"
+    assert _subtitle_statuses(task_id)[task_steps.NOTE] == task_steps.DONE
