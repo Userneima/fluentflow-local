@@ -14,6 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 每次重启都会留下一个已经结束的旧窗口，要一个个手动关。启动时把这些已结束的
 # 旧启动器窗口关掉；还在跑东西的窗口（包括这一个）不动。旧窗口要几秒才退干净，
 # 所以在后台等一会儿再关，不耽误启动。
+# 只在终端里双击本文件、并且终端正开着时才做：`tell application "Terminal"`
+# 会把没开的终端启动起来，终端一启动就新开一个窗口。桌面应用每次都经由这里
+# 启动服务，没有这个判断，每次打开 FluentFlow 都会弹出一个空终端窗口
+# （2026-11-26 王愉超指出）。
+if [[ "${TERM_PROGRAM:-}" == "Apple_Terminal" ]] && pgrep -xq Terminal; then
 (sleep 6; osascript >/dev/null 2>&1 <<'APPLESCRIPT' || true
 tell application "Terminal"
 	set ids to id of every window
@@ -24,6 +29,7 @@ tell application "Terminal"
 end tell
 APPLESCRIPT
 ) &
+fi
 
 # 打开页面：Chrome 里已经有这个服务的标签页就复用它（刷新并切到前面），多余的
 # 同址标签页关掉；没有才新开。每次重启都新开一个标签页，旧的要一个个手动关。
