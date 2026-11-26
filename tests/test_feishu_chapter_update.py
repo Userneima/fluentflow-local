@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import subprocess
 import uuid
@@ -842,6 +843,37 @@ def test_a_cut_off_recorded_by_an_older_version_still_gets_its_pictures(tmp_path
     _recorded_as_shown(doc, result)
 
 
+def test_a_record_whose_note_was_written_again_since_places_no_picture(tmp_path):
+    """A record from a version that kept only the document, whose note was
+    saved again by a resume that was cut off before it noted the resume: the
+    note as pushed is not the one that export wrote, so its markers are
+    matched to no picture. The screenshots it cannot place are reported as
+    not uploaded, not put under another one's caption."""
+    _frames(tmp_path, ["a.jpg", "b.jpg", "c.jpg", "x.jpg"])
+    doc = FakeDoc()
+    _cut_before_pictures(doc, PICTURED, tmp_path)
+    edited = PICTURED.replace("开场的话。", f"开场的话。\n\n{_pic('x.jpg')}")
+    record = tmp_path / "t1" / cli.CREATED
+    older = json.loads(record.read_text(encoding="utf-8"))
+    older.pop("first_push")
+    record.write_text(json.dumps(older), encoding="utf-8")
+    cli.save_pushed_note(tmp_path, "t1", edited)
+    os.utime(record, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    os.utime(tmp_path / "t1" / cli.PUSHED_NOTE, ns=(1_700_000_009_000_000_000, 1_700_000_009_000_000_000))
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert not [b for b in doc.blocks if b["tag"] == "img"], "no picture under another one's caption"
+    assert not any("FFIMG" in b.get("text", "") for b in doc.blocks), "its markers are taken out"
+    for caption in ("图 1：讲者打开设置页", "图 2：点开模型菜单", "图 3：保存后的结果"):
+        assert caption in doc.texts(), "the caption stays as words"
+    assert result["image_upload_count"] == 0
+    assert result["image_upload_errors"] == [f"/jobs/t1/artifacts/frame?file={name}"
+                                             for name in ("x.jpg", "a.jpg", "b.jpg", "c.jpg")]
+    assert {image["file_token"] for image in result["sync"]["images"]} == {None}
+    assert not (tmp_path / "t1" / cli.CREATED).exists()
+
+
 def test_links_in_chapters_a_resume_leaves_alone_point_at_their_chapters(tmp_path):
     """Cut off before the chapter links were pointed, then the first chapter
     edited: the resume rewrites that chapter only, and the link the cut-off
@@ -858,6 +890,27 @@ def test_links_in_chapters_a_resume_leaves_alone_point_at_their_chapters(tmp_pat
     framework = next(t for t in doc.texts() if "框架的话" in t)
     assert f"[第三章]({URL}#{_ids(doc)['三、结尾']})" in framework
     assert not any("fluentflow.invalid" in t for t in doc.texts())
+    assert result["sync"]["link_errors"] == []
+
+
+def test_a_resume_numbers_its_links_after_the_ones_the_document_still_holds(tmp_path):
+    """Cut off before the chapter links were pointed, then the first chapter
+    gains a link to the same heading the second one links to: the resume
+    numbers its own placeholder after the first push's, so neither matches two
+    places and both point at their chapter."""
+    doc = FakeDoc()
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, lambda c: "--scope" in c))
+    edited = NOTE.replace("开场的话。", "开场的话，见[[#三、结尾|第三章]]。")
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    heading = _ids(doc)["三、结尾"]
+    linked = [text for text in doc.texts() if "第三章" in text]
+    assert len(linked) == 2 and all(f"[第三章]({URL}#{heading})" in text for text in linked), \
+        "both links point at their chapter, the rewritten one's and the one left alone"
+    assert not any("fluentflow.invalid" in text for text in doc.texts())
     assert result["sync"]["link_errors"] == []
 
 

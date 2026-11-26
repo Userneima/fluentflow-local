@@ -86,6 +86,7 @@ from backend.core.lark_cli_records import (
     _forget_created,
     _remember_created,
     note_digest,
+    pushed_note_after_record,
     pushed_note_path,
     reread_sections,
     save_pushed_note,
@@ -122,13 +123,21 @@ def _first_push_of_older_record(
     """What an export cut off under a version that kept only the document
     wrote into it: the note as pushed, saved before that record, read before
     ``_update`` replaces it, and kept with the record so a resume cut off in
-    turn reads the same. Its markers are taken whatever their push."""
+    turn reads the same. Its markers are taken whatever their push.
+
+    A note saved after the record is not the note that export wrote: a resume
+    under that version rewrote chapters, saved the note and was cut off before
+    it noted them, and its figures are numbered over the edited note. No
+    marker is then matched to a picture, and the pictures are reported as not
+    uploaded rather than put under another one's caption."""
     path = pushed_note_path(artifact_root, task_id, state)
     pushed = path.read_text(encoding="utf-8") if path is not None and path.is_file() else ""
     parts = feishu_note.sections(pushed)
     links: List[feishu_note.HeadingLink] = []
     written = _feishu_chunk(parts, list(range(len(parts))), links, tight=tight)
-    _markdown, pending, _missing = _prepare_images(written, task_id=task_id, artifact_root=artifact_root)
+    pending: List[dict[str, Any]] = []
+    if not pushed_note_after_record(artifact_root, task_id, state):
+        _markdown, pending, _missing = _prepare_images(written, task_id=task_id, artifact_root=artifact_root)
     first = lark_cli_images.first_push(None, pending, links, tracked=False)
     _remember_created(artifact_root, task_id, {
         "doc_id": resumed["doc_id"], "url": resumed.get("url"), "revision_id": resumed.get("revision_id"),

@@ -185,6 +185,17 @@ def to_feishu(
     return FeishuMarkdown(markdown="\n".join(laid), links=links)
 
 
+_PLACEHOLDER_NUMBER = re.compile(re.escape(PLACEHOLDER_PREFIX) + r"(\d+)")
+
+
+def last_placeholder(content: str) -> int:
+    """The highest number of the chapter-link placeholders ``content`` (a
+    with-ids or a markdown fetch) still holds, 0 when it holds none. A push
+    numbers its own after it, so no two placeholders in the document read the
+    same and neither can be pointed for the other."""
+    return max((int(number) for number in _PLACEHOLDER_NUMBER.findall(content or "")), default=0)
+
+
 # ── the page as the owner's Feishu notes look ───────────────────────────────
 
 _LIST_START = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
@@ -760,6 +771,7 @@ __all__ = [
     "feishu_section_records",
     "from_feishu",
     "headings",
+    "last_placeholder",
     "plan_update",
     "section_records",
     "sections",

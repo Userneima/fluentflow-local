@@ -3,7 +3,9 @@
 ``_feishu_chunk`` turns chapters into what is written to Feishu (both for a
 new document and for a rewrite); ``_update`` rewrites only the chapters that
 changed since the last push, as ``feishu_note.plan_update`` says, and raises
-:class:`UnfinishedUpdate` when a rewrite stops after it began writing.
+:class:`UnfinishedUpdate` when a rewrite stops after it began writing. Its
+links are numbered after the placeholders the document still holds, so a
+resume's own link never shares a placeholder with the first push's.
 ``_response`` is the reply both a new document and an update return.
 """
 
@@ -21,12 +23,12 @@ from backend.core.lark_cli_run import Runner
 
 def _feishu_chunk(
     parts: List[feishu_note.Section], indices: List[int], links: List[feishu_note.HeadingLink], *, body_only: bool = False,
-    tight: bool = False,
+    tight: bool = False, first_link: int = 0,
 ) -> str:
     """The chapters ``indices`` as written to Feishu, links numbered on from
-    ``links`` (extended). A chapter followed by a ``##`` chapter other than
-    the first one ends with the divider before it, so rewriting either chapter
-    later keeps the divider where it was."""
+    ``first_link`` and ``links`` (extended). A chapter followed by a ``##``
+    chapter other than the first one ends with the divider before it, so
+    rewriting either chapter later keeps the divider where it was."""
     first_h2 = next((i for i, part in enumerate(parts) if part.level == 2), None)
     pieces: List[str] = []
     for index in indices:
@@ -34,7 +36,7 @@ def _feishu_chunk(
         divider = following is not None and following.level == 2 and index + 1 != first_h2
         gap = tight and following is not None and following.level >= 3
         text = parts[index].body if body_only else parts[index].text
-        prepared = feishu_note.to_feishu(text, first_link=len(links), divider_after=divider, tight=tight,
+        prepared = feishu_note.to_feishu(text, first_link=first_link + len(links), divider_after=divider, tight=tight,
                                          gap_after=gap)
         links.extend(prepared.links)
         if prepared.markdown.strip():
@@ -76,8 +78,11 @@ def _write_ops(
     artifact_root: Optional[Path],
     runner: Runner,
     tight: bool = False,
+    first_link: int = 0,
 ) -> int:
-    """Run ``plan_update``'s deletes and inserts; returns the chapters written."""
+    """Run ``plan_update``'s deletes and inserts; returns the chapters written.
+    Its links are numbered after ``first_link``, the last placeholder already
+    in the document."""
     rewritten = 0
     for op in ops:
         if isinstance(op, feishu_note.Delete):
@@ -91,7 +96,7 @@ def _write_ops(
                 )
                 deleted.update(chunk)
             continue
-        written = _feishu_chunk(parts, op.parts, links, body_only=op.body_only, tight=tight)
+        written = _feishu_chunk(parts, op.parts, links, body_only=op.body_only, tight=tight, first_link=first_link)
         if not written.strip():
             # Nothing the page shows (a part marker only): the delete was enough.
             continue
@@ -191,10 +196,15 @@ def _update(
     missing: List[dict[str, Any]] = []
     deleted: set[str] = set()
     rewritten = 0
+    # The placeholders the document still holds are the ones it was written
+    # with before this push (a resume's first push's, or one a failed point
+    # left): this push numbers its own after them, so no two places in the
+    # document read the same and neither is pointed for the other.
+    first_link = feishu_note.last_placeholder(str(document.get("content") or ""))
     try:
         rewritten = _write_ops(ops, parts, figures, links, pending, missing, deleted,
                                bin_path=bin_path, doc_id=doc_id, timeout=timeout, task_id=task_id,
-                               artifact_root=artifact_root, runner=runner, tight=tight)
+                               artifact_root=artifact_root, runner=runner, tight=tight, first_link=first_link)
     except Exception as exc:
         # Every chapter the push was changing: rewritten, added, removed or
         # moved (a move is a delete and an insert with nothing else changed).

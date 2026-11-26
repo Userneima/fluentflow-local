@@ -2,10 +2,10 @@
 
 The document an export created but was cut off before recording
 (``feishu_created.json``), the note as last pushed (``feishu_pushed.md``),
-the note's digest, and reading a pushed document's chapters again when they
-could not be read right after the push (``reread_sections``). ``state``
-prefixes the file names, so a second document of the same task (its review
-note) keeps its own.
+whether that note was saved after that record, the note's digest, and reading
+a pushed document's chapters again when they could not be read right after
+the push (``reread_sections``). ``state`` prefixes the file names, so a
+second document of the same task (its review note) keeps its own.
 """
 
 from __future__ import annotations
@@ -83,6 +83,22 @@ def pushed_note_path(artifact_root: Optional[Path], task_id: Optional[str], stat
     if artifact_root is None or not task_id:
         return None
     return Path(artifact_root) / task_id / f"{state}{PUSHED_NOTE}"
+
+
+def pushed_note_after_record(artifact_root: Optional[Path], task_id: Optional[str], state: str = "") -> bool:
+    """Whether the note as last pushed was saved after the record of the
+    export that made the document. Another push has written it since then (a
+    resume that was cut off in turn, under a version that did not note the
+    resume), so the record's markers cannot be read against it: its figures
+    are numbered over a different note."""
+    note = pushed_note_path(artifact_root, task_id, state)
+    record = _created_path(artifact_root, task_id, state)
+    if note is None or record is None or not note.is_file() or not record.is_file():
+        return False
+    try:
+        return note.stat().st_mtime_ns > record.stat().st_mtime_ns
+    except OSError:
+        return False
 
 
 def sections_unread(sync: Optional[dict[str, Any]]) -> bool:
