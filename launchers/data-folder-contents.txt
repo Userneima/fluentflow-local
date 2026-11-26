@@ -17,11 +17,13 @@
 fluentflow_config.json
 fluentflow_config.json.*
 fluentflow_jobs.sqlite
-fluentflow_jobs.sqlite-*
-fluentflow_jobs.sqlite.*
+fluentflow_jobs.sqlite-wal
+fluentflow_jobs.sqlite-shm
+fluentflow_jobs.sqlite-journal
 fluentflow_events.sqlite
-fluentflow_events.sqlite-*
-fluentflow_events.sqlite.*
+fluentflow_events.sqlite-wal
+fluentflow_events.sqlite-shm
+fluentflow_events.sqlite-journal
 recommended_models.json
 .recommended_models.json.*
 yt_dlp_last_update

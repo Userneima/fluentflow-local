@@ -299,6 +299,8 @@ def test_update_and_uninstall_leave_what_is_not_theirs():
     assert "Assert-OwnLeftover" in windows and "assert_own_leftover" in macos
     assert "WindowsIdentity]::GetCurrent().User.Value" in windows
     assert "another Windows account's FluentFlow" in windows and "icacls" in windows
+    # An empty folder made beforehand is made private too, not only a new one.
+    assert "$FirstTake = -not (Test-Path $Marker)" in windows and "if ($FirstTake) {" in windows
     # A release older than this installer is installed by its own installer.
     assert "predates this installer" in windows
     assert "KeepsUserFiles" in (ROOT / "launchers" / "windows" / "uninstall-local.ps1").read_text(encoding="utf-8-sig")

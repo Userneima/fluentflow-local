@@ -344,9 +344,12 @@ def test_every_place_the_code_writes_in_the_data_folder_is_registered():
 
 
 def test_the_sqlite_companions_and_temporary_files_are_registered():
-    for name in ("fluentflow_jobs.sqlite-wal", "fluentflow_events.sqlite-shm", ".recommended_models.json.ab12.tmp"):
+    for name in ("fluentflow_jobs.sqlite-wal", "fluentflow_events.sqlite-shm", "fluentflow_jobs.sqlite-journal",
+                 ".recommended_models.json.ab12.tmp"):
         assert _is_registered(name), name
-    for name in ("mine.txt", "Documents", "fluentflow_notes_backup"):
+    # A backup the user named after the task store is theirs, not SQLite's.
+    for name in ("mine.txt", "Documents", "fluentflow_notes_backup",
+                 "fluentflow_jobs.sqlite.bak-20261126", "fluentflow_jobs.sqlite-backup"):
         assert not _is_registered(name), name
 
 

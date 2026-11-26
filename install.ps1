@@ -309,13 +309,16 @@ if (Test-Path (Join-Path $Root "backend\local_main.py")) {
     if ((Test-Path $Root) -and -not (Test-Path $Marker) -and -not $HasApp -and (Get-ChildItem -Force -LiteralPath $Root | Select-Object -First 1)) {
         throw "$Root already holds other files. Choose a new or empty folder for FluentFlow (FLUENTFLOW_INSTALL_DIR), for example $Root\FluentFlow."
     }
-    $NewRoot = -not (Test-Path $Root)
+    # A folder this installer takes for the first time: new, or one that was
+    # already there but empty (checked above). Either way it is made private.
+    $FirstTake = -not (Test-Path $Marker)
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
-    if ($NewRoot) {
+    if ($FirstTake) {
         # A drive's root lets every account on the computer read what is
-        # created there; tasks, transcripts, the access token and saved keys
-        # are this user's. Only this account, SYSTEM and Administrators get in,
-        # as in the user's own profile folder.
+        # created there, and an empty folder made beforehand inherits the same;
+        # tasks, transcripts, the access token and saved keys are this user's.
+        # Only this account, SYSTEM and Administrators get in, as in the user's
+        # own profile folder.
         & icacls.exe $Root /inheritance:r /grant:r "*${CurrentSid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
         if ($LASTEXITCODE -ne 0) { Write-Host "Could not make $Root private to this account; other accounts on this computer may read it." }
     }
