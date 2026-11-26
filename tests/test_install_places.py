@@ -870,7 +870,7 @@ WIN_FUNCTIONS = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowQuoted", 
                  "Set-FluentFlowEnvLine", "Get-FluentFlowHomeRoot", "Repair-FluentFlowHome",
                  "Get-FluentFlowDataDir", "Add-FluentFlowFolderLines", "Set-FluentFlowUpdateCopyAs",
                  "Test-FluentFlowUpdateCopy", "Set-FluentFlowUpdateCopy", "Get-FluentFlowUpdatingMarker",
-                 "Start-FluentFlowUpdating", "Stop-FluentFlowUpdating")
+                 "Start-FluentFlowUpdating", "Stop-FluentFlowUpdating", "Get-FluentFlowEntryScript")
 
 
 def _win_helper_script(*needs: str) -> str:
@@ -1195,18 +1195,24 @@ def test_the_mcp_entry_path_is_read_whole_when_a_folder_holds_spaces():
     registration of another install is removed (2026-11-27)."""
     helper = _bash_function(_read(ROOT / "install.sh"), "claude_target_of")
     assert helper
+    # The shape `claude mcp get fluentflow-local` really prints: the interpreter
+    # on its own Command: line, Args: holding only the script path.
     cases = [
-        ("python3 /Users/a/app/scripts/fluentflow_mcp_server.py", "/Users/a/app/scripts/fluentflow_mcp_server.py"),
-        ("python3 /Users/John Smith/app/scripts/fluentflow_mcp_server.py", "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"),
-        ("/Users/John Smith/.local/bin/python3 /Users/John Smith/app/scripts/fluentflow_mcp_server.py",
+        ("  Command: python3\n  Args: /Users/a/app/scripts/fluentflow_mcp_server.py",
+         "/Users/a/app/scripts/fluentflow_mcp_server.py"),
+        ("  Command: python3\n  Args: /Users/John Smith/app/scripts/fluentflow_mcp_server.py",
          "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"),
-        ('python3 "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"',
+        ('  Command: python3\n  Args: "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"',
+         "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"),
+        # A hand-edited entry with the interpreter in Args is understood too.
+        ("  Command: sh\n  Args: /Users/John Smith/.local/bin/python3 /Users/John Smith/app/scripts/fluentflow_mcp_server.py",
          "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"),
         # Not the server script: nothing can be told, so nothing may be removed.
-        ("/opt/homebrew/bin/python3 /tmp/other-server.py", ""),
+        ("  Command: python3\n  Args: /opt/stuff/other-server.py", ""),
     ]
     script = helper + '\nfor a in "$@"; do claude_target_of "$a"; printf "\\n"; done\n'
-    payloads = ["fluentflow-local:\n  Scope: User config\n  Args: " + args + "\n" for args, _ in cases]
+    payloads = ["fluentflow-local:\n  Scope: User config\n" + body + "\n\nTo remove this server, run: claude mcp remove fluentflow-local -s user\n"
+                for body, _ in cases]
     out = subprocess.run(["bash", "-c", script, "-", *payloads], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert out.stdout.split("\n")[:len(cases)] == [want for _, want in cases]
@@ -1400,3 +1406,164 @@ def test_a_codex_entry_that_cannot_be_read_is_not_taken_for_a_dead_one():
         out = subprocess.run(["bash", "-c", script, "-", section], capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
         assert (out.stdout.strip() == "stale") == expected, (section, out.stdout)
+
+
+# --- the update marker is claimed, not checked -------------------------------
+
+def _claim_harness() -> str:
+    """ff_claim_updating_marker with what it calls, and a fail_plain that just
+    ends that process."""
+    text = _read(ROOT / "install.sh")
+    parts = []
+    for name in ("ff_updating_marker", "ff_claim_updating_marker"):
+        function = _bash_function(text, name)
+        assert function, f"{name} missing from install.sh"
+        parts.append(function)
+    return "fail_plain() { exit 1; }\nLATEST=9.9.9\n" + "\n".join(parts)
+
+
+@mac_only
+def test_only_one_of_several_updates_gets_the_marker(tmp_path):
+    """Checking the file and then writing it lets two updates in at once; the
+    claim has to be one step (2026-11-27)."""
+    script = _claim_harness() + f'\nff_claim_updating_marker "{tmp_path}/app" 9.9.9\n'
+    script_file = tmp_path / "claim.sh"
+    script_file.write_text(script, encoding="utf-8")
+    winners = tmp_path / "winners"
+    winners.mkdir()
+    processes = [subprocess.Popen(["bash", str(script_file)], cwd=tmp_path,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(16)]
+    codes = [process.wait(timeout=60) for process in processes]
+
+    assert codes.count(0) == 1, codes
+    assert (tmp_path / "app.fluentflow-updating").is_file()
+
+
+@mac_only
+def test_a_second_update_stops_before_touching_the_first_ones_staged_copy(tmp_path):
+    """The marker is claimed before ${DIR}.new is prepared: a run that starts
+    while another is staging its new code stops without deleting that code."""
+    app = _fake_code(tmp_path / "app", version="0.1.0")
+    release = _fake_code(tmp_path / "release", version="9.0.0")
+    fake = tmp_path / "fake-bin"
+    fake.mkdir()
+    # Stands in for the update being killed right after it staged its new code:
+    # the copy is complete, and the marker it claimed is still there.
+    (fake / "cp").write_text(
+        "#!/bin/bash\n"
+        '/bin/cp "$@"\n'
+        'kill -9 $PPID\n'
+        "exit 0\n", encoding="utf-8")
+    (fake / "cp").chmod(0o755)
+    env = _sandbox_env(tmp_path)
+    first = subprocess.run(["bash", str(ROOT / "install.sh"), "--skip-model"], capture_output=True, text=True,
+                           cwd=tmp_path, timeout=120,
+                           env={**env, "PATH": f"{fake}:{env['PATH']}", "FLUENTFLOW_INSTALL_DIR": str(app),
+                                "FLUENTFLOW_INSTALL_SOURCE": str(release)})
+    assert first.returncode != 0
+    assert (tmp_path / "app.new" / "VERSION").read_text(encoding="utf-8").strip() == "9.0.0"
+    assert (tmp_path / "app.fluentflow-updating").is_file()
+
+    second = _install(tmp_path, app, release)
+
+    assert second.returncode != 0
+    assert "另一个更新正在运行" in second.stderr, second.stderr
+    # The first run's staged copy is untouched.
+    assert (tmp_path / "app.new" / "VERSION").read_text(encoding="utf-8").strip() == "9.0.0"
+    assert (app / "VERSION").read_text(encoding="utf-8").strip() == "0.1.0"
+
+
+@mac_only
+def test_a_downloaded_update_leaves_no_temporary_folder(tmp_path):
+    """The download branch installed a trap for its temp folder, and the marker
+    installed another: the second replaced the first, so the folder stayed."""
+    app = _fake_code(tmp_path / "app", version="0.1.0")
+    release = tmp_path / "release-tree" / "fluentflow-local-9.9.9"
+    _fake_code(release, version="9.9.9")
+    archive = tmp_path / "release.zip"
+    subprocess.run(["zip", "-qr", str(archive), release.name], cwd=release.parent, check=True)
+    work = tmp_path / "tmpdir"
+    work.mkdir()
+    fake = tmp_path / "fake-bin"
+    fake.mkdir()
+    (fake / "curl").write_text(
+        "#!/bin/bash\n"
+        f'release_zip="{archive}"\n'
+        'url=""; out=""\n'
+        'while [[ $# -gt 0 ]]; do\n'
+        '  case "$1" in\n'
+        '    -o) out="$2"; shift 2 ;;\n'
+        '    -w) shift 2 ;;\n'
+        '    -*) shift ;;\n'
+        '    *) url="$1"; shift ;;\n'
+        '  esac\n'
+        'done\n'
+        'case "$url" in\n'
+        '  */releases/latest) printf "HTTP/2 302\\r\\nLocation: https://github.com/x/y/releases/tag/v9.9.9\\r\\n" ;;\n'
+        '  *archive/refs/tags/*.zip) cp "$release_zip" "$out" ;;\n'
+        '  *frontend-dist-local.zip) exit 22 ;;\n'
+        '  *registry.npmmirror.com*) exit 6 ;;\n'
+        '  *) exit 7 ;;\n'
+        'esac\n', encoding="utf-8")
+    (fake / "curl").chmod(0o755)
+    env = {**_sandbox_env(tmp_path), "PATH": f"{fake}:{_sandbox_env(tmp_path)['PATH']}", "TMPDIR": str(work),
+           "FLUENTFLOW_INSTALL_DIR": str(app)}
+    # Where this shell's mktemp puts things (macOS mktemp ignores TMPDIR): a
+    # folder it left behind still holds the download.
+    probe = subprocess.run(["bash", "-c", "d=$(mktemp -d); printf %s \"$d\"; rmdir \"$d\""],
+                           capture_output=True, text=True, env=env)
+    base = Path(probe.stdout.strip()).parent
+    before = set(base.glob("tmp.*"))
+    result = subprocess.run(["bash", str(ROOT / "install.sh"), "--skip-model"], capture_output=True, text=True,
+                            cwd=tmp_path, timeout=180, env=env)
+    leaked = [entry.name for entry in set(base.glob("tmp.*")) - before if (entry / "src.zip").exists()]
+    left = [entry.name for entry in work.iterdir()]
+
+    assert not leaked, (leaked, result.stdout + result.stderr)
+    assert left == [], (left, result.stdout + result.stderr)
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_the_windows_parser_reads_the_real_entry_shape(tmp_path):
+    """`claude mcp get` on Windows prints Command: with the interpreter and Args:
+    with the script alone; a folder with a space must not be cut (2026-11-27)."""
+    script = _win_helper_script("Get-FluentFlowEntryScript") + '''
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$cases = @(
+  @("Command: python.exe`nArgs: C:\\Users\\John Smith\\app\\scripts\\fluentflow_mcp_server.py", "C:\\Users\\John Smith\\app\\scripts\\fluentflow_mcp_server.py"),
+  @("Command: python.exe`nArgs: D:\\FluentFlow\\app\\scripts\\fluentflow_mcp_server.py", "D:\\FluentFlow\\app\\scripts\\fluentflow_mcp_server.py"),
+  @("Command: python.exe`nArgs: ""D:\\FluentFlow\\app\\scripts\\fluentflow_mcp_server.py""", "D:\\FluentFlow\\app\\scripts\\fluentflow_mcp_server.py"),
+  @("Command: sh`nArgs: C:\\Python312\\python.exe D:\\FluentFlow\\app\\scripts\\fluentflow_mcp_server.py", "D:\\FluentFlow\\app\\scripts\\fluentflow_mcp_server.py"),
+  @("Command: python.exe`nArgs: D:\\other\\other-server.py", "")
+)
+foreach ($c in $cases) { "got=" + (Get-FluentFlowEntryScript $c[0]); "want=" + $c[1] }
+'''
+    result = _powershell(script)
+
+    assert result.returncode == 0, result.stderr
+    lines = [line.split("=", 1) for line in result.stdout.strip().splitlines() if "=" in line]
+    pairs = [(value, lines[i + 1][1]) for i, (key, value) in enumerate(lines) if key == "got"]
+    for got, want in pairs:
+        assert got.lower() == want.lower(), (got, want, result.stdout)
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_only_one_of_several_updates_gets_the_marker_on_windows(tmp_path):
+    root = tmp_path / "FluentFlow"
+    (root / "app").mkdir(parents=True)
+    (root / ".fluentflow-home").write_text("FluentFlow Local lives here", encoding="ascii")
+    claimer = tmp_path / "claim.ps1"
+    claimer.write_text(_win_helper_script("Get-FluentFlowUpdatingMarker", "Start-FluentFlowUpdating") + f'''
+try {{
+    Start-FluentFlowUpdating '{root}' 'to 9.9.9' | Out-Null
+    exit 0
+}} catch {{
+    exit 3
+}}
+''', encoding="utf-8")
+    processes = [subprocess.Popen([_POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(claimer)],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(8)]
+    codes = [process.wait(timeout=120) for process in processes]
+
+    assert codes.count(0) == 1, codes
+    assert (tmp_path / "FluentFlow.fluentflow-updating").is_file()

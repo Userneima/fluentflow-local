@@ -14,6 +14,10 @@
 
 from __future__ import annotations
 
+import subprocess
+
+import pytest
+
 from backend.core import release_check
 
 
@@ -130,10 +134,59 @@ def test_the_update_command_names_the_install_folder_not_the_code_folder(monkeyp
 
     assert release_check.install_folder() == root
     command = release_check.update_command()
-    assert f'"{root}"' in command and f'"{app}"' not in command
+    assert release_check.shell_literal(str(root)) in command or release_check.powershell_literal(str(root)) in command
+    assert f'"{app}"' not in command and f"'{app}'" not in command
 
     plain = tmp_path / "plain"
     plain.mkdir()
     monkeypatch.setattr(release_check, "PROJECT_ROOT", plain)
     assert release_check.install_folder() == plain
-    assert f'"{plain}"' in release_check.update_command()
+    command = release_check.update_command()
+    assert release_check.shell_literal(str(plain)) in command or release_check.powershell_literal(str(plain)) in command
+
+
+@pytest.mark.skipif(release_check.os.name == "nt", reason="the shell command is for macOS; the PowerShell one is checked below")
+def test_a_folder_name_is_never_run_by_the_copied_command(monkeypatch, tmp_path):
+    """The folder goes into a shell command the user copies and runs. Written in
+    double quotes, a folder holding $(), a backtick or a quote would run part of
+    itself (2026-11-27)."""
+    folder = tmp_path / "a$(touch pwned)b'c"
+    folder.mkdir()
+    monkeypatch.setattr(release_check, "PROJECT_ROOT", folder)
+    command = release_check.update_command()
+
+    # The literal the command hands the installer, run by a real shell, gives the
+    # folder back unchanged and runs nothing.
+    literal = command.split("FLUENTFLOW_INSTALL_DIR=", 1)[1].split(" bash -c", 1)[0]
+    result = subprocess.run(["bash", "-c", f"d={literal}; printf %s \"$d\""], capture_output=True, text=True, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == str(folder)
+    assert not (tmp_path / "pwned").exists()
+    # And no double-quoted form of the folder is left in the command.
+    assert f'"{folder}"' not in command
+
+
+def test_the_powershell_literal_keeps_a_quote_and_a_dollar_pair():
+    """PowerShell writes a quote inside a single-quoted string as two."""
+    assert release_check.powershell_literal("D:\\Fluent Flow\\a'b$(x)") == "'D:\\Fluent Flow\\a''b$(x)'"
+    assert release_check.shell_literal("/a b/$(x)") == "'/a b/$(x)'"
+    assert release_check.shell_literal("/a'b") == "'/a'\\''b'"
+
+
+@pytest.mark.skipif(release_check.os.name != "nt", reason="the PowerShell command is for Windows")
+def test_the_powershell_command_keeps_such_a_folder_literal(monkeypatch, tmp_path):
+    """The same folder in the PowerShell command the page hands out: run, the
+    assignment gives the folder back and runs nothing in it."""
+    folder = tmp_path / "a$(touch pwned)b'c"
+    folder.mkdir()
+    monkeypatch.setattr(release_check, "PROJECT_ROOT", folder)
+    command = release_check.update_command()
+
+    assert command.startswith("$env:FLUENTFLOW_INSTALL_DIR = '")
+    assignment = command.split(";", 1)[0]
+    result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                             assignment + "; Write-Output $env:FLUENTFLOW_INSTALL_DIR"],
+                            capture_output=True, text=True, encoding="utf-8", cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(folder)
+    assert not (tmp_path / "pwned").exists()

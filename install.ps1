@@ -264,17 +264,24 @@ function Get-FluentFlowUpdatingMarker([string]$InstallFolder) {
 
 function Start-FluentFlowUpdating([string]$InstallFolder, [string]$What) {
     $Marker = Get-FluentFlowUpdatingMarker $InstallFolder
-    if (Test-Path -LiteralPath $Marker) {
-        $Age = (Get-Date) - (Get-Item -LiteralPath $Marker).LastWriteTime
-        if ($Age.TotalMinutes -lt 60) {
-            throw "Another update is running (or one was just killed): $Marker is still there. Let it finish, or delete that file once you are sure nothing is running; nothing was changed."
-        }
-        Remove-Item -Force -LiteralPath $Marker -ErrorAction SilentlyContinue
-        Write-Host "An earlier update was interrupted and left $Marker; this run installs it properly."
-    }
+    $Busy = "Another update is running (or one was just killed): $Marker is still there. Let it finish, or delete that file once you are sure nothing is running; nothing was changed."
     $Text = @("FluentFlow Local is being updated ($What); do not start the service from this install while this file exists.", (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
-    [System.IO.File]::WriteAllLines($Marker, [string[]]$Text, (New-Object System.Text.UTF8Encoding $false))
-    return $Marker
+    $Bytes = (New-Object System.Text.UTF8Encoding $false).GetBytes(($Text -join "`r`n") + "`r`n")
+    for ($Try = 1; $Try -le 2; $Try++) {
+        try {
+            # CreateNew: making the file is the claim, in one step, so two updates
+            # cannot both pass a check and then write (2026-11-27).
+            $Stream = [System.IO.File]::Open($Marker, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            try { $Stream.Write($Bytes, 0, $Bytes.Length) } finally { $Stream.Close() }
+            return $Marker
+        } catch {
+            if (-not (Test-Path -LiteralPath $Marker)) { throw "Could not write ${Marker}: $($_.Exception.Message). Nothing was changed." }
+            $Age = (Get-Date) - (Get-Item -LiteralPath $Marker).LastWriteTime
+            if ($Age.TotalMinutes -lt 60 -or $Try -eq 2) { throw $Busy }
+            Remove-Item -Force -LiteralPath $Marker -ErrorAction SilentlyContinue
+            Write-Host "An earlier update was interrupted and left $Marker; this run installs it properly."
+        }
+    }
 }
 
 function Stop-FluentFlowUpdating([string]$Marker) {
@@ -493,6 +500,12 @@ function Assert-OwnLeftover([string]$Path) {
 }
 
 Write-Host "== Getting the code =="
+# Held from the moment this run is an update; both staging paths claim it before
+# touching $Dir.new (see Start-FluentFlowUpdating).
+$UpdatingMarker = $null
+function Claim-FluentFlowUpdating {
+    if ($Updating -and -not $UpdatingMarker) { $script:UpdatingMarker = Start-FluentFlowUpdating $Root "to $Latest from $Current" }
+}
 # An install already here is updated in place when a newer release is out: the
 # new code goes beside it, keeps its .env, and replaces it only once the
 # service is stopped; setup then adds what the new version needs (packages,
@@ -526,6 +539,9 @@ if ($IsGit) {
         }
     }
     if (-not $HaveCode -or $Updating) {
+        # Before $Dir.new is touched: a second run must not delete the copy this
+        # one has already staged.
+        Claim-FluentFlowUpdating
         $Target = if ($Updating) { "$Dir.new" } else { $Dir }
         if ($Updating) { Assert-OwnLeftover $Target }
         if (Test-Path $Target) { Remove-Item -Recurse -Force -LiteralPath $Target }
@@ -582,6 +598,7 @@ if ($IsGit) {
         throw "Could not reach github.com or registry.npmmirror.com to download FluentFlow; check the network or proxy."
     }
   if (-not $HaveCode -or $Updating) {
+    Claim-FluentFlowUpdating
     $Target = if ($Updating) { "$Dir.new" } else { $Dir }
     if ($Updating) { Assert-OwnLeftover $Target; if (Test-Path $Target) { Remove-Item -Recurse -Force -LiteralPath $Target } }
 
@@ -706,13 +723,12 @@ function Get-BusyTaskCount([string]$Port) {
 }
 
 $StoppedOld = $false
-$UpdatingMarker = $null
 if ($Updating) {
-  # Before anything is stopped: another agent's MCP server that starts the
-  # service now would run a half-built copy (see Start-FluentFlowUpdating). If a
-  # copy was already staged, it is this run's and goes with the refusal.
+  # Normally claimed before staging; kept here so a run that somehow got past
+  # that point still holds it. Before anything is stopped: another agent's MCP
+  # server that starts the service now would run a half-built copy.
   try {
-    $UpdatingMarker = Start-FluentFlowUpdating $Root "to $Latest from $Current"
+    Claim-FluentFlowUpdating
   } catch {
     Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
     throw
@@ -868,24 +884,9 @@ try {
         if (Get-Command claude -ErrorAction SilentlyContinue) {
             $Described = Invoke-FluentFlowTool claude @("mcp", "get", "fluentflow-local")
             $ExistingEntry = if ($Described.Code -eq 0) { $Described.Output } else { "" }
-            # The file the entry starts: the "Args:" line ends with the server
-            # script, and a folder name may hold spaces (C:\Users\John Smith\...),
-            # so the whole tail is taken, not the last word. Empty when the line
-            # cannot be understood: then nothing is removed.
-            $Starts = ""
-            $ArgsLine = @($ExistingEntry -split "`n" | Where-Object { $_ -match '^\s*Args:' }) | Select-Object -Last 1
-            if ($ArgsLine) {
-                $ArgsText = ($ArgsLine -replace '^\s*Args:\s*', '').Trim()
-                $Words = @($ArgsText -split '\s+')
-                for ($w = 0; $w -lt $Words.Count; $w++) {
-                    $Tail = (($Words[$w..($Words.Count - 1)]) -join ' ').Trim('"').Trim("'")
-                    if ($Tail -notmatch '[\\/]scripts[\\/]fluentflow_mcp_server\.py$') { continue }
-                    # One drive path only: a tail that still holds the python path has two.
-                    if (@([regex]::Matches($Tail, '[A-Za-z]:[\\/]')).Count -ne 1) { continue }
-                    $Starts = $Tail
-                    break
-                }
-            }
+            # The file the entry starts (see Get-FluentFlowEntryScript). Empty when
+            # the line cannot be understood: then nothing is removed.
+            $Starts = Get-FluentFlowEntryScript $ExistingEntry
             if ($ExistingEntry -and $ExistingEntry.IndexOf($McpScript, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 Write-Host "Claude Code: fluentflow-local is already registered (this copy); left as it is."
             } elseif ($ExistingEntry -and -not $Starts) {

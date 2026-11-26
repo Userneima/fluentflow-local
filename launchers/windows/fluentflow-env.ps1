@@ -440,21 +440,54 @@ function Get-FluentFlowUpdatingMarker([string]$InstallFolder) {
 
 function Start-FluentFlowUpdating([string]$InstallFolder, [string]$What) {
     $Marker = Get-FluentFlowUpdatingMarker $InstallFolder
-    if (Test-Path -LiteralPath $Marker) {
-        $Age = (Get-Date) - (Get-Item -LiteralPath $Marker).LastWriteTime
-        if ($Age.TotalMinutes -lt 60) {
-            throw "Another update is running (or one was just killed): $Marker is still there. Let it finish, or delete that file once you are sure nothing is running; nothing was changed."
-        }
-        Remove-Item -Force -LiteralPath $Marker -ErrorAction SilentlyContinue
-        Write-Host "An earlier update was interrupted and left $Marker; this run installs it properly."
-    }
+    $Busy = "Another update is running (or one was just killed): $Marker is still there. Let it finish, or delete that file once you are sure nothing is running; nothing was changed."
     $Text = @("FluentFlow Local is being updated ($What); do not start the service from this install while this file exists.", (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
-    [System.IO.File]::WriteAllLines($Marker, [string[]]$Text, (New-Object System.Text.UTF8Encoding $false))
-    return $Marker
+    $Bytes = (New-Object System.Text.UTF8Encoding $false).GetBytes(($Text -join "`r`n") + "`r`n")
+    for ($Try = 1; $Try -le 2; $Try++) {
+        try {
+            # CreateNew: making the file is the claim, in one step, so two updates
+            # cannot both pass a check and then write (2026-11-27).
+            $Stream = [System.IO.File]::Open($Marker, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            try { $Stream.Write($Bytes, 0, $Bytes.Length) } finally { $Stream.Close() }
+            return $Marker
+        } catch {
+            if (-not (Test-Path -LiteralPath $Marker)) { throw "Could not write ${Marker}: $($_.Exception.Message). Nothing was changed." }
+            $Age = (Get-Date) - (Get-Item -LiteralPath $Marker).LastWriteTime
+            if ($Age.TotalMinutes -lt 60 -or $Try -eq 2) { throw $Busy }
+            Remove-Item -Force -LiteralPath $Marker -ErrorAction SilentlyContinue
+            Write-Host "An earlier update was interrupted and left $Marker; this run installs it properly."
+        }
+    }
 }
 
 function Stop-FluentFlowUpdating([string]$Marker) {
     if ($Marker) { Remove-Item -Force -LiteralPath $Marker -ErrorAction SilentlyContinue }
+}
+
+# The script an MCP entry starts, read from `claude mcp get`'s output, or "" when
+# that cannot be told. The real output puts the interpreter on its own Command:
+# line and the script alone in Args, so a single path is taken as it is; a
+# hand-edited entry that also lists the interpreter there is read from its words.
+# A folder name may hold spaces (C:\Users\John Smith\...), so neither case may
+# stop at the last word alone (2026-11-27).
+function Get-FluentFlowEntryScript([string]$Described) {
+    $ArgsLine = @($Described -split "`n" | Where-Object { $_ -match '^\s*Args:' }) | Select-Object -Last 1
+    if (-not $ArgsLine) { return "" }
+    $ArgsText = ($ArgsLine -replace '^\s*Args:\s*', '').Trim()
+    $Whole = $ArgsText.Trim('"').Trim("'")
+    if ($Whole -match '^([A-Za-z]:[\\/]|\\\\)' -and $Whole -match '[\\/]fluentflow_mcp_server\.py$' -and -not ($Whole -match '\s+[A-Za-z]:[\\/]')) {
+        return $Whole
+    }
+    $Words = @($ArgsText -split '\s+')
+    for ($w = 0; $w -lt $Words.Count; $w++) {
+        $Tail = (($Words[$w..($Words.Count - 1)]) -join ' ').Trim('"').Trim("'")
+        if ($Tail -notmatch '[\\/]scripts[\\/]fluentflow_mcp_server\.py$') { continue }
+        if (-not ($Tail -match '^([A-Za-z]:[\\/]|\\\\)')) { continue }
+        # One drive path only: a tail that still holds the python path has two.
+        if (@([regex]::Matches($Tail, '[A-Za-z]:[\\/]')).Count -ne 1) { continue }
+        return $Tail
+    }
+    return ""
 }
 
 # Codex keeps its config and skills in CODEX_HOME when that is set, else in the

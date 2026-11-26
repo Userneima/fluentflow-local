@@ -79,25 +79,41 @@ def install_folder() -> Path:
     return root
 
 
+def shell_literal(value: str) -> str:
+    """One shell word, single-quoted: nothing inside it is expanded or run.
+
+    A folder is the user's, and it can hold ``$()``, a backtick or a quote: in
+    double quotes the copied command would run part of it (2026-11-27).
+    """
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def powershell_literal(value: str) -> str:
+    """One PowerShell literal string, single-quoted, ``'`` written twice."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def update_command() -> str | None:
     """The command that updates this copy, written out with its folder.
 
     The install command run without a folder installs into the default place;
     on a machine where the install lives in a folder the user chose, that made
     a second copy beside the first (2026-11-26). The page and agents get the
-    command with this install's folder in it.
+    command with this install's folder in it, quoted so the folder is taken as
+    it is however it is named.
     """
     folder = str(install_folder())
     if is_git_checkout():
         if os.name == "nt":
-            return ('cd "{0}"; git pull; powershell -NoProfile -ExecutionPolicy Bypass '
-                    '-File ".\\launchers\\windows\\setup-local.ps1"').format(folder)
-        return 'cd "{0}" && git pull && bash launchers/macos/setup-local.sh'.format(folder)
+            return ('cd {0}; git pull; powershell -NoProfile -ExecutionPolicy Bypass '
+                    '-File ".\\launchers\\windows\\setup-local.ps1"').format(powershell_literal(folder))
+        return 'cd {0} && git pull && bash launchers/macos/setup-local.sh'.format(shell_literal(folder))
     if os.name == "nt":
-        return ('$env:FLUENTFLOW_INSTALL_DIR = "{0}"; powershell -ExecutionPolicy Bypass '
+        return ('$env:FLUENTFLOW_INSTALL_DIR = {0}; powershell -ExecutionPolicy Bypass '
                 '-Command "irm https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.ps1 | iex"'
-                ).format(folder)
-    return 'FLUENTFLOW_INSTALL_DIR="{0}" bash -c "$(curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.sh)"'.format(folder)
+                ).format(powershell_literal(folder))
+    return ('FLUENTFLOW_INSTALL_DIR={0} bash -c "$(curl -fsSL '
+            'https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.sh)"').format(shell_literal(folder))
 
 
 def _fetch_latest() -> str | None:
@@ -159,4 +175,5 @@ def status(*, now: float | None = None) -> dict[str, Any]:
     }
 
 
-__all__ = ["is_newer", "status", "update_command", "is_git_checkout", "enabled", "install_folder"]
+__all__ = ["is_newer", "status", "update_command", "is_git_checkout", "enabled", "install_folder",
+           "shell_literal", "powershell_literal"]

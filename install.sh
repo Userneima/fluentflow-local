@@ -326,6 +326,49 @@ fail() {
 	fail_plain "$1"
 }
 
+# 退出时统一清两样东西：下载用的临时目录和更新标记。两个都可能还没建，也可能只有一个；
+# 只装一个 EXIT trap，后面谁再装会把前一个顶掉（`trap ... EXIT` 是替换，不是追加）。
+WORK=""
+UPDATING_MARKER=""
+cleanup() {
+	if [[ -n "${WORK:-}" ]]; then rm -rf "$WORK"; fi
+	if [[ -n "${UPDATING_MARKER:-}" ]]; then rm -f "$UPDATING_MARKER"; fi
+}
+trap cleanup EXIT
+
+# 更新期间在安装文件夹旁边放一个标记：<安装文件夹>.fluentflow-updating（macOS 上就是
+# ~/fluentflow-local.fluentflow-updating，Windows 一个文件夹安装是 D:\FluentFlow.fluentflow-updating）。
+# 更新会停服务、换代码、重建虚拟环境，这期间别的 agent 的 MCP 服务从这里起服务会拿到
+# 半装好的一份。这个标记就是给它看的：有这个文件就别起。每次退出都删掉；进程被强杀
+# 留下的，下一次运行开头清掉（超过一小时才算上一次的，正在跑的更新不会被误清）。
+ff_updating_marker() {
+	printf '%s.fluentflow-updating' "${1%/}"
+}
+
+ff_claim_updating_marker() {
+	local marker stale text attempt
+	# 这次运行已经拿到（在放 ${DIR}.new 之前就拿过一次）。
+	[[ -n "${UPDATING_MARKER:-}" ]] && return 0
+	marker="$(ff_updating_marker "$1")"
+	text="$(printf 'FluentFlow Local is being updated (to %s); do not start the service from this install while this file exists.\n%s\n' \
+		"${2:-$LATEST}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+	for attempt in 1 2; do
+		# set -C（noclobber）下 `>` 用 O_EXCL 建文件，判断和创建是一步：两个更新同时进来
+		# 只有一个能建出来，另一个在这里就停下，不会删掉对方已经放好的新代码。
+		if ( set -C; printf '%s' "$text" >"$marker" ) 2>/dev/null; then
+			UPDATING_MARKER="$marker"
+			return 0
+		fi
+		[[ -e "$marker" ]] || fail_plain "写不了 ${marker}（没有权限？）。什么都没改。"
+		stale="$(find "$marker" -mmin +60 2>/dev/null || true)"
+		if [[ -z "$stale" || "$attempt" -eq 2 ]]; then
+			fail_plain "另一个更新正在运行（或者上一次刚被强杀）：${marker} 还在。等它结束；确认没有在跑时删掉那个文件再运行。什么都没改。"
+		fi
+		rm -f "$marker"
+		echo "上一次更新被中断，留下了 ${marker}（那次没装完）；这次重新装。"
+	done
+}
+
 # 系统设置里的代理：curl 不看它。和 launchers/macos/fluentflow-env.sh 的
 # ff_use_system_proxy 同一条规则（那份这时还不在这台机器上）。
 if [[ -z "${HTTPS_PROXY:-}${HTTP_PROXY:-}${https_proxy:-}${http_proxy:-}" ]]; then
@@ -388,6 +431,9 @@ elif [[ -n "$LOCAL_SOURCE" ]]; then
 		"$(printf '%s\n%s\n' "$CURRENT" "$LATEST" | sort -V | tail -n 1)" == "$LATEST" ]]; then
 		UPDATING=1
 		echo "把 FluentFlow Local 从 ${CURRENT} 更新到 ${LATEST}（来自 ${LOCAL_SOURCE}）。"
+		# 先把更新标记拿到手，再去动 ${DIR}.new：另一个更新抢先时在这里就停下，
+		# 不会把这一份已经放好的新代码删掉。
+		ff_claim_updating_marker "$DIR" "$LATEST"
 	elif [[ "$HAVE_CODE" -eq 1 ]]; then
 		echo "${DIR} 里的 ${CURRENT} 不比 ${LOCAL_SOURCE} 里的 ${LATEST} 旧。"
 		[[ -n "${SRC_TMP:-}" ]] && rm -rf "$SRC_TMP"
@@ -447,6 +493,8 @@ else
 		fail "连不上 github.com，也连不上 registry.npmmirror.com，请检查网络或代理。"
 	fi
 fi
+# 同上：拿标记在动 ${DIR}.new 之前。
+if [[ "$UPDATING" -eq 1 ]]; then ff_claim_updating_marker "$DIR" "$LATEST"; fi
 if [[ "$IS_GIT" -eq 0 && -z "$LOCAL_SOURCE" && ( "$HAVE_CODE" -eq 0 || "$UPDATING" -eq 1 ) ]]; then
 	TARGET="$DIR"
 	if [[ "$UPDATING" -eq 1 ]]; then
@@ -459,8 +507,8 @@ if [[ "$IS_GIT" -eq 0 && -z "$LOCAL_SOURCE" && ( "$HAVE_CODE" -eq 0 || "$UPDATIN
 		got="$(curl -sL -r 0-1048575 --max-time 5 -o /dev/null -w '%{size_download}' "$GITHUB_ZIP" 2>/dev/null || true)"
 		[[ -z "$NPM_META" || "${got:-0}" -ge 1048576 ]] && order="github npm"
 	fi
-	WORK="$(mktemp -d)"
-	trap 'rm -rf "$WORK"' EXIT
+	tmp_base="${TMPDIR:-/tmp}"
+	WORK="$(mktemp -d "${tmp_base%/}/fluentflow-install.XXXXXXXX")"
 	unpacked=""
 	for source in $order; do
 		if [[ "$source" == github && -n "$GITHUB_ZIP" ]]; then
@@ -505,30 +553,6 @@ stop_folder_programs() {
 	ff_stop_folder_programs "$1" || true
 }
 
-# 更新期间在安装文件夹旁边放一个标记：<安装文件夹>.fluentflow-updating（macOS 上就是
-# ~/fluentflow-local.fluentflow-updating，Windows 一个文件夹安装是 D:\FluentFlow.fluentflow-updating）。
-# 更新会停服务、换代码、重建虚拟环境，这期间别的 agent 的 MCP 服务从这里起服务会拿到
-# 半装好的一份。这个标记就是给它看的：有这个文件就别起。每次退出都删掉；进程被强杀
-# 留下的，下一次运行开头清掉（超过一小时才算上一次的，正在跑的更新不会被误清）。
-ff_updating_marker() { printf '%s.fluentflow-updating' "${1%/}"; }
-
-ff_claim_updating_marker() {
-	local marker stale
-	marker="$(ff_updating_marker "$1")"
-	if [[ -e "$marker" ]]; then
-		stale="$(find "$marker" -mmin +60 2>/dev/null || true)"
-		if [[ -z "$stale" ]]; then
-			fail_plain "另一个更新正在运行（或者上一次刚被强杀）：${marker} 还在。等它结束；确认没有在跑时删掉那个文件再运行。什么都没改。"
-		fi
-		rm -f "$marker"
-		echo "上一次更新被中断，留下了 ${marker}（那次没装完）；这次重新装。"
-	fi
-	printf 'FluentFlow Local is being updated (to %s); do not start the service from this install while this file exists.\n%s\n' \
-		"${2:-$LATEST}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$marker" || true
-	UPDATING_MARKER="$marker"
-	# shellcheck disable=SC2064
-	trap 'rm -f "${UPDATING_MARKER:-}"' EXIT
-}
 
 if [[ "$UPDATING" -eq 1 ]]; then
 	ff_claim_updating_marker "$DIR" "$LATEST"
@@ -660,15 +684,24 @@ MCP_ENV=()
 claude_scope_of() {
 	printf '%s\n' "$1" | sed -n 's/.*claude mcp remove fluentflow-local -s \([A-Za-z]*\).*/\1/p' | tail -n 1
 }
-# Args 那一行指向的脚本：文件夹名里可以有空格（/Users/John Smith/…），只取最后一个词
-# 会把它截断、Test-Path 落空，然后把另一份还在用的注册删掉。取最后一个「空格后面开始、
-# 到行尾」的绝对路径；看不出是 fluentflow_mcp_server.py 时打印空，调用方就不删任何注册。
+# Args 那一行指向的脚本。真实的 `claude mcp get fluentflow-local` 把解释器放在
+# Command: 那行，Args: 只有一个脚本路径（`Args: /Users/x/app/scripts/fluentflow_mcp_server.py`），
+# 所以先看整行是不是这一个路径；手工改过的条目才可能把解释器也写进 Args，那时取最后一个
+# 「空格后面开始、到行尾」的绝对路径（文件夹名里可以有空格）。看不出是
+# fluentflow_mcp_server.py 时打印空，调用方就不删任何注册。
 claude_target_of() {
-	local args
+	local args target
 	args="$(printf '%s\n' "$1" | sed -n 's/^[[:space:]]*Args:[[:space:]]*//p' | tail -n 1 | tr -d '\r')"
 	args="${args//\"/}"
 	args="${args//\'/}"
-	printf '%s' "$(printf '%s' "$args" | sed -n 's#.*[[:space:]]\(/.*fluentflow_mcp_server\.py\)[[:space:]]*$#\1#p')"
+	args="${args%"${args##*[![:space:]]}"}"
+	# 整行就是一个脚本路径（没有「空格再跟一个 /」，那是解释器加脚本两段）。
+	if [[ "$args" == /*fluentflow_mcp_server.py && ! "$args" =~ [[:space:]]/ ]]; then
+		printf '%s' "$args"
+		return 0
+	fi
+	target="$(printf '%s' "$args" | sed -n 's#.*[[:space:]]\(/.*fluentflow_mcp_server\.py\)[[:space:]]*$#\1#p')"
+	[[ -n "$target" ]] && printf '%s' "$target"
 }
 if command -v claude >/dev/null 2>&1; then
 	described="$(claude mcp get fluentflow-local 2>/dev/null || true)"
