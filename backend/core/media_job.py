@@ -1531,16 +1531,22 @@ async def _stream_media_job(ctx: MediaJobContext) -> AsyncGenerator[str, None]:
             # Same dict the result carries, so whether the note actually saw
             # speaker labels is answerable from the stored task.
             speaker_payload["note_input_labeled"] = bool(note_speaker_text)
-            summary_result = await loop.run_in_executor(
-                None,
-                model_usage.carry(lambda: summarize_transcript_with_metadata(
-                    note_input_text,
-                    speaker_labeled=bool(note_speaker_text),
-                    task_id=ctx.task_id_value,
-                    client_id=ctx.client_id,
-                    **kwargs,
-                )),
-            )
+            def summarize() -> Any:
+                # Bound to the task, so 停下这一步 stops its chapters' and
+                # check's requests too (``model_usage.unless_stopping``), as
+                # for a transcript file's note (``transcript_note``):
+                # cancelling this coroutine alone left the thread writing
+                # the note to the end.
+                with task_stop.bound(ctx.task_id_value):
+                    return summarize_transcript_with_metadata(
+                        note_input_text,
+                        speaker_labeled=bool(note_speaker_text),
+                        task_id=ctx.task_id_value,
+                        client_id=ctx.client_id,
+                        **kwargs,
+                    )
+
+            summary_result = await loop.run_in_executor(None, model_usage.carry(summarize))
             summary_md = summary_result.markdown
             if not summary_md.strip():
                 raise ValueError("AI summarization returned empty result")

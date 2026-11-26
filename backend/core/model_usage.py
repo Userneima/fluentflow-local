@@ -339,6 +339,14 @@ def unless_stopping(ask: Callable[[], Any]) -> Any:
 
     def run() -> None:
         try:
+            # Asked again right before sending, on the request's own thread:
+            # a stop made between the check above and this thread starting
+            # used to send the request all the same (OpenCode review,
+            # 2026-11-26).
+            if task_stop.shutting_down():
+                raise ServiceStopping("服务正在停止，这次模型请求没有发出。")
+            if stopped is not None and stopped.is_set():
+                raise task_stop.StepStopped("这一步已停下，这次模型请求没有发出。")
             outcome["answer"] = ask()
         except BaseException as exc:  # noqa: BLE001 - raised to the caller below
             outcome["error"] = exc

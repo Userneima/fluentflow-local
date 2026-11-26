@@ -1365,6 +1365,10 @@ def _run_visual_note(
             drafts.append(part_draft)
             coverage_parts.append({"part": part.index, **part_coverage})
             note_progress.part_done(task_id, index=part.index, text=part_draft.markdown or "")
+        # Stopped after the last answer came back: the note is not written
+        # and does not replace the one the task has. The answers are kept for
+        # 接着做 (``model_answers``).
+        model_usage.stop_if_asked()
         draft = _joined_draft(drafts, parts, title=note_title(job))
         cropped, frames_with_crops = apply_crops(draft.markdown, task_id, frames)
         cited = cited_frames(cropped, frames_with_crops)
@@ -1709,19 +1713,22 @@ def _log_visual_note(
     state = visual_note_state(job.get("result"))
     if state.get("status") == STATUS_RUNNING and error is None:
         return
+    # The user stopping the step is no failure of the note: an event of its
+    # own, neither failed nor completed.
+    stopped = isinstance(error, task_stop.StepStopped)
     # A refusal before anything started (no transcript, already running) leaves
     # no state of its own; it is still a note that did not get written.
-    failed = error is not None or state.get("status") == STATUS_FAILED
+    failed = not stopped and (error is not None or state.get("status") == STATUS_FAILED)
     usage = state.get("usage") if isinstance(state.get("usage"), dict) else {}
     markdown = str(state.get("markdown") or "")
     log_event(
         task_id=task_id,
-        event_name="visual_note_failed" if failed else "visual_note_completed",
+        event_name="visual_note_stopped" if stopped else "visual_note_failed" if failed else "visual_note_completed",
         source_type=str(job.get("source_type") or "") or None,
         summary_length=len(markdown) if markdown else None,
         stage="visual_note",
         duration_seconds=round(time.perf_counter() - started, 3),
-        success=not failed,
+        success=None if stopped else not failed,
         error_reason=(str(error) if error is not None else state.get("error")) or None,
         metadata=event_metadata(
             trigger=trigger,

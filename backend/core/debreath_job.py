@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core import cut_timeline, device_profile, model_usage, silence_cuts, task_steps
+from backend.core import cut_timeline, device_profile, model_usage, silence_cuts, task_steps, task_stop
 from backend.core.event_context import event_metadata
 from backend.core.event_logger import log_event
 from backend.core.job_store import get_job, list_jobs_by_statuses, save_result_changes, update_job_result
@@ -790,6 +790,7 @@ def _run_debreath(
                 "settings": settings,
                 "threshold_choice": threshold_choice or None,
                 "error": None,
+                "stopped": None,
             },
         )
         plan = silence_cuts.plan_silence_cuts(
@@ -910,6 +911,21 @@ def _run_debreath(
                    "finished_at": _now()},
         )
         raise DebreathError(str(exc)) from exc
+    except task_stop.StepStopped:
+        # The user stopped the step while the cut was judged (its model
+        # request, ``model_usage.unless_stopping``): the cut reads stopped,
+        # not running. Left running, the task read busy for good and refused
+        # 接着做, 停下 and deletion until the service restarted (review of
+        # the 2026-11-26 stop change). The decision is judged again when the
+        # step is carried on; the answers already received are read back
+        # (``model_answers``).
+        _store(
+            task_id,
+            client_id=client_id,
+            state={"status": STATUS_FAILED, "stage": "done", "error": task_steps.STOPPED_NOTE,
+                   "stopped": True, "finished_at": _now()},
+        )
+        raise
     except Exception as exc:  # noqa: BLE001 - the job must not be left "running"
         logger.exception("debreath failed for %s", task_id)
         _store(
@@ -979,7 +995,7 @@ def _debreath_outcome(state: dict[str, Any]) -> str:
     plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
     separation = plan.get("level_separation") if isinstance(plan.get("level_separation"), dict) else {}
     if state.get("status") == STATUS_FAILED:
-        return "failed"
+        return "stopped" if state.get("stopped") else "failed"
     if state.get("already_cut"):
         return "already_cut"
     if state.get("not_worth_rendering"):
@@ -1004,13 +1020,16 @@ def _log_debreath(task_id: str, state: dict[str, Any], *, trigger: str, started:
     choice = state.get("threshold_choice") if isinstance(state.get("threshold_choice"), dict) else {}
     outcome = _debreath_outcome(state)
     failed = outcome == "failed"
+    # The user stopping the step is no failure of the cut: an event of its
+    # own, neither failed nor done.
+    stopped = outcome == "stopped"
     log_event(
         task_id=task_id,
-        event_name="debreath_failed" if failed else "debreath_completed",
+        event_name="debreath_stopped" if stopped else "debreath_failed" if failed else "debreath_completed",
         source_duration_seconds=plan.get("source_duration_seconds"),
         stage="debreath",
         duration_seconds=round(time.perf_counter() - started, 3),
-        success=not failed,
+        success=None if stopped else not failed,
         error_reason=(state.get("error") if failed else state.get("not_used_reason")) or None,
         metadata=event_metadata(
             trigger=trigger,

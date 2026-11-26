@@ -293,7 +293,21 @@ async def stop_step(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
     cancelled = await JOB_EVENTS.cancel(task_id)
     # Whatever no runner closes (a task still waiting for its turn).
     task_steps.close_open(task_id, stopped=True)
-    if job.get("status") in {"queued", "running"}:
+    if (job.get("status") in {"queued", "running"} and not task_stop.shutting_down()
+            and _transcript_note_under_way(task_id, client_id)):
+        # A transcript file (a subtitle file, a link's captions) whose
+        # transcript is stored and whose first note was being written: stopped
+        # at its note, as a recording is once its transcript is stored. It
+        # read 已取消 before (the review of 2026-11-26), while its note step
+        # read 已停下; 接着做 writes the note from the stored transcript. Not
+        # while the service stops: the steps stay as they are then, and a
+        # cancelled task keeps the user's stop over the restart.
+        local_intake_flow._patch_result(task_id, client_id, {
+            "summary_status": "failed", "summary_error": task_steps.STOPPED_NOTE, "summary_skipped": False,
+        })
+        upsert_job(task_id=task_id, status="completed", stage="done", summary_status="failed",
+                   client_id=job.get("client_id"), metadata={"queue_wait": None})
+    elif job.get("status") in {"queued", "running"}:
         # Stopped before its transcript was stored: it reads stopped now, as a
         # cancel does, not once the task ahead of it in line is done (its
         # runner keeps its place until then, so the line stays serial).
@@ -321,6 +335,17 @@ async def stop_step(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
         "task_id": task_id,
         "stopped_step": None if step is None else {"step": step, "label": task_steps.LABELS.get(step, step)},
     }
+
+
+def _transcript_note_under_way(task_id: str, client_id: Optional[str]) -> bool:
+    """Whether a task made from a transcript file holds its transcript while
+    it still runs: its first note is being written
+    (``transcript_note.summarize_transcript_source`` stores the transcript,
+    then waits for the model)."""
+    from backend.core import transcript_note
+
+    job = get_job(task_id, client_id=client_id) or {}
+    return job.get("source_type") == "transcript_file" and transcript_note.stored_transcript_of(job)
 
 
 RESTART_RESUME_LIMIT = 2

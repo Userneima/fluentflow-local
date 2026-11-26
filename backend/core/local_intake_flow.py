@@ -499,6 +499,9 @@ def _write_text_note_instead(
         )
         logger.warning("text-note fallback failed for %s: %s", task_id, exc)
         return
+    # Stopped after the last answer came back: the note is not saved and
+    # does not replace the one the task has (``task_flow`` records the stop).
+    model_usage.stop_if_asked()
     fields: dict[str, Any] = {
         "summary_markdown": markdown,
         "summary_status": "completed",
