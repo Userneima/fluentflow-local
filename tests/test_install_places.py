@@ -111,7 +111,9 @@ def _cases(repo: Path, home: Path, other: Path):
         (f"BASE=.\nFLUENTFLOW_DATA_DIR=${{BASE}}/data\nBASE={other}", "FLUENTFLOW_DATA_DIR", {}, "inside"),
         ("FLUENTFLOW_DATA_DIR=${FF_SURELY_UNSET:-data}", "FLUENTFLOW_DATA_DIR", {}, "inside"),
         # Escapes in quotes are decoded as the service decodes them.
-        (f'FLUENTFLOW_DATA_DIR="{other}/x\\\\notes"', "FLUENTFLOW_DATA_DIR", {}, f"{other}/x\\notes"),
+        # (Forward slashes: in double quotes C:\Users\runneradmin holds \r, which the
+        # service reads as a carriage return.)
+        (f'FLUENTFLOW_DATA_DIR="{other.as_posix()}/x\\\\notes"', "FLUENTFLOW_DATA_DIR", {}, f"{other}/x\\notes"),
         # A quote not closed on its line: the service reads the next line into
         # the value, and that line is no setting of its own any more.
         (f"FLUENTFLOW_DATA_DIR='{other}/data\\'\nOTHER=1", "FLUENTFLOW_DATA_DIR", {}, "unsure"),
