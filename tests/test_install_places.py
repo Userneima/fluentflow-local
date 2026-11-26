@@ -141,8 +141,11 @@ def test_the_mac_helpers_see_through_links(tmp_path):
 
 
 def _powershell(script: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    # Without the test run's own data folder and the other places it sets:
+    # a setting in the environment wins over .env, as in the service.
+    base = {k: v for k, v in os.environ.items() if not k.upper().startswith("FLUENTFLOW_") and k.upper() != "HF_HOME"}
     return subprocess.run([_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script],
-                          capture_output=True, text=True, encoding="utf-8", env={**os.environ, **(env or {})})
+                          capture_output=True, text=True, encoding="utf-8", env={**base, **(env or {})})
 
 
 @pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")

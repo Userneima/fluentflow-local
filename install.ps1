@@ -550,7 +550,8 @@ if ($Updating) {
     } catch {
         throw "Could not move $Dir aside ($($_.Exception.Message)). A window or program is using it; close it (or run this from another folder) and run this again"
     }
-    Set-FluentFlowUpdateCopy "$Dir.old"
+    # Unmarked, the next update stops at it rather than deleting it: never a reason to fail here.
+    try { Set-FluentFlowUpdateCopy "$Dir.old" } catch {}
   } catch {
     $Why = $_.Exception.Message
     Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
@@ -697,7 +698,7 @@ try {
     if (Test-Path "$Dir.failed") { Remove-Item -Recurse -Force -LiteralPath "$Dir.failed" -ErrorAction SilentlyContinue }
     Set-Location (Split-Path -Parent $Dir)
     Move-Item -LiteralPath $Dir -Destination "$Dir.failed"
-    Set-FluentFlowUpdateCopy "$Dir.failed"
+    try { Set-FluentFlowUpdateCopy "$Dir.failed" } catch {}
     Move-Item -LiteralPath "$Dir.old" -Destination $Dir
     Remove-Item -Force -LiteralPath (Join-Path $Dir ".fluentflow-update") -ErrorAction SilentlyContinue
     $Launcher = Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd"

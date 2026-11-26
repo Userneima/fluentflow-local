@@ -184,7 +184,7 @@ fail() {
 		echo "更新失败，换回 ${CURRENT}…" >&2
 		stop_folder_programs "$DIR"
 		rm -rf "${DIR}.failed"
-		if [[ -e "$DIR" ]]; then mv "$DIR" "${DIR}.failed" && ff_mark_update_copy "${DIR}.failed"; fi
+		if [[ -e "$DIR" ]]; then mv "$DIR" "${DIR}.failed" && { ff_mark_update_copy "${DIR}.failed" || true; }; fi
 		mv "${DIR}.old" "$DIR"
 		rm -f "${DIR}/.fluentflow-update"
 		# 更新前在跑的服务换回后接着跑（没有桌面启动器的安装也一样）。
@@ -435,7 +435,8 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	SWAPPED=1
 	# set -e 停下的那些步骤也要先换回旧版本，包括下一步的 mv。
 	trap 'fail "安装中途出错（install.sh 第 ${LINENO} 行）。"' ERR
-	ff_mark_update_copy "${DIR}.old"
+	# 没写成标记时下次更新会停在它前面，不会删它：不值得为此失败。
+	ff_mark_update_copy "${DIR}.old" || true
 	mv "${DIR}.new" "$DIR"
 	rm -f "${DIR}/.fluentflow-update"
 fi
