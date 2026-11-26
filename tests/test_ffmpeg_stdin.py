@@ -1,20 +1,22 @@
-"""ffmpeg must not read the service's stdin.
+"""Children must not read the service's stdin.
 
-When the service is started from a terminal, an ffmpeg child that reads stdin
-can keep polling that tty after its input ends and never exit (2026-11-25:
-audio extraction of a 68-minute recording hung at 18%). Every ffmpeg and
-ffprobe is started through ``backend/core/ffmpeg_cmd.py``, which adds
-``-nostdin`` and an empty stdin; the scan below fails on a call that starts
-one any other way.
+When the service is started from a terminal, a child that reads stdin can keep
+polling that tty after its input ends and never exit (2026-11-25: audio
+extraction of a 68-minute recording hung at 18%). Every ffmpeg and ffprobe is
+started through ``backend/core/ffmpeg_cmd.py``, which adds ``-nostdin`` and an
+empty stdin; the scan below fails on a call that starts one any other way.
+yt-dlp is started with an empty stdin too, and the service Windows starts has
+no terminal on stdin at all (2026-11-26).
 """
 
 from __future__ import annotations
 
 import ast
 import subprocess
+import sys
 from pathlib import Path
 
-from backend.core import audio_handler, ffmpeg_cmd
+from backend.core import audio_handler, ffmpeg_cmd, video_source
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,7 +25,8 @@ _SPAWNERS = {"run", "Popen", "check_output", "check_call", "call"}
 # Direct subprocess calls whose command is a parameter, in modules that also
 # mention ffmpeg. Each says why it never starts ffmpeg or ffprobe itself.
 _NOT_FFMPEG = {
-    # yt-dlp (it starts its own ffmpeg to merge, with its own stdin handling).
+    # yt-dlp (which starts its own ffmpeg to merge, with its own stdin
+    # handling), started with an empty stdin itself.
     ("backend/core/video_source.py", "_run_process"),
     ("backend/core/video_source.py", "_run_process_streaming"),
 }
@@ -142,3 +145,60 @@ def test_macos_launcher_starts_service_without_terminal_stdin():
     text = (ROOT / "launchers/macos/FluentFlowLocal.command").read_text(encoding="utf-8")
     line = next(l for l in text.splitlines() if l.startswith("exec ") and "uvicorn" in l)
     assert "</dev/null" in line
+
+
+class _NoOutput:
+    """A child's pipe with nothing in it."""
+
+    def readline(self) -> str:
+        return ""
+
+    def close(self) -> None:
+        pass
+
+
+def test_yt_dlp_is_started_without_the_terminal(monkeypatch):
+    """The same rule for yt-dlp: it runs the recording's download and can sit
+    waiting on the terminal it inherited, like ffmpeg did (2026-11-26)."""
+    seen: list[dict] = []
+
+    class FakePopen:
+        pid = 4242
+        returncode = 0
+
+        def __init__(self, args, **kwargs):
+            seen.append(kwargs)
+            self.stdout, self.stderr = _NoOutput(), _NoOutput()
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(video_source.subprocess, "Popen", FakePopen)
+    video_source._run_process(["yt-dlp", "--version"], timeout=5)
+    video_source._run_process(["yt-dlp", "a link"], timeout=5, on_output_line=lambda _line: None)
+
+    assert [kwargs.get("stdin") for kwargs in seen] == [subprocess.DEVNULL, subprocess.DEVNULL]
+
+
+def test_the_service_windows_starts_has_no_terminal_on_stdin():
+    """Windows' process service gives the service no console, but nothing it
+    starts may depend on that: ``scripts/run_service.py`` puts the null device
+    on stdin before uvicorn runs. Checked in a child of its own, so this
+    test's own stdin is not touched: before the redirect it reads what was
+    handed to it, after it reads nothing (end of file at once)."""
+    script = "\n".join([
+        "import os, sys",
+        f"sys.path.insert(0, {str(ROOT / 'scripts')!r})",
+        "import run_service",
+        "run_service.detach_stdin()",
+        "print('null' if os.read(0, 10) == b'' else 'inherited')",
+    ])
+    done = subprocess.run(
+        [sys.executable, "-c", script], input="kept open\n", capture_output=True, text=True, timeout=120,
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "null", done.stdout

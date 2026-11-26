@@ -18,13 +18,24 @@ and carrying the task on starts there.
 
 Writes are best-effort: a step record that cannot be written is logged and the
 task goes on. The task's results are the user's; the steps only describe them.
+
+Every call that touches the store waits for the disk to commit: on the GitHub
+Windows machine that was measured at a median 33 ms and up to 400 (decision
+8.27). The flow that runs a task runs on the event loop that also answers the
+page and agents, so it awaits the ``*_off_loop`` calls below: the same write on
+a worker thread, with the loop free meanwhile (decision 8.30). They are awaited
+one after another, so the calls of one task never race and a read after a write
+sees it. ``start`` and ``finish`` keep the bookkeeping of which step a model
+call belongs to on the calling thread, because that is a context variable of
+that thread (``model_usage``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 from backend.core import job_store, model_answers, model_usage, task_stop
 
@@ -72,9 +83,28 @@ def _write(task_id: str, name: str, status: str, **kwargs: Any) -> None:
     _write_steps(task_id, [name], status, **kwargs)
 
 
+async def _off_loop(call: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """One of this module's calls on a worker thread (decision 8.30).
+
+    A call already handed to the thread finishes before a cancellation goes
+    on, so the code that closes a stopped or failed run's steps never races a
+    write that is still on its way. Each such wait is one commit: that is the
+    same wait this call would have made on the loop."""
+    pending = asyncio.ensure_future(asyncio.to_thread(call, *args, **kwargs))
+    try:
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        try:
+            await asyncio.shield(pending)
+        except BaseException:  # noqa: BLE001 - the cancellation goes on all the same
+            logger.debug("a task-store call did not finish before the cancellation", exc_info=True)
+        raise
+
+
 def _write_steps(task_id: str, names: list[str], status: str, **kwargs: Any) -> None:
     """Record these steps in one commit: on Windows each commit was measured
-    at tens of milliseconds, and the queue calls this on the service's loop."""
+    at tens of milliseconds, so the flow makes these calls on a worker thread
+    (``_off_loop``)."""
     if not names:
         return
     if task_stop.shutting_down():
@@ -94,27 +124,65 @@ def plan(task_id: str) -> None:
     _write_steps(task_id, list(ORDER), PENDING, reset=True)
 
 
+async def plan_off_loop(task_id: str) -> None:
+    """``plan`` awaited from the event loop (decision 8.30)."""
+    await _off_loop(plan, task_id)
+
+
+def _step_began(task_id: str, name: str) -> None:
+    """The bookkeeping of ``start``, on the thread that will make the calls:
+    which step a model call belongs to is a context variable of that thread."""
+    model_usage.enter_step(task_id, name)
+    model_answers.step_started(task_id, name)
+
+
 def start(task_id: str, name: str) -> None:
     """The step is under way. The model calls made from here on, in this
     context and the work it hands to other threads, are this step's
     (``model_usage``)."""
     _write(task_id, name, RUNNING, started=True)
-    model_usage.enter_step(task_id, name)
-    model_answers.step_started(task_id, name)
+    _step_began(task_id, name)
 
 
-def finish(task_id: str, name: str, status: str, error: str | None = None) -> None:
+async def start_off_loop(task_id: str, name: str) -> None:
+    """``start`` awaited from the event loop (decision 8.30)."""
+    await _off_loop(_write, task_id, name, RUNNING, started=True)
+    _step_began(task_id, name)
+
+
+def _ending(task_id: str, name: str, status: str, error: str | None) -> tuple[str, str | None]:
     # A call of this step refused for the test budget fails the step, whatever
     # the step made of the refusal (many steps go on without their model).
     if model_usage.budget_refused(task_id, name) and status != STOPPED:
-        status, error = FAILED, model_usage.BUDGET_EXCEEDED
-    _write(task_id, name, status, error=error or None, finished=True)
-    model_usage.leave_step(task_id, name)
+        return FAILED, model_usage.BUDGET_EXCEEDED
+    return status, error
+
+
+def _answers_ended(task_id: str, name: str, status: str, error: str | None) -> None:
     # The answers it paid for stay for a run that carries it on when it was
     # cut off rather than ended by itself (``model_answers``).
     model_answers.step_ended(task_id, name, status, keep=(
         status == STOPPED or task_stop.shutting_down() or error in (RESTART_ERROR, UNFINISHED_ERROR)
     ))
+
+
+def finish(task_id: str, name: str, status: str, error: str | None = None) -> None:
+    status, error = _ending(task_id, name, status, error)
+    _write(task_id, name, status, error=error or None, finished=True)
+    model_usage.leave_step(task_id, name)
+    _answers_ended(task_id, name, status, error)
+
+
+def _write_and_end_answers(task_id: str, name: str, status: str, error: str | None) -> None:
+    _write(task_id, name, status, error=error or None, finished=True)
+    _answers_ended(task_id, name, status, error)
+
+
+async def finish_off_loop(task_id: str, name: str, status: str, error: str | None = None) -> None:
+    """``finish`` awaited from the event loop (decision 8.30)."""
+    status, error = _ending(task_id, name, status, error)
+    await _off_loop(_write_and_end_answers, task_id, name, status, error)
+    model_usage.leave_step(task_id, name)
 
 
 def steps_of(task_ids: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
@@ -125,8 +193,16 @@ def steps_of(task_ids: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
         return {}
 
 
-def close_open(task_id: str, *, stopped: bool = False, error: str = UNFINISHED_ERROR) -> None:
-    """End every step still open once its runner is gone.
+async def steps_of_off_loop(task_ids: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
+    """``steps_of`` awaited from the event loop (decision 8.30)."""
+    return await _off_loop(steps_of, task_ids)
+
+
+def _closings(
+    steps: list[dict[str, Any]], *, stopped: bool, error: str,
+) -> Iterator[tuple[str, str, str | None]]:
+    """(name, status, error) for each step ``close_open`` ends, in the order
+    they run.
 
     One that was running did not finish (failed). One that never started is
     skipped when a step before it failed: that failure is what carrying the
@@ -137,7 +213,7 @@ def close_open(task_id: str, *, stopped: bool = False, error: str = UNFINISHED_E
     stopped them.
     """
     ended_early = False
-    for step in sorted(steps_of([task_id]).get(task_id, []), key=lambda each: ORDER.index(
+    for step in sorted(steps, key=lambda each: ORDER.index(
             str(each.get("step_type") or "")[len(job_store.TASK_STEP_PREFIX):])
             if str(each.get("step_type") or "")[len(job_store.TASK_STEP_PREFIX):] in ORDER else len(ORDER)):
         name = str(step.get("step_type") or "")[len(job_store.TASK_STEP_PREFIX):]
@@ -148,15 +224,32 @@ def close_open(task_id: str, *, stopped: bool = False, error: str = UNFINISHED_E
         if step.get("status") not in OPEN:
             continue
         if stopped:
-            finish(task_id, name, STOPPED)
+            yield name, STOPPED, None
         elif step.get("status") == RUNNING:
-            finish(task_id, name, FAILED, error)
+            yield name, FAILED, error
             ended_early = True
         elif ended_early:
-            finish(task_id, name, SKIPPED)
+            yield name, SKIPPED, None
         else:
-            finish(task_id, name, FAILED, NOT_REACHED_ERROR)
+            yield name, FAILED, NOT_REACHED_ERROR
             ended_early = True
+
+
+def close_open(task_id: str, *, stopped: bool = False, error: str = UNFINISHED_ERROR) -> None:
+    """End every step still open once its runner is gone (``_closings``)."""
+    for name, status, why in _closings(steps_of([task_id]).get(task_id, []), stopped=stopped, error=error):
+        finish(task_id, name, status, why)
+
+
+async def close_open_off_loop(task_id: str, *, stopped: bool = False, error: str = UNFINISHED_ERROR) -> None:
+    """``close_open`` awaited from the event loop (decision 8.30)."""
+    steps = (await steps_of_off_loop([task_id])).get(task_id, [])
+    for name, status, why in _closings(steps, stopped=stopped, error=error):
+        await finish_off_loop(task_id, name, status, why)
+
+
+def _to_skip(named: dict[str, str], names: Iterable[str]) -> list[str]:
+    return [name for name in ORDER if name in set(names) and named.get(name) == PENDING]
 
 
 def skip_pending(task_id: str, names: Iterable[str]) -> None:
@@ -165,17 +258,31 @@ def skip_pending(task_id: str, names: Iterable[str]) -> None:
     skipped now, in one commit, so a stop before the run ends does not read
     them as stopped and carry the task on from them."""
     named = statuses(steps_of([task_id]).get(task_id, []))
-    _write_steps(task_id, [name for name in ORDER if name in set(names) and named.get(name) == PENDING],
-                 SKIPPED, finished=True)
+    _write_steps(task_id, _to_skip(named, names), SKIPPED, finished=True)
+
+
+async def skip_pending_off_loop(task_id: str, names: Iterable[str]) -> None:
+    """``skip_pending`` awaited from the event loop (decision 8.30)."""
+    named = statuses((await steps_of_off_loop([task_id])).get(task_id, []))
+    await _off_loop(_write_steps, task_id, _to_skip(named, names), SKIPPED, finished=True)
+
+
+def _pending(steps: list[dict[str, Any]]) -> list[str]:
+    return [name for name, status in statuses(steps).items() if status == PENDING]
 
 
 def skip_open(task_id: str) -> None:
     """The run is over and the steps not started were not needed (a link that
     gave captions has nothing to transcribe or cut): skipped, unlike the ones
     ``close_open`` finds left over by a run that ended early."""
-    for name, status in statuses(steps_of([task_id]).get(task_id, [])).items():
-        if status == PENDING:  # one still running is not over
-            finish(task_id, name, SKIPPED)
+    for name in _pending(steps_of([task_id]).get(task_id, [])):
+        finish(task_id, name, SKIPPED)  # one still running is not over
+
+
+async def skip_open_off_loop(task_id: str) -> None:
+    """``skip_open`` awaited from the event loop (decision 8.30)."""
+    for name in _pending((await steps_of_off_loop([task_id])).get(task_id, [])):
+        await finish_off_loop(task_id, name, SKIPPED)
 
 
 def interrupted() -> list[str]:
@@ -226,8 +333,20 @@ def reopen_from(task_id: str, name: str, steps: list[dict[str, Any]] | None = No
     """Make ``name`` and every later step not already done open again (not
     started), for a run that carries the task on from ``name``."""
     named = statuses(steps if steps is not None else steps_of([task_id]).get(task_id, []))
-    _write_steps(task_id, [later for later in ORDER[ORDER.index(name):] if named.get(later) != DONE], PENDING,
-                 reset=True)
+    _write_steps(task_id, _to_reopen(named, name), PENDING, reset=True)
+
+
+def _to_reopen(named: dict[str, str], name: str) -> list[str]:
+    return [later for later in ORDER[ORDER.index(name):] if named.get(later) != DONE]
+
+
+async def reopen_from_off_loop(
+    task_id: str, name: str, steps: list[dict[str, Any]] | None = None,
+) -> None:
+    """``reopen_from`` awaited from the event loop (decision 8.30)."""
+    if steps is None:
+        steps = (await steps_of_off_loop([task_id])).get(task_id, [])
+    await _off_loop(_write_steps, task_id, _to_reopen(statuses(steps), name), PENDING, reset=True)
 
 
 def status_of(task_id: str, name: str) -> str | None:
@@ -298,6 +417,12 @@ def feishu_outcome(job: Any) -> tuple[str, str | None]:
 def settle(task_id: str, name: str, outcome: tuple[str, str | None]) -> None:
     status, error = outcome
     finish(task_id, name, status, error)
+
+
+async def settle_off_loop(task_id: str, name: str, outcome: tuple[str, str | None]) -> None:
+    """``settle`` awaited from the event loop (decision 8.30)."""
+    status, error = outcome
+    await finish_off_loop(task_id, name, status, error)
 
 
 # ── a step the user's agent does ─────────────────────────────────────────────
@@ -522,7 +647,10 @@ def _cut_parts(job: Any, start: datetime, end: datetime | None, until: datetime 
 __all__ = [
     "BEFORE_TRANSCRIPT", "CORRECT", "CUT", "COMPRESS", "DONE", "ENDS", "FAILED", "FEISHU", "FETCH", "LABELS",
     "NOTE", "OPEN", "ORDER", "PENDING", "RUNNING", "SKIPPED", "STOPPED", "TRANSCRIBE",
-    "agent_aligning", "agent_began", "agent_finished", "close_open", "compress_outcome", "cut_outcome", "feishu_outcome", "finish", "interrupted", "note_outcome",
-    "plan", "recover_after_restart", "reopen_from", "resume_point", "settle", "start", "status_of",
-    "statuses", "steps_of", "timings", "transcribe_outcome",
+    "agent_aligning", "agent_began", "agent_finished", "close_open", "close_open_off_loop", "compress_outcome",
+    "cut_outcome", "feishu_outcome", "finish", "finish_off_loop", "interrupted", "note_outcome",
+    "plan", "plan_off_loop", "recover_after_restart", "reopen_from", "reopen_from_off_loop", "resume_point",
+    "settle", "settle_off_loop", "skip_open", "skip_open_off_loop", "skip_pending", "skip_pending_off_loop",
+    "start", "start_off_loop", "status_of", "statuses", "steps_of", "steps_of_off_loop", "timings",
+    "transcribe_outcome",
 ]

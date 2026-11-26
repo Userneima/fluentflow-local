@@ -201,12 +201,15 @@ async def _run_local_video_source_job(
         raise
     finally:
         link_done.set()
-        # However the download ended, no step of it is left open.
-        task_steps.close_open(task_id, stopped=stopped or task_stop.requested(task_id))
         # Ended without the pipeline (download failed, download only, a note
         # from captions), whose own end clears it otherwise: the run a restart
-        # carried on is over.
+        # carried on is over. Cleared before the steps are closed, so nothing
+        # reads a task whose every step ended as still saying it was resumed
+        # (the steps are closed off the event loop, so that check can land
+        # between two of those writes).
         update_job_metadata(task_id, {RESTART_RESUMED_KEY: None})
+        # However the download ended, no step of it is left open.
+        await task_steps.close_open_off_loop(task_id, stopped=stopped or task_stop.requested(task_id))
 
 
 def _progress_throttle() -> Any:
@@ -279,9 +282,9 @@ async def _download_then_process(
     """Fetch the link, record the file, then end the task one of three ways:
     download only, a note from captions, or the transcription pipeline."""
     job = _LinkTask(task_id, input_text, title, options, client_id, gate, route)
-    if not task_steps.steps_of([task_id]).get(task_id):
-        task_steps.plan(task_id)
-    task_steps.start(task_id, task_steps.FETCH)
+    if not (await task_steps.steps_of_off_loop([task_id])).get(task_id):
+        await task_steps.plan_off_loop(task_id)
+    await task_steps.start_off_loop(task_id, task_steps.FETCH)
 
     download_only = download_only_requested(options)
     try:
@@ -407,7 +410,7 @@ async def _record_fetch_failure(
     """End the task as failed at ``stage``: the fetch step, the event log, the
     task record and the hub all get the same friendly reason."""
     friendly_error = _friendly_error(error)
-    task_steps.finish(job.task_id, task_steps.FETCH, task_steps.FAILED, friendly_error)
+    await task_steps.finish_off_loop(job.task_id, task_steps.FETCH, task_steps.FAILED, friendly_error)
     log_event(
         task_id=job.task_id,
         event_name="task_failed",
@@ -530,9 +533,11 @@ async def _note_from_caption_file(job: _LinkTask, path: Path, filename: str) -> 
     except Exception as exc:
         await _record_fetch_failure(job, "summary", exc)
         return
-    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
-    task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
-    task_steps.skip_open(task_id)
+    await task_steps.finish_off_loop(task_id, task_steps.FETCH, task_steps.DONE)
+    await task_steps.settle_off_loop(
+        task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)),
+    )
+    await task_steps.skip_open_off_loop(task_id)
     await JOB_EVENTS.publish(task_id, {"stage": "done", "progress": 100, "result": result})
 
 
@@ -576,7 +581,7 @@ async def _hand_to_pipeline(
         duration_limit_seconds=effective_duration_limit,
     )
     ctx.event_route = job.route
-    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+    await task_steps.finish_off_loop(task_id, task_steps.FETCH, task_steps.DONE)
     # The expensive part waits its turn; the download above did not have to.
     await wait_for_queue_turn(previous, task_id, client_id)
     await run_pipeline_then_note(done, ctx, start_at=task_steps.TRANSCRIBE)
@@ -599,8 +604,8 @@ async def _finish_download_only(task_id: str, client_id: Optional[str], target_p
     transcribed, and a video without speech is still a fine download."""
     from backend.core import output_folder
 
-    task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
-    task_steps.skip_open(task_id)
+    await task_steps.finish_off_loop(task_id, task_steps.FETCH, task_steps.DONE)
+    await task_steps.skip_open_off_loop(task_id)
     upsert_job(task_id=task_id, status="running", client_id=client_id, stage="saving", progress=90,
                result={"download_only": True, "downloaded_file": str(target_path)})
     record = await asyncio.to_thread(output_folder.sync, task_id)
@@ -855,7 +860,7 @@ async def resume_captions_note(job: dict[str, Any], *, route: str, start_at: str
     filename = str(job.get("source_filename") or source.name)
     link = _LinkTask(task_id, link_of(job), None, options, client_id, CancellationGate(), route)
     resume_at = stored_resume_point(job, start_at)
-    task_steps.reopen_from(task_id, resume_at)
+    await task_steps.reopen_from_off_loop(task_id, resume_at)
     if not (resume_at != task_steps.FETCH and job.get("status") == "completed"):
         reopen_job(task_id)
 
@@ -868,23 +873,26 @@ async def resume_captions_note(job: dict[str, Any], *, route: str, start_at: str
             if resume_at == task_steps.FEISHU:
                 await export_stored_note(task_id, client_id)
             elif resume_at == task_steps.NOTE:
-                task_steps.start(task_id, task_steps.NOTE)
+                await task_steps.start_off_loop(task_id, task_steps.NOTE)
                 result = await note_from_stored_transcript(task_id, client_id=client_id, options=options,
                                                            route=route)
-                task_steps.settle(task_id, task_steps.NOTE,
-                                  task_steps.note_outcome(get_job(task_id, client_id=client_id)))
-                task_steps.skip_open(task_id)
+                await task_steps.settle_off_loop(
+                    task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)),
+                )
+                await task_steps.skip_open_off_loop(task_id)
                 await JOB_EVENTS.publish(task_id, {"stage": "done", "progress": 100, "result": result})
             else:
-                task_steps.start(task_id, task_steps.FETCH)
+                await task_steps.start_off_loop(task_id, task_steps.FETCH)
                 await _note_from_caption_file(link, source, filename)
         except asyncio.CancelledError:
             stopped = True
             raise
         finally:
             done.set()
-            task_steps.close_open(task_id, stopped=stopped or task_stop.requested(task_id))
+            # Cleared before the steps are closed: a task whose every step
+            # ended must not still say it was carried on after a restart.
             update_job_metadata(task_id, {RESTART_RESUMED_KEY: None})
+            await task_steps.close_open_off_loop(task_id, stopped=stopped or task_stop.requested(task_id))
 
     return await _start_behind_queue(task_id=task_id, client_id=client_id, route=route, stage="transcript_file",
                                      gate=link.gate, plan_steps=False, chained_worker=worker)

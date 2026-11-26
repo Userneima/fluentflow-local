@@ -99,6 +99,19 @@ def reached(monkeypatch):
             return real_connect(sock, address, *args, **kwargs)
         found.stop(f"network {address}")
 
+    # Windows' default event loop (Proactor) connects through ``ConnectEx``,
+    # which does not go through ``socket.socket.connect``: the loop's own
+    # wake-up connects through it inside the process. What every platform
+    # goes through is the name lookup, so a name that is not this machine's
+    # fails here (2026-11-26, second review of the Windows test fixes).
+    real_getaddrinfo = socket.getaddrinfo
+    _THIS_MACHINE = {"", "127.0.0.1", "::1", "localhost", None}
+
+    def no_lookup(host, *args, **kwargs):
+        if host in _THIS_MACHINE:
+            return real_getaddrinfo(host, *args, **kwargs)
+        found.stop(f"name lookup {host}")
+
     class NoOpenAI:
         """Building a client sends nothing; a request through it would."""
 
@@ -121,6 +134,7 @@ def reached(monkeypatch):
 
     monkeypatch.setattr(socket, "socketpair", socketpair)
     monkeypatch.setattr(socket.socket, "connect", no_connect)
+    monkeypatch.setattr(socket, "getaddrinfo", no_lookup)
     monkeypatch.setattr(ai_client, "OpenAI", NoOpenAI)
     monkeypatch.setattr(claude_vision.anthropic, "Anthropic", NoAnthropic)
     real_run = ccn._run_tracked
@@ -223,14 +237,17 @@ def _run_fake_task(monkeypatch, tmp_path, task_id):
     monkeypatch.setenv(fake_model.ENV, "1")
     _owner_setup(monkeypatch)
     flow = FakeModelTask(task_id, tmp_path)
-    pdfs: list[Path] = []
+    pdfs: list[tuple[str, Path]] = []
 
     def export_pdf(task_id, *, client_id=None, output_dir=None, filename=None):
         # The browser that prints the PDF is local work; stood in for here,
-        # run for real in the test on a copy of the real data.
+        # run for real in the test on a copy of the real data. Recorded with
+        # its task: a folder worker another test left running exports its own
+        # task's PDF through this same patch (Windows is slower than the
+        # suite's per-test leftovers last), and that one is not this task's.
         path = Path(output_dir) / f"{filename}.pdf"
         path.write_bytes(b"%PDF fake")
-        pdfs.append(path)
+        pdfs.append((task_id, path))
         return {"task_id": task_id, "pdf_path": str(path), "html_path": None}
 
     async def deliver(ctx):
@@ -278,7 +295,8 @@ def test_with_the_fake_model_a_whole_task_ends_every_step_without_one_real_reque
     folder = output_folder.sync(task_id)
     md = Path(folder["md_path"])
     assert md.parent.parent == flow.source.parent and fake_model.NOTE.splitlines()[0] in md.read_text(encoding="utf-8")
-    assert pdfs and pdfs[0].parent == md.parent
+    ours = [path for owner, path in pdfs if owner == task_id]
+    assert ours and ours[0].parent == md.parent
 
 
 @pytest.mark.real_coverage_checker
@@ -290,6 +308,19 @@ def test_the_whole_task_check_is_not_vacuous_without_the_fake_model(monkeypatch,
         _owner_setup(monkeypatch)
         FakeModelTask(task_id, tmp_path).survey_and_cut(task_id, None)
     assert reached.attempts
+
+
+def test_the_guard_stops_a_name_lookup_on_every_platform(reached):
+    """The connect guard alone cannot hold on Windows: its default event loop
+    connects through ``ConnectEx``, which does not go through
+    ``socket.socket.connect``. The name lookup is the one step every
+    connection takes, so it is guarded too (2026-11-26, second review of the
+    Windows test fixes)."""
+    with pytest.raises(AssertionError, match="a real request was made"):
+        socket.getaddrinfo("example.com", 443, type=socket.SOCK_STREAM)
+    assert reached.attempts == ["name lookup example.com"]
+    # The loop's own wake-up stays inside this machine.
+    assert socket.getaddrinfo("127.0.0.1", 9, type=socket.SOCK_STREAM)
 
 
 # ── the fake model: each exit on its own ───────────────────────────────────

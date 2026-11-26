@@ -70,7 +70,7 @@ async def _settle() -> None:
         await asyncio.sleep(0.01)
 
 
-async def _until(done, seconds: float = 5.0) -> None:
+async def _until(done, seconds: float = 30.0) -> None:
     """Wait for what should happen next, up to ``seconds``. After a pipeline the
     cut and the note step run before the queue moves on, and a slow CI runner
     took longer than a fixed fifth of a second for them (2026-10-16)."""
@@ -137,11 +137,10 @@ def test_a_single_upload_a_video_link_and_an_in_place_file_run_one_after_another
         third = in_place["task_id"]
         gates[third] = asyncio.Event()
 
-        await _settle()
+        await _until(lambda: log == [f"start:{first}"])
         assert log == [f"start:{first}"], "nothing may start beside the first job"
         gates[first].set()
         await _until(lambda: len(log) >= 3)
-        await _settle()
         assert log == [f"start:{first}", f"finish:{first}", f"start:{second}"]
         gates[second].set()
         await _until(lambda: len(log) >= 5)
@@ -190,11 +189,15 @@ def test_a_video_link_downloads_while_the_queue_works_and_waits_only_to_transcri
         second = (await lvs.submit_video_source_job(
             input_text="https://example.com/v/2", title="", raw_options={}, client_id="local-single-user"
         ))["task_id"]
-        await _settle()
-        assert log == [f"start:{first}", "download"]
+        # The download does not wait for the queue, so it may come before or
+        # after the transcription it will follow starts; what must hold is
+        # that it happens while that transcription is still running.
+        await _until(lambda: "download" in log)
+        assert f"finish:{first}" not in log, "the download waited for the transcription"
+        assert await _until_true(lambda: f"start:{first}" in log), "the first recording never started"
         gate.set()
         await _until(lambda: len(log) >= 5)
-        assert log == [f"start:{first}", "download", f"finish:{first}", f"start:{second}", f"finish:{second}"]
+        assert log[-3:] == [f"finish:{first}", f"start:{second}", f"finish:{second}"]
 
     asyncio.run(scenario())
 
@@ -382,8 +385,7 @@ def test_a_task_submitted_as_a_link_gets_its_note_written_too(tmp_path, monkeypa
         task_id = (await lvs.submit_video_source_job(
             input_text="https://example.com/v/3", title="", raw_options={}, client_id="local-single-user"
         ))["task_id"]
-        await _settle()
-        await _settle()
+        await _until(lambda: noted)
         return task_id
 
     task_id = asyncio.run(scenario())
@@ -451,16 +453,15 @@ def test_resubmitting_a_running_task_id_does_not_let_the_next_job_jump_the_queue
 
     async def scenario():
         assert await start("running-a") is True
-        await _settle()
+        await _until(lambda: log == ["start:running-a"])
         assert await start("running-a") is False, "the same id is not started twice"
         assert await start("waiting-b") is True
         await _settle()
         assert log == ["start:running-a"], "b started beside a"
         gates["running-a"].set()
-        await _settle()
-        assert log[-1] == "start:waiting-b"
+        await _until(lambda: log[-1] == "start:waiting-b")
         gates["waiting-b"].set()
-        await _settle()
+        await _until(lambda: len(log) >= 4)
 
     asyncio.run(scenario())
 
@@ -605,13 +606,12 @@ def test_a_job_that_ends_without_waiting_does_not_hold_an_idle_line(monkeypatch)
         await _settle()
         await tq._start_behind_queue(task_id="serial-idle-b", client_id=None, route="t", stage="x",
                                      chained_worker=recording)
-        await _settle()
-        assert started == ["b"]
+        assert await _until_true(lambda: started == ["b"]), started
 
     asyncio.run(scenario())
 
 
-async def _until_true(predicate, seconds: float = 5.0) -> bool:
+async def _until_true(predicate, seconds: float = 30.0) -> bool:
     for _ in range(int(seconds / 0.01)):
         if predicate():
             return True
@@ -727,8 +727,7 @@ def test_a_job_that_got_past_a_dead_link_frees_the_line_at_once_even_when_that_t
                                      chained_worker=waits("serial-free-c"))
         # From here a missed release costs a whole (long) heartbeat at least.
         monkeypatch.setattr(tq, "_QUEUE_HEARTBEAT_SECONDS", 30.0)
-        await _settle()
-        assert log == ["serial-free-b"]
+        assert await _until_true(lambda: log == ["serial-free-b"]), log
         hold_b.set()
         done = await _until_true(lambda: log == ["serial-free-b", "serial-free-a", "serial-free-c"], 1.0)
         if not done:

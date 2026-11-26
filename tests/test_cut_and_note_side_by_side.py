@@ -30,6 +30,7 @@ import backend.core.visual_note_job as vn
 from backend.core import cut_timeline
 from backend.routers import local_processing as lp
 from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
+from tests.test_task_steps import FLOW_SECONDS
 from test_visual_note_job import TASK, job_store, no_ambient_key, vn_result  # noqa: F401
 
 # Kept: 0-10 s and 20-100 s of the original; 10-20 s is cut.
@@ -129,7 +130,7 @@ def test_the_note_starts_once_the_cut_is_decided_and_does_not_wait_for_the_rende
         assert await _until(done.is_set), "the queue waited for the note's wait on Claude"
         assert "note-done" not in flow.log
         flow.remote_gate.set()
-        await asyncio.wait_for(runner, 5)
+        await asyncio.wait_for(runner, FLOW_SECONDS)
 
     asyncio.run(scenario())
     assert flow.planned == RANGES
@@ -143,7 +144,7 @@ def test_with_nothing_to_cut_the_note_waits_for_the_cut_step(monkeypatch):
     flow.render_gate.set()
     flow.remote_gate.set()
 
-    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx()), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx()), FLOW_SECONDS))
     assert flow.log.index("cut-done") < flow.log.index("note-start")
     assert flow.planned is None
 
@@ -154,7 +155,7 @@ def test_without_claude_the_note_waits_for_the_cut(monkeypatch):
     flow.render_gate.set()
     flow.remote_gate.set()
 
-    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx()), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx()), FLOW_SECONDS))
     assert flow.log.index("cut-done") < flow.log.index("note-start")
     assert flow.planned is None
 

@@ -209,7 +209,11 @@ def test_events_name_the_entry_a_task_came_in_through(monkeypatch, ids):
             content=b"", source_file_size_mb=1.0, duration_preflight_sec=60.0, options={},
         )
         await ts.start_media_job_behind_queue(ctx, route="/queue/process-folder")
-        for _ in range(20):
+        # The steps are written off the event loop (decision 8.30), so the
+        # pipeline starts a few writes later: wait for it, not a fixed while.
+        for _ in range(3000):
+            if seen:
+                break
             await asyncio.sleep(0.01)
 
     asyncio.run(scenario())

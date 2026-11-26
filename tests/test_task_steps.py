@@ -150,6 +150,14 @@ async def _until(predicate, tries=250):
     return predicate()
 
 
+# A whole flow with fakes at its edges: seconds on this machine, and on the
+# GitHub Windows machine each write to the task store waits on the disk (33 ms
+# median, up to 400, decisions 8.27 and 8.30), so a fixed 5 s budget failed
+# there now and then. A budget only has to catch a hang; the tests that assert
+# something happened wait for that state instead.
+FLOW_SECONDS = 30
+
+
 def _ctx(task_id, *, lark=False):
     return SimpleNamespace(task_id_value=task_id, client_id=None, do_lark=lark,
                            note_deferred_to_visual_note=True)
@@ -180,7 +188,7 @@ def test_while_the_cut_and_note_are_still_coming_the_task_is_busy_everywhere(mon
         assert task_activity.busy_reason(_job(task_id)) == "这个任务的笔记还在写，等写完再删。"
 
         flow.note_gate.set()
-        await asyncio.wait_for(runner, 5)
+        await asyncio.wait_for(runner, FLOW_SECONDS)
 
     asyncio.run(scenario())
     assert not any(_busy_everywhere(task_id).values())
@@ -197,7 +205,7 @@ def test_a_task_that_only_wanted_a_transcript_is_finished_once_it_is_stored(monk
     flow = Flow(task_id, note=False, cut=False)
     _wire(monkeypatch, flow)
 
-    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), FLOW_SECONDS))
 
     assert not any(_busy_everywhere(task_id).values())
     assert {name: step["status"] for name, step in _steps(task_id).items()} == {
@@ -213,7 +221,7 @@ def test_a_failed_note_ends_the_task_and_names_the_failure(monkeypatch, task_id)
     flow.note_gate.set()
     _wire(monkeypatch, flow)
 
-    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), FLOW_SECONDS))
 
     activity = task_activity.activity(_job(task_id))
     assert not activity.busy
@@ -229,7 +237,7 @@ def test_a_cut_that_raises_is_failed_and_the_task_still_ends(monkeypatch, task_i
     flow.note_gate.set()
     _wire(monkeypatch, flow)
 
-    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), FLOW_SECONDS))
 
     steps = _steps(task_id)
     assert steps["cut"]["status"] == "failed"
@@ -245,7 +253,7 @@ def test_a_note_that_raises_leaves_no_step_in_progress(monkeypatch, task_id):
     _wire(monkeypatch, flow)
 
     with pytest.raises(RuntimeError):
-        asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+        asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), FLOW_SECONDS))
 
     steps = _steps(task_id)
     assert steps["note"]["status"] == "failed"
@@ -284,10 +292,46 @@ def test_the_feishu_step_says_what_came_of_the_export(monkeypatch, task_id):
         _patch(ctx.task_id_value, lark_error="飞书没登录")
 
     monkeypatch.setattr(tf, "_export_note_written_after_pipeline", export)
-    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id, lark=True)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id, lark=True)), FLOW_SECONDS))
 
     feishu = _steps(task_id)["feishu"]
     assert (feishu["status"], feishu["error_reason"]) == ("failed", "飞书没登录")
+
+
+def test_the_step_records_are_never_written_on_the_event_loop(monkeypatch, task_id):
+    """Requirement (decision 8.30): writing a step waits for the disk (on the
+    GitHub Windows machine 33 ms median, up to 400), so the flow, which runs on
+    the loop that also answers the page and agents, hands every write and read
+    of the task store to a worker thread."""
+    _queued(task_id)
+    flow = Flow(task_id)
+    flow.render_gate.set()
+    flow.note_gate.set()
+    _wire(monkeypatch, flow)
+    on_the_loop: list[str] = []
+    loop_thread = threading.main_thread()
+    real_write, real_read = job_store.write_task_steps, job_store.list_task_steps
+
+    def write(*args, **kwargs):
+        if threading.current_thread() is loop_thread:
+            on_the_loop.append("write")
+        return real_write(*args, **kwargs)
+
+    def read(*args, **kwargs):
+        if threading.current_thread() is loop_thread:
+            on_the_loop.append("read")
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(job_store, "write_task_steps", write)
+    monkeypatch.setattr(job_store, "list_task_steps", read)
+
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), FLOW_SECONDS))
+
+    # Before reading the steps below, which would count itself.
+    assert on_the_loop == []
+    steps = _steps(task_id)
+    assert steps["note"]["status"] == task_steps.DONE
+    assert all(step["status"] in task_steps.ENDS for step in steps.values())
 
 
 def test_a_restart_closes_what_was_running_and_leaves_an_agent_wait_alone(task_id):
@@ -314,7 +358,10 @@ def test_planning_and_reopening_a_task_write_its_steps_in_one_commit(monkeypatch
     real = job_store.sqlite_connection
 
     def counting(*args, **kwargs):
-        opened.append(args)
+        # Only this thread's opens: another test's leftover thread may write to
+        # the same store in the same worker.
+        if threading.current_thread() is threading.main_thread():
+            opened.append(args)
         return real(*args, **kwargs)
 
     monkeypatch.setattr(job_store, "sqlite_connection", counting)

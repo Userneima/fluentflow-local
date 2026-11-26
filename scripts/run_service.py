@@ -24,6 +24,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def detach_stdin() -> None:
+    """Nothing in the service reads the terminal, and a child that inherits it
+    can sit waiting on it (an ffmpeg did, 2026-11-25). Windows' process
+    service gives this process no console, but that is not something a child's
+    behaviour should depend on: stdin becomes the null device, here and for
+    everything started from here."""
+    try:
+        null = os.open(os.devnull, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.dup2(null, 0)
+    except OSError:  # no stdin to replace
+        pass
+    finally:
+        if null != 0:
+            os.close(null)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--env-file", default=None)
@@ -35,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.update({str(k): str(v) for k, v in json.loads(path.read_text(encoding="utf-8-sig")).items()})
         finally:
             path.unlink(missing_ok=True)
+    detach_stdin()
     os.chdir(ROOT)
     sys.path.insert(0, str(ROOT))
     import uvicorn

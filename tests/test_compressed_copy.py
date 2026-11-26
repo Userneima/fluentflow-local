@@ -23,6 +23,7 @@ import pytest
 from backend.core import local_intake_flow as flow
 from backend.routers import local_processing as lp
 from backend.core import task_flow as tf, task_queue as tq, task_submission as ts  # noqa: F401
+from tests.test_task_steps import FLOW_SECONDS
 
 
 # ── which tasks get a copy ─────────────────────────────────────────────────
@@ -128,7 +129,7 @@ def test_the_queue_waits_for_the_copy_but_not_for_claude(monkeypatch):
         assert await _until(done.is_set), "the queue waited for Claude"
         assert "note-done" not in steps.log
         steps.remote_gate.set()
-        await asyncio.wait_for(runner, 5)
+        await asyncio.wait_for(runner, FLOW_SECONDS)
 
     asyncio.run(scenario())
     assert steps.log.index("copy-done") < steps.log.index("delivered")
@@ -139,6 +140,9 @@ def test_a_task_without_a_note_still_gets_its_copy(monkeypatch):
     _wire(monkeypatch, steps, note=False)
     steps.copy_gate.set()
 
-    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), SimpleNamespace(task_id_value="t", client_id=None)), 5))
+    asyncio.run(asyncio.wait_for(
+        tf.run_pipeline_then_note(asyncio.Event(), SimpleNamespace(task_id_value="t", client_id=None)),
+        FLOW_SECONDS,
+    ))
 
     assert "copy-done" in steps.log and steps.log.index("copy-done") < steps.log.index("delivered")

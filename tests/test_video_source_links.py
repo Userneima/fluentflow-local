@@ -455,12 +455,16 @@ def test_yt_dlp_refusing_a_large_file_reports_the_size_not_a_missing_file(monkey
 def test_no_more_than_two_links_download_at_once(monkeypatch):
     state = {"now": 0, "peak": 0}
     lock = threading.Lock()
+    release = threading.Event()
 
     def download(*_a, **_k):
         with lock:
             state["now"] += 1
             state["peak"] = max(state["peak"], state["now"])
-        time.sleep(0.2)
+        # Held until the test has looked: with a fixed short download the five
+        # tasks, which now reach the download a few step writes apart
+        # (decision 8.30), no longer met inside one another's wait.
+        release.wait(30)
         with lock:
             state["now"] -= 1
         raise RuntimeError("stop here")
@@ -478,16 +482,28 @@ def test_no_more_than_two_links_download_at_once(monkeypatch):
     async def scenario():
         from backend.core.local_entry_guards import CancellationGate
 
-        await asyncio.gather(*(
-            lvs._download_then_process(
+        jobs = [
+            asyncio.ensure_future(lvs._download_then_process(
                 task_id=f"t{i}", input_text=YOUTUBE, title=None, options={},
                 client_id="c", gate=CancellationGate(), route="/r", previous=None, done=asyncio.Event(),
-            )
+            ))
             for i in range(5)
-        ))
+        ]
+        try:
+            for _ in range(3000):
+                if state["peak"] >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            # Three more want in; a moment for a third to slip through if the
+            # limit were gone.
+            for _ in range(50):
+                await asyncio.sleep(0.01)
+            assert state["peak"] == 2
+        finally:
+            release.set()
+            await asyncio.gather(*jobs, return_exceptions=True)
 
     asyncio.run(scenario())
-    assert state["peak"] == 2
 
 
 # ── 11. download progress moves ─────────────────────────────────────────────

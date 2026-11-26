@@ -27,7 +27,7 @@ others will need gets a line here in the same change.
 exists and that no other file judges whether a task is still busy.
 
 - Whether a task is still working, on what, and whether it is finished: `backend/core/task_activity.py`
-- The steps a task records after it is queued, and how long each took (`timings`, the queue and the agent's own note included): `backend/core/task_steps.py`
+- The steps a task records after it is queued, and how long each took (`timings`, the queue and the agent's own note included): `backend/core/task_steps.py`; a step's write or read from the event loop is the `*_off_loop` call there, never the sync one
 - The processing queue (which task runs now, which wait): `backend/core/task_queue.py`
 - Whether FluentFlow holds a note for a task (the outcome badge, the card's note length, the 有笔记 filter): `frontend/src/lib/taskState.js` (`noteCharsOf`)
 - The order of the records list and the start page's recent list (live tasks, then the ones the user pinned, then by time): `frontend/src/lib/jobMappers.js` (`sortJobsForHistoryView`); whether a record is pinned: `metadata.pinned_at`, set only by `POST /jobs/{id}/pin` in `backend/routers/local_job_mutation.py`

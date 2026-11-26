@@ -631,7 +631,10 @@ def test_starting_the_service_carries_cut_off_tasks_on_without_new_tasks(monkeyp
     before = len(job_store.list_jobs(limit=None, include_result=False))
 
     with TestClient(local_main.create_local_app()):
-        deadline = time.monotonic() + 10
+        # Startup, two tasks carried on: on the GitHub Windows machine every
+        # write to the task store waits on the disk (decision 8.27), so the
+        # wait is generous and only catches a hang.
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline and not (_ended(cutting) and _ended(waiting)):
             time.sleep(0.05)
 

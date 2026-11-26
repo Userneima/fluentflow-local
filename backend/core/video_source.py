@@ -1,5 +1,9 @@
 """Resolve and download shared video links for FluentFlow."""
 
+# yt-dlp is started with an empty stdin (``_run_process``): a child that
+# inherits the terminal can sit waiting on it (an ffmpeg did, 2026-11-25; the
+# same rule as ``ffmpeg_cmd``).
+
 from __future__ import annotations
 
 import hashlib
@@ -185,6 +189,7 @@ def _run_process(
         )
     process = subprocess.Popen(
         args,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -219,6 +224,7 @@ def _run_process_streaming(
     is written, so a download can report its progress while it runs."""
     process = subprocess.Popen(
         args,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

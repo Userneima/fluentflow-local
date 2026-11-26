@@ -212,9 +212,11 @@ async def _write_note_after_transcript(
     """
     if not (local_intake_flow.note_is_wanted(task_id, client_id) or _note_left_unfinished(task_id, client_id)):
         # No note to write here: the pipeline wrote it, or none was asked for.
-        task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
+        await task_steps.settle_off_loop(
+            task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)),
+        )
         return
-    task_steps.start(task_id, task_steps.NOTE)
+    await task_steps.start_off_loop(task_id, task_steps.NOTE)
     local_intake_flow.mark_note_running(task_id, client_id)
     abandoned = threading.Event()
     future = asyncio.get_running_loop().run_in_executor(
@@ -232,9 +234,11 @@ async def _write_note_after_transcript(
         abandoned.set()
         raise
     except Exception as exc:
-        task_steps.finish(task_id, task_steps.NOTE, task_steps.FAILED, friendly_error(exc))
+        await task_steps.finish_off_loop(task_id, task_steps.NOTE, task_steps.FAILED, friendly_error(exc))
         raise
-    task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)))
+    await task_steps.settle_off_loop(
+        task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=client_id)),
+    )
 
 
 async def _run_pipeline(ctx: MediaJobContext) -> None:
@@ -300,11 +304,11 @@ async def run_pipeline_then_note(
     loop = asyncio.get_running_loop()
     compressing: list[asyncio.Future] = []
     task_id = ctx.task_id_value
-    recorded = task_steps.steps_of([task_id]).get(task_id, [])
+    recorded = (await task_steps.steps_of_off_loop([task_id])).get(task_id, [])
     if recorded:
-        task_steps.reopen_from(task_id, start_at, recorded)
+        await task_steps.reopen_from_off_loop(task_id, start_at, recorded)
     else:
-        task_steps.plan(task_id)
+        await task_steps.plan_off_loop(task_id)
     done_before = {name for name, status in task_steps.statuses(recorded).items() if status == task_steps.DONE}
     task_stop.begin(task_id)
 
@@ -326,13 +330,13 @@ async def run_pipeline_then_note(
         if start_at in task_steps.BEFORE_TRANSCRIPT:
             if not await _steps_before_transcript(ctx, start_at):
                 return
-        named = task_steps.statuses(task_steps.steps_of([task_id]).get(task_id, []))
+        named = task_steps.statuses((await task_steps.steps_of_off_loop([task_id])).get(task_id, []))
         if named.get(task_steps.CUT) != task_steps.DONE and agent_cut.cut_declined(
             get_job(task_id, client_id=ctx.client_id) or {}
         ):
             # Submitted with cut=false (only the transcript wanted): nothing
             # is judged or cut; the rest runs as for an uncut recording.
-            task_steps.finish(task_id, task_steps.CUT, task_steps.SKIPPED)
+            await task_steps.finish_off_loop(task_id, task_steps.CUT, task_steps.SKIPPED)
             if named.get(task_steps.NOTE) != task_steps.DONE:
                 await _write_note_after_transcript(task_id, ctx.client_id, on_local_work_done=hand_off)
         elif named.get(task_steps.CUT) != task_steps.DONE:
@@ -370,9 +374,22 @@ async def run_pipeline_then_note(
         # when the note ended before reaching its hand-off. The remote slot is
         # not released here: the note thread owns it (`_write_note_holding_slot`).
         done.set()
-        # Nothing runs this task's steps once this returns.
-        task_steps.close_open(task_id, stopped=stopped or task_stop.requested(task_id))
+        # A copy still encoding when the flow ends another way (its note
+        # failed) is stopped before the steps are closed: nothing else would
+        # close it, and it would hold the machine for minutes after the task
+        # ended. Stopping it first also keeps the close from racing its write.
+        for step in compressing:
+            if not step.done():
+                step.cancel()
+        if compressing:
+            await asyncio.gather(*compressing, return_exceptions=True)
+        # Cleared before the steps are closed: nothing then reads a task whose
+        # every step ended as still saying it was carried on after a restart
+        # (the steps are closed off the event loop, so that check can land
+        # between two of those writes).
         update_job_metadata(task_id, {RESTART_RESUMED_KEY: None})
+        # Nothing runs this task's steps once this returns.
+        await task_steps.close_open_off_loop(task_id, stopped=stopped or task_stop.requested(task_id))
 
 
 def _bound_to(task_id: str, work: Any) -> Any:
@@ -463,16 +480,16 @@ async def _steps_before_transcript(ctx: Any, start_at: str) -> bool:
     task_id = ctx.task_id_value
     _drop_checkpoint_of_retried(task_id, ctx.client_id)
     if start_at == task_steps.FETCH:
-        task_steps.start(task_id, task_steps.FETCH)
-        task_steps.finish(task_id, task_steps.FETCH, task_steps.DONE)
+        await task_steps.start_off_loop(task_id, task_steps.FETCH)
+        await task_steps.finish_off_loop(task_id, task_steps.FETCH, task_steps.DONE)
     checkpoint = load_checkpoint(task_id) if start_at == task_steps.CORRECT else None
     if checkpoint is None:
         if start_at == task_steps.CORRECT:
             # Nothing kept from the transcription: it is done again.
-            task_steps.reopen_from(task_id, task_steps.TRANSCRIBE)
-        task_steps.start(task_id, task_steps.TRANSCRIBE)
+            await task_steps.reopen_from_off_loop(task_id, task_steps.TRANSCRIBE)
+        await task_steps.start_off_loop(task_id, task_steps.TRANSCRIBE)
     else:
-        task_steps.start(task_id, task_steps.CORRECT)
+        await task_steps.start_off_loop(task_id, task_steps.CORRECT)
 
     def transcribed(record: dict[str, Any]) -> None:
         _save_checkpoint(task_id, record)
@@ -494,14 +511,16 @@ async def _steps_before_transcript(ctx: Any, start_at: str) -> bool:
     outcome = task_steps.transcribe_outcome(get_job(task_id, client_id=ctx.client_id))
     if task_stop.requested(task_id) and outcome[0] != task_steps.DONE:
         outcome = (task_steps.STOPPED, None)
-    current = task_steps.statuses(task_steps.steps_of([task_id]).get(task_id, []))
+    current = task_steps.statuses((await task_steps.steps_of_off_loop([task_id])).get(task_id, []))
     for name in (task_steps.TRANSCRIBE, task_steps.CORRECT):
         if current.get(name) in task_steps.OPEN:
-            task_steps.settle(task_id, name, outcome)
+            await task_steps.settle_off_loop(task_id, name, outcome)
     if current.get(task_steps.NOTE) == task_steps.RUNNING and outcome[0] != task_steps.STOPPED:
         # The pipeline wrote the note (``on_note_started``): what came of it.
         # The note step later finds a note and does not write another.
-        task_steps.settle(task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=ctx.client_id)))
+        await task_steps.settle_off_loop(
+            task_id, task_steps.NOTE, task_steps.note_outcome(get_job(task_id, client_id=ctx.client_id)),
+        )
     if outcome[0] == task_steps.STOPPED:
         raise StepStopped()
     if outcome[0] == task_steps.DONE:
@@ -554,14 +573,14 @@ async def continue_after_agent(task_id: str, client_id: Optional[str], ctx: Any 
     pipeline's context; without it (resumed after a restart) the note is not
     exported to Feishu automatically. The cut step is open from the start:
     the task is not finished while it waits for the agent."""
-    task_steps.start(task_id, task_steps.CUT)
+    await task_steps.start_off_loop(task_id, task_steps.CUT)
     try:
         await _cut_note_and_export_after_agent(task_id, client_id, ctx)
     except asyncio.CancelledError:
-        task_steps.close_open(task_id, stopped=True)
+        await task_steps.close_open_off_loop(task_id, stopped=True)
         raise
     finally:
-        task_steps.close_open(task_id)
+        await task_steps.close_open_off_loop(task_id)
 
 
 async def _cut_note_and_export_after_agent(task_id: str, client_id: Optional[str], ctx: Any) -> None:
@@ -585,7 +604,7 @@ async def _cut_note_and_export_after_agent(task_id: str, client_id: Optional[str
         # ``close_open`` to read as not reached (Codex push review).
         if ctx is not None:
             await _feishu_step(ctx)
-        task_steps.skip_open(task_id)
+        await task_steps.skip_open_off_loop(task_id)
         try:
             output_folder.schedule_sync(task_id)
         except Exception as exc:  # noqa: BLE001 - the task's own results stand
@@ -631,7 +650,7 @@ async def _compress_then_release(ctx: MediaJobContext, done: asyncio.Event) -> N
     """Make the uncut compressed copy (``local_intake_flow.compress_original``),
     then hand the queue on. Cancelled with its task, it stops the encode."""
     watch = TaskWatch()
-    task_steps.start(ctx.task_id_value, task_steps.COMPRESS)
+    await task_steps.start_off_loop(ctx.task_id_value, task_steps.COMPRESS)
     state: Any = None
     try:
         state = await asyncio.get_running_loop().run_in_executor(
@@ -645,7 +664,7 @@ async def _compress_then_release(ctx: MediaJobContext, done: asyncio.Event) -> N
         state = {"compressed": False, "compress_error": str(exc)}
     finally:
         done.set()
-    task_steps.settle(ctx.task_id_value, task_steps.COMPRESS, task_steps.compress_outcome(state))
+    await task_steps.settle_off_loop(ctx.task_id_value, task_steps.COMPRESS, task_steps.compress_outcome(state))
 
 
 def _note_can_start_before_the_cut(ctx: MediaJobContext) -> bool:
@@ -759,16 +778,16 @@ async def _trim_recorded_tail(ctx: MediaJobContext, *, on_plan: Any = None, **cu
         work = functools.partial(survey_cut.survey_and_cut, ctx.task_id_value, ctx.client_id, on_plan=on_plan, **cut)
     else:
         work = functools.partial(tail_trim.trim_tail, ctx.task_id_value, ctx.client_id)
-    task_steps.start(ctx.task_id_value, task_steps.CUT)
+    await task_steps.start_off_loop(ctx.task_id_value, task_steps.CUT)
     try:
         await asyncio.get_running_loop().run_in_executor(None, _bound_to(ctx.task_id_value, work))
     except Exception as exc:  # noqa: BLE001 - the task's own results stand
         logger.warning("tail trim skipped for %s: %s", ctx.task_id_value, exc)
-        task_steps.finish(ctx.task_id_value, task_steps.CUT, task_steps.FAILED, friendly_error(exc))
+        await task_steps.finish_off_loop(ctx.task_id_value, task_steps.CUT, task_steps.FAILED, friendly_error(exc))
         return
     # A cut made before transcription (not the survey flow) recorded itself in
     # the pipeline; either way the result says what came of it.
-    task_steps.settle(ctx.task_id_value, task_steps.CUT, task_steps.cut_outcome(
+    await task_steps.settle_off_loop(ctx.task_id_value, task_steps.CUT, task_steps.cut_outcome(
         get_job(ctx.task_id_value, client_id=ctx.client_id),
     ))
 
@@ -794,11 +813,11 @@ async def _feishu_step(ctx: Any) -> None:
     task_id = ctx.task_id_value
     # A test copy never writes to Feishu (``test_copy``).
     if not getattr(ctx, "do_lark", False) or test_copy.enabled():
-        task_steps.finish(task_id, task_steps.FEISHU, task_steps.SKIPPED)
+        await task_steps.finish_off_loop(task_id, task_steps.FEISHU, task_steps.SKIPPED)
         return
-    task_steps.start(task_id, task_steps.FEISHU)
+    await task_steps.start_off_loop(task_id, task_steps.FEISHU)
     await _export_note_written_after_pipeline(ctx)
-    task_steps.settle(task_id, task_steps.FEISHU, task_steps.feishu_outcome(
+    await task_steps.settle_off_loop(task_id, task_steps.FEISHU, task_steps.feishu_outcome(
         get_job(task_id, client_id=ctx.client_id),
     ))
 

@@ -306,13 +306,14 @@ async def _start_behind_queue(
     never waits; its ``done`` still moves the line on only once the job ahead
     has (``_ChainLink``).
     """
-    # Barrier and record happen together, before the first await, so two
+    # Barrier and record happen together, with no await between them, so two
     # submissions arriving at once cannot both take the same job as the one
-    # they wait for.
-    if plan_steps and not task_steps.steps_of([task_id]).get(task_id):
+    # they wait for. Its steps are recorded first (off the event loop: a
+    # commit waits on the disk, decision 8.30).
+    if plan_steps and not (await task_steps.steps_of_off_loop([task_id])).get(task_id):
         # Recorded from the moment the task is queued, so a restart before its
         # turn carries it on in place (``task_actions.resume_after_restart``).
-        task_steps.plan(task_id)
+        await task_steps.plan_off_loop(task_id)
     previous = _queue_tail_barrier()
     done = _ChainLink(previous)
     _queue_tail_record(task_id, done)

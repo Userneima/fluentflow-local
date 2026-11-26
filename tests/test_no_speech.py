@@ -24,7 +24,7 @@ from backend.core.local_entry_guards import friendly_error
 from backend.core.local_error_diagnostics import NO_SPEECH, diagnose_error
 from backend.core.media_job import require_speech
 from backend.routers.agent_v1 import common
-from tests.test_task_steps import Flow, _ctx, _job, _queued, _steps, _wire
+from tests.test_task_steps import FLOW_SECONDS, Flow, _ctx, _job, _queued, _steps, _wire
 
 _counter = iter(range(10_000))
 
@@ -81,7 +81,7 @@ def _run(monkeypatch, task_id, error):
         flow.delivered = True
 
     monkeypatch.setattr(tf, "_deliver_to_output_folder", deliver)
-    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), FLOW_SECONDS))
     return flow
 
 

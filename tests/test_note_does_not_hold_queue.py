@@ -118,7 +118,7 @@ def _start(flow: Flow, ids, monkeypatch):
     return runners
 
 
-async def _until(predicate, seconds=10.0):
+async def _until(predicate, seconds=30.0):
     """Wait for a state rather than a fixed time: on Windows each store write
     waits for the disk, measured at tens of milliseconds."""
     for _ in range(int(seconds / 0.02)):

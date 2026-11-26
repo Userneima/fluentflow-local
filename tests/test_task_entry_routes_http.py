@@ -20,6 +20,7 @@ covers the system-dialog entry and the in-place retry; neither is repeated.
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 
@@ -115,7 +116,10 @@ def client(monkeypatch, pipeline):
     tq._QUEUE_RECENT.clear()
 
 
-def _wait_until_done(client: TestClient, task_id: str, seconds: float = 5.0) -> dict:
+def _wait_until_done(client: TestClient, task_id: str, seconds: float = 30.0) -> dict:
+    # A whole task through the fakes takes a moment here and longer on the
+    # GitHub Windows machine, where every write to the task store waits on the
+    # disk (decision 8.27): the budget only has to catch a hang.
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         job = client.get(f"/jobs/{task_id}").json()
@@ -371,28 +375,36 @@ def test_a_folder_is_queued_in_place_with_positions_and_full_titles(client, pipe
 def test_filling_the_output_folder_does_not_hold_the_queue(client, pipeline, folder, monkeypatch):
     """Requirement (2026-10-15): putting a task's outputs in its folder (which
     exports a PDF through a browser) happens off the queue; the next recording
-    starts as soon as the previous one's processing is done."""
+    starts as soon as the previous one's processing is done.
+
+    The first folder's fill is held at a gate, so what the test says is not
+    "it was quick enough": the second task finishes while that fill is still
+    running (2026-11-25: a fixed three seconds made this fail on a loaded
+    Windows machine, where the second task alone could take longer)."""
     from backend.core import output_folder
 
+    started_filling = threading.Event()
+    stop_filling = threading.Event()
     synced: dict[str, float] = {}
+    filling: dict[str, str] = {}
 
     def slow_sync(task_id):
-        time.sleep(3)
+        if task_id == filling.get("first"):
+            started_filling.set()
+            assert stop_filling.wait(30), "the first folder's fill was never let go"
         synced[task_id] = time.monotonic()
 
     monkeypatch.setattr(output_folder, "sync", slow_sync)
 
     queued = client.post("/queue/process-folder", json={"path": str(folder)}).json()["queued"]
     first, second = (q["task_id"] for q in queued[:2])
-    _wait_until_done(client, first, seconds=10)
-    _wait_until_done(client, second, seconds=10)
-    second_done = time.monotonic()
-
-    # Measured against the first folder's own fill rather than a wall-clock
-    # budget: a task is finished only once its cut and compressed copy have
-    # ended too, which on a loaded machine takes a variable while.
-    assert first not in synced or synced[first] > second_done, \
-        "the second recording waited for the first one's folder"
+    filling["first"] = first
+    try:
+        _wait_until_done(client, second)
+        assert started_filling.wait(30), "the first task's folder was never filled"
+        assert first not in synced, "the first folder's fill ended before the second task did"
+    finally:
+        stop_filling.set()
 
 
 def test_a_folder_that_does_not_exist_is_refused_by_name(client, pipeline, tmp_path):

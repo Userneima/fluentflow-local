@@ -39,6 +39,19 @@ def test_a_failed_block_is_rolled_back_and_still_closed(tmp_path):
     db.unlink()
 
 
+def test_a_connection_waits_for_a_slow_disk_longer_than_sqlite_default(tmp_path):
+    """One commit holds the write lock while it waits for the disk, and on the
+    GitHub Windows machine that was measured at up to 400 ms (decision 8.27)
+    while steps are written from worker threads (8.30). SQLite's own five
+    seconds turned such a wait into "database is locked" there, so the default
+    is longer; a caller that names its own keeps it."""
+    db = tmp_path / "jobs.sqlite"
+    with sqlite_connection(db) as conn:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] >= 20_000
+    with sqlite_connection(db, timeout=1) as conn:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] <= 1_000
+
+
 def test_no_backend_code_opens_a_connection_it_does_not_close():
     pattern = re.compile(r"with\s+sqlite3\.connect\(")
     offenders = [

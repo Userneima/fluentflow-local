@@ -27,7 +27,7 @@ from backend.routers.agent_v1 import common, tasks
 from backend.core import agent_cut, job_store, task_activity, task_submission
 from backend.core import task_flow as tf
 
-from tests.test_task_steps import Flow, _ctx, _steps, _wire
+from tests.test_task_steps import FLOW_SECONDS, Flow, _ctx, _steps, _wire
 
 _TOKEN = "no-cut-token"
 _counter = iter(range(10_000))
@@ -62,7 +62,7 @@ def _run(monkeypatch, task_id, *, note):
     # cut_judge=agent; preparing the agent's material is where waiting begins.
     monkeypatch.setattr(tf, "_agent_judges_cut", _ORIGINAL_AGENT_JUDGES)
     monkeypatch.setattr(agent_cut, "prepare", lambda *_a: called.__setitem__("agent", called["agent"] + 1) or True)
-    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), 5))
+    asyncio.run(asyncio.wait_for(tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id)), FLOW_SECONDS))
     return called
 
 
@@ -104,7 +104,7 @@ def test_carrying_on_after_a_restart_still_does_not_cut(monkeypatch, task_id):
     monkeypatch.setattr(tf, "_agent_judges_cut", _ORIGINAL_AGENT_JUDGES)
     monkeypatch.setattr(agent_cut, "prepare", lambda *_a: called.append("agent") or True)
     asyncio.run(asyncio.wait_for(
-        tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id), start_at="cut"), 5,
+        tf.run_pipeline_then_note(asyncio.Event(), _ctx(task_id), start_at="cut"), FLOW_SECONDS,
     ))
     assert called == []
     assert _steps(task_id)["cut"]["status"] == "skipped"
