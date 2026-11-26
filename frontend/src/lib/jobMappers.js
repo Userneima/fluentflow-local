@@ -5,6 +5,7 @@ import {
     noteStatusOf,
 } from './resultSchema.js';
 import {
+    cutItemsToJudge,
     normalizeTaskState,
     TASK_STATE_UPLOADING,
     TASK_STATE_COMPLETED,
@@ -49,15 +50,20 @@ const snapshotCurrentStage = (snapshot={}) => {
 };
 
 // The cut as a list row has it (backend job_store._debreath_summary): its
-// counts, not the survey's thousands of ranges.
-const compactCutForCache = (debreath) => {
+// counts, not the survey's thousands of ranges. A task's own read carries the
+// report and its answers instead of the count, which is worked out from them
+// before they go; none wait once the user closed the judge's reminders
+// (cut_standing.released, on GET /jobs/{id}).
+const compactCutForCache = (debreath, cutStanding) => {
     if (!debreath || typeof debreath !== 'object') return debreath;
     const survey = asObject(debreath.survey);
+    const toJudge = survey.to_judge !== undefined ? survey.to_judge
+        : (cutStanding?.released ? 0 : cutItemsToJudge({debreath}));
     return {
         ...debreath,
         survey: debreath.survey ? {
             has_report: Boolean(survey.has_report || survey.report),
-            to_judge: survey.to_judge,
+            to_judge: toJudge,
             rerendering: survey.rerendering,
         } : debreath.survey,
     };
@@ -80,7 +86,7 @@ const minimizeJobForCache = (job) => {
         ...persistedJob,
         result: result ? {
             ...withoutSegments,
-            debreath: compactCutForCache(result.debreath),
+            debreath: compactCutForCache(result.debreath, job.cut_standing),
             visual_note: result.visual_note && typeof result.visual_note === 'object'
                 ? {...visualNote, markdown: compactTextForCache(visualNote.markdown)}
                 : result.visual_note,
@@ -138,8 +144,13 @@ const withMarksOf = (job, from) => {
 };
 
 // A row that brings only a task's state and marks (``taskStateRow``) onto the
-// list's own row, which keeps its trimmed result.
-const STATE_KEYS = ['status', 'task_state', 'stage', 'summary_status', 'updated_at'];
+// list's own row, which keeps its trimmed result. The activity and the step
+// snapshot go with the status: the card reads its live line from them, and a
+// status of one read beside the activity of another says 已完成 and 正在写笔记
+// at once. updated_at moves too; the records page's poll keeps its own cursor
+// from the rows it fetched, so a row stamped here is still sent to it and
+// replaces this one at the same time (``>=``).
+const STATE_KEYS = ['status', 'task_state', 'stage', 'summary_status', 'updated_at', 'activity', 'task_snapshot'];
 const withStateOf = (job, from) => {
     const next = {...job, metadata: {...asObject(job.metadata), ...asObject(from.metadata)}};
     STATE_KEYS.forEach((key) => { if (key in from) next[key] = from[key]; });
@@ -183,7 +194,10 @@ export const mergeCachedJobs = (...groups) => {
 // keeps it, until the whole list replaces it.
 export const taskStateRow = (job) => {
     const row = minimizeJobForCache(job);
-    return row ? {...row, __marksOnly: true} : row;
+    if (!row) return row;
+    // The snapshot as the list carries it (backend local_jobs._list_snapshot).
+    const {artifacts: _a, actions: _b, step_statuses: _c, data_quality: _d, ...snapshot} = asObject(row.task_snapshot);
+    return {...row, ...(row.task_snapshot ? {task_snapshot: snapshot} : {}), __marksOnly: true};
 };
 
 export const taskKeyForJob = (job) => String(job?.task_id || job?.result?.task_id || '').trim();

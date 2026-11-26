@@ -155,21 +155,8 @@ export const sizeTextareas = (nodes) => {
     list.forEach((node, index) => { node.style.height = `${heights[index]}px`; });
 };
 
-// How many places of the cut wait for the user's judgement: items of the
-// report's judgement group without an answer. The full result carries the
-// report and the answers; a records-list copy carries only the count.
-export const cutItemsToJudge = (result) => {
-    const survey = result?.debreath?.survey;
-    if (!survey || typeof survey !== 'object') return 0;
-    const sections = Array.isArray(survey.report?.sections) ? survey.report.sections : null;
-    if (!sections) return Math.max(0, Number(survey.to_judge) || 0);
-    const verdicts = survey.verdicts && typeof survey.verdicts === 'object' ? survey.verdicts : {};
-    return sections
-        .filter((section) => section?.judge)
-        .flatMap((section) => section.items || [])
-        .filter((item) => item && !verdicts[item.key])
-        .length;
-};
+// How many places of the cut wait for the user's judgement (lib/taskState.js).
+export {cutItemsToJudge} from '../lib/taskState.js';
 
 // Which stored file the player should load: the one this transcript belongs to.
 //

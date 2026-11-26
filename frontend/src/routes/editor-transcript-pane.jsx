@@ -93,7 +93,7 @@ const TranscriptPane = ({
         leaveSentence,
         sentenceKeys,
     } = playback;
-    const {mediaUrl, mediaLoading, mediaError, playbackProblem} = media;
+    const {mediaUrl, mediaLoading, mediaError, cutFileMissing, playbackProblem} = media;
     const followSwitch = (
         <button type="button" data-testid="transcript-follow-switch" onClick={followPlayback ? pauseFollowing : resumeFollowing} aria-pressed={followPlayback} className={chip(followPlayback)}>
             {/* The note follows too, so each switch names what it moves; once
@@ -324,7 +324,7 @@ const TranscriptPane = ({
                     // Wraps: in a narrow pane the button goes under the line
                     // instead of squeezing it into a column of two-word rows.
                     <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-                        <p className="min-w-0 flex-1 basis-48 text-xs font-semibold text-[#666] dark:text-white/60">{mediaLoading ? t('edit.sourceLoading') : playbackProblem ? (lang === 'zh' ? playbackProblem : t('edit.playbackAudioFailed')) : mediaError ? t('edit.mediaOpenFailed') : t('edit.audioUnavailable')}</p>
+                        <p className="min-w-0 flex-1 basis-48 text-xs font-semibold text-[#666] dark:text-white/60">{mediaLoading ? t('edit.sourceLoading') : playbackProblem ? (lang === 'zh' ? playbackProblem : t('edit.playbackAudioFailed')) : cutFileMissing ? t('edit.cutFileMissing') : mediaError ? t('edit.mediaOpenFailed') : t('edit.audioUnavailable')}</p>
                         <button type="button" onClick={()=>mediaInputRef.current?.click()} className={button('secondary', 'sm')}>
                             <SvgIcon name="audio_file" className="text-sm"/>{t('edit.chooseAudio')}
                         </button>

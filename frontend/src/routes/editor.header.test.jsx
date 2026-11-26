@@ -52,11 +52,14 @@ vi.mock('../app/shared.jsx', async () => {
             getCredentialsStatus: async () => null,
             pinJob: async (taskId, pinned) => {
                 globalThis.__headerPinCalls.push([taskId, pinned]);
-                return {task_id: taskId, status: 'completed', metadata: {pinned_at: pinned ? '2026-11-19T06:00:00Z' : null}};
+                // The whole record, as POST /jobs/{id}/pin answers.
+                return {task_id: taskId, status: 'completed', metadata: {pinned_at: pinned ? '2026-11-19T06:00:00Z' : null},
+                    result: {task_id: taskId, raw_segments: [{text: 'a'}], stt_raw_segments: [{text: 'a'}]}};
             },
             markStudied: async (taskId, studied, verdict) => {
                 globalThis.__headerStudyCalls.push([taskId, studied, verdict]);
-                return {task_id: taskId, status: 'completed', metadata: {pinned_at: null, studied: studied ? {at: '2026-11-25T06:00:00Z', verdict, course: '实战 1'} : null}};
+                return {task_id: taskId, status: 'completed', metadata: {pinned_at: null, studied: studied ? {at: '2026-11-25T06:00:00Z', verdict, course: '实战 1'} : null},
+                    result: {task_id: taskId, display_segments: [{text: 'a'}], source_stt_raw_segments: [{text: 'a'}]}};
             },
         }),
     };
@@ -185,6 +188,11 @@ describe('the pin button in the header', () => {
         fireEvent.click(pin);
         await waitFor(() => expect(globalThis.__headerPinCalls).toEqual([['t1', true]]));
         await waitFor(() => expect(globalThis.__headerIngested.at(-1)[0].metadata.pinned_at).toBeTruthy());
+        // Its state and marks only, not the transcript (review of 5554f67).
+        const [row] = globalThis.__headerIngested.at(-1);
+        expect(row.__marksOnly).toBe(true);
+        expect(row.result.raw_segments).toBe(null);
+        expect(row.result.stt_raw_segments).toBe(null);
     });
 
     it('shows a pinned task as pressed and unpins it', async () => {
@@ -221,6 +229,10 @@ describe('the studied button in the header', () => {
         fireEvent.click(studied);
         await waitFor(() => expect(globalThis.__headerStudyCalls).toEqual([['t1', true, null]]));
         await waitFor(() => expect(globalThis.__headerIngested.at(-1)[0].metadata.studied.at).toBeTruthy());
+        const [row] = globalThis.__headerIngested.at(-1);
+        expect(row.__marksOnly).toBe(true);
+        expect(row.result.display_segments).toBe(null);
+        expect(row.result.source_stt_raw_segments).toBe(null);
     });
 
     it('asks how the note was once studied, and sends the answer or takes the mark back', async () => {

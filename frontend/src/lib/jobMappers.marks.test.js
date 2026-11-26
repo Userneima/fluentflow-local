@@ -94,3 +94,35 @@ describe('the browser copy of the list', () => {
         expect(job.result.visual_note.status).toBe('done');
     });
 });
+
+// Second review of the same change (2026-11-26):
+// - A task's own read carries the cut report, not its count; the browser copy
+//   still says how many places wait for the user (none once released).
+// - The editor's read replaces the row's activity with its status, so the card
+//   never says 已完成 beside a live line from an older read.
+describe('the cut count of a task read whole', () => {
+    const report = {sections: [{judge: true, items: [{key: 'a'}, {key: 'b'}, {key: 'c'}]}, {items: [{key: 'x'}]}]};
+    const whole = (extra = {}) => row({}, {result: {task_id: 't1', debreath: {status: 'done', survey: {report, verdicts: {a: 'agree'}}}}, ...extra});
+
+    it('is worked out from the report and its answers', () => {
+        const [added] = onto([], [taskStateRow(whole())]);
+        expect(added.result.debreath.survey).toEqual({has_report: true, to_judge: 2, rerendering: undefined});
+    });
+
+    it('is none once the user closed the judge\'s reminders', () => {
+        const [added] = onto([], [taskStateRow(whole({cut_standing: {released: true}}))]);
+        expect(added.result.debreath.survey.to_judge).toBe(0);
+    });
+});
+
+describe('the editor\'s read of a running task that finished', () => {
+    it('brings the activity and steps with the status', () => {
+        const listed = row({}, {status: 'completed', activity: {busy: true, current_step: 'note', label: '正在写笔记'},
+            task_snapshot: {current_step: 'note_generation', steps: [{id: 'note_generation', status: 'running'}]}});
+        const read = row({}, {status: 'completed', updated_at: '2026-11-21T00:00:00Z', activity: {busy: false},
+            task_snapshot: {current_step: '', steps: [{id: 'note_generation', status: 'done'}], artifacts: {big: 1}, actions: []}});
+        const [merged] = onto([listed], [taskStateRow(read)]);
+        expect(merged.activity).toEqual({busy: false});
+        expect(merged.task_snapshot).toEqual({current_step: '', steps: [{id: 'note_generation', status: 'done'}]});
+    });
+});

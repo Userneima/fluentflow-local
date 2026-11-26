@@ -15,7 +15,8 @@ JSON, and that was wrong twice over:
 So this parses JSON and counts nothing but each job's own `status`, and it asks
 under both scopes the local edition uses: no client id (agents, CLI) and
 `local-single-user`, which is what the page always sends on 127.0.0.1. The larger
-answer wins, because either scope having a live task is a reason not to restart.
+answer wins, because either scope having a live task is a reason not to restart;
+either scope not answering makes it "could not tell".
 
 Prints one integer. `-1` means "could not tell" — a service that is broken or
 answering nonsense must lead to one extra question, never to a silent restart that
@@ -82,8 +83,10 @@ def is_busy(job: dict) -> bool:
 
 
 def active_job_count(base_url: str) -> int:
-    counts = [count for scope in SCOPES if (count := count_for_scope(base_url, scope)) is not None]
-    return max(counts) if counts else -1
+    """The larger count of the two scopes; -1 when either could not answer,
+    since the one that did not may be the one with the running task."""
+    counts = [count_for_scope(base_url, scope) for scope in SCOPES]
+    return -1 if None in counts else max(counts)
 
 
 def main(argv: list[str]) -> int:

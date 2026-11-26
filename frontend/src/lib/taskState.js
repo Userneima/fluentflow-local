@@ -153,6 +153,22 @@ export const taskStatusLabel = (job, lang = 'zh') => {
 // 'failed' | 'warn' | 'done', and `done` is the only quiet one.
 export const cutsToJudge = (job = {}) => Number(job?.result?.debreath?.survey?.to_judge) || 0;
 
+// How many places of the cut wait for the user's judgement: items of the
+// report's judgement group without an answer. The full result carries the
+// report and the answers; a records-list copy carries only the count.
+export const cutItemsToJudge = (result) => {
+    const survey = result?.debreath?.survey;
+    if (!survey || typeof survey !== 'object') return 0;
+    const sections = Array.isArray(survey.report?.sections) ? survey.report.sections : null;
+    if (!sections) return Math.max(0, Number(survey.to_judge) || 0);
+    const verdicts = survey.verdicts && typeof survey.verdicts === 'object' ? survey.verdicts : {};
+    return sections
+        .filter((section) => section?.judge)
+        .flatMap((section) => section.items || [])
+        .filter((item) => item && !verdicts[item.key])
+        .length;
+};
+
 // A task the user stopped (a step reads stopped and nothing is working).
 export const isStopped = (job = {}) => hasActivity(job) && !job.activity.busy && Boolean(job.activity.stopped);
 

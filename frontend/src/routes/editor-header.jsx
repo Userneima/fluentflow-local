@@ -7,6 +7,7 @@ import {useMemo, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {AlertCircle, CheckCheck, Pin} from 'lucide-react';
 import {markBackendJob} from '../lib/taskState.js';
+import {taskStateRow} from '../lib/jobMappers.js';
 import SvgIcon from '../components/SvgIcon.jsx';
 import OutputFolderLine from '../components/OutputFolderLine.jsx';
 import {isPinnedJob, studiedOf} from '../app/shared.jsx';
@@ -28,7 +29,7 @@ export const useTaskPin = ({activeTaskId, tasks, pinJob, ingestJobs}) => {
         setPinError('');
         try {
             const updated = await pinJob(activeTaskId, !activeTaskPinned);
-            if (updated?.task_id) ingestJobs([markBackendJob(updated)]);
+            if (updated?.task_id) ingestJobs([taskStateRow(markBackendJob(updated))]);
         } catch (err) {
             setPinError(err?.message || String(err));
         } finally {
@@ -58,7 +59,7 @@ export const useTaskStudied = ({activeTaskId, tasks, markStudied, ingestJobs, sa
         setStudyError('');
         try {
             const updated = await markStudied(activeTaskId, value, verdict);
-            if (updated?.task_id) ingestJobs([markBackendJob(updated)]);
+            if (updated?.task_id) ingestJobs([taskStateRow(markBackendJob(updated))]);
         } catch (err) {
             setStudyError(err?.message || String(err));
         } finally {

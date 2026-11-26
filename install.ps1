@@ -520,7 +520,7 @@ function Test-ServiceUp([string]$ProbePort) {
 # repeated here because neither copy's scripts can be relied on yet):
 # counts them: each task's activity.busy (a task is "completed" once its
 # transcript is stored while its cut and note may run for many minutes), asked
-# under both scopes the local edition uses. -1 when the service cannot say.
+# under both scopes the local edition uses. -1 when either scope cannot say.
 function Get-BusyTaskCount([string]$Port) {
     $Counts = @()
     foreach ($Scope in @($null, "local-single-user")) {
@@ -532,9 +532,8 @@ function Get-BusyTaskCount([string]$Port) {
                 if ($_.activity -and ($_.activity.busy -is [bool])) { $_.activity.busy }
                 else { ($_.status -in @("queued", "processing", "running", "pending")) -or ($_.summary_status -eq "pending") -or ($_.result.debreath.status -eq "running") }
             }).Count
-        } catch {}
+        } catch { return -1 }
     }
-    if ($Counts.Count -eq 0) { return -1 }
     return ($Counts | Measure-Object -Maximum).Maximum
 }
 

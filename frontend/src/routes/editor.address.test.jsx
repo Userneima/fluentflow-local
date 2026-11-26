@@ -366,6 +366,17 @@ describe('the player without audio', () => {
         expect(screen.queryByText(/读不到|unavailable|not found/i)).toBeNull();
     });
 
+    it('does not suggest the recording when the cut file the transcript follows is gone', async () => {
+        mediaMissing = true;
+        jobs.t1 = {task_id: 't1', result: task('t1', {source_file_available: true, transcript_media: 'debreath_media',
+            debreath: {status: 'completed', ran_before_transcription: true, used_for_transcription: true},
+            artifacts: {debreath_media: {filename: 'debreath/t1_debreath.mp4'}, playback_audio: {filename: 't1_audio.mp3'}}})};
+        mount('/editor?task=t1');
+
+        expect(await screen.findByText('edit.cutFileMissing')).toBeTruthy();
+        expect(screen.queryByText('edit.mediaOpenFailed')).toBeNull();
+    });
+
     it('gives the English page its own sentence, from the translations', async () => {
         uiLang = 'en';
         try {

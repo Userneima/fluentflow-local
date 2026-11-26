@@ -185,5 +185,10 @@ export const useMediaSource = ({result, matchedLocalSourceFile, lang}) => {
     const hasPlaybackAudio = !!result?.artifacts?.playback_audio || !!result?.playback_audio_available;
     const playbackProblem = hasPlaybackAudio ? '' : (result?.playback_audio_problem?.detail || '');
 
-    return {mediaUrl, mediaKind, mediaLoading, mediaError, playbackProblem, setMediaError, loadMediaFile, mediaObjectUrlRef};
+    // The transcript belongs to the cut file and it would not load: in this
+    // flow nothing else is tried, and the recording would put every line at
+    // the wrong moment, so the player must not suggest it.
+    const cutFileMissing = !!mediaError && !mediaUrl && !!result && isAutoCutFlow(result);
+
+    return {mediaUrl, mediaKind, mediaLoading, mediaError, cutFileMissing, playbackProblem, setMediaError, loadMediaFile, mediaObjectUrlRef};
 };

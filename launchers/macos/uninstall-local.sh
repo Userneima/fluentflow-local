@@ -80,6 +80,7 @@ if [[ "$health" == *'"execution":"local"'* ]]; then
 	[[ -x "$count_py" ]] || count_py="${REPO}/.venv/bin/python"
 	[[ -x "$count_py" ]] || count_py="python3"
 	running="$("$count_py" "${REPO}/launchers/macos/count_active_jobs.py" "http://127.0.0.1:${PORT}" 2>/dev/null || echo -1)"
+	[[ "$running" =~ ^-?[0-9]+$ ]] || running=-1
 	echo "FluentFlow Local 正在端口 ${PORT} 上运行。"
 	if [[ "${running:--1}" == "-1" ]]; then
 		echo "⚠ 查不清后台有没有任务在进行，停止可能会打断正在转写的任务。"
