@@ -133,7 +133,10 @@ def get_task_package(
 
 
 @tool(
-    description=("Explain task or note generation failure state in a machine-readable form."),
+    description=("Explain task or note generation failure state in a machine-readable form. "
+        "playback_audio says why the editor has no audio of FluentFlow's own to play (the "
+        "playback MP3 failed after transcription started; detail in Chinese for the user, "
+        "error is ffmpeg's text), null when it was made."),
     input_schema={
         "type": "object",
         "properties": {"task_id": {"type": "string"}, "api_base": {"type": "string"}},

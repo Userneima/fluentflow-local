@@ -36,13 +36,16 @@ LIVE_STATUSES = {"queued", "processing", "running", "pending"}
 # submitted by an agent or by curl without a header lands in the unscoped list.
 SCOPES = (None, "local-single-user")
 
-# The list reads every task; on a machine busy transcribing, three seconds
-# was not enough and the guard answered "could not tell" on an idle queue.
+# ``view=activity`` reads each task's status and activity and no result, a
+# few tenths of a second for 300 tasks; the full list read every result and
+# took 12 seconds on a busy machine (2026-11-25), past this wait, so the guard
+# answered "could not tell" on an idle queue. A service from before the view
+# ignores it and sends the full list, whose rows carry the same activity.
 TIMEOUT_SECONDS = 10
 
 
 def count_for_scope(base_url: str, client_id: str | None) -> int | None:
-    request = urllib.request.Request(base_url.rstrip("/") + "/jobs")
+    request = urllib.request.Request(base_url.rstrip("/") + "/jobs?view=activity")
     if client_id:
         request.add_header("X-FluentFlow-Client-Id", client_id)
     try:

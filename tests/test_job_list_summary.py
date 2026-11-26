@@ -55,8 +55,10 @@ def test_list_row_has_what_a_card_shows_and_none_of_the_bulk():
         # The note read the original recording, so the stamp is corrected.
         assert result["summary_written_from"] == "source_media_note"
         assert result["debreath"]["plan"]["cut_count"] == 12
-        for bulky in ("display_segments", "raw_segments", "stt_raw_segments", "raw_transcript_text", "visual_note"):
+        for bulky in ("display_segments", "raw_segments", "stt_raw_segments", "raw_transcript_text"):
             assert bulky not in result
+        # Of the visual note, only whether it is being written again (task_activity).
+        assert result["visual_note"] is None
     finally:
         job_store.delete_jobs([task_id], client_id="list-test")
 

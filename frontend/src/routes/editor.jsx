@@ -90,7 +90,7 @@ const Editor = () => {
     // 240 characters, which must be neither edited nor saved: on 2026-10-22 the
     // page saved that preview over a 40,000-character note.
     const [noteReadFor, setNoteReadFor] = useState('');
-    const {urlTaskId, urlWantsCutReview, setSearchParams, openingUrlTask, urlTaskMissing} = useEditorAddress({lastResult, getJob, setLastResult, setNoteReadFor});
+    const {urlTaskId, urlWantsCutReview, setSearchParams, openingUrlTask, urlTaskMissing} = useEditorAddress({lastResult, getJob, setLastResult, setNoteReadFor, ingestJobs});
 
     const result = lastResult;
     const matchedLocalSourceFile = localSourceFileMatchesResult(lastSourceFile, result) ? lastSourceFile : null;
@@ -105,7 +105,7 @@ const Editor = () => {
         source_file_storage: resultSourceStorage,
     }), [resultSttProvider, resultPlaybackStorage, resultSourceStorage]);
 
-    const transcriptDraft = useResultTranscript({result, setLastResult, getJob, resultJobOptions, noteReadFor, setNoteReadFor});
+    const transcriptDraft = useResultTranscript({result, setLastResult, getJob, resultJobOptions, noteReadFor, setNoteReadFor, ingestJobs});
     const {segments, transcript, transcriptDirty, setHydrationFailed, visibleEditRecords} = transcriptDraft;
     const noteDraft = useNoteDraft({result, setLastResult, noteReadFor, lang});
     const {hasEditableSummary, noteReady, summaryMarkdownForEditor, summaryResultKey} = noteDraft;

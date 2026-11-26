@@ -762,3 +762,22 @@ def test_a_failed_background_transcript_note_is_reported_by_wait(monkeypatch, ag
     waited = client.post(f"/agent/v1/tasks/{task_id}/wait", headers=_HEADERS, json={}).json()
     assert waited["done"] is True
     assert job_store.get_job(task_id, db_path=agent_stack["jobs_db"])["status"] == "failed"
+
+
+def test_the_diagnosis_says_why_there_is_no_playback_audio(agent_stack):
+    # Requirement (to-do 2026-11-26): when the playback MP3 failed after the
+    # transcription started, the task finishes without it, and an agent asking
+    # diagnose_task learns why; a task whose audio was made says nothing.
+    for task_id, result in (
+        ("no-audio", {"task_id": "no-audio", "playback_audio_error": "write error: No space left on device"}),
+        ("has-audio", {"task_id": "has-audio", "playback_audio_available": True}),
+    ):
+        job_store.upsert_job(task_id=task_id, status="completed", client_id=LOCAL_OWNER_ID,
+                             result=result, db_path=agent_stack["jobs_db"])
+    client = TestClient(_app())
+
+    missing = client.get("/agent/v1/tasks/no-audio/diagnosis", headers=_HEADERS).json()["playback_audio"]
+    assert missing["code"] == "playback_audio_failed"
+    assert "磁盘满了" in missing["detail"]
+    assert missing["error"] == "write error: No space left on device"
+    assert client.get("/agent/v1/tasks/has-audio/diagnosis", headers=_HEADERS).json()["playback_audio"] is None

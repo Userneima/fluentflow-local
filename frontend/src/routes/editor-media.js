@@ -177,5 +177,11 @@ export const useMediaSource = ({result, matchedLocalSourceFile, lang}) => {
         return () => { cancelled = true; };
     }, [mediaSourceKey, replaceMediaUrl, loadMediaFile, openJobMedia]);
 
-    return {mediaUrl, mediaKind, mediaLoading, mediaError, setMediaError, loadMediaFile, mediaObjectUrlRef};
+    // Why FluentFlow has no audio of its own to play, when making it failed
+    // after the transcription started (decision 4.23): the service words it,
+    // only the task's own record carries it, and the player says it when
+    // nothing plays.
+    const playbackProblem = result?.playback_audio_problem?.detail || '';
+
+    return {mediaUrl, mediaKind, mediaLoading, mediaError, playbackProblem, setMediaError, loadMediaFile, mediaObjectUrlRef};
 };

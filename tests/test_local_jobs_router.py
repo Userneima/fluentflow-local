@@ -41,7 +41,11 @@ def test_local_jobs_list_reads_the_local_owner_and_uses_local_projection(monkeyp
 
     assert response.status_code == 200
     assert seen == [LOCAL_OWNER_ID]
-    assert response.json()["jobs"][0]["task_snapshot"] == local_task_detail.build_task_snapshot(_JOB)
+    # The list's snapshot leaves the files, actions and data checks to the task's own read.
+    full = local_task_detail.build_task_snapshot(_JOB)
+    assert response.json()["jobs"][0]["task_snapshot"] == {
+        key: value for key, value in full.items() if key not in ("artifacts", "actions", "step_statuses", "data_quality")
+    }
 
 
 def test_local_jobs_list_is_the_same_whichever_client_id_is_sent(monkeypatch):

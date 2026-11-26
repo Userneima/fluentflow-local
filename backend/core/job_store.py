@@ -513,6 +513,52 @@ def list_job_summaries(
     )
 
 
+def list_job_states(
+    db_path: Path | str = DEFAULT_DB_PATH,
+    client_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Every job with only what ``task_activity.activity`` reads: the status
+    columns and the four states a finished task can still be working in (a cut
+    or note started again, a note pending, the agent asked to judge the cut).
+
+    The restart guard asks this. A summary row still decodes every result,
+    about 94 MB on a machine with 300 tasks, and on a busy machine the whole
+    list took longer than the guard waits (2026-11-25, 12 seconds)."""
+    ensure_job_db(db_path)
+    sql = (
+        "SELECT task_id, status, summary_status,"
+        " json_extract(result_json, '$.summary_status') AS result_summary_status,"
+        " json_extract(result_json, '$.debreath.status') AS cut_status,"
+        " json_extract(result_json, '$.visual_note.status') AS visual_note_status,"
+        " json_extract(result_json, '$.agent_cut.status') AS agent_cut_status"
+        " FROM jobs"
+    )
+    params: list[Any] = []
+    if client_id is not None:
+        sql += " WHERE client_id = ?"
+        params.append(client_id)
+    sql += " ORDER BY updated_at DESC"
+    with sqlite_connection(Path(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, params).fetchall()
+    jobs = []
+    for row in rows:
+        result: dict[str, Any] = {}
+        if row["result_summary_status"] is not None:
+            result["summary_status"] = row["result_summary_status"]
+        for key, column in (("debreath", "cut_status"), ("visual_note", "visual_note_status"),
+                            ("agent_cut", "agent_cut_status")):
+            if row[column] is not None:
+                result[key] = {"status": row[column]}
+        jobs.append({
+            "task_id": row["task_id"],
+            "status": row["status"],
+            "summary_status": _note_status(row["summary_status"]),
+            "result": result,
+        })
+    return jobs
+
+
 RESTART_INTERRUPTION_KEY = "restart_interruption"
 # Metadata key for a record the user pinned to the top of the list: when it
 # was pinned (ISO time), null or absent when it is not.
@@ -1537,6 +1583,12 @@ def _result_summary(result: Any) -> dict[str, Any] | None:
         # Waiting for the user's agent to judge the cut, or why it stopped
         # waiting (``agent_cut``): the card and the task page say so.
         "agent_cut": _agent_cut_summary(result.get("agent_cut")),
+        # Whether Claude is writing the note again: without it the list read a
+        # finished task as idle while its note was being rewritten
+        # (``task_activity``), and so did the restart guard.
+        "visual_note": ({"status": result["visual_note"]["status"]}
+                        if isinstance(result.get("visual_note"), dict) and result["visual_note"].get("status")
+                        else None),
         # Where the outputs went. A link's cut goes into its folder under the
         # Videos folder and is recorded here, not on the cut; without it the
         # card called that cut "uploaded, left in the app".

@@ -13,9 +13,10 @@ import {
     pickTranscriptBaselineSegments,
     pickTranscriptSegments,
 } from '../app/shared.jsx';
+import {markBackendJob} from '../lib/taskState.js';
 import {filterVisibleEditRecords, groupTranscriptParagraphs, mergeNoteFields, resultIdentity} from './editor-helpers.js';
 
-export const useResultTranscript = ({result, setLastResult, getJob, resultJobOptions, noteReadFor, setNoteReadFor}) => {
+export const useResultTranscript = ({result, setLastResult, getJob, resultJobOptions, noteReadFor, setNoteReadFor, ingestJobs}) => {
     const hydratedTaskIdsRef = useRef(new Set());
     // Effects keyed on a derived string (resultKey) read the latest result
     // through this ref: listing `result` itself as a dependency would re-run
@@ -75,6 +76,8 @@ export const useResultTranscript = ({result, setLastResult, getJob, resultJobOpt
             .then((job) => {
                 const full = job?.result;
                 if (cancelled || !full) return;
+                // Its 置顶 and 学完了 too, as when the address opens a task.
+                if (job.task_id) ingestJobs?.([markBackendJob(job)]);
                 const fullSegments = pickTranscriptSegments(full);
                 const fullText = full.transcript_text || '';
                 const currentDisplayCount = pickDisplayTranscriptSegments(result, currentSegments).length;
@@ -113,7 +116,7 @@ export const useResultTranscript = ({result, setLastResult, getJob, resultJobOpt
                 if (!cancelled) setHydratingResult(false);
             });
         return () => { cancelled = true; };
-    }, [resultKey, transcriptUnsaved, resultJobOptions, getJob, setLastResult, setNoteReadFor]);
+    }, [resultKey, transcriptUnsaved, resultJobOptions, getJob, setLastResult, setNoteReadFor, ingestJobs]);
 
     useEffect(() => {
         const result = resultRef.current;

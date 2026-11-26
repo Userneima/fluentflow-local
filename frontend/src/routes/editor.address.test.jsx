@@ -313,3 +313,38 @@ describe('switching while nothing plays', () => {
         }
     });
 });
+
+// No playback audio (to-do 2026-11-26): when FluentFlow could not make the
+// audio it plays and the recording is not kept either, the player says why in
+// the service's words, never ffmpeg's English; with audio, nothing is said.
+describe('the player without audio', () => {
+    const problem = {code: 'playback_audio_failed', detail: '播放用的音频没做成：当时这台电脑的磁盘满了。转录稿和笔记不受影响。',
+        error: 'av_interleaved_write_frame(): No space left on device'};
+
+    it('says why there is no audio to play', async () => {
+        jobs.t1 = {task_id: 't1', result: task('t1', {source_file_available: false, playback_audio_problem: problem})};
+        mount('/editor?task=t1');
+
+        const line = await screen.findByText(/播放用的音频没做成/);
+        expect(line.textContent).toContain('磁盘满了');
+        // What to do is the 选择原音频 button beside it.
+        expect(screen.getByText('edit.chooseAudio')).toBeTruthy();
+        expect(line.textContent).not.toMatch(/No space|av_interleaved/);
+    });
+
+    it('says it also for a result first opened from a list row, which never carries it', async () => {
+        const light = task('t1', {source_file_available: false, transcript_text: 'short'});
+        jobs.t1 = {task_id: 't1', result: {...light, playback_audio_problem: problem}};
+        mount('/editor?task=t1', light);
+
+        expect(await screen.findByText(/播放用的音频没做成/)).toBeTruthy();
+    });
+
+    it('says nothing of it when nothing failed', async () => {
+        jobs.t1 = {task_id: 't1', result: task('t1', {source_file_available: false})};
+        mount('/editor?task=t1');
+
+        expect(await screen.findByText('edit.audioUnavailable')).toBeTruthy();
+        expect(screen.queryByText(/播放用的音频没做成/)).toBeNull();
+    });
+});

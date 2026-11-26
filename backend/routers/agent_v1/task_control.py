@@ -8,6 +8,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
 
 from backend.core.local_agent_package import note_generation_diagnosis
+from backend.core.local_error_diagnostics import playback_audio_diagnosis
 from backend.core import task_actions
 from backend.core import agent_cut
 from backend.core.local_request_scope import require_local_agent_access
@@ -79,6 +80,8 @@ def get_agent_task_diagnosis(request: Request, task_id: str) -> dict[str, Any]:
         "ok": True,
         "task_id": task_id,
         "note": note_generation_diagnosis(job, result),
+        # Why the editor has no audio to play, when making it failed; null otherwise.
+        "playback_audio": playback_audio_diagnosis(result),
     }
 
 

@@ -72,6 +72,8 @@ const Address = () => {
 
 const Harness = ({initial}) => {
     const [lastResult, setLastResult] = useState(initial);
+    // The shared list as the app keeps it: rows ingested replace their task's.
+    const [tasks, setTasks] = useState(globalThis.__headerTasks);
     const value = {
         lastResult,
         setLastResult,
@@ -82,8 +84,11 @@ const Harness = ({initial}) => {
         setCurrentJob: () => {},
         addLarkExport: () => {},
         runtimeConfig,
-        tasks: globalThis.__headerTasks,
-        ingestJobs: (rows) => globalThis.__headerIngested.push(rows),
+        tasks,
+        ingestJobs: (rows) => {
+            globalThis.__headerIngested.push(rows);
+            setTasks((current) => [...rows, ...(current || []).filter((job) => !rows.some((row) => row.task_id === job.task_id))]);
+        },
     };
     return (
         <AppCtx.Provider value={value}>
@@ -171,20 +176,22 @@ describe('the pin button in the header', () => {
 
     it('pins an unpinned task', async () => {
         const result = withFolder();
-        jobs.t1 = {task_id: 't1', result};
         globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {}}];
+        // The task's own record says what the list says.
+        jobs.t1 = {...globalThis.__headerTasks[0], result};
         mount('/editor', result);
         const pin = await screen.findByTestId('editor-pin');
         expect(pin.getAttribute('aria-pressed')).toBe('false');
         fireEvent.click(pin);
         await waitFor(() => expect(globalThis.__headerPinCalls).toEqual([['t1', true]]));
-        await waitFor(() => expect(globalThis.__headerIngested[0][0].metadata.pinned_at).toBeTruthy());
+        await waitFor(() => expect(globalThis.__headerIngested.at(-1)[0].metadata.pinned_at).toBeTruthy());
     });
 
     it('shows a pinned task as pressed and unpins it', async () => {
         const result = withFolder();
-        jobs.t1 = {task_id: 't1', result};
         globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {pinned_at: '2026-11-19T06:00:00Z'}}];
+        // The task's own record says what the list says.
+        jobs.t1 = {...globalThis.__headerTasks[0], result};
         mount('/editor', result);
         const pin = await screen.findByTestId('editor-pin');
         expect(pin.getAttribute('aria-pressed')).toBe('true');
@@ -205,20 +212,22 @@ describe('the studied button in the header', () => {
 
     it('marks a note studied and puts the answered row into the list', async () => {
         const result = withFolder();
-        jobs.t1 = {task_id: 't1', result};
         globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {pinned_at: '2026-11-19T06:00:00Z'}}];
+        // The task's own record says what the list says.
+        jobs.t1 = {...globalThis.__headerTasks[0], result};
         mount('/editor', result);
         const studied = await screen.findByTestId('editor-studied');
         expect(studied.textContent).toContain('学完了');
         fireEvent.click(studied);
         await waitFor(() => expect(globalThis.__headerStudyCalls).toEqual([['t1', true, null]]));
-        await waitFor(() => expect(globalThis.__headerIngested[0][0].metadata.studied.at).toBeTruthy());
+        await waitFor(() => expect(globalThis.__headerIngested.at(-1)[0].metadata.studied.at).toBeTruthy());
     });
 
     it('asks how the note was once studied, and sends the answer or takes the mark back', async () => {
         const result = withFolder();
-        jobs.t1 = {task_id: 't1', result};
         globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {studied: {at: '2026-11-25T06:00:00Z', verdict: null}}}];
+        // The task's own record says what the list says.
+        jobs.t1 = {...globalThis.__headerTasks[0], result};
         mount('/editor', result);
         const studied = await screen.findByTestId('editor-studied');
         expect(studied.textContent).toContain('已学完 · 这篇怎么样');
@@ -232,8 +241,9 @@ describe('the studied button in the header', () => {
 
     it('is not offered without a note', async () => {
         const result = withFolder({summary_markdown: '', summary_status: 'skipped', summary_skipped: true});
-        jobs.t1 = {task_id: 't1', result};
         globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {}}];
+        // The task's own record says what the list says.
+        jobs.t1 = {...globalThis.__headerTasks[0], result};
         mount('/editor', result);
         await screen.findByTestId('editor-pin');
         expect(screen.queryByTestId('editor-studied')).toBeNull();
@@ -329,5 +339,26 @@ describe('the slim header', () => {
         expect(msgs.zh['edit.regenerateConfirmTitle']).toBe('写笔记');
         expect(msgs.zh['edit.regenerateConfirmAction']).toBe('开始写');
         expect(msgs.zh['edit.regenerateConfirmDesc']).not.toMatch(/重写|替换/);
+    });
+});
+
+// 置顶 and 学完了 on a fresh load (to-do 2026-11-25): the shared list holds the
+// browser's cached copy until the whole list arrives, which took seconds; the
+// header says what the task's own record says as soon as it is read.
+describe('the header on a fresh load', () => {
+    afterEach(() => {
+        globalThis.__headerTasks = [];
+        globalThis.__headerIngested = [];
+    });
+
+    it('shows the pin and the studied mark from the task it opens, before the list arrives', async () => {
+        jobs.t1 = {task_id: 't1', status: 'completed', result: withFolder(),
+            metadata: {pinned_at: '2026-11-19T06:00:00Z', studied: {at: '2026-11-25T06:00:00Z', verdict: null}}};
+        // The cached list predates both.
+        globalThis.__headerTasks = [{task_id: 't1', status: 'completed', metadata: {}}];
+        mount('/editor?task=t1');
+
+        await waitFor(() => expect(screen.getByTestId('editor-pin').getAttribute('aria-pressed')).toBe('true'));
+        expect(screen.getByTestId('editor-studied').textContent).toContain('已学完');
     });
 });

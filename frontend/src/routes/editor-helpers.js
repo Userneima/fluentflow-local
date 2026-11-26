@@ -274,6 +274,9 @@ const NOTE_FIELDS = new Set([
     // The version travels with the note it belongs to: a save made on the
     // note taken from the service must name that note's version.
     'note_version',
+    // Why there is no audio to play rides along for a result first opened
+    // from a list row, which never carries it.
+    'playback_audio_problem',
     ...LARK_FIELDS,
 ]);
 export const mergeNoteFields = (current, fresh) => {

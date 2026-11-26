@@ -64,7 +64,7 @@ function Get-RunningJobCount {
     # so the service's own activity.busy decides; status only for a service
     # from before that answer existed.
     try {
-        $jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?limit=100" -TimeoutSec 10
+        $jobs = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?view=activity" -TimeoutSec 10
         return @($jobs.jobs | Where-Object {
             if ($_.activity -and ($_.activity.busy -is [bool])) { $_.activity.busy }
             else { $_.status -in @("queued", "processing", "running", "pending") }

@@ -5,8 +5,9 @@
 // open result back into the address.
 import {useEffect, useRef, useState} from 'react';
 import {useSearchParams} from 'react-router-dom';
+import {markBackendJob} from '../lib/taskState.js';
 
-export const useEditorAddress = ({lastResult, getJob, setLastResult, setNoteReadFor}) => {
+export const useEditorAddress = ({lastResult, getJob, setLastResult, setNoteReadFor, ingestJobs}) => {
     const [searchParams, setSearchParams] = useSearchParams();
     const urlTaskId = searchParams.get('task') || '';
     const urlWantsCutReview = searchParams.get('review') === 'cut';
@@ -31,13 +32,17 @@ export const useEditorAddress = ({lastResult, getJob, setLastResult, setNoteRead
                     return;
                 }
                 setLastResult({...job.result, task_id: job.result.task_id || urlTaskId});
+                // The header's 置顶 and 学完了 read the shared list, which on a
+                // fresh load holds the browser's cached copy until the whole
+                // list arrives; this task's own record says them now.
+                if (job.task_id) ingestJobs?.([markBackendJob(job)]);
                 setNoteReadFor(urlTaskId);
                 setUrlTask({id: urlTaskId, state: 'loaded'});
             })
             .catch(() => {
                 if (urlTaskIdRef.current === urlTaskId) setUrlTask({id: urlTaskId, state: 'missing'});
             });
-    }, [urlTaskId, lastResult?.task_id, urlTask, getJob, setLastResult, setNoteReadFor]);
+    }, [urlTaskId, lastResult?.task_id, urlTask, getJob, setLastResult, setNoteReadFor, ingestJobs]);
     const openingUrlTask = !!urlTaskId && lastResult?.task_id !== urlTaskId
         && (urlTask.id !== urlTaskId || urlTask.state === 'loading');
     const urlTaskMissing = !!urlTaskId && lastResult?.task_id !== urlTaskId && urlTask.id === urlTaskId && urlTask.state === 'missing';

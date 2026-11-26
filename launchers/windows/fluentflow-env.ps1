@@ -379,7 +379,7 @@ function Get-FluentFlowBusyCount([string]$Port) {
         try {
             $Headers = @{}
             if ($Scope) { $Headers["X-FluentFlow-Client-Id"] = $Scope }
-            $Jobs = (Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs" -Headers $Headers -TimeoutSec 10).jobs
+            $Jobs = (Invoke-RestMethod -Uri "http://127.0.0.1:$Port/jobs?view=activity" -Headers $Headers -TimeoutSec 10).jobs
             $Counts += @($Jobs | Where-Object {
                 if ($_.activity -and ($_.activity.busy -is [bool])) { $_.activity.busy }
                 else { ($_.status -in @("queued", "processing", "running", "pending")) -or ($_.summary_status -eq "pending") -or ($_.result.debreath.status -eq "running") }

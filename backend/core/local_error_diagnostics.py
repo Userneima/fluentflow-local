@@ -637,3 +637,32 @@ def diagnose_error(error: Any) -> dict[str, Any]:
         raw,
         "重试一次；如果连续失败，请查看本机日志。",
     )
+
+
+# ---- Playback audio ---------------------------------------------------------
+#
+# The MP3 the editor plays when the recording is not kept is encoded beside the
+# transcription; when that fails after the transcription started, the task
+# still finishes and the reason is stored as ``playback_audio_error``, ffmpeg's
+# own last lines (decision 4.23). These are the words the page and agents give.
+_DISK_FULL = ("no space left on device", "disk full", "磁盘已满", "磁盘满")
+
+
+def playback_audio_diagnosis(result: Any) -> dict[str, Any] | None:
+    """Why this task has no playback audio, or None when nothing went wrong
+    making it. ``error`` keeps ffmpeg's text for an agent; the editor shows
+    ``detail`` under its player when nothing can play, and never quotes it."""
+    raw = str((result or {}).get("playback_audio_error") or "").strip() if isinstance(result, dict) else ""
+    if not raw:
+        return None
+    if any(token in raw.lower() for token in _DISK_FULL):
+        detail = "播放用的音频没做成：当时这台电脑的磁盘满了。转录稿和笔记不受影响。"
+        action = "腾出磁盘空间后重新提交这条（agent 用 retry_task）；只想边听边校对的话，选择原始音视频就行。"
+    else:
+        detail = "播放用的音频没做成：把录音转成播放用的音频时出错了。转录稿和笔记不受影响。"
+        action = "选择原始音视频就能边听边校对；要 FluentFlow 自己存一份，重新提交这条（agent 用 retry_task）。"
+    return {
+        **_diag("playback_audio_failed", "播放用的音频没做成", detail, action),
+        "severity": "warning",
+        "error": raw,
+    }
