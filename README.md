@@ -402,7 +402,7 @@ Windows 用 `launchers\windows\uninstall-local.ps1`，开关是 `-Models`、`-Da
 给 agent 的 skill，并注销 Claude Code、Codex 里的 `fluentflow-local` 工具（只在它指向这份安装时）。这些重装就回来。
 转录模型和任务数据各自需要显式开口：模型在 Hugging Face 的公共缓存里时，脚本只删本产品下载过的那几个目录；
 任务数据删掉无法恢复，所以会再确认一次。数据目录里有 FluentFlow 认不出的文件时（比如数据目录指到了你自己也在用的文件夹），
-只删 FluentFlow 自己的那些，认不出的留着，并列出来让你自己看着删。数据、链接下载或模型设在代码目录里面时，
+只删 FluentFlow 自己的那些，认不出的留着，并列出来让你自己看着删；`bin`、`models`、`logs` 这类常见名字的文件夹，里面装的也得是 FluentFlow 放的东西才删，你自己的同名文件夹不动。数据、链接下载或模型设在代码目录里面时，
 代码目录不整个删，只删程序自己的部分。你自己复制或改名出来的代码文件夹（比如 `app.old`）不会被当成更新留下的那份删掉。
 
 Windows 上用一条命令装进 `FluentFlow` 文件夹的，`-All` 删完后这个文件夹也不在了。也可以让你的 agent 替你卸载，
