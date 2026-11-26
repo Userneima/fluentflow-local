@@ -139,9 +139,11 @@ part_names="FLUENTFLOW_LINK_OUTPUT_DIR HF_HOME $(env | sed -n -E 's/^(FLUENTFLOW
 if [[ "$DATA_SURE" -ne 1 ]] || ff_inside "$DATA_ROOT" "$REPO"; then KEEPS_USER_FILES=1; fi
 for name in $part_names; do
 	[[ "$name" != FLUENTFLOW_INSTALL_DIR ]] || continue
-	where="$(ff_setting "$REPO" "$name")"
-	[[ -n "$where" ]] || continue
-	if ! place="$(ff_place "$REPO" "$where")" || ff_inside "$place" "$REPO"; then KEEPS_USER_FILES=1; fi
+	# 环境变量和 .env 里的同一项都看：之后启动的服务不一定带着这个窗口的环境变量。
+	for where in "${!name:-}" "$(ff_env_file_value "$REPO" "$name")"; do
+		[[ -n "$where" ]] || continue
+		if ! place="$(ff_place "$REPO" "$where")" || ff_inside "$place" "$REPO"; then KEEPS_USER_FILES=1; fi
+	done
 done
 
 # 模型目录同理：交给 scripts/stt_model.py 列，它知道产品下过哪些 repo。
@@ -191,10 +193,52 @@ fi
 add_target "${HOME}/Desktop/FluentFlow Local.app" "桌面启动器"
 add_target "${HOME}/Desktop/FluentFlow Local.command" "桌面启动器（旧版）"
 add_target "${HOME}/Library/Logs/FluentFlow" "日志"
+# 数据目录里的一项是不是 FluentFlow 的（launchers/data-folder-contents.txt）：名字在清单上；
+# 名字是 bin、models 这类通用的，里面的每一样还都得是清单上写的那些。数据目录可能被指到
+# 用户自己也在用的文件夹，他自己的 bin、models 不能按名字删。
+data_rules=()
+if [[ -f "${REPO}/launchers/data-folder-contents.txt" ]]; then
+	while IFS= read -r rule || [[ -n "$rule" ]]; do
+		rule="${rule%%#*}"
+		[[ "$rule" =~ [^[:space:]] ]] && data_rules+=("$rule")
+	done <"${REPO}/launchers/data-folder-contents.txt"
+fi
+data_entry_is_fluentflows() (
+	local rule words child matched pattern
+	shopt -s nullglob dotglob
+	for rule in ${data_rules[@]+"${data_rules[@]}"}; do
+		read -r -a words <<<"$rule"
+		# shellcheck disable=SC2053 # the names on the list are wildcards on purpose
+		[[ "${1##*/}" == ${words[0]} ]] || continue
+		[[ ${#words[@]} -gt 1 ]] || exit 0
+		[[ -d "$1" && ! -L "$1" ]] || exit 1
+		for child in "$1"/*; do
+			case "${child##*/}" in .DS_Store | Thumbs.db | desktop.ini) continue ;; esac
+			matched=0
+			for pattern in "${words[@]:1}"; do
+				# shellcheck disable=SC2053
+				if [[ "${child##*/}" == $pattern ]]; then
+					matched=1
+					break
+				fi
+			done
+			[[ "$matched" -eq 1 ]] || exit 1
+		done
+		exit 0
+	done
+	exit 1
+)
+
+data_left=()
 if [[ "$DATA_SURE" -eq 1 ]]; then
-	add_target "${DATA_ROOT}/bin" "安装时下载的 FFmpeg 和 uv"
-	add_target "${DATA_ROOT}/tools" "安装时下载的 Node.js 和 Python"
-	add_target "${DATA_ROOT}/cache" "安装时的下载缓存"
+	for part in bin:"安装时下载的 FFmpeg 和 uv" tools:"安装时下载的 Node.js 和 Python" cache:"安装时的下载缓存"; do
+		[[ -e "${DATA_ROOT}/${part%%:*}" ]] || continue
+		if data_entry_is_fluentflows "${DATA_ROOT}/${part%%:*}"; then
+			add_target "${DATA_ROOT}/${part%%:*}" "${part#*:}"
+		elif [[ "$REMOVE_DATA" -ne 1 ]]; then
+			data_left+=("${DATA_ROOT}/${part%%:*}")
+		fi
+	done
 fi
 # install.sh 装的 skill 是链到本目录的链接；用户自己的同名目录不动。
 for skill in "${HOME}/.claude/skills/fluentflow" "${HOME}/.codex/skills/fluentflow"; do
@@ -235,31 +279,14 @@ done
 # 数据目录可能被指到用户自己也在用的文件夹：里面全是 FluentFlow 认得的东西
 # （launchers/data-folder-contents.txt）才整个删；有认不出的，只删认得的那些，
 # 认不出的留下并列出来。
-data_left=()
 if [[ "$REMOVE_DATA" -eq 1 && "$DATA_SURE" -ne 1 ]]; then
 	echo ""
 	echo "数据目录的位置读不准（${DATA_ROOT}，里面有展开不了的 \$），不删它；请自己确认它在哪后再删。"
 elif [[ "$REMOVE_DATA" -eq 1 && -d "$DATA_ROOT" ]]; then
-	known_patterns=()
-	if [[ -f "${REPO}/launchers/data-folder-contents.txt" ]]; then
-		while IFS= read -r pattern || [[ -n "$pattern" ]]; do
-			pattern="${pattern%%#*}"
-			pattern="${pattern%"${pattern##*[![:space:]]}"}"
-			[[ -n "$pattern" ]] && known_patterns+=("$pattern")
-		done <"${REPO}/launchers/data-folder-contents.txt"
-	fi
 	data_known=()
 	shopt -s nullglob dotglob
 	for entry in "$DATA_ROOT"/*; do
-		recognised=0
-		for pattern in ${known_patterns[@]+"${known_patterns[@]}"}; do
-			# shellcheck disable=SC2053 # the pattern is a wildcard on purpose
-			if [[ "${entry##*/}" == $pattern ]]; then
-				recognised=1
-				break
-			fi
-		done
-		if [[ "$recognised" -eq 1 ]]; then data_known+=("$entry"); else data_left+=("$entry"); fi
+		if data_entry_is_fluentflows "$entry"; then data_known+=("$entry"); else data_left+=("$entry"); fi
 	done
 	shopt -u nullglob dotglob
 	if [[ ${#data_left[@]} -eq 0 ]]; then
@@ -339,12 +366,7 @@ for tool in "${mcp_removals[@]:-}"; do
 done
 # 还在从代码目录运行的程序占着文件、删完还会接着写：后台下载转录模型、每天更新 yt-dlp、
 # 别的端口上的服务。和 Windows 一样先停掉，不算本脚本自己。
-repo_pattern="$(printf '%s/' "$REPO" | sed -e 's/[].*^$+?(){}|\\[]/\\&/g')"
-[[ "${#repo_pattern}" -gt 2 ]] || fail "认不出代码目录的路径（${REPO}），不去停程序。"
-for pid in $(pgrep -f -- "$repo_pattern" 2>/dev/null || true); do
-	[[ "$pid" == "$$" || "$pid" == "$PPID" ]] || kill "$pid" 2>/dev/null || true
-done
-sleep 1
+ff_stop_folder_programs "$REPO" || fail "认不出代码目录的路径（${REPO}），不去停程序。"
 # 代码目录可能就是当前目录；bash 已经打开了本脚本，删掉文件也能读完。
 cd "$HOME"
 for i in "${!targets[@]}"; do

@@ -22,40 +22,94 @@ REPO_SLUG="Userneima/fluentflow-local"
 # 读 .env、判断位置的几个函数，和 launchers/macos/fluentflow-env.sh 里的一字不差
 # （tests/test_install_places.py 守着）：更新换代码之前，新旧两份的脚本都还靠不上
 # （旧版本可能没有这些函数，新版本还没放好）。
-# .env 里某个名字的值，不看环境变量。引用前面行的值（${BASE}/data）时，照服务那边
-# 读前面那一行；FF_ENV_DEPTH 防止互相引用转圈。
+# .env 里某个名字的值，不看环境变量，照服务（backend/core/runtime_paths.py 的 read_env_file）
+# 的读法：去掉开头的 BOM；引号里的转义照它解；${NAME} 和 ${NAME:-默认值} 先看环境变量，
+# 再看这一行之前的同名行（不是文件里最后那行）。照它读不准的，值前面加上 $?，ff_place
+# 看到 $ 就当读不准：某一行的引号在本行没闭合（服务会把下一行也读进这个值，那一行
+# 也就不再是一项设置），这一行和它之后的都算；文件不是 UTF-8，或值里有替换字符 U+FFFD。
+# 第三个参数：只看这一行之前的（展开引用时用）。
 ff_env_file_value() {
-	local repo="$1" name="$2" line value
+	local repo="$1" key="$2" before="${3:-}" line number=0 broken=0 found="" found_at=0 value
 	[[ -f "${repo}/.env" ]] || return 0
-	line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${name}[[:space:]]*=" "${repo}/.env" 2>/dev/null | tail -n 1 || true)"
-	[[ -n "$line" ]] || return 0
-	value="${line#*=}"
-	value="${value#"${value%%[![:space:]]*}"}"
-	case "$value" in
-	\"*)
-		value="${value#\"}"
-		value="${value%%\"*}"
-		;;
-	\'*)
-		value="${value#\'}"
-		value="${value%%\'*}"
-		;;
-	*)
-		value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')"
-		;;
-	esac
-	# ${NAME} 和 ${NAME:-默认值}，照服务那边（python-dotenv 的规则）从环境变量展开。
-	local ref name default found
-	while [[ "$value" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\} ]]; do
-		ref="${BASH_REMATCH[0]}" name="${BASH_REMATCH[1]}" default="${BASH_REMATCH[3]}"
-		found="${!name:-}"
-		if [[ -z "$found" && "${FF_ENV_DEPTH:-0}" -lt 5 ]]; then
-			found="$(FF_ENV_DEPTH=$(( ${FF_ENV_DEPTH:-0} + 1 )) ff_env_file_value "$repo" "$name")"
+	# 不是 UTF-8 的 .env 服务读不了，这里也就说不准任何一项。
+	if command -v iconv >/dev/null 2>&1 && ! iconv -f UTF-8 -t UTF-8 "${repo}/.env" >/dev/null 2>&1; then
+		printf '%s' '$?.env is not UTF-8'
+		return 0
+	fi
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		number=$((number + 1))
+		[[ -n "$before" && "$number" -ge "$before" ]] && break
+		[[ "$number" -eq 1 ]] && line="${line#$'\xef\xbb\xbf'}"
+		[[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]] || continue
+		value="${BASH_REMATCH[3]}"
+		if [[ "${BASH_REMATCH[2]}" == "$key" ]]; then
+			found="$value"
+			found_at="$number"
 		fi
-		found="${found:-$default}"
-		value="${value/"$ref"/$found}"
+		value="${value#"${value%%[![:space:]]*}"}"
+		if [[ "$broken" -eq 0 && ( "$value" == \"* || "$value" == \'* ) ]] && ! ff_unquote "$value" >/dev/null; then
+			broken="$number"
+		fi
+	done <"${repo}/.env"
+	[[ "$found_at" -gt 0 ]] || return 0
+	value="${found#"${found%%[![:space:]]*}"}"
+	if [[ "$broken" -gt 0 && "$found_at" -ge "$broken" ]]; then
+		printf '$?%s' "$value"
+		return 0
+	fi
+	case "$value" in
+	\"* | \'*) value="$(ff_unquote "$value")" ;;
+	*) value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')" ;;
+	esac
+	# 引用一段段拼起来，不用 ${value/…/…} 替换：bash 5.2 起替换文字里的 & 代表匹配到的
+	# 那段，值里有 & 时（R&D）原来的循环永远停不下来。展开出来的文字不再展开，和服务一样。
+	local rest="$value" ref ref_name ref_default ref_value
+	value=""
+	while [[ "$rest" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\} ]]; do
+		ref="${BASH_REMATCH[0]}" ref_name="${BASH_REMATCH[1]}" ref_default="${BASH_REMATCH[3]}"
+		value="${value}${rest%%"$ref"*}"
+		rest="${rest#*"$ref"}"
+		ref_value="${!ref_name:-}"
+		[[ -n "$ref_value" ]] || ref_value="$(ff_env_file_value "$repo" "$ref_name" "$found_at")"
+		value="${value}${ref_value:-$ref_default}"
 	done
+	value="${value}${rest}"
+	# U+FFFD：别的程序按错的编码读过再存回来的。
+	[[ "$value" != *$'\xef\xbf\xbd'* ]] || value="\$?${value}"
 	printf '%s' "$value"
+}
+
+# 开头带引号的值里引号中间那段，照服务的规则解转义（单引号里只有 \\ 和 \'，双引号里还有
+# \n \t 这些）；引号在本行没闭合时返回 1。
+ff_unquote() {
+	local text="$1" quote="${1:0:1}" out="" i=1 char next
+	while [[ "$i" -lt "${#text}" ]]; do
+		char="${text:i:1}"
+		if [[ "$char" == "\\" && $((i + 1)) -lt "${#text}" ]]; then
+			next="${text:i+1:1}"
+			if [[ "$quote" == "'" ]]; then
+				case "$next" in "\\" | "'") ;; *) next="" ;; esac
+			else
+				case "$next" in
+				n) next=$'\n' ;; r) next=$'\r' ;; t) next=$'\t' ;; a) next=$'\a' ;; b) next=$'\b' ;; f) next=$'\f' ;; v) next=$'\v' ;;
+				"\\" | "'" | '"') ;;
+				*) next="" ;;
+				esac
+			fi
+			if [[ -n "$next" ]]; then
+				out="${out}${next}"
+				i=$((i + 2))
+				continue
+			fi
+		fi
+		if [[ "$char" == "$quote" ]]; then
+			printf '%s' "$out"
+			return 0
+		fi
+		out="${out}${char}"
+		i=$((i + 1))
+	done
+	return 1
 }
 
 ff_setting() {
@@ -136,6 +190,20 @@ ff_update_marker_says() {
 	[[ -f "$1/.fluentflow-update" ]] || return 1
 	said="$(tail -n 1 "$1/.fluentflow-update")"
 	[[ -n "$said" && "$(ff_lower "$(ff_physical "$said")")" == "$(ff_lower "$(ff_physical "$1")")" ]]
+}
+
+# 停掉从某个代码目录运行的程序：命令行以这个目录里虚拟环境的 python 开头的，或者是一个
+# python 直接跑这个目录里的脚本（Homebrew 的 Python 会换成框架里的 Python 再跑，命令行就不再
+# 以虚拟环境的路径开头）。只在参数别处提到这个目录的程序不算，本脚本自己也不算。
+ff_stop_folder_programs() {
+	local folder pattern pid
+	folder="$(printf '%s' "${1%/}" | sed -e 's/[].*^$+?(){}|\\[]/\\&/g')"
+	[[ "${#folder}" -gt 1 ]] || return 1
+	pattern="^(${folder}/(\.venv|venv)/bin/|[^ ]*/[Pp]ython[0-9.]* ${folder}/)"
+	for pid in $(pgrep -f -- "$pattern" 2>/dev/null || true); do
+		[[ "$pid" == "$$" || "$pid" == "$PPID" ]] || kill "$pid" 2>/dev/null || true
+	done
+	sleep 1
 }
 
 # 装到哪：展开 ~，相对路径从当前目录算起，去掉结尾的 /。后面要挪进挪出这个目录，
@@ -357,11 +425,7 @@ fi
 # 还在从某个目录运行的程序（服务、后台下载模型、yt-dlp 更新）。
 # 不算这个脚本自己：它可能就是从那个目录里运行的。
 stop_folder_programs() {
-	local pid
-	for pid in $(pgrep -f "$1/" 2>/dev/null || true); do
-		[[ "$pid" == "$$" || "$pid" == "$PPID" ]] || kill "$pid" 2>/dev/null || true
-	done
-	sleep 1
+	ff_stop_folder_programs "$1" || true
 }
 
 if [[ "$UPDATING" -eq 1 ]]; then
@@ -376,16 +440,18 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	for name in $(printf '%s\n' $names | sort -u); do
 		# 装到哪的那个变量本身不算（它就是这份安装的位置）。
 		[[ "$name" != FLUENTFLOW_INSTALL_DIR ]] || continue
-		where="$(ff_setting "$DIR" "$name")"
-		[[ -n "$where" ]] || continue
-		if ! place="$(ff_place "$DIR" "$where")"; then
-			rm -rf "${DIR}.new"
-			fail_plain "${name}（${where}）里有展开不了的 \$，看不准它在不在代码目录里；更新会换掉代码目录，所以先停下。请把它改成完整路径（或 \${HOME}/… 这样带花括号的写法），并确认在 ${DIR} 外面。什么都没改。"
-		fi
-		if ff_inside "$place" "$DIR"; then
-			rm -rf "${DIR}.new"
-			fail_plain "${name}（${where}，也就是 ${place}）在代码目录里面，更新会换掉这个目录。请先把它挪到 ${DIR} 外面。什么都没改。"
-		fi
+		# 环境变量和 .env 里的同一项都看：之后由启动器起的服务不一定带着这个窗口的环境变量。
+		for where in "${!name:-}" "$(ff_env_file_value "$DIR" "$name")"; do
+			[[ -n "$where" ]] || continue
+			if ! place="$(ff_place "$DIR" "$where")"; then
+				rm -rf "${DIR}.new"
+				fail_plain "${name}（${where}）照服务的读法看不准在哪（展开不了的 \$、引号没在本行闭合、不是 UTF-8）；更新会换掉代码目录，所以先停下。请把它改成完整路径，并确认在 ${DIR} 外面。什么都没改。"
+			fi
+			if ff_inside "$place" "$DIR"; then
+				rm -rf "${DIR}.new"
+				fail_plain "${name}（${where}，也就是 ${place}）在代码目录里面，更新会换掉这个目录。请先把它挪到 ${DIR} 外面。什么都没改。"
+			fi
+		done
 	done
 	# 端口和桌面启动器一样：环境变量优先，其次是 .env 里的同名行（新旧两份 .env 一样）。
 	if [[ -z "${FLUENTFLOW_LOCAL_PORT:-}" && -f "${DIR}/.env" ]]; then

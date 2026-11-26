@@ -158,8 +158,12 @@ $PartNames = @(Get-ChildItem Env: | Where-Object { $_.Name -match '^FLUENTFLOW_\
 if (Test-Path (Join-Path $Repo ".env")) {
     $PartNames += @([System.IO.File]::ReadAllLines((Join-Path $Repo ".env"), [System.Text.Encoding]::UTF8) | ForEach-Object { if ($_ -match '^\s*(export\s+)?(FLUENTFLOW_\w*(DIR|PATH|CACHE))\s*=') { $Matches[2] } })
 }
+# The window's variable and the .env line are both checked: the service a
+# launcher starts need not have this window's variables.
 foreach ($Name in ($PartNames | Where-Object { $_ -ne "FLUENTFLOW_INSTALL_DIR" } | Sort-Object -Unique)) {
-    if (Test-InRepo (Get-Place $Name)) { $KeepsUserFiles = $true }
+    foreach ($Where in @([Environment]::GetEnvironmentVariable($Name, "Process"), (Get-FluentFlowEnvFileValue $Repo $Name))) {
+        if (Test-InRepo (Resolve-FluentFlowPlace $Repo $Where)) { $KeepsUserFiles = $true }
+    }
 }
 
 $ModelDirs = @()
@@ -209,9 +213,40 @@ if ($IsGitCheckout -or $KeepsUserFiles) {
 Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd") "桌面启动器"
 Add-Target (Join-Path ([Environment]::GetFolderPath("Desktop")) "停止 FluentFlow Local.cmd") "桌面上的停止图标"
 Add-Target (Join-Path $env:LOCALAPPDATA "FluentFlow\Logs") "日志"
+# Whether an entry of the data folder is FluentFlow's
+# (launchers/data-folder-contents.txt): its name is on the list, and for a
+# common name (bin, models, logs...) everything inside it is what FluentFlow
+# puts there. The data folder may be one the user keeps their own bin or
+# models in, which a name alone cannot tell apart.
+$Registry = Join-Path $Repo "launchers\data-folder-contents.txt"
+$DataRules = @()
+if (Test-Path -LiteralPath $Registry) {
+    $DataRules = @([System.IO.File]::ReadAllLines($Registry, [System.Text.Encoding]::UTF8) |
+        ForEach-Object { , @((($_ -split '#', 2)[0].Trim() -split '\s+') | Where-Object { $_ }) } | Where-Object { $_.Count -gt 0 })
+}
+function Test-FluentFlowDataEntry($Entry) {
+    foreach ($Rule in $DataRules) {
+        if ($Entry.Name -notlike $Rule[0]) { continue }
+        if ($Rule.Count -eq 1) { return $true }
+        if (-not $Entry.PSIsContainer -or ($Entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { return $false }
+        foreach ($Child in @(Get-ChildItem -Force -LiteralPath $Entry.FullName)) {
+            if ($Child.Name -in @(".DS_Store", "Thumbs.db", "desktop.ini")) { continue }
+            $ChildName = $Child.Name
+            if (@($Rule[1..($Rule.Count - 1)] | Where-Object { $ChildName -like $_ }).Count -eq 0) { return $false }
+        }
+        return $true
+    }
+    return $false
+}
+
+$DataLeft = @()
 if ($DataSure) {
-    Add-Target (Join-Path $DataRoot "bin") "安装时下载的 FFmpeg"
-    Add-Target (Join-Path $DataRoot "tools") "安装时下载的 Node.js"
+    foreach ($Part in @(@("bin", "安装时下载的 FFmpeg"), @("tools", "安装时下载的 Node.js"))) {
+        $Entry = Get-Item -Force -LiteralPath (Join-Path $DataRoot $Part[0]) -ErrorAction SilentlyContinue
+        if (-not $Entry) { continue }
+        if (Test-FluentFlowDataEntry $Entry) { Add-Target $Entry.FullName $Part[1] }
+        elseif (-not $Data) { $DataLeft += $Entry }
+    }
 }
 if ($HomeDir) { Add-Target (Join-Path $HomeDir "cache") "pip、uv 和 npm 的下载缓存" }
 foreach ($ToolDir in @((Join-Path $env:USERPROFILE ".claude"), (Join-Path $env:USERPROFILE ".codex"))) {
@@ -223,19 +258,12 @@ foreach ($Dir in $ModelDirs) { Add-Target $Dir "转录模型" }
 # whole only when everything in it is something FluentFlow makes
 # (launchers/data-folder-contents.txt); otherwise only those go, and the rest
 # is named and left.
-$DataLeft = @()
 if ($Data -and -not $DataSure) {
     Write-Host "`n数据目录的位置读不准（${DataRoot}，里面有展开不了的 `$），不删它；请自己确认它在哪后再删。"
 } elseif ($Data -and (Test-Path -LiteralPath $DataRoot -PathType Container)) {
-    $Registry = Join-Path $Repo "launchers\data-folder-contents.txt"
-    $Known = @()
-    if (Test-Path -LiteralPath $Registry) {
-        $Known = @([System.IO.File]::ReadAllLines($Registry, [System.Text.Encoding]::UTF8) | ForEach-Object { ($_ -split '#', 2)[0].Trim() } | Where-Object { $_ })
-    }
     $Recognised = @()
     foreach ($Entry in @(Get-ChildItem -Force -LiteralPath $DataRoot)) {
-        $EntryName = $Entry.Name
-        if (@($Known | Where-Object { $EntryName -like $_ }).Count -gt 0) { $Recognised += $Entry } else { $DataLeft += $Entry }
+        if (Test-FluentFlowDataEntry $Entry) { $Recognised += $Entry } else { $DataLeft += $Entry }
     }
     if ($DataLeft.Count -eq 0) {
         Add-Target $DataRoot "任务历史、转录稿、笔记、媒体文件" $true

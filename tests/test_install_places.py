@@ -50,9 +50,9 @@ def _read(path: Path) -> str:
 
 # --- the helpers' text in the two installers ---------------------------------
 
-SHARED_BASH = ("ff_env_file_value", "ff_setting", "ff_normalize", "ff_place", "ff_lower", "ff_physical", "ff_inside",
-               "ff_update_marker_says", "ff_mark_update_copy")
-SHARED_POWERSHELL = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowEnvValue", "Get-FluentFlowEnvFileValue",
+SHARED_BASH = ("ff_env_file_value", "ff_unquote", "ff_setting", "ff_normalize", "ff_place", "ff_lower", "ff_physical", "ff_inside",
+               "ff_update_marker_says", "ff_mark_update_copy", "ff_stop_folder_programs")
+SHARED_POWERSHELL = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowQuoted", "ConvertFrom-FluentFlowEnvValue", "Get-FluentFlowEnvFileValue",
                      "Get-FluentFlowSetting", "Resolve-FluentFlowPlace", "Test-FluentFlowInside",
                      "Test-FluentFlowUpdateCopy", "Set-FluentFlowUpdateCopy")
 
@@ -107,6 +107,15 @@ def _cases(repo: Path, home: Path, other: Path):
         ("HF_HOME=~/models", "HF_HOME", {"HOME": str(home)}, str(home / "models")),
         (f"FLUENTFLOW_SOURCE_DIR='{other}/sources'", "FLUENTFLOW_SOURCE_DIR", {}, str(other / "sources")),
         (f"FLUENTFLOW_SOURCE_DIR='{other}/sources'", "FLUENTFLOW_SOURCE_DIR", {"FLUENTFLOW_SOURCE_DIR": "data"}, "inside"),
+        # A reference takes the line above it, not a later one of the same name.
+        (f"BASE=.\nFLUENTFLOW_DATA_DIR=${{BASE}}/data\nBASE={other}", "FLUENTFLOW_DATA_DIR", {}, "inside"),
+        ("FLUENTFLOW_DATA_DIR=${FF_SURELY_UNSET:-data}", "FLUENTFLOW_DATA_DIR", {}, "inside"),
+        # Escapes in quotes are decoded as the service decodes them.
+        (f'FLUENTFLOW_DATA_DIR="{other}/x\\\\notes"', "FLUENTFLOW_DATA_DIR", {}, f"{other}/x\\notes"),
+        # A quote not closed on its line: the service reads the next line into
+        # the value, and that line is no setting of its own any more.
+        (f"FLUENTFLOW_DATA_DIR='{other}/data\\'\nOTHER=1", "FLUENTFLOW_DATA_DIR", {}, "unsure"),
+        (f"NOTE='it\\'\nFLUENTFLOW_DATA_DIR='{other}/data'", "FLUENTFLOW_DATA_DIR", {}, "unsure"),
     ]
 
 
@@ -127,6 +136,42 @@ def test_the_mac_helpers_place_settings_where_the_service_does(tmp_path):
             result = subprocess.run([bash, "-c", script, "-", str(repo), name], capture_output=True, text=True, env=env)
             assert result.returncode == 0, (bash, line, result.stderr)
             assert result.stdout.strip() == expected, (bash, line)
+
+
+def _bash_place(bash: str, repo: Path, env: dict) -> subprocess.CompletedProcess:
+    script = (
+        f'set -euo pipefail; source "{MAC_HELPER}"; v="$(ff_setting "$1" FLUENTFLOW_DATA_DIR)"; '
+        'if p="$(ff_place "$1" "$v")"; then if ff_inside "$p" "$1"; then echo inside; else echo "$p"; fi; '
+        'else echo unsure; fi'
+    )
+    return subprocess.run([bash, "-c", script, "-", str(repo)], capture_output=True, text=True,
+                          env={"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8", **env}, timeout=10)
+
+
+@pytest.mark.skipif(not POSIX or not _BASHES, reason="the macOS helpers, run by bash")
+@pytest.mark.parametrize(("raw", "expected"), [
+    (b"\xef\xbb\xbfFLUENTFLOW_DATA_DIR=data\n", "inside"),  # a BOM before the first line
+    (b"FLUENTFLOW_DATA_DIR='/tmp/\xff\xfe/data'\n", "unsure"),  # not UTF-8
+])
+def test_the_mac_helpers_read_the_file_as_the_service_does(tmp_path, raw, expected):
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".env").write_bytes(raw)
+    for bash in _BASHES:
+        result = _bash_place(bash, repo, {"HOME": str(tmp_path)})
+        assert result.returncode == 0, (bash, result.stderr)
+        assert result.stdout.strip() == expected, bash
+
+
+@pytest.mark.skipif(not POSIX or not _BASHES, reason="the macOS helpers, run by bash")
+def test_a_reference_holding_an_ampersand_is_expanded_under_every_bash(tmp_path):
+    """bash 5.2 puts the match where ${x//pat/rep} has an &: the old loop never ended."""
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".env").write_text("FLUENTFLOW_DATA_DIR=${MYDIR}/data\n", encoding="utf-8")
+    for bash in _BASHES:
+        result = _bash_place(bash, repo, {"HOME": str(tmp_path), "MYDIR": "/Users/x/R&D"})
+        assert result.stdout.strip() == "/Users/x/R&D/data", bash
 
 
 @pytest.mark.skipif(not POSIX, reason="macOS paths")
@@ -154,6 +199,8 @@ def test_the_windows_helpers_place_settings_where_the_service_does(tmp_path):
     repo.mkdir()
     home.mkdir()
     for line, name, extra, expected in _cases(repo, home, other):
+        if expected not in ("inside", "unsure"):
+            expected = expected.replace("\\\\", "\\")
         if name == "HF_HOME":  # ~ is the user's profile folder on Windows
             extra = {"USERPROFILE": str(home)}
         # Without a BOM, as the installer writes it: Windows PowerShell's
@@ -167,6 +214,24 @@ def test_the_windows_helpers_place_settings_where_the_service_does(tmp_path):
         result = _powershell(script, extra)
         assert result.returncode == 0, (line, result.stderr)
         assert result.stdout.strip().lower() == expected.replace("/", "\\").lower(), line
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+@pytest.mark.parametrize(("raw", "expected"), [
+    (b"\xef\xbb\xbfFLUENTFLOW_DATA_DIR=data\r\n", "inside"),
+    (b"FLUENTFLOW_DATA_DIR='C:\\\xff\xfe\\data'\r\n", "unsure"),  # read as U+FFFD
+])
+def test_the_windows_helpers_read_the_file_as_the_service_does(tmp_path, raw, expected):
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / ".env").write_bytes(raw)
+    script = (
+        f". '{WIN_HELPER}'; $p = Resolve-FluentFlowPlace '{repo}' (Get-FluentFlowSetting '{repo}' 'FLUENTFLOW_DATA_DIR'); "
+        f"if (-not $p.Sure) {{ 'unsure' }} elseif (Test-FluentFlowInside $p.Path '{repo}') {{ 'inside' }} else {{ $p.Path }}"
+    )
+    result = _powershell(script)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
 
 
 @pytest.mark.skipif(not _POWERSHELL, reason="install.ps1, run by Windows PowerShell")
@@ -190,8 +255,8 @@ def test_a_drive_root_is_not_an_install_folder():
 # --- the data folder's own contents ------------------------------------------
 
 def _registered() -> list[str]:
-    lines = (line.split("#", 1)[0].strip() for line in _read(REGISTRY).splitlines())
-    return [line for line in lines if line]
+    lines = (line.split("#", 1)[0].split() for line in _read(REGISTRY).splitlines())
+    return [words[0] for words in lines if words]
 
 
 def _is_registered(name: str) -> bool:
@@ -313,8 +378,8 @@ def _fake_code(folder: Path, version: str = "0.1.0", setup_exit: int = 1) -> Pat
     return folder
 
 
-def _install(tmp_path: Path, folder: Path, source: Path) -> subprocess.CompletedProcess:
-    env = {**_sandbox_env(tmp_path), "FLUENTFLOW_INSTALL_DIR": str(folder), "FLUENTFLOW_INSTALL_SOURCE": str(source)}
+def _install(tmp_path: Path, folder: Path, source: Path, **extra: str) -> subprocess.CompletedProcess:
+    env = {**_sandbox_env(tmp_path), "FLUENTFLOW_INSTALL_DIR": str(folder), "FLUENTFLOW_INSTALL_SOURCE": str(source), **extra}
     return subprocess.run(["bash", str(ROOT / "install.sh"), "--skip-model"], capture_output=True, text=True,
                           env=env, cwd=tmp_path, timeout=120)
 
@@ -345,6 +410,18 @@ def test_an_update_stops_when_data_may_be_in_the_code_folder(tmp_path, line):
     assert (app / "data" / "fluentflow_jobs.sqlite").read_text(encoding="utf-8") == "tasks"
     assert (app / "VERSION").read_text(encoding="utf-8").strip() == "0.1.0"
     assert not (tmp_path / "app.new").exists() and not (tmp_path / "app.old").exists()
+
+
+@mac_only
+def test_an_update_checks_the_env_file_even_when_the_window_sets_the_same_name(tmp_path):
+    """The service a launcher starts later may not get this window's variable."""
+    app = _fake_code(tmp_path / "app")
+    (app / ".env").write_text("FLUENTFLOW_DATA_DIR=data\n", encoding="utf-8")
+    (app / "data").mkdir()
+    result = _install(tmp_path, app, _fake_code(tmp_path / "release", version="9.0.0"),
+                      FLUENTFLOW_DATA_DIR=str(tmp_path / "elsewhere"))
+    assert result.returncode != 0 and "代码目录" in result.stderr, result.stderr
+    assert (app / "VERSION").read_text(encoding="utf-8").strip() == "0.1.0"
 
 
 @mac_only
@@ -416,6 +493,60 @@ def test_removing_all_data_leaves_what_is_not_fluentflows(tmp_path, dry_run):
 
 
 @mac_only
+def test_common_names_in_a_shared_folder_go_only_with_what_fluentflow_puts_in_them(tmp_path):
+    app = _fake_code(tmp_path / "app")
+    data = tmp_path / "shared"
+    for folder in ("models/speaker", "bin", "logs", "sources/0508c4e78c784bdc9a13eadbebc124c8", "mine"):
+        (data / folder).mkdir(parents=True, exist_ok=True)
+    (data / "fluentflow_jobs.sqlite").write_text("tasks", encoding="utf-8")
+    (data / "logs" / "model-download.log").write_text("log", encoding="utf-8")
+    (data / "bin" / "ffmpeg").write_text("tool", encoding="utf-8")
+    (data / "bin" / "my-script").write_text("mine", encoding="utf-8")  # the user's own bin
+    (data / "models" / "my-model.bin").write_text("mine", encoding="utf-8")  # and their own models
+    (app / ".env").write_text(f"FLUENTFLOW_DATA_DIR='{data}'\n", encoding="utf-8")
+
+    plan = _uninstall(tmp_path, app, "--all", "--yes", "--dry-run")
+    assert "bin" in plan.stdout.split("认不出")[-1] and "models" in plan.stdout.split("认不出")[-1]
+    result = _uninstall(tmp_path, app, "--all", "--yes")
+
+    assert result.returncode == 0, result.stderr
+    assert (data / "bin" / "my-script").exists() and (data / "bin" / "ffmpeg").exists()
+    assert (data / "models" / "my-model.bin").exists()
+    assert not (data / "fluentflow_jobs.sqlite").exists() and not (data / "logs").exists()
+    assert not (data / "sources").exists()
+
+
+@mac_only
+def test_a_folder_of_only_fluentflow_names_is_kept_when_one_holds_the_users_files(tmp_path):
+    app = _fake_code(tmp_path / "app")
+    data = tmp_path / "data"
+    (data / "models").mkdir(parents=True)
+    (data / "models" / "my-model.bin").write_text("mine", encoding="utf-8")
+    (data / "fluentflow_jobs.sqlite").write_text("tasks", encoding="utf-8")
+    (app / ".env").write_text(f"FLUENTFLOW_DATA_DIR='{data}'\n", encoding="utf-8")
+
+    result = _uninstall(tmp_path, app, "--all", "--yes")
+
+    assert result.returncode == 0, result.stderr
+    assert (data / "models" / "my-model.bin").exists() and not (data / "fluentflow_jobs.sqlite").exists()
+
+
+@mac_only
+def test_removing_the_program_leaves_a_bin_with_the_users_files(tmp_path):
+    app = _fake_code(tmp_path / "app")
+    data = tmp_path / "data"
+    (data / "bin").mkdir(parents=True)
+    (data / "bin" / "ffmpeg").write_text("tool", encoding="utf-8")
+    (data / "bin" / "my-script").write_text("mine", encoding="utf-8")
+    (app / ".env").write_text(f"FLUENTFLOW_DATA_DIR='{data}'\n", encoding="utf-8")
+
+    result = _uninstall(tmp_path, app, "--models", "--yes")
+
+    assert result.returncode == 0, result.stderr
+    assert (data / "bin" / "my-script").exists()
+
+
+@mac_only
 def test_removing_all_data_removes_a_folder_that_is_only_fluentflows(tmp_path):
     app = _fake_code(tmp_path / "app")
     data = tmp_path / "data"
@@ -447,10 +578,16 @@ def test_the_uninstaller_stops_programs_running_from_the_code_folder(tmp_path):
     app = _fake_code(tmp_path / "app")
     (app / "data").mkdir()
     (app / ".env").write_text(f"FLUENTFLOW_DATA_DIR='{tmp_path / 'data'}'\n", encoding="utf-8")
-    # Stands in for the background model download: its command line names a
-    # file in the code folder, as the venv's python running stt_model.py does.
-    downloader = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(app / "scripts" / "stt_model.py")])
+    # Stands in for the background model download: a python running a script
+    # in the code folder, as the venv's python runs stt_model.py.
+    (app / "scripts").mkdir()
+    (app / "scripts" / "stt_model.py").write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    (tmp_path / "other.py").write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    downloader = subprocess.Popen([sys.executable, str(app / "scripts" / "stt_model.py")])
+    # Another program that only names the folder somewhere in its arguments.
+    bystander = subprocess.Popen([sys.executable, str(tmp_path / "other.py"), str(app) + "/notes"])
     try:
+        time.sleep(0.5)
         result = _uninstall(tmp_path, app, "--models", "--yes")
         assert result.returncode == 0, result.stderr
         for _ in range(20):
@@ -458,7 +595,9 @@ def test_the_uninstaller_stops_programs_running_from_the_code_folder(tmp_path):
                 break
             time.sleep(0.25)
         assert downloader.poll() is not None
+        assert bystander.poll() is None
     finally:
-        if downloader.poll() is None:
-            os.kill(downloader.pid, signal.SIGKILL)
-            downloader.wait()
+        for process in (downloader, bystander):
+            if process.poll() is None:
+                os.kill(process.pid, signal.SIGKILL)
+                process.wait()

@@ -1,12 +1,19 @@
-# What FluentFlow itself makes in its data folder (FLUENTFLOW_DATA_DIR), one
-# name or wildcard pattern per line. Removing the data (uninstall --all / -All)
-# removes the whole folder only when everything in it is on this list; otherwise
-# it removes just these and names what it left, because the folder may be one
-# the user also keeps their own files in. Read by launchers/macos/uninstall-local.sh
-# and launchers/windows/uninstall-local.ps1; tests/test_install_places.py fails
-# when the code writes something here that is not on the list.
+# What FluentFlow itself makes in its data folder (FLUENTFLOW_DATA_DIR). Read by
+# launchers/macos/uninstall-local.sh and launchers/windows/uninstall-local.ps1;
+# tests/test_install_places.py fails when the code writes something in the data
+# folder that is not on this list.
+#
+# One entry per line: a name (wildcards allowed), then, for a common name another
+# program or the user may also use (bin, models, logs...), what FluentFlow puts
+# inside it. An entry counts as FluentFlow's when its name is here and, for a
+# common name, everything directly inside it matches one of those patterns
+# (.DS_Store, Thumbs.db and desktop.ini aside). Removing the data deletes the
+# folder whole only when every entry in it counts; otherwise it deletes just
+# those and lists what it left, since the folder may be one the user keeps their
+# own files in. Removing the program deletes bin, tools and cache only when they
+# count.
 
-# Settings, task history and their SQLite side files
+# Names only FluentFlow uses
 fluentflow_config.json
 fluentflow_config.json.*
 fluentflow_jobs.sqlite
@@ -15,27 +22,24 @@ fluentflow_jobs.sqlite.*
 fluentflow_events.sqlite
 fluentflow_events.sqlite-*
 fluentflow_events.sqlite.*
-
-# Recordings, transcripts, notes and their edits
-sources
-artifacts
-edited_transcripts
-transcript_edit_records
-video_sources
-note_skills
-
-# Speaker models, the model table and its temporary copies
-models
 recommended_models.json
 .recommended_models.json.*
-
-# Downloaded FFmpeg, uv, Node.js and Python, the download cache, logs
-bin
-tools
-cache
-logs
 yt_dlp_last_update
 .fluentflow-write-check
+video_sources
+edited_transcripts          *_edited.txt
+transcript_edit_records     *_edit_records.json
+note_skills                 mine
+
+# Common names: only with what FluentFlow puts in them. A task's folder is named
+# by its id (32 hex digits, or the older form with dashes).
+sources     ????????????????????????????????  ????????-????-????-????-????????????
+artifacts   ????????????????????????????????  ????????-????-????-????-????????????
+models      speaker  pyannote
+bin         ffmpeg  ffprobe  uv  uvx  ffmpeg.exe  ffprobe.exe
+tools       node-v*  python  uv-*  *.zip  *.tar.gz
+cache       uv  pip  npm
+logs        *.log  *.log.*
 
 # Left by the system's file browser
 .DS_Store

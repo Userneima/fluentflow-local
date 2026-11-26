@@ -59,29 +59,69 @@ function Expand-FluentFlowReferences([string]$Value, [hashtable]$Earlier) {
     })
 }
 
+# The text inside a leading quote, escapes decoded as the service decodes them
+# (backend/core/runtime_paths.py, _quoted): \\ and \' in single quotes, the
+# usual backslash escapes in double quotes ("D:\\notes" is D:\notes, "\t" a
+# tab). $null when the quote is not closed on its line (a closing \' or \"):
+# the service then reads the next line into the value.
+function ConvertFrom-FluentFlowQuoted([string]$Value) {
+    $Quote = $Value[0]
+    $Out = New-Object System.Text.StringBuilder
+    for ($i = 1; $i -lt $Value.Length; $i++) {
+        $Char = $Value[$i]
+        if ($Char -eq '\' -and $i + 1 -lt $Value.Length) {
+            $Next = [string]$Value[$i + 1]
+            $Decoded = $null
+            if ($Quote -eq "'") {
+                if ($Next -ceq '\' -or $Next -ceq "'") { $Decoded = $Next }
+            } else {
+                switch -CaseSensitive ($Next) {
+                    'n' { $Decoded = "`n" } 'r' { $Decoded = "`r" } 't' { $Decoded = "`t" } 'a' { $Decoded = "`a" }
+                    'b' { $Decoded = "`b" } 'f' { $Decoded = "`f" } 'v' { $Decoded = "`v" }
+                    '\' { $Decoded = '\' } "'" { $Decoded = "'" } '"' { $Decoded = '"' }
+                }
+            }
+            if ($null -ne $Decoded) { [void]$Out.Append($Decoded); $i++; continue }
+        }
+        if ($Char -eq $Quote) { return $Out.ToString() }
+        [void]$Out.Append($Char)
+    }
+    return $null
+}
+
+# A value as the service reads it; $null when its quote is not closed.
 function ConvertFrom-FluentFlowEnvValue([string]$Raw, [hashtable]$Earlier) {
     $Value = $Raw.Trim()
     if ($Value.Length -ge 1 -and ($Value[0] -eq '"' -or $Value[0] -eq "'")) {
-        $Quote = $Value[0]
-        $End = $Value.IndexOf($Quote, 1)
-        if ($End -gt 0) {
-            $Inner = $Value.Substring(1, $End - 1)
-            if ($Quote -eq '"') { $Inner = $Inner.Replace('\n', "`n").Replace('\"', '"').Replace('\\', '\') }
-            return Expand-FluentFlowReferences $Inner $Earlier
-        }
+        $Inner = ConvertFrom-FluentFlowQuoted $Value
+        if ($null -eq $Inner) { return $null }
+        return Expand-FluentFlowReferences $Inner $Earlier
     }
     return Expand-FluentFlowReferences (([regex]::Split($Value, '\s+#', 2)[0]).Trim()) $Earlier
 }
 
-# The value of a line in the repository's .env, ignoring the environment.
+# The value of a line in the repository's .env, ignoring the environment, read
+# as the service reads it: every line in order, so a value can use an earlier
+# one. What cannot be read the way the service reads it comes back starting
+# with $? (Resolve-FluentFlowPlace then reports it unsure): a quote not closed
+# on its line, and every line after it (the service reads them into that
+# value), and anything in a file that is not UTF-8 (read with U+FFFD in it).
 function Get-FluentFlowEnvFileValue([string]$Repo, [string]$Name) {
     $EnvFile = Join-Path $Repo ".env"
     if (-not (Test-Path -LiteralPath $EnvFile)) { return $null }
-    # Every line in order, so a value can use an earlier one.
+    $Lines = [System.IO.File]::ReadAllLines($EnvFile, [System.Text.Encoding]::UTF8)
+    $Broken = @($Lines | Where-Object { $_.Contains([char]0xFFFD) }).Count -gt 0
     $Values = @{}
-    foreach ($Line in [System.IO.File]::ReadAllLines($EnvFile, [System.Text.Encoding]::UTF8)) {
+    foreach ($Line in $Lines) {
         if ($Line -match '^\s*(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$') {
-            $Values[$Matches[2]] = ConvertFrom-FluentFlowEnvValue $Matches[3] $Values
+            $Key = $Matches[2]
+            $RawValue = $Matches[3]
+            $Read = if ($Broken) { $null } else { ConvertFrom-FluentFlowEnvValue $RawValue $Values }
+            if ($null -eq $Read) {
+                $Broken = $true
+                $Read = '$?' + $RawValue.Trim()
+            }
+            $Values[$Key] = $Read
         }
     }
     if ($Values[$Name]) { return $Values[$Name] }
