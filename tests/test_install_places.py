@@ -614,3 +614,65 @@ def test_the_mac_uninstaller_counts_busy_tasks_as_the_launcher_does():
     text = _read(ROOT / "launchers" / "macos" / "uninstall-local.sh")
     assert "count_active_jobs.py" in text
     assert "/jobs?limit" not in text and "grep -c" not in text
+
+
+# --- the setup puts tools and models where the service looks ----------------
+# Requirement (2026-11-26, decision 7.11): a data folder written as a relative
+# path is placed from the code folder, as the service places it, whatever
+# folder the setup is run from; one that cannot be placed for sure stops the
+# setup before anything is installed, as updating and uninstalling do.
+
+def _setup_code(folder: Path, env_line: str) -> Path:
+    (folder / "backend").mkdir(parents=True)
+    (folder / "backend" / "local_main.py").write_text("", encoding="utf-8")
+    macos = folder / "launchers" / "macos"
+    macos.mkdir(parents=True)
+    for name in ("setup-local.sh", "fluentflow-env.sh"):
+        shutil.copy2(ROOT / "launchers" / "macos" / name, macos / name)
+    (folder / ".env").write_text(env_line + "\n", encoding="utf-8")
+    return folder
+
+
+def _setup(tmp_path: Path, folder: Path, cwd: Path) -> subprocess.CompletedProcess:
+    # No download gets out: curl fails, so the run stops at fetching FFmpeg,
+    # after the data folder's bin is made.
+    fake = tmp_path / "fake-bin"
+    fake.mkdir(exist_ok=True)
+    (fake / "curl").write_text("#!/bin/bash\nexit 7\n", encoding="utf-8")
+    (fake / "curl").chmod(0o755)
+    env = _sandbox_env(tmp_path)
+    env["PATH"] = f"{fake}:{env['PATH']}"
+    cwd.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(["bash", str(folder / "launchers" / "macos" / "setup-local.sh"), "--skip-desktop", "--skip-model"],
+                          capture_output=True, text=True, env=env, cwd=cwd, timeout=120)
+
+
+@mac_only
+def test_setup_places_a_relative_data_folder_from_the_code_folder(tmp_path):
+    folder = _setup_code(tmp_path / "app", "FLUENTFLOW_DATA_DIR=data\nHF_HOME=./models")
+    elsewhere = tmp_path / "elsewhere"
+    run = _setup(tmp_path, folder, elsewhere)
+    assert (folder / "data" / "bin").is_dir(), run.stdout + run.stderr
+    assert not (elsewhere / "data").exists()
+
+
+@mac_only
+@pytest.mark.parametrize("env_line", ["FLUENTFLOW_DATA_DIR=$HOME/data", "FLUENTFLOW_DATA_DIR='unclosed"])
+def test_setup_stops_on_a_data_folder_it_cannot_place(tmp_path, env_line):
+    folder = _setup_code(tmp_path / "app", env_line)
+    elsewhere = tmp_path / "elsewhere"
+    run = _setup(tmp_path, folder, elsewhere)
+    assert run.returncode != 0
+    assert "看不准在哪" in run.stderr and "什么都还没装" in run.stderr
+    assert "FFmpeg" not in run.stdout
+    assert not any(elsewhere.iterdir()) and not (folder / "data").exists()
+
+
+def test_the_windows_setup_stops_on_a_place_it_cannot_tell():
+    helper = _read(ROOT / "launchers" / "windows" / "fluentflow-env.ps1")
+    body = helper[helper.index("function Import-FluentFlowEnv"):]
+    body = body[:body.index("\n}\n")]
+    assert "Resolve-FluentFlowPlace $Repo $Value" in body and "return $Unplaced" in body
+    setup = _read(ROOT / "launchers" / "windows" / "setup-local.ps1")
+    assert "$Unplaced = @(Import-FluentFlowEnv $Repo)" in setup
+    assert setup.index("$Unplaced.Count -gt 0") < setup.index("Get-FluentFlowDataDir $Repo")

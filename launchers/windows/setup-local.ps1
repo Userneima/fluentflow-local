@@ -52,7 +52,10 @@ $Venv = Join-Path $Repo ".venv"
 $Python = Join-Path $Venv "Scripts\python.exe"
 
 . (Join-Path $ScriptDir "fluentflow-env.ps1")
-Import-FluentFlowEnv $Repo
+$Unplaced = @(Import-FluentFlowEnv $Repo)
+if ($Unplaced.Count -gt 0) {
+    throw "$($Unplaced -join ', ') 照服务的读法看不准在哪（展开不了的 `$、盘符后没有 \ 的 D:data、引号没在本行闭合、.env 不是 UTF-8）；照这样装，FFmpeg 和模型会放到服务找不到的地方。请在 .env 或环境变量里把它改成完整路径后重新运行。什么都还没装。"
+}
 Use-FluentFlowSystemProxy
 
 function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {

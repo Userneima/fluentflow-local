@@ -172,7 +172,7 @@ if ($Models -and (Test-InHome $ModelHome)) {
 } elseif ($Models) {
     if (Test-Path $Python) {
         try {
-            Import-FluentFlowEnv $Repo
+            Import-FluentFlowEnv $Repo | Out-Null
             $ModelDirs = @(& $Python (Join-Path $Repo "scripts\stt_model.py") "cache-paths" 2>$null |
                 Where-Object { $_ -and (Test-Path $_) })
         } catch {

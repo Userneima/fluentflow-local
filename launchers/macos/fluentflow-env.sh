@@ -204,12 +204,22 @@ ff_data_dir() {
 	printf '%s' "${value:-${HOME}/Library/Application Support/FluentFlow}"
 }
 
-# 把 .env 里会影响下载和存放位置的几项放进环境，给这个脚本启动的程序用。
+# 把 .env 里会影响下载和存放位置的几项放进环境，给这个脚本启动的程序用。位置照服务的
+# 读法换成完整路径（ff_place：~ 是家目录，相对路径从代码目录算起），不然这个脚本按它运行
+# 时所在的目录放 FFmpeg、Node.js 和模型，服务却去代码目录下找。看不准的照原样放进去，
+# 名字记在 FF_UNPLACED 里，由调用方停下说明（决策 7.11）。
 ff_import_env() {
-	local name value
+	local name value place
+	FF_UNPLACED=""
 	for name in FLUENTFLOW_DATA_DIR HF_HOME PIP_CACHE_DIR UV_CACHE_DIR npm_config_cache; do
 		value="$(ff_setting "$1" "$name")"
-		[[ -n "$value" ]] && export "${name}=${value}"
+		[[ -n "$value" ]] || continue
+		if place="$(ff_place "$1" "$value")"; then
+			export "${name}=${place}"
+		else
+			export "${name}=${value}"
+			FF_UNPLACED="${FF_UNPLACED:+${FF_UNPLACED} }${name}（${value#\$\?}）"
+		fi
 	done
 	return 0
 }

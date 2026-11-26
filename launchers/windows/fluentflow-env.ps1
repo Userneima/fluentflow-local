@@ -200,11 +200,21 @@ function Get-FluentFlowPort([string]$Repo) {
 # The settings the installer may have written into .env that the tools this
 # process starts read from the environment: the data folder, the model cache,
 # and the pip and npm caches (kept in the install folder, not on drive C).
+# Each goes in as the full path the service would use (Resolve-FluentFlowPlace:
+# a relative path from the code folder, not from wherever this script runs),
+# or the setup would put FFmpeg, Node.js and the models where the service does
+# not look. One that cannot be placed for sure goes in as written, and its
+# name and value are returned for the caller to stop on (decision 7.11).
 function Import-FluentFlowEnv([string]$Repo) {
+    $Unplaced = @()
     foreach ($Name in @("FLUENTFLOW_DATA_DIR", "HF_HOME", "PIP_CACHE_DIR", "UV_CACHE_DIR", "npm_config_cache")) {
         $Value = Get-FluentFlowSetting $Repo $Name
-        if ($Value) { [Environment]::SetEnvironmentVariable($Name, $Value, "Process") }
+        if (-not $Value) { continue }
+        $Place = Resolve-FluentFlowPlace $Repo $Value
+        if ($Place.Sure) { $Value = $Place.Path } else { $Unplaced += "$Name ($Value)" }
+        [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
     }
+    return $Unplaced
 }
 
 # Appends NAME=value to .env unless the file already has the name. Single

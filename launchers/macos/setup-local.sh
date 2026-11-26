@@ -66,6 +66,8 @@ fail() {
 # shellcheck source=fluentflow-env.sh
 source "${SCRIPT_DIR}/fluentflow-env.sh"
 ff_import_env "$REPO"
+[[ -z "$FF_UNPLACED" ]] ||
+	fail "${FF_UNPLACED} 照服务的读法看不准在哪（展开不了的 \$、引号没在本行闭合、.env 不是 UTF-8）；照这样装，FFmpeg 和模型会放到服务找不到的地方。请在 .env 或环境变量里把它改成完整路径后重新运行。什么都还没装。"
 ff_use_system_proxy
 DATA_DIR="$(ff_data_dir "$REPO")"
 TOOLS_BIN="${DATA_DIR}/bin"

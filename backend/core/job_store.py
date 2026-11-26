@@ -107,8 +107,85 @@ def _json_dumps(value: Any) -> str | None:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _result_json_dumps(result: dict[str, Any] | None) -> str | None:
-    return _json_dumps(normalize_result_for_storage(result))
+def _stored_result(result: dict[str, Any] | None) -> tuple[str | None, str | None, int]:
+    """A result as it is written: its JSON, the part a list row reads of it
+    (``list_result_json``) and when that part was made (``list_result_at``)."""
+    normalized = normalize_result_for_storage(result)
+    text = _json_dumps(normalized)
+    return text, _list_part_json(normalized, text), time.time_ns()
+
+
+# The part of a result a list row reads (``_result_summary``, and what
+# ``normalize_result_for_read`` derives it from), kept beside the result in
+# ``list_result_json`` when the result is written. The records page's whole
+# list read every result for it: 94 MB on 303 tasks, half a second on an idle
+# machine and over ten while it transcribed; this part is about 3 MB
+# (2026-11-26, decision 6.96). ``tests/test_job_list_summary.py`` checks a row
+# read from it equals one read from the result, and that every key
+# ``_result_summary`` reads is here.
+_LIST_RESULT_KEYS = (
+    "task_id", "status", "filename", "raw_title", "display_title", "audio_duration_seconds",
+    "stt_elapsed_seconds", "stt_realtime_factor", "stt_provider", "stt_provider_label", "stt_model",
+    "stt_speed", "stt_language", "detected_language", "source_language", "subtitle_mode",
+    "translation_status", "translation_error", "summary_status", "summary_error", "summary_skipped",
+    "download_only", "downloaded_file", "summary_skipped_reason", "summary_markdown",
+    "transcript_text_preview", "artifacts", "transcript_media", "summary_written_from",
+    "note_written_by", "note_fallback_reason", "feishu_doc_url", "lark_error", "source_fingerprint",
+    "playback_audio_available", "source_file_available", "requested_note_mode", "resolved_note_mode",
+    "note_mode_chunk_count", "note_mode_segment_count", "note_mode_evidence_count",
+    "note_mode_chapter_count", "note_mode_important_evidence_count",
+    "note_mode_covered_important_evidence_count", "note_mode_coverage_missing_count",
+    "note_mode_plan_reason", "note_mode_plan_confidence", "note_mode_plan_warnings",
+    "note_mode_plan_provider", "note_mode_plan_model", "note_mode_plan_fallback", "note_mode_plan_error",
+    "note_mode_plan_selected_mode", "prompt_preset", "prompt_preset_label", "imported_from_local_history",
+    "result_schema_version",
+)
+# The objects a row reads a part of, and that part.
+_LIST_RESULT_PARTS: dict[str, tuple[str, ...]] = {
+    "debreath": ("status", "stage", "used_for_transcription", "already_cut", "not_worth_rendering",
+                 "not_used_reason", "ran_before_transcription", "render_verified", "delivered",
+                 "delivered_name", "delivery_error", "plan", "survey"),
+    "debreath.plan": ("cut_count", "removed_seconds", "removed_percent", "kept_seconds", "source_duration_seconds"),
+    # What ``cut_trust.waiting`` reads: the report, the answers and which
+    # judge, whose reminders may be closed since (so the count is not kept).
+    "debreath.survey": ("report", "verdicts", "judged_by", "rerendering"),
+    "agent_cut": ("status", "since", "fallback_reason", "judged_by"),
+    "visual_note": ("status", "media_source"),
+    "output_folder": ("path", "cut_path", "error"),
+    "lark_response": ("url",),
+}
+# The list shows the first 240 characters of the transcript.
+_LIST_TRANSCRIPT_CHARS = 240
+
+
+def _list_part_of(value: Any, path: str) -> Any:
+    """``value``'s keys a list row reads. A part that is not an object, or is
+    empty, stays as it is (an empty cut still reads as no cut); one with none
+    of those keys keeps a marker so it does not read as empty."""
+    if not isinstance(value, dict) or not value:
+        return value
+    part = {
+        key: _list_part_of(value[key], f"{path}.{key}") if f"{path}.{key}" in _LIST_RESULT_PARTS else value[key]
+        for key in _LIST_RESULT_PARTS[path] if key in value
+    }
+    return part or {"_not_empty": True}
+
+
+def _list_part_json(result: Any, text: str | None) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    part = {key: result[key] for key in _LIST_RESULT_KEYS if key in result}
+    for key in _LIST_RESULT_PARTS:
+        if "." not in key and key in result:
+            part[key] = _list_part_of(result[key], key)
+    if "transcript_text" in result:
+        transcript = result["transcript_text"]
+        part["transcript_text"] = transcript[:_LIST_TRANSCRIPT_CHARS] if isinstance(transcript, str) else transcript
+    # Said by the segments the part leaves out, for a result that never had
+    # it stored (as the list read it from the whole result before).
+    if not part.get("subtitle_mode"):
+        part["subtitle_mode"] = "bilingual_zh" if '"text_zh"' in (text or "") else "source_only"
+    return _json_dumps(part)
 
 
 def _json_loads(value: str | None) -> Any:
@@ -171,7 +248,51 @@ def ensure_job_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
         if "client_id" not in columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN client_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_client_updated_at ON jobs(client_id, updated_at)")
+        if "list_result_json" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN list_result_json TEXT")
+        if "list_result_at" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN list_result_at INTEGER")
+        # A write that changes the result without its list part (an older
+        # FluentFlow, a hand-run UPDATE) leaves the part out of date; this
+        # clears it, and the list reads that row from its result. Plain SQL,
+        # so any SQLite that opens the file can run it.
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS jobs_list_result_stale AFTER UPDATE OF result_json ON jobs"
+            " WHEN NEW.list_result_at IS OLD.list_result_at AND NEW.result_json IS NOT OLD.result_json"
+            " BEGIN UPDATE jobs SET list_result_json = NULL WHERE task_id = NEW.task_id; END"
+        )
+        conn.commit()
+        _fill_list_results(conn)
     _SCHEMA_READY.add(key)
+
+
+def _fill_list_results(conn: sqlite3.Connection, batch: int = 20) -> None:
+    """Make the list part of results written without one: every task the
+    first time this version opens the file, a task an older version wrote
+    since. A batch at a time, each read and written in one transaction, so a
+    result written meanwhile is not given the part of the one before it. A
+    failure leaves the rest to be read from their results, as before."""
+    try:
+        while True:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                "SELECT task_id, result_json FROM jobs"
+                " WHERE list_result_json IS NULL AND result_json IS NOT NULL LIMIT ?", (batch,),
+            ).fetchall()
+            for task_id, text in rows:
+                part = _list_part_json(_json_loads(text), text)
+                # A result that is not an object reads as no result, as it
+                # did from the result itself.
+                conn.execute(
+                    "UPDATE jobs SET list_result_json = ?, list_result_at = ? WHERE task_id = ?",
+                    (part if part is not None else "null", time.time_ns(), task_id),
+                )
+            conn.commit()
+            if len(rows) < batch:
+                return
+    except Exception:  # noqa: BLE001 - the list reads those rows from their results
+        conn.rollback()
+        logger.warning("could not make the list part of stored results", exc_info=True)
 
 
 def adopt_jobs_for_owner(owner: str, db_path: Path | str = DEFAULT_DB_PATH) -> int:
@@ -281,13 +402,14 @@ def upsert_job(
                 # do write the same row at the same time.
                 conn.execute("BEGIN IMMEDIATE")
                 merged_metadata = _merged_metadata_for_upsert(conn, task_id, metadata, stage, now)
+                result_text, list_text, list_at = _stored_result(result)
                 conn.execute(
                     """
                     INSERT INTO jobs (
                         task_id, created_at, updated_at, status, client_id, stage, progress,
                         source_type, source_filename, source_file_size_mb, summary_status,
-                        error_reason, result_json, metadata_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        error_reason, result_json, metadata_json, list_result_json, list_result_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(task_id) DO UPDATE SET
                         updated_at=excluded.updated_at,
                         status=excluded.status,
@@ -300,7 +422,11 @@ def upsert_job(
                         summary_status=COALESCE(excluded.summary_status, jobs.summary_status),
                         error_reason=COALESCE(excluded.error_reason, jobs.error_reason),
                         result_json=COALESCE(excluded.result_json, jobs.result_json),
-                        metadata_json=COALESCE(excluded.metadata_json, jobs.metadata_json)
+                        metadata_json=COALESCE(excluded.metadata_json, jobs.metadata_json),
+                        list_result_json=CASE WHEN excluded.result_json IS NULL THEN jobs.list_result_json
+                                              ELSE excluded.list_result_json END,
+                        list_result_at=CASE WHEN excluded.result_json IS NULL THEN jobs.list_result_at
+                                            ELSE excluded.list_result_at END
                     WHERE jobs.status != 'cancelled' OR excluded.status = 'cancelled'
                     """,
                     (
@@ -316,8 +442,10 @@ def upsert_job(
                         source_file_size_mb,
                         summary_status,
                         error_reason,
-                        _result_json_dumps(result),
+                        result_text,
                         _json_dumps(merged_metadata),
+                        list_text,
+                        list_at,
                     ),
                 )
             return
@@ -476,10 +604,12 @@ def list_jobs_by_statuses(
     ]
 
 
-# What a list row never shows: every segment list, the full-length transcript
-# variants (the preview comes from transcript_text), and the visual note's own
-# copy of the note and its frame lists. ``visual_note.media_source`` stays,
-# because reading corrects the note's recorded source from it.
+# A row whose list part is missing (written by an older FluentFlow, or not
+# made yet) is read from its result as before: without every segment list,
+# the full-length transcript variants (the preview comes from
+# transcript_text), and the visual note's own copy of the note and its frame
+# lists. ``visual_note.media_source`` stays, because reading corrects the
+# note's recorded source from it. SQLite reads the result only for those rows.
 _SUMMARY_DROPPED_KEYS = (
     "raw_segments", "display_segments", "stt_raw_segments", *sorted(LEGACY_SEGMENT_KEYS),
     "raw_transcript_text", "cleaned_transcript_text",
@@ -489,10 +619,12 @@ _SUMMARY_DROPPED_KEYS = (
 _SUMMARY_COLUMNS = (
     "task_id, created_at, updated_at, status, client_id, stage, progress, source_type,"
     " source_filename, source_file_size_mb, summary_status, error_reason, metadata_json,"
-    " json_remove(result_json, " + ", ".join(f"'$.{key}'" for key in _SUMMARY_DROPPED_KEYS) + ") AS result_json,"
+    " list_result_json,"
+    " CASE WHEN list_result_json IS NULL THEN json_remove(result_json, "
+    + ", ".join(f"'$.{key}'" for key in _SUMMARY_DROPPED_KEYS) + ") END AS result_json,"
     # What the dropped segments said about subtitles, for an old result that
     # never had subtitle_mode stored.
-    " instr(result_json, '\"text_zh\"') > 0 AS has_text_zh"
+    " CASE WHEN list_result_json IS NULL THEN instr(result_json, '\"text_zh\"') > 0 END AS has_text_zh"
 )
 
 
@@ -816,13 +948,15 @@ def update_job_result(
             summary_status = None
         if touch_updated_at:
             conn.execute(
-                "UPDATE jobs SET updated_at = ?, result_json = ?, summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
-                (now, _result_json_dumps(result), summary_status, task_id),
+                "UPDATE jobs SET updated_at = ?, result_json = ?, list_result_json = ?, list_result_at = ?,"
+                " summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
+                (now, *_stored_result(result), summary_status, task_id),
             )
         else:
             conn.execute(
-                "UPDATE jobs SET result_json = ?, summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
-                (_result_json_dumps(result), summary_status, task_id),
+                "UPDATE jobs SET result_json = ?, list_result_json = ?, list_result_at = ?,"
+                " summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
+                (*_stored_result(result), summary_status, task_id),
             )
         before = _json_loads(row["result_json"])
         updated = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
@@ -931,13 +1065,15 @@ def save_result_changes(
             summary_status = None
         if touch_updated_at:
             conn.execute(
-                "UPDATE jobs SET updated_at = ?, result_json = ?, summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
-                (_now_iso(), _result_json_dumps(merged), summary_status, task_id),
+                "UPDATE jobs SET updated_at = ?, result_json = ?, list_result_json = ?, list_result_at = ?,"
+                " summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
+                (_now_iso(), *_stored_result(merged), summary_status, task_id),
             )
         else:
             conn.execute(
-                "UPDATE jobs SET result_json = ?, summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
-                (_result_json_dumps(merged), summary_status, task_id),
+                "UPDATE jobs SET result_json = ?, list_result_json = ?, list_result_at = ?,"
+                " summary_status = COALESCE(?, summary_status) WHERE task_id = ?",
+                (*_stored_result(merged), summary_status, task_id),
             )
         updated = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id,)).fetchone()
         conn.commit()
@@ -1004,11 +1140,11 @@ def finalize_note_if_unchanged(
             """
             UPDATE jobs
             SET updated_at = ?, status = ?, stage = ?, progress = COALESCE(?, progress),
-                summary_status = ?, error_reason = ?, result_json = ?
+                summary_status = ?, error_reason = ?, result_json = ?, list_result_json = ?, list_result_at = ?
             WHERE task_id = ?
             """,
             (_now_iso(), status, stage, progress, summary_status, error_reason,
-             _result_json_dumps(merged), task_id_value),
+             *_stored_result(merged), task_id_value),
         )
         updated = conn.execute("SELECT * FROM jobs WHERE task_id = ?", (task_id_value,)).fetchone()
         conn.commit()
@@ -1055,8 +1191,8 @@ def append_job_result_list_item(
         items = list(current_items) if isinstance(current_items, list) else []
         next_result[field_value] = [*items, dict(item)]
         conn.execute(
-            "UPDATE jobs SET updated_at = ?, result_json = ? WHERE task_id = ?",
-            (now, _result_json_dumps(next_result), task_id_value),
+            "UPDATE jobs SET updated_at = ?, result_json = ?, list_result_json = ?, list_result_at = ? WHERE task_id = ?",
+            (now, *_stored_result(next_result), task_id_value),
         )
         updated = conn.execute(
             "SELECT * FROM jobs WHERE task_id = ?",
@@ -1649,9 +1785,13 @@ def _output_folder_summary(folder: Any) -> dict[str, Any] | None:
 
 
 def _row_to_summary_dict(row: sqlite3.Row) -> dict[str, Any]:
-    stored = _json_loads(row["result_json"])
-    if isinstance(stored, dict) and not stored.get("subtitle_mode") and "has_text_zh" in row.keys():
-        stored["subtitle_mode"] = "bilingual_zh" if row["has_text_zh"] else "source_only"
+    listed = row["list_result_json"] if "list_result_json" in row.keys() else None
+    if listed is not None:
+        stored = _json_loads(listed)
+    else:
+        stored = _json_loads(row["result_json"])
+        if isinstance(stored, dict) and not stored.get("subtitle_mode") and "has_text_zh" in row.keys():
+            stored["subtitle_mode"] = "bilingual_zh" if row["has_text_zh"] else "source_only"
     result = _result_summary(stored)
     metadata = _json_loads(row["metadata_json"])
     return {
