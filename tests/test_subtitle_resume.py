@@ -20,7 +20,9 @@ from types import SimpleNamespace
 import pytest
 
 import backend.core.transcript_note as transcript_note
-from backend.core import job_store, note_pdf, output_folder, storage_paths, task_actions, task_steps, task_stop
+from backend.core import (
+    job_store, note_pdf, output_folder, storage_paths, task_actions, task_queue, task_steps, task_stop,
+)
 from backend.core.output_folder import SUBTITLE_INTAKE_KEY
 
 SRT = """1
@@ -122,12 +124,32 @@ def _restart(task_id) -> int:
     async def scenario():
         assert task_id in task_actions.stepped_tasks_cut_off()
         carried = await task_actions.resume_after_restart([task_id])
-        assert await _until(lambda: _ended(task_id) and job_store.get_job(task_id)["status"] != "queued")
+        # The run has to be over, not only its steps ended: the last of them
+        # is written off the event loop (decision 8.30), and the run asks for
+        # the folder just after. Ending this loop with it still going cancels
+        # it there, and no folder is ever asked for.
+        assert await _until(lambda: _ended(task_id) and not task_queue.JOB_EVENTS.is_running(task_id)
+                            and job_store.get_job(task_id)["status"] != "queued")
         return carried
 
     carried = asyncio.run(scenario())
     output_folder._WORKER.submit(lambda: None).result(timeout=10)
     return carried
+
+
+def _wait_for_the_folder(check, what: str, seconds: float = 10.0) -> None:
+    """Wait until the folder holds what the test is about to read.
+
+    The folder is filled by a worker of its own a moment after the run's steps
+    are recorded (decision 8.30), so the steps reading done is not the folder
+    being there yet: wait for the file, not for a no-op submitted to that
+    worker at whatever moment the run happened to end."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if check():
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"the folder was never filled: {what}")
 
 
 def _assert_finished_with_its_note(task_id, model):
@@ -151,8 +173,9 @@ def test_a_subtitle_file_by_path_carries_on_after_a_restart(task_id, tmp_path, m
     assert _restart(task_id) == 1
 
     _assert_finished_with_its_note(task_id, model)
-    folder = srt.parent / "最小二乘法"
-    assert "模型写的" in (folder / "最小二乘法_笔记.md").read_text(encoding="utf-8")
+    note_file = srt.parent / "最小二乘法" / "最小二乘法_笔记.md"
+    _wait_for_the_folder(lambda: note_file.is_file() and "模型写的" in note_file.read_text(encoding="utf-8"),
+                         str(note_file))
     assert srt.read_text(encoding="utf-8") == SRT
 
 
@@ -300,8 +323,9 @@ def _user_edits_the_transcript(task_id):
 def _carry_on(task_id):
     async def scenario():
         await task_actions.resume_task(task_id, None)
-        assert await _until(lambda: _ended(task_id) and job_store.get_job(task_id)["result"].get(
-            "summary_status") not in {"pending", "failed"})
+        assert await _until(lambda: _ended(task_id) and not task_queue.JOB_EVENTS.is_running(task_id)
+                            and job_store.get_job(task_id)["result"].get(
+                                "summary_status") not in {"pending", "failed"})
 
     asyncio.run(scenario())
     output_folder._WORKER.submit(lambda: None).result(timeout=10)
@@ -466,8 +490,12 @@ def test_a_transcript_edit_saved_while_the_carried_on_note_is_written_stays_in_t
                   "display_segments": EDITED_SEGMENTS, "transcript_edited": True}
         job_store.save_result_changes(task_id, before, _attach_result_artifacts(task_id, edited, parts=("transcript",)))
         answer.set()
-        assert await _until(lambda: _ended(task_id) and "模型写的" in str(
-            job_store.get_job(task_id)["result"].get("summary_markdown")))
+        # The run has to be over, not only its steps ended: it asks for the
+        # folder just after the last step is written, off the event loop
+        # (decision 8.30), and this loop's end cancels it there.
+        assert await _until(lambda: _ended(task_id) and not task_queue.JOB_EVENTS.is_running(task_id)
+                            and "模型写的" in str(
+                                job_store.get_job(task_id)["result"].get("summary_markdown")))
 
     asyncio.run(scenario())
     output_folder._WORKER.submit(lambda: None).result(timeout=10)
@@ -478,8 +506,12 @@ def test_a_transcript_edit_saved_while_the_carried_on_note_is_written_stays_in_t
         encoding="utf-8")
     assert "残差平方和" in on_disk, "the transcript file went back to the text before the edit"
     process = srt.parent / "最小二乘法" / output_folder.PROCESS_DIRNAME
-    copies = [path.read_text(encoding="utf-8") for path in process.glob("*.txt")]
-    assert copies and all("残差平方和" in text for text in copies), copies
+
+    def edited_copies() -> list[str]:
+        copies = [path.read_text(encoding="utf-8") for path in process.glob("*.txt")]
+        return copies if copies and all("残差平方和" in text for text in copies) else []
+
+    _wait_for_the_folder(edited_copies, str(process))
 
 
 def test_stopping_a_carried_on_note_leaves_the_task_as_a_recording_stopped_at_its_note(
@@ -494,8 +526,6 @@ def test_stopping_a_carried_on_note_leaves_the_task_as_a_recording_stopped_at_it
         assert job_store.get_job(task_id)["status"] == "completed", "a task with its transcript reads completed"
         await task_actions.stop_step(task_id, None)
         assert await _until(lambda: _ended(task_id) and not task_queue.JOB_EVENTS.is_running(task_id))
-
-    from backend.core import task_queue
 
     try:
         asyncio.run(scenario())

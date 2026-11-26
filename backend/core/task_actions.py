@@ -280,17 +280,29 @@ async def stop_step(task_id: str, client_id: Optional[str]) -> dict[str, Any]:
     Claude command line, or the request it is waiting on. The step is recorded
     as stopped, the task reads 已停下, and ``resume_task`` carries it on from
     there."""
+    # The stop is registered before anything is read from the task store: the
+    # note's thread sends its next chapter within milliseconds of the last
+    # answer, and must see this stop. Reading first let one more request out
+    # after the user pressed 停止, paid for by them (review of 2026-11-27: the
+    # step write moved off the event loop, and with it that window widened).
+    # A task with no runner is decided below and never gets an event set.
+    running = JOB_EVENTS.is_running(task_id)
+    killed = task_stop.request(task_id) if running else 0
     job = _job(task_id, client_id, "任务不存在")
-    current = task_activity.activity(job)
     recorded = (await task_steps.steps_of_off_loop([task_id])).get(task_id, [])
+    current = task_activity.activity(job, recorded)
     open_steps = [name for name, status in task_steps.statuses(recorded).items() if status in task_steps.OPEN]
 
     if not open_steps and not JOB_EVENTS.is_running(task_id):
         if current.busy:
             raise Refused("这是单独发起的重新剪辑或重写笔记，不能停下，等它做完。", "rerun_not_stoppable")
         raise Refused("这个任务现在没有在做的步骤。", "not_working")
+    if not running:
+        # Still waiting its turn: no runner to cancel, and its thread starts
+        # only once it has one, so this is early enough. The queue sees it and
+        # does not start the task (``task_queue._start_behind_queue``).
+        killed = task_stop.request(task_id)
     step = current.current_step or (open_steps[0] if open_steps else None)
-    killed = task_stop.request(task_id)
     stopped_at_its_note = (job.get("status") in {"queued", "running"} and not task_stop.shutting_down()
                            and _transcript_note_under_way(task_id, client_id))
     if stopped_at_its_note:

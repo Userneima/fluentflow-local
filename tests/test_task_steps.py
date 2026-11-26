@@ -380,9 +380,7 @@ def test_the_step_records_are_never_written_on_the_event_loop(monkeypatch, task_
     task_steps.start(stopping, task_steps.CUT)
     watch.on_the_loop.clear()  # the setup above is the test's own, on the loop
     asyncio.run(task_actions.stop_step(stopping, None))
-    # The write and the close are off the loop; the one read is
-    # ``task_activity``'s, which the page asks too (docs/01-待办.md).
-    assert watch.on_the_loop == ["read"], watch.on_the_loop
+    assert watch.on_the_loop == [], watch.on_the_loop
     assert watch.steps(stopping)[task_steps.CUT]["status"] == task_steps.STOPPED
 
 
