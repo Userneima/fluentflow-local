@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,12 +108,27 @@ def _json_dumps(value: Any) -> str | None:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
+_STAMP_LOCK = threading.Lock()
+_LAST_STAMP = 0
+
+
+def _list_stamp() -> int:
+    """A ``list_result_at`` that never repeats in this process. Windows clocks
+    tick about every 15 ms, and two writes of one task inside a tick would get
+    the same stamp; the stale-part trigger would then clear the part the second
+    write just made."""
+    global _LAST_STAMP
+    with _STAMP_LOCK:
+        _LAST_STAMP = max(time.time_ns(), _LAST_STAMP + 1)
+        return _LAST_STAMP
+
+
 def _stored_result(result: dict[str, Any] | None) -> tuple[str | None, str | None, int]:
     """A result as it is written: its JSON, the part a list row reads of it
     (``list_result_json``) and when that part was made (``list_result_at``)."""
     normalized = normalize_result_for_storage(result)
     text = _json_dumps(normalized)
-    return text, _list_part_json(normalized, text), time.time_ns()
+    return text, _list_part_json(normalized, text), _list_stamp()
 
 
 # The part of a result a list row reads (``_result_summary``, and what
@@ -120,7 +136,7 @@ def _stored_result(result: dict[str, Any] | None) -> tuple[str | None, str | Non
 # ``list_result_json`` when the result is written. The records page's whole
 # list read every result for it: 94 MB on 303 tasks, half a second on an idle
 # machine and over ten while it transcribed; this part is about 3 MB
-# (2026-11-26, decision 6.96). ``tests/test_job_list_summary.py`` checks a row
+# (2026-11-26, decision 6.97). ``tests/test_job_list_part.py`` checks a row
 # read from it equals one read from the result, and that every key
 # ``_result_summary`` reads is here.
 _LIST_RESULT_KEYS = (
@@ -248,10 +264,14 @@ def ensure_job_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
         if "client_id" not in columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN client_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_client_updated_at ON jobs(client_id, updated_at)")
-        if "list_result_json" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN list_result_json TEXT")
-        if "list_result_at" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN list_result_at INTEGER")
+        for name, kind in (("list_result_json", "TEXT"), ("list_result_at", "INTEGER")):
+            if name not in columns:
+                try:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
+                except sqlite3.OperationalError as exc:
+                    # Another opener added it between our look and our add.
+                    if "duplicate column" not in str(exc):
+                        raise
         # A write that changes the result without its list part (an older
         # FluentFlow, a hand-run UPDATE) leaves the part out of date; this
         # clears it, and the list reads that row from its result. Plain SQL,
@@ -285,7 +305,7 @@ def _fill_list_results(conn: sqlite3.Connection, batch: int = 20) -> None:
                 # did from the result itself.
                 conn.execute(
                     "UPDATE jobs SET list_result_json = ?, list_result_at = ? WHERE task_id = ?",
-                    (part if part is not None else "null", time.time_ns(), task_id),
+                    (part if part is not None else "null", _list_stamp(), task_id),
                 )
             conn.commit()
             if len(rows) < batch:
@@ -1499,14 +1519,18 @@ def repair_truncated_display_titles(db_path: Path | str = DEFAULT_DB_PATH) -> in
             result = _json_loads(row["result_json"])
             if isinstance(result, dict) and result.get("display_title") == old:
                 result["display_title"] = fixed
-            conn.execute(
-                "UPDATE jobs SET result_json = ?, metadata_json = ? WHERE task_id = ?",
-                (
-                    _json_dumps(result) if isinstance(result, dict) else row["result_json"],
-                    _json_dumps(metadata),
-                    row["task_id"],
-                ),
-            )
+            if isinstance(result, dict):
+                text, part, stamp = _stored_result(result)
+                conn.execute(
+                    "UPDATE jobs SET result_json = ?, list_result_json = ?, list_result_at = ?,"
+                    " metadata_json = ? WHERE task_id = ?",
+                    (text, part, stamp, _json_dumps(metadata), row["task_id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE jobs SET metadata_json = ? WHERE task_id = ?",
+                    (_json_dumps(metadata), row["task_id"]),
+                )
             changed += 1
     return changed
 

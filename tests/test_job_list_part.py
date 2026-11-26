@@ -1,6 +1,6 @@
 """The records list read from the part of each result kept for it.
 
-Requirements (2026-11-26, decision 6.96):
+Requirements (2026-11-26, decision 6.97):
 
 - The whole list no longer reads every result (94 MB on 303 tasks; seconds
   on a busy machine): each result's list part is written with it.
@@ -123,6 +123,25 @@ def test_each_kind_of_write_keeps_the_part_in_step(db):
     job_store.upsert_job(task_id="nothing", status="processing", client_id="u", stage="stt", db_path=db)
     assert _now(db) == _before(db)
     assert all(_parts(db).values())
+
+
+def test_the_title_repair_keeps_the_part_in_step(db):
+    job_store.upsert_job(task_id="cut_title", status="completed", client_id="u", stage="done",
+                         result={"display_title": "第四课"}, metadata={"raw_title": "第四课.课件", "display_title": "第四课"},
+                         db_path=db)
+    assert job_store.repair_truncated_display_titles(db_path=db) == 1
+    assert _parts(db)["cut_title"]
+    rows = {job["task_id"]: job for job in _now(db)}
+    assert rows["cut_title"]["result"]["display_title"] == "第四课.课件"
+
+
+def test_two_writes_in_one_clock_tick_keep_the_part(db, monkeypatch):
+    # Windows clocks tick about every 15 ms.
+    monkeypatch.setattr(job_store.time, "time_ns", lambda: 1)
+    full = job_store.get_job("full", db_path=db)["result"]
+    job_store.update_job_result("full", {**full, "display_title": "一"}, db_path=db)
+    job_store.update_job_result("full", {**full, "display_title": "二"}, db_path=db)
+    assert _parts(db)["full"]
 
 
 def test_a_result_written_without_its_part_is_read_from_the_result(db):
