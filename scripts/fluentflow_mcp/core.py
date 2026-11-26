@@ -13,9 +13,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
+import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +81,7 @@ def _client_id(value: str | None = None) -> str:
 # scripts. ``/health`` now declares the edition; only the tools that actually
 # need one ask, so pointing this client at either backend still works for the
 # ten tools both editions serve.
-_START_HINT = "请双击桌面上的「FluentFlow Local」启动它，等它把浏览器打开之后重试。"
+_START_MANUALLY = "请双击桌面上的「FluentFlow Local」启动它，等它把浏览器打开之后重试。"
 # A 401 is almost always two copies of one token that drifted: the backend reads
 # FLUENTFLOW_ACCESS_TOKEN from the repository .env, the MCP client sends whatever
 # its own config says, and nobody can see both at once from inside a chat.
@@ -89,13 +92,62 @@ _UNAUTHORIZED_HINT = (
 )
 
 
+def _start_hint() -> str:
+    if _autostart_allowed() and _launcher_path() is not None:
+        return (
+            "FluentFlow Local 没在运行时，工具会自己在后台启动它、不打开浏览器；"
+            f"启动不成功时再{_START_MANUALLY}"
+        )
+    return _START_MANUALLY
+
+
 def _unreachable(api_base: str, reason: str) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": f"FluentFlow Local 没有在 {api_base} 应答（{reason}）。{_START_HINT}",
+        "error": f"FluentFlow Local 没有在 {api_base} 应答（{reason}）。{_start_hint()}",
         "status": None,
         "payload": None,
     }
+
+
+def _edition_of(health: dict[str, Any]) -> str:
+    edition = str(health.get("edition") or "").strip().lower()
+    if not edition:
+        # A backend from before /health declared its edition: runtime.execution
+        # was the only discriminator then, and only the local edition set it.
+        runtime = health.get("runtime") if isinstance(health.get("runtime"), dict) else {}
+        edition = "local" if str(runtime.get("execution") or "").strip().lower() == "local" else "hosted"
+    return edition
+
+
+def _local_health(api_base: str, timeout: float = 3) -> dict[str, Any] | None:
+    """The health answer, when the local edition gives one."""
+    try:
+        health = api_request("GET", api_base, "/health", timeout=timeout)
+    except FluentFlowApiError:
+        return None
+    return health if _edition_of(health) == "local" else None
+
+
+def _health(api_base: str, timeout: float = 5) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """``/health``'s answer, or the error payload to return instead.
+
+    Nothing answering on this machine is the one case where the service is
+    started first (decision 1.20); every other failure keeps its own message.
+    """
+    try:
+        return api_request("GET", api_base, "/health", timeout=timeout), None
+    except FluentFlowApiError as exc:
+        if exc.status is None:
+            started = _start_local_service(api_base)
+            if started is not None:
+                if started.get("ok") is False:
+                    return None, started
+                try:
+                    return api_request("GET", api_base, "/health", timeout=timeout), None
+                except FluentFlowApiError as again:
+                    return None, _unreachable(api_base, str(again))
+        return None, _unreachable(api_base, str(exc))
 
 
 def _backend_edition(api_base: str) -> tuple[str, dict[str, Any] | None]:
@@ -105,17 +157,10 @@ def _backend_edition(api_base: str) -> tuple[str, dict[str, Any] | None]:
     being swapped on a port, and a cached identity is wrong exactly then. One
     loopback GET is nothing beside submitting a media job.
     """
-    try:
-        health = api_request("GET", api_base, "/health", timeout=5)
-    except FluentFlowApiError as exc:
-        return "", _unreachable(api_base, str(exc))
-    edition = str(health.get("edition") or "").strip().lower()
-    if not edition:
-        # A backend from before /health declared its edition: runtime.execution
-        # was the only discriminator then, and only the local edition set it.
-        runtime = health.get("runtime") if isinstance(health.get("runtime"), dict) else {}
-        edition = "local" if str(runtime.get("execution") or "").strip().lower() == "local" else "hosted"
-    return edition, None
+    health, failure = _health(api_base)
+    if failure is not None:
+        return "", failure
+    return _edition_of(health or {}), None
 
 
 def _require_local_edition(api_base: str) -> dict[str, Any] | None:
@@ -129,7 +174,7 @@ def _require_local_edition(api_base: str) -> dict[str, Any] | None:
             "error": (
                 f"{api_base} 上应答的是 FluentFlow Hosted，这个工具要的是 FluentFlow Local。"
                 "托管版按设计不收本机文件路径，它拒绝提交并不代表本地处理这个功能不存在。"
-                f"{_START_HINT}"
+                f"{_START_MANUALLY}"
             ),
             "status": None,
             "payload": None,
@@ -137,10 +182,253 @@ def _require_local_edition(api_base: str) -> dict[str, Any] | None:
     return None
 
 
+# ── starting the service ─────────────────────────────────────────────────────
+#
+# The MCP tools answer only while the service runs, and the service used to be
+# started only by opening the desktop app, which also opened a browser page: an
+# agent asked for a note had to send the user off to click something first
+# (2026-11-26, decision 1.20). When a tool is called and nothing answers on this
+# machine, this process starts the launcher itself, detached, with the page
+# suppressed. The desktop app still opens the page: clicking it is the person
+# saying they want to see FluentFlow.
+AUTOSTART_SECONDS = 90.0
+AUTOSTART_POLL_SECONDS = 0.5
+_NO_START_VALUES = ("0", "false", "no", "off")
+
+
+def _autostart_allowed() -> bool:
+    """``FLUENTFLOW_MCP_AUTOSTART=0`` for people who start the service themselves."""
+    return (os.environ.get("FLUENTFLOW_MCP_AUTOSTART") or "").strip().lower() not in _NO_START_VALUES
+
+
+def _log_dir() -> Path:
+    """The launchers' own log folder; the autostart log and its lock live here."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "FluentFlow"
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "FluentFlow" / "Logs"
+    return Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")) / "fluentflow" / "log"
+
+
+def _local_target(api_base: str) -> tuple[str, int] | None:
+    """Where to start the service, when ``api_base`` is this machine."""
+    try:
+        parts = urllib.parse.urlsplit(api_base)
+        port = parts.port
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "http" or host not in ("127.0.0.1", "localhost", "::1"):
+        return None
+    return host, port or 80
+
+
+def _port_answers(host: str, port: int) -> bool:
+    """Whether anything answers on this port here, FluentFlow or not."""
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def _launcher_path() -> Path | None:
+    """The launcher this machine starts the service with, when it has one."""
+    if sys.platform == "darwin":
+        script = PROJECT_ROOT / "launchers" / "macos" / "FluentFlowLocal.command"
+    elif os.name == "nt":
+        script = PROJECT_ROOT / "launchers" / "windows" / "FluentFlowLocal.ps1"
+    else:
+        return None
+    return script if script.is_file() else None
+
+
+def _launcher_command(script: Path) -> list[str]:
+    if os.name == "nt":
+        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)]
+    return [str(script)]
+
+
+def _launcher_environment(port: int) -> dict[str, str]:
+    """What the desktop app would hand the launcher, minus the page."""
+    env = {**os.environ}
+    env["FLUENTFLOW_OPEN_PAGE"] = "0"
+    env["FLUENTFLOW_LOCAL_PORT"] = str(port)
+    env["FLUENTFLOW_REPO"] = str(PROJECT_ROOT)
+    return env
+
+
+def _run_launcher(port: int, log_path: Path) -> subprocess.Popen | None:
+    """Start the launcher detached, its output in ``log_path``.
+
+    Detached so it outlives this process (the conversation it belongs to may end
+    while the service keeps working), stdin from nowhere so a launcher that asks
+    something reads EOF instead of a conversation, and on Windows without a
+    console window.
+    """
+    script = _launcher_path()
+    if script is None:
+        return None
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    output = open(log_path, "a", encoding="utf-8", errors="replace")
+    try:
+        options: dict[str, Any] = {}
+        if os.name == "nt":
+            options["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+        else:
+            options["start_new_session"] = True
+        return subprocess.Popen(
+            _launcher_command(script),
+            cwd=str(PROJECT_ROOT),
+            env=_launcher_environment(port),
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            **options,
+        )
+    finally:
+        output.close()
+
+
+# Two tool calls, or two agent sessions, can arrive at a dead service at the
+# same moment; only one of them may start one. The second waits here and then
+# finds the service answering instead of starting its own.
+_starter_handle: Any = None
+
+
+def _acquire_starter_lock(deadline: float) -> bool:
+    global _starter_handle
+    try:
+        path = _log_dir() / "mcp-autostart.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path, "a+", encoding="utf-8")
+    except OSError:
+        return True  # no lock file to make here: starting is still better than not
+    while True:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _starter_handle = handle
+            return True
+        except OSError:
+            if time.monotonic() >= deadline:
+                handle.close()
+                return False
+            time.sleep(0.2)
+
+
+def _release_starter_lock() -> None:
+    global _starter_handle
+    handle, _starter_handle = _starter_handle, None
+    if handle is None:
+        return
+    try:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    handle.close()
+
+
+def _log_tail(path: Path, lines: int = 12, chars: int = 1500) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "（启动日志还没写出来）"
+    return "\n".join(text.splitlines()[-lines:])[-chars:] or "（启动日志还是空的）"
+
+
+def _start_failed(api_base: str, log_path: Path, reason: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": (
+            f"FluentFlow Local 没有在 {api_base} 应答。已经试着在后台启动它，但{reason}。\n"
+            f"启动日志：{log_path}\n最后几行：\n{_log_tail(log_path)}\n"
+            "再调一次会重新启动；也可以双击桌面上的「FluentFlow Local」看看它报什么。"
+        ),
+        "status": None,
+        "payload": None,
+    }
+
+
+def _start_local_service(api_base: str) -> dict[str, Any] | None:
+    """Start the local service when nothing answers here.
+
+    None means it was not this tool's to start — an address on another machine,
+    the switch turned off, no launcher on this platform, or something already
+    holding the port (another program, the hosted edition, a FluentFlow whose
+    health check is failing). Nothing is started or stopped then, and the caller
+    keeps the message it has always given.
+    """
+    target = _local_target(api_base)
+    if target is None or not _autostart_allowed() or _launcher_path() is None:
+        return None
+    host, port = target
+    if _port_answers(host, port):
+        return None
+    log_path = _log_dir() / "mcp-autostart.log"
+    deadline = time.monotonic() + AUTOSTART_SECONDS
+    locked = _acquire_starter_lock(deadline)
+    try:
+        if _local_health(api_base) is not None:
+            return {"ok": True}  # another caller started it while this one waited
+        if not locked:
+            return _start_failed(api_base, log_path, "另一个 FluentFlow 启动还没有结束，服务仍没有应答")
+        try:
+            process = _run_launcher(port, log_path)
+        except OSError as exc:
+            return _start_failed(api_base, log_path, f"启动器没能跑起来：{exc}")
+        if process is None:
+            return None
+        while True:
+            if _local_health(api_base) is not None:
+                return {"ok": True}
+            if process.poll() is not None:
+                return _start_failed(api_base, log_path, f"启动器退出了（退出码 {process.returncode}）")
+            if time.monotonic() >= deadline:
+                return _start_failed(
+                    api_base, log_path, f"等了 {int(AUTOSTART_SECONDS)} 秒服务仍没有应答"
+                )
+            time.sleep(AUTOSTART_POLL_SECONDS)
+    finally:
+        _release_starter_lock()
+
+
 # What the backend says when a task id matches nothing, in either wording, and
 # what an agent is told instead: the usual cause is an id copied short.
 _MISSING_TASK = ("Job not found", "任务不存在")
 _TASK_NOT_FOUND = "没有这个任务（task_id 要完整的 32 位）。用 list_tasks 按标题找到它的编号。"
+
+
+def _send(
+    method: str,
+    base: str,
+    path: str,
+    *,
+    payload: dict[str, Any] | None,
+    client_id: str | None,
+    timeout: float,
+) -> dict[str, Any]:
+    return api_request(
+        method,
+        base,
+        path,
+        payload=payload,
+        client_id=_client_id(client_id),
+        access_token=os.environ.get("FLUENTFLOW_ACCESS_TOKEN"),
+        timeout=timeout,
+    )
 
 
 def _agent_request(
@@ -151,19 +439,24 @@ def _agent_request(
     api_base: str | None = None,
     client_id: str | None = None,
     timeout: float = 60,
+    autostart: bool = True,
 ) -> dict[str, Any]:
     base = normalize_api_base(api_base)
+    sent = {"payload": payload, "client_id": client_id, "timeout": timeout}
     try:
-        return api_request(
-            method,
-            base,
-            path,
-            payload=payload,
-            client_id=_client_id(client_id),
-            access_token=os.environ.get("FLUENTFLOW_ACCESS_TOKEN"),
-            timeout=timeout,
-        )
+        return _send(method, base, path, **sent)
     except FluentFlowApiError as exc:
+        if exc.status is None and autostart:
+            # Nothing answered: the service may simply not be running. Start it
+            # (decision 1.20) and send the call once more.
+            started = _start_local_service(base)
+            if started is not None:
+                if started.get("ok") is False:
+                    return started
+                try:
+                    return _send(method, base, path, **sent)
+                except FluentFlowApiError as again:
+                    exc = again
         if exc.status is None:
             # No HTTP status means nothing answered. Say how to start it instead of
             # handing the caller a bare "Connection refused" to interpret.
@@ -280,6 +573,9 @@ def _heartbeat_once() -> None:
         answer = _agent_request(
             "POST", "/agent/v1/agent-cut/heartbeat", api_base=api_base, client_id=client_id,
             payload={"task_ids": ids}, timeout=10,
+            # A beat is this process's own bookkeeping, not a tool call: it must
+            # not start a service the user just stopped.
+            autostart=False,
         )
         if not isinstance(answer, dict) or answer.get("ok") is False or not isinstance(answer.get("watching"), list):
             continue  # FluentFlow not answering (restarting): keep them all

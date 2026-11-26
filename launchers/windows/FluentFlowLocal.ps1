@@ -23,8 +23,20 @@ function Fail([string]$Message) {
     Write-Host ""
     Write-Host "x $Message" -ForegroundColor Red
     Write-Host ""
-    Read-Host "按回车键关闭" | Out-Null
+    # Nothing to wait for when this runs behind an agent (the MCP server starts
+    # it when a tool is called and nothing answers, decision 1.20): stdin is not
+    # a console then, and Read-Host would fail instead of ending.
+    if (-not [Console]::IsInputRedirected) {
+        Read-Host "按回车键关闭" | Out-Null
+    }
     exit 1
+}
+
+# Opening the page is what a double-click asks for. The MCP server starts this
+# launcher in the background with FLUENTFLOW_OPEN_PAGE=0: the agent wants the
+# service, not a browser tab in front of the person (2026-11-26, decision 1.20).
+function Open-AppPage {
+    if ($env:FLUENTFLOW_OPEN_PAGE -ne "0") { Start-Process $AppUrl }
 }
 
 function Get-LocalHealth {
@@ -82,8 +94,8 @@ if ($health) {
     # top level made a healthy running instance look like a foreign process.
     if ($health.runtime -and $health.runtime.execution -eq "local") {
         if (Test-AppPageServes) {
-            Write-Host "FluentFlow Local is already running. Opening the workspace."
-            Start-Process $AppUrl
+            Write-Host "FluentFlow Local is already running."
+            Open-AppPage
             exit 0
         }
         Write-Host ""
@@ -228,7 +240,7 @@ for ($attempt = 0; $attempt -lt 90 -and -not (Test-FluentFlowHealthy $Port); $at
 if (-not (Test-FluentFlowHealthy $Port)) {
     Fail "服务没有在 90 秒内启动。日志：$LogFile"
 }
-Start-Process $AppUrl
+Open-AppPage
 Write-Host ""
 Write-Host "FluentFlow Local 在后台运行：$AppUrl"
 Write-Host "关掉这个窗口不影响它。要停止，双击桌面上的「停止 FluentFlow Local」。"

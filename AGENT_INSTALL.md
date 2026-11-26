@@ -84,7 +84,9 @@ seconds without an extra turn). It changes nothing else.
 
 Say this, in the user's language:
 
-- FluentFlow is installed and running; later it opens from the Desktop icon.
+- FluentFlow is installed; later it opens from the Desktop icon. You do not need them
+  to open it before you work: the tools start the service themselves, without opening
+  a page.
 - To get a note, give you (the agent) a video file or a Douyin, Bilibili or YouTube link
   in a new conversation, or drop it into the app's page.
 - You write the notes yourself, so no API key is needed. Entering a model key in the
@@ -174,14 +176,29 @@ are being processed: wait for them, or set `FLUENTFLOW_UPDATE_FORCE=1` after the
 
 The service runs in the background and does not belong to any window or shell, yours
 included, so it keeps running after your command ends. To check it, ask
-`http://127.0.0.1:8000/health` (a JSON answer with `"edition":"local"` means it is up);
-the MCP tools answer only while it runs. When it is down, start it the way the
-Desktop icon does and wait for that answer:
+`http://127.0.0.1:8000/health` (a JSON answer with `"edition":"local"` means it is up).
 
-- macOS: `open ~/Desktop/"FluentFlow Local.app"`
-- Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File <folder>\app\launchers\windows\FluentFlowLocal.ps1`
+You do not have to start it first. The MCP tools answer only while it runs, and they
+start it themselves: when a tool is called and nothing answers on this machine, the
+MCP server starts the launcher in the background — no terminal window, no browser page
+— waits up to 90 seconds for `/health` to report the local edition, then carries on
+with the call. Its output is in `~/Library/Logs/FluentFlow/mcp-autostart.log` on macOS
+and `%LOCALAPPDATA%\FluentFlow\Logs\mcp-autostart.log` on Windows; a start that does
+not come up says so, with the last lines of that log, so read them rather than guessing.
+Two calls arriving together start one service. Nothing is started or stopped when the
+port is already answered by something else (the hosted edition, another program): that
+error is unchanged. Never kill a process to make room. `FLUENTFLOW_MCP_AUTOSTART=0`
+turns the automatic start off, for a user who runs the service themselves.
+
+To start it by hand (for example with the automatic start off), use the launcher with
+the page turned off, in the background, and wait for the health answer:
+
+- macOS: `FLUENTFLOW_OPEN_PAGE=0 nohup ~/fluentflow-local/launchers/macos/FluentFlowLocal.command >>~/Library/Logs/FluentFlow/local-launcher.log 2>&1 </dev/null &`
+  (the Desktop app also starts it, but it opens a browser page: use it when the user
+  wants to see FluentFlow, not when you only need the service)
+- Windows: `$env:FLUENTFLOW_OPEN_PAGE = "0"; powershell -NoProfile -ExecutionPolicy Bypass -File <folder>\app\launchers\windows\FluentFlowLocal.ps1`
   (it checks the environment, rebuilds a broken Python environment by itself, starts
-  the service in the background, opens the page and exits)
+  the service in the background and exits)
 
 Do not start uvicorn yourself in a shell of yours: when that shell is closed or
 reclaimed, the service goes with it. To stop it on Windows:

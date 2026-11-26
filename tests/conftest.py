@@ -47,6 +47,10 @@ def _isolate_runtime_storage() -> Path:
     # Starlette's TestClient sends Host: testserver; the service only answers
     # requests addressed to this machine (local_http_boundary).
     os.environ["FLUENTFLOW_ALLOWED_HOSTS"] = "testserver"
+    # The MCP client starts the local service when nothing answers (decision
+    # 1.20). A test must never start one — a stray launcher would take a port
+    # and outlive the run — so the switch is off unless a test asks for it.
+    os.environ["FLUENTFLOW_MCP_AUTOSTART"] = "0"
 
     env_file = PROJECT_ROOT / ".env"
     dotenv_keys = set(dotenv_values(env_file)) if env_file.is_file() else set()

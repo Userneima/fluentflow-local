@@ -33,7 +33,13 @@ fi
 
 # 打开页面：Chrome 里已经有这个服务的标签页就复用它（刷新并切到前面），多余的
 # 同址标签页关掉；没有才新开。每次重启都新开一个标签页，旧的要一个个手动关。
+# FLUENTFLOW_OPEN_PAGE=0 时不打开：MCP 工具发现服务没在跑时在后台拉起这个启动器，
+# agent 要的是服务，不是让你看见浏览器（2026-11-26，决策 1.20）。桌面图标和终端里
+# 双击启动不设这个变量，照旧打开页面。
 open_app() {
+	if [[ "${FLUENTFLOW_OPEN_PAGE:-1}" == "0" ]]; then
+		return 0
+	fi
 	if pgrep -xq "Google Chrome"; then
 		local reused
 		reused="$(osascript - "$APP_URL" "http://127.0.0.1:${PORT}" <<'APPLESCRIPT' 2>/dev/null || true
@@ -106,7 +112,11 @@ fail() {
 	echo ""
 	echo "✗ $1" >&2
 	echo ""
-	read -r -p "按回车键关闭…" _ || true
+	# 背后没有终端时（MCP 工具、桌面应用拉起）不等人按回车：read 会立刻读到
+	# EOF，只把一句没人看的提示写进日志。
+	if [[ -t 0 ]]; then
+		read -r -p "按回车键关闭…" _ || true
+	fi
 	exit 1
 }
 
@@ -125,7 +135,11 @@ if [[ -n "$health" ]]; then
 		# 那次启动器认定「已在运行」，高高兴兴地把空白页打开了 —— 所以这里要探
 		# 浏览器真正会加载的那个地址，而不是只探健康检查。
 		if curl -sf --max-time 5 "$APP_URL" 2>/dev/null | head -c 1 | grep -q .; then
-			echo "FluentFlow Local 已在运行，直接打开浏览器。"
+			if [[ "${FLUENTFLOW_OPEN_PAGE:-1}" == "0" ]]; then
+				echo "FluentFlow Local 已在运行。"
+			else
+				echo "FluentFlow Local 已在运行，直接打开浏览器。"
+			fi
 			open_app
 			exit 0
 		fi
