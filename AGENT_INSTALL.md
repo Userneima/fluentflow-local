@@ -163,11 +163,14 @@ Agent-written notes and tasks handed to an agent do not trigger background Claud
 
 When the user asks you to update FluentFlow, or the page says a new version is out
 (`http://127.0.0.1:8000/release-check` answers `"update_available": true`; its
-`update_command` is the exact command for this copy), run the install command again (on
-Windows: the same `FLUENTFLOW_INSTALL_DIR`), from a directory outside the install. When the
-folder is not passed, the installer asks the running service where its code is and updates
-that copy, so an install in a folder the user chose is not joined by a second copy in the
-default place. It sees the install, downloads the newest release beside it, keeps
+`update_command` is the exact command for this copy, and the page shows it with a copy
+button), run the install command again (on Windows: the same `FLUENTFLOW_INSTALL_DIR`), from
+a directory outside the install. When the folder is not passed, the installer asks the
+running service where its code is and updates that copy, so an install in a folder the user
+chose is not joined by a second copy in the default place. That works only while the service
+is running; with it stopped, pass `FLUENTFLOW_INSTALL_DIR`. A service answering from a git
+checkout is not taken over: the installer says so and installs the release into the default
+place. It sees the install, downloads the newest release beside it, keeps
 `.env`, the tasks, settings and models, stops the service, swaps the code in, adds what the
 new version needs (packages, speaker models, the transcription model) and starts it again.
 If any of that fails, it puts the previous version back, starts it again and says so. It

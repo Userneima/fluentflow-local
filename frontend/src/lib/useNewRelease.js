@@ -8,10 +8,10 @@ const RETRIES = 4;
 const RECHECK_MS = 6 * 3600 * 1000;
 
 // A newer release the page should offer, with how this copy is updated
-// ("release": the install command again; "git": git pull and the setup script),
-// or null. Backend release_check reads the latest release at most once a day
-// and tries again soon after a check that could not reach anything; asking
-// never waits on it.
+// ("release": the install command again; "git": git pull and the setup script)
+// and the command itself with this install's folder in it, or null. Backend
+// release_check reads the latest release at most once a day and tries again
+// soon after a check that could not reach anything; asking never waits on it.
 export const useNewRelease = () => {
     const [release, setRelease] = useState(null);
     useEffect(() => {
@@ -25,7 +25,11 @@ export const useNewRelease = () => {
                     if (cancelled) return;
                     // A known answer replaces the notice either way: after an update
                     // the page left open stops offering the version just installed.
-                    if (body?.latest) setRelease(body.update_available ? {version: body.latest, checkout: body.checkout} : null);
+                    if (body?.latest) {
+                        setRelease(body.update_available
+                            ? {version: body.latest, checkout: body.checkout, command: body.update_command || ''}
+                            : null);
+                    }
                     const unknown = body && !body.latest;
                     const wait = unknown && retries < RETRIES ? RETRY_MS : RECHECK_MS;
                     if (unknown) retries += 1;

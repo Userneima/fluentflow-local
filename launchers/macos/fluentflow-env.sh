@@ -201,8 +201,13 @@ ff_inside() {
 # 更新时挪到旁边的那几份（.new .old .failed）里放一个标记，写明它是在哪个位置被放下的。
 # 只有标记写的就是它现在的位置，才是更新留下的、可以删；用户把代码目录复制或改名成
 # app.old 时，标记写的是别的位置（或者没有标记），不动。正在用的那份里没有标记。
+# ff_mark_update_copy_as：挪动之前写，写的是它将被挪到的地方。
+ff_mark_update_copy_as() {
+	printf 'Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.\n%s\n' "$2" >"$1/.fluentflow-update"
+}
+
 ff_mark_update_copy() {
-	printf 'Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.\n%s\n' "$1" >"$1/.fluentflow-update"
+	ff_mark_update_copy_as "$1" "$1"
 }
 
 ff_update_marker_says() {

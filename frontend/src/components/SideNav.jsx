@@ -6,6 +6,7 @@ import {
     History,
     Languages,
     ChevronRight,
+    ClipboardCopy,
     Menu,
     Moon,
     PanelLeftClose,
@@ -20,7 +21,7 @@ import {useI18n, useSettings} from '../app/shared.jsx';
 import {useNewRelease} from '../lib/useNewRelease.js';
 import {useDismissable} from '../lib/useDismissable.js';
 import {useHoverPeek} from '../lib/useHoverPeek.js';
-import {iconButton, navItem, menuItem, rowButton, floatingLayer} from '../lib/ui.js';
+import {button, iconButton, navItem, menuItem, rowButton, floatingLayer} from '../lib/ui.js';
 
 const FluentFlowLogo = ({compact = false}) => (
     <div className={`relative flex shrink-0 items-center justify-center bg-[#111111] text-white [--ff-logo-line:#111111] dark:bg-white dark:text-[#111111] dark:[--ff-logo-line:#ffffff] ${compact ? 'size-6 rounded-[8px]' : 'size-8 rounded-[10px]'}`}>
@@ -61,6 +62,7 @@ const SideNav = ({
     const [menuOpen, setMenuOpen] = useState(false);
     const [legalMenuOpen, setLegalMenuOpen] = useState(false);
     const [agentAccessOpen, setAgentAccessOpen] = useState(false);
+    const [updateCommandCopied, setUpdateCommandCopied] = useState(false);
     const menuRef = useRef(null);
     const loc = useLocation();
     const hover = useHoverPeek(peekOnHover && layoutCollapsed, menuOpen || agentAccessOpen);
@@ -89,6 +91,19 @@ const SideNav = ({
     const newRelease = useNewRelease();
     // A git checkout is not updated by the install command (it says so and stops):
     // say what does update it (2026-11-26).
+    // The command that updates this copy, with its own folder in it (the backend
+    // writes it): the install command run without a folder installs into the
+    // default place, a second copy beside an install the user put elsewhere.
+    const copyUpdateCommand = async () => {
+        try {
+            await navigator.clipboard?.writeText(newRelease?.command || '');
+            setUpdateCommandCopied(true);
+            window.setTimeout(() => setUpdateCommandCopied(false), 1400);
+        } catch (_) {
+            setUpdateCommandCopied(false);
+        }
+    };
+
     const updateHint = newRelease?.checkout === 'git'
         ? (lang === 'zh'
             ? '这是 git 检出：在代码目录里 git pull，再运行一次安装脚本（launchers 里的 setup-local）；任务和设置都会保留。'
@@ -282,6 +297,23 @@ const SideNav = ({
                                     <div className="mt-1.5 text-[11px] font-semibold text-[#111111] dark:text-white/[0.92]">
                                         {lang === 'zh' ? `v${newRelease.version} 可以更新：` : `v${newRelease.version} is out: `}
                                         <span className="font-medium text-[#6b6c72] dark:text-white/60">{updateHint}</span>
+                                        {newRelease.command && (
+                                            <div className="mt-1.5 rounded-[8px] border border-[#e5e5e5] bg-white px-2 py-1.5 font-mono text-[11px] font-medium leading-relaxed break-all select-text text-[#6b6c72] dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-white/60">
+                                                {newRelease.command}
+                                            </div>
+                                        )}
+                                        {newRelease.command && (
+                                            <button
+                                                type="button"
+                                                onClick={copyUpdateCommand}
+                                                className={`${button('quiet', 'sm')} mt-1`}
+                                            >
+                                                <ClipboardCopy className="size-3.5" strokeWidth={2.1}/>
+                                                {updateCommandCopied
+                                                    ? (lang === 'zh' ? '已复制' : 'Copied')
+                                                    : (lang === 'zh' ? '复制更新命令' : 'Copy the command')}
+                                            </button>
+                                        )}
                                     </div>
                                 )}
                             </div>

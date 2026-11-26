@@ -54,7 +54,8 @@ SHARED_BASH = ("ff_env_file_value", "ff_unquote", "ff_setting", "ff_normalize", 
                "ff_inside", "ff_update_marker_says", "ff_mark_update_copy", "ff_codex_home", "ff_stop_folder_programs")
 SHARED_POWERSHELL = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowQuoted", "ConvertFrom-FluentFlowEnvValue", "Get-FluentFlowEnvFileValue",
                      "Get-FluentFlowSetting", "Get-FluentFlowRealPath", "Get-FluentFlowLinkTarget", "Resolve-FluentFlowPlace", "Test-FluentFlowInside",
-                     "Test-FluentFlowUpdateCopy", "Set-FluentFlowUpdateCopy")
+                     "Test-FluentFlowUpdateCopy", "Set-FluentFlowUpdateCopyAs", "Set-FluentFlowUpdateCopy",
+                     "Get-FluentFlowUpdatingMarker", "Start-FluentFlowUpdating", "Stop-FluentFlowUpdating")
 
 
 def _bash_function(text: str, name: str) -> str | None:
@@ -856,17 +857,28 @@ def test_a_link_before_a_dotdot_lands_where_the_system_puts_it(tmp_path):
 # is maintained on). They run the scripts' own functions against temporary
 # folders; the real install/update/uninstall run is the workflow's.
 
+# What Repair-FluentFlowHome itself calls.
+WIN_HELPERS_FOR_REPAIR = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowQuoted", "ConvertFrom-FluentFlowEnvValue",
+                          "Get-FluentFlowEnvFileValue", "Get-FluentFlowRealPath", "Get-FluentFlowLinkTarget",
+                          "Resolve-FluentFlowPlace", "Test-FluentFlowInside", "Add-FluentFlowEnvLine",
+                          "Set-FluentFlowEnvLine", "Get-FluentFlowHomeRoot", "Repair-FluentFlowHome",
+                          "Test-FluentFlowUpdateCopy", "Set-FluentFlowUpdateCopy")
+
 WIN_FUNCTIONS = ("Expand-FluentFlowReferences", "ConvertFrom-FluentFlowQuoted", "ConvertFrom-FluentFlowEnvValue",
                  "Get-FluentFlowEnvFileValue", "Get-FluentFlowSetting", "Get-FluentFlowRealPath",
                  "Resolve-FluentFlowPlace", "Get-FluentFlowLinkTarget", "Test-FluentFlowInside", "Add-FluentFlowEnvLine",
                  "Set-FluentFlowEnvLine", "Get-FluentFlowHomeRoot", "Repair-FluentFlowHome",
-                 "Get-FluentFlowDataDir", "Add-FluentFlowFolderLines")
+                 "Get-FluentFlowDataDir", "Add-FluentFlowFolderLines", "Set-FluentFlowUpdateCopyAs",
+                 "Test-FluentFlowUpdateCopy", "Set-FluentFlowUpdateCopy", "Get-FluentFlowUpdatingMarker",
+                 "Start-FluentFlowUpdating", "Stop-FluentFlowUpdating")
 
 
-def _win_helper_script() -> str:
+def _win_helper_script(*needs: str) -> str:
+    """The helper's functions, all of them or the ones named (with a test that
+    runs one function alone, the others it does not need stay out)."""
     text = _read(WIN_HELPER)
     parts = []
-    for name in WIN_FUNCTIONS:
+    for name in (needs or WIN_FUNCTIONS):
         function = _powershell_function(text, name)
         assert function, f"{name} missing from fluentflow-env.ps1"
         parts.append(function)
@@ -1032,3 +1044,359 @@ def test_a_copy_beside_the_code_folder_that_is_left_is_named(tmp_path):
     assert not app.exists()
     assert copy.exists()
     assert "app.failed" in result.stdout.split("还剩下")[-1]
+
+
+# --- an install that is a git checkout, and an update's own markers ----------
+
+@mac_only
+def test_a_running_git_checkout_is_not_taken_over_as_the_install(tmp_path):
+    """A developer's checkout answering on the port is theirs to update with
+    git; installing the release over it, or running its setup, is not what the
+    command was asked to do."""
+    import http.server
+    import json
+    import threading
+
+    checkout = _fake_code(tmp_path / "dev" / "app")
+    (checkout / ".git").mkdir()
+    answer = json.dumps({"status": "ok", "edition": "local", "install": {"code_dir": str(checkout)}},
+                        separators=(",", ":")).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer)))
+            self.end_headers()
+            self.wfile.write(answer)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        result = _install(tmp_path, tmp_path / "unused", _fake_code(tmp_path / "release", version="0.1.0"),
+                          **{"FLUENTFLOW_INSTALL_DIR": "", "FLUENTFLOW_LOCAL_PORT": str(server.server_address[1])})
+    finally:
+        server.shutdown()
+
+    assert "git 检出" in result.stdout, result.stdout + result.stderr
+    assert not (checkout / "VERSION").exists() or (checkout / "VERSION").read_text(encoding="utf-8").strip() == "0.1.0"
+    # Installed into the default place instead.
+    assert (tmp_path / "home" / "fluentflow-local" / "backend" / "local_main.py").is_file()
+
+
+@mac_only
+def test_an_update_writes_the_old_version_marker_before_moving_it(tmp_path):
+    """Power lost between the two moves leaves the previous version beside a
+    missing code folder. Without a marker naming where it was put, the next run
+    takes that for a fresh install and writes a default .env (the access token
+    and the data folder settings are lost)."""
+    app = _fake_code(tmp_path / "app", version="0.1.0")
+    (app / ".env").write_text(f"FLUENTFLOW_ACCESS_TOKEN=abc\nFLUENTFLOW_DATA_DIR='{tmp_path}/data'\n", encoding="utf-8")
+    fake = tmp_path / "fake-bin"
+    fake.mkdir()
+    seen = tmp_path / "updating-marker-seen"
+    (fake / "mv").write_text(
+        "#!/bin/bash\n"
+        f'if [[ "$1" == "{app}" && "$2" == "{app}.old" ]]; then\n'
+        f'  [[ -e "{app}.fluentflow-updating" ]] && : >"{seen}"\n'
+        '  /bin/mv "$@"\n'
+        '  kill -9 $PPID\n'
+        "  exit 0\n"
+        "fi\n"
+        'exec /bin/mv "$@"\n', encoding="utf-8")
+    (fake / "mv").chmod(0o755)
+    env = _sandbox_env(tmp_path)
+    result = subprocess.run(["bash", str(ROOT / "install.sh"), "--skip-model"], capture_output=True, text=True,
+                            cwd=tmp_path, timeout=120,
+                            env={**env, "PATH": f"{fake}:{env['PATH']}", "FLUENTFLOW_INSTALL_DIR": str(app),
+                                 "FLUENTFLOW_INSTALL_SOURCE": str(_fake_code(tmp_path / "release", version="9.0.0"))})
+
+    assert result.returncode != 0
+    assert (tmp_path / "app.old" / ".fluentflow-update").is_file(), result.stdout + result.stderr
+    assert (tmp_path / "app.old" / ".fluentflow-update").read_text(encoding="utf-8").split("\n")[-2].strip() == str(tmp_path / "app.old")
+    assert seen.exists(), "the in-progress marker was not there while the update was running"
+
+
+@mac_only
+def test_an_update_stopped_between_the_moves_keeps_the_old_settings(tmp_path):
+    """After that interruption, the next run puts the previous version back
+    instead of installing fresh with a default .env."""
+    app = _fake_code(tmp_path / "app", version="0.1.0")
+    (app / ".env").write_text("FLUENTFLOW_ACCESS_TOKEN=abc\nThe line an update keeps\n", encoding="utf-8")
+    fake = tmp_path / "fake-bin"
+    fake.mkdir()
+    (fake / "mv").write_text(
+        "#!/bin/bash\n"
+        f'if [[ "$1" == "{app}" && "$2" == "{app}.old" ]]; then\n'
+        '  /bin/mv "$@"\n'
+        '  kill -9 $PPID\n'
+        "  exit 0\n"
+        "fi\n"
+        'exec /bin/mv "$@"\n', encoding="utf-8")
+    (fake / "mv").chmod(0o755)
+    env = _sandbox_env(tmp_path)
+    first = subprocess.run(["bash", str(ROOT / "install.sh"), "--skip-model"], capture_output=True, text=True,
+                           cwd=tmp_path, timeout=120,
+                           env={**env, "PATH": f"{fake}:{env['PATH']}", "FLUENTFLOW_INSTALL_DIR": str(app),
+                                "FLUENTFLOW_INSTALL_SOURCE": str(_fake_code(tmp_path / "release", version="9.0.0"))})
+    assert first.returncode != 0 and not app.exists()
+
+    # The next run behaves as if nothing had happened to it: the previous version
+    # is put back, .env and everything else with it.
+    again = _install(tmp_path, app, tmp_path / "release")
+
+    assert "上一次更新" in again.stdout + again.stderr, again.stdout + again.stderr
+    assert (app / ".env").read_text(encoding="utf-8") == "FLUENTFLOW_ACCESS_TOKEN=abc\nThe line an update keeps\n"
+
+
+@mac_only
+def test_the_updating_marker_is_gone_after_an_update_that_failed(tmp_path):
+    """The marker tells another agent's MCP server not to start the service from
+    a half-built install; it must not outlive the run."""
+    app = _fake_code(tmp_path / "app", version="0.1.0")
+    result = _install(tmp_path, app, _fake_code(tmp_path / "release", version="9.0.0"))
+
+    assert result.returncode != 0
+    assert "已换回 0.1.0" in result.stderr, result.stderr
+    assert not (tmp_path / "app.fluentflow-updating").exists()
+
+
+@mac_only
+def test_a_stale_updating_marker_is_cleared_by_the_next_run(tmp_path):
+    app = _fake_code(tmp_path / "app", version="0.1.0")
+    stale = tmp_path / "app.fluentflow-updating"
+    stale.write_text("left by a killed run\n", encoding="utf-8")
+    os.utime(stale, (0, 0))  # more than an hour ago
+
+    result = _install(tmp_path, app, _fake_code(tmp_path / "release", version="9.0.0"))
+
+    assert "上一次更新被中断" in result.stdout + result.stderr, result.stdout + result.stderr
+
+
+@mac_only
+def test_a_fresh_updating_marker_stops_a_second_update(tmp_path):
+    app = _fake_code(tmp_path / "app", version="0.1.0")
+    (tmp_path / "app.fluentflow-updating").write_text("being updated now\n", encoding="utf-8")
+
+    result = _install(tmp_path, app, _fake_code(tmp_path / "release", version="9.0.0"))
+
+    assert result.returncode != 0
+    assert "另一个更新正在运行" in result.stderr, result.stderr
+    assert (app / "VERSION").read_text(encoding="utf-8").strip() == "0.1.0"
+
+
+@pytest.mark.skipif(not POSIX, reason="install.sh is macOS only, and its function is run by bash")
+def test_the_mcp_entry_path_is_read_whole_when_a_folder_holds_spaces():
+    """`claude mcp get` prints `<python> <script>`; a folder name with a space is
+    cut by taking the last word, Test-Path then fails, and the working
+    registration of another install is removed (2026-11-27)."""
+    helper = _bash_function(_read(ROOT / "install.sh"), "claude_target_of")
+    assert helper
+    cases = [
+        ("python3 /Users/a/app/scripts/fluentflow_mcp_server.py", "/Users/a/app/scripts/fluentflow_mcp_server.py"),
+        ("python3 /Users/John Smith/app/scripts/fluentflow_mcp_server.py", "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"),
+        ("/Users/John Smith/.local/bin/python3 /Users/John Smith/app/scripts/fluentflow_mcp_server.py",
+         "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"),
+        ('python3 "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"',
+         "/Users/John Smith/app/scripts/fluentflow_mcp_server.py"),
+        # Not the server script: nothing can be told, so nothing may be removed.
+        ("/opt/homebrew/bin/python3 /tmp/other-server.py", ""),
+    ]
+    script = helper + '\nfor a in "$@"; do claude_target_of "$a"; printf "\\n"; done\n'
+    payloads = ["fluentflow-local:\n  Scope: User config\n  Args: " + args + "\n" for args, _ in cases]
+    out = subprocess.run(["bash", "-c", script, "-", *payloads], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split("\n")[:len(cases)] == [want for _, want in cases]
+
+
+def _fake_claude(tmp_path, repo, scope, remove_project_exit=0, remove_user_exit=0):
+    fake = tmp_path / "fake-claude-bin"
+    fake.mkdir(exist_ok=True)
+    calls = tmp_path / "claude-calls.log"
+    (fake / "claude").write_text(
+        "#!/bin/bash\n"
+        f"echo \"$*\" >> '{calls}'\n"
+        'if [[ "$1 $2" == "mcp get" ]]; then\n'
+        "  echo 'fluentflow-local:'\n"
+        "  echo '  Scope: Project config'\n"
+        f"  echo '  Args: python3 {repo}/scripts/fluentflow_mcp_server.py'\n"
+        f"  echo 'To remove this server, run: claude mcp remove fluentflow-local -s {scope}'\n"
+        "  exit 0\n"
+        "fi\n"
+        f'if [[ "$*" == *"--scope project"* ]]; then exit {remove_project_exit}; fi\n'
+        f'if [[ "$*" == *"--scope user"* ]]; then exit {remove_user_exit}; fi\n'
+        "exit 0\n", encoding="utf-8")
+    (fake / "claude").chmod(0o755)
+    return fake, calls
+
+
+@mac_only
+def test_unregistering_does_not_fall_back_to_another_scope(tmp_path):
+    """Removing at the found scope failed; retrying at the user scope could
+    remove another install's registration (both installs register at user)."""
+    app = _fake_code(tmp_path / "app")
+    fake, calls = _fake_claude(tmp_path, app, "project", remove_project_exit=1)
+
+    result = _uninstall(tmp_path, app, "--yes", PATH=f"{fake}:/usr/bin:/bin:/usr/sbin:/sbin")
+
+    assert result.returncode == 0, result.stderr
+    log = calls.read_text(encoding="utf-8")
+    assert "mcp remove --scope project" in log
+    assert "--scope user" not in log
+    assert "claude mcp remove --scope project fluentflow-local" in result.stdout
+
+
+@mac_only
+def test_unregistering_uses_the_user_scope_when_that_is_where_it_was(tmp_path):
+    app = _fake_code(tmp_path / "app")
+    fake, calls = _fake_claude(tmp_path, app, "user")
+
+    result = _uninstall(tmp_path, app, "--yes", PATH=f"{fake}:/usr/bin:/bin:/usr/sbin:/sbin")
+
+    assert result.returncode == 0, result.stderr
+    assert "mcp remove --scope user" in calls.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_a_folder_on_a_drive_that_is_not_there_is_not_a_move(tmp_path):
+    """A folder can be missing because the disk or share holding it is
+    unplugged. Repointing .env then would abandon the data on it the moment it
+    comes back (2026-11-27)."""
+    letters = [c for c in "QRSTUVWXYZ" if not (Path(f"{c}:/").exists())]
+    if not letters:
+        pytest.skip("every drive letter is in use here")
+    letter = letters[0]
+    root = tmp_path / "FluentFlow"
+    app = root / "app"
+    app.mkdir(parents=True)
+    (root / ".fluentflow-home").write_text("FluentFlow Local lives here", encoding="ascii")
+    env_file = app / ".env"
+    env_file.write_text(f"FLUENTFLOW_HOME='{letter}:\\FluentFlow'\r\n", encoding="utf-8")
+    before = env_file.read_text(encoding="utf-8")
+    script = _win_helper_script(*WIN_HELPERS_FOR_REPAIR) + (
+        f"\n[Console]::OutputEncoding = [Text.Encoding]::UTF8\n"
+        f"'changed=' + (@(Repair-FluentFlowHome '{app}') -join ',')\n")
+    result = _powershell(script)
+
+    assert result.returncode == 0, result.stderr
+    assert "changed=" == result.stdout.strip().splitlines()[-1].strip(), result.stdout
+    assert env_file.read_text(encoding="utf-8") == before
+    assert "is not available right now" in result.stdout
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_the_env_file_is_never_seen_half_written(tmp_path):
+    """Set-FluentFlowEnvLine used to truncate the file and write it again: a
+    launcher or a service starting at that moment read an empty .env and ran on
+    the default data folder (2026-11-27)."""
+    repo = tmp_path / "app"
+    repo.mkdir()
+    env_file = repo / ".env"
+    filler = "".join(f"FILLER_{index}=0123456789abcdef0123456789abcdef\r\n" for index in range(20000))
+    old = filler + "FLUENTFLOW_ACCESS_TOKEN=abc\r\n"
+    # Bytes: writing text on Windows would turn each \n into \r\n and the
+    # comparison below would never match what PowerShell writes.
+    env_file.write_bytes(old.encode("utf-8"))
+    new = filler + "FLUENTFLOW_ACCESS_TOKEN=abc\r\nMY_SETTING='D:\\FluentFlow\\data'\r\n"
+    writer = tmp_path / "writer.ps1"
+    writer.write_text(_win_helper_script("Add-FluentFlowEnvLine", "Set-FluentFlowEnvLine") + (
+        f"\nfor ($i = 0; $i -lt 25; $i++) {{ Set-FluentFlowEnvLine '{repo}' 'MY_SETTING' 'D:\\FluentFlow\\data' }}\n"),
+        encoding="utf-8")
+    writer_log = tmp_path / "writer.log"
+    with open(writer_log, "wb") as log:
+        process = subprocess.Popen([_POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(writer)],
+                                   stdout=log, stderr=subprocess.STDOUT)
+    partial = 0
+    lengths = []
+    first = None
+    try:
+        while process.poll() is None:
+            try:
+                with open(env_file, "rb") as handle:
+                    seen = handle.read()
+            except OSError:
+                continue
+            text = seen.decode("utf-8", "replace")
+            lengths.append(len(seen))
+            if text not in (old, new):
+                partial += 1
+                if first is None:
+                    first = text[:80] + " ... " + text[-80:]
+    finally:
+        process.wait(timeout=120)
+
+    assert partial == 0, (
+        f"a reader saw a half-written .env; lengths {min(lengths or [0])}-{max(lengths or [0])}, "
+        f"first: {first!r}, writer said: {writer_log.read_text(encoding='utf-8', errors='replace')[:600]!r}")
+    assert not (repo / ".env.writing").exists()
+    assert env_file.read_bytes().decode("utf-8") in (old, new)
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_the_old_version_marker_is_written_before_the_move(tmp_path):
+    """Losing power between the two moves must leave a marker that names where
+    the copy went, or the next run installs fresh over the settings."""
+    root = tmp_path / "FluentFlow"
+    app = root / "app"
+    app.mkdir(parents=True)
+    (root / ".fluentflow-home").write_text("FluentFlow Local lives here", encoding="ascii")
+    script = _win_helper_script("Get-FluentFlowRealPath", "Get-FluentFlowLinkTarget", "Set-FluentFlowUpdateCopyAs", "Test-FluentFlowUpdateCopy") + (
+        f"\nSet-FluentFlowUpdateCopyAs '{app}' '{app}.old'\n"
+        f"'before=' + (Test-FluentFlowUpdateCopy '{app}')\n"
+        f"Move-Item -LiteralPath '{app}' -Destination '{app}.old'\n"
+        f"'after=' + (Test-FluentFlowUpdateCopy '{app}.old')\n")
+    result = _powershell(script)
+
+    assert result.returncode == 0, result.stderr
+    assert "before=False" in result.stdout and "after=True" in result.stdout, result.stdout
+
+
+@pytest.mark.skipif(not _POWERSHELL, reason="the Windows helpers, run by Windows PowerShell")
+def test_the_updating_marker_is_created_and_removed(tmp_path):
+    root = tmp_path / "FluentFlow"
+    (root / "app").mkdir(parents=True)
+    (root / ".fluentflow-home").write_text("FluentFlow Local lives here", encoding="ascii")
+    script = _win_helper_script("Get-FluentFlowUpdatingMarker", "Start-FluentFlowUpdating", "Stop-FluentFlowUpdating") + f"""
+$marker = Start-FluentFlowUpdating '{root}' 'to 9.9.9 from 0.1.0'
+'exists=' + (Test-Path -LiteralPath $marker)
+'path=' + $marker
+'text=' + ((Get-Content -LiteralPath $marker) -join '|')
+$second = ''
+try {{ Start-FluentFlowUpdating '{root}' 'again' | Out-Null }} catch {{ $second = $_.Exception.Message }}
+'second=' + [bool]$second
+Stop-FluentFlowUpdating $marker
+'after=' + (Test-Path -LiteralPath $marker)
+"""
+    result = _powershell(script)
+
+    assert result.returncode == 0, result.stderr
+    lines = dict(line.split("=", 1) for line in result.stdout.strip().splitlines() if "=" in line)
+    assert lines["exists"] == "True"
+    assert lines["path"].lower() == str(tmp_path / "FluentFlow.fluentflow-updating").lower()
+    assert "FluentFlow Local is being updated" in lines["text"]
+    assert lines["second"] == "True"
+    assert lines["after"] == "False"
+
+
+@pytest.mark.skipif(not POSIX, reason="install.sh is macOS only, and its function is run by bash")
+def test_a_codex_entry_that_cannot_be_read_is_not_taken_for_a_dead_one():
+    """`args` written in a form the installer cannot parse used to count as
+    stale, and the entry (another install's, at that) was removed (2026-11-27)."""
+    helper = _bash_function(_read(ROOT / "install.sh"), "codex_entry_is_stale")
+    assert helper
+    missing = "/Users/a/gone/scripts/fluentflow_mcp_server.py"
+    present = "/Users/a/app/scripts/fluentflow_mcp_server.py"
+    cases = [
+        (f'[mcp_servers.fluentflow-local]\ncommand = "python3"\nargs = ["{missing}"]', True),
+        (f'[mcp_servers.fluentflow-local]\ncommand = "python3"\nargs = ["{present}"]', False),
+        ('[mcp_servers.fluentflow-local]\ncommand = "x"\nargs = [\n  "a",\n]', False),
+        ('[mcp_servers.fluentflow-local]\ncommand = "x"', False),
+    ]
+    script = f'MCP_SCRIPT="{present}"\n' + helper + '\ncodex_entry_is_stale "$1" && echo stale || echo kept\n'
+    for section, expected in cases:
+        out = subprocess.run(["bash", "-c", script, "-", section], capture_output=True, text=True)
+        assert out.returncode == 0, out.stderr
+        assert (out.stdout.strip() == "stale") == expected, (section, out.stdout)

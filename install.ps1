@@ -239,9 +239,13 @@ function Test-FluentFlowInside([string]$Path, [string]$Folder) {
 # naming the place the update put them. Only a copy whose marker names where
 # it is now is the update's to remove: a copy or rename the user made of the
 # code folder names another place, or has no marker (the copy in use has none).
-function Set-FluentFlowUpdateCopy([string]$Folder) {
-    $Lines = @("Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.", [System.IO.Path]::GetFullPath($Folder))
+function Set-FluentFlowUpdateCopyAs([string]$Folder, [string]$PlacedAt) {
+    $Lines = @("Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.", [System.IO.Path]::GetFullPath($PlacedAt))
     [System.IO.File]::WriteAllLines((Join-Path $Folder ".fluentflow-update"), [string[]]$Lines, (New-Object System.Text.UTF8Encoding $false))
+}
+
+function Set-FluentFlowUpdateCopy([string]$Folder) {
+    Set-FluentFlowUpdateCopyAs $Folder $Folder
 }
 
 function Test-FluentFlowUpdateCopy([string]$Folder) {
@@ -252,6 +256,29 @@ function Test-FluentFlowUpdateCopy([string]$Folder) {
     try {
         return [System.IO.Path]::GetFullPath($Said.Trim()).TrimEnd('\').Equals([System.IO.Path]::GetFullPath($Folder).TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
     } catch { return $false }
+}
+
+function Get-FluentFlowUpdatingMarker([string]$InstallFolder) {
+    return $InstallFolder.TrimEnd('\') + ".fluentflow-updating"
+}
+
+function Start-FluentFlowUpdating([string]$InstallFolder, [string]$What) {
+    $Marker = Get-FluentFlowUpdatingMarker $InstallFolder
+    if (Test-Path -LiteralPath $Marker) {
+        $Age = (Get-Date) - (Get-Item -LiteralPath $Marker).LastWriteTime
+        if ($Age.TotalMinutes -lt 60) {
+            throw "Another update is running (or one was just killed): $Marker is still there. Let it finish, or delete that file once you are sure nothing is running; nothing was changed."
+        }
+        Remove-Item -Force -LiteralPath $Marker -ErrorAction SilentlyContinue
+        Write-Host "An earlier update was interrupted and left $Marker; this run installs it properly."
+    }
+    $Text = @("FluentFlow Local is being updated ($What); do not start the service from this install while this file exists.", (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
+    [System.IO.File]::WriteAllLines($Marker, [string[]]$Text, (New-Object System.Text.UTF8Encoding $false))
+    return $Marker
+}
+
+function Stop-FluentFlowUpdating([string]$Marker) {
+    if ($Marker) { Remove-Item -Force -LiteralPath $Marker -ErrorAction SilentlyContinue }
 }
 
 # The folder asked for in FLUENTFLOW_INSTALL_DIR, as a full path with no
@@ -362,6 +389,12 @@ function Find-RunningRoot([string]$ProbePort) {
     if (-not $Health -or $Health.edition -ne "local") { return $null }
     $Code = [string]$Health.install.code_dir
     if (-not $Code -or -not (Test-Path (Join-Path $Code "backend\local_main.py"))) { return $null }
+    # A developer's own git checkout is theirs to update with git; installing the
+    # release over it, or running its setup, is not what this command was asked to do.
+    if (Test-Path -LiteralPath (Join-Path $Code ".git")) {
+        Write-Host "The FluentFlow answering here runs from a git checkout ($Code); it is not taken over (update it with git pull)."
+        return $null
+    }
     $Code = (Get-FluentFlowRealPath ([System.IO.Path]::GetFullPath($Code))).TrimEnd('\')
     # The one-folder install's code is <root>\app, with the installer's marker beside it.
     $Parent = Split-Path -Parent $Code
@@ -673,7 +706,17 @@ function Get-BusyTaskCount([string]$Port) {
 }
 
 $StoppedOld = $false
+$UpdatingMarker = $null
 if ($Updating) {
+  # Before anything is stopped: another agent's MCP server that starts the
+  # service now would run a half-built copy (see Start-FluentFlowUpdating). If a
+  # copy was already staged, it is this run's and goes with the refusal.
+  try {
+    $UpdatingMarker = Start-FluentFlowUpdating $Root "to $Latest from $Current"
+  } catch {
+    Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
+    throw
+  }
   try {
     foreach ($Leftover in @("$Dir.old", "$Dir.failed")) { Assert-OwnLeftover $Leftover }
     # Every place a setting can put the user's files: the data folder and each
@@ -722,13 +765,17 @@ if ($Updating) {
     if (Test-Path (Join-Path $Dir ".env")) { Copy-Item -Force (Join-Path $Dir ".env") (Join-Path "$Dir.new" ".env") }
     if (Test-Path "$Dir.old") { Remove-Item -Recurse -Force -LiteralPath "$Dir.old" }
     Set-Location (Split-Path -Parent $Dir)
+    # The marker is written into the copy first, naming where it is going: losing
+    # power between the two moves would otherwise leave the previous version
+    # beside a missing code folder with no marker, and the next run would take
+    # that for a fresh install and write a default .env over the lost settings.
+    try { Set-FluentFlowUpdateCopyAs $Dir "$Dir.old" } catch {}
     try {
         Move-FluentFlowFolder $Dir "$Dir.old"
     } catch {
+        Remove-Item -Force -LiteralPath (Join-Path $Dir ".fluentflow-update") -ErrorAction SilentlyContinue
         throw "Could not move $Dir aside ($($_.Exception.Message)). A window or program is using it; close it (or run this from another folder) and run this again"
     }
-    # Unmarked, the next update stops at it rather than deleting it: never a reason to fail here.
-    try { Set-FluentFlowUpdateCopy "$Dir.old" } catch {}
   } catch {
     $Why = $_.Exception.Message
     Remove-Item -Recurse -Force -LiteralPath "$Dir.new" -ErrorAction SilentlyContinue
@@ -737,6 +784,7 @@ if ($Updating) {
         $Launcher = Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd"
         if (Test-Path $Launcher) { Start-Process $Launcher }
     }
+    Stop-FluentFlowUpdating $UpdatingMarker
     throw "$Why. Nothing was changed; FluentFlow Local $Current is still in $Dir."
   }
     try {
@@ -744,6 +792,7 @@ if ($Updating) {
     } catch {
         Move-FluentFlowFolder "$Dir.old" $Dir
         Remove-Item -Force -LiteralPath (Join-Path $Dir ".fluentflow-update") -ErrorAction SilentlyContinue
+        Stop-FluentFlowUpdating $UpdatingMarker
         throw "Could not put the new version in place ($($_.Exception.Message)); FluentFlow Local $Current is back in $Dir."
     }
     # The copy in use carries no marker: a copy the user makes of it later is not an update's.
@@ -819,13 +868,29 @@ try {
         if (Get-Command claude -ErrorAction SilentlyContinue) {
             $Described = Invoke-FluentFlowTool claude @("mcp", "get", "fluentflow-local")
             $ExistingEntry = if ($Described.Code -eq 0) { $Described.Output } else { "" }
-            # Files the entry starts: the last word of its "Args:" line is the server script.
+            # The file the entry starts: the "Args:" line ends with the server
+            # script, and a folder name may hold spaces (C:\Users\John Smith\...),
+            # so the whole tail is taken, not the last word. Empty when the line
+            # cannot be understood: then nothing is removed.
             $Starts = ""
             $ArgsLine = @($ExistingEntry -split "`n" | Where-Object { $_ -match '^\s*Args:' }) | Select-Object -Last 1
-            if ($ArgsLine) { $Starts = ($ArgsLine -replace '^\s*Args:\s*', '').Trim().Split(' ')[-1].Trim('"', "'") }
+            if ($ArgsLine) {
+                $ArgsText = ($ArgsLine -replace '^\s*Args:\s*', '').Trim()
+                $Words = @($ArgsText -split '\s+')
+                for ($w = 0; $w -lt $Words.Count; $w++) {
+                    $Tail = (($Words[$w..($Words.Count - 1)]) -join ' ').Trim('"').Trim("'")
+                    if ($Tail -notmatch '[\\/]scripts[\\/]fluentflow_mcp_server\.py$') { continue }
+                    # One drive path only: a tail that still holds the python path has two.
+                    if (@([regex]::Matches($Tail, '[A-Za-z]:[\\/]')).Count -ne 1) { continue }
+                    $Starts = $Tail
+                    break
+                }
+            }
             if ($ExistingEntry -and $ExistingEntry.IndexOf($McpScript, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 Write-Host "Claude Code: fluentflow-local is already registered (this copy); left as it is."
-            } elseif ($ExistingEntry -and $Starts -and (Test-Path -LiteralPath $Starts)) {
+            } elseif ($ExistingEntry -and -not $Starts) {
+                Write-Host "Claude Code: fluentflow-local is registered but the files it starts cannot be read from its entry; left as it is."
+            } elseif ($ExistingEntry -and (Test-Path -LiteralPath $Starts)) {
                 Write-Host "Claude Code: fluentflow-local is registered to another install ($Starts); left as it is. Rerun after uninstalling that one to register this copy."
             } else {
                 if ($ExistingEntry) {
@@ -851,8 +916,10 @@ try {
             }
             $Stale = $false
             if ($Section -and $Section.IndexOf($McpScript, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                # Only a target that can be read and is gone counts: an entry this
+                # cannot read may be another install's.
                 $Target = [regex]::Match($Section, '(?m)^\s*args\s*=\s*\[\s*"([^"]*)"').Groups[1].Value
-                if (-not $Target -or -not (Test-Path -LiteralPath $Target)) { $Stale = $true }
+                if ($Target -and -not (Test-Path -LiteralPath $Target)) { $Stale = $true }
             }
             if ($Section -and -not $Stale) {
                 Write-Host "Codex: fluentflow-local is already registered (this copy, or another install that still exists); left as it is."
@@ -913,6 +980,7 @@ try {
     $Launcher = Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd"
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Dir "launchers\windows\install-local-to-desktop.ps1") | Out-Null
     if (Test-Path $Launcher) { Start-Process $Launcher }
+    Stop-FluentFlowUpdating $UpdatingMarker
     throw "Updating to $Latest failed: $Reason. FluentFlow Local $Current is back in $Dir (the failed copy is in $Dir.failed)."
 }
 if ($Updating) {
@@ -924,6 +992,8 @@ if ($Updating) {
     Remove-Item -Recurse -Force -LiteralPath "$Dir.old" -ErrorAction SilentlyContinue
     Write-Host "Removed the previous version an earlier update left beside the install."
 }
+
+Stop-FluentFlowUpdating $UpdatingMarker
 
 Write-Host ""
 Write-Host "FluentFlow Local is installed and running at http://127.0.0.1:$Port"

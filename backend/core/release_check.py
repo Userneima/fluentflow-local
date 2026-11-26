@@ -64,6 +64,21 @@ def is_git_checkout() -> bool:
     return (Path(PROJECT_ROOT) / ".git").exists()
 
 
+def install_folder() -> Path:
+    """The folder the user installed into.
+
+    A Windows one-folder install keeps the code in ``<folder>\\app`` with the
+    installer's marker beside it; every other install is the code folder itself.
+    The update command has to name this folder: given the code folder of a
+    one-folder install, the installer takes it for the older layout and skips
+    the checks that layout needs (2026-11-27).
+    """
+    root = Path(PROJECT_ROOT)
+    if (root.parent / ".fluentflow-home").exists():
+        return root.parent
+    return root
+
+
 def update_command() -> str | None:
     """The command that updates this copy, written out with its folder.
 
@@ -72,7 +87,7 @@ def update_command() -> str | None:
     a second copy beside the first (2026-11-26). The page and agents get the
     command with this install's folder in it.
     """
-    folder = str(PROJECT_ROOT)
+    folder = str(install_folder())
     if is_git_checkout():
         if os.name == "nt":
             return ('cd "{0}"; git pull; powershell -NoProfile -ExecutionPolicy Bypass '
@@ -144,4 +159,4 @@ def status(*, now: float | None = None) -> dict[str, Any]:
     }
 
 
-__all__ = ["is_newer", "status", "update_command", "is_git_checkout", "enabled"]
+__all__ = ["is_newer", "status", "update_command", "is_git_checkout", "enabled", "install_folder"]

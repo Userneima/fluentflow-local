@@ -209,8 +209,13 @@ ff_inside() {
 # 更新时挪到旁边的那几份（.new .old .failed）里放一个标记，写明它是在哪个位置被放下的。
 # 只有标记写的就是它现在的位置，才是更新留下的、可以删；用户把代码目录复制或改名成
 # app.old 时，标记写的是别的位置（或者没有标记），不动。正在用的那份里没有标记。
+# ff_mark_update_copy_as：挪动之前写，写的是它将被挪到的地方。
+ff_mark_update_copy_as() {
+	printf 'Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.\n%s\n' "$2" >"$1/.fluentflow-update"
+}
+
 ff_mark_update_copy() {
-	printf 'Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.\n%s\n' "$1" >"$1/.fluentflow-update"
+	ff_mark_update_copy_as "$1" "$1"
 }
 
 ff_update_marker_says() {
@@ -239,12 +244,17 @@ PORT="${FLUENTFLOW_LOCAL_PORT:-8000}"
 # 正在运行的 FluentFlow 把它的代码目录写在 /health 里。装在自选文件夹、没设
 # FLUENTFLOW_INSTALL_DIR 再运行一次安装命令时，靠它接着更新那一份；不然这里会在
 # ~/fluentflow-local 另装一份，看上去像更新了，原来的任务和设置却不在页面里。
+# 返回 2 表示应答的是开发者自己的 git 检出：那份由 git 管，这条安装命令不接管它。
 ff_code_dir_from_service() {
 	local health dir
 	health="$(curl -s --max-time 3 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
 	[[ "$health" == *'"edition":"local"'* ]] || return 1
 	dir="$(printf '%s' "$health" | sed -n 's/.*"code_dir":"\([^"]*\)".*/\1/p')"
 	[[ -n "$dir" && -f "${dir}/backend/local_main.py" ]] || return 1
+	if [[ -e "${dir}/.git" ]]; then
+		printf '%s' "$dir"
+		return 2
+	fi
 	printf '%s' "$dir"
 }
 
@@ -252,9 +262,13 @@ ff_code_dir_from_service() {
 # 也要拿它和 .env 里的位置比。
 DIR="${FLUENTFLOW_INSTALL_DIR:-}"
 if [[ -z "$DIR" && ! -f "${HOME}/fluentflow-local/backend/local_main.py" ]]; then
-	if found="$(ff_code_dir_from_service)"; then
+	found="" code=0
+	found="$(ff_code_dir_from_service)" || code=$?
+	if [[ "$code" -eq 0 && -n "$found" ]]; then
 		echo "正在运行的 FluentFlow 装在 ${found}，接着更新那一份（要装到别处就设 FLUENTFLOW_INSTALL_DIR）。"
 		DIR="$found"
+	elif [[ "$code" -eq 2 ]]; then
+		echo "正在运行的 FluentFlow 是 git 检出（${found}），不接管它：那份用 git pull 更新。这次装到默认位置 ${HOME}/fluentflow-local（要装到别处就设 FLUENTFLOW_INSTALL_DIR）。"
 	fi
 fi
 DIR="${DIR:-${HOME}/fluentflow-local}"
@@ -491,7 +505,33 @@ stop_folder_programs() {
 	ff_stop_folder_programs "$1" || true
 }
 
+# 更新期间在安装文件夹旁边放一个标记：<安装文件夹>.fluentflow-updating（macOS 上就是
+# ~/fluentflow-local.fluentflow-updating，Windows 一个文件夹安装是 D:\FluentFlow.fluentflow-updating）。
+# 更新会停服务、换代码、重建虚拟环境，这期间别的 agent 的 MCP 服务从这里起服务会拿到
+# 半装好的一份。这个标记就是给它看的：有这个文件就别起。每次退出都删掉；进程被强杀
+# 留下的，下一次运行开头清掉（超过一小时才算上一次的，正在跑的更新不会被误清）。
+ff_updating_marker() { printf '%s.fluentflow-updating' "${1%/}"; }
+
+ff_claim_updating_marker() {
+	local marker stale
+	marker="$(ff_updating_marker "$1")"
+	if [[ -e "$marker" ]]; then
+		stale="$(find "$marker" -mmin +60 2>/dev/null || true)"
+		if [[ -z "$stale" ]]; then
+			fail_plain "另一个更新正在运行（或者上一次刚被强杀）：${marker} 还在。等它结束；确认没有在跑时删掉那个文件再运行。什么都没改。"
+		fi
+		rm -f "$marker"
+		echo "上一次更新被中断，留下了 ${marker}（那次没装完）；这次重新装。"
+	fi
+	printf 'FluentFlow Local is being updated (to %s); do not start the service from this install while this file exists.\n%s\n' \
+		"${2:-$LATEST}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$marker" || true
+	UPDATING_MARKER="$marker"
+	# shellcheck disable=SC2064
+	trap 'rm -f "${UPDATING_MARKER:-}"' EXIT
+}
+
 if [[ "$UPDATING" -eq 1 ]]; then
+	ff_claim_updating_marker "$DIR" "$LATEST"
 	assert_own_leftover "${DIR}.old"
 	assert_own_leftover "${DIR}.failed"
 	# 数据、链接下载、模型若设在代码目录里面，会随旧代码一起被删：先挪出去再更新。
@@ -556,7 +596,12 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	[[ -f "${DIR}/.env" ]] && cp -p "${DIR}/.env" "${DIR}.new/.env"
 	rm -rf "${DIR}.old"
 	cd "$(dirname "$DIR")"
+	# 标记先写、再挪：写进旧的这份里，写的是它将要待的位置（DIR.old）。中途断电时
+	# 旧版本已经在旁边、却没有标记的话，下次运行会当成没装过、另装一份并用默认的 .env
+	# （访问令牌、数据目录的设置就丢了）。挪不动时删掉，别让它在正在用的那份里。
+	ff_mark_update_copy_as "$DIR" "${DIR}.old" || true
 	if ! mv "$DIR" "${DIR}.old"; then
+		rm -f "${DIR}/.fluentflow-update"
 		rm -rf "${DIR}.new"
 		[[ "$STOPPED_OLD" -eq 1 ]] && start_service
 		fail_plain "没能把 ${DIR} 挪开（有程序在用它）。关掉它再运行一次。什么都没改。"
@@ -564,8 +609,6 @@ if [[ "$UPDATING" -eq 1 ]]; then
 	SWAPPED=1
 	# set -e 停下的那些步骤也要先换回旧版本，包括下一步的 mv。
 	trap 'fail "安装中途出错（install.sh 第 ${LINENO} 行）。"' ERR
-	# 没写成标记时下次更新会停在它前面，不会删它：不值得为此失败。
-	ff_mark_update_copy "${DIR}.old" || true
 	mv "${DIR}.new" "$DIR"
 	rm -f "${DIR}/.fluentflow-update"
 fi
@@ -617,8 +660,15 @@ MCP_ENV=()
 claude_scope_of() {
 	printf '%s\n' "$1" | sed -n 's/.*claude mcp remove fluentflow-local -s \([A-Za-z]*\).*/\1/p' | tail -n 1
 }
+# Args 那一行指向的脚本：文件夹名里可以有空格（/Users/John Smith/…），只取最后一个词
+# 会把它截断、Test-Path 落空，然后把另一份还在用的注册删掉。取最后一个「空格后面开始、
+# 到行尾」的绝对路径；看不出是 fluentflow_mcp_server.py 时打印空，调用方就不删任何注册。
 claude_target_of() {
-	printf '%s\n' "$1" | sed -n 's/^[[:space:]]*Args:[[:space:]]*//p' | tail -n 1 | awk '{print $NF}'
+	local args
+	args="$(printf '%s\n' "$1" | sed -n 's/^[[:space:]]*Args:[[:space:]]*//p' | tail -n 1 | tr -d '\r')"
+	args="${args//\"/}"
+	args="${args//\'/}"
+	printf '%s' "$(printf '%s' "$args" | sed -n 's#.*[[:space:]]\(/.*fluentflow_mcp_server\.py\)[[:space:]]*$#\1#p')"
 }
 if command -v claude >/dev/null 2>&1; then
 	described="$(claude mcp get fluentflow-local 2>/dev/null || true)"
@@ -626,11 +676,16 @@ if command -v claude >/dev/null 2>&1; then
 		echo "Claude Code：已注册过 fluentflow-local（这一份），保持不动。"
 	elif [[ -n "$described" ]]; then
 		target="$(claude_target_of "$described")"
-		if [[ -n "$target" && -e "$target" ]]; then
+		if [[ -z "$target" ]]; then
+			echo "Claude Code：fluentflow-local 已注册，但认不出它启动的是哪个脚本，不动它。"
+		elif [[ -e "$target" ]]; then
 			echo "Claude Code：fluentflow-local 已注册到另一份安装（${target}），不动它。卸载那份后重新运行本命令，就会注册到这一份。"
 		else
-			claude mcp remove --scope "$(claude_scope_of "$described" || true)" fluentflow-local >/dev/null 2>&1 ||
-				claude mcp remove --scope user fluentflow-local >/dev/null 2>&1 || true
+			scope="$(claude_scope_of "$described" || true)"
+			# 注销只在查到的那一个作用域里做；查不到时按 --scope user（当初注册的默认）。
+			# 不拿另一个作用域再删一次：那可能正好是另一份安装的注册。
+			[[ -n "$scope" ]] || scope=user
+			claude mcp remove --scope "$scope" fluentflow-local >/dev/null 2>&1 || true
 			if claude mcp add --scope user fluentflow-local ${MCP_ENV[@]+"${MCP_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null; then
 				echo "Claude Code：原来那条指向的位置已经没了，已重新注册 fluentflow-local。"
 			else
@@ -644,17 +699,22 @@ if command -v claude >/dev/null 2>&1; then
 	fi
 	registered=1
 fi
+# Codex 配置里那一节失效了吗：只有读得出它启动的脚本、而且那个文件不在了才算；
+# 读不出（args 写法认不出）就不删，那可能是别人或另一份安装的注册。
+codex_entry_is_stale() {
+	local section="$1" target
+	[[ -n "$section" ]] || return 1
+	[[ "$section" != *"${MCP_SCRIPT}"* ]] || return 1
+	target="$(printf '%s\n' "$section" | sed -n 's/^[[:space:]]*args[[:space:]]*=[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+	[[ -n "$target" ]] || return 1
+	[[ ! -e "$target" ]]
+}
 if command -v codex >/dev/null 2>&1; then
 	section=""
 	[[ -f "$CODEX_CONFIG" ]] && section="$(awk '/^\[mcp_servers\.fluentflow-local\][[:space:]]*$/ { on = 1; next } /^\[/ { on = 0 } on' "$CODEX_CONFIG")"
-	stale=0
-	if [[ -n "$section" && "$section" != *"${MCP_SCRIPT}"* ]]; then
-		target="$(printf '%s\n' "$section" | sed -n 's/^[[:space:]]*args[[:space:]]*=[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-		[[ -n "$target" && -e "$target" ]] || stale=1
-	fi
-	if [[ -n "$section" && "$stale" -eq 0 ]]; then
+	if [[ -n "$section" ]] && ! codex_entry_is_stale "$section"; then
 		echo "Codex：已注册过 fluentflow-local（这一份，或另一份还在的安装），保持不动。"
-	elif [[ "$stale" -eq 1 ]]; then
+	elif [[ -n "$section" ]] && codex_entry_is_stale "$section"; then
 		codex mcp remove fluentflow-local >/dev/null 2>&1 || true
 		if codex mcp add fluentflow-local -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null 2>&1; then
 			echo "Codex：原来那条指向的位置已经没了，已重新注册 fluentflow-local。"

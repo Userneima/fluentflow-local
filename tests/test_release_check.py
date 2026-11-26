@@ -116,3 +116,24 @@ def test_a_check_that_reached_nothing_is_remembered_as_failed(monkeypatch):
     monkeypatch.setattr(release_check, "_fetch_latest", lambda: "0.12.0")
     release_check._refresh()
     assert release_check._state["failed"] is False and release_check._state["latest"] == "0.12.0"
+
+
+def test_the_update_command_names_the_install_folder_not_the_code_folder(monkeypatch, tmp_path):
+    """A Windows one-folder install keeps its code in <folder>\\app: giving the
+    installer that folder makes it take the install for the older layout and
+    skip the checks that layout needs (2026-11-27)."""
+    root = tmp_path / "FluentFlow"
+    app = root / "app"
+    app.mkdir(parents=True)
+    (root / ".fluentflow-home").write_text("FluentFlow Local lives here", encoding="ascii")
+    monkeypatch.setattr(release_check, "PROJECT_ROOT", app)
+
+    assert release_check.install_folder() == root
+    command = release_check.update_command()
+    assert f'"{root}"' in command and f'"{app}"' not in command
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setattr(release_check, "PROJECT_ROOT", plain)
+    assert release_check.install_folder() == plain
+    assert f'"{plain}"' in release_check.update_command()

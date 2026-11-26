@@ -234,9 +234,13 @@ function Test-FluentFlowInside([string]$Path, [string]$Folder) {
 # naming the place the update put them. Only a copy whose marker names where
 # it is now is the update's to remove: a copy or rename the user made of the
 # code folder names another place, or has no marker (the copy in use has none).
-function Set-FluentFlowUpdateCopy([string]$Folder) {
-    $Lines = @("Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.", [System.IO.Path]::GetFullPath($Folder))
+function Set-FluentFlowUpdateCopyAs([string]$Folder, [string]$PlacedAt) {
+    $Lines = @("Set aside by a FluentFlow Local update; the next update or the uninstaller removes it.", [System.IO.Path]::GetFullPath($PlacedAt))
     [System.IO.File]::WriteAllLines((Join-Path $Folder ".fluentflow-update"), [string[]]$Lines, (New-Object System.Text.UTF8Encoding $false))
+}
+
+function Set-FluentFlowUpdateCopy([string]$Folder) {
+    Set-FluentFlowUpdateCopyAs $Folder $Folder
 }
 
 function Test-FluentFlowUpdateCopy([string]$Folder) {
@@ -316,7 +320,28 @@ function Set-FluentFlowEnvLine([string]$Repo, [string]$Name, [string]$Value) {
         if ($Lines[$i] -match $Pattern) { $Lines[$i] = "$Name=$Written"; $Found = $true }
     }
     if (-not $Found) { [void]$Lines.Add("$Name=$Written") }
-    [System.IO.File]::WriteAllLines($EnvFile, [string[]]$Lines, (New-Object System.Text.UTF8Encoding $false))
+    # Written beside the file and renamed over it: the service (or a launcher that
+    # starts one at this moment) must never read a half-written or empty .env and
+    # fall back to the default data folder.
+    $Temp = $EnvFile + ".writing"
+    [System.IO.File]::WriteAllLines($Temp, [string[]]$Lines, (New-Object System.Text.UTF8Encoding $false))
+    for ($Try = 1; $Try -le 5; $Try++) {
+        try {
+            # Rename over the file (MoveFileEx with replacement): a reader sees the
+            # old one or the new one, never the half-written one.
+            Move-Item -Force -LiteralPath $Temp -Destination $EnvFile -ErrorAction Stop
+            return
+        } catch {
+            # A program reading it at this moment can hold it closed to replacement
+            # for a few milliseconds; wait and try again.
+            if ($Try -eq 5) {
+                Remove-Item -Force -LiteralPath $Temp -ErrorAction SilentlyContinue
+                Write-Host "Could not write $EnvFile ($($_.Exception.Message)); it was left as it was." -ForegroundColor Yellow
+                return
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
 }
 
 # The one-folder root this code belongs to: the folder the installer marked
@@ -338,14 +363,30 @@ function Repair-FluentFlowHome([string]$Repo) {
     $Root = Get-FluentFlowHomeRoot $Repo
     if (-not $Root) { return @() }
     $Said = Get-FluentFlowEnvFileValue $Repo "FLUENTFLOW_HOME"
-    if (-not $Said) { return @() }
+    if (-not $Said) {
+        Write-Host "This is a one-folder install but .env names no FLUENTFLOW_HOME; its settings are left as they are." -ForegroundColor Yellow
+        return @()
+    }
     $Old = Resolve-FluentFlowPlace $Repo $Said
-    if (-not $Old -or -not $Old.Sure) { return @() }
+    if (-not $Old -or -not $Old.Sure) {
+        Write-Host "FLUENTFLOW_HOME ($Said) cannot be placed the way the service reads it; .env is left as it is." -ForegroundColor Yellow
+        return @()
+    }
     $OldPath = $Old.Path.TrimEnd('\')
     if ($OldPath.Equals($Root, [StringComparison]::OrdinalIgnoreCase)) { return @() }
     # The old place may still be there as another install the user keeps: its
     # data is not this one's to take over.
     if (Test-Path -LiteralPath $OldPath) { return @() }
+    # The folder may be gone because the drive or share holding it is not
+    # available right now (a USB disk unplugged, a network share offline).
+    # Repointing .env would then abandon that data the moment it comes back, so
+    # only a folder that is gone while its volume is there counts as a move.
+    $Volume = $null
+    try { $Volume = [System.IO.Path]::GetPathRoot($OldPath) } catch {}
+    if (-not $Volume -or -not (Test-Path -LiteralPath $Volume)) {
+        Write-Host "FLUENTFLOW_HOME names $OldPath, and $Volume is not available right now; .env is left as it is. Reconnect it, or change the setting if the folder was moved for good." -ForegroundColor Yellow
+        return @()
+    }
     $Changed = @("FLUENTFLOW_HOME")
     $Fixes = @{}
     $EnvFile = Join-Path $Repo ".env"
@@ -383,6 +424,37 @@ function Repair-FluentFlowHome([string]$Repo) {
         }
     }
     return $Changed + @($Fixes.Keys | Sort-Object)
+}
+
+# While an install is being updated: stopped service, code folder being swapped,
+# virtual environment being rebuilt. An MCP server of another agent that starts
+# the service at that moment would run a half-built copy. It is told by a file
+# beside the install folder, named <install folder>.fluentflow-updating
+# (D:\FluentFlow.fluentflow-updating for a one-folder install, the code folder
+# plus the suffix for an older layout). Written before anything is stopped, and
+# removed on every way out; one left by a killed run is cleared by the next run
+# once it is an hour old.
+function Get-FluentFlowUpdatingMarker([string]$InstallFolder) {
+    return $InstallFolder.TrimEnd('\') + ".fluentflow-updating"
+}
+
+function Start-FluentFlowUpdating([string]$InstallFolder, [string]$What) {
+    $Marker = Get-FluentFlowUpdatingMarker $InstallFolder
+    if (Test-Path -LiteralPath $Marker) {
+        $Age = (Get-Date) - (Get-Item -LiteralPath $Marker).LastWriteTime
+        if ($Age.TotalMinutes -lt 60) {
+            throw "Another update is running (or one was just killed): $Marker is still there. Let it finish, or delete that file once you are sure nothing is running; nothing was changed."
+        }
+        Remove-Item -Force -LiteralPath $Marker -ErrorAction SilentlyContinue
+        Write-Host "An earlier update was interrupted and left $Marker; this run installs it properly."
+    }
+    $Text = @("FluentFlow Local is being updated ($What); do not start the service from this install while this file exists.", (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
+    [System.IO.File]::WriteAllLines($Marker, [string[]]$Text, (New-Object System.Text.UTF8Encoding $false))
+    return $Marker
+}
+
+function Stop-FluentFlowUpdating([string]$Marker) {
+    if ($Marker) { Remove-Item -Force -LiteralPath $Marker -ErrorAction SilentlyContinue }
 }
 
 # Codex keeps its config and skills in CODEX_HOME when that is set, else in the

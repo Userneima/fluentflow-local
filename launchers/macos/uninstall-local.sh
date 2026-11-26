@@ -367,11 +367,13 @@ step "删除"
 for tool in "${mcp_removals[@]:-}"; do
 	case "$tool" in
 	"Claude Code")
-		if claude mcp remove --scope "${claude_removal_scope:-user}" fluentflow-local >/dev/null 2>&1 ||
-			claude mcp remove --scope user fluentflow-local >/dev/null 2>&1; then
+		# 只在查到的那一个作用域里注销。换一个作用域再删一次会删掉另一份安装的注册
+		# （同一台机器上装了两份时，两份都可以是 --scope user）。
+		scope="${claude_removal_scope:-user}"
+		if claude mcp remove --scope "$scope" fluentflow-local >/dev/null 2>&1; then
 			echo "已注销：Claude Code 里的 fluentflow-local"
 		else
-			echo "Claude Code 注销失败，请手动运行：claude mcp remove --scope ${claude_removal_scope:-user} fluentflow-local"
+			echo "Claude Code 注销失败，请手动运行：claude mcp remove --scope ${scope} fluentflow-local"
 		fi
 		;;
 	Codex)
