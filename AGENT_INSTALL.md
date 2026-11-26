@@ -197,8 +197,14 @@ and `%LOCALAPPDATA%\FluentFlow\Logs\mcp-autostart.log` on Windows; a start that 
 not come up says so, with the last lines of that log, so read them rather than guessing.
 Two calls arriving together start one service. Nothing is started or stopped when the
 port is already answered by something else (the hosted edition, another program): that
-error is unchanged. Never kill a process to make room. `FLUENTFLOW_MCP_AUTOSTART=0`
-turns the automatic start off, for a user who runs the service themselves.
+error is unchanged. Never kill a process to make room. It also starts nothing when the
+port it would use (the environment, then the repository `.env`, then 8000 — what the
+launcher reads) is not the port this client was told to use: the error names both ports,
+and the fix is to point `FLUENTFLOW_API_BASE` at that port or put `FLUENTFLOW_LOCAL_PORT`
+back and restart. A call whose connection dropped after it was sent comes back as
+`result_unknown` instead of being repeated: check `list_tasks` before retrying, or a
+second task is made. `FLUENTFLOW_MCP_AUTOSTART=0` turns the automatic start off, for a
+user who runs the service themselves.
 
 To start it by hand (for example with the automatic start off), use the launcher with
 the page turned off, in the background, and wait for the health answer:

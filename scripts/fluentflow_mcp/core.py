@@ -13,11 +13,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -193,6 +195,10 @@ def _require_local_edition(api_base: str) -> dict[str, Any] | None:
 # saying they want to see FluentFlow.
 AUTOSTART_SECONDS = 90.0
 AUTOSTART_POLL_SECONDS = 0.5
+# How long the service gets to answer after the launcher itself has returned:
+# the Windows launcher waits for /health before exiting, a launcher that put the
+# service in the background may exit at once.
+LAUNCHER_EXIT_GRACE_SECONDS = 5.0
 _NO_START_VALUES = ("0", "false", "no", "off")
 
 
@@ -212,16 +218,46 @@ def _log_dir() -> Path:
 
 
 def _local_target(api_base: str) -> tuple[str, int] | None:
-    """Where to start the service, when ``api_base`` is this machine."""
+    """Where to start the service, when ``api_base`` is this machine.
+
+    ``[::1]`` is not accepted: the launchers bind 127.0.0.1 only, so starting one
+    for an IPv6 address would wait out the whole 90 seconds and fail.
+    """
     try:
         parts = urllib.parse.urlsplit(api_base)
         port = parts.port
     except ValueError:
         return None
     host = (parts.hostname or "").lower()
-    if parts.scheme != "http" or host not in ("127.0.0.1", "localhost", "::1"):
+    if parts.scheme != "http" or host not in ("127.0.0.1", "localhost"):
         return None
     return host, port or 80
+
+
+# The port a launcher would use, by the launchers' own rule
+# (`FluentFlowLocal.command` env_port, `Get-FluentFlowPort`): the environment
+# first, then the last matching line of the repository .env, then 8000.
+_DEFAULT_PORT = 8000
+_PORT_LINE = re.compile(r"^\s*(?:export\s+)?FLUENTFLOW_LOCAL_PORT\s*=(.*)$")
+
+
+def _configured_port() -> int:
+    value = (os.environ.get("FLUENTFLOW_LOCAL_PORT") or "").strip()
+    if value.isdigit():
+        return int(value)
+    try:
+        text = (PROJECT_ROOT / ".env").read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return _DEFAULT_PORT
+    found = None
+    for line in text.splitlines():
+        match = _PORT_LINE.match(line)
+        if match:
+            found = match.group(1)
+    if found is None:
+        return _DEFAULT_PORT
+    value = re.split(r"\s+#", found.strip(), maxsplit=1)[0].strip().strip("'\"")
+    return int(value) if value.isdigit() else _DEFAULT_PORT
 
 
 def _port_answers(host: str, port: int) -> bool:
@@ -250,16 +286,22 @@ def _launcher_command(script: Path) -> list[str]:
     return [str(script)]
 
 
-def _launcher_environment(port: int) -> dict[str, str]:
-    """What the desktop app would hand the launcher, minus the page."""
+def _launcher_environment() -> dict[str, str]:
+    """What the desktop app would hand the launcher, minus the page.
+
+    The port is not passed: the launcher reads it by its own rule, and
+    ``_start_local_service`` only starts anything when that rule agrees with the
+    address this client was told to use. Forcing this client's port here is how
+    a second service on the same data would have been started beside one the
+    user moved to another port in .env.
+    """
     env = {**os.environ}
     env["FLUENTFLOW_OPEN_PAGE"] = "0"
-    env["FLUENTFLOW_LOCAL_PORT"] = str(port)
     env["FLUENTFLOW_REPO"] = str(PROJECT_ROOT)
     return env
 
 
-def _run_launcher(port: int, log_path: Path) -> subprocess.Popen | None:
+def _run_launcher(log_path: Path) -> subprocess.Popen | None:
     """Start the launcher detached, its output in ``log_path``.
 
     Detached so it outlives this process (the conversation it belongs to may end
@@ -281,7 +323,7 @@ def _run_launcher(port: int, log_path: Path) -> subprocess.Popen | None:
         return subprocess.Popen(
             _launcher_command(script),
             cwd=str(PROJECT_ROOT),
-            env=_launcher_environment(port),
+            env=_launcher_environment(),
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=subprocess.STDOUT,
@@ -362,14 +404,38 @@ def _start_failed(api_base: str, log_path: Path, reason: str) -> dict[str, Any]:
     }
 
 
+def _port_disagreement(api_base: str, configured: int, asked: int) -> dict[str, Any]:
+    """The launcher would use another port than the one this client asks.
+
+    Starting it would put a second service on the same code and data beside the
+    one already there: each startup treats the other's running tasks as stranded
+    by a restart and re-queues them, so both would process the same recording.
+    """
+    running = _local_health(f"http://127.0.0.1:{configured}") is not None
+    where = f"服务现在就在 {configured} 端口上跑着" if running else f"启动器会把服务起在 {configured} 端口"
+    return {
+        "ok": False,
+        "error": (
+            f"MCP 工具连的是 {api_base}，但 .env 里的 FLUENTFLOW_LOCAL_PORT 是 {configured}，{where}。"
+            f"没有为了凑 {asked} 端口再起一个：同一个代码和数据上两个服务会把对方的任务当成重启中断、重复处理。\n"
+            f"两种改法：把 MCP 注册里的 FLUENTFLOW_API_BASE 改成 http://127.0.0.1:{configured}"
+            "（Claude Code 用 claude mcp remove/add 重新注册，Codex 改 config.toml），"
+            f"或把 .env 里的 FLUENTFLOW_LOCAL_PORT 改回 {asked} 后重启 FluentFlow Local。"
+        ),
+        "status": None,
+        "payload": None,
+    }
+
+
 def _start_local_service(api_base: str) -> dict[str, Any] | None:
     """Start the local service when nothing answers here.
 
     None means it was not this tool's to start — an address on another machine,
-    the switch turned off, no launcher on this platform, or something already
+    the switch turned off, no launcher on this platform, something already
     holding the port (another program, the hosted edition, a FluentFlow whose
-    health check is failing). Nothing is started or stopped then, and the caller
-    keeps the message it has always given.
+    health check is failing), or a .env port that disagrees with this client's.
+    Nothing is started or stopped then, and the caller keeps its own message
+    (except for the port, where the caller has none).
     """
     target = _local_target(api_base)
     if target is None or not _autostart_allowed() or _launcher_path() is None:
@@ -377,6 +443,9 @@ def _start_local_service(api_base: str) -> dict[str, Any] | None:
     host, port = target
     if _port_answers(host, port):
         return None
+    configured = _configured_port()
+    if configured != port:
+        return _port_disagreement(api_base, configured, port)
     log_path = _log_dir() / "mcp-autostart.log"
     deadline = time.monotonic() + AUTOSTART_SECONDS
     locked = _acquire_starter_lock(deadline)
@@ -386,16 +455,22 @@ def _start_local_service(api_base: str) -> dict[str, Any] | None:
         if not locked:
             return _start_failed(api_base, log_path, "另一个 FluentFlow 启动还没有结束，服务仍没有应答")
         try:
-            process = _run_launcher(port, log_path)
+            process = _run_launcher(log_path)
         except OSError as exc:
             return _start_failed(api_base, log_path, f"启动器没能跑起来：{exc}")
         if process is None:
             return None
+        exited_at: float | None = None
         while True:
             if _local_health(api_base) is not None:
                 return {"ok": True}
             if process.poll() is not None:
-                return _start_failed(api_base, log_path, f"启动器退出了（退出码 {process.returncode}）")
+                # A launcher may start the service and return (the Windows one
+                # waits for /health itself, a detached one may not): give the
+                # service a moment before calling the exit a failure.
+                exited_at = exited_at or time.monotonic()
+                if time.monotonic() - exited_at > LAUNCHER_EXIT_GRACE_SECONDS:
+                    return _start_failed(api_base, log_path, f"启动器退出了（退出码 {process.returncode}）")
             if time.monotonic() >= deadline:
                 return _start_failed(
                     api_base, log_path, f"等了 {int(AUTOSTART_SECONDS)} 秒服务仍没有应答"
@@ -431,6 +506,37 @@ def _send(
     )
 
 
+def _never_sent(exc: FluentFlowApiError) -> bool:
+    """Whether the request certainly never reached the service.
+
+    Connection refused (and a name that does not resolve) is the connect itself
+    failing, so no byte of the call was delivered and the same call can go out
+    again. Anything else without a status — a reset or a timeout after the
+    request was written — may have been carried out.
+    """
+    reason = getattr(exc.__cause__, "reason", None)
+    return isinstance(reason, (ConnectionRefusedError, socket.gaierror))
+
+
+def _may_have_arrived(exc: FluentFlowApiError) -> bool:
+    """The request went out and then the connection was lost (status is None)."""
+    return isinstance(exc.__cause__, urllib.error.URLError) and not _never_sent(exc)
+
+
+def _outcome_unknown(api_base: str, method: str, exc: FluentFlowApiError) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "code": "result_unknown",
+        "error": (
+            f"调用 {method} {api_base} 时请求已经发出去，之后连接断了（{exc}），"
+            "这一次有没有在 FluentFlow 里生效不确定。先确认现状再决定要不要重试（例如 list_tasks 看有没有多出来的任务，"
+            "get_task 看这一条到哪一步了）；不确认就重试，提交类的调用会建出第二条任务。"
+        ),
+        "status": None,
+        "payload": None,
+    }
+
+
 def _agent_request(
     method: str,
     path: str,
@@ -448,16 +554,20 @@ def _agent_request(
     except FluentFlowApiError as exc:
         if exc.status is None and autostart:
             # Nothing answered: the service may simply not be running. Start it
-            # (decision 1.20) and send the call once more.
+            # (decision 1.20), and repeat the call only when it certainly never
+            # went out: a submit sent once and lost would otherwise make a
+            # second task.
             started = _start_local_service(base)
-            if started is not None:
-                if started.get("ok") is False:
-                    return started
+            if started is not None and started.get("ok") is False:
+                return started
+            if started is not None and _never_sent(exc):
                 try:
                     return _send(method, base, path, **sent)
                 except FluentFlowApiError as again:
                     exc = again
         if exc.status is None:
+            if _may_have_arrived(exc):
+                return _outcome_unknown(base, method, exc)
             # No HTTP status means nothing answered. Say how to start it instead of
             # handing the caller a bare "Connection refused" to interpret.
             return _unreachable(base, str(exc))
