@@ -168,6 +168,17 @@ def _insert_images(
     return images, errors
 
 
+def last_link_number(first: dict[str, Any]) -> int:
+    """The highest number the export that made the document gave a chapter
+    link (``first_push``), 0 when it gave none. A resume's own links are
+    numbered after it, also those of a chapter the first push wrote and this
+    resume deletes: a number that export used is never taken again, so none of
+    its placeholders can be read as one of the resume's."""
+    return feishu_note.last_placeholder(
+        " ".join(str(link.get("placeholder") or "") for link in first.get("links") or []),
+    )
+
+
 def _local_images_in(text: str) -> int:
     """The screenshots ``_prepare_images`` numbers in ``text`` (not the image
     lines inside code), so a chapter written on its own keeps the figure

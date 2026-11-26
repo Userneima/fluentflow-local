@@ -914,6 +914,118 @@ def test_a_resume_numbers_its_links_after_the_ones_the_document_still_holds(tmp_
     assert result["sync"]["link_errors"] == []
 
 
+def test_a_record_whose_note_s_time_cannot_be_told_from_the_record_s_places_nothing(tmp_path):
+    """Equal file times (a coarse filesystem clock) cannot tell whether the
+    note as pushed is the one that export wrote: it is taken as not, so no
+    picture goes in and the screenshots are reported as not uploaded, rather
+    than placed by a numbering that may be another note's."""
+    _frames(tmp_path, ["a.jpg", "b.jpg", "c.jpg", "x.jpg"])
+    doc = FakeDoc()
+    _cut_before_pictures(doc, PICTURED, tmp_path)
+    edited = PICTURED.replace("开场的话。", f"开场的话。\n\n{_pic('x.jpg')}")
+    record = tmp_path / "t1" / cli.CREATED
+    older = json.loads(record.read_text(encoding="utf-8"))
+    older.pop("first_push")
+    record.write_text(json.dumps(older), encoding="utf-8")
+    cli.save_pushed_note(tmp_path, "t1", edited)
+    same = 1_700_000_000_000_000_000
+    os.utime(record, ns=(same, same))
+    os.utime(tmp_path / "t1" / cli.PUSHED_NOTE, ns=(same, same))
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    assert not [b for b in doc.blocks if b["tag"] == "img"]
+    assert result["image_upload_count"] == 0
+    assert result["image_upload_errors"] == [f"/jobs/t1/artifacts/frame?file={name}"
+                                             for name in ("x.jpg", "a.jpg", "b.jpg", "c.jpg")]
+
+
+def test_a_record_whose_note_is_not_the_one_it_wrote_points_no_link(tmp_path):
+    """A record from a version that kept only the document, whose note was
+    written again since: the placeholders left in the document were numbered
+    by another note, so pointing one by this note's numbering can put a link
+    on the wrong chapter. None is pointed; they are reported and left in
+    sight."""
+    doc = FakeDoc()
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", NOTE, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, lambda c: "--scope" in c))
+    # The note a later resume saved: its first link is another chapter's, and
+    # it reads as the placeholder the document still holds.
+    edited = NOTE.replace("开场的话。", "开场的话，见[[#二、框架|第三章]]。")
+    record = tmp_path / "t1" / cli.CREATED
+    older = json.loads(record.read_text(encoding="utf-8"))
+    older.pop("first_push")
+    record.write_text(json.dumps(older), encoding="utf-8")
+    cli.save_pushed_note(tmp_path, "t1", edited)
+    os.utime(record, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    os.utime(tmp_path / "t1" / cli.PUSHED_NOTE, ns=(1_700_000_009_000_000_000, 1_700_000_009_000_000_000))
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=doc)
+
+    framework = next(text for text in doc.texts() if "框架的话" in text)
+    assert "fluentflow.invalid/link/1" in framework, "left as it was, in sight"
+    assert f"#{_ids(doc)['二、框架']}" not in framework, "not pointed at the chapter this note's link 1 names"
+    assert result["sync"]["link_errors"] == ["第三章"]
+
+
+def test_a_resume_numbers_its_links_after_the_first_push_s_even_when_that_chapter_is_gone(tmp_path):
+    """The first push put its second link in a chapter a resume since deleted,
+    and that resume saved the note without noting the record: the next resume
+    numbers its own link after both what the document still holds and what
+    the first push used, so it never takes a number of the first push's."""
+    note = """# 访谈
+
+## 一、开场
+
+开场的话。
+
+## 二、框架
+
+框架的话，见[[#三、结尾|第三章]]。
+
+## 三、结尾
+
+结尾的话，也见[[#一、开场|第一章]]。
+"""
+    doc = FakeDoc()
+    with pytest.raises(KeyboardInterrupt):
+        cli.export_markdown_via_lark_cli("访谈", note, task_id="t1", artifact_root=tmp_path,
+                                         runner=_cut_off_at(doc, lambda c: "--scope" in c))
+    # That resume deleted the third chapter, which held link/2, and saved the
+    # note without it; then the note was edited again: the first chapter gains
+    # a link, and this export rewrites that chapter.
+    doc.blocks = [b for b in doc.blocks if b["text"] not in ("三、结尾", "结尾的话，也见[第一章](https://fluentflow.invalid/link/2)。")]
+    pushed = """# 访谈
+
+## 一、开场
+
+开场的话。
+
+## 二、框架
+
+框架的话，见[[#三、结尾|第三章]]。
+"""
+    cli.save_pushed_note(tmp_path, "t1", pushed)
+    edited = pushed.replace("开场的话。", "开场的话，见[[#二、框架|第二章]]。")
+    written: list[str] = []
+
+    def runner(cmd, **kwargs):
+        if cmd[2] == "+update" and _flag(cmd, "--command") == "block_insert_after":
+            written.append(kwargs.get("input") or "")
+        return doc(cmd, **kwargs)
+
+    result = cli.export_markdown_via_lark_cli("访谈", edited, task_id="t1", artifact_root=tmp_path, runner=runner)
+
+    assert len(written) == 1
+    assert "https://fluentflow.invalid/link/3" in written[0], "numbered after the first push's link/2"
+    assert "https://fluentflow.invalid/link/2" not in written[0]
+    assert f"[第二章]({URL}#{_ids(doc)['二、框架']})" in next(t for t in doc.texts() if "开场的话" in t)
+    # The second chapter links to the chapter that resume deleted: reported,
+    # its words kept, as before.
+    assert result["sync"]["link_errors"] == ["第三章"]
+
+
 # Second independent review of the resume, 2026-11-26: a picture right above
 # a caption is the screenshot only when the export was putting that very
 # screenshot in when it stopped (it records each one before and after it goes

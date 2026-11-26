@@ -86,8 +86,8 @@ from backend.core.lark_cli_records import (
     _forget_created,
     _remember_created,
     note_digest,
-    pushed_note_after_record,
     pushed_note_path,
+    pushed_note_saved_before_record,
     reread_sections,
     save_pushed_note,
     sections_unread,
@@ -125,20 +125,25 @@ def _first_push_of_older_record(
     ``_update`` replaces it, and kept with the record so a resume cut off in
     turn reads the same. Its markers are taken whatever their push.
 
-    A note saved after the record is not the note that export wrote: a resume
-    under that version rewrote chapters, saved the note and was cut off before
-    it noted them, and its figures are numbered over the edited note. No
-    marker is then matched to a picture, and the pictures are reported as not
-    uploaded rather than put under another one's caption."""
+    A note saved after the record (or one whose times cannot be told apart)
+    is not the note that export wrote: a resume under that version rewrote
+    chapters, saved the note and was cut off before it noted them, and its
+    figures and links are numbered over the edited note. Nothing is then
+    matched to the document: the pictures are reported as not uploaded rather
+    than put under another one's caption, and the chapter links left in it are
+    reported rather than pointed at a chapter this note may not name."""
     path = pushed_note_path(artifact_root, task_id, state)
     pushed = path.read_text(encoding="utf-8") if path is not None and path.is_file() else ""
     parts = feishu_note.sections(pushed)
     links: List[feishu_note.HeadingLink] = []
     written = _feishu_chunk(parts, list(range(len(parts))), links, tight=tight)
     pending: List[dict[str, Any]] = []
-    if not pushed_note_after_record(artifact_root, task_id, state):
+    trusted = pushed_note_saved_before_record(artifact_root, task_id, state)
+    if trusted:
         _markdown, pending, _missing = _prepare_images(written, task_id=task_id, artifact_root=artifact_root)
     first = lark_cli_images.first_push(None, pending, links, tracked=False)
+    if not trusted:
+        first["note_replaced"] = True
     _remember_created(artifact_root, task_id, {
         "doc_id": resumed["doc_id"], "url": resumed.get("url"), "revision_id": resumed.get("revision_id"),
         "first_push": first,
@@ -206,6 +211,7 @@ def export_markdown_via_lark_cli(
         updated = _update(
             markdown, previous, bin_path=bin_path, timeout=timeout, task_id=task_id,
             artifact_root=artifact_root, keep_feishu=keep_feishu, runner=runner, state=state, tight=tight,
+            first_link=lark_cli_images.last_link_number(first) if first else 0,
         )
         if resumed is not None:
             # The export that made the document may have been cut off before
@@ -235,10 +241,18 @@ def export_markdown_via_lark_cli(
             # still there (in chapters this resume did not rewrite) are
             # pointed now; ``_update`` pointed its own before this read, so
             # a placeholder found here is never one of its.
-            links = [
-                feishu_note.HeadingLink(**link) for link in first.get("links") or []
+            left = [
+                link for link in first.get("links") or []
                 if re.search(re.escape(link["placeholder"]) + r"(?!\d)", content)
             ]
+            if first.get("note_replaced"):
+                # The note is not the one that export wrote, so a placeholder
+                # in the document cannot be told from one this note would
+                # write: pointing the wrong chapter is worse than a
+                # placeholder left in sight, so they stay and are reported.
+                sync["link_errors"] = [link["label"] for link in left]
+                left = []
+            links = [feishu_note.HeadingLink(**link) for link in left]
             _finish(runner, bin_path, doc_id, str(previous.get("url") or ""), links, parts, sync)
             _forget_created(artifact_root, task_id, state)
             updated = {**updated, **_response(sync, pending, missing, images, errors)}

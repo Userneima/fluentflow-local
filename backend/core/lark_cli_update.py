@@ -4,8 +4,9 @@
 new document and for a rewrite); ``_update`` rewrites only the chapters that
 changed since the last push, as ``feishu_note.plan_update`` says, and raises
 :class:`UnfinishedUpdate` when a rewrite stops after it began writing. Its
-links are numbered after the placeholders the document still holds, so a
-resume's own link never shares a placeholder with the first push's.
+links are numbered after the numbers the export that made the document used
+and those still in it, so a resume's own link never shares a placeholder with
+the first push's.
 ``_response`` is the reply both a new document and an update return.
 """
 
@@ -151,6 +152,7 @@ def _update(
     runner: Runner,
     state: str = "",
     tight: bool = False,
+    first_link: int = 0,
 ) -> Dict[str, Any]:
     """Rewrite only the chapters that changed since ``previous`` was pushed.
 
@@ -159,7 +161,9 @@ def _update(
     says which blocks to delete and what to write after which block. Before the
     first write the document is handed to ``keep_feishu`` as markdown, so the
     version being replaced can be found again; if it cannot be read, nothing
-    is written."""
+    is written. ``first_link`` is the highest link number the export that made
+    the document used: this update numbers its own links after it, and after
+    the placeholders the document still holds, whichever is higher."""
     doc_id = str(previous["doc_id"])
     doc_url = str(previous.get("url") or "")
     fetched = lark_cli_run._run(
@@ -198,9 +202,11 @@ def _update(
     rewritten = 0
     # The placeholders the document still holds are the ones it was written
     # with before this push (a resume's first push's, or one a failed point
-    # left): this push numbers its own after them, so no two places in the
-    # document read the same and neither is pointed for the other.
-    first_link = feishu_note.last_placeholder(str(document.get("content") or ""))
+    # left), and the first push used numbers up to ``first_link`` whether or
+    # not they are still there: this push numbers its own after both, so no
+    # two places in the document read the same and none of its placeholders
+    # can be taken for the first push's.
+    first_link = max(first_link, feishu_note.last_placeholder(str(document.get("content") or "")))
     try:
         rewritten = _write_ops(ops, parts, figures, links, pending, missing, deleted,
                                bin_path=bin_path, doc_id=doc_id, timeout=timeout, task_id=task_id,
