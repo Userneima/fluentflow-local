@@ -10,10 +10,14 @@ the first delivery is made or they say they need no guide.
 Who is guided: a machine whose record is not done and that had no real task
 before the guide started. A machine with tasks from before (an old user
 updating) is never guided; the MCP self-check's task does not count as a real
-one. The guide's own first task does not end it either: tasks created after
-``started_at`` (stamped by the first record) are not counted, so another
-conversation can carry the guide on until it is marked done. A user who deleted
-every task is guided again; that is accepted (they start over as new).
+one, and neither does a task left in the platform's own data folder by an
+earlier install that this one no longer reads (Windows: an install from before
+the one-folder layout kept its tasks in %APPDATA%\FluentFlow). The guide's own
+task does not end it while it runs: tasks created after ``started_at`` (stamped
+by the first record) count only once one has completed, so another
+conversation can carry an unfinished guide on, and a guide whose delivery was
+never marked done does not start again. A user who deleted every task is guided
+again; that is accepted (they start over as new).
 """
 from __future__ import annotations
 
@@ -60,13 +64,29 @@ def status() -> dict[str, Any]:
     transcription model is on disk yet (speech_model_ready; the installer
     leaves it downloading, and false means the first recording waits for it)."""
     record = load()
-    record["should_onboard"] = not record["done"] and not job_store.has_job_not_named(
-        SELF_CHECK_TITLES, created_before=record["started_at"])
+    started = record["started_at"]
+    record["should_onboard"] = not record["done"] and not (
+        job_store.has_job_not_named(SELF_CHECK_TITLES, created_before=started)
+        or (started and job_store.has_job_not_named(SELF_CHECK_TITLES, created_from=started, statuses=("completed",)))
+        or _earlier_install_had_tasks(started)
+    )
     if record["should_onboard"]:
         record["speech_model_ready"] = _speech_model_ready()
         if GUIDE_PATH.is_file():
             record["guide_path"] = str(GUIDE_PATH)
     return record
+
+
+def _earlier_install_had_tasks(started: str | None) -> bool:
+    from backend.core import runtime_paths
+
+    earlier = runtime_paths.default_app_data_root() / "fluentflow_jobs.sqlite"
+    try:
+        if earlier.resolve() == Path(job_store.DEFAULT_DB_PATH).resolve():
+            return False
+    except OSError:
+        return False
+    return job_store.has_job_not_named(SELF_CHECK_TITLES, db_path=earlier, created_before=started, read_only=True)
 
 
 def _speech_model_ready() -> bool | None:

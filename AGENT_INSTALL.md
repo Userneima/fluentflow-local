@@ -98,8 +98,11 @@ Ask nothing of this during the install when FluentFlow has been on this machine 
 the code folder already existed when you started (an update), or a task database is
 left from an earlier install (an uninstall that kept the data): macOS
 `~/Library/Application Support/FluentFlow/fluentflow_jobs.sqlite`, Windows
-`<folder>\data\fluentflow_jobs.sqlite` or `%APPDATA%\FluentFlow\fluentflow_jobs.sqlite`.
-Then decide after the install from `get_status` alone.
+`<folder>\data\fluentflow_jobs.sqlite` or `%APPDATA%\FluentFlow\fluentflow_jobs.sqlite`,
+or the settings file `fluentflow_config.json` in one of those folders already has
+`"first_use"` with `"done": true`. Then decide after the install from `get_status` alone
+(it also counts tasks an earlier install left in `%APPDATA%\FluentFlow`, which a
+one-folder install does not read).
 
 1. While the install runs in the background: as soon as
    `<code>/agent/skills/fluentflow/first-use.md` exists (the first step, getting the code,
@@ -138,10 +141,24 @@ The MCP tools load when a conversation starts, so this conversation (the one tha
 the install) cannot call them yet; do not ask the user to restart or open a new
 conversation for that. Read `agent/skills/fluentflow/SKILL.md` in the install folder (the
 skill also loads only at a conversation's start), then run each tool from the command
-line with the same names and arguments:
-`<code>/.venv/bin/python <code>/scripts/fluentflow_mcp_server.py call <tool> '<JSON arguments>'`
-(on Windows `<folder>\app\.venv\Scripts\python.exe <folder>\app\scripts\fluentflow_mcp_server.py`; `-` in place of the JSON reads it from
-stdin, `tools` lists every tool and `tools <name>` prints one with its arguments). It
+line with the same names and arguments (quote the paths: a folder name may hold spaces):
+
+```bash
+"<code>/.venv/bin/python" "<code>/scripts/fluentflow_mcp_server.py" call get_task '{"task_id": "…"}'
+```
+
+On Windows, Windows PowerShell 5.1 drops the double quotes inside an argument it passes
+to a program, so a JSON argument arrives broken: send the JSON on stdin with `-` instead,
+after telling PowerShell to pipe UTF-8 (it pipes ASCII by default, which turns Chinese
+into `?`), and start Python with the call operator `&`:
+
+```powershell
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+'{"task_id": "…"}' | & "<folder>\app\.venv\Scripts\python.exe" "<folder>\app\scripts\fluentflow_mcp_server.py" call get_task -
+& "<folder>\app\.venv\Scripts\python.exe" "<folder>\app\scripts\fluentflow_mcp_server.py" call get_status
+```
+
+`tools` lists every tool and `tools <name>` prints one with its arguments. It
 prints the tool's JSON answer and exits 1 when the answer is `ok: false`. `wait_task`
 holds up to its `timeout_seconds`, so give that command at least as long (in Claude Code
 a 600000 ms command timeout). A command waits until its tool is done (no `still_working`

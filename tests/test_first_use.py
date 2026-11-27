@@ -32,6 +32,7 @@ from scripts.check_mcp_server import run_check  # noqa: F401 - the self-check mo
 from scripts.fluentflow_mcp import core
 
 ROOT = Path(__file__).resolve().parents[1]
+REAL_EARLIER_INSTALL_CHECK = first_use._earlier_install_had_tasks
 TOKEN = "first-use-token"
 
 
@@ -41,8 +42,9 @@ def no_tasks(monkeypatch, tmp_path):
     db = tmp_path / "jobs.sqlite"
     real = job_store.has_job_not_named
     monkeypatch.setattr(job_store, "has_job_not_named",
-                        lambda names, db_path=db, created_before=None: real(names, db_path=db_path,
-                                                                            created_before=created_before))
+                        lambda names, db_path=db, **kw: real(names, db_path=db_path, **kw))
+    # The platform's own data folder is the real user's: never read it here.
+    monkeypatch.setattr(first_use, "_earlier_install_had_tasks", lambda started: False)
     monkeypatch.setattr(first_use, "_speech_model_ready", lambda: False)
     return db
 
@@ -320,3 +322,136 @@ def test_the_guide_never_promises_a_vtt_in_the_folder():
     guide = (SKILL_DIR / "first-use.md").read_text(encoding="utf-8")
     assert "txt、srt、vtt" not in guide and "srt、vtt 字幕文件" not in guide
     assert "一两个 G" not in guide and "1.5 到 3 个 G" in guide
+
+
+# --- second review (2026-11-27) ----------------------------------------------------
+
+def test_a_delivered_guide_never_marked_done_does_not_start_again(monkeypatch, own_empty_settings_file, no_tasks):
+    monkeypatch.setattr(first_use, "_now", lambda: _stamp(-30))
+    first_use.record({"need": 2, "material": "https://v.douyin.com/abc/"})
+    task_id = uuid.uuid4().hex
+    job_store.upsert_job(task_id=task_id, status="running", client_id=OWNER, source_filename="abc", db_path=no_tasks)
+    assert first_use.status()["should_onboard"] is True, "still running: another conversation carries it on"
+
+    job_store.upsert_job(task_id=task_id, status="completed", client_id=OWNER, db_path=no_tasks)
+
+    assert first_use.status()["should_onboard"] is False, "delivered: the material is not submitted again"
+
+
+def test_a_failed_guide_task_does_not_end_the_guide(monkeypatch, own_empty_settings_file, no_tasks):
+    monkeypatch.setattr(first_use, "_now", lambda: _stamp(-30))
+    first_use.record({"need": 2})
+    job_store.upsert_job(task_id=uuid.uuid4().hex, status="failed", client_id=OWNER, source_filename="x",
+                         db_path=no_tasks)
+    assert first_use.status()["should_onboard"] is True
+
+
+def test_tasks_left_by_an_earlier_install_count(monkeypatch, tmp_path, own_empty_settings_file, no_tasks):
+    # The fixture hides the platform data folder; this test points it at its own copy.
+    monkeypatch.setattr(first_use, "_earlier_install_had_tasks", REAL_EARLIER_INSTALL_CHECK)
+    earlier = tmp_path / "AppData" / "FluentFlow"
+    earlier.mkdir(parents=True)
+    monkeypatch.setattr(runtime_paths, "default_app_data_root", lambda: earlier)
+    assert first_use.status()["should_onboard"] is True, "no earlier database: guided"
+
+    job_store.upsert_job(task_id=uuid.uuid4().hex, status="completed", client_id=OWNER,
+                         source_filename="旧课.mp4", db_path=earlier / "fluentflow_jobs.sqlite")
+    assert first_use.status()["should_onboard"] is False
+
+
+def test_an_earlier_database_is_only_read(tmp_path):
+    db = tmp_path / "fluentflow_jobs.sqlite"
+    assert job_store.has_job_not_named(first_use.SELF_CHECK_TITLES, db_path=db, read_only=True) is False
+    assert not db.exists(), "reading never creates it"
+    db.write_text("not a database", encoding="utf-8")
+    assert job_store.has_job_not_named(first_use.SELF_CHECK_TITLES, db_path=db, read_only=True) is False
+    assert db.read_text(encoding="utf-8") == "not a database"
+
+
+def test_a_settings_file_that_cannot_be_read_fails_the_save_and_stays(monkeypatch, own_empty_settings_file):
+    target = local_config.config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"secrets": {"K": "v"}}', encoding="utf-8")
+    real_read = Path.read_bytes
+
+    def locked(self):
+        if self == target:
+            raise PermissionError("another program has it open")
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", locked)
+    with pytest.raises(PermissionError):
+        local_config.save_section("first_use", {"done": True})
+    monkeypatch.undo()
+
+    assert target.read_text(encoding="utf-8") == '{"secrets": {"K": "v"}}'
+    assert not list(target.parent.glob(f"{target.name}.broken-*")), "not damaged, so no backup"
+
+
+def test_the_settings_path_is_resolved_inside_the_lock(monkeypatch, tmp_path):
+    held = {"now": False, "seen": None}
+
+    class Lock:
+        def __enter__(self):
+            held["now"] = True
+
+        def __exit__(self, *exc):
+            held["now"] = False
+
+    def path():
+        held["seen"] = held["now"]
+        return tmp_path / "fluentflow_config.json"
+
+    monkeypatch.setattr(local_config, "_WRITE_LOCK", Lock())
+    monkeypatch.setattr(local_config, "config_path", path)
+    local_config.save_section("x", 1)
+    assert held["seen"] is True, "the copy from the old place runs under the lock"
+
+
+def test_a_cut_reminder_choice_keeps_one_saved_at_the_same_moment(monkeypatch, own_empty_settings_file):
+    from backend.core import cut_trust
+    from tests.test_cut_trust import _qualified, _task
+
+    judge = _qualified()
+    task = _task(judge, asked=1)
+    real_update = local_config.update_config
+
+    def with_another(change, path=None):
+        # Another judge's choice lands between this choice's start and its write.
+        return real_update(lambda config: change({**config, cut_trust.CHOICES_KEY: {"someone-else": {"kept_at": "x"}}}),
+                           path)
+
+    monkeypatch.setattr(local_config, "update_config", with_another)
+    cut_trust.choose(job_store.get_job(task), "keep")
+
+    saved = local_config.load_config()[cut_trust.CHOICES_KEY]
+    assert "someone-else" in saved and judge in saved
+
+
+def test_no_install_time_promise_and_deliveries_say_only_what_exists():
+    guide = (SKILL_DIR / "first-use.md").read_text(encoding="utf-8")
+    assert "「收到。等装好我就直接开始处理这条。」" in guide
+    assert guide.count("不用再发一遍") == 1, "only in the line for a recorded choice"
+    recorded = guide.index("- Recorded:")
+    assert recorded < guide.index("不用再发一遍") < guide.index("- Not recorded:")
+    assert "only when the task's result has it" in guide
+    assert "PDF 这次没生成出来" in guide and "这次没能分出不同的人" in guide
+    assert "「过程文件」文件夹" in guide.split("- 4: 「转好了")[1].split("\n")[0]
+    assert "- 6: 「做好了。" in guide and "- 6: 「以后也是跟我说话就行。" in guide
+
+
+def test_windows_command_lines_quote_paths_and_send_json_on_stdin():
+    text = (ROOT / "AGENT_INSTALL.md").read_text(encoding="utf-8")
+    lines = [line for line in text.splitlines() if "python.exe" in line and "fluentflow_mcp_server.py" in line]
+    assert lines
+    for line in lines:
+        assert '& "' in line and '"<folder>\\app\\scripts\\fluentflow_mcp_server.py"' in line, line
+        if "call get_task" in line:
+            assert line.rstrip().endswith(" -") and line.lstrip().startswith("'{"), line
+    assert "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)" in text
+
+
+def test_the_install_skips_a_machine_whose_settings_say_done():
+    text = (ROOT / "AGENT_INSTALL.md").read_text(encoding="utf-8")
+    section = text[text.index("## First use"):text.index("## Tell the user how to use it")]
+    assert "fluentflow_config.json" in section and '"done": true' in section

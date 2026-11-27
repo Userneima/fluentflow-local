@@ -53,7 +53,9 @@ By their choice:
 - 6, something it does: 「这个能做，我会{一句话说怎么做}。把{文件或链接}发过来就行。」
 - 6, something it does not (the list at the end): give that item's answer, then 「想试前面几种的话回个数字，或者直接发个视频、抖音链接过来。」
 
-Material received while the install still runs: 「收到。等装好我就直接开始处理这条，你不用再发一遍。」
+Material received while the install still runs: 「收到。等装好我就直接开始处理这条。」 (No promise
+that they will not have to send it again: that holds only once `record_first_use` has
+saved it, see step 3.)
 
 ## Step 3: installed, start at once
 
@@ -102,12 +104,19 @@ Otherwise:
 `{输出文件夹}` and `{page_url}` come from the task (`wait_task`'s `task`, `page_url`). End
 every delivery with 「整个过程你只打了 {N} 次字。」 Then `record_first_use(done=true)`.
 
+Say each part of a line only when the task's result has it (`get_task_package`): the PDF,
+the screenshots, the section times, speakers told apart. When one is missing, drop it from
+the line and say so once, plainly, for example 「PDF 这次没生成出来，Markdown 那份是完整的。」 or
+「这次没能分出不同的人，逐字稿里没标是谁说的。」
+
 - 1: 「做好了。按讲的顺序分好了章节，插了关键画面的截图，每段都对好了视频时间。笔记在这里：{输出文件夹}（有 Markdown 和 PDF 两份）。想边看视频边对着笔记：{page_url}，点右边任意一章就跳回视频那一段。」
 - 2: 「看完了，这条讲的是：{两三句重点}。带截图的完整笔记在这里：{输出文件夹}，PDF 那份可以直接发给别人。想边播原片边对着看：{page_url}」
 - 3: 「整理好了，每个人说的话分开标了，也理出了纪要。纪要在这里：{输出文件夹}，完整逐字稿在里面的「过程文件」文件夹。想边听录音边核对原文：{page_url}」
-- 4: 「转好了，原片没剪，也没写笔记。文字稿和字幕文件（txt、srt）在这里：{路径}，网页里还能另存成 vtt。想边播边改错字：{page_url}」
+- 4: 「转好了，原片没剪，也没写笔记。文字稿和字幕文件（txt、srt）在这里：{输出文件夹}里的「过程文件」文件夹，网页里还能另存成 vtt。想边播边改错字：{page_url}」
 - 5, with a compressed copy (a video on a Mac): 「剪好了。原来 {原时长}，剪掉 {N} 处空白和气口，现在 {新时长}。剪好的版本和压小的原片副本都在这里：{输出文件夹}，原片没动。想看具体剪了哪几段：{page_url}」
 - 5, without one (audio, Windows, a video already small): 「剪好了。原来 {原时长}，剪掉 {N} 处空白和气口，现在 {新时长}，文件在这里：{输出文件夹}，原片没动。{这条是音频 / 这台电脑出不了压小的副本 / 原片已经够小}，所以没另出压小的那份。想看具体剪了哪几段：{page_url}」
+
+- 6: 「做好了。{第 2 步说好要做的事，只说这次实际做出来的}，在这里：{输出文件夹}。想在网页里看：{page_url}」
 
 The cut has places you were unsure of: add 「另外有 {N} 处我拿不准该不该剪，你在意的话点上面的链接听一下，留不留你定。」
 
@@ -116,6 +125,7 @@ The cut has places you were unsure of: add 「另外有 {N} 处我拿不准该�
 - 1, 2, 3: 「以后不用点按钮，跟我说话就行。现在可以顺手试一句（回数字），或者说没问题了：1. 给我整理一份复习笔记 2. 有句写错了，或者以后都想换个写法，直接告诉我怎么改 3. 发到飞书 4. 学完了（我帮你标上，以后好找没学的） 5. 先这样」
 - 4: 「以后也是跟我说话就行。现在可以顺手试一件（回数字），或者收尾：1. 有人名或专业词听错了，告诉我正确写法，我整篇改掉，下次也记得 2. 英文视频的话，把字幕翻成中文 3. 顺便写成一份笔记 4. 先这样」
 - 5: 「以后别的录音录像也直接丢给我就行。现在可以顺手试一件（回数字），或者收尾：1. 哪段不该剪、哪里没剪干净，告诉我那句话或时间点，我重新出一版 2. 顺便整理成文字笔记 3. 先这样」
+- 6: 「以后也是跟我说话就行。现在可以顺手试一件（回数字），或者收尾：1. 哪里不对，告诉我怎么改 2. {这次没写笔记的话：顺便写成一份笔记} 3. 先这样」 (renumber when item 2 does not apply)
 
 Put each list on its own lines. Do what they pick the way the skill says (review note,
 `replace_note_text` / feedback rules, Feishu export, `mark_studied`, cut changes, the

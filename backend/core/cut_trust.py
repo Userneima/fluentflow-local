@@ -207,9 +207,13 @@ def choose(job: dict[str, Any], choice: str) -> dict[str, Any]:
         saved = {"closed_at": now}
     else:
         saved = {"kept_at": now}
-    config = local_config.load_config()
-    choices = config.get(CHOICES_KEY) if isinstance(config.get(CHOICES_KEY), dict) else {}
-    local_config.save_section(CHOICES_KEY, {**choices, judge: saved})
+    def change(config: dict[str, Any]) -> dict[str, Any]:
+        # Read inside the settings lock: a choice for another judge saved at the
+        # same moment is kept.
+        choices = config.get(CHOICES_KEY) if isinstance(config.get(CHOICES_KEY), dict) else {}
+        return {**config, CHOICES_KEY: {**choices, judge: saved}}
+
+    local_config.update_config(change)
     return standing(judge)
 
 

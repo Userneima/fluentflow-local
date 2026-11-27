@@ -121,9 +121,10 @@ logger = logging.getLogger(__name__)
 
 # Every save reads the whole file, changes one part and writes it back: two
 # saves at once (a page setting and an agent's record) would each write the
-# file without the other's change. One lock for the process around the
-# read-modify-write, and the write goes to a temporary file swapped in whole,
-# so a reader never sees half a file.
+# file without the other's change. One lock around the read-modify-write, and
+# the write goes to a temporary file swapped in whole, so a reader never sees
+# half a file. The lock covers one process: every writer is the service (the
+# page and the MCP tools both reach it over HTTP).
 _WRITE_LOCK = threading.RLock()
 
 
@@ -133,11 +134,14 @@ def _load_for_update(target: Path) -> dict[str, Any]:
     replaces it, so a damaged file with the user's keys is never lost silently."""
     if not target.exists():
         return {}
+    # An OSError (another program holding the file, no permission) is not a
+    # damaged file: it fails the save, and the file stays as it is.
+    text = target.read_bytes()
     try:
-        data = json.loads(target.read_text(encoding="utf-8"))
+        data = json.loads(text.decode("utf-8"))
         if isinstance(data, dict):
             return data
-    except (OSError, UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError):
         pass
     backup = target.with_name(f"{target.name}.broken-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}")
     shutil.copy2(target, backup)
@@ -151,6 +155,8 @@ def _write_config(target: Path, data: dict[str, Any]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())
         try:
             os.chmod(temp, 0o600)  # the file holds secrets: readable by the user only
         except OSError:
@@ -167,13 +173,26 @@ def _write_config(target: Path, data: dict[str, Any]) -> None:
     except BaseException:
         Path(temp).unlink(missing_ok=True)
         raise
+    if os.name == "posix":
+        # The rename itself reaches the disk only with the folder's entry.
+        try:
+            folder = os.open(str(target.parent), os.O_RDONLY)
+            try:
+                os.fsync(folder)
+            finally:
+                os.close(folder)
+        except OSError:
+            pass
 
 
 def update_config(change: Callable[[dict[str, Any]], dict[str, Any]], path: Path | str | None = None) -> dict[str, Any]:
     """Read the settings, apply ``change`` (it returns the new whole), write
     them back, all under the lock; returns what was written."""
-    target = Path(path) if path else config_path()
     with _WRITE_LOCK:
+        # config_path() may copy a settings file from its old place: inside the
+        # lock, so a save at the same moment cannot land between the copy and
+        # this read.
+        target = Path(path) if path else config_path()
         updated = change(_load_for_update(target))
         _write_config(target, updated)
         return updated

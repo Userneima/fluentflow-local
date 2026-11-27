@@ -601,11 +601,14 @@ def recent_local_folders(
 
 
 def has_job_not_named(names: tuple[str, ...] | list[str], db_path: Path | str = DEFAULT_DB_PATH,
-                      created_before: str | None = None) -> bool:
+                      created_before: str | None = None, created_from: str | None = None,
+                      statuses: tuple[str, ...] | None = None, read_only: bool = False) -> bool:
     """Whether any task exists besides the ones whose title is one of ``names``
-    (the MCP self-check's task), counting only those created before
-    ``created_before`` when it is given: one lookup, not a read of the list."""
-    ensure_job_db(db_path)
+    (the MCP self-check's task): created before ``created_before`` and/or at
+    or after ``created_from`` when given, in one of ``statuses`` when given.
+    One lookup, not a read of the list. ``read_only`` opens a database this
+    service does not own (an earlier install's) without creating or migrating
+    it: missing, or not a task database, means no."""
     values: list[Any] = [str(name) for name in names]
     clauses = []
     if values:
@@ -613,9 +616,28 @@ def has_job_not_named(names: tuple[str, ...] | list[str], db_path: Path | str = 
     if created_before:
         clauses.append("julianday(created_at) < julianday(?)")
         values.append(str(created_before))
-    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    if created_from:
+        clauses.append("julianday(created_at) >= julianday(?)")
+        values.append(str(created_from))
+    if statuses:
+        clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+        values.extend(statuses)
+    sql = "SELECT 1 FROM jobs" + (f" WHERE {' AND '.join(clauses)}" if clauses else "") + " LIMIT 1"
+    if read_only:
+        path = Path(db_path)
+        if not path.is_file():
+            return False
+        try:
+            conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+            try:
+                return conn.execute(sql, values).fetchone() is not None
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return False
+    ensure_job_db(db_path)
     with sqlite_connection(Path(db_path)) as conn:
-        return conn.execute(f"SELECT 1 FROM jobs{where} LIMIT 1", values).fetchone() is not None
+        return conn.execute(sql, values).fetchone() is not None
 
 
 def list_jobs_by_statuses(
