@@ -25,6 +25,23 @@ with one line or one number; you do everything else.
 - Between the expectation line (step 4) and the delivery (step 5) say nothing: judge
   the cut, correct the transcript, write and check the note, align it, all without
   asking the user. The usual rules of the skill apply to each of those.
+- The expectation line promises 「好了我叫你」, and you cannot come back once your turn
+  ends: say it as a progress message and keep working in the same turn (`wait_task`
+  and the steps it names) until you deliver. Do not end your turn after the expectation
+  line and wait for the user to reply.
+- Ask question 1 and question 2 one at a time, each as its own plain message with the
+  lines below as written (not merged, not reworded, not through a multiple-choice
+  tool), and wait for the answer to each: end your turn after asking, so the user can
+  answer (an install keeps running in the background; check on it when they reply).
+  Do not hold the turn waiting for the install and then ask the same question again.
+- Say the lines of this guide and nothing extra: no tips beyond them (which app opens
+  the markdown, how many words were corrected) unless the user asks.
+- In the install conversation the walk-through replaces the install report: when the
+  install finishes, do not list versions, health checks, the access token or which agents
+  were registered (keep those for when the user asks or something failed). At most one
+  line, 「装好了。」, then the next step.
+- The delivery (step 5) and the try-one menu (step 6) go in one message, so the user
+  sees what to try without having to answer first.
 
 ## Step 1: what they want most
 
@@ -95,7 +112,7 @@ with `task.downloading_model=true` before you said it (then say this line once, 
 
 > 开始处理「{标题或文件名}」。这是装完的第一条，电脑还在下语音识别要用的文件（1.5 到 3 个 G），这次会多等几分钟，往后就快了。不用守着，电脑别合盖就行，好了我叫你。
 
-Otherwise:
+Otherwise (no title known yet: say 「开始处理这条视频」, without the quotation marks):
 
 > 开始处理「{标题或文件名}」，大概要 {几分钟}。不用守着，电脑别合盖就行，好了我叫你。
 

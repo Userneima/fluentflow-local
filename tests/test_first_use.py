@@ -468,3 +468,37 @@ def test_the_install_skips_a_machine_whose_settings_say_done():
     text = (ROOT / "AGENT_INSTALL.md").read_text(encoding="utf-8")
     section = text[text.index("## First use"):text.index("## Tell the user how to use it")]
     assert "fluentflow_config.json" in section and '"done": true' in section
+
+
+def test_the_guide_keeps_the_turn_until_delivery_and_offers_the_menu_with_it():
+    # Acceptance round 1 (2026-11-27, OpenCode): the agent ended its turn after
+    # 「好了我叫你」 and only went on when the user wrote again; the try-one menu came
+    # in a second message after the user answered the delivery.
+    guide = (SKILL_DIR / "first-use.md").read_text(encoding="utf-8")
+    assert "keep working in the same turn" in guide
+    assert "Do not end your turn after the expectation" in guide
+    assert "go in one message" in guide
+
+
+def test_the_questions_come_one_at_a_time_and_the_install_report_stays_out():
+    # Acceptance round 2: the install finished inside the first turn and the agent
+    # sent a technical install report (version, health check, token, registrations)
+    # with both questions merged and reworded after it.
+    guide = (SKILL_DIR / "first-use.md").read_text(encoding="utf-8")
+    assert "one at a time" in guide and "not merged, not reworded" in guide
+    assert "replaces the install report" in guide and "「装好了。」" in guide
+    install = (ROOT / "AGENT_INSTALL.md").read_text(encoding="utf-8")
+    section = install[install.index("## First use"):install.index("## Tell the user how to use it")]
+    assert "one at a time" in section and "replaces the install report" in section
+
+
+def test_asking_ends_the_turn_and_nothing_is_added():
+    # Acceptance round 3: the agent asked question 1, held its turn until the
+    # install finished, then asked it again; it added an Obsidian tip; with no title
+    # it said 「开始处理「这条视频」」.
+    guide = (SKILL_DIR / "first-use.md").read_text(encoding="utf-8")
+    assert "end your turn after asking" in guide and "ask the same question again" in guide
+    assert "nothing extra" in guide
+    assert "开始处理这条视频" in guide and "「这条视频」 in place" not in guide
+    install = (ROOT / "AGENT_INSTALL.md").read_text(encoding="utf-8")
+    assert "your turn after each so the user can answer" in install

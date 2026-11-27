@@ -108,8 +108,12 @@ one-folder install does not read).
    `<code>/agent/skills/fluentflow/first-use.md` exists (the first step, getting the code,
    puts it there within a minute or two), read it and ask its question 1 (the six
    options), then question 2 (the material; with none at hand, any Douyin share link).
-   Keep the answers in this conversation; do not call any tool while the install is
-   setting things up. A user who skips the questions and gives a file or a link is not
+   Ask them one at a time, as plain messages with the guide's lines as written, and end
+   your turn after each so the user can answer while the install runs. Keep the
+   answers in this conversation; do not call any tool while the install is setting
+   things up. The walk-through replaces the install report below: when the install
+   finishes, say at most 「装好了。」 (versions, health checks, the token and the
+   registrations only when the user asks or something failed). A user who skips the questions and gives a file or a link is not
    stopped: take it as a request for a note. If the file never appears (an older release
    than these instructions), skip the walk-through.
 2. When the install has finished: read `<code>/agent/skills/fluentflow/SKILL.md` and call
