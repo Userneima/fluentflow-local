@@ -213,7 +213,65 @@ def _use_utf8_stdio() -> None:
             reconfigure(**options)
 
 
+_CLI_USAGE = """用法：
+  fluentflow_mcp_server.py                     作为 MCP 服务跑（agent 注册的就是这个）
+  fluentflow_mcp_server.py tools               列出全部工具和一句说明
+  fluentflow_mcp_server.py tools <工具名>      打印这个工具的完整说明和参数
+  fluentflow_mcp_server.py call <工具名> ['<JSON 参数>' | -]
+                                               调一次工具，打印它的回答（JSON）；- 表示参数从标准输入读
+"""
+
+
+def run_cli(argv: list[str], out=None) -> int:
+    """The same tools from the command line, for an agent whose conversation
+    started before the tools were registered: Claude Code and Codex load MCP
+    servers only when a conversation starts, so the conversation that ran the
+    install cannot call them, but it can run this (2026-11-27, onboarding).
+    Exit 0 when the tool answered, 1 when it answered ok=false, 2 on a usage
+    error."""
+    out = out or sys.stdout
+    command, rest = argv[0], argv[1:]
+    if command == "tools":
+        if not rest:
+            for definition in TOOL_DEFINITIONS:
+                summary = str(definition.get("description") or "").strip().split(". ")[0]
+                out.write(f"{definition['name']}: {summary[:160]}\n")
+            return 0
+        definition = next((item for item in TOOL_DEFINITIONS if item["name"] == rest[0]), None)
+        if definition is None:
+            sys.stderr.write(f"没有叫 {rest[0]} 的工具。运行 tools 看全部工具。\n")
+            return 2
+        out.write(json.dumps(definition, ensure_ascii=False, indent=2) + "\n")
+        return 0
+    if command != "call" or not rest or len(rest) > 2:
+        sys.stderr.write(_CLI_USAGE)
+        return 2
+    name = rest[0]
+    if name not in TOOL_FUNCTIONS:
+        sys.stderr.write(f"没有叫 {name} 的工具。运行 tools 看全部工具。\n")
+        return 2
+    raw = (sys.stdin.read() if rest[1:] == ["-"] else rest[1]) if len(rest) == 2 else "{}"
+    try:
+        arguments = json.loads(raw or "{}")
+    except ValueError as exc:
+        sys.stderr.write(f"参数不是合法的 JSON：{exc}\n")
+        return 2
+    if not isinstance(arguments, dict):
+        sys.stderr.write("参数要是一个 JSON 对象，例如 '{\"task_id\": \"abc\"}'。\n")
+        return 2
+    try:
+        result = _call_tool(name, arguments)
+    except TypeError as exc:
+        sys.stderr.write(f"参数不对：{exc}\n")
+        return 2
+    out.write(result["content"][0]["text"] + "\n")
+    return 1 if result.get("isError") else 0
+
+
 def main() -> int:
+    if len(sys.argv) > 1:
+        _use_utf8_stdio()
+        return run_cli(sys.argv[1:])
     core._heartbeat_enabled = True
     _use_utf8_stdio()
     # The host closing stdin ends the conversation: exit without finishing

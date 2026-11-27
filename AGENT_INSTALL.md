@@ -99,8 +99,18 @@ Say this, in the user's language:
 - You write the notes yourself, so no API key is needed. Entering a model key in the
   app's settings is optional; it is a fallback when you cannot complete the work or the user delegates it, and supports submissions made on the page.
 
-The MCP tools appear in the user's next conversation with you. When asked for a note
-then: submit with `submit_local_media` (a recording or a subtitle file, by path) or
+The MCP tools load when a conversation starts, so this conversation (the one that ran
+the install) cannot call them yet; do not ask the user to restart or open a new
+conversation for that. Read `agent/skills/fluentflow/SKILL.md` in the install folder (the
+skill also loads only at a conversation's start), then run each tool from the command
+line with the same names and arguments:
+`<folder>/.venv/bin/python <folder>/scripts/fluentflow_mcp_server.py call <tool> '<JSON arguments>'`
+(on Windows `<folder>\.venv\Scripts\python.exe`; `-` in place of the JSON reads it from
+stdin, `tools` lists every tool and `tools <name>` prints one with its arguments). It
+prints the tool's JSON answer and exits 1 when the answer is `ok: false`. `wait_task`
+holds up to its `timeout_seconds`, so give that command at least as long (in Claude Code
+a 600000 ms command timeout). From the user's next conversation the tools are there
+directly. When asked for a note: submit with `submit_local_media` (a recording or a subtitle file, by path) or
 `submit_video_link` using the default `intelligence="agent"`; hand `agent_cut` to a subagent with a fresh context, which uses
 `get_agent_cut_material`, `save_agent_cut` and `save_agent_cut_report`; when `wait_task` returns `agent_note` ready, the cut is
 rendering and the note can start. Fetch `get_agent_note_material`, write and check the note
