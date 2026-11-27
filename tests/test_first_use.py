@@ -359,6 +359,19 @@ def test_tasks_left_by_an_earlier_install_count(monkeypatch, tmp_path, own_empty
     assert first_use.status()["should_onboard"] is False
 
 
+def test_a_test_copy_does_not_read_the_real_earlier_database(monkeypatch, tmp_path, own_empty_settings_file, no_tasks):
+    """Push review 2026-11-27: a test copy must answer from its copied data only."""
+    monkeypatch.setattr(first_use, "_earlier_install_had_tasks", REAL_EARLIER_INSTALL_CHECK)
+    earlier = tmp_path / "AppData" / "FluentFlow"
+    earlier.mkdir(parents=True)
+    monkeypatch.setattr(runtime_paths, "default_app_data_root", lambda: earlier)
+    job_store.upsert_job(task_id=uuid.uuid4().hex, status="completed", client_id=OWNER,
+                         source_filename="旧课.mp4", db_path=earlier / "fluentflow_jobs.sqlite")
+    monkeypatch.setenv("FLUENTFLOW_TEST_COPY", "1")
+
+    assert first_use.status()["should_onboard"] is True
+
+
 def test_an_earlier_database_is_only_read(tmp_path):
     db = tmp_path / "fluentflow_jobs.sqlite"
     assert job_store.has_job_not_named(first_use.SELF_CHECK_TITLES, db_path=db, read_only=True) is False

@@ -78,8 +78,12 @@ def status() -> dict[str, Any]:
 
 
 def _earlier_install_had_tasks(started: str | None) -> bool:
-    from backend.core import runtime_paths
+    from backend.core import runtime_paths, test_copy
 
+    # A test copy answers from its own copied data only: the user's real task
+    # library must neither skip the copy's guide nor be read from it (8.11).
+    if test_copy.enabled():
+        return False
     earlier = runtime_paths.default_app_data_root() / "fluentflow_jobs.sqlite"
     try:
         if earlier.resolve() == Path(job_store.DEFAULT_DB_PATH).resolve():
