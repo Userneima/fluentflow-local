@@ -52,7 +52,7 @@ tarball works.
 macOS:
 
 ```bash
-d=$(mktemp -d) && curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest -o "$d/m.json" && curl -fsSL -o "$d/p.tgz" "$(plutil -extract dist.tarball raw -o - "$d/m.json")" && tar -xzf "$d/p.tgz" -C "$d" package && FLUENTFLOW_INSTALL_SOURCE="$d/package/source" bash "$d/package/install.sh"; rm -rf "$d"
+d=$(mktemp -d) && curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest -o "$d/m.json" && curl -fsSL -o "$d/p.tgz" "$(plutil -extract dist.tarball raw -o - "$d/m.json")" && tar -xzf "$d/p.tgz" -C "$d" package && FLUENTFLOW_INSTALL_SOURCE="$d/package/source" bash "$d/package/install.sh" && rm -rf "$d"
 ```
 
 Windows (PowerShell), with `$env:FLUENTFLOW_INSTALL_DIR` set first as above when the
