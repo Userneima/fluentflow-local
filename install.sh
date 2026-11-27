@@ -869,8 +869,8 @@ fi
 echo ""
 echo "✓ FluentFlow Local 已装好，并已启动：http://127.0.0.1:${PORT}"
 if [[ -d "${HOME}/Desktop/FluentFlow Local.app" ]]; then
-	echo "  以后从桌面的「FluentFlow Local」打开。要笔记时，在新对话里把视频文件或链接交给你的 agent，"
+	echo "  以后从桌面的「FluentFlow Local」打开。要笔记时，把视频文件或链接交给你的 agent（这个对话或以后的对话都行），"
 else
-	echo "  桌面上没有图标，不影响使用：agent 调用工具时会自己把它在后台起来。要笔记时，在新对话里把视频文件或链接交给你的 agent，"
+	echo "  桌面上没有图标，不影响使用：agent 调用工具时会自己把它在后台起来。要笔记时，把视频文件或链接交给你的 agent（这个对话或以后的对话都行），"
 fi
 echo "  它会用 FluentFlow 转写并亲自写笔记，不需要任何 API Key。"

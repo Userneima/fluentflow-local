@@ -8,7 +8,8 @@ end, and only those go to the user.
 
 Tell the user once, before you start, that the install downloads about 8 GB and takes
 15 to 30 minutes. On Windows, ask one question first (below, which drive); then work
-without further questions.
+without further questions about the install. On a new install, the two questions of
+"First use" (what they want it for, and a video to start with) are asked while it runs.
 
 ## Windows: ask which drive
 
@@ -90,23 +91,36 @@ seconds without an extra turn). It changes nothing else.
 ## First use
 
 A new install ends with the user's first real task, done in this same conversation:
-do not ask them to restart or to open a new conversation. Skip all of it when the install
-folder already existed before you started (an update), and when `get_status` says
-`first_use.should_onboard=false` (done before, or this machine already has tasks).
+do not ask them to restart or to open a new conversation. Below, `<code>` is where the
+code lands: `~/fluentflow-local` on macOS, `<folder>\app` on Windows.
+
+Ask nothing of this during the install when FluentFlow has been on this machine before:
+the code folder already existed when you started (an update), or a task database is
+left from an earlier install (an uninstall that kept the data): macOS
+`~/Library/Application Support/FluentFlow/fluentflow_jobs.sqlite`, Windows
+`<folder>\data\fluentflow_jobs.sqlite` or `%APPDATA%\FluentFlow\fluentflow_jobs.sqlite`.
+Then decide after the install from `get_status` alone.
 
 1. While the install runs in the background: as soon as
-   `<folder>/agent/skills/fluentflow/first-use.md` exists (the first step, getting the
-   code, puts it there within a minute or two), read it and ask its question 1 (the six
+   `<code>/agent/skills/fluentflow/first-use.md` exists (the first step, getting the code,
+   puts it there within a minute or two), read it and ask its question 1 (the six
    options), then question 2 (the material; with none at hand, any Douyin share link).
-   A user who skips the questions and gives a file or a link is not stopped: take it as
-   a request for a note.
-2. When the install has finished: read `<folder>/agent/skills/fluentflow/SKILL.md`, call
-   `get_status` from the command line (below), and with `first_use.should_onboard=true`
-   save what they chose with `record_first_use` (`need`, `material`), then go on from step
-   4 of `first-use.md`, every tool called from the command line. Its closing lines replace
-   the ones in the next section.
-3. An agent that cannot run commands follows step 3 of `first-use.md` instead: the user
-   opens a new conversation and says 「带我用一次 FluentFlow」.
+   Keep the answers in this conversation; do not call any tool while the install is
+   setting things up. A user who skips the questions and gives a file or a link is not
+   stopped: take it as a request for a note. If the file never appears (an older release
+   than these instructions), skip the walk-through.
+2. When the install has finished: read `<code>/agent/skills/fluentflow/SKILL.md` and call
+   `get_status` from the command line (below). With `first_use.should_onboard=true`, save
+   the answers with one `record_first_use` (`need`, `material`) and go on from step 4 of
+   `first-use.md`, every tool called from the command line. With `should_onboard=false`,
+   or no `first_use` in the answer (an older release), there is no walk-through: material
+   the user already gave is processed as an ordinary task, without the guide's lines.
+3. When the command-line entry cannot reach the tools at all, step 3 of `first-use.md`
+   says what to tell the user: open a new conversation and say 「带我用一次 FluentFlow」.
+
+The guide's last line already tells the user how to use FluentFlow from now on; the
+next section's points are for an install without the walk-through, and its command-line
+instructions apply either way.
 
 ## Tell the user how to use it
 
@@ -115,8 +129,8 @@ Say this, in the user's language:
 - FluentFlow is installed; later it opens from the Desktop icon. You do not need them
   to open it before you work: the tools start the service themselves, without opening
   a page.
-- To get a note, give you (the agent) a video file or a Douyin, Bilibili or YouTube link
-  in a new conversation, or drop it into the app's page.
+- To get a note, give you (the agent) a video file or a Douyin, Bilibili or YouTube link,
+  here or in any later conversation, or drop it into the app's page.
 - You write the notes yourself, so no API key is needed. Entering a model key in the
   app's settings is optional; it is a fallback when you cannot complete the work or the user delegates it, and supports submissions made on the page.
 
@@ -125,8 +139,8 @@ the install) cannot call them yet; do not ask the user to restart or open a new
 conversation for that. Read `agent/skills/fluentflow/SKILL.md` in the install folder (the
 skill also loads only at a conversation's start), then run each tool from the command
 line with the same names and arguments:
-`<folder>/.venv/bin/python <folder>/scripts/fluentflow_mcp_server.py call <tool> '<JSON arguments>'`
-(on Windows `<folder>\.venv\Scripts\python.exe`; `-` in place of the JSON reads it from
+`<code>/.venv/bin/python <code>/scripts/fluentflow_mcp_server.py call <tool> '<JSON arguments>'`
+(on Windows `<folder>\app\.venv\Scripts\python.exe <folder>\app\scripts\fluentflow_mcp_server.py`; `-` in place of the JSON reads it from
 stdin, `tools` lists every tool and `tools <name>` prints one with its arguments). It
 prints the tool's JSON answer and exits 1 when the answer is `ok: false`. `wait_task`
 holds up to its `timeout_seconds`, so give that command at least as long (in Claude Code

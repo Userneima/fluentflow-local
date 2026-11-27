@@ -7,9 +7,12 @@ with one line or one number; you do everything else.
 
 ## Rules for the whole walk-through
 
-- Record as you go with `record_first_use`, so a later conversation picks it up: `need`
-  right after question 1 (the number, or their words for 6), `material` right after
-  question 2 (the path or the link), `done=true` once step 5 is delivered.
+- Record with `record_first_use`, so a later conversation picks it up: `need` (the
+  number, or their words for 6) and `material` (the path or the link) before you submit
+  the task (the walk-through counts from that first record, so its own task does not end
+  it), and `done=true` once step 5 is delivered. In the install conversation keep both in
+  mind while the install runs and record them once it has finished (no tool call while
+  the environment and the service are being set up).
 - `first_use.need` / `first_use.material` already set (the install conversation asked):
   do not ask again; go on from the first step that is missing.
 - The user skips the questions and just gives a file or a link: do not stop them. Record
@@ -17,8 +20,8 @@ with one line or one number; you do everything else.
   YouTube link, and go on to step 4.
 - They say 「不用教了」 (or anything like it): `record_first_use(done=true)`, stop the
   walk-through, and just do what they ask.
-- Count the user's messages in this conversation from their first one up to the
-  delivery: that is the N of 「整个过程你只打了 N 次字」.
+- Count the user's messages from their answer to question 1 (or the material, when they
+  skipped it) up to the delivery: that is the N of 「整个过程你只打了 N 次字」.
 - Between the expectation line (step 4) and the delivery (step 5) say nothing: judge
   the cut, correct the transcript, write and check the note, align it, all without
   asking the user. The usual rules of the skill apply to each of those.
@@ -58,12 +61,22 @@ An agent that can run commands (Claude Code, Codex, OpenCode) asks the user for 
 here: it goes straight to step 4, calling the tools from the command line in the install
 conversation (`AGENT_INSTALL.md`).
 
-An agent that cannot call the tools in this conversation (a desktop app, an editor
-plugin) records need and material if it can reach `record_first_use` at all (the command
-line, see `AGENT_INSTALL.md`); otherwise the new conversation finds them empty and asks
-again. Then:
+An agent that ran the install can normally run the command-line entry too, so try it
+first. Only when this conversation cannot reach the tools at all (the entry fails, or the
+agent cannot run commands) is the user sent to a new conversation; say the line that
+matches whether `record_first_use` went through:
+
+- Recorded:
 
 > 装好了。还差一步：工具是刚装上的，要开一个新对话才认得它。你新开一个对话，发一句「带我用一次 FluentFlow」，我会接着处理你刚才给的那条，不用再发一遍。
+
+- Not recorded:
+
+> 装好了。还差一步：工具是刚装上的，要开一个新对话才认得它。你新开一个对话，发一句「带我用一次 FluentFlow」，再把刚才那条视频或链接发一遍。
+
+A new conversation (this one, or one where the user installed FluentFlow in a terminal
+themselves) starts from `get_status`: with `should_onboard=true` or the phrase, follow
+this guide from the first step whose answer `first_use` does not hold.
 
 ## Step 4: submit, one expectation line, then silence
 
@@ -78,7 +91,7 @@ Submit by their choice, with the skill's defaults otherwise:
 Then one line. `get_status` `first_use.speech_model_ready=false`, or a `wait_task` answer
 with `task.downloading_model=true` before you said it (then say this line once, then):
 
-> 开始处理「{标题或文件名}」。这是装完的第一条，电脑还在下语音识别要用的文件（一两个 G），这次会多等几分钟，往后就快了。不用守着，电脑别合盖就行，好了我叫你。
+> 开始处理「{标题或文件名}」。这是装完的第一条，电脑还在下语音识别要用的文件（1.5 到 3 个 G），这次会多等几分钟，往后就快了。不用守着，电脑别合盖就行，好了我叫你。
 
 Otherwise:
 
@@ -92,7 +105,7 @@ every delivery with 「整个过程你只打了 {N} 次字。」 Then `record_fi
 - 1: 「做好了。按讲的顺序分好了章节，插了关键画面的截图，每段都对好了视频时间。笔记在这里：{输出文件夹}（有 Markdown 和 PDF 两份）。想边看视频边对着笔记：{page_url}，点右边任意一章就跳回视频那一段。」
 - 2: 「看完了，这条讲的是：{两三句重点}。带截图的完整笔记在这里：{输出文件夹}，PDF 那份可以直接发给别人。想边播原片边对着看：{page_url}」
 - 3: 「整理好了，每个人说的话分开标了，也理出了纪要。纪要在这里：{输出文件夹}，完整逐字稿在里面的「过程文件」文件夹。想边听录音边核对原文：{page_url}」
-- 4: 「转好了，原片没剪，也没写笔记。文字稿和字幕文件（txt、srt、vtt）在这里：{路径}。想边播边改错字：{page_url}」
+- 4: 「转好了，原片没剪，也没写笔记。文字稿和字幕文件（txt、srt）在这里：{路径}，网页里还能另存成 vtt。想边播边改错字：{page_url}」
 - 5, with a compressed copy (a video on a Mac): 「剪好了。原来 {原时长}，剪掉 {N} 处空白和气口，现在 {新时长}。剪好的版本和压小的原片副本都在这里：{输出文件夹}，原片没动。想看具体剪了哪几段：{page_url}」
 - 5, without one (audio, Windows, a video already small): 「剪好了。原来 {原时长}，剪掉 {N} 处空白和气口，现在 {新时长}，文件在这里：{输出文件夹}，原片没动。{这条是音频 / 这台电脑出不了压小的副本 / 原片已经够小}，所以没另出压小的那份。想看具体剪了哪几段：{page_url}」
 
@@ -128,4 +141,4 @@ Checked against the code on 2026-11-27. Answer with the line, then offer the six
 - Live transcription while someone speaks: 「它不能边说边转，要先录下来，把录音或录像文件给我。」
 - On the phone: 「它只在电脑上运行，没有手机版；处理要在这台电脑上做，做好的 PDF 笔记可以发到手机上看。」
 - Dubbing into another language: 「它不配音；英文视频可以把字幕翻成中文。」
-- Burning subtitles into the picture: 「它不把字幕压进画面，出的是单独的 srt、vtt 字幕文件，播放器里能加载。」
+- Burning subtitles into the picture: 「它不把字幕压进画面，出的是单独的 srt 字幕文件（网页里还能另存成 vtt），播放器里能加载。」

@@ -16,9 +16,9 @@ from .core import _options, tool
         "The same list the Settings page shows. Use it when the user asks what FluentFlow is set up to do. "
         "model_usage_outside_tasks adds up the model calls that belong to no task (the settings page's key "
         "check, the note style, a call that lost its task), shaped like a task's model_usage with items by kind. "
-        "first_use is the guided first use: should_onboard=true means guide the user (the skill's 第一次使用); "
-        "need and material are what they already chose, so do not ask again; speech_model_ready=false means the "
-        "first recording waits for the speech model to download."),
+        "first_use is the guided first use: should_onboard=true means guide the user: read the file at "
+        "guide_path and follow it; need and material are what they already chose, so do not ask again; "
+        "speech_model_ready=false means the first recording waits for the speech model to download."),
     input_schema={"type": "object", "properties": {"api_base": {"type": "string"}}},
 )
 def get_status(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:

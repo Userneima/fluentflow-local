@@ -15,14 +15,16 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.core import first_use, job_store, local_config
+from backend.core import first_use, job_store, local_config, runtime_paths
 from backend.core.local_request_scope import LOCAL_OWNER_ID as OWNER
 from backend.routers.local_agent import router
 from scripts import fluentflow_mcp_server as mcp
@@ -38,7 +40,9 @@ def no_tasks(monkeypatch, tmp_path):
     """An empty task database of its own: the shared one holds other tests' tasks."""
     db = tmp_path / "jobs.sqlite"
     real = job_store.has_job_not_named
-    monkeypatch.setattr(job_store, "has_job_not_named", lambda names, db_path=db: real(names, db_path=db_path))
+    monkeypatch.setattr(job_store, "has_job_not_named",
+                        lambda names, db_path=db, created_before=None: real(names, db_path=db_path,
+                                                                            created_before=created_before))
     monkeypatch.setattr(first_use, "_speech_model_ready", lambda: False)
     return db
 
@@ -219,3 +223,100 @@ def test_the_install_conversation_does_not_send_the_user_away():
     assert "do not ask them to restart" in section
     assert "first-use.md" in section and "record_first_use" in section and "should_onboard" in section
     assert "带我用一次 FluentFlow" in section
+
+
+# --- review of 3b677fa (2026-11-27) -----------------------------------------------
+
+def _stamp(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
+
+
+def test_the_guides_own_task_does_not_end_it(monkeypatch, own_empty_settings_file, no_tasks):
+    monkeypatch.setattr(first_use, "_now", lambda: _stamp(-30))
+    first_use.record({"need": 1, "material": "/Users/me/课.mp4"})
+    job_store.upsert_job(task_id=uuid.uuid4().hex, status="running", client_id=OWNER,
+                         source_filename="课.mp4", db_path=no_tasks)
+
+    status = first_use.status()
+
+    assert status["should_onboard"] is True, "submitted after the guide started: still the guide's"
+    assert "speech_model_ready" in status and "guide_path" in status
+
+
+def test_a_task_from_before_the_guide_started_still_counts(monkeypatch, own_empty_settings_file, no_tasks):
+    job_store.upsert_job(task_id=uuid.uuid4().hex, status="completed", client_id=OWNER,
+                         source_filename="旧课.mp4", db_path=no_tasks)
+    monkeypatch.setattr(first_use, "_now", lambda: _stamp(30))
+    first_use.record({"need": 2})
+    assert first_use.status()["should_onboard"] is False
+
+
+def test_started_at_never_moves(monkeypatch, own_empty_settings_file, no_tasks):
+    monkeypatch.setattr(first_use, "_now", lambda: "2026-11-27T10:00:00+08:00")
+    first_use.record({"need": 1})
+    monkeypatch.setattr(first_use, "_now", lambda: "2026-11-27T11:00:00+08:00")
+    saved = first_use.record({"material": "x"})
+    assert saved["started_at"] == "2026-11-27T10:00:00+08:00" and saved["updated_at"] == "2026-11-27T11:00:00+08:00"
+
+
+def test_get_status_points_any_agent_at_the_guide(own_empty_settings_file, no_tasks):
+    status = first_use.status()
+    path = Path(status["guide_path"])
+    assert path.is_absolute() and path.is_file() and path.name == "first-use.md"
+    definition = next(d for d in mcp.TOOL_DEFINITIONS if d["name"] == "get_status")
+    assert "guide_path" in definition["description"]
+
+
+def test_a_null_need_is_refused_not_stored(client):
+    test_client, headers = client
+    response = test_client.post("/agent/v1/first-use", json={"need": None}, headers=headers)
+    assert response.status_code == 400
+    assert "first_use" not in local_config.load_config()
+
+
+def test_concurrent_saves_keep_both_sections(own_empty_settings_file):
+    def save(name: str) -> None:
+        for i in range(40):
+            local_config.save_section(name, {"i": i})
+
+    threads = [threading.Thread(target=save, args=(name,)) for name in ("alpha", "beta", "gamma")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    config = local_config.load_config()
+    assert config["alpha"] == {"i": 39} and config["beta"] == {"i": 39} and config["gamma"] == {"i": 39}
+
+
+def test_a_broken_settings_file_is_kept_aside_not_wiped(own_empty_settings_file):
+    target = local_config.config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"secrets": {"DEEPSEEK_API_KEY": "sk-keep"', encoding="utf-8")
+
+    local_config.save_section("first_use", {"done": True})
+
+    backups = list(target.parent.glob(f"{target.name}.broken-*"))
+    assert len(backups) == 1
+    assert "sk-keep" in backups[0].read_text(encoding="utf-8")
+    assert local_config.load_config() == {"first_use": {"done": True}}
+    assert not list(target.parent.glob(f"{target.name}.*.tmp")), "no temporary file left"
+
+
+def test_the_install_checks_for_an_earlier_task_database_before_asking():
+    text = (ROOT / "AGENT_INSTALL.md").read_text(encoding="utf-8")
+    section = text[text.index("## First use"):text.index("## Tell the user how to use it")]
+    assert runtime_paths.default_job_db_path().name == "fluentflow_jobs.sqlite"
+    assert runtime_paths.APP_NAME == "FluentFlow"
+    for place in ("~/Library/Application Support/FluentFlow/fluentflow_jobs.sqlite",
+                  "<folder>\\data\\fluentflow_jobs.sqlite", "%APPDATA%\\FluentFlow\\fluentflow_jobs.sqlite"):
+        assert place in section, place
+    assert "processed as an ordinary task" in section
+    assert "no `first_use`" in section, "an older release without the record skips the guide"
+    assert "<folder>\\app" in section
+
+
+def test_the_guide_never_promises_a_vtt_in_the_folder():
+    guide = (SKILL_DIR / "first-use.md").read_text(encoding="utf-8")
+    assert "txt、srt、vtt" not in guide and "srt、vtt 字幕文件" not in guide
+    assert "一两个 G" not in guide and "1.5 到 3 个 G" in guide

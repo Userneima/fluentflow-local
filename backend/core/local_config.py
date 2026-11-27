@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
+import tempfile
+import threading
+import time
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from backend.core import runtime_paths
 from backend.core.runtime_paths import default_config_path
@@ -112,50 +117,94 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+logger = logging.getLogger(__name__)
+
+# Every save reads the whole file, changes one part and writes it back: two
+# saves at once (a page setting and an agent's record) would each write the
+# file without the other's change. One lock for the process around the
+# read-modify-write, and the write goes to a temporary file swapped in whole,
+# so a reader never sees half a file.
+_WRITE_LOCK = threading.RLock()
+
+
+def _load_for_update(target: Path) -> dict[str, Any]:
+    """The file's settings before a save. A file that is there but cannot be
+    read as settings is copied aside (``<name>.broken-<time>``) before the save
+    replaces it, so a damaged file with the user's keys is never lost silently."""
+    if not target.exists():
+        return {}
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except (OSError, UnicodeDecodeError, ValueError):
+        pass
+    backup = target.with_name(f"{target.name}.broken-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}")
+    shutil.copy2(target, backup)
+    logger.warning("设置文件 %s 读不出来，已原样备份到 %s，再写入这次的改动。", target, backup)
+    return {}
+
+
+def _write_config(target: Path, data: dict[str, Any]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(prefix=f"{target.name}.", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
+        try:
+            os.chmod(temp, 0o600)  # the file holds secrets: readable by the user only
+        except OSError:
+            pass
+        for attempt in range(5):
+            try:
+                os.replace(temp, target)
+                break
+            except PermissionError:
+                # Windows refuses the swap while a reader has the file open.
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+
+
+def update_config(change: Callable[[dict[str, Any]], dict[str, Any]], path: Path | str | None = None) -> dict[str, Any]:
+    """Read the settings, apply ``change`` (it returns the new whole), write
+    them back, all under the lock; returns what was written."""
+    target = Path(path) if path else config_path()
+    with _WRITE_LOCK:
+        updated = change(_load_for_update(target))
+        _write_config(target, updated)
+        return updated
+
+
 def save_secret_patch(
     patch: dict[str, Any],
     *,
     allowed_fields: set[str],
     path: Path | str | None = None,
 ) -> None:
-    target = Path(path) if path else config_path()
-    current = load_config(target)
-    secrets = current.get("secrets") if isinstance(current.get("secrets"), dict) else {}
-    next_secrets = dict(secrets)
-    for key in allowed_fields:
-        if key not in patch:
-            continue
-        value = patch.get(key)
-        if value is None or str(value) == "":
-            next_secrets.pop(key, None)
-        else:
-            next_secrets[key] = str(value)
+    def change(current: dict[str, Any]) -> dict[str, Any]:
+        secrets = current.get("secrets") if isinstance(current.get("secrets"), dict) else {}
+        next_secrets = dict(secrets)
+        for key in allowed_fields:
+            if key not in patch:
+                continue
+            value = patch.get(key)
+            if value is None or str(value) == "":
+                next_secrets.pop(key, None)
+            else:
+                next_secrets[key] = str(value)
+        return {**current, "secrets": next_secrets}
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps({**current, "secrets": next_secrets}, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    try:
-        target.chmod(0o600)
-    except OSError:
-        pass
+    update_config(change, path)
 
 
 def save_section(name: str, value: Any, path: Path | str | None = None) -> None:
     """Replace one top-level section of the config, keeping the rest (the
     file also holds secrets, so it stays readable by the user only)."""
-    target = Path(path) if path else config_path()
-    current = load_config(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps({**current, name: value}, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    try:
-        target.chmod(0o600)
-    except OSError:
-        pass
+    update_config(lambda current: {**current, name: value}, path)
 
 
 def save_sensitive_settings(patch: dict[str, Any], path: Path | str | None = None) -> dict[str, Any]:
@@ -209,8 +258,17 @@ def load_preferences(path: Path | str | None = None) -> dict[str, Any]:
 
 
 def save_preferences(patch: dict[str, Any], path: Path | str | None = None) -> dict[str, Any]:
-    target = Path(path) if path else config_path()
-    current = load_config(target)
+    result: dict[str, Any] = {}
+
+    def change(current: dict[str, Any]) -> dict[str, Any]:
+        result.update(_next_preferences(current, patch))
+        return {**current, "preferences": dict(result)}
+
+    update_config(change, path)
+    return result
+
+
+def _next_preferences(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     preferences = current.get("preferences") if isinstance(current.get("preferences"), dict) else {}
     next_preferences = dict(preferences)
     for key in _RETIRED_PREFERENCES:
@@ -265,18 +323,6 @@ def save_preferences(patch: dict[str, Any], path: Path | str | None = None) -> d
                 next_preferences[key] = browser
             else:
                 next_preferences.pop(key, None)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(
-            {**current, "preferences": next_preferences},
-            ensure_ascii=False, indent=2, sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-    try:
-        target.chmod(0o600)
-    except OSError:
-        pass
     return next_preferences
 
 

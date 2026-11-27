@@ -1034,4 +1034,4 @@ Write-Host "FluentFlow Local is installed and running at http://127.0.0.1:$Port"
 $DesktopLauncher = Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd"
 if (Test-Path -LiteralPath $DesktopLauncher) { Write-Host -NoNewline "Open it later from 'FluentFlow Local' on the Desktop. " }
 else { Write-Host -NoNewline "There is no Desktop icon; that is fine: the agent's tools start FluentFlow in the background when they need it. " }
-Write-Host "For a note, give your agent a video file or link in a new conversation; it transcribes with FluentFlow and writes the note itself, no API key needed."
+Write-Host "For a note, give your agent a video file or link (in this conversation or a later one); it transcribes with FluentFlow and writes the note itself, no API key needed."
