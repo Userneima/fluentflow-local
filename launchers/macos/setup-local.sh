@@ -452,7 +452,16 @@ if [[ "$SKIP_DESKTOP" -eq 1 ]]; then
 fi
 
 step "生成桌面启动器"
-bash "${SCRIPT_DIR}/install-local-to-desktop.sh" || fail "生成桌面启动器失败。"
+# 图标只是打开方式之一：生成不了（桌面写不进去、osacompile 出错）只提醒，安装照常往下走，
+# 注册 MCP 工具、启动服务都不受影响；agent 调用工具时服务会自己在后台起来（1.20）。
+if ! bash "${SCRIPT_DIR}/install-local-to-desktop.sh"; then
+	echo ""
+	echo "⚠ 没能在桌面生成「FluentFlow Local」图标（见上面的报错），安装继续。"
+	echo "  以后可以重新运行：bash ${SCRIPT_DIR}/install-local-to-desktop.sh"
+	echo ""
+	echo "✓ 安装完成（没有桌面图标）。"
+	exit 0
+fi
 
 echo ""
 echo "✓ 安装完成。双击桌面上的「FluentFlow Local」即可启动。"

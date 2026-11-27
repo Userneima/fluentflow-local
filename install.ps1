@@ -875,10 +875,18 @@ try {
         # The MCP server reaches 8000 by itself; another port has to be told.
         $ClaudeEnv = @()
         $CodexEnv = @()
+        $ExpectedApiBase = ""
         if ($Port -ne "8000") {
+            $ExpectedApiBase = "http://127.0.0.1:$Port"
             $ClaudeEnv = @("-e", "FLUENTFLOW_API_BASE=http://127.0.0.1:$Port")
             $CodexEnv = @("--env", "FLUENTFLOW_API_BASE=http://127.0.0.1:$Port")
             $CodexToml += "`nenv = { FLUENTFLOW_API_BASE = 'http://127.0.0.1:$Port' }"
+        }
+        # An entry of this copy that names another port (or none, when the port is
+        # not 8000) is registered again: left as it is, the agent dials the old port.
+        function Test-FluentFlowApiBaseDiffers([string]$Have) {
+            if ($Have -eq "http://127.0.0.1:8000") { $Have = "" }
+            return $Have -ne $ExpectedApiBase
         }
         $Registered = $false
         if (Get-Command claude -ErrorAction SilentlyContinue) {
@@ -887,7 +895,17 @@ try {
             # The file the entry starts (see Get-FluentFlowEntryScript). Empty when
             # the line cannot be understood: then nothing is removed.
             $Starts = Get-FluentFlowEntryScript $ExistingEntry
-            if ($ExistingEntry -and $ExistingEntry.IndexOf($McpScript, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            $ClaudeApiBase = [regex]::Match($ExistingEntry, '(?m)^\s*FLUENTFLOW_API_BASE=(\S*)').Groups[1].Value
+            $ThisCopy = $ExistingEntry -and $ExistingEntry.IndexOf($McpScript, [StringComparison]::OrdinalIgnoreCase) -ge 0
+            if ($ThisCopy -and (Test-FluentFlowApiBaseDiffers $ClaudeApiBase)) {
+                $Scope = "user"
+                $ScopeLine = @($ExistingEntry -split "`n" | Where-Object { $_ -match 'claude mcp remove fluentflow-local -s ' }) | Select-Object -Last 1
+                if ($ScopeLine -match '-s\s+([A-Za-z]+)') { $Scope = $Matches[1] }
+                Invoke-FluentFlowTool claude @("mcp", "remove", "--scope", $Scope, "fluentflow-local") | Out-Null
+                $Added = Invoke-FluentFlowTool claude (@("mcp", "add", "--scope", "user", "fluentflow-local") + $ClaudeEnv + @("--", $Python, $McpScript))
+                if ($Added.Code -eq 0) { Write-Host "Claude Code: the port is now $Port; registered fluentflow-local again." }
+                else { Write-Host "Claude Code: registration failed ($($Added.Output.Trim())); run: claude mcp add --scope user fluentflow-local $($ClaudeEnv -join ' ') -- `"$Python`" `"$McpScript`"" }
+            } elseif ($ThisCopy) {
                 Write-Host "Claude Code: fluentflow-local is already registered (this copy); left as it is."
             } elseif ($ExistingEntry -and -not $Starts) {
                 Write-Host "Claude Code: fluentflow-local is registered but the files it starts cannot be read from its entry; left as it is."
@@ -916,19 +934,27 @@ try {
                 $Section = [regex]::Match($Toml, '(?ms)^\[mcp_servers\.fluentflow-local\]\s*$.*?(?=^\[|\z)').Value
             }
             $Stale = $false
+            $PortChanged = $false
+            if ($Section -and $Section.IndexOf($McpScript, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                # codex mcp add --env writes a [mcp_servers.fluentflow-local.env] table;
+                # a hand-written entry may say env = { FLUENTFLOW_API_BASE = "..." }.
+                $EnvTable = [regex]::Match($Toml, '(?ms)^\[mcp_servers\.fluentflow-local\.env\]\s*$.*?(?=^\[|\z)').Value
+                $CodexApiBase = [regex]::Match($EnvTable + "`n" + $Section, 'FLUENTFLOW_API_BASE\s*=\s*["'']([^"'']*)').Groups[1].Value
+                $PortChanged = Test-FluentFlowApiBaseDiffers $CodexApiBase
+            }
             if ($Section -and $Section.IndexOf($McpScript, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
                 # Only a target that can be read and is gone counts: an entry this
                 # cannot read may be another install's.
                 $Target = [regex]::Match($Section, '(?m)^\s*args\s*=\s*\[\s*"([^"]*)"').Groups[1].Value
                 if ($Target -and -not (Test-Path -LiteralPath $Target)) { $Stale = $true }
             }
-            if ($Section -and -not $Stale) {
+            if ($Section -and -not $Stale -and -not $PortChanged) {
                 Write-Host "Codex: fluentflow-local is already registered (this copy, or another install that still exists); left as it is."
             } else {
-                if ($Stale) { Invoke-FluentFlowTool codex @("mcp", "remove", "fluentflow-local") | Out-Null }
+                if ($Stale -or $PortChanged) { Invoke-FluentFlowTool codex @("mcp", "remove", "fluentflow-local") | Out-Null }
                 $Added = Invoke-FluentFlowTool codex (@("mcp", "add", "fluentflow-local") + $CodexEnv + @("--", $Python, $McpScript))
                 if ($Added.Code -eq 0) {
-                    $What = if ($Stale) { "the old one started files that are gone; registered again" } else { "registered fluentflow-local" }
+                    $What = if ($PortChanged) { "the port is now $Port; registered again" } elseif ($Stale) { "the old one started files that are gone; registered again" } else { "registered fluentflow-local" }
                     Write-Host "Codex: $What."
                 } else {
                     Write-Host "Codex: could not register automatically ($($Added.Output.Trim())); add these lines to $CodexConfig :"
@@ -937,8 +963,15 @@ try {
             }
             $Registered = $true
         }
+        # OpenCode: only when it is here (the opencode command or its config folder),
+        # and only the fluentflow-local entry is written (scripts\opencode_mcp_config.py;
+        # exit 3 means OpenCode is not installed).
+        & $Python (Join-Path $Dir "scripts\opencode_mcp_config.py") register --python $Python --script $McpScript --port $Port
+        $OpenCodeExit = $LASTEXITCODE
+        if ($OpenCodeExit -ne 3) { $Registered = $true }
+        if ($OpenCodeExit -eq 1) { Write-Host "OpenCode: registration failed (see above); add this command to its MCP config: `"$Python`" `"$McpScript`"" }
         if (-not $Registered) {
-            Write-Host "Neither claude nor codex was found. Register this command as an MCP server in your AI tool:"
+            Write-Host "Neither claude, codex nor opencode was found. Register this command as an MCP server in your AI tool:"
             Write-Host "  `"$Python`" `"$McpScript`""
             Write-Host $CodexToml
         }
@@ -998,4 +1031,7 @@ Stop-FluentFlowUpdating $UpdatingMarker
 
 Write-Host ""
 Write-Host "FluentFlow Local is installed and running at http://127.0.0.1:$Port"
-Write-Host "Open it later from 'FluentFlow Local' on the Desktop. For a note, give your agent a video file or link in a new conversation; it transcribes with FluentFlow and writes the note itself, no API key needed."
+$DesktopLauncher = Join-Path ([Environment]::GetFolderPath("Desktop")) "FluentFlow Local.cmd"
+if (Test-Path -LiteralPath $DesktopLauncher) { Write-Host -NoNewline "Open it later from 'FluentFlow Local' on the Desktop. " }
+else { Write-Host -NoNewline "There is no Desktop icon; that is fine: the agent's tools start FluentFlow in the background when they need it. " }
+Write-Host "For a note, give your agent a video file or link in a new conversation; it transcribes with FluentFlow and writes the note itself, no API key needed."

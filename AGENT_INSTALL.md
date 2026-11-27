@@ -62,7 +62,11 @@ user on drive C. Then it builds the interface, starts the transcription model (1
 3 GB) downloading in the background (the install does not wait for it; a recording
 submitted before it is done shows "正在下载转录模型" and carries on once it is), generates the agent access token into `.env`, starts the app at `http://127.0.0.1:8000`,
 registers the MCP server `fluentflow-local` with Claude Code and Codex when their command
-line tools are on this machine, and checks that server. Every download has a source in
+line tools are on this machine and with OpenCode when it is installed (only that one entry of
+its `opencode.json` is written; a file that is not plain JSON is left alone and the lines to
+add are printed), each told the port when it is not 8000, and checks that server. A Desktop
+icon that cannot be made is only a warning; the install still registers the tools and starts
+the service. Every download has a source in
 China: the script tries the original host for a few seconds and switches to the mirror
 when it is unreachable or slow. Node.js, Windows' Python installer and FFmpeg, the speaker
 models and the npm code package are checked against fixed checksums; pip packages and the
@@ -73,7 +77,7 @@ Success is exit code 0 and a last line starting with `✓` (Windows: "FluentFlow
 is installed"). On failure the last lines say what went wrong and what to do; fix that
 and run the same command again. It keeps what is already installed.
 
-When neither `claude` nor `codex` is found, the script prints the command to register
+When none of `claude`, `codex` or `opencode` is found, the script prints the command to register
 as an MCP server; register it in whatever tool you are. The MCP server reads its access
 token from the repository `.env`, so the registration carries no secret.
 
@@ -260,9 +264,10 @@ the same command without `--dry-run` / `-DryRun`, adding `--yes` / `-Yes`:
 
 It stops the running service, removes the program (for an install from these
 instructions, the code folder itself, and the copy a failed update kept beside it), the downloaded FFmpeg and Node.js, the Desktop
-icon, the logs and the agent skill, and unregisters `fluentflow-local` from Claude Code
-and Codex (only an entry that points at this install, and under the scope it was registered
-in; Codex's config is read from `CODEX_HOME` when that is set). On Windows with `-All`, the
+icon, the logs and the agent skill, and unregisters `fluentflow-local` from Claude Code,
+Codex and OpenCode (only an entry that points at this install, and under the scope it was registered
+in; Codex's config is read from `CODEX_HOME` when that is set; OpenCode's other servers and
+settings are kept). On Windows with `-All`, the
 `FluentFlow` folder is gone afterwards, also when the folder was moved to another drive since
 it was installed. When the data folder also holds files FluentFlow
 does not recognise, only FluentFlow's own are removed and the rest are listed, in the dry

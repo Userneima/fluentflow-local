@@ -291,8 +291,8 @@ fail() {
 
 # 起这个目录里的服务：有桌面启动器就打开它，按要求没生成时直接在后台起。
 start_service() {
-	if [[ -d "${HOME}/Desktop/FluentFlow Local.app" ]]; then
-		open "${HOME}/Desktop/FluentFlow Local.app"
+	# 桌面图标生成到一半失败时留下的残缺 .app 打不开，那时照没有图标处理。
+	if [[ -d "${HOME}/Desktop/FluentFlow Local.app" ]] && open "${HOME}/Desktop/FluentFlow Local.app"; then
 		return 0
 	fi
 	local py="${DIR}/.venv/bin/python"
@@ -676,9 +676,47 @@ CODEX_TOML="[mcp_servers.fluentflow-local]
 command = \"${VENV_PY}\"
 args = [\"${MCP_SCRIPT}\"]"
 registered=0
-# 默认端口时 MCP 服务自己就连得上；换过端口才需要告诉它。
+# 默认端口时 MCP 服务自己就连得上；换过端口才需要告诉它，三个 agent 都一样。
 MCP_ENV=()
-[[ "$PORT" != "8000" ]] && MCP_ENV=(-e "FLUENTFLOW_API_BASE=http://127.0.0.1:${PORT}")
+CODEX_ENV=()
+EXPECTED_API_BASE=""
+if [[ "$PORT" != "8000" ]]; then
+	EXPECTED_API_BASE="http://127.0.0.1:${PORT}"
+	MCP_ENV=(-e "FLUENTFLOW_API_BASE=${EXPECTED_API_BASE}")
+	CODEX_ENV=(--env "FLUENTFLOW_API_BASE=${EXPECTED_API_BASE}")
+	CODEX_TOML="${CODEX_TOML}
+
+[mcp_servers.fluentflow-local.env]
+FLUENTFLOW_API_BASE = \"${EXPECTED_API_BASE}\""
+fi
+# 条目里写的地址和这次的端口对不上吗（没写、写 8000 都算默认端口）。
+api_base_differs() {
+	local have="$1"
+	[[ "$have" == "http://127.0.0.1:8000" ]] && have=""
+	[[ "$have" != "$EXPECTED_API_BASE" ]]
+}
+# claude mcp get 的 Environment: 下面一行 "    FLUENTFLOW_API_BASE=http://…"。
+claude_api_base_of() {
+	printf '%s\n' "$1" | sed -n 's/^[[:space:]]*FLUENTFLOW_API_BASE=//p' | tail -n 1 | tr -d '\r'
+}
+# Codex 配置里这一条的地址：codex mcp add --env 写成 [mcp_servers.fluentflow-local.env]
+# 一节，手写的也可能是 env = { FLUENTFLOW_API_BASE = "…" }。
+codex_api_base_of() {
+	[[ -f "$1" ]] || return 0
+	awk '
+		/^\[/ {
+			in_env = ($0 ~ /^\[mcp_servers\.fluentflow-local\.env\][[:space:]]*$/)
+			in_main = ($0 ~ /^\[mcp_servers\.fluentflow-local\][[:space:]]*$/)
+			next
+		}
+		in_env && /^[[:space:]]*FLUENTFLOW_API_BASE[[:space:]]*=/ {
+			v = $0; sub(/^[^=]*=[[:space:]]*["\047]/, "", v); sub(/["\047].*/, "", v); print v; exit
+		}
+		in_main && /^[[:space:]]*env[[:space:]]*=/ && /FLUENTFLOW_API_BASE/ {
+			v = $0; sub(/.*FLUENTFLOW_API_BASE[[:space:]]*=[[:space:]]*["\047]/, "", v); sub(/["\047].*/, "", v); print v; exit
+		}
+	' "$1"
+}
 # claude mcp get 打印的作用域："Scope: User config …" 和最后一行
 # "To remove this server, run: claude mcp remove fluentflow-local -s user"。
 claude_scope_of() {
@@ -705,7 +743,17 @@ claude_target_of() {
 }
 if command -v claude >/dev/null 2>&1; then
 	described="$(claude mcp get fluentflow-local 2>/dev/null || true)"
-	if [[ -n "$described" && "$described" == *"${MCP_SCRIPT}"* ]]; then
+	if [[ -n "$described" && "$described" == *"${MCP_SCRIPT}"* ]] && api_base_differs "$(claude_api_base_of "$described")"; then
+		# 这一份的注册，但端口换过了：留着它，agent 会去连旧端口。
+		scope="$(claude_scope_of "$described" || true)"
+		[[ -n "$scope" ]] || scope=user
+		claude mcp remove --scope "$scope" fluentflow-local >/dev/null 2>&1 || true
+		if claude mcp add --scope user fluentflow-local ${MCP_ENV[@]+"${MCP_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null; then
+			echo "Claude Code：端口改成了 ${PORT}，已重新注册 fluentflow-local。"
+		else
+			echo "Claude Code：注册失败，可以手动运行：claude mcp add --scope user fluentflow-local ${MCP_ENV[*]:-} -- \"${VENV_PY}\" \"${MCP_SCRIPT}\""
+		fi
+	elif [[ -n "$described" && "$described" == *"${MCP_SCRIPT}"* ]]; then
 		echo "Claude Code：已注册过 fluentflow-local（这一份），保持不动。"
 	elif [[ -n "$described" ]]; then
 		target="$(claude_target_of "$described")"
@@ -722,13 +770,13 @@ if command -v claude >/dev/null 2>&1; then
 			if claude mcp add --scope user fluentflow-local ${MCP_ENV[@]+"${MCP_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null; then
 				echo "Claude Code：原来那条指向的位置已经没了，已重新注册 fluentflow-local。"
 			else
-				echo "Claude Code：注册失败，可以手动运行：claude mcp add --scope user fluentflow-local -- \"${VENV_PY}\" \"${MCP_SCRIPT}\""
+				echo "Claude Code：注册失败，可以手动运行：claude mcp add --scope user fluentflow-local ${MCP_ENV[*]:-} -- \"${VENV_PY}\" \"${MCP_SCRIPT}\""
 			fi
 		fi
 	elif claude mcp add --scope user fluentflow-local ${MCP_ENV[@]+"${MCP_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null; then
 		echo "Claude Code：已注册 fluentflow-local。"
 	else
-		echo "Claude Code：注册失败，可以手动运行：claude mcp add --scope user fluentflow-local -- \"${VENV_PY}\" \"${MCP_SCRIPT}\""
+		echo "Claude Code：注册失败，可以手动运行：claude mcp add --scope user fluentflow-local ${MCP_ENV[*]:-} -- \"${VENV_PY}\" \"${MCP_SCRIPT}\""
 	fi
 	registered=1
 fi
@@ -745,17 +793,25 @@ codex_entry_is_stale() {
 if command -v codex >/dev/null 2>&1; then
 	section=""
 	[[ -f "$CODEX_CONFIG" ]] && section="$(awk '/^\[mcp_servers\.fluentflow-local\][[:space:]]*$/ { on = 1; next } /^\[/ { on = 0 } on' "$CODEX_CONFIG")"
-	if [[ -n "$section" ]] && ! codex_entry_is_stale "$section"; then
+	if [[ "$section" == *"${MCP_SCRIPT}"* ]] && api_base_differs "$(codex_api_base_of "$CODEX_CONFIG")"; then
+		codex mcp remove fluentflow-local >/dev/null 2>&1 || true
+		if codex mcp add fluentflow-local ${CODEX_ENV[@]+"${CODEX_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null 2>&1; then
+			echo "Codex：端口改成了 ${PORT}，已重新注册 fluentflow-local。"
+		else
+			echo "Codex：没能自动注册，把下面几行加进 ${CODEX_CONFIG}："
+			echo "$CODEX_TOML"
+		fi
+	elif [[ -n "$section" ]] && ! codex_entry_is_stale "$section"; then
 		echo "Codex：已注册过 fluentflow-local（这一份，或另一份还在的安装），保持不动。"
 	elif [[ -n "$section" ]] && codex_entry_is_stale "$section"; then
 		codex mcp remove fluentflow-local >/dev/null 2>&1 || true
-		if codex mcp add fluentflow-local -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null 2>&1; then
+		if codex mcp add fluentflow-local ${CODEX_ENV[@]+"${CODEX_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null 2>&1; then
 			echo "Codex：原来那条指向的位置已经没了，已重新注册 fluentflow-local。"
 		else
 			echo "Codex：没能自动注册，把下面几行加进 ${CODEX_CONFIG}："
 			echo "$CODEX_TOML"
 		fi
-	elif codex mcp add fluentflow-local -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null 2>&1; then
+	elif codex mcp add fluentflow-local ${CODEX_ENV[@]+"${CODEX_ENV[@]}"} -- "$VENV_PY" "$MCP_SCRIPT" >/dev/null 2>&1; then
 		echo "Codex：已注册 fluentflow-local。"
 	else
 		echo "Codex：没能自动注册，把下面几行加进 ${CODEX_CONFIG}："
@@ -763,8 +819,15 @@ if command -v codex >/dev/null 2>&1; then
 	fi
 	registered=1
 fi
+# OpenCode：装了（有 opencode 命令或它的配置文件夹）才写，只改 fluentflow-local 这一条
+# （scripts/opencode_mcp_config.py；退出码 3 是没装）。
+opencode_status=0
+"$VENV_PY" "${DIR}/scripts/opencode_mcp_config.py" register --python "$VENV_PY" --script "$MCP_SCRIPT" --port "$PORT" ||
+	opencode_status=$?
+[[ "$opencode_status" -ne 3 ]] && registered=1
+[[ "$opencode_status" -eq 1 ]] && echo "OpenCode：注册时出错（见上面），可以手动把这个命令加进它的 MCP 配置：\"${VENV_PY}\" \"${MCP_SCRIPT}\""
 if [[ "$registered" -eq 0 ]]; then
-	echo "没找到 claude 或 codex 命令。在你的 AI 工具里把下面这个命令注册成 MCP 服务："
+	echo "没找到 claude、codex 或 opencode。在你的 AI 工具里把下面这个命令注册成 MCP 服务："
 	echo "  \"${VENV_PY}\" \"${MCP_SCRIPT}\""
 	echo "Codex 的写法："
 	echo "$CODEX_TOML"
@@ -805,5 +868,9 @@ fi
 
 echo ""
 echo "✓ FluentFlow Local 已装好，并已启动：http://127.0.0.1:${PORT}"
-echo "  以后从桌面的「FluentFlow Local」打开。要笔记时，在新对话里把视频文件或链接交给你的 agent，"
+if [[ -d "${HOME}/Desktop/FluentFlow Local.app" ]]; then
+	echo "  以后从桌面的「FluentFlow Local」打开。要笔记时，在新对话里把视频文件或链接交给你的 agent，"
+else
+	echo "  桌面上没有图标，不影响使用：agent 调用工具时会自己把它在后台起来。要笔记时，在新对话里把视频文件或链接交给你的 agent，"
+fi
 echo "  它会用 FluentFlow 转写并亲自写笔记，不需要任何 API Key。"

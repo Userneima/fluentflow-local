@@ -5,7 +5,7 @@
 #       zip; a git checkout keeps its code), its virtual environment, frontend
 #       dependencies and build, the FFmpeg and Node.js the installer downloaded,
 #       the pip and npm caches, the Desktop launcher, logs, the agent skill, and
-#       the fluentflow-local MCP tools in Claude Code and Codex (only when they
+#       the fluentflow-local MCP tools in Claude Code, Codex and OpenCode (only when they
 #       point at this folder). Reinstalling brings all of it back.
 #   Models (-Models): several gigabytes of transcription weights. In a
 #       one-folder install they have their own folder, removed whole; otherwise
@@ -311,6 +311,14 @@ if (Test-Path $CodexConfig) {
     if ($Section.Success -and (Test-MentionsRepo $Section.Value)) { [void]$McpRemovals.Add("Codex") }
     elseif ($Section.Success) { Write-Host "`nCodex 里的 fluentflow-local 指向别的位置，不动它。" }
 }
+# OpenCode's config is JSON: only this folder's fluentflow-local entry goes, by the
+# same script the installer wrote it with (scripts\opencode_mcp_config.py).
+$OpenCodePython = Join-Path $Repo ".venv\Scripts\python.exe"
+$OpenCodeHelper = Join-Path $Repo "scripts\opencode_mcp_config.py"
+if ((Test-Path -LiteralPath $OpenCodePython) -and (Test-Path -LiteralPath $OpenCodeHelper)) {
+    & $OpenCodePython $OpenCodeHelper unregister --repo $Repo --check
+    if ($LASTEXITCODE -eq 0) { [void]$McpRemovals.Add("OpenCode") }
+}
 
 if ($Targets.Count -eq 0 -and $McpRemovals.Count -eq 0) {
     # Nothing of FluentFlow's is left, but the data folder may still hold files it
@@ -357,7 +365,10 @@ if ($HasSensitive) {
 
 Write-Host "`n== 删除 =="
 foreach ($Tool in $McpRemovals) {
-    if ($Tool -eq "Claude Code") {
+    if ($Tool -eq "OpenCode") {
+        & $OpenCodePython $OpenCodeHelper unregister --repo $Repo
+        if ($LASTEXITCODE -ne 0) { Write-Host "OpenCode 没能自动注销，请删掉它配置（opencode.json）里的 fluentflow-local 那一条。" }
+    } elseif ($Tool -eq "Claude Code") {
         if ((Invoke-FluentFlowTool claude @("mcp", "remove", "--scope", $ClaudeScope, "fluentflow-local")).Code -eq 0) { Write-Host "已注销：Claude Code 里的 fluentflow-local" }
         else { Write-Host "Claude Code 注销失败，请手动运行：claude mcp remove --scope $ClaudeScope fluentflow-local" }
     } else {

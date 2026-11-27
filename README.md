@@ -76,7 +76,8 @@ bash launchers/macos/setup-local.sh
 ```
 
 它会建虚拟环境、装 Python 和前端依赖、构建前端、在后台开始下载转录模型，最后在桌面生成
-「FluentFlow Local.app」。装完双击桌面图标即可使用，不需要再开终端。
+「FluentFlow Local.app」。装完双击桌面图标即可使用，不需要再开终端。桌面图标生成不了（比如桌面写不进去）
+只提醒一句，安装照常完成。
 
 整个过程不需要你回答任何问题，也不要密码。缺的 FFmpeg、Node.js 和 Python 装进 FluentFlow 自己的
 数据文件夹，不经过 Homebrew。`--skip-desktop`
@@ -306,7 +307,9 @@ FluentFlow Local 自带一个 MCP 服务（让 AI 工具直接调用本应用的
 提交视频、等待结果、读取和写笔记。这个接口要一个访问令牌才开，安装脚本已经生成好一串写进了仓库根目录的
 `.env`（`FLUENTFLOW_ACCESS_TOKEN=` 那一行），后台服务和 MCP 服务都从这里读。
 
-1. 打开应用左下角「菜单 → Agent 接入」，复制 Claude Code 或 Codex 的命令到终端运行一次。在这台电脑上
+1. 一条命令安装已经替你注册好了：Claude Code、Codex 有命令行就注册，装了 OpenCode 的写进它的
+   `opencode.json`（只动 `fluentflow-local` 这一条），端口不是 8000 时都带上地址。自己装的，打开应用左下角
+   「菜单 → Agent 接入」，复制 Claude Code 或 Codex 的命令到终端运行一次。在这台电脑上
    不用填令牌，MCP 服务自己从 `.env` 读；面板顶部写着有没有 agent 连上。也可以直接照
    [AGENT_INSTALL.md](AGENT_INSTALL.md)「Run one command」一节最后那段的命令注册。
 2. 想确认接通了，在仓库目录运行
@@ -409,7 +412,7 @@ Windows 用 `launchers\windows\uninstall-local.ps1`，开关是 `-Models`、`-Da
 
 默认只删程序：用一条命令（发布包）装的，整个代码目录连同虚拟环境一起删，更新失败时留在旁边的那份也删；用 git 检出的，只删虚拟环境、
 前端依赖和构建产物，代码留着（里面可能有你的改动）。另外删安装时下载的 FFmpeg、Node.js，桌面启动器、日志、
-给 agent 的 skill，并注销 Claude Code、Codex 里的 `fluentflow-local` 工具（只在它指向这份安装时）。这些重装就回来。
+给 agent 的 skill，并注销 Claude Code、Codex、OpenCode 里的 `fluentflow-local` 工具（只在它指向这份安装时）。这些重装就回来。
 转录模型和任务数据各自需要显式开口：模型在 Hugging Face 的公共缓存里时，脚本只删本产品下载过的那几个目录；
 任务数据删掉无法恢复，所以会再确认一次。数据目录里有 FluentFlow 认不出的文件时（比如数据目录指到了你自己也在用的文件夹），
 只删 FluentFlow 自己的那些，认不出的留着，并列出来让你自己看着删；没有别的可删、只剩认不出的东西时也会列出来，不再只说「没有找到需要删除的东西」。`bin`、`models`、`logs` 这类常见名字的文件夹，里面装的也得是 FluentFlow 放的东西才删，你自己的同名文件夹不动。数据、链接下载或模型设在代码目录里面时，

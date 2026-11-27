@@ -514,5 +514,13 @@ if (-not $HasToken) {
 
 Write-Host "启动前检查…"
 Invoke-Checked $Python @((Join-Path $Repo "scripts\check_local_readiness.py"))
-Invoke-Checked (Join-Path $ScriptDir "install-local-to-desktop.ps1") @()
-Write-Host "安装完成。双击桌面上的「FluentFlow Local.cmd」即可启动。"
+# The icon is only one way to open it: when it cannot be made (the Desktop is not
+# writable, redirected, ...), say so and finish; registering the MCP tools and
+# starting the service go on, and the tools start the service themselves (1.20).
+try {
+    Invoke-Checked (Join-Path $ScriptDir "install-local-to-desktop.ps1") @()
+    Write-Host "安装完成。双击桌面上的「FluentFlow Local.cmd」即可启动。"
+} catch {
+    Write-Warning "没能在桌面生成「FluentFlow Local」图标（$($_.Exception.Message)），安装继续。以后可以重新运行：$(Join-Path $ScriptDir 'install-local-to-desktop.ps1')"
+    Write-Host "安装完成（没有桌面图标）。"
+}

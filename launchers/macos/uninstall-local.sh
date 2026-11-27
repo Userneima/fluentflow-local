@@ -4,7 +4,7 @@
 # 分三层，因为「卸载」对三种东西意味着完全不同的后果：
 #   程序（默认删）：代码目录（从发布包装的才删，git 检出只删虚拟环境、前端依赖
 #                   和构建产物，代码留着）、桌面启动器、日志、给 agent 的 skill，
-#                   以及注册在 Claude Code、Codex 里的 fluentflow-local 工具（只在
+#                   以及注册在 Claude Code、Codex、OpenCode 里的 fluentflow-local 工具（只在
 #                   它指向本目录时注销）。删了重装就回来，没有任何损失。
 #   模型（--models）：几 GB 的转录模型。它们住在 Hugging Face 的公共缓存里，
 #                   那个目录别的工具也在用，所以这里只删本产品自己下载的那几个
@@ -282,6 +282,20 @@ if [[ -f "$CODEX_CONFIG" ]]; then
 		fi
 	fi
 fi
+# OpenCode 的配置是 JSON，只删指向本目录的 fluentflow-local 那一条，交给安装时写它的
+# 同一个脚本（scripts/opencode_mcp_config.py）。用本目录的虚拟环境跑：系统的 python3
+# 在没装命令行开发者工具时会弹窗。
+OPENCODE_PY="${REPO}/.venv/bin/python"
+[[ -x "${REPO}/venv/bin/python" ]] && OPENCODE_PY="${REPO}/venv/bin/python"
+OPENCODE_HELPER="${REPO}/scripts/opencode_mcp_config.py"
+if [[ -x "$OPENCODE_PY" && -f "$OPENCODE_HELPER" ]]; then
+	if "$OPENCODE_PY" "$OPENCODE_HELPER" unregister --repo "$REPO" --check; then
+		mcp_removals+=("OpenCode")
+	fi
+elif grep -qs 'fluentflow-local' "${XDG_CONFIG_HOME:-${HOME}/.config}/opencode/opencode.json"; then
+	echo ""
+	echo "本目录的 Python 环境已经不在，没法替你改 OpenCode 的配置；如果里面的 fluentflow-local 指向本目录，请手动删掉那一条。"
+fi
 
 for dir in "${model_dirs[@]:-}"; do
 	[[ -n "$dir" ]] && add_target "$dir" "转录模型"
@@ -382,6 +396,10 @@ for tool in "${mcp_removals[@]:-}"; do
 		else
 			echo "Codex 没能自动注销，请删掉 ${CODEX_CONFIG} 里 [mcp_servers.fluentflow-local] 那一节。"
 		fi
+		;;
+	OpenCode)
+		"$OPENCODE_PY" "$OPENCODE_HELPER" unregister --repo "$REPO" ||
+			echo "OpenCode 没能自动注销，请删掉它配置（opencode.json）里的 fluentflow-local 那一条。"
 		;;
 	esac
 done
