@@ -112,13 +112,17 @@ Before changing any page, read `docs/06-界面规矩.md`: FluentFlow's words, wh
 - Shell scripts (`install.sh`, `launchers/macos/*.sh`) keep one `cleanup` function in one `trap ... EXIT`; a new thing to clean on exit goes into it, because a second `trap` replaces the first (2026-11-27: the download's temp folder was left behind that way). Temp folders take `mktemp -d "${TMPDIR:-/tmp}/<name>.XXXXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`, so a test pointing `TMPDIR` elsewhere sees nothing.
 - Keep a change readable (decisions 8.23, 8.24): split out the part you change only when understanding it means reading unrelated logic around it. When a button goes, its copy in `shared.jsx` goes too (`tests/test_frontend_copy_used.py`); a hint saying to click 「X」 names text the page has (`tests/test_hint_buttons_exist.py`).
 
+## 任务卡和流程回顾
+
+多 session、会并行、或者错了不会当场暴露的事，开工前在 `docs/任务卡/` 写一张卡：范围、对外接口、验收命令、不能碰的东西、依赖、谁审。什么时候开卡、写完怎么回填四个数，见那里的 README。审查的会话只看卡、diff 和验收输出，不看聊天记录，只报能复现的问题。每月翻一次 `docs/任务卡/流程账本.md`，按它的阈值删掉拦不住东西的规矩，一次只改一条。
+
 The service on port 8000 serves `frontend/dist-local` straight from this checkout, so `npm run build:frontend` replaces the page the owner is using. When `git status` shows changes you did not make, build into a scratch folder instead (`npx vite build --config vite.local.config.mjs --outDir <scratch folder> --emptyOutDir`) and look at the page through `npm run dev:frontend` (port 5186), so another session's unfinished work does not reach the owner's page. To compare against the code before your change, open a clean copy with `git worktree add <scratch folder> HEAD`; never `git stash` here, it puts away the other sessions' changes too.
 
 ## Where files go
 
 Owner, 2026-10-28 (decision 8.15). The repository root holds code, configuration and the entry documents (`README.md`, `AGENTS.md`, `CLAUDE.md`, `AGENT_INSTALL.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, `VERSION`), nothing else; a script that writes output defaults to a folder under `private/`.
 
-- `docs/`: the numbered documents are the living ones; `docs/方案/` dated proposals, `docs/评测/` dated evaluations, `docs/交付记录/` one record per delivered sub-session, `docs/handoffs/` handoffs, deleted when the task is done.
+- `docs/`: the numbered documents are the living ones; `docs/方案/` dated proposals, `docs/评测/` dated evaluations, `docs/交付记录/` one record per delivered sub-session, `docs/任务卡/` one card per thing that spans sessions, `docs/handoffs/` handoffs, deleted when the task is done.
 - `private/` (git-ignored, only in the main checkout): `测试记录/` real-run records (`docs/04-维护手册.md`「在真实数据的副本上实测」), `报告/` output of the evaluation scripts and review reports, `promo/` the promo film project and its cuts, `笔记考题/` note quizzes, `旧工作副本/` uncommitted files saved before a worktree was removed.
 - `.claude/worktrees/`: sub-session worktrees. Remove one once its branch is in `main`; a prototype kept for later stays as a branch, not a worktree.
 
