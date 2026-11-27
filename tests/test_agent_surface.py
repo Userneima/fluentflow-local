@@ -71,10 +71,11 @@ def test_every_agent_route_is_reachable_by_a_tool():
 def test_the_skill_names_only_tools_that_exist():
     tools = {item["name"] for item in mcp.TOOL_DEFINITIONS}
     first_words = {name.split("_", 1)[0] + "_" for name in tools}
-    skill = (ROOT / "agent" / "skills" / "fluentflow" / "SKILL.md").read_text(encoding="utf-8")
-    named = set(re.findall(r"`([a-z][a-z0-9_]*)`", skill))
-    unknown = sorted(name for name in named if name.startswith(tuple(first_words)) and name not in tools)
-    assert not unknown, f"agent/skills/fluentflow/SKILL.md names tools the MCP server does not list: {unknown}"
+    for page in ("SKILL.md", "first-use.md"):
+        skill = (ROOT / "agent" / "skills" / "fluentflow" / page).read_text(encoding="utf-8")
+        named = set(re.findall(r"`([a-z][a-z0-9_]*)`", skill))
+        unknown = sorted(name for name in named if name.startswith(tuple(first_words)) and name not in tools)
+        assert not unknown, f"agent/skills/fluentflow/{page} names tools the MCP server does not list: {unknown}"
 
 
 def test_the_checks_see_what_they_check():

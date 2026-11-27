@@ -87,6 +87,27 @@ lets FluentFlow's waits run longer, so a long recording costs fewer turns of the
 allowance: `tool_timeout_sec = 900` (measured 2026-11-05: a single call then held 420
 seconds without an extra turn). It changes nothing else.
 
+## First use
+
+A new install ends with the user's first real task, done in this same conversation:
+do not ask them to restart or to open a new conversation. Skip all of it when the install
+folder already existed before you started (an update), and when `get_status` says
+`first_use.should_onboard=false` (done before, or this machine already has tasks).
+
+1. While the install runs in the background: as soon as
+   `<folder>/agent/skills/fluentflow/first-use.md` exists (the first step, getting the
+   code, puts it there within a minute or two), read it and ask its question 1 (the six
+   options), then question 2 (the material; with none at hand, any Douyin share link).
+   A user who skips the questions and gives a file or a link is not stopped: take it as
+   a request for a note.
+2. When the install has finished: read `<folder>/agent/skills/fluentflow/SKILL.md`, call
+   `get_status` from the command line (below), and with `first_use.should_onboard=true`
+   save what they chose with `record_first_use` (`need`, `material`), then go on from step
+   4 of `first-use.md`, every tool called from the command line. Its closing lines replace
+   the ones in the next section.
+3. An agent that cannot run commands follows step 3 of `first-use.md` instead: the user
+   opens a new conversation and says 「带我用一次 FluentFlow」.
+
 ## Tell the user how to use it
 
 Say this, in the user's language:

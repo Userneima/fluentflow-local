@@ -66,7 +66,9 @@ WAIT_MAX_SECONDS = 600
         "then wait again; agent_note (status ready, next) once the cut is decided and rendering and the "
         "note is yours to write: start it now (get_agent_note_material) instead of waiting for the "
         "render; this comes once. With done=true, next asks you to align the sections of a note you wrote "
-        "to playback times when they have none, and page_url, the task's page to open for the user. Otherwise it returns the current state when its time is up. Keep the "
+        "to playback times when they have none, and page_url, the task's page to open for the user. Otherwise it returns the current state when its time is up "
+        "(task.downloading_model=true: the speech model is still downloading, as on the first recording after "
+        "an install). Keep the "
         "default timeout on Codex: it stops waiting on one tool call after 300 seconds unless its "
         "tool_timeout_sec is raised."),
     input_schema={

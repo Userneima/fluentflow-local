@@ -600,6 +600,16 @@ def recent_local_folders(
     return folders
 
 
+def has_job_not_named(names: tuple[str, ...] | list[str], db_path: Path | str = DEFAULT_DB_PATH) -> bool:
+    """Whether any task exists besides the ones whose title is one of ``names``
+    (the MCP self-check's task): one indexed lookup, not a read of the list."""
+    ensure_job_db(db_path)
+    values = [str(name) for name in names]
+    clause = f" WHERE source_filename IS NULL OR source_filename NOT IN ({','.join('?' for _ in values)})" if values else ""
+    with sqlite_connection(Path(db_path)) as conn:
+        return conn.execute(f"SELECT 1 FROM jobs{clause} LIMIT 1", values).fetchone() is not None
+
+
 def list_jobs_by_statuses(
     statuses: tuple[str, ...] | list[str],
     *,

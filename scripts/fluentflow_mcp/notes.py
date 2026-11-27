@@ -15,11 +15,36 @@ from .core import _options, tool
         "cutting, transcription, notes, outputs, agent connection), and anything the user has to fix first. "
         "The same list the Settings page shows. Use it when the user asks what FluentFlow is set up to do. "
         "model_usage_outside_tasks adds up the model calls that belong to no task (the settings page's key "
-        "check, the note style, a call that lost its task), shaped like a task's model_usage with items by kind."),
+        "check, the note style, a call that lost its task), shaped like a task's model_usage with items by kind. "
+        "first_use is the guided first use: should_onboard=true means guide the user (the skill's 第一次使用); "
+        "need and material are what they already chose, so do not ask again; speech_model_ready=false means the "
+        "first recording waits for the speech model to download."),
     input_schema={"type": "object", "properties": {"api_base": {"type": "string"}}},
 )
 def get_status(api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
     return core._agent_request("GET", "/agent/v1/status", api_base=api_base, client_id=client_id)
+
+
+@tool(
+    description=("Record the guided first use (the skill's 第一次使用) as it goes, so another conversation picks "
+        "it up: need = the option the user picked (1 to 6) or their own words for \"other\"; material = the "
+        "file path or link they gave (\"\" clears it); done=true after the first delivery, or when they say "
+        "they need no guide (不用教了). Only the fields you pass change. Returns first_use as get_status shows it."),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "done": {"type": "boolean"},
+            "need": {"type": ["integer", "string"]},
+            "material": {"type": "string"},
+            "api_base": {"type": "string"},
+        },
+    },
+)
+def record_first_use(done: bool | None = None, need: int | str | None = None, material: str | None = None,
+                     api_base: str | None = None, client_id: str | None = None) -> dict[str, Any]:
+    payload = {key: value for key, value in (("done", done), ("need", need), ("material", material))
+               if value is not None}
+    return core._agent_request("POST", "/agent/v1/first-use", api_base=api_base, client_id=client_id, payload=payload)
 
 
 @tool(

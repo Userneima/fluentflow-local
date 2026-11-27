@@ -15,6 +15,7 @@ from backend.core import agent_correction, note_section_times, task_intelligence
 from backend.core.local_entry_guards import claim_task_id
 from backend.core import model_usage, task_activity
 from backend.core import agent_cut, agent_note, local_folder_intake, transcript_note
+from backend.core import first_use
 from backend.core import speaker_diarization as speaker_diarization_core
 from backend.core.local_request_scope import (
     request_is_localhost,
@@ -237,7 +238,18 @@ def agent_workflow_status() -> dict[str, Any]:
         # Model calls that belong to no task (the key check, the note style,
         # a call whose thread lost its task): a task's own are in get_task.
         "model_usage_outside_tasks": model_usage.outside_tasks_or_none(),
+        # The guided first use (AGENT_INSTALL.md "First use", the skill's 第一次使用).
+        "first_use": first_use.status(),
     }
+
+
+@router.post("/first-use")
+def record_first_use(payload: Optional[dict[str, Any]] = Body(None)) -> dict[str, Any]:
+    """Save what the user chose for the guided first use, or that it is done."""
+    try:
+        return {"ok": True, "first_use": first_use.record(payload or {})}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/tasks")
@@ -329,6 +341,22 @@ def get_agent_task_package(request: Request, task_id: str) -> dict[str, Any]:
 WAIT_MAX_SECONDS = 600
 
 
+def _running_brief(job: dict[str, Any]) -> dict[str, Any]:
+    """Where a task that is not done stands. downloading_model: the speech
+    model is still being fetched (the first recording after an install waits
+    for it), so the agent can say why this one takes longer."""
+    brief = {
+        "task_id": job.get("task_id"),
+        "status": job.get("status"),
+        "stage": job.get("stage"),
+        "progress": job.get("progress"),
+    }
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    if job.get("stage") == "stt" and metadata.get("stt_status") == "downloading_model":
+        brief["downloading_model"] = True
+    return brief
+
+
 @router.post("/tasks/{task_id}/wait")
 async def wait_agent_task(
     request: Request, task_id: str, payload: Optional[dict[str, Any]] = Body(None)
@@ -400,12 +428,7 @@ async def wait_agent_task(
                 "done": False,
                 "note_pending": _note_pending(job),
                 "cut_running": _cut_running(job),
-                "task": {
-                    "task_id": job.get("task_id"),
-                    "status": job.get("status"),
-                    "stage": job.get("stage"),
-                    "progress": job.get("progress"),
-                },
+                "task": _running_brief(job),
                 "package_url": f"/agent/v1/tasks/{task_id}/package",
             }
         await asyncio.sleep(poll_interval)

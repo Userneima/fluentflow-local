@@ -1,11 +1,21 @@
 ---
 name: fluentflow
-description: Turn a video, recording or video link into a transcript and a study note with the local FluentFlow app, and improve how notes are written from the user's feedback. Use when the user gives a video or audio file, a Douyin, Bilibili or YouTube link, or a folder of recordings and wants it transcribed, summarised or made into notes; when they send a screenshot of a FluentFlow note or say a note is wrong, too long, missing something or written the wrong way; and when they ask what FluentFlow did with a recording. Not for editing a video, and not for notes on written articles.
+description: Turn a video, recording or video link into a transcript and a study note with the local FluentFlow app, and improve how notes are written from the user's feedback. Use when the user gives a video or audio file, a Douyin, Bilibili or YouTube link, or a folder of recordings and wants it transcribed, summarised or made into notes; when they send a screenshot of a FluentFlow note or say a note is wrong, too long, missing something or written the wrong way; when they ask what FluentFlow did with a recording; and when they say 「带我用一次 FluentFlow」 (walk them through a first use). Not for editing a video, and not for notes on written articles.
 ---
 
 # FluentFlow
 
 FluentFlow runs on the user's machine and does the heavy work: download, transcribe, cut silent gaps, pick frames. You write the note yourself from what it hands you, so the user needs no model key. All of it goes through the `fluentflow-local` MCP tools; do not reimplement any step in the conversation.
+
+## 第一次使用 (first use)
+
+At the start of a conversation in which the user hands you FluentFlow work, `get_status`
+tells you whether to guide them: `first_use.should_onboard=true` (nothing done on this
+machine yet), or the user says 「带我用一次 FluentFlow」. Then read `first-use.md` beside
+this file and follow it: the six options, the material, one expectation line, a delivery
+tied to what they chose, one thing to try by voice. `first_use.need` and `material` hold
+what they already told the install conversation, so do not ask again. Never guide a user
+whose `should_onboard` is false unless they ask. `record_first_use` keeps the progress.
 
 ## Current agent first
 
