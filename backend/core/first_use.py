@@ -12,7 +12,7 @@ before the guide started. A machine with tasks from before (an old user
 updating) is never guided; the MCP self-check's task does not count as a real
 one, and neither does a task left in the platform's own data folder by an
 earlier install that this one no longer reads (Windows: an install from before
-the one-folder layout kept its tasks in %APPDATA%\FluentFlow). The guide's own
+the one-folder layout kept its tasks in %APPDATA%\\FluentFlow). The guide's own
 task does not end it while it runs: tasks created after ``started_at`` (stamped
 by the first record) count only once one has completed, so another
 conversation can carry an unfinished guide on, and a guide whose delivery was
