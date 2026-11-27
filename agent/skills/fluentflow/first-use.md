@@ -26,7 +26,7 @@ with one line or one number; you do everything else.
 ## Step 1: what they want most
 
 During the install (the install conversation, `AGENT_INSTALL.md` "First use"), start with
-「我在后台装 FluentFlow 了，大概要 10 到 20 分钟，你不用管它。趁这会儿先问一句：」;
+「我在后台装 FluentFlow 了，你不用管它。趁这会儿先问一句：」;
 in a new conversation start with 「先问一句：」. Then:
 
 > 你装它最想先解决哪件事？回个数字就行。
