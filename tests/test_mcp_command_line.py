@@ -105,3 +105,15 @@ def test_a_long_call_waits_until_done_instead_of_answering_still_working(monkeyp
     assert code == 0 and json.loads(out) == {"ok": True, "done": True}
     assert core._heartbeat_enabled is False
     assert core.HOLD_SECONDS == 0.05  # put back for anything else in this process
+
+
+def test_piped_arguments_with_a_byte_order_mark_are_read(monkeypatch):
+    """Windows PowerShell 5.1 pipes a UTF-8 BOM before the JSON (release check 2026-11-27)."""
+    monkeypatch.setitem(server.TOOL_FUNCTIONS, "record_first_use", lambda material=None: {"ok": True, "material": material})
+
+    class Stdin:
+        buffer = io.BytesIO('\ufeff{"material": "抖音 https://v.douyin.com/abc/"}'.encode("utf-8"))
+
+    monkeypatch.setattr(sys, "stdin", Stdin())
+    code, out = _run(["call", "record_first_use", "-"])
+    assert code == 0 and json.loads(out)["material"] == "抖音 https://v.douyin.com/abc/"

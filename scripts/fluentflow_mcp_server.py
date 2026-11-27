@@ -222,6 +222,16 @@ _CLI_USAGE = """用法：
 """
 
 
+def _read_stdin() -> str:
+    """Piped arguments as UTF-8, whatever the console's code page. Windows
+    PowerShell 5.1 pipes with a byte-order mark first even with
+    $OutputEncoding set to UTF-8 without one (release check, 2026-11-27)."""
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is None:
+        return sys.stdin.read()
+    return buffer.read().decode("utf-8-sig", errors="replace")
+
+
 def run_cli(argv: list[str], out=None) -> int:
     """The same tools from the command line, for an agent whose conversation
     started before the tools were registered: Claude Code and Codex load MCP
@@ -250,7 +260,8 @@ def run_cli(argv: list[str], out=None) -> int:
     if name not in TOOL_FUNCTIONS:
         sys.stderr.write(f"没有叫 {name} 的工具。运行 tools 看全部工具。\n")
         return 2
-    raw = (sys.stdin.read() if rest[1:] == ["-"] else rest[1]) if len(rest) == 2 else "{}"
+    raw = (_read_stdin() if rest[1:] == ["-"] else rest[1]) if len(rest) == 2 else "{}"
+    raw = raw.lstrip("\ufeff")  # a byte-order mark: Windows PowerShell puts one before piped text
     try:
         arguments = json.loads(raw or "{}")
     except ValueError as exc:
