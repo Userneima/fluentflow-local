@@ -5,8 +5,13 @@ npm is not how FluentFlow runs; it is a second host for the release. npmjs
 publishes it, npmmirror (Alibaba) copies it within minutes, and from there the
 one-command install and its code download work where GitHub crawls:
 
-    https://registry.npmmirror.com/fluentflow-local/latest/files/install.ps1
+    https://registry.npmmirror.com/fluentflow-local/latest
     https://registry.npmmirror.com/fluentflow-local/-/fluentflow-local-<version>.tgz
+
+npmmirror gives an application's files one at a time only for packages on the
+unpkg-white-list, which this one is not; the domestic one-command install reads
+`dist.tarball` from the metadata above, unpacks the install script (and the
+source, passed as FLUENTFLOW_INSTALL_SOURCE) out of it, and never asks GitHub.
 
 The package holds the two install scripts at its top and the release's source
 tree at that tag, exactly as ``git archive`` gives it, under ``source/``. The repository's

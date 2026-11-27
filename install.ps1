@@ -2,8 +2,16 @@
 #
 #   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.ps1 | iex"
 #
-# In China, the same script from npmmirror (published with each release):
-#   powershell -ExecutionPolicy Bypass -Command "irm https://registry.npmmirror.com/fluentflow-local/latest/files/install.ps1 | iex"
+# In China, the release on npmmirror instead: npmmirror does not serve an application's
+# files one at a time, so the package published with each release is downloaded and this
+# script is unpacked and run from it, with that package's source (AGENT_INSTALL.md has the
+# macOS line):
+#   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+#   $d = Join-Path $env:TEMP ("fluentflow-" + [guid]::NewGuid()); New-Item -ItemType Directory $d | Out-Null
+#   $t = (Invoke-RestMethod "https://registry.npmmirror.com/fluentflow-local/latest").dist.tarball
+#   Invoke-WebRequest $t -OutFile "$d\p.tgz"; tar -xzf "$d\p.tgz" -C "$d" package
+#   $env:FLUENTFLOW_INSTALL_SOURCE = "$d\package\source"
+#   iex (Get-Content "$d\package\install.ps1" -Raw -Encoding UTF8)
 #
 # The whole product goes into one folder, FluentFlow, on the drive chosen:
 #   app\        the code and its Python environment

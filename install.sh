@@ -3,8 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.sh | bash
 #
-# 国内用 npmmirror 上随每个发布版发的同一份：
-#   curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest/files/install.sh | bash
+# 国内用 npmmirror 上随每个发布版发的 npm 包（npmmirror 不按文件给，从整包里解出这一份再运行，
+# 代码也从同一个包装；AGENT_INSTALL.md 有 Windows 版）：
+#   d=$(mktemp -d) && curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest -o "$d/m.json" && curl -fsSL -o "$d/p.tgz" "$(plutil -extract dist.tarball raw -o - "$d/m.json")" && tar -xzf "$d/p.tgz" -C "$d" package && FLUENTFLOW_INSTALL_SOURCE="$d/package/source" bash "$d/package/install.sh"; rm -rf "$d"
 #
 # 依次做完：下载最新发布版到 ~/fluentflow-local、运行安装脚本、启动 FluentFlow、
 # 把它的 MCP 工具注册到本机的 Claude Code 和 Codex、自检。全程不要密码，不弹系统窗口，

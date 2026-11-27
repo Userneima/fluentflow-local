@@ -7,6 +7,8 @@
 - A tag that does not match VERSION is refused.
 - The workflow skips the publish, green, without the NPM_TOKEN secret.
 - Both install scripts know the npmmirror host and check the tarball's sha512.
+- The China install command in the documents and in both scripts' headers takes
+  the installer out of the package tarball, not from `/files/install.sh` (403).
 """
 
 from __future__ import annotations
@@ -66,6 +68,20 @@ def test_both_installers_can_fetch_from_npmmirror_and_check_it():
         text = (ROOT / name).read_text(encoding="utf-8")
         assert "registry.npmmirror.com/fluentflow-local/" in text, name
         assert "sha512-" in text and "integrity" in text, name
+
+
+def test_the_china_install_takes_the_installer_out_of_the_package():
+    # npmmirror serves an application's files one at a time only for packages on
+    # the unpkg-white-list; this one answers 403 there (2026-11-27). The documents
+    # and the scripts' own headers must send people to the package instead: read
+    # dist.tarball from the metadata, unpack install.sh / install.ps1, run it with
+    # that package's source.
+    for name in ("README.md", "AGENT_INSTALL.md", "install.sh", "install.ps1"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert "npmmirror.com/fluentflow-local/latest/files/install" not in text, name
+        assert "fluentflow-local/latest" in text, name
+        assert "dist.tarball" in text, name
+        assert "FLUENTFLOW_INSTALL_SOURCE" in text, name
 
 
 def test_a_release_carries_the_built_interface_and_installs_skip_the_build():

@@ -42,15 +42,31 @@ $env:FLUENTFLOW_INSTALL_DIR = "D:\FluentFlow"
 powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Userneima/fluentflow-local/main/install.ps1 | iex"
 ```
 
-When the user is in mainland China, or GitHub does not open, take the same scripts from
-npmmirror, published with every release:
+When the user is in mainland China, or GitHub does not open, take the release from
+npmmirror instead: download the package published with every release, unpack the install
+script out of it and run it with that package's source as `FLUENTFLOW_INSTALL_SOURCE`, so
+nothing is fetched from GitHub. npmmirror does not serve the scripts one file at a time
+for an application such as this one (`/files/install.sh` answers 403); the package
+tarball works.
+
+macOS:
 
 ```bash
-curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest/files/install.sh | bash
+d=$(mktemp -d) && curl -fsSL https://registry.npmmirror.com/fluentflow-local/latest -o "$d/m.json" && curl -fsSL -o "$d/p.tgz" "$(plutil -extract dist.tarball raw -o - "$d/m.json")" && tar -xzf "$d/p.tgz" -C "$d" package && FLUENTFLOW_INSTALL_SOURCE="$d/package/source" bash "$d/package/install.sh"; rm -rf "$d"
 ```
 
+Windows (PowerShell), with `$env:FLUENTFLOW_INSTALL_DIR` set first as above when the
+folder is not the default:
+
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://registry.npmmirror.com/fluentflow-local/latest/files/install.ps1 | iex"
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$d = Join-Path $env:TEMP ("fluentflow-" + [guid]::NewGuid()); New-Item -ItemType Directory $d | Out-Null
+$t = (Invoke-RestMethod "https://registry.npmmirror.com/fluentflow-local/latest").dist.tarball
+Invoke-WebRequest $t -OutFile "$d\p.tgz"
+tar -xzf "$d\p.tgz" -C "$d" package
+$env:FLUENTFLOW_INSTALL_SOURCE = "$d\package\source"
+iex (Get-Content "$d\package\install.ps1" -Raw -Encoding UTF8)
+Remove-Item -Recurse -Force $d
 ```
 
 Run it in the background and wait; it prints a `== step ==` line before each step.
