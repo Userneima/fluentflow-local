@@ -114,7 +114,7 @@ Before changing any page, read `docs/06-界面规矩.md`: FluentFlow's words, wh
 
 ## 任务卡和流程回顾
 
-多 session、会并行、或者错了不会当场暴露的事，开工前在 `docs/任务卡/` 写一张卡：范围、对外接口、验收命令、不能碰的东西、依赖、谁审。什么时候开卡、写完怎么回填四个数，见那里的 README。审查的会话只看卡、diff 和验收输出，不看聊天记录，只报能复现的问题。每月翻一次 `docs/任务卡/流程账本.md`，按它的阈值删掉拦不住东西的规矩，一次只改一条。
+多 session、会并行、或者错了不会当场暴露的事，开工前在 `docs/任务卡/` 写一张卡：范围、对外接口、验收命令、不能碰的东西、依赖、谁审。什么时候开卡、写完怎么回填四个数，见那里的 README。审查的会话只看卡、diff 和验收输出，不看聊天记录，只报能复现的问题。合并前跑一条跨改动的检查（全量测试、前端构建、一个真实任务的端到端），各人的单测都过不代表合起来对。每月翻一次 `docs/任务卡/流程账本.md`，按它的阈值删掉拦不住东西的规矩，一次只改一条。
 
 The service on port 8000 serves `frontend/dist-local` straight from this checkout, so `npm run build:frontend` replaces the page the owner is using. When `git status` shows changes you did not make, build into a scratch folder instead (`npx vite build --config vite.local.config.mjs --outDir <scratch folder> --emptyOutDir`) and look at the page through `npm run dev:frontend` (port 5186), so another session's unfinished work does not reach the owner's page. To compare against the code before your change, open a clean copy with `git worktree add <scratch folder> HEAD`; never `git stash` here, it puts away the other sessions' changes too.
 
@@ -129,5 +129,5 @@ Owner, 2026-10-28 (decision 8.15). The repository root holds code, configuration
 ## Real-run tests, delivery records, restarting
 
 - Real-run tests on the owner's data run on a copy prepared by `scripts/prepare_test_copy.py`, on a port of their own, `--fake` for a test of the flow; before a test of what a model produces, say whether it goes through the Claude subscription or a key billed per call and what it should cost, and wait for 王愉超's go-ahead when it is billed per call (decision 8.11). How, and where the written record goes: `docs/04-维护手册.md`「在真实数据的副本上实测」.
-- A block of work done in a separate session leaves a record in `docs/交付记录/`, as the `subsession-acceptance` skill says.
+- A block of work done in a separate session leaves a record in `docs/交付记录/`, as the `subsession-acceptance` skill says; the record names the acceptance command that was run and its result, so the next reader can rerun it instead of trusting the prose.
 - Before stopping or restarting the backend on port 8000, run `python3 launchers/macos/count_active_jobs.py http://127.0.0.1:8000` and restart only when it prints `0` and `git status` shows no other session's uncommitted changes under `backend/` or `scripts/`; otherwise wait or test on another port. Why: `docs/04-维护手册.md`「重启服务」.
