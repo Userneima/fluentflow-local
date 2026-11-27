@@ -84,3 +84,24 @@ def test_the_script_itself_runs_the_command_line():
                             capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert result.returncode == 0
     assert "submit_video_link:" in result.stdout
+
+
+def test_a_long_call_waits_until_done_instead_of_answering_still_working(monkeypatch):
+    """The next command is a new process and could not pick the run up again."""
+    import threading
+    from scripts.fluentflow_mcp import core
+
+    monkeypatch.setattr(core, "HOLD_SECONDS", 0.05)
+    release = threading.Event()
+
+    def slow(task_id):
+        return core._held("get_task", {"task_id": task_id}, lambda: (release.wait(5), {"ok": True, "done": True})[1])
+
+    monkeypatch.setitem(server.TOOL_FUNCTIONS, "get_task", slow)
+    threading.Timer(0.3, release.set).start()
+
+    code, out = _run(["call", "get_task", '{"task_id": "long"}'])
+
+    assert code == 0 and json.loads(out) == {"ok": True, "done": True}
+    assert core._heartbeat_enabled is False
+    assert core.HOLD_SECONDS == 0.05  # put back for anything else in this process

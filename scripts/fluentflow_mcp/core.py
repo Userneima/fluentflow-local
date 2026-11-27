@@ -655,7 +655,7 @@ def _options(**values: Any) -> dict[str, Any]:
 # HOLD_SECONDS, and calling the same tool again with the same arguments waits
 # on the same run instead of starting a second one. The run lives on a daemon
 # thread of this process: when the conversation ends, so does the waiting.
-HOLD_SECONDS = 240
+HOLD_SECONDS: float | None = 240  # None: wait until done (the command line, one call per process)
 # A finished run nobody came back for is dropped after this, so asking for the
 # same thing much later starts afresh instead of returning an old answer.
 UNCLAIMED_SECONDS = 1800

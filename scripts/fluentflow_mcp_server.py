@@ -259,11 +259,18 @@ def run_cli(argv: list[str], out=None) -> int:
     if not isinstance(arguments, dict):
         sys.stderr.write("参数要是一个 JSON 对象，例如 '{\"task_id\": \"abc\"}'。\n")
         return 2
+    # One command is one process: a "still working" answer could not be picked
+    # up again by the next command (the run lives in this process), so a long
+    # call waits here until it is done. No heartbeat either: a task never
+    # reported on is not given away when this process exits (agent_cut.overdue).
+    hold, core.HOLD_SECONDS = core.HOLD_SECONDS, None
     try:
         result = _call_tool(name, arguments)
     except TypeError as exc:
         sys.stderr.write(f"参数不对：{exc}\n")
         return 2
+    finally:
+        core.HOLD_SECONDS = hold
     out.write(result["content"][0]["text"] + "\n")
     return 1 if result.get("isError") else 0
 

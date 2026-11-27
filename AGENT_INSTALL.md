@@ -109,7 +109,9 @@ line with the same names and arguments:
 stdin, `tools` lists every tool and `tools <name>` prints one with its arguments). It
 prints the tool's JSON answer and exits 1 when the answer is `ok: false`. `wait_task`
 holds up to its `timeout_seconds`, so give that command at least as long (in Claude Code
-a 600000 ms command timeout). From the user's next conversation the tools are there
+a 600000 ms command timeout). A command waits until its tool is done (no `still_working`
+answer), so leave the slow FluentFlow-model calls (`writer="fluentflow"`) to the next
+conversation. From the user's next conversation the tools are there
 directly. When asked for a note: submit with `submit_local_media` (a recording or a subtitle file, by path) or
 `submit_video_link` using the default `intelligence="agent"`; hand `agent_cut` to a subagent with a fresh context, which uses
 `get_agent_cut_material`, `save_agent_cut` and `save_agent_cut_report`; when `wait_task` returns `agent_note` ready, the cut is
