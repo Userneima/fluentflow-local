@@ -126,11 +126,64 @@ def test_the_old_layout_is_written_for_opencode_1_and_moved_for_2():
 @pytest.mark.parametrize(("version", "config", "layout"), [
     ("opencode v2.4.1\n", {}, "servers"),
     ("1.0.150", {}, "legacy"),
-    (None, {}, "servers"),
+    # Unknown version (opencode not on PATH, only its config folder): the old form,
+    # which 2.x still reads and early 1.x requires.
+    (None, {}, "legacy"),
     ("1.0.150", {"mcp": {"servers": {}}}, "servers"),
+    # A 1.x server that happens to be named "servers" is not the 2.x container.
+    (None, {"mcp": {"servers": {"type": "local", "command": ["s"]}}}, "legacy"),
 ])
 def test_the_layout_follows_the_installed_version(version, config, layout):
     assert oc.layout_for(version, config) == layout
+
+
+@pytest.mark.parametrize("config", [
+    {"mcp": "keep", "theme": "dark"},
+    {"mcp": {"servers": "keep"}},
+    {"mcp": {"fluentflow-local": "keep"}},
+    {"mcp": {"servers": {"fluentflow-local": ["keep"]}}},
+])
+def test_an_mcp_value_we_would_have_to_overwrite_is_left_alone(config):
+    for layout in ("servers", "legacy"):
+        same, what = oc.merge_entry(config, PY, SCRIPT, None, layout)
+        assert what == "unsupported_shape" and same is config
+
+
+def test_a_1x_server_named_servers_is_not_written_into():
+    config = {"mcp": {"servers": {"type": "local", "command": ["s"]}}}
+
+    same, what = oc.merge_entry(config, PY, SCRIPT, None, "servers")
+    assert what == "unsupported_shape" and same is config
+
+    new, what = oc.merge_entry(config, PY, SCRIPT, None, "legacy")
+    assert what == "added"
+    assert new["mcp"]["servers"] == {"type": "local", "command": ["s"]}
+    assert new["mcp"]["fluentflow-local"]["command"] == [PY, SCRIPT]
+
+
+def test_a_switched_off_entry_stays_off_when_it_moves_between_forms():
+    old = {"mcp": {"fluentflow-local": {"type": "local", "command": [PY, SCRIPT], "enabled": False}}}
+    moved, _ = oc.merge_entry(old, PY, SCRIPT, None, "servers")
+    entry = moved["mcp"]["servers"]["fluentflow-local"]
+    assert entry["disabled"] is True and "enabled" not in entry
+
+    back, _ = oc.merge_entry(moved, PY, SCRIPT, None, "legacy")
+    entry = back["mcp"]["fluentflow-local"]
+    assert entry["enabled"] is False and "disabled" not in entry
+
+
+@pytest.mark.skipif(not POSIX, reason="symlinks need extra rights on Windows")
+def test_a_symlinked_config_keeps_its_link(tmp_path):
+    real = tmp_path / "dotfiles" / "opencode.json"
+    real.parent.mkdir()
+    real.write_text("{}", encoding="utf-8")
+    link = tmp_path / "opencode.json"
+    link.symlink_to(real)
+
+    oc.write_config(link, {"theme": "dark"})
+
+    assert link.is_symlink()
+    assert json.loads(real.read_text(encoding="utf-8")) == {"theme": "dark"}
 
 
 def test_removing_takes_only_this_installs_entry():
@@ -340,3 +393,11 @@ def test_the_mac_uninstaller_leaves_another_installs_opencode_entry(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads((folder / "opencode.json").read_text(encoding="utf-8")) == config
     assert "指向别的位置" in result.stdout
+
+
+def test_a_half_made_desktop_app_is_removed_when_the_icon_script_fails():
+    """A .app left behind after osacompile but before signing would not open, and
+    install.sh would then try to start the service through it."""
+    text = (ROOT / "launchers" / "macos" / "install-local-to-desktop.sh").read_text(encoding="utf-8")
+    assert re.search(r"trap '[^']*\$status -ne 0 && \$MADE -eq 1 \]\]; then rm -rf \"\$DEST\"", text)
+    assert text.index("MADE=1") < text.index('osacompile -o "$DEST"')

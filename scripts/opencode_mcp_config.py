@@ -59,16 +59,44 @@ def installed() -> bool:
     return bool(shutil.which("opencode")) or config_dir().is_dir()
 
 
+def _servers_container(mcp: Any) -> dict[str, Any] | None:
+    """mcp.servers when it is the 2.x container; a 1.x server that happens to be
+    named "servers" (it has a type or command) is not one."""
+    if not isinstance(mcp, dict):
+        return None
+    servers = mcp.get("servers")
+    if isinstance(servers, dict) and "type" not in servers and "command" not in servers:
+        return servers
+    return None
+
+
 def layout_for(version_text: str | None, config: dict[str, Any]) -> str:
     """"servers" (2.x) or "legacy" (1.x). A file already using mcp.servers keeps it;
-    an unknown version gets the current form."""
-    mcp = config.get("mcp")
-    if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
+    a known 2.x gets it; an unknown version gets the old form, because 2.x still
+    reads mcp.<name> while early 1.x refuses a file with mcp.servers."""
+    if _servers_container(config.get("mcp")) is not None:
         return "servers"
     match = re.search(r"(\d+)\.\d+", version_text or "")
-    if match and int(match.group(1)) < 2:
-        return "legacy"
-    return "servers"
+    if match and int(match.group(1)) >= 2:
+        return "servers"
+    return "legacy"
+
+
+def unsupported_shape(config: dict[str, Any]) -> bool:
+    """mcp, or mcp.servers in a file using it, holds something we would have to
+    overwrite to add our entry: leave the file alone."""
+    if "mcp" not in config:
+        return False
+    mcp = config["mcp"]
+    if not isinstance(mcp, dict):
+        return True
+    if NAME in mcp and not isinstance(mcp[NAME], dict):
+        return True
+    servers = mcp.get("servers")
+    if servers is not None and not isinstance(servers, dict):
+        return True
+    container = _servers_container(mcp)
+    return container is not None and NAME in container and not isinstance(container[NAME], dict)
 
 
 def opencode_version() -> str | None:
@@ -86,8 +114,8 @@ def _entries(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     found = []
     mcp = config.get("mcp")
     if isinstance(mcp, dict):
-        servers = mcp.get("servers")
-        if isinstance(servers, dict) and isinstance(servers.get(NAME), dict):
+        servers = _servers_container(mcp)
+        if servers is not None and isinstance(servers.get(NAME), dict):
             found.append(("servers", servers[NAME]))
         if isinstance(mcp.get(NAME), dict):
             found.append(("legacy", mcp[NAME]))
@@ -109,12 +137,18 @@ def _same_path(a: str, b: str) -> bool:
 def merge_entry(config: dict[str, Any], python: str, script: str, api_base: str | None, layout: str,
                 exists: Callable[[str], bool] = os.path.exists) -> tuple[dict[str, Any], str]:
     """The config with this install's entry in place, and what happened:
-    "added", "updated", "unchanged", "other_install" or "unreadable_entry".
+    "added", "updated", "unchanged", "other_install", "unreadable_entry" or
+    "unsupported_shape" (mcp holds something we would have to overwrite).
 
     An entry that starts another install's script that is still there, or whose
     script cannot be read, is left alone (as install.sh does for Claude Code and
     Codex); one whose script is gone is replaced. ``api_base`` None means the
     default port, so no FLUENTFLOW_API_BASE."""
+    if unsupported_shape(config):
+        return config, "unsupported_shape"
+    if layout == "servers" and isinstance(config.get("mcp"), dict) and "servers" in config["mcp"] \
+            and _servers_container(config["mcp"]) is None:
+        return config, "unsupported_shape"  # a 1.x server named "servers" holds that key
     new = copy.deepcopy(config)
     found = _entries(new)
     old: dict[str, Any] = {}
@@ -142,12 +176,21 @@ def merge_entry(config: dict[str, Any], python: str, script: str, api_base: str 
     else:
         entry.pop("environment", None)
 
-    mcp = new.get("mcp") if isinstance(new.get("mcp"), dict) else {}
-    new["mcp"] = mcp
-    mcp.pop(NAME, None)
-    if isinstance(mcp.get("servers"), dict):
-        mcp["servers"].pop(NAME, None)
-        if not mcp["servers"] and layout != "servers":
+    # 1.x writes enabled: false, the 2.x servers form disabled: true; carry the
+    # user's switch across when the entry moves between the two.
+    if layout == "servers" and entry.get("enabled") is False:
+        entry.pop("enabled")
+        entry["disabled"] = True
+    elif layout != "servers" and entry.get("disabled") is True:
+        entry.pop("disabled")
+        entry["enabled"] = False
+    mcp = new.setdefault("mcp", {})
+    servers = _servers_container(mcp)
+    if isinstance(mcp.get(NAME), dict) and entry_script(mcp[NAME]) is not None:
+        del mcp[NAME]
+    if servers is not None:
+        servers.pop(NAME, None)
+        if not servers and layout != "servers":
             del mcp["servers"]
     if layout == "servers":
         mcp.setdefault("servers", {})[NAME] = entry
@@ -170,8 +213,9 @@ def remove_entry(config: dict[str, Any], repo: str) -> tuple[dict[str, Any], boo
     if not isinstance(mcp, dict):
         return config, False
     holders = [mcp]
-    if isinstance(mcp.get("servers"), dict):
-        holders.append(mcp["servers"])
+    servers = _servers_container(mcp)
+    if servers is not None:
+        holders.append(servers)
     for holder in holders:
         entry = holder.get(NAME)
         if not isinstance(entry, dict):
@@ -196,6 +240,7 @@ def read_config(path: Path) -> dict[str, Any] | None:
 
 def write_config(path: Path, config: dict[str, Any]) -> None:
     """Write next to the file and swap it in, keeping the file's permissions."""
+    path = path.resolve()  # a symlinked config (dotfile managers) keeps its link
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = path.stat().st_mode & 0o777 if path.exists() else None
     fd, temp = tempfile.mkstemp(prefix=".opencode.", suffix=".tmp", dir=str(path.parent))
@@ -228,7 +273,12 @@ def register(python: str, script: str, api_base: str | None) -> int:
         print(f"OpenCode：{path} 不是能直接改的 JSON（可能带注释），没有动它。把下面这段合进去：")
         print(_snippet(python, script, api_base, layout_for(version, {})))
         return 2
-    new, what = merge_entry(config, python, script, api_base, layout_for(version, config))
+    layout = layout_for(version, config)
+    new, what = merge_entry(config, python, script, api_base, layout)
+    if what == "unsupported_shape":
+        print(f"OpenCode：{path} 里的 mcp 不是常见的写法，没有动它。把下面这段合进去：")
+        print(_snippet(python, script, api_base, layout))
+        return 2
     messages = {
         "added": f"OpenCode：已注册 {NAME}（{path}）。",
         "updated": f"OpenCode：已更新 {NAME}（{path}）。",

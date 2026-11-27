@@ -27,8 +27,10 @@ command -v osacompile >/dev/null 2>&1 || fail "找不到 osacompile（macOS 自�
 
 # 把代码目录路径写进源码再编译。applet 里不能靠相对路径推断：它被装到桌面，
 # 和代码目录没有位置关系。
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/fluentflow-desktop.XXXXXXXX")"
+# 编译之后任何一步失败，都删掉生成到一半的 .app：它打不开，留在桌面上会让安装以为能用它启动服务。
+MADE=0
+trap 'status=$?; rm -rf "$WORK"; if [[ $status -ne 0 && $MADE -eq 1 ]]; then rm -rf "$DEST"; fi' EXIT
 # 用 bash 自己替换，不调用 python3：没装命令行开发者工具的 Mac 上，/usr/bin/python3
 # 只是一个会弹窗要求安装开发者工具的占位程序。
 TEMPLATE="$(<"$SOURCE")"
@@ -38,6 +40,7 @@ printf '%s\n' "${TEMPLATE//@@REPO@@/$REPO}" >"$WORK/main.applescript"
 if [[ -e "$DEST" ]]; then
 	rm -rf "$DEST"
 fi
+MADE=1
 osacompile -o "$DEST" "$WORK/main.applescript" || fail "编译失败"
 
 # 完整性自检：缺任何一件，双击就是一个打不开的图标
